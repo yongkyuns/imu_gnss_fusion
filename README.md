@@ -1,15 +1,18 @@
 # imu_gnss_fusion
 
-Rust port of:
+`imu_gnss_fusion` is a Rust workspace for u-blox dead-reckoning workflows:
 
-- `parse_pygpsdata_log.py` -> `parse_pygpsdata_log` (CLI)
-- `visualize_pygpsdata_log.py` -> `visualize_pygpsdata_log` (egui app)
+- Works with u-blox EVKs that support DR (for example, M9DR-class devices).
+- Fuses IMU, GNSS, and wheel-speed signals with an EKF pipeline.
+- Provides batteries-included logging, simulation, and visualization tools.
+- Visualization stack is designed to be cross-platform (macOS, Linux, Windows, and web-oriented viewer flow).
 
-Tech stack:
+## Workspace crates
 
-- UBX parsing: `ublox-rs` + direct UBX frame decoding
-- DataFrame/export: `polars`
-- Visualization: `egui`/`eframe` + `egui_plot`
+- `sim`: offline replay/simulation and visualization app (`visualize_pygpsdata_log`).
+- `logger`: realtime serial logger and Rerun-based live UI (`realtime_rerun_logger`).
+- `ekf`: EKF implementation crate (including generated model code and C parity assets).
+- `ublox`: local fork of the UBX parsing crate used by the workspace.
 
 ## Build
 
@@ -18,19 +21,22 @@ cd simulation/imu_gnss_fusion
 cargo build --release
 ```
 
-## Parse log
+## Run simulation/visualization
 
 ```bash
-cargo run --release --bin parse_pygpsdata_log -- \
-  /path/to/pygpsdata.log \
-  --csv parsed.csv \
-  --parquet parsed.parquet
+cargo run --release -p sim -- /path/to/ubx_raw_*.bin
 ```
 
-## Visualize log
+## Run realtime logger
 
 ```bash
-cargo run --release --bin visualize_pygpsdata_log -- \
-  /path/to/pygpsdata.log
+cargo run --release -p logger --bin realtime_rerun_logger -- \
+  --port /dev/tty.usbmodemXXXX \
+  --baud 230400
 ```
 
+By default, raw UBX logs are written to `logger/data/`.
+
+## License
+
+MIT. See `LICENSE`.
