@@ -1,0 +1,8 @@
+[package]
+name = "ekf-rs"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "ekf_rs"
+path = "src/lib.rs"

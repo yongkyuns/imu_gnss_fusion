@@ -1,0 +1,40 @@
+// Equations for state prediction.
+const float s_0 = 0.5F*dax - 0.5F*dax_b;
+const float s_1 = day - day_b;
+const float s_2 = 0.5F*q2;
+const float s_3 = daz - daz_b;
+const float s_4 = 0.5F*q3;
+const float s_5 = 0.5F*q0;
+const float s_6 = 0.5F*q1;
+const float s_7 = q0*q3;
+const float s_8 = q1*q2;
+const float s_9 = q0*q1;
+const float s_10 = q2*q3;
+const float s_11 = s_10 + s_9;
+const float s_12 = dt*g;
+const float s_13 = 2*s_12;
+const float s_14 = dvy - dvy_b + s_11*s_13;
+const float s_15 = 2*s_14;
+const float s_16 = q0*q2;
+const float s_17 = q1*q3;
+const float s_18 = 2*powf(q1, 2);
+const float s_19 = 2*powf(q2, 2) - 1;
+const float s_20 = s_18 + s_19;
+const float s_21 = -dvz + dvz_b + s_12*s_20;
+const float s_22 = 2*s_21;
+const float s_23 = 2*powf(q3, 2);
+const float s_24 = s_16 - s_17;
+const float s_25 = -dvx + dvx_b + s_13*s_24;
+const float s_26 = 2*s_25;
+
+
+ekf->state.q0 = q0 - q1*s_0 - s_1*s_2 - s_3*s_4;
+ekf->state.q1 = q0*s_0 + q1 - s_1*s_4 + s_2*s_3;
+ekf->state.q2 = q2 + q3*s_0 + s_1*s_5 - s_3*s_6;
+ekf->state.q3 = -q2*s_0 + q3 + s_1*s_6 + s_3*s_5;
+ekf->state.vn = -s_15*(s_7 - s_8) - s_22*(s_16 + s_17) + s_25*(s_19 + s_23) + vn;
+ekf->state.ve = -s_14*(s_18 + s_23 - 1) + s_22*(-s_10 + s_9) - s_26*(s_7 + s_8) + ve;
+ekf->state.vd = s_11*s_15 + s_20*s_21 + s_24*s_26 + vd;
+ekf->state.pn = dt*vn + pn;
+ekf->state.pe = dt*ve + pe;
+ekf->state.pd = dt*vd + pd;

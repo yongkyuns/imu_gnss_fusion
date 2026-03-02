@@ -1,0 +1,307 @@
+#include "ekf.h"
+#include <math.h>
+#include <string.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846f
+#endif
+
+static void quat_mult(const float p[4], const float q[4], float r[4]);
+static void quat2Rot(const float q[4], float R[3][3]);
+static void normalize_quat(float q[4]);
+
+static void ekf_fuse_gps_pos_n(ekf_t *ekf, float pos_n, float R_POS_N);
+static void ekf_fuse_gps_pos_e(ekf_t *ekf, float pos_e, float R_POS_E);
+static void ekf_fuse_gps_pos_d(ekf_t *ekf, float pos_d, float R_POS_D);
+static void ekf_fuse_gps_vel_n(ekf_t *ekf, float vel_n, float R_VEL_N);
+static void ekf_fuse_gps_vel_e(ekf_t *ekf, float vel_e, float R_VEL_E);
+static void ekf_fuse_gps_vel_d(ekf_t *ekf, float vel_d, float R_VEL_D);
+static void ekf_fuse_gps_heading(ekf_t *ekf, float heading, float R_YAW);
+static void ekf_fuse_body_vel_y(ekf_t *ekf, const float R_BODY_VEL);
+static void ekf_fuse_body_vel_z(ekf_t *ekf, const float R_BODY_VEL);
+
+void ekf_init(ekf_t *ekf, float P_init_val) {
+  memset(ekf, 0, sizeof(ekf_t));
+  for (int i = 0; i < N_STATES; i++) {
+    ekf->P[i][i] = P_init_val;
+  }
+}
+
+void ekf_predict(ekf_t *ekf, const imu_sample_t *imu, const float daVar,
+                 const float dvVar, const float dgb_p_noise_var,
+                 const float dvb_x_p_noise_var, const float dvb_y_p_noise_var,
+                 const float dvb_z_p_noise_var, ekf_debug_t *debug_out) {
+
+  const float daxVar = daVar;
+  const float dayVar = daVar;
+  const float dazVar = daVar;
+
+  const float dvxVar = dvVar;
+  const float dvyVar = dvVar;
+  const float dvzVar = dvVar;
+
+  const float q0 = ekf->state.q0;
+  const float q1 = ekf->state.q1;
+  const float q2 = ekf->state.q2;
+  const float q3 = ekf->state.q3;
+  const float vn = ekf->state.vn;
+  const float ve = ekf->state.ve;
+  const float vd = ekf->state.vd;
+  const float pn = ekf->state.pn;
+  const float pe = ekf->state.pe;
+  const float pd = ekf->state.pd;
+  const float dax_b = ekf->state.dax_b;
+  const float day_b = ekf->state.day_b;
+  const float daz_b = ekf->state.daz_b;
+  const float dvx_b = ekf->state.dvx_b;
+  const float dvy_b = ekf->state.dvy_b;
+  const float dvz_b = ekf->state.dvz_b;
+
+  const float dax = imu->dax;
+  const float day = imu->day;
+  const float daz = imu->daz;
+  const float dvx = imu->dvx;
+  const float dvy = imu->dvy;
+  const float dvz = imu->dvz;
+  const float dt = imu->dt;
+  const float g = GRAVITY_MSS;
+
+  if (debug_out) {
+    float R[3][3];
+    quat2Rot((float *)&ekf->state, R);
+    debug_out->dvb_x = dvx - dvx_b + R[2][0] * g * dt;
+    debug_out->dvb_y = dvy - dvy_b + R[2][1] * g * dt;
+    debug_out->dvb_z = dvz - dvz_b + R[2][2] * g * dt;
+  }
+
+#include "generated/prediction_generated.c"
+
+  normalize_quat((float *)&ekf->state);
+
+  float nextP[N_STATES][N_STATES] = {{0}};
+  const float (*P)[N_STATES] = ekf->P;
+
+#include "generated/covariance_generated.c"
+
+  for (int i = 0; i < N_STATES; i++) {
+    for (int j = 0; j < N_STATES; j++) {
+      nextP[j][i] = nextP[i][j];
+    }
+  }
+  memcpy(ekf->P, nextP, sizeof(ekf->P));
+}
+
+void ekf_fuse_gps(ekf_t *ekf, const gps_data_t *gps) {
+  ekf_fuse_gps_pos_n(ekf, gps->pos_n, gps->R_POS_N);
+  ekf_fuse_gps_pos_e(ekf, gps->pos_e, gps->R_POS_E);
+  ekf_fuse_gps_pos_d(ekf, gps->pos_d, gps->R_POS_D);
+  ekf_fuse_gps_vel_n(ekf, gps->vel_n, gps->R_VEL_N);
+  ekf_fuse_gps_vel_e(ekf, gps->vel_e, gps->R_VEL_E);
+  ekf_fuse_gps_vel_d(ekf, gps->vel_d, gps->R_VEL_D);
+  ekf_fuse_gps_heading(ekf, gps->heading_rad, gps->R_YAW);
+}
+
+static void fuse_measurement(ekf_t *ekf, float innovation,
+                             const float H[N_STATES], const float K[N_STATES]) {
+  float *state_array = (float *)&ekf->state;
+
+  for (int i = 0; i < N_STATES; i++) {
+    state_array[i] += K[i] * innovation;
+  }
+
+  normalize_quat(state_array);
+
+  float HP[N_STATES];
+  for (int j = 0; j < N_STATES; j++) {
+    HP[j] = 0;
+    for (int k = 0; k < N_STATES; k++) {
+      HP[j] += H[k] * ekf->P[k][j];
+    }
+  }
+
+  for (int i = 0; i < N_STATES; i++) {
+    for (int j = i + 1; j < N_STATES; j++) {
+      const float temp = (ekf->P[i][j] + ekf->P[j][i]) / 2.0f;
+      ekf->P[i][j] = temp;
+      ekf->P[j][i] = temp;
+    }
+  }
+}
+
+static void ekf_fuse_gps_pos_n(ekf_t *ekf, float pos_n, float R_POS_N) {
+  const float pn = ekf->state.pn;
+  const float (*P)[N_STATES] = ekf->P;
+
+  const float innovation = pos_n - pn;
+
+  float Hfusion[N_STATES];
+  float Kfusion[N_STATES];
+
+#include "generated/gps_pos_n_generated.c"
+  fuse_measurement(ekf, innovation, Hfusion, Kfusion);
+}
+
+static void ekf_fuse_gps_pos_e(ekf_t *ekf, float pos_e, float R_POS_E) {
+  const float pe = ekf->state.pe;
+  const float (*P)[N_STATES] = ekf->P;
+
+  const float innovation = pos_e - pe;
+
+  float Hfusion[N_STATES];
+  float Kfusion[N_STATES];
+
+#include "generated/gps_pos_e_generated.c"
+  fuse_measurement(ekf, innovation, Hfusion, Kfusion);
+}
+
+static void ekf_fuse_gps_pos_d(ekf_t *ekf, float pos_d, float R_POS_D) {
+  const float pd = ekf->state.pd;
+  const float (*P)[N_STATES] = ekf->P;
+
+  const float innovation = pos_d - pd;
+
+  float Hfusion[N_STATES];
+  float Kfusion[N_STATES];
+
+#include "generated/gps_pos_d_generated.c"
+  fuse_measurement(ekf, innovation, Hfusion, Kfusion);
+}
+
+static void ekf_fuse_gps_vel_n(ekf_t *ekf, float vel_n, float R_VEL_N) {
+  const float vn = ekf->state.vn;
+  const float (*P)[N_STATES] = ekf->P;
+
+  const float innovation = vel_n - vn;
+
+  float Hfusion[N_STATES];
+  float Kfusion[N_STATES];
+
+#include "generated/gps_vel_n_generated.c"
+  fuse_measurement(ekf, innovation, Hfusion, Kfusion);
+}
+
+static void ekf_fuse_gps_vel_e(ekf_t *ekf, float vel_e, float R_VEL_E) {
+  const float ve = ekf->state.ve;
+  const float (*P)[N_STATES] = ekf->P;
+
+  const float innovation = vel_e - ve;
+
+  float Hfusion[N_STATES];
+  float Kfusion[N_STATES];
+
+#include "generated/gps_vel_e_generated.c"
+  fuse_measurement(ekf, innovation, Hfusion, Kfusion);
+}
+
+static void ekf_fuse_gps_vel_d(ekf_t *ekf, float vel_d, float R_VEL_D) {
+  const float vd = ekf->state.vd;
+  const float (*P)[N_STATES] = ekf->P;
+
+  const float innovation = vel_d - vd;
+
+  float Hfusion[N_STATES];
+  float Kfusion[N_STATES];
+
+#include "generated/gps_vel_d_generated.c"
+  fuse_measurement(ekf, innovation, Hfusion, Kfusion);
+}
+
+static void ekf_fuse_gps_heading(ekf_t *ekf, float heading, float R_YAW) {
+  const float q0 = ekf->state.q0, q1 = ekf->state.q1, q2 = ekf->state.q2,
+              q3 = ekf->state.q3;
+  const float (*P)[N_STATES] = ekf->P;
+  const float R_10 = 2.0f * (q1 * q2 + q0 * q3);
+  const float R_00 = 1.0f - 2.0f * (q2 * q2 + q3 * q3);
+  const float predicted_yaw = atan2f(R_10, R_00);
+
+  float innovation = heading - predicted_yaw;
+
+  if (innovation > M_PI) {
+    innovation -= 2.0f * M_PI;
+  } else if (innovation < -M_PI) {
+    innovation += 2.0f * M_PI;
+  }
+
+  float Hfusion[N_STATES];
+  float Kfusion[N_STATES];
+
+#include "generated/gps_heading_generated.c"
+  fuse_measurement(ekf, innovation, Hfusion, Kfusion);
+}
+
+static void ekf_fuse_body_vel_y(ekf_t *ekf, const float R_BODY_VEL) {
+  const float q0 = ekf->state.q0, q1 = ekf->state.q1, q2 = ekf->state.q2,
+              q3 = ekf->state.q3;
+  const float vn = ekf->state.vn, ve = ekf->state.ve, vd = ekf->state.vd;
+  const float (*P)[N_STATES] = ekf->P;
+
+  const float R_T_10 = 2.0f * (q1 * q2 - q0 * q3);
+  const float R_T_11 = 1.0f - 2.0f * (q1 * q1 + q3 * q3);
+  const float R_T_12 = 2.0f * (q2 * q3 + q0 * q1);
+  const float v_body_y = R_T_10 * vn + R_T_11 * ve + R_T_12 * vd;
+
+  const float innovation = -v_body_y;
+
+  float Hfusion[N_STATES];
+  float Kfusion[N_STATES];
+#include "generated/body_vel_y_generated.c"
+  fuse_measurement(ekf, innovation, Hfusion, Kfusion);
+}
+
+static void ekf_fuse_body_vel_z(ekf_t *ekf, const float R_BODY_VEL) {
+  const float q0 = ekf->state.q0, q1 = ekf->state.q1, q2 = ekf->state.q2,
+              q3 = ekf->state.q3;
+  const float vn = ekf->state.vn, ve = ekf->state.ve, vd = ekf->state.vd;
+  const float (*P)[N_STATES] = ekf->P;
+
+  const float R_T_20 = 2.0f * (q1 * q3 + q0 * q2);
+  const float R_T_21 = 2.0f * (q2 * q3 - q0 * q1);
+  const float R_T_22 = 1.0f - 2.0f * (q1 * q1 + q2 * q2);
+  const float v_body_z = R_T_20 * vn + R_T_21 * ve + R_T_22 * vd;
+
+  const float innovation = -v_body_z;
+
+  float Hfusion[N_STATES];
+  float Kfusion[N_STATES];
+#include "generated/body_vel_z_generated.c"
+  fuse_measurement(ekf, innovation, Hfusion, Kfusion);
+}
+
+static void quat_mult(const float p[4], const float q[4], float r[4]) {
+  r[0] = p[0] * q[0] - p[1] * q[1] - p[2] * q[2] - p[3] * q[3];
+  r[1] = p[0] * q[1] + p[1] * q[0] + p[2] * q[3] - p[3] * q[2];
+  r[2] = p[0] * q[2] - p[1] * q[3] + p[2] * q[0] + p[3] * q[1];
+  r[3] = p[0] * q[3] + p[1] * q[2] - p[2] * q[1] + p[3] * q[0];
+}
+
+static void quat2Rot(const float q[4], float R[3][3]) {
+  const float q0 = q[0], q1 = q[1], q2 = q[2], q3 = q[3];
+  const float q1q1 = q1 * q1, q2q2 = q2 * q2, q3q3 = q3 * q3;
+  R[0][0] = 1.0f - 2.0f * (q2q2 + q3q3);
+  R[0][1] = 2.0f * (q1 * q2 - q0 * q3);
+  R[0][2] = 2.0f * (q1 * q3 + q0 * q2);
+  R[1][0] = 2.0f * (q1 * q2 + q0 * q3);
+  R[1][1] = 1.0f - 2.0f * (q1q1 + q3q3);
+  R[1][2] = 2.0f * (q2 * q3 - q0 * q1);
+  R[2][0] = 2.0f * (q1 * q3 - q0 * q2);
+  R[2][1] = 2.0f * (q2 * q3 + q0 * q1);
+  R[2][2] = 1.0f - 2.0f * (q1q1 + q2q2);
+}
+
+static void normalize_quat(float q[4]) {
+  const float norm_sq = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
+
+  if (norm_sq > 1e-6f) {
+    const float norm_inv = 1.0f / sqrtf(norm_sq);
+    q[0] *= norm_inv;
+    q[1] *= norm_inv;
+    q[2] *= norm_inv;
+    q[3] *= norm_inv;
+  } else {
+    // If the quaternion is too close to zero, reset to a default orientation
+    q[0] = 1.0f;
+    q[1] = 0.0f;
+    q[2] = 0.0f;
+    q[3] = 0.0f;
+  }
+}
