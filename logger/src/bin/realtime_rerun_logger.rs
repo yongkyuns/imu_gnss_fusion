@@ -754,17 +754,21 @@ fn main() -> Result<()> {
     let args = Args::parse();
     std::env::set_var("RERUN_MAPBOX_ACCESS_TOKEN", &args.mapbox_token);
 
+    let data_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data");
+    std::fs::create_dir_all(&data_dir)?;
     let raw_path = if args.raw_log.is_empty() {
         let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
-        PathBuf::from(format!("ubx_raw_{ts}.bin"))
+        data_dir.join(format!("ubx_raw_{ts}.bin"))
     } else {
-        PathBuf::from(&args.raw_log)
+        let p = PathBuf::from(&args.raw_log);
+        if p.is_absolute() { p } else { data_dir.join(p) }
     };
     if let Some(parent) = raw_path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
         }
     }
+    println!("raw_log_path={}", raw_path.display());
 
     let (selected_port, selected_probe_baud) = select_port_and_config(&args)?;
     println!("selected_port={selected_port}");

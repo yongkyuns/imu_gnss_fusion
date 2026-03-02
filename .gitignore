@@ -4,3 +4,4 @@
 **/.cargo-ok
 **/.cargo_vcs_info.json
 logger/ubx_raw_*.bin
+logger/data/*.bin
