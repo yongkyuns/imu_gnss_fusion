@@ -1,3 +1,6 @@
 /target
 /ekf/target
 **/target/
+**/.cargo-ok
+**/.cargo_vcs_info.json
+logger/ubx_raw_*.bin
