@@ -1,19 +1,19 @@
-use std::{collections::HashMap, fs::File, io::Read, path::PathBuf};
 use std::time::{Duration, Instant};
+use std::{collections::HashMap, fs::File, io::Read, path::PathBuf};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use ekf_rs::ekf::{Ekf, GpsData, ImuSample, ekf_fuse_gps, ekf_init, ekf_predict};
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
+use ekf_rs::ekf::{Ekf, GpsData, ImuSample, ekf_fuse_gps, ekf_init, ekf_predict};
+use sim::ubxlog::{
+    extract_esf_alg, extract_esf_cal_samples, extract_esf_ins, extract_esf_meas_samples,
+    extract_esf_raw_samples, extract_itow_ms, extract_nav_att, extract_nav_pvt,
+    extract_nav_pvt_obs, extract_nav_sat_cn0, fit_linear_map, parse_ubx_frames, sensor_meta,
+    unwrap_counter,
+};
 use walkers::sources::{Mapbox, MapboxStyle, OpenStreetMap};
 use walkers::{HttpTiles, Map, MapMemory, Plugin, Position, lon_lat};
-use sim::ubxlog::{
-    extract_esf_alg, extract_esf_cal_samples, extract_esf_ins, extract_esf_meas_samples, extract_esf_raw_samples,
-    extract_itow_ms, extract_nav_att, extract_nav_pvt, extract_nav_pvt_obs, extract_nav_sat_cn0, fit_linear_map,
-    parse_ubx_frames,
-    sensor_meta, unwrap_counter,
-};
 
 #[derive(Parser, Debug)]
 #[command(name = "visualize_pygpsdata_log")]
@@ -55,9 +55,10 @@ struct PlotData {
     ekf_cmp_pos: Vec<Trace>,
     ekf_cmp_vel: Vec<Trace>,
     ekf_cmp_att: Vec<Trace>,
-    ekf_res_pos: Vec<Trace>,
-    ekf_res_vel: Vec<Trace>,
-    ekf_res_att: Vec<Trace>,
+    ekf_bias_gyro: Vec<Trace>,
+    ekf_bias_accel: Vec<Trace>,
+    ekf_cov_bias: Vec<Trace>,
+    ekf_cov_nonbias: Vec<Trace>,
     ekf_map: Vec<Trace>,
     ekf_map_heading: Vec<HeadingSample>,
 }
@@ -122,16 +123,6 @@ fn wrap_pi(mut a: f64) -> f64 {
     a
 }
 
-fn wrap_deg180(mut a: f64) -> f64 {
-    while a > 180.0 {
-        a -= 360.0;
-    }
-    while a < -180.0 {
-        a += 360.0;
-    }
-    a
-}
-
 fn rot_zyx(yaw_rad: f64, pitch_rad: f64, roll_rad: f64) -> [[f64; 3]; 3] {
     let (sy, cy) = yaw_rad.sin_cos();
     let (sp, cp) = pitch_rad.sin_cos();
@@ -176,7 +167,11 @@ fn quat_rpy_deg(q0: f32, q1: f32, q2: f32, q3: f32) -> (f64, f64, f64) {
     let siny_cosp = 2.0 * (qw * qz + qx * qy);
     let cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz);
     let yaw = siny_cosp.atan2(cosy_cosp);
-    (rad2deg(roll), rad2deg(pitch), normalize_heading_deg(rad2deg(yaw)))
+    (
+        rad2deg(roll),
+        rad2deg(pitch),
+        normalize_heading_deg(rad2deg(yaw)),
+    )
 }
 
 fn lla_to_ecef(lat_deg: f64, lon_deg: f64, h_m: f64) -> [f64; 3] {
@@ -209,7 +204,14 @@ fn ecef_to_ned(ecef: [f64; 3], ref_ecef: [f64; 3], ref_lat_deg: f64, ref_lon_deg
     ]
 }
 
-fn ned_to_lla_approx(n: f64, e: f64, d: f64, ref_lat_deg: f64, ref_lon_deg: f64, ref_h_m: f64) -> (f64, f64, f64) {
+fn ned_to_lla_approx(
+    n: f64,
+    e: f64,
+    d: f64,
+    ref_lat_deg: f64,
+    ref_lon_deg: f64,
+    ref_h_m: f64,
+) -> (f64, f64, f64) {
     let a = 6378137.0_f64;
     let e2 = 6.69437999014e-3_f64;
     let lat0 = deg2rad(ref_lat_deg);
@@ -250,9 +252,20 @@ fn build_ekf_compare_traces(
     frames: &[sim::ubxlog::UbxFrame],
     masters: &[(u64, f64)],
     t0_master_ms: f64,
-) -> (Vec<Trace>, Vec<Trace>, Vec<Trace>, Vec<Trace>, Vec<Trace>, Vec<Trace>, Vec<Trace>, Vec<HeadingSample>) {
+) -> (
+    Vec<Trace>,
+    Vec<Trace>,
+    Vec<Trace>,
+    Vec<Trace>,
+    Vec<Trace>,
+    Vec<Trace>,
+    Vec<Trace>,
+    Vec<Trace>,
+    Vec<HeadingSample>,
+) {
     if masters.is_empty() {
         return (
+            Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
@@ -297,8 +310,16 @@ fn build_ekf_compare_traces(
             }
         }
     }
-    alg_events.sort_by(|a, b| a.t_ms.partial_cmp(&b.t_ms).unwrap_or(std::cmp::Ordering::Equal));
-    nav_att_events.sort_by(|a, b| a.t_ms.partial_cmp(&b.t_ms).unwrap_or(std::cmp::Ordering::Equal));
+    alg_events.sort_by(|a, b| {
+        a.t_ms
+            .partial_cmp(&b.t_ms)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    nav_att_events.sort_by(|a, b| {
+        a.t_ms
+            .partial_cmp(&b.t_ms)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     nav_events.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
     let mut raw_seq = Vec::<u64>::new();
@@ -324,8 +345,14 @@ fn build_ekf_compare_traces(
         }
     }
     let (a_raw, b_raw) = fit_linear_map(&x, &y, 1e-3);
-    let master_min = masters.iter().map(|(_, ms)| *ms).fold(f64::INFINITY, f64::min);
-    let master_max = masters.iter().map(|(_, ms)| *ms).fold(f64::NEG_INFINITY, f64::max);
+    let master_min = masters
+        .iter()
+        .map(|(_, ms)| *ms)
+        .fold(f64::INFINITY, f64::min);
+    let master_max = masters
+        .iter()
+        .map(|(_, ms)| *ms)
+        .fold(f64::NEG_INFINITY, f64::max);
 
     let mut imu_packets = Vec::<ImuPacket>::new();
     let mut current_tag: Option<u64> = None;
@@ -343,7 +370,9 @@ fn build_ekf_compare_traces(
         .zip(raw_val.iter())
     {
         if current_tag != Some(*tag_u) {
-            if let (Some(gxv), Some(gyv), Some(gzv), Some(axv), Some(ayv), Some(azv)) = (gx, gy, gz, ax, ay, az) {
+            if let (Some(gxv), Some(gyv), Some(gzv), Some(axv), Some(ayv), Some(azv)) =
+                (gx, gy, gz, ax, ay, az)
+            {
                 imu_packets.push(ImuPacket {
                     t_ms,
                     gx_dps: gxv,
@@ -383,7 +412,9 @@ fn build_ekf_compare_traces(
             _ => {}
         }
     }
-    if let (Some(gxv), Some(gyv), Some(gzv), Some(axv), Some(ayv), Some(azv)) = (gx, gy, gz, ax, ay, az) {
+    if let (Some(gxv), Some(gyv), Some(gzv), Some(axv), Some(ayv), Some(azv)) =
+        (gx, gy, gz, ax, ay, az)
+    {
         imu_packets.push(ImuPacket {
             t_ms,
             gx_dps: gxv,
@@ -394,7 +425,11 @@ fn build_ekf_compare_traces(
             az_mps2: azv,
         });
     }
-    imu_packets.sort_by(|a, b| a.t_ms.partial_cmp(&b.t_ms).unwrap_or(std::cmp::Ordering::Equal));
+    imu_packets.sort_by(|a, b| {
+        a.t_ms
+            .partial_cmp(&b.t_ms)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut cmp_pos_n = Vec::<[f64; 2]>::new();
     let mut cmp_pos_e = Vec::<[f64; 2]>::new();
@@ -402,9 +437,6 @@ fn build_ekf_compare_traces(
     let mut ubx_pos_n = Vec::<[f64; 2]>::new();
     let mut ubx_pos_e = Vec::<[f64; 2]>::new();
     let mut ubx_pos_d = Vec::<[f64; 2]>::new();
-    let mut res_pos_n = Vec::<[f64; 2]>::new();
-    let mut res_pos_e = Vec::<[f64; 2]>::new();
-    let mut res_pos_d = Vec::<[f64; 2]>::new();
 
     let mut cmp_vel_n = Vec::<[f64; 2]>::new();
     let mut cmp_vel_e = Vec::<[f64; 2]>::new();
@@ -412,9 +444,6 @@ fn build_ekf_compare_traces(
     let mut ubx_vel_n = Vec::<[f64; 2]>::new();
     let mut ubx_vel_e = Vec::<[f64; 2]>::new();
     let mut ubx_vel_d = Vec::<[f64; 2]>::new();
-    let mut res_vel_n = Vec::<[f64; 2]>::new();
-    let mut res_vel_e = Vec::<[f64; 2]>::new();
-    let mut res_vel_d = Vec::<[f64; 2]>::new();
 
     let mut cmp_att_roll = Vec::<[f64; 2]>::new();
     let mut cmp_att_pitch = Vec::<[f64; 2]>::new();
@@ -422,15 +451,19 @@ fn build_ekf_compare_traces(
     let mut ubx_att_roll = Vec::<[f64; 2]>::new();
     let mut ubx_att_pitch = Vec::<[f64; 2]>::new();
     let mut ubx_att_yaw = Vec::<[f64; 2]>::new();
-    let mut res_att_roll = Vec::<[f64; 2]>::new();
-    let mut res_att_pitch = Vec::<[f64; 2]>::new();
-    let mut res_att_yaw = Vec::<[f64; 2]>::new();
+    let mut bias_gyro_x = Vec::<[f64; 2]>::new();
+    let mut bias_gyro_y = Vec::<[f64; 2]>::new();
+    let mut bias_gyro_z = Vec::<[f64; 2]>::new();
+    let mut bias_accel_x = Vec::<[f64; 2]>::new();
+    let mut bias_accel_y = Vec::<[f64; 2]>::new();
+    let mut bias_accel_z = Vec::<[f64; 2]>::new();
+    let mut cov_diag: [Vec<[f64; 2]>; 16] = std::array::from_fn(|_| Vec::new());
     let mut map_ubx = Vec::<[f64; 2]>::new(); // [lon, lat]
     let mut map_ekf = Vec::<[f64; 2]>::new(); // [lon, lat]
     let mut map_heading = Vec::<HeadingSample>::new();
 
     let mut ekf = Ekf::default();
-    ekf_init(&mut ekf, 1.0);
+    ekf_init(&mut ekf, 1000.0);
     ekf.state.q0 = 1.0;
     let mut prev_imu_t: Option<f64> = None;
     let mut alg_idx = 0usize;
@@ -467,7 +500,11 @@ fn build_ekf_compare_traces(
         let mut gyro = [pkt.gx_dps, pkt.gy_dps, pkt.gz_dps];
         let mut accel = [pkt.ax_mps2, pkt.ay_mps2, pkt.az_mps2];
         if let Some(alg) = cur_alg {
-            let r_bs = rot_zyx(deg2rad(alg.yaw_deg), deg2rad(alg.pitch_deg), deg2rad(alg.roll_deg));
+            let r_bs = rot_zyx(
+                deg2rad(alg.yaw_deg),
+                deg2rad(alg.pitch_deg),
+                deg2rad(alg.roll_deg),
+            );
             let r_sb = transpose(r_bs);
             gyro = mat_vec(r_sb, gyro);
             accel = mat_vec(r_sb, accel);
@@ -482,15 +519,7 @@ fn build_ekf_compare_traces(
             dt: dt as f32,
         };
         ekf_predict(
-            &mut ekf,
-            &imu,
-            2.5e-4,
-            1.2e-3,
-            5.0e-7,
-            2.0e-6,
-            2.5e-6,
-            3.0e-6,
-            None,
+            &mut ekf, &imu, 2.5e-4, 1.2e-3, 5.0e-7, 2.0e-6, 2.5e-6, 3.0e-6, None,
         );
 
         while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
@@ -517,7 +546,8 @@ fn build_ekf_compare_traces(
             let mut heading_rad = wrap_pi(deg2rad(nav.heading_motion_deg));
             let mut r_yaw = deg2rad(nav.head_acc_deg).powi(2).max(0.02);
             if speed_h < 1.0 || !r_yaw.is_finite() {
-                let (_, _, yaw_deg) = quat_rpy_deg(ekf.state.q0, ekf.state.q1, ekf.state.q2, ekf.state.q3);
+                let (_, _, yaw_deg) =
+                    quat_rpy_deg(ekf.state.q0, ekf.state.q1, ekf.state.q2, ekf.state.q3);
                 heading_rad = deg2rad(yaw_deg);
                 r_yaw = 1e6;
             }
@@ -549,9 +579,6 @@ fn build_ekf_compare_traces(
             ubx_pos_n.push([t, ned[0]]);
             ubx_pos_e.push([t, ned[1]]);
             ubx_pos_d.push([t, ned[2]]);
-            res_pos_n.push([t, ekf.state.pn as f64 - ned[0]]);
-            res_pos_e.push([t, ekf.state.pe as f64 - ned[1]]);
-            res_pos_d.push([t, ekf.state.pd as f64 - ned[2]]);
 
             cmp_vel_n.push([t, ekf.state.vn as f64]);
             cmp_vel_e.push([t, ekf.state.ve as f64]);
@@ -559,9 +586,16 @@ fn build_ekf_compare_traces(
             ubx_vel_n.push([t, nav.vel_n_mps]);
             ubx_vel_e.push([t, nav.vel_e_mps]);
             ubx_vel_d.push([t, nav.vel_d_mps]);
-            res_vel_n.push([t, ekf.state.vn as f64 - nav.vel_n_mps]);
-            res_vel_e.push([t, ekf.state.ve as f64 - nav.vel_e_mps]);
-            res_vel_d.push([t, ekf.state.vd as f64 - nav.vel_d_mps]);
+            let dt_safe = dt.max(1.0e-6);
+            bias_gyro_x.push([t, rad2deg((ekf.state.dax_b as f64) / dt_safe)]);
+            bias_gyro_y.push([t, rad2deg((ekf.state.day_b as f64) / dt_safe)]);
+            bias_gyro_z.push([t, rad2deg((ekf.state.daz_b as f64) / dt_safe)]);
+            bias_accel_x.push([t, (ekf.state.dvx_b as f64) / dt_safe]);
+            bias_accel_y.push([t, (ekf.state.dvy_b as f64) / dt_safe]);
+            bias_accel_z.push([t, (ekf.state.dvz_b as f64) / dt_safe]);
+            for (i, tr) in cov_diag.iter_mut().enumerate() {
+                tr.push([t, ekf.p[i][i] as f64]);
+            }
             map_ubx.push([nav.lon_deg, nav.lat_deg]);
             let (ekf_roll, ekf_pitch, ekf_yaw) =
                 quat_rpy_deg(ekf.state.q0, ekf.state.q1, ekf.state.q2, ekf.state.q3);
@@ -581,7 +615,9 @@ fn build_ekf_compare_traces(
                 yaw_deg: ekf_yaw,
             });
 
-            while nav_att_idx + 1 < nav_att_events.len() && nav_att_events[nav_att_idx + 1].t_ms <= t_ms {
+            while nav_att_idx + 1 < nav_att_events.len()
+                && nav_att_events[nav_att_idx + 1].t_ms <= t_ms
+            {
                 nav_att_idx += 1;
             }
             if nav_att_idx < nav_att_events.len() && nav_att_events[nav_att_idx].t_ms <= t_ms {
@@ -592,58 +628,206 @@ fn build_ekf_compare_traces(
                 ubx_att_roll.push([t, att.roll_deg]);
                 ubx_att_pitch.push([t, att.pitch_deg]);
                 ubx_att_yaw.push([t, att.heading_deg]);
-                res_att_roll.push([t, ekf_roll - att.roll_deg]);
-                res_att_pitch.push([t, ekf_pitch - att.pitch_deg]);
-                res_att_yaw.push([t, wrap_deg180(ekf_yaw - att.heading_deg)]);
             }
         }
     }
 
     let cmp_pos = vec![
-        Trace { name: "EKF posN [m]".to_string(), points: cmp_pos_n },
-        Trace { name: "UBX posN [m]".to_string(), points: ubx_pos_n },
-        Trace { name: "EKF posE [m]".to_string(), points: cmp_pos_e },
-        Trace { name: "UBX posE [m]".to_string(), points: ubx_pos_e },
-        Trace { name: "EKF posD [m]".to_string(), points: cmp_pos_d },
-        Trace { name: "UBX posD [m]".to_string(), points: ubx_pos_d },
+        Trace {
+            name: "EKF posN [m]".to_string(),
+            points: cmp_pos_n,
+        },
+        Trace {
+            name: "UBX posN [m]".to_string(),
+            points: ubx_pos_n,
+        },
+        Trace {
+            name: "EKF posE [m]".to_string(),
+            points: cmp_pos_e,
+        },
+        Trace {
+            name: "UBX posE [m]".to_string(),
+            points: ubx_pos_e,
+        },
+        Trace {
+            name: "EKF posD [m]".to_string(),
+            points: cmp_pos_d,
+        },
+        Trace {
+            name: "UBX posD [m]".to_string(),
+            points: ubx_pos_d,
+        },
     ];
     let cmp_vel = vec![
-        Trace { name: "EKF velN [m/s]".to_string(), points: cmp_vel_n },
-        Trace { name: "UBX velN [m/s]".to_string(), points: ubx_vel_n },
-        Trace { name: "EKF velE [m/s]".to_string(), points: cmp_vel_e },
-        Trace { name: "UBX velE [m/s]".to_string(), points: ubx_vel_e },
-        Trace { name: "EKF velD [m/s]".to_string(), points: cmp_vel_d },
-        Trace { name: "UBX velD [m/s]".to_string(), points: ubx_vel_d },
+        Trace {
+            name: "EKF velN [m/s]".to_string(),
+            points: cmp_vel_n,
+        },
+        Trace {
+            name: "UBX velN [m/s]".to_string(),
+            points: ubx_vel_n,
+        },
+        Trace {
+            name: "EKF velE [m/s]".to_string(),
+            points: cmp_vel_e,
+        },
+        Trace {
+            name: "UBX velE [m/s]".to_string(),
+            points: ubx_vel_e,
+        },
+        Trace {
+            name: "EKF velD [m/s]".to_string(),
+            points: cmp_vel_d,
+        },
+        Trace {
+            name: "UBX velD [m/s]".to_string(),
+            points: ubx_vel_d,
+        },
     ];
     let cmp_att = vec![
-        Trace { name: "EKF roll [deg]".to_string(), points: cmp_att_roll },
-        Trace { name: "UBX roll [deg]".to_string(), points: ubx_att_roll },
-        Trace { name: "EKF pitch [deg]".to_string(), points: cmp_att_pitch },
-        Trace { name: "UBX pitch [deg]".to_string(), points: ubx_att_pitch },
-        Trace { name: "EKF yaw [deg]".to_string(), points: cmp_att_yaw },
-        Trace { name: "UBX yaw [deg]".to_string(), points: ubx_att_yaw },
+        Trace {
+            name: "EKF roll [deg]".to_string(),
+            points: cmp_att_roll,
+        },
+        Trace {
+            name: "NAV-ATT roll [deg]".to_string(),
+            points: ubx_att_roll,
+        },
+        Trace {
+            name: "EKF pitch [deg]".to_string(),
+            points: cmp_att_pitch,
+        },
+        Trace {
+            name: "NAV-ATT pitch [deg]".to_string(),
+            points: ubx_att_pitch,
+        },
+        Trace {
+            name: "EKF yaw [deg]".to_string(),
+            points: cmp_att_yaw,
+        },
+        Trace {
+            name: "NAV-ATT heading [deg]".to_string(),
+            points: ubx_att_yaw,
+        },
     ];
-    let res_pos = vec![
-        Trace { name: "res posN [m]".to_string(), points: res_pos_n },
-        Trace { name: "res posE [m]".to_string(), points: res_pos_e },
-        Trace { name: "res posD [m]".to_string(), points: res_pos_d },
+    let bias_gyro = vec![
+        Trace {
+            name: "EKF gyro bias x [deg/s]".to_string(),
+            points: bias_gyro_x,
+        },
+        Trace {
+            name: "EKF gyro bias y [deg/s]".to_string(),
+            points: bias_gyro_y,
+        },
+        Trace {
+            name: "EKF gyro bias z [deg/s]".to_string(),
+            points: bias_gyro_z,
+        },
     ];
-    let res_vel = vec![
-        Trace { name: "res velN [m/s]".to_string(), points: res_vel_n },
-        Trace { name: "res velE [m/s]".to_string(), points: res_vel_e },
-        Trace { name: "res velD [m/s]".to_string(), points: res_vel_d },
+    let bias_accel = vec![
+        Trace {
+            name: "EKF accel bias x [m/s^2]".to_string(),
+            points: bias_accel_x,
+        },
+        Trace {
+            name: "EKF accel bias y [m/s^2]".to_string(),
+            points: bias_accel_y,
+        },
+        Trace {
+            name: "EKF accel bias z [m/s^2]".to_string(),
+            points: bias_accel_z,
+        },
     ];
-    let res_att = vec![
-        Trace { name: "res roll [deg]".to_string(), points: res_att_roll },
-        Trace { name: "res pitch [deg]".to_string(), points: res_att_pitch },
-        Trace { name: "res yaw [deg]".to_string(), points: res_att_yaw },
+    let cov_bias = vec![
+        Trace {
+            name: "acc_x".to_string(),
+            points: cov_diag[13].clone(),
+        },
+        Trace {
+            name: "acc_y".to_string(),
+            points: cov_diag[14].clone(),
+        },
+        Trace {
+            name: "acc_z".to_string(),
+            points: cov_diag[15].clone(),
+        },
+        Trace {
+            name: "gyro_x".to_string(),
+            points: cov_diag[10].clone(),
+        },
+        Trace {
+            name: "gyro_y".to_string(),
+            points: cov_diag[11].clone(),
+        },
+        Trace {
+            name: "gyro_z".to_string(),
+            points: cov_diag[12].clone(),
+        },
+    ];
+    let cov_nonbias = vec![
+        Trace {
+            name: "p_n".to_string(),
+            points: cov_diag[7].clone(),
+        },
+        Trace {
+            name: "p_e".to_string(),
+            points: cov_diag[8].clone(),
+        },
+        Trace {
+            name: "p_d".to_string(),
+            points: cov_diag[9].clone(),
+        },
+        Trace {
+            name: "v_n".to_string(),
+            points: cov_diag[4].clone(),
+        },
+        Trace {
+            name: "v_e".to_string(),
+            points: cov_diag[5].clone(),
+        },
+        Trace {
+            name: "v_d".to_string(),
+            points: cov_diag[6].clone(),
+        },
+        Trace {
+            name: "q1".to_string(),
+            points: cov_diag[1].clone(),
+        },
+        Trace {
+            name: "q2".to_string(),
+            points: cov_diag[2].clone(),
+        },
+        Trace {
+            name: "q3".to_string(),
+            points: cov_diag[3].clone(),
+        },
+        Trace {
+            name: "q0".to_string(),
+            points: cov_diag[0].clone(),
+        },
     ];
     let map = vec![
-        Trace { name: "u-blox path (lon,lat)".to_string(), points: map_ubx },
-        Trace { name: "EKF path (lon,lat)".to_string(), points: map_ekf },
+        Trace {
+            name: "u-blox path (lon,lat)".to_string(),
+            points: map_ubx,
+        },
+        Trace {
+            name: "EKF path (lon,lat)".to_string(),
+            points: map_ekf,
+        },
     ];
 
-    (cmp_pos, cmp_vel, cmp_att, res_pos, res_vel, res_att, map, map_heading)
+    (
+        cmp_pos,
+        cmp_vel,
+        cmp_att,
+        bias_gyro,
+        bias_accel,
+        cov_bias,
+        cov_nonbias,
+        map,
+        map_heading,
+    )
 }
 
 fn unwrap_i64_counter(values: &[i64], modulus: i64) -> Vec<i64> {
@@ -713,7 +897,11 @@ fn build_plot_data(bytes: &[u8], max_records: Option<usize>) -> (PlotData, bool)
         .iter()
         .map(|(_, ms)| *ms)
         .fold(f64::INFINITY, f64::min);
-    let t0_master_ms = if t0_master_ms.is_finite() { t0_master_ms } else { 0.0 };
+    let t0_master_ms = if t0_master_ms.is_finite() {
+        t0_master_ms
+    } else {
+        0.0
+    };
     let master_ms_to_rel_s = |master_ms: f64| -> Option<f64> {
         if !has_itow {
             return None;
@@ -729,8 +917,17 @@ fn build_plot_data(bytes: &[u8], max_records: Option<usize>) -> (PlotData, bool)
         master_ms_to_rel_s(master_ms)
     };
 
-    let (ekf_cmp_pos, ekf_cmp_vel, ekf_cmp_att, ekf_res_pos, ekf_res_vel, ekf_res_att, ekf_map, ekf_map_heading) =
-        build_ekf_compare_traces(&frames, &masters, t0_master_ms);
+    let (
+        ekf_cmp_pos,
+        ekf_cmp_vel,
+        ekf_cmp_att,
+        ekf_bias_gyro,
+        ekf_bias_accel,
+        ekf_cov_bias,
+        ekf_cov_nonbias,
+        ekf_map,
+        ekf_map_heading,
+    ) = build_ekf_compare_traces(&frames, &masters, t0_master_ms);
 
     let mut speed_g = Vec::<[f64; 2]>::new();
     let mut speed_n = Vec::<[f64; 2]>::new();
@@ -745,42 +942,42 @@ fn build_plot_data(bytes: &[u8], max_records: Option<usize>) -> (PlotData, bool)
     for f in &frames {
         if let Some((_itow, gs, vn, ve, vd, _lat, _lon)) = extract_nav_pvt(f) {
             if let Some(t) = seq_to_rel_s(f.seq) {
-            speed_g.push([t, gs]);
-            speed_n.push([t, vn]);
-            speed_e.push([t, ve]);
-            speed_d.push([t, vd]);
+                speed_g.push([t, gs]);
+                speed_n.push([t, vn]);
+                speed_e.push([t, ve]);
+                speed_d.push([t, vd]);
             }
         }
         if let Some((_itow, roll, pitch, yaw)) = extract_nav_att(f) {
             if let Some(t) = seq_to_rel_s(f.seq) {
-            other_map
-                .entry("NAV-ATT roll [deg]".to_string())
-                .or_default()
-                .push([t, roll]);
-            other_map
-                .entry("NAV-ATT pitch [deg]".to_string())
-                .or_default()
-                .push([t, pitch]);
-            other_map
-                .entry("NAV-ATT heading [deg]".to_string())
-                .or_default()
-                .push([t, normalize_heading_deg(yaw)]);
+                other_map
+                    .entry("NAV-ATT roll [deg]".to_string())
+                    .or_default()
+                    .push([t, roll]);
+                other_map
+                    .entry("NAV-ATT pitch [deg]".to_string())
+                    .or_default()
+                    .push([t, pitch]);
+                other_map
+                    .entry("NAV-ATT heading [deg]".to_string())
+                    .or_default()
+                    .push([t, normalize_heading_deg(yaw)]);
             }
         }
         if let Some((_itow, roll, pitch, yaw)) = extract_esf_alg(f) {
             if let Some(t) = seq_to_rel_s(f.seq) {
-            orient_map
-                .entry("ESF-ALG roll [deg]".to_string())
-                .or_default()
-                .push([t, roll]);
-            orient_map
-                .entry("ESF-ALG pitch [deg]".to_string())
-                .or_default()
-                .push([t, pitch]);
-            orient_map
-                .entry("ESF-ALG yaw [deg]".to_string())
-                .or_default()
-                .push([t, normalize_heading_deg(yaw)]);
+                orient_map
+                    .entry("ESF-ALG roll [deg]".to_string())
+                    .or_default()
+                    .push([t, roll]);
+                orient_map
+                    .entry("ESF-ALG pitch [deg]".to_string())
+                    .or_default()
+                    .push([t, pitch]);
+                orient_map
+                    .entry("ESF-ALG yaw [deg]".to_string())
+                    .or_default()
+                    .push([t, normalize_heading_deg(yaw)]);
             }
         }
         for (sat, cno) in extract_nav_sat_cn0(f) {
@@ -891,8 +1088,16 @@ fn build_plot_data(bytes: &[u8], max_records: Option<usize>) -> (PlotData, bool)
         .iter()
         .map(|(_, ms)| *ms)
         .fold(f64::NEG_INFINITY, f64::max);
-    let master_min = if master_min.is_finite() { master_min } else { 0.0 };
-    let master_max = if master_max.is_finite() { master_max } else { master_min };
+    let master_min = if master_min.is_finite() {
+        master_min
+    } else {
+        0.0
+    };
+    let master_max = if master_max.is_finite() {
+        master_max
+    } else {
+        master_min
+    };
     let map_tag_ms = |a: f64, b: f64, tag: f64, seq: u64| -> Option<f64> {
         let seq_ms = nearest_master_ms(seq, &masters)?;
         let mut ms = a * tag + b;
@@ -936,7 +1141,8 @@ fn build_plot_data(bytes: &[u8], max_records: Option<usize>) -> (PlotData, bool)
                 .push([t, *val]);
         }
     }
-    for (((dtype, val, src), tag), seq) in meas_sig.iter().zip(meas_tag.iter()).zip(meas_seq.iter()) {
+    for (((dtype, val, src), tag), seq) in meas_sig.iter().zip(meas_tag.iter()).zip(meas_seq.iter())
+    {
         let (name, _unit, _scale) = sensor_meta(*dtype);
         let master_ms = match map_tag_ms(a_meas, b_meas, *tag as f64, *seq) {
             Some(v) => v,
@@ -971,10 +1177,7 @@ fn build_plot_data(bytes: &[u8], max_records: Option<usize>) -> (PlotData, bool)
     ];
     out.sat_cn0 = sats
         .into_iter()
-        .map(|(k, v)| Trace {
-            name: k,
-            points: v,
-        })
+        .map(|(k, v)| Trace { name: k, points: v })
         .collect();
 
     for (k, v) in raw_by_sig {
@@ -1004,8 +1207,11 @@ fn build_plot_data(bytes: &[u8], max_records: Option<usize>) -> (PlotData, bool)
     for (name, points) in orient_map {
         out.orientation.push(Trace { name, points });
     }
-    out.orientation
-        .sort_by(|a, b| a.name.partial_cmp(&b.name).unwrap_or(std::cmp::Ordering::Equal));
+    out.orientation.sort_by(|a, b| {
+        a.name
+            .partial_cmp(&b.name)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     for (name, points) in esf_ins_accel_map {
         out.esf_ins_accel.push(Trace { name, points });
@@ -1013,16 +1219,23 @@ fn build_plot_data(bytes: &[u8], max_records: Option<usize>) -> (PlotData, bool)
     for (name, points) in esf_ins_gyro_map {
         out.esf_ins_gyro.push(Trace { name, points });
     }
-    out.esf_ins_gyro
-        .sort_by(|a, b| a.name.partial_cmp(&b.name).unwrap_or(std::cmp::Ordering::Equal));
-    out.esf_ins_accel
-        .sort_by(|a, b| a.name.partial_cmp(&b.name).unwrap_or(std::cmp::Ordering::Equal));
+    out.esf_ins_gyro.sort_by(|a, b| {
+        a.name
+            .partial_cmp(&b.name)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    out.esf_ins_accel.sort_by(|a, b| {
+        a.name
+            .partial_cmp(&b.name)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     out.ekf_cmp_pos = ekf_cmp_pos;
     out.ekf_cmp_vel = ekf_cmp_vel;
     out.ekf_cmp_att = ekf_cmp_att;
-    out.ekf_res_pos = ekf_res_pos;
-    out.ekf_res_vel = ekf_res_vel;
-    out.ekf_res_att = ekf_res_att;
+    out.ekf_bias_gyro = ekf_bias_gyro;
+    out.ekf_bias_accel = ekf_bias_accel;
+    out.ekf_cov_bias = ekf_cov_bias;
+    out.ekf_cov_nonbias = ekf_cov_nonbias;
     out.ekf_map = ekf_map;
     out.ekf_map_heading = ekf_map_heading;
 
@@ -1062,9 +1275,10 @@ fn build_plot_data(bytes: &[u8], max_records: Option<usize>) -> (PlotData, bool)
         &mut out.ekf_cmp_pos,
         &mut out.ekf_cmp_vel,
         &mut out.ekf_cmp_att,
-        &mut out.ekf_res_pos,
-        &mut out.ekf_res_vel,
-        &mut out.ekf_res_att,
+        &mut out.ekf_bias_gyro,
+        &mut out.ekf_bias_accel,
+        &mut out.ekf_cov_bias,
+        &mut out.ekf_cov_nonbias,
     ] {
         for tr in traces.iter_mut() {
             tr.points
@@ -1094,9 +1308,10 @@ fn trace_stats(data: &PlotData) -> (usize, usize) {
         &data.ekf_cmp_pos,
         &data.ekf_cmp_vel,
         &data.ekf_cmp_att,
-        &data.ekf_res_pos,
-        &data.ekf_res_vel,
-        &data.ekf_res_att,
+        &data.ekf_bias_gyro,
+        &data.ekf_bias_accel,
+        &data.ekf_cov_bias,
+        &data.ekf_cov_nonbias,
     ];
     let mut traces = 0usize;
     let mut points = 0usize;
@@ -1122,9 +1337,10 @@ fn trace_time_bounds(data: &PlotData) -> Option<(f64, f64)> {
         &data.ekf_cmp_pos,
         &data.ekf_cmp_vel,
         &data.ekf_cmp_att,
-        &data.ekf_res_pos,
-        &data.ekf_res_vel,
-        &data.ekf_res_att,
+        &data.ekf_bias_gyro,
+        &data.ekf_bias_accel,
+        &data.ekf_cov_bias,
+        &data.ekf_cov_nonbias,
         &data.ekf_map,
     ];
     let mut min_t = f64::INFINITY;
@@ -1203,8 +1419,7 @@ struct App {
     show_heading: bool,
 }
 
-const MAPBOX_ACCESS_TOKEN: &str =
-    "pk.eyJ1IjoieW9uZ2t5dW5zODciLCJhIjoiY21tNjB5NWt6MGJmOTJzcG02MmRvN3RnYiJ9.fu_66qb1G1cgrLzAE54E0w";
+const MAPBOX_ACCESS_TOKEN: &str = "pk.eyJ1IjoieW9uZ2t5dW5zODciLCJhIjoiY21tNjB5NWt6MGJmOTJzcG02MmRvN3RnYiJ9.fu_66qb1G1cgrLzAE54E0w";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Page {
@@ -1250,8 +1465,10 @@ impl Plugin for TrackOverlay {
                 pts.push(egui::pos2(v.x, v.y));
             }
             if pts.len() >= 2 {
-                ui.painter()
-                    .add(egui::epaint::PathShape::line(pts, egui::Stroke::new(2.2, color)));
+                ui.painter().add(egui::epaint::PathShape::line(
+                    pts,
+                    egui::Stroke::new(2.2, color),
+                ));
             }
         }
 
@@ -1344,7 +1561,10 @@ impl eframe::App for App {
                         self.max_points_per_trace, self.fps_ema
                     ));
                     ui.checkbox(&mut self.show_esf_meas, "Show ESF-MEAS (Accel)");
-                    ui.checkbox(&mut self.show_egui_inspection, "Show egui inspection/profiler");
+                    ui.checkbox(
+                        &mut self.show_egui_inspection,
+                        "Show egui inspection/profiler",
+                    );
                 });
             ui.horizontal(|ui| {
                 ui.label("Page:");
@@ -1380,27 +1600,118 @@ impl eframe::App for App {
                     .resizable(false)
                     .exact_width(half_width)
                     .show(ctx, |ui| {
-                        draw_plot(ui, "Speed", &self.data.speed, true, self.max_points_per_trace);
-                        draw_plot(ui, "IMU Gyro ESF (RAW/CAL)", &imu_gyro, true, self.max_points_per_trace);
-                        draw_plot(ui, "ESF-INS Gyro", &self.data.esf_ins_gyro, true, self.max_points_per_trace);
-                        draw_plot(ui, "Orientation", &self.data.orientation, true, self.max_points_per_trace);
+                        draw_plot(
+                            ui,
+                            "Speed",
+                            &self.data.speed,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "IMU Gyro ESF (RAW/CAL)",
+                            &imu_gyro,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "ESF-INS Gyro",
+                            &self.data.esf_ins_gyro,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "Orientation",
+                            &self.data.orientation,
+                            true,
+                            self.max_points_per_trace,
+                        );
                     });
 
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    draw_plot(ui, "Signal Strength (C/N0)", &self.data.sat_cn0, false, self.max_points_per_trace);
-                    draw_plot(ui, "IMU Accel ESF (RAW/CAL/MEAS)", &imu_accel, true, self.max_points_per_trace);
-                    draw_plot(ui, "ESF-INS Accel", &self.data.esf_ins_accel, true, self.max_points_per_trace);
-                    draw_plot(ui, "Other Signals", &self.data.other, true, self.max_points_per_trace);
+                    draw_plot(
+                        ui,
+                        "Signal Strength (C/N0)",
+                        &self.data.sat_cn0,
+                        false,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "IMU Accel ESF (RAW/CAL/MEAS)",
+                        &imu_accel,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "ESF-INS Accel",
+                        &self.data.esf_ins_accel,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "Other Signals",
+                        &self.data.other,
+                        true,
+                        self.max_points_per_trace,
+                    );
                 });
             }
             Page::EkfCompare => {
+                let half_width = (ctx.content_rect().width() * 0.5).max(260.0);
+                egui::SidePanel::left("ekf_compare_left")
+                    .resizable(false)
+                    .exact_width(half_width)
+                    .show(ctx, |ui| {
+                        draw_plot(
+                            ui,
+                            "Velocity: EKF vs u-blox",
+                            &self.data.ekf_cmp_vel,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "Euler Angles: EKF Quaternion vs NAV-ATT",
+                            &self.data.ekf_cmp_att,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "EKF Gyro Bias Estimates",
+                            &self.data.ekf_bias_gyro,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                    });
+
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    draw_plot(ui, "Position: EKF vs u-blox", &self.data.ekf_cmp_pos, true, self.max_points_per_trace);
-                    draw_plot(ui, "Position Residuals (EKF - u-blox)", &self.data.ekf_res_pos, true, self.max_points_per_trace);
-                    draw_plot(ui, "Velocity: EKF vs u-blox", &self.data.ekf_cmp_vel, true, self.max_points_per_trace);
-                    draw_plot(ui, "Velocity Residuals (EKF - u-blox)", &self.data.ekf_res_vel, true, self.max_points_per_trace);
-                    draw_plot(ui, "Orientation: EKF vs u-blox", &self.data.ekf_cmp_att, true, self.max_points_per_trace);
-                    draw_plot(ui, "Orientation Residuals (EKF - u-blox)", &self.data.ekf_res_att, true, self.max_points_per_trace);
+                    draw_plot(
+                        ui,
+                        "EKF Accel Bias Estimates",
+                        &self.data.ekf_bias_accel,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "EKF Bias Covariance Diagonal",
+                        &self.data.ekf_cov_bias,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "EKF Covariance Diagonal (Non-bias States)",
+                        &self.data.ekf_cov_nonbias,
+                        true,
+                        self.max_points_per_trace,
+                    );
                 });
             }
             Page::MapDark => {
@@ -1418,9 +1729,13 @@ impl eframe::App for App {
                         show_heading: self.show_heading,
                     };
                     ui.add(
-                        Map::new(Some(&mut self.map_tiles), &mut self.map_memory, self.map_center)
-                            .with_plugin(track)
-                            .double_click_to_zoom(true),
+                        Map::new(
+                            Some(&mut self.map_tiles),
+                            &mut self.map_memory,
+                            self.map_center,
+                        )
+                        .with_plugin(track)
+                        .double_click_to_zoom(true),
                     );
                 });
             }
@@ -1436,15 +1751,30 @@ impl eframe::App for App {
     }
 }
 
-fn draw_plot(ui: &mut egui::Ui, title: &str, traces: &[Trace], show_legend: bool, max_points_per_trace: usize) {
-    fn visible_decimated(points: &[[f64; 2]], xmin: f64, xmax: f64, max_points: usize) -> Vec<[f64; 2]> {
+fn draw_plot(
+    ui: &mut egui::Ui,
+    title: &str,
+    traces: &[Trace],
+    show_legend: bool,
+    max_points_per_trace: usize,
+) {
+    fn visible_decimated(
+        points: &[[f64; 2]],
+        xmin: f64,
+        xmax: f64,
+        max_points: usize,
+    ) -> Vec<[f64; 2]> {
         if points.is_empty() {
             return Vec::new();
         }
         let lo = points.partition_point(|p| p[0] < xmin);
         let hi = points.partition_point(|p| p[0] <= xmax);
         let start = lo.saturating_sub(1);
-        let end = if hi < points.len() { hi + 1 } else { points.len() };
+        let end = if hi < points.len() {
+            hi + 1
+        } else {
+            points.len()
+        };
         let slice = &points[start..end];
         if slice.len() <= max_points || max_points == 0 {
             return slice.to_vec();
@@ -1592,9 +1922,10 @@ fn main() -> Result<()> {
         group_stats("ekf_cmp_pos", &data.ekf_cmp_pos),
         group_stats("ekf_cmp_vel", &data.ekf_cmp_vel),
         group_stats("ekf_cmp_att", &data.ekf_cmp_att),
-        group_stats("ekf_res_pos", &data.ekf_res_pos),
-        group_stats("ekf_res_vel", &data.ekf_res_vel),
-        group_stats("ekf_res_att", &data.ekf_res_att),
+        group_stats("ekf_bias_gyro", &data.ekf_bias_gyro),
+        group_stats("ekf_bias_accel", &data.ekf_bias_accel),
+        group_stats("ekf_cov_bias", &data.ekf_cov_bias),
+        group_stats("ekf_cov_nonbias", &data.ekf_cov_nonbias),
         group_stats("ekf_map", &data.ekf_map),
     ] {
         eprintln!("[profile] group={} traces={} points={}", name, nt, np);
@@ -1613,7 +1944,10 @@ fn main() -> Result<()> {
         ("imu_cal_accel", &data.imu_cal_accel),
     ] {
         if let Some((name, gap)) = max_gap_trace(traces) {
-            eprintln!("[profile] max_gap_trace group={} signal={} gap_s={:.3}", group, name, gap);
+            eprintln!(
+                "[profile] max_gap_trace group={} signal={} gap_s={:.3}",
+                group, name, gap
+            );
         }
     }
     if args.profile_only {
