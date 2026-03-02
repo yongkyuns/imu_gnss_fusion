@@ -1,0 +1,17 @@
+[package]
+name = "logger"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive"] }
+rerun = { version = "0.26.2", default-features = false, features = ["sdk", "server", "map_view"] }
+serialport = "4.8"
+ublox = { path = "../ublox", features = ["std", "ubx_proto23", "ubx_proto27", "ubx_proto31"] }
+uuid = { version = "1", features = ["v4"] }
+
+[[bin]]
+name = "realtime_rerun_logger"
+path = "src/bin/realtime_rerun_logger.rs"

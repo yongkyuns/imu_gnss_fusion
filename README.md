@@ -1,4 +1,4 @@
-# pygps-rs
+# imu_gnss_fusion
 
 Rust port of:
 
@@ -14,7 +14,7 @@ Tech stack:
 ## Build
 
 ```bash
-cd simulation/pygps-rs
+cd simulation/imu_gnss_fusion
 cargo build --release
 ```
 

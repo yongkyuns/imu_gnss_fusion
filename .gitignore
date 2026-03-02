@@ -1,2 +1,3 @@
 /target
-/algo/ekf-rs/target
+/ekf/target
+**/target/
