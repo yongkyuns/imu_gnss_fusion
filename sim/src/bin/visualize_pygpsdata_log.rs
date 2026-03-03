@@ -5,7 +5,9 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
-use ekf_rs::ekf::{Ekf, GpsData, ImuSample, ekf_fuse_gps, ekf_init, ekf_predict};
+use ekf_rs::ekf::{
+    Ekf, GpsData, ImuSample, ekf_fuse_body_vel, ekf_fuse_gps, ekf_init, ekf_predict,
+};
 use sim::ubxlog::{
     extract_esf_alg, extract_esf_cal_samples, extract_esf_ins, extract_esf_meas_samples,
     extract_esf_raw_samples, extract_itow_ms, extract_nav_att, extract_nav_pvt,
@@ -123,14 +125,14 @@ fn wrap_pi(mut a: f64) -> f64 {
     a
 }
 
-fn rot_zyx(yaw_rad: f64, pitch_rad: f64, roll_rad: f64) -> [[f64; 3]; 3] {
-    let (sy, cy) = yaw_rad.sin_cos();
-    let (sp, cp) = pitch_rad.sin_cos();
+fn rot_xyz(roll_rad: f64, pitch_rad: f64, yaw_rad: f64) -> [[f64; 3]; 3] {
     let (sr, cr) = roll_rad.sin_cos();
+    let (sp, cp) = pitch_rad.sin_cos();
+    let (sy, cy) = yaw_rad.sin_cos();
     [
-        [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
-        [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
-        [-sp, cp * sr, cp * cr],
+        [cp * cy, -cp * sy, sp],
+        [cr * sy + sr * sp * cy, cr * cy - sr * sp * sy, -sr * cp],
+        [sr * sy - cr * sp * cy, sr * cy + cr * sp * sy, cr * cp],
     ]
 }
 
@@ -237,6 +239,18 @@ fn heading_endpoint(lat_deg: f64, lon_deg: f64, heading_deg: f64, length_m: f64)
     (lat_deg + rad2deg(d_lat), lon_deg + rad2deg(d_lon))
 }
 
+fn clamp_ekf_biases(ekf: &mut Ekf, dt_s: f64) {
+    let dt = dt_s.max(1.0e-3);
+    let max_gyro_bias_da = (deg2rad(1.5) * dt) as f32; // [rad] per step
+    let max_accel_bias_dv = (1.5 * dt) as f32; // [m/s] per step
+    ekf.state.dax_b = ekf.state.dax_b.clamp(-max_gyro_bias_da, max_gyro_bias_da);
+    ekf.state.day_b = ekf.state.day_b.clamp(-max_gyro_bias_da, max_gyro_bias_da);
+    ekf.state.daz_b = ekf.state.daz_b.clamp(-max_gyro_bias_da, max_gyro_bias_da);
+    ekf.state.dvx_b = ekf.state.dvx_b.clamp(-max_accel_bias_dv, max_accel_bias_dv);
+    ekf.state.dvy_b = ekf.state.dvy_b.clamp(-max_accel_bias_dv, max_accel_bias_dv);
+    ekf.state.dvz_b = ekf.state.dvz_b.clamp(-max_accel_bias_dv, max_accel_bias_dv);
+}
+
 #[derive(Clone, Copy)]
 struct ImuPacket {
     t_ms: f64,
@@ -263,6 +277,17 @@ fn build_ekf_compare_traces(
     Vec<Trace>,
     Vec<HeadingSample>,
 ) {
+    const P_INIT: f32 = 1.0;
+    const R_BODY_VEL_MOVING: f32 = 2.0;
+    const R_POS_SCALE: f64 = 10.0;
+    const R_VEL_SCALE: f64 = 10.0;
+    const R_YAW_SCALE: f64 = 10.0;
+    const DA_VAR_MOVING: f32 = 2.5e-4;
+    const DV_VAR_MOVING: f32 = 1.2e-3;
+    const DGB_P_NOISE_MOVING: f32 = 5.0e-7;
+    const DVB_X_NOISE_MOVING: f32 = 2.0e-6;
+    const DVB_Y_NOISE_MOVING: f32 = 2.5e-6;
+    const DVB_Z_NOISE_MOVING: f32 = 3.0e-6;
     if masters.is_empty() {
         return (
             Vec::new(),
@@ -463,12 +488,11 @@ fn build_ekf_compare_traces(
     let mut map_heading = Vec::<HeadingSample>::new();
 
     let mut ekf = Ekf::default();
-    ekf_init(&mut ekf, 1000.0);
+    ekf_init(&mut ekf, P_INIT);
     ekf.state.q0 = 1.0;
     let mut prev_imu_t: Option<f64> = None;
     let mut alg_idx = 0usize;
     let mut nav_idx = 0usize;
-    let mut nav_att_idx = 0usize;
     let mut cur_alg: Option<AlgEvent> = None;
 
     let mut origin_set = false;
@@ -477,9 +501,35 @@ fn build_ekf_compare_traces(
     let mut ref_ecef = [0.0_f64; 3];
     let mut ref_h = 0.0_f64;
 
+    if let Some((_, first_nav)) = nav_events.first().copied() {
+        ref_lat = first_nav.lat_deg;
+        ref_lon = first_nav.lon_deg;
+        ref_h = first_nav.height_m;
+        ref_ecef = lla_to_ecef(ref_lat, ref_lon, ref_h);
+        origin_set = true;
+
+        for (t_ms, nav) in &nav_events {
+            let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
+            let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
+            let t = rel_s(*t_ms);
+            ubx_pos_n.push([t, ned[0]]);
+            ubx_pos_e.push([t, ned[1]]);
+            ubx_pos_d.push([t, ned[2]]);
+            ubx_vel_n.push([t, nav.vel_n_mps]);
+            ubx_vel_e.push([t, nav.vel_e_mps]);
+            ubx_vel_d.push([t, nav.vel_d_mps]);
+            map_ubx.push([nav.lon_deg, nav.lat_deg]);
+        }
+    }
+    for att in &nav_att_events {
+        let t = rel_s(att.t_ms);
+        ubx_att_roll.push([t, att.roll_deg]);
+        ubx_att_pitch.push([t, att.pitch_deg]);
+        ubx_att_yaw.push([t, att.heading_deg]);
+    }
+
     let mut next_gps_update_ms = f64::NEG_INFINITY;
     let gps_period_ms = 500.0_f64; // 2Hz, aligned with EKF integration path.
-
     for pkt in &imu_packets {
         while alg_idx < alg_events.len() && alg_events[alg_idx].t_ms <= pkt.t_ms {
             cur_alg = Some(alg_events[alg_idx]);
@@ -500,15 +550,20 @@ fn build_ekf_compare_traces(
         let mut gyro = [pkt.gx_dps, pkt.gy_dps, pkt.gz_dps];
         let mut accel = [pkt.ax_mps2, pkt.ay_mps2, pkt.az_mps2];
         if let Some(alg) = cur_alg {
-            let r_bs = rot_zyx(
-                deg2rad(alg.yaw_deg),
-                deg2rad(alg.pitch_deg),
+            let r_sb = rot_xyz(
                 deg2rad(alg.roll_deg),
+                deg2rad(alg.pitch_deg),
+                deg2rad(alg.yaw_deg),
             );
-            let r_sb = transpose(r_bs);
             gyro = mat_vec(r_sb, gyro);
             accel = mat_vec(r_sb, accel);
         }
+        // Apply a rigid-body frame correction (Rx 180deg) to both gyro and accel:
+        // [x, y, z] -> [x, -y, -z]
+        gyro[1] = -gyro[1];
+        gyro[2] = -gyro[2];
+        accel[1] = -accel[1];
+        accel[2] = -accel[2];
         let imu = ImuSample {
             dax: (deg2rad(gyro[0]) * dt) as f32,
             day: (deg2rad(gyro[1]) * dt) as f32,
@@ -519,8 +574,20 @@ fn build_ekf_compare_traces(
             dt: dt as f32,
         };
         ekf_predict(
-            &mut ekf, &imu, 2.5e-4, 1.2e-3, 5.0e-7, 2.0e-6, 2.5e-6, 3.0e-6, None,
+            &mut ekf,
+            &imu,
+            DA_VAR_MOVING,
+            DV_VAR_MOVING,
+            DGB_P_NOISE_MOVING,
+            DVB_X_NOISE_MOVING,
+            DVB_Y_NOISE_MOVING,
+            DVB_Z_NOISE_MOVING,
+            None,
         );
+        clamp_ekf_biases(&mut ekf, dt);
+        // Non-holonomic vehicle constraint: body-frame lateral/vertical velocity ≈ 0.
+        ekf_fuse_body_vel(&mut ekf, R_BODY_VEL_MOVING);
+        clamp_ekf_biases(&mut ekf, dt);
 
         while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
             let (t_ms, nav) = nav_events[nav_idx];
@@ -544,16 +611,16 @@ fn build_ekf_compare_traces(
             let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
             let speed_h = nav.vel_n_mps.hypot(nav.vel_e_mps);
             let mut heading_rad = wrap_pi(deg2rad(nav.heading_motion_deg));
-            let mut r_yaw = deg2rad(nav.head_acc_deg).powi(2).max(0.02);
+            let mut r_yaw = deg2rad(nav.head_acc_deg).powi(2).max(0.02) * R_YAW_SCALE;
             if speed_h < 1.0 || !r_yaw.is_finite() {
                 let (_, _, yaw_deg) =
                     quat_rpy_deg(ekf.state.q0, ekf.state.q1, ekf.state.q2, ekf.state.q3);
                 heading_rad = deg2rad(yaw_deg);
                 r_yaw = 1e6;
             }
-            let h_acc2 = (nav.h_acc_m * nav.h_acc_m).max(0.05);
-            let v_acc2 = (nav.v_acc_m * nav.v_acc_m).max(0.05);
-            let s_acc2 = (nav.s_acc_mps * nav.s_acc_mps).max(0.02);
+            let h_acc2 = (nav.h_acc_m * nav.h_acc_m).max(0.05) * R_POS_SCALE;
+            let v_acc2 = (nav.v_acc_m * nav.v_acc_m).max(0.05) * R_POS_SCALE;
+            let s_acc2 = (nav.s_acc_mps * nav.s_acc_mps).max(0.02) * R_VEL_SCALE;
             let gps = GpsData {
                 pos_n: ned[0] as f32,
                 pos_e: ned[1] as f32,
@@ -571,33 +638,10 @@ fn build_ekf_compare_traces(
                 R_YAW: r_yaw as f32,
             };
             ekf_fuse_gps(&mut ekf, &gps);
+            clamp_ekf_biases(&mut ekf, dt);
 
             let t = rel_s(t_ms);
-            cmp_pos_n.push([t, ekf.state.pn as f64]);
-            cmp_pos_e.push([t, ekf.state.pe as f64]);
-            cmp_pos_d.push([t, ekf.state.pd as f64]);
-            ubx_pos_n.push([t, ned[0]]);
-            ubx_pos_e.push([t, ned[1]]);
-            ubx_pos_d.push([t, ned[2]]);
-
-            cmp_vel_n.push([t, ekf.state.vn as f64]);
-            cmp_vel_e.push([t, ekf.state.ve as f64]);
-            cmp_vel_d.push([t, ekf.state.vd as f64]);
-            ubx_vel_n.push([t, nav.vel_n_mps]);
-            ubx_vel_e.push([t, nav.vel_e_mps]);
-            ubx_vel_d.push([t, nav.vel_d_mps]);
-            let dt_safe = dt.max(1.0e-6);
-            bias_gyro_x.push([t, rad2deg((ekf.state.dax_b as f64) / dt_safe)]);
-            bias_gyro_y.push([t, rad2deg((ekf.state.day_b as f64) / dt_safe)]);
-            bias_gyro_z.push([t, rad2deg((ekf.state.daz_b as f64) / dt_safe)]);
-            bias_accel_x.push([t, (ekf.state.dvx_b as f64) / dt_safe]);
-            bias_accel_y.push([t, (ekf.state.dvy_b as f64) / dt_safe]);
-            bias_accel_z.push([t, (ekf.state.dvz_b as f64) / dt_safe]);
-            for (i, tr) in cov_diag.iter_mut().enumerate() {
-                tr.push([t, ekf.p[i][i] as f64]);
-            }
-            map_ubx.push([nav.lon_deg, nav.lat_deg]);
-            let (ekf_roll, ekf_pitch, ekf_yaw) =
+            let (_, _, ekf_yaw) =
                 quat_rpy_deg(ekf.state.q0, ekf.state.q1, ekf.state.q2, ekf.state.q3);
             let (ekf_lat, ekf_lon, _ekf_h) = ned_to_lla_approx(
                 ekf.state.pn as f64,
@@ -614,22 +658,31 @@ fn build_ekf_compare_traces(
                 lat_deg: ekf_lat,
                 yaw_deg: ekf_yaw,
             });
-
-            while nav_att_idx + 1 < nav_att_events.len()
-                && nav_att_events[nav_att_idx + 1].t_ms <= t_ms
-            {
-                nav_att_idx += 1;
-            }
-            if nav_att_idx < nav_att_events.len() && nav_att_events[nav_att_idx].t_ms <= t_ms {
-                let att = nav_att_events[nav_att_idx];
-                cmp_att_roll.push([t, ekf_roll]);
-                cmp_att_pitch.push([t, ekf_pitch]);
-                cmp_att_yaw.push([t, ekf_yaw]);
-                ubx_att_roll.push([t, att.roll_deg]);
-                ubx_att_pitch.push([t, att.pitch_deg]);
-                ubx_att_yaw.push([t, att.heading_deg]);
-            }
         }
+
+        // Log EKF outputs at IMU rate (~100 Hz), independent of GNSS update rate.
+        let t_imu = rel_s(pkt.t_ms);
+        cmp_pos_n.push([t_imu, ekf.state.pn as f64]);
+        cmp_pos_e.push([t_imu, ekf.state.pe as f64]);
+        cmp_pos_d.push([t_imu, ekf.state.pd as f64]);
+        cmp_vel_n.push([t_imu, ekf.state.vn as f64]);
+        cmp_vel_e.push([t_imu, ekf.state.ve as f64]);
+        cmp_vel_d.push([t_imu, ekf.state.vd as f64]);
+        let dt_safe = dt.max(1.0e-6);
+        bias_gyro_x.push([t_imu, rad2deg((ekf.state.dax_b as f64) / dt_safe)]);
+        bias_gyro_y.push([t_imu, rad2deg((ekf.state.day_b as f64) / dt_safe)]);
+        bias_gyro_z.push([t_imu, rad2deg((ekf.state.daz_b as f64) / dt_safe)]);
+        bias_accel_x.push([t_imu, (ekf.state.dvx_b as f64) / dt_safe]);
+        bias_accel_y.push([t_imu, (ekf.state.dvy_b as f64) / dt_safe]);
+        bias_accel_z.push([t_imu, (ekf.state.dvz_b as f64) / dt_safe]);
+        for (i, tr) in cov_diag.iter_mut().enumerate() {
+            tr.push([t_imu, ekf.p[i][i] as f64]);
+        }
+        let (ekf_roll, ekf_pitch, ekf_yaw) =
+            quat_rpy_deg(ekf.state.q0, ekf.state.q1, ekf.state.q2, ekf.state.q3);
+        cmp_att_roll.push([t_imu, ekf_roll]);
+        cmp_att_pitch.push([t_imu, ekf_pitch]);
+        cmp_att_yaw.push([t_imu, ekf_yaw]);
     }
 
     let cmp_pos = vec![
@@ -1488,6 +1541,41 @@ impl Plugin for TrackOverlay {
                 );
             }
         }
+
+        // Hover tooltip for EKF trajectory points: show relative simulation timestamp.
+        if let Some(mouse_pos) = ui.input(|i| i.pointer.hover_pos()) {
+            let mut best: Option<(f32, &HeadingSample, egui::Pos2)> = None;
+            for h in &self.headings {
+                let v = projector.project(lon_lat(h.lon_deg, h.lat_deg));
+                let p = egui::pos2(v.x, v.y);
+                let d2 = p.distance_sq(mouse_pos);
+                match best {
+                    Some((bd2, _, _)) if d2 >= bd2 => {}
+                    _ => best = Some((d2, h, p)),
+                }
+            }
+            if let Some((d2, h, p)) = best {
+                // Show tooltip only when hovering close to EKF path.
+                if d2 <= 12.0_f32 * 12.0_f32 {
+                    ui.painter().circle_filled(p, 3.0, egui::Color32::from_rgb(255, 220, 0));
+                    let label = format!("t={:.2}s", h.t_s);
+                    let bg_min = p + egui::vec2(8.0, -24.0);
+                    let bg_rect = egui::Rect::from_min_size(bg_min, egui::vec2(78.0, 18.0));
+                    ui.painter().rect_filled(
+                        bg_rect,
+                        4.0,
+                        egui::Color32::from_black_alpha(180),
+                    );
+                    ui.painter().text(
+                        bg_min + egui::vec2(6.0, 2.0),
+                        egui::Align2::LEFT_TOP,
+                        label,
+                        egui::FontId::monospace(12.0),
+                        egui::Color32::WHITE,
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -1663,6 +1751,10 @@ impl eframe::App for App {
             }
             Page::EkfCompare => {
                 let half_width = (ctx.content_rect().width() * 0.5).max(260.0);
+                let mut esf_raw_gyro = self.data.imu_raw_gyro.clone();
+                esf_raw_gyro.retain(|t| t.name.starts_with("ESF-RAW gyro_"));
+                let mut esf_raw_accel = self.data.imu_raw_accel.clone();
+                esf_raw_accel.retain(|t| t.name.starts_with("ESF-RAW accel_"));
                 egui::SidePanel::left("ekf_compare_left")
                     .resizable(false)
                     .exact_width(half_width)
@@ -1688,6 +1780,13 @@ impl eframe::App for App {
                             true,
                             self.max_points_per_trace,
                         );
+                        draw_plot(
+                            ui,
+                            "ESF-RAW Angular Rate",
+                            &esf_raw_gyro,
+                            true,
+                            self.max_points_per_trace,
+                        );
                     });
 
                 egui::CentralPanel::default().show(ctx, |ui| {
@@ -1709,6 +1808,13 @@ impl eframe::App for App {
                         ui,
                         "EKF Covariance Diagonal (Non-bias States)",
                         &self.data.ekf_cov_nonbias,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "ESF-RAW Acceleration",
+                        &esf_raw_accel,
                         true,
                         self.max_points_per_trace,
                     );
