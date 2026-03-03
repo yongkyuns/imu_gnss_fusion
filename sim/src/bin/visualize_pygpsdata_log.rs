@@ -136,6 +136,17 @@ fn rot_xyz(roll_rad: f64, pitch_rad: f64, yaw_rad: f64) -> [[f64; 3]; 3] {
     ]
 }
 
+fn rot_zyx(yaw_rad: f64, pitch_rad: f64, roll_rad: f64) -> [[f64; 3]; 3] {
+    let (sy, cy) = yaw_rad.sin_cos();
+    let (sp, cp) = pitch_rad.sin_cos();
+    let (sr, cr) = roll_rad.sin_cos();
+    [
+        [cp * cy, -cp * sy, sp],
+        [sr * sp * cy + cr * sy, -sr * sp * sy + cr * cy, -sr * cp],
+        [-cr * sp * cy + sr * sy, cr * sp * sy + sr * cy, cr * cp],
+    ]
+}
+
 fn transpose(r: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
     [
         [r[0][0], r[1][0], r[2][0]],
@@ -174,6 +185,14 @@ fn quat_rpy_deg(q0: f32, q1: f32, q2: f32, q3: f32) -> (f64, f64, f64) {
         rad2deg(pitch),
         normalize_heading_deg(rad2deg(yaw)),
     )
+}
+
+fn set_quat_yaw_only(state: &mut ekf_rs::ekf::EkfState, yaw_rad: f64) {
+    let half = 0.5 * yaw_rad;
+    state.q0 = half.cos() as f32;
+    state.q1 = 0.0;
+    state.q2 = 0.0;
+    state.q3 = half.sin() as f32;
 }
 
 fn lla_to_ecef(lat_deg: f64, lon_deg: f64, h_m: f64) -> [f64; 3] {
@@ -278,7 +297,10 @@ fn build_ekf_compare_traces(
     Vec<HeadingSample>,
 ) {
     const P_INIT: f32 = 1.0;
-    const R_BODY_VEL_MOVING: f32 = 10.0;
+    const R_BODY_VEL_MOVING: f32 = 60.0;
+    const R_BODY_VEL_STARTSTOP: f32 = 100.0;
+    const BODY_VEL_SPEED_LOW_MPS: f64 = 0.5;
+    const BODY_VEL_SPEED_HIGH_MPS: f64 = 2.0;
     const R_POS_SCALE: f64 = 10.0;
     const R_VEL_SCALE: f64 = 10.0;
     const R_YAW_DISABLED: f64 = 1.0e12;
@@ -530,6 +552,8 @@ fn build_ekf_compare_traces(
 
     let mut next_gps_update_ms = f64::NEG_INFINITY;
     let gps_period_ms = 500.0_f64; // 2Hz, aligned with EKF integration path.
+    let mut yaw_initialized_from_vel = false;
+    let mut speed_h_for_nhc = 0.0_f64;
     for pkt in &imu_packets {
         while alg_idx < alg_events.len() && alg_events[alg_idx].t_ms <= pkt.t_ms {
             cur_alg = Some(alg_events[alg_idx]);
@@ -555,6 +579,11 @@ fn build_ekf_compare_traces(
                 deg2rad(alg.pitch_deg),
                 deg2rad(alg.yaw_deg),
             );
+            // let r_sb = transpose(rot_zyx(
+            //     deg2rad(alg.yaw_deg),
+            //     deg2rad(alg.pitch_deg),
+            //     deg2rad(alg.roll_deg),
+            // ));
             gyro = mat_vec(r_sb, gyro);
             accel = mat_vec(r_sb, accel);
         }
@@ -585,8 +614,20 @@ fn build_ekf_compare_traces(
             None,
         );
         clamp_ekf_biases(&mut ekf, dt);
+        // Adaptive non-holonomic constraint:
+        // weaken around start/stop, tighten as speed increases.
+        let r_body_vel = if speed_h_for_nhc <= BODY_VEL_SPEED_LOW_MPS {
+            R_BODY_VEL_STARTSTOP
+        } else if speed_h_for_nhc >= BODY_VEL_SPEED_HIGH_MPS {
+            R_BODY_VEL_MOVING
+        } else {
+            let alpha = ((speed_h_for_nhc - BODY_VEL_SPEED_LOW_MPS)
+                / (BODY_VEL_SPEED_HIGH_MPS - BODY_VEL_SPEED_LOW_MPS))
+                as f32;
+            R_BODY_VEL_STARTSTOP + alpha * (R_BODY_VEL_MOVING - R_BODY_VEL_STARTSTOP)
+        };
         // Non-holonomic vehicle constraint: body-frame lateral/vertical velocity ≈ 0.
-        ekf_fuse_body_vel(&mut ekf, R_BODY_VEL_MOVING);
+        ekf_fuse_body_vel(&mut ekf, r_body_vel);
         clamp_ekf_biases(&mut ekf, dt);
 
         while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
@@ -609,6 +650,13 @@ fn build_ekf_compare_traces(
             }
             let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
             let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
+            let speed_h = nav.vel_n_mps.hypot(nav.vel_e_mps);
+            speed_h_for_nhc = speed_h;
+            if !yaw_initialized_from_vel && speed_h >= 2.0 {
+                let yaw_from_vel = nav.vel_e_mps.atan2(nav.vel_n_mps);
+                set_quat_yaw_only(&mut ekf.state, yaw_from_vel);
+                yaw_initialized_from_vel = true;
+            }
             // Disable direct heading fusion: use GNSS position/velocity only.
             // Keep heading equal to predicted yaw with very large variance.
             let (_, _, yaw_deg) =
