@@ -9,9 +9,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use clap::Parser;
-use rerun::{RecordingStream, RecordingStreamBuilder};
 use rerun::external::re_log_types::{BlueprintActivationCommand, LogMsg, RecordingId};
 use rerun::sink::SinkFlushError;
+use rerun::{RecordingStream, RecordingStreamBuilder};
 use serialport::SerialPort;
 use ublox::nav_pvt::common::NavPvtFlags;
 use ublox::nav_sat::NavSatRef;
@@ -20,6 +20,7 @@ use ublox::UbxProtocol;
 
 const CFG_VALSET_ID: u8 = 0x8A;
 const CFG_VALGET_ID: u8 = 0x8B;
+const CFG_MSG_ID: u8 = 0x01;
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "realtime_rerun_logger")]
@@ -89,7 +90,11 @@ impl ViewerDecimator {
         } else if path.starts_with("status/") {
             0.50
         } else if path.starts_with("gnss/") || path.starts_with("fusion/") {
-            if lag_s > 8.0 { 0.20 } else { 0.00 }
+            if lag_s > 8.0 {
+                0.20
+            } else {
+                0.00
+            }
         } else if lag_s > 8.0 {
             0.10
         } else {
@@ -114,6 +119,7 @@ impl ViewerDecimator {
     }
 }
 
+#[rustfmt::skip]
 fn cfg_items_startup(target_baud: u32) -> Vec<CfgItem> {
     vec![
         // CFG_UART1INPROT_NMEA / OUTPROT_NMEA / UART2 NMEA off
@@ -128,19 +134,25 @@ fn cfg_items_startup(target_baud: u32) -> Vec<CfgItem> {
         CfgItem { key: 0x3021_0001, value: 500, size: 2 },
         CfgItem { key: 0x3021_0002, value: 1, size: 2 },
         CfgItem { key: 0x2021_0004, value: 30, size: 1 },
-        // NAV msgout UART1
-        CfgItem { key: 0x2091_0016, value: 1, size: 1 }, // NAV-SAT
-        CfgItem { key: 0x2091_0007, value: 1, size: 1 }, // NAV-PVT
-        CfgItem { key: 0x2091_001b, value: 1, size: 1 }, // NAV-STATUS
-        CfgItem { key: 0x2091_0011, value: 1, size: 1 }, // NAV-ORB
-        CfgItem { key: 0x2091_0020, value: 1, size: 1 }, // NAV-ATT
-        // ESF msgout UART1
-        CfgItem { key: 0x2091_02a0, value: 1, size: 1 }, // ESF-RAW
-        CfgItem { key: 0x2091_06ad, value: 1, size: 1 }, // ESF-CAL
-        CfgItem { key: 0x2091_0278, value: 1, size: 1 }, // ESF-MEAS
-        CfgItem { key: 0x2091_0110, value: 1, size: 1 }, // ESF-ALG
-        CfgItem { key: 0x2091_0115, value: 1, size: 1 }, // ESF-INS
-        CfgItem { key: 0x2091_0106, value: 1, size: 1 }, // ESF-STATUS
+        // Enable NAV2 secondary output globally
+        CfgItem { key: 0x1017_0001, value: 1, size: 1 }, // CFG-NAV2-OUT_ENABLED
+        // NAV2 msgout USB
+        CfgItem { key: 0x2091_0493, value: 1, size: 1 }, // NAV2-PVT USB
+        CfgItem { key: 0x2091_0498, value: 0, size: 1 }, // NAV2-SAT USB off
+        CfgItem { key: 0x2091_0518, value: 0, size: 1 }, // NAV2-STATUS USB off
+        // NAV msgout USB
+        CfgItem { key: 0x2091_0018, value: 1, size: 1 }, // NAV-SAT USB
+        CfgItem { key: 0x2091_0009, value: 1, size: 1 }, // NAV-PVT USB
+        CfgItem { key: 0x2091_001d, value: 1, size: 1 }, // NAV-STATUS USB
+        CfgItem { key: 0x2091_0013, value: 1, size: 1 }, // NAV-ORB USB
+        CfgItem { key: 0x2091_0022, value: 1, size: 1 }, // NAV-ATT USB
+        // ESF msgout USB
+        CfgItem { key: 0x2091_02a2, value: 1, size: 1 }, // ESF-RAW USB
+        CfgItem { key: 0x2091_06af, value: 1, size: 1 }, // ESF-CAL USB
+        CfgItem { key: 0x2091_027a, value: 1, size: 1 }, // ESF-MEAS USB
+        CfgItem { key: 0x2091_0112, value: 1, size: 1 }, // ESF-ALG USB
+        CfgItem { key: 0x2091_0117, value: 1, size: 1 }, // ESF-INS USB
+        CfgItem { key: 0x2091_0108, value: 1, size: 1 }, // ESF-STATUS USB
         // UART1 baud
         CfgItem { key: 0x4052_0001, value: target_baud as u64, size: 4 },
         // CFG_NAVSPG_DYNMODEL = automotive(4)
@@ -234,6 +246,18 @@ fn build_cfg_valget_packet(keys: &[u32], layer: u8) -> Vec<u8> {
     pkt
 }
 
+fn build_cfg_msg_rate_packet(msg_class: u8, msg_id: u8, uart1_rate: u8, usb_rate: u8) -> Vec<u8> {
+    let payload = [msg_class, msg_id, 0u8, uart1_rate, 0u8, usb_rate, 0u8, 0u8];
+    let mut pkt = Vec::with_capacity(8 + payload.len());
+    pkt.extend_from_slice(&[0xB5, 0x62, 0x06, CFG_MSG_ID]);
+    pkt.extend_from_slice(&(payload.len() as u16).to_le_bytes());
+    pkt.extend_from_slice(&payload);
+    let (ck_a, ck_b) = ubx_checksum(&pkt[2..]);
+    pkt.push(ck_a);
+    pkt.push(ck_b);
+    pkt
+}
+
 fn extract_ubx_frames(buffer: &mut Vec<u8>) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     loop {
@@ -269,6 +293,10 @@ fn extract_ubx_frames(buffer: &mut Vec<u8>) -> Vec<Vec<u8>> {
 }
 
 fn wait_cfg_valset_ack(port: &mut dyn SerialPort, timeout: Duration) -> Result<bool> {
+    wait_cfg_ack(port, CFG_VALSET_ID, timeout)
+}
+
+fn wait_cfg_ack(port: &mut dyn SerialPort, cfg_msg_id: u8, timeout: Duration) -> Result<bool> {
     let deadline = Instant::now() + timeout;
     let mut tmp = [0u8; 1024];
     let mut buf = Vec::<u8>::new();
@@ -283,11 +311,11 @@ fn wait_cfg_valset_ack(port: &mut dyn SerialPort, timeout: Duration) -> Result<b
                     let class = fr[2];
                     let id = fr[3];
                     if class == 0x05 && id == 0x01 {
-                        if fr[6] == 0x06 && fr[7] == CFG_VALSET_ID {
+                        if fr[6] == 0x06 && fr[7] == cfg_msg_id {
                             return Ok(true);
                         }
                     } else if class == 0x05 && id == 0x00 {
-                        if fr[6] == 0x06 && fr[7] == CFG_VALSET_ID {
+                        if fr[6] == 0x06 && fr[7] == cfg_msg_id {
                             return Ok(false);
                         }
                     }
@@ -299,14 +327,32 @@ fn wait_cfg_valset_ack(port: &mut dyn SerialPort, timeout: Duration) -> Result<b
     Ok(false)
 }
 
-fn send_startup_config(port: &mut dyn SerialPort, target_baud: u32, timeout: Duration) -> Result<bool> {
+fn send_startup_config(
+    port: &mut dyn SerialPort,
+    target_baud: u32,
+    timeout: Duration,
+) -> Result<bool> {
     let pkt = build_cfg_valset_packet(&cfg_items_startup(target_baud), 0x07);
     port.write_all(&pkt)?;
     port.flush()?;
-    wait_cfg_valset_ack(port, timeout)
+    let ok = wait_cfg_valset_ack(port, timeout)?;
+    if !ok {
+        return Ok(false);
+    }
+
+    // Compatibility fallback: enable NAV2-PVT on USB via legacy CFG-MSG.
+    let nav2_pvt_cfg_msg = build_cfg_msg_rate_packet(0x29, 0x07, 0, 1);
+    port.write_all(&nav2_pvt_cfg_msg)?;
+    port.flush()?;
+    let _ = wait_cfg_ack(port, CFG_MSG_ID, timeout)?;
+    Ok(true)
 }
 
-fn poll_cfg_values(port: &mut dyn SerialPort, keys: &[CfgItem], timeout: Duration) -> Result<HashMap<u32, u64>> {
+fn poll_cfg_values(
+    port: &mut dyn SerialPort,
+    keys: &[CfgItem],
+    timeout: Duration,
+) -> Result<HashMap<u32, u64>> {
     let key_ids: Vec<u32> = keys.iter().map(|k| k.key).collect();
     let key_sizes: HashMap<u32, usize> = keys.iter().map(|k| (k.key, k.size)).collect();
     let pkt = build_cfg_valget_packet(&key_ids, 0);
@@ -331,19 +377,37 @@ fn poll_cfg_values(port: &mut dyn SerialPort, keys: &[CfgItem], timeout: Duratio
                     }
                     let mut i = 4usize;
                     while i + 4 <= payload.len() {
-                        let key = u32::from_le_bytes([payload[i], payload[i + 1], payload[i + 2], payload[i + 3]]);
+                        let key = u32::from_le_bytes([
+                            payload[i],
+                            payload[i + 1],
+                            payload[i + 2],
+                            payload[i + 3],
+                        ]);
                         i += 4;
-                        let Some(sz) = key_sizes.get(&key).copied() else { break };
+                        let Some(sz) = key_sizes.get(&key).copied() else {
+                            break;
+                        };
                         if i + sz > payload.len() {
                             break;
                         }
                         let val = match sz {
                             1 => payload[i] as u64,
                             2 => u16::from_le_bytes([payload[i], payload[i + 1]]) as u64,
-                            4 => u32::from_le_bytes([payload[i], payload[i + 1], payload[i + 2], payload[i + 3]]) as u64,
+                            4 => u32::from_le_bytes([
+                                payload[i],
+                                payload[i + 1],
+                                payload[i + 2],
+                                payload[i + 3],
+                            ]) as u64,
                             8 => u64::from_le_bytes([
-                                payload[i], payload[i + 1], payload[i + 2], payload[i + 3], payload[i + 4], payload[i + 5],
-                                payload[i + 6], payload[i + 7],
+                                payload[i],
+                                payload[i + 1],
+                                payload[i + 2],
+                                payload[i + 3],
+                                payload[i + 4],
+                                payload[i + 5],
+                                payload[i + 6],
+                                payload[i + 7],
                             ]),
                             _ => 0,
                         };
@@ -382,7 +446,11 @@ fn select_port_and_config(args: &Args) -> Result<(String, u32)> {
                     if args.skip_startup_config {
                         return Ok((p.clone(), *probe));
                     }
-                    match send_startup_config(&mut *sp, args.baud, Duration::from_secs_f64(args.config_timeout)) {
+                    match send_startup_config(
+                        &mut *sp,
+                        args.baud,
+                        Duration::from_secs_f64(args.config_timeout),
+                    ) {
                         Ok(true) => return Ok((p.clone(), *probe)),
                         Ok(false) => {
                             last_err = format!("no ACK for CFG-VALSET on {p} @ {probe}");
@@ -459,7 +527,11 @@ fn log_nav_sat(rec: &RecordingStream, pkt: &NavSatRef<'_>) {
         } else {
             "❌"
         };
-        let eph = if flags.ephemeris_available() { "✅" } else { "❌" };
+        let eph = if flags.ephemeris_available() {
+            "✅"
+        } else {
+            "❌"
+        };
         let summary = format!("use:{used} health:{health} q:{quality} corr:{corr} eph:{eph}");
         rows.push((sys, sv.sv_id() as i32, cno, summary));
     }
@@ -504,14 +576,18 @@ fn log_nav_sat(rec: &RecordingStream, pkt: &NavSatRef<'_>) {
     for (idx, (sys, sv, cno, summary)) in rows.into_iter().enumerate() {
         grouped_idx.entry(sys).or_default().push(idx as i64);
         grouped_cno.entry(sys).or_default().push(cno);
-        lines.push(format!("{idx:02}: {sys}-{sv:02}  {cno:.1} dB-Hz  {summary}"));
+        lines.push(format!(
+            "{idx:02}: {sys}-{sv:02}  {cno:.1} dB-Hz  {summary}"
+        ));
     }
 
     for (sys, ys) in grouped_cno {
         let xs = grouped_idx.remove(sys).unwrap_or_default();
         let _ = rec.log(
             format!("gnss/nav_sat/cno/{sys}"),
-            &rerun::BarChart::new(ys).with_abscissa(xs).with_color(color(sys)),
+            &rerun::BarChart::new(ys)
+                .with_abscissa(xs)
+                .with_color(color(sys)),
         );
     }
 
@@ -558,10 +634,12 @@ fn log_blueprint_view(
 
 fn send_startup_blueprint(app_id: &str, rec: &RecordingStream) -> Result<()> {
     use rerun::external::re_types::blueprint::archetypes::{
-        ContainerBlueprint, MapBackground, MapZoom, PanelBlueprint, TimePanelBlueprint, ViewportBlueprint,
+        ContainerBlueprint, MapBackground, MapZoom, PanelBlueprint, TimePanelBlueprint,
+        ViewportBlueprint,
     };
     use rerun::external::re_types::blueprint::components::{
-        ColumnShare, ContainerKind, IncludedContent, MapProvider, PanelState, RootContainer, RowShare,
+        ColumnShare, ContainerKind, IncludedContent, MapProvider, PanelState, RootContainer,
+        RowShare,
     };
     use rerun::external::re_types::datatypes::{Float32, Uuid as DtUuid};
 
@@ -668,13 +746,12 @@ fn send_startup_blueprint(app_id: &str, rec: &RecordingStream) -> Result<()> {
     // Containers
     bp_rec.log(
         c_left.as_str(),
-        &ContainerBlueprint::new(ContainerKind::Vertical)
-            .with_contents([
-                IncludedContent(v_gnss.clone().into()),
-                IncludedContent(v_imu_accel.clone().into()),
-                IncludedContent(v_imu_gyro.clone().into()),
-                IncludedContent(v_fusion.clone().into()),
-            ]),
+        &ContainerBlueprint::new(ContainerKind::Vertical).with_contents([
+            IncludedContent(v_gnss.clone().into()),
+            IncludedContent(v_imu_accel.clone().into()),
+            IncludedContent(v_imu_gyro.clone().into()),
+            IncludedContent(v_fusion.clone().into()),
+        ]),
     )?;
     bp_rec.log(
         c_cal_tabs.as_str(),
@@ -761,7 +838,11 @@ fn main() -> Result<()> {
         data_dir.join(format!("ubx_raw_{ts}.bin"))
     } else {
         let p = PathBuf::from(&args.raw_log);
-        if p.is_absolute() { p } else { data_dir.join(p) }
+        if p.is_absolute() {
+            p
+        } else {
+            data_dir.join(p)
+        }
     };
     if let Some(parent) = raw_path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -776,26 +857,49 @@ fn main() -> Result<()> {
     println!("logger_baud={}", args.baud);
     println!(
         "startup_config={}",
-        if args.skip_startup_config { "disabled" } else { "enabled" }
+        if args.skip_startup_config {
+            "disabled"
+        } else {
+            "enabled"
+        }
     );
 
     if !args.skip_startup_config {
-        if let Ok(mut sp) = open_serial(&selected_port, selected_probe_baud, 0.2) {
-            let verify = cfg_items_startup(args.baud);
-            if let Ok(applied) = poll_cfg_values(&mut *sp, &verify, Duration::from_secs_f64(args.config_timeout)) {
-                println!("cfg_readback_ram:");
-                for v in verify {
-                    let got = applied.get(&v.key).copied();
-                    let ok = got == Some(v.value);
-                    println!(
-                        "  {:#010x}: expected={} applied={:?} {}",
-                        v.key,
-                        v.value,
-                        got,
-                        if ok { "OK" } else { "DIFF" }
-                    );
+        let verify = cfg_items_startup(args.baud);
+        let mut readback_bauds = vec![args.baud];
+        if selected_probe_baud != args.baud {
+            readback_bauds.push(selected_probe_baud);
+        }
+        let mut readback_done = false;
+        for baud in readback_bauds {
+            if let Ok(mut sp) = open_serial(&selected_port, baud, 0.2) {
+                if let Ok(applied) = poll_cfg_values(
+                    &mut *sp,
+                    &verify,
+                    Duration::from_secs_f64(args.config_timeout),
+                ) {
+                    readback_done = true;
+                    println!("cfg_readback_ram: baud={baud}");
+                    for v in &verify {
+                        let got = applied.get(&v.key).copied();
+                        let ok = got == Some(v.value);
+                        println!(
+                            "  {:#010x}: expected={} applied={:?} {}",
+                            v.key,
+                            v.value,
+                            got,
+                            if ok { "OK" } else { "DIFF" }
+                        );
+                    }
+                    break;
                 }
             }
+        }
+        if !readback_done {
+            println!(
+                "cfg_readback_ram: unavailable (no CFG-VALGET response at bauds tried: {}, {})",
+                args.baud, selected_probe_baud
+            );
         }
     }
 
@@ -853,7 +957,16 @@ fn main() -> Result<()> {
                         let payload = fr[6..6 + len].to_vec();
                         seq += 1;
                         let elapsed = capture_start.elapsed().as_secs_f64();
-                        if tx.send(RawFrame { seq, class, id, payload, elapsed_s: elapsed }).is_err() {
+                        if tx
+                            .send(RawFrame {
+                                seq,
+                                class,
+                                id,
+                                payload,
+                                elapsed_s: elapsed,
+                            })
+                            .is_err()
+                        {
                             return;
                         }
                     }
@@ -907,7 +1020,10 @@ fn main() -> Result<()> {
         );
         if frame.elapsed_s - last_lag_log_s >= 1.0 {
             last_lag_log_s = frame.elapsed_s;
-            let _ = rec.log("status/stream/viewer_lag_s", &rerun::Scalars::new([viewer_lag_s]));
+            let _ = rec.log(
+                "status/stream/viewer_lag_s",
+                &rerun::Scalars::new([viewer_lag_s]),
+            );
         }
         let ident = match (frame.class, frame.id) {
             (0x01, 0x07) => "NAV-PVT",
@@ -915,6 +1031,9 @@ fn main() -> Result<()> {
             (0x01, 0x05) => "NAV-ATT",
             (0x01, 0x03) => "NAV-STATUS",
             (0x01, 0x34) => "NAV-ORB",
+            (0x29, 0x07) => "NAV2-PVT",
+            (0x29, 0x35) => "NAV2-SAT",
+            (0x29, 0x03) => "NAV2-STATUS",
             (0x10, 0x03) => "ESF-RAW",
             (0x10, 0x04) => "ESF-CAL",
             (0x10, 0x02) => "ESF-MEAS",
@@ -933,7 +1052,11 @@ fn main() -> Result<()> {
         }
 
         frame_rate_window.push_back(frame.elapsed_s);
-        while frame_rate_window.front().map(|t| frame.elapsed_s - *t > 5.0).unwrap_or(false) {
+        while frame_rate_window
+            .front()
+            .map(|t| frame.elapsed_s - *t > 5.0)
+            .unwrap_or(false)
+        {
             frame_rate_window.pop_front();
         }
         if frame.elapsed_s - last_rate_log >= 1.0 {
@@ -963,9 +1086,7 @@ fn main() -> Result<()> {
                     if frame.elapsed_s > 5.0 {
                         viewer_failed_probes += 1;
                         if viewer_seen_connected && viewer_failed_probes >= 3 {
-                            println!(
-                                "viewer_disconnected=true reason={message} action=auto_exit"
-                            );
+                            println!("viewer_disconnected=true reason={message} action=auto_exit");
                             break;
                         }
                     }
@@ -976,13 +1097,62 @@ fn main() -> Result<()> {
         match <Proto31 as UbxProtocol>::match_packet(frame.class, frame.id, &frame.payload) {
             Ok(pkt) => match pkt {
                 PacketRef::NavPvt(p) => {
-                    log_scalar(&mut viewer_decimator, &rec, frame.elapsed_s, viewer_lag_s, "gnss/nav_pvt/speed_g_mps", p.ground_speed_2d());
-                    log_scalar(&mut viewer_decimator, &rec, frame.elapsed_s, viewer_lag_s, "gnss/nav_pvt/speed_n_mps", p.vel_north());
-                    log_scalar(&mut viewer_decimator, &rec, frame.elapsed_s, viewer_lag_s, "gnss/nav_pvt/speed_e_mps", p.vel_east());
-                    log_scalar(&mut viewer_decimator, &rec, frame.elapsed_s, viewer_lag_s, "gnss/nav_pvt/speed_d_mps", p.vel_down());
-                    log_scalar(&mut viewer_decimator, &rec, frame.elapsed_s, viewer_lag_s, "gnss/nav_pvt/heading_deg", p.heading_motion());
-                    log_scalar(&mut viewer_decimator, &rec, frame.elapsed_s, viewer_lag_s, "gnss/nav_pvt/hacc_m", p.horizontal_accuracy());
-                    log_scalar(&mut viewer_decimator, &rec, frame.elapsed_s, viewer_lag_s, "gnss/nav_pvt/vacc_m", p.vertical_accuracy());
+                    log_scalar(
+                        &mut viewer_decimator,
+                        &rec,
+                        frame.elapsed_s,
+                        viewer_lag_s,
+                        "gnss/nav_pvt/speed_g_mps",
+                        p.ground_speed_2d(),
+                    );
+                    log_scalar(
+                        &mut viewer_decimator,
+                        &rec,
+                        frame.elapsed_s,
+                        viewer_lag_s,
+                        "gnss/nav_pvt/speed_n_mps",
+                        p.vel_north(),
+                    );
+                    log_scalar(
+                        &mut viewer_decimator,
+                        &rec,
+                        frame.elapsed_s,
+                        viewer_lag_s,
+                        "gnss/nav_pvt/speed_e_mps",
+                        p.vel_east(),
+                    );
+                    log_scalar(
+                        &mut viewer_decimator,
+                        &rec,
+                        frame.elapsed_s,
+                        viewer_lag_s,
+                        "gnss/nav_pvt/speed_d_mps",
+                        p.vel_down(),
+                    );
+                    log_scalar(
+                        &mut viewer_decimator,
+                        &rec,
+                        frame.elapsed_s,
+                        viewer_lag_s,
+                        "gnss/nav_pvt/heading_deg",
+                        p.heading_motion(),
+                    );
+                    log_scalar(
+                        &mut viewer_decimator,
+                        &rec,
+                        frame.elapsed_s,
+                        viewer_lag_s,
+                        "gnss/nav_pvt/hacc_m",
+                        p.horizontal_accuracy(),
+                    );
+                    log_scalar(
+                        &mut viewer_decimator,
+                        &rec,
+                        frame.elapsed_s,
+                        viewer_lag_s,
+                        "gnss/nav_pvt/vacc_m",
+                        p.vertical_accuracy(),
+                    );
                     // Same robustness as Python logger:
                     // 1) Gate map updates on valid GNSS fix.
                     // 2) Accept both already-scaled deg and raw 1e-7 UBX units.
@@ -1064,14 +1234,56 @@ fn main() -> Result<()> {
                     );
                 }
                 PacketRef::NavAtt(p) => {
-                    log_scalar(&mut viewer_decimator, &rec, frame.elapsed_s, viewer_lag_s, "fusion/nav_att/roll_deg", p.vehicle_roll());
-                    log_scalar(&mut viewer_decimator, &rec, frame.elapsed_s, viewer_lag_s, "fusion/nav_att/pitch_deg", p.vehicle_pitch());
-                    log_scalar(&mut viewer_decimator, &rec, frame.elapsed_s, viewer_lag_s, "fusion/nav_att/heading_deg", p.vehicle_heading());
+                    log_scalar(
+                        &mut viewer_decimator,
+                        &rec,
+                        frame.elapsed_s,
+                        viewer_lag_s,
+                        "fusion/nav_att/roll_deg",
+                        p.vehicle_roll(),
+                    );
+                    log_scalar(
+                        &mut viewer_decimator,
+                        &rec,
+                        frame.elapsed_s,
+                        viewer_lag_s,
+                        "fusion/nav_att/pitch_deg",
+                        p.vehicle_pitch(),
+                    );
+                    log_scalar(
+                        &mut viewer_decimator,
+                        &rec,
+                        frame.elapsed_s,
+                        viewer_lag_s,
+                        "fusion/nav_att/heading_deg",
+                        p.vehicle_heading(),
+                    );
                 }
                 PacketRef::EsfAlg(p) => {
-                    log_scalar(&mut viewer_decimator, &rec, frame.elapsed_s, viewer_lag_s, "fusion/esf_alg/yaw_deg", p.yaw());
-                    log_scalar(&mut viewer_decimator, &rec, frame.elapsed_s, viewer_lag_s, "fusion/esf_alg/roll_deg", p.roll());
-                    log_scalar(&mut viewer_decimator, &rec, frame.elapsed_s, viewer_lag_s, "fusion/esf_alg/pitch_deg", p.pitch());
+                    log_scalar(
+                        &mut viewer_decimator,
+                        &rec,
+                        frame.elapsed_s,
+                        viewer_lag_s,
+                        "fusion/esf_alg/yaw_deg",
+                        p.yaw(),
+                    );
+                    log_scalar(
+                        &mut viewer_decimator,
+                        &rec,
+                        frame.elapsed_s,
+                        viewer_lag_s,
+                        "fusion/esf_alg/roll_deg",
+                        p.roll(),
+                    );
+                    log_scalar(
+                        &mut viewer_decimator,
+                        &rec,
+                        frame.elapsed_s,
+                        viewer_lag_s,
+                        "fusion/esf_alg/pitch_deg",
+                        p.pitch(),
+                    );
                     let flags = p.flags();
                     let err = p.error();
                     let _ = rec.log(
@@ -1105,12 +1317,54 @@ fn main() -> Result<()> {
                     );
                 }
                 PacketRef::EsfIns(p) => {
-                    log_scalar(&mut viewer_decimator, &rec, frame.elapsed_s, viewer_lag_s, "imu/gyro/esf_ins/xAngRate_dps", p.x_angular_rate());
-                    log_scalar(&mut viewer_decimator, &rec, frame.elapsed_s, viewer_lag_s, "imu/gyro/esf_ins/yAngRate_dps", p.y_angular_rate());
-                    log_scalar(&mut viewer_decimator, &rec, frame.elapsed_s, viewer_lag_s, "imu/gyro/esf_ins/zAngRate_dps", p.z_angular_rate());
-                    log_scalar(&mut viewer_decimator, &rec, frame.elapsed_s, viewer_lag_s, "imu/accel/esf_ins/xAccel_mps2", p.x_acceleration());
-                    log_scalar(&mut viewer_decimator, &rec, frame.elapsed_s, viewer_lag_s, "imu/accel/esf_ins/yAccel_mps2", p.y_acceleration());
-                    log_scalar(&mut viewer_decimator, &rec, frame.elapsed_s, viewer_lag_s, "imu/accel/esf_ins/zAccel_mps2", p.z_acceleration());
+                    log_scalar(
+                        &mut viewer_decimator,
+                        &rec,
+                        frame.elapsed_s,
+                        viewer_lag_s,
+                        "imu/gyro/esf_ins/xAngRate_dps",
+                        p.x_angular_rate(),
+                    );
+                    log_scalar(
+                        &mut viewer_decimator,
+                        &rec,
+                        frame.elapsed_s,
+                        viewer_lag_s,
+                        "imu/gyro/esf_ins/yAngRate_dps",
+                        p.y_angular_rate(),
+                    );
+                    log_scalar(
+                        &mut viewer_decimator,
+                        &rec,
+                        frame.elapsed_s,
+                        viewer_lag_s,
+                        "imu/gyro/esf_ins/zAngRate_dps",
+                        p.z_angular_rate(),
+                    );
+                    log_scalar(
+                        &mut viewer_decimator,
+                        &rec,
+                        frame.elapsed_s,
+                        viewer_lag_s,
+                        "imu/accel/esf_ins/xAccel_mps2",
+                        p.x_acceleration(),
+                    );
+                    log_scalar(
+                        &mut viewer_decimator,
+                        &rec,
+                        frame.elapsed_s,
+                        viewer_lag_s,
+                        "imu/accel/esf_ins/yAccel_mps2",
+                        p.y_acceleration(),
+                    );
+                    log_scalar(
+                        &mut viewer_decimator,
+                        &rec,
+                        frame.elapsed_s,
+                        viewer_lag_s,
+                        "imu/accel/esf_ins/zAccel_mps2",
+                        p.z_acceleration(),
+                    );
                 }
                 PacketRef::EsfStatus(p) => {
                     let init1 = p.init_status1();
