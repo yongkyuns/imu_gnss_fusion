@@ -278,16 +278,16 @@ fn build_ekf_compare_traces(
     Vec<HeadingSample>,
 ) {
     const P_INIT: f32 = 1.0;
-    const R_BODY_VEL_MOVING: f32 = 2.0;
+    const R_BODY_VEL_MOVING: f32 = 10.0;
     const R_POS_SCALE: f64 = 10.0;
     const R_VEL_SCALE: f64 = 10.0;
-    const R_YAW_SCALE: f64 = 10.0;
+    const R_YAW_DISABLED: f64 = 1.0e12;
     const DA_VAR_MOVING: f32 = 2.5e-4;
     const DV_VAR_MOVING: f32 = 1.2e-3;
-    const DGB_P_NOISE_MOVING: f32 = 5.0e-7;
-    const DVB_X_NOISE_MOVING: f32 = 2.0e-6;
-    const DVB_Y_NOISE_MOVING: f32 = 2.5e-6;
-    const DVB_Z_NOISE_MOVING: f32 = 3.0e-6;
+    const DGB_P_NOISE_MOVING: f32 = 4.0e-6;
+    const DVB_X_NOISE_MOVING: f32 = 8.0e-6;
+    const DVB_Y_NOISE_MOVING: f32 = 8.0e-6;
+    const DVB_Z_NOISE_MOVING: f32 = 8.0e-6;
     if masters.is_empty() {
         return (
             Vec::new(),
@@ -609,15 +609,12 @@ fn build_ekf_compare_traces(
             }
             let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
             let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
-            let speed_h = nav.vel_n_mps.hypot(nav.vel_e_mps);
-            let mut heading_rad = wrap_pi(deg2rad(nav.heading_motion_deg));
-            let mut r_yaw = deg2rad(nav.head_acc_deg).powi(2).max(0.02) * R_YAW_SCALE;
-            if speed_h < 1.0 || !r_yaw.is_finite() {
-                let (_, _, yaw_deg) =
-                    quat_rpy_deg(ekf.state.q0, ekf.state.q1, ekf.state.q2, ekf.state.q3);
-                heading_rad = deg2rad(yaw_deg);
-                r_yaw = 1e6;
-            }
+            // Disable direct heading fusion: use GNSS position/velocity only.
+            // Keep heading equal to predicted yaw with very large variance.
+            let (_, _, yaw_deg) =
+                quat_rpy_deg(ekf.state.q0, ekf.state.q1, ekf.state.q2, ekf.state.q3);
+            let heading_rad = deg2rad(yaw_deg);
+            let r_yaw = R_YAW_DISABLED;
             let h_acc2 = (nav.h_acc_m * nav.h_acc_m).max(0.05) * R_POS_SCALE;
             let v_acc2 = (nav.v_acc_m * nav.v_acc_m).max(0.05) * R_POS_SCALE;
             let s_acc2 = (nav.s_acc_mps * nav.s_acc_mps).max(0.02) * R_VEL_SCALE;
@@ -1557,15 +1554,13 @@ impl Plugin for TrackOverlay {
             if let Some((d2, h, p)) = best {
                 // Show tooltip only when hovering close to EKF path.
                 if d2 <= 12.0_f32 * 12.0_f32 {
-                    ui.painter().circle_filled(p, 3.0, egui::Color32::from_rgb(255, 220, 0));
+                    ui.painter()
+                        .circle_filled(p, 3.0, egui::Color32::from_rgb(255, 220, 0));
                     let label = format!("t={:.2}s", h.t_s);
                     let bg_min = p + egui::vec2(8.0, -24.0);
                     let bg_rect = egui::Rect::from_min_size(bg_min, egui::vec2(78.0, 18.0));
-                    ui.painter().rect_filled(
-                        bg_rect,
-                        4.0,
-                        egui::Color32::from_black_alpha(180),
-                    );
+                    ui.painter()
+                        .rect_filled(bg_rect, 4.0, egui::Color32::from_black_alpha(180));
                     ui.painter().text(
                         bg_min + egui::vec2(6.0, 2.0),
                         egui::Align2::LEFT_TOP,
