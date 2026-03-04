@@ -5,9 +5,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
-use ekf_rs::ekf::{
-    Ekf, GpsData, ImuSample, ekf_fuse_body_vel, ekf_fuse_gps, ekf_init, ekf_predict,
-};
+use ekf_rs::ekf::{Ekf, GpsData, ImuSample, ekf_fuse_body_vel, ekf_fuse_gps, ekf_predict};
 use sim::ubxlog::{
     extract_esf_alg, extract_esf_cal_samples, extract_esf_ins, extract_esf_meas_samples,
     extract_esf_raw_samples, extract_itow_ms, extract_nav_att, extract_nav_pvt,
@@ -270,24 +268,6 @@ fn clamp_ekf_biases(ekf: &mut Ekf, dt_s: f64) {
     ekf.state.dvz_b = ekf.state.dvz_b.clamp(-max_accel_bias_dv, max_accel_bias_dv);
 }
 
-fn set_initial_bias_covariance(ekf: &mut Ekf, dt_nominal_s: f64) {
-    // Bias states are delta-angle / delta-velocity increments per predict step.
-    // Use tight initial covariance so biases start near zero and settle smoothly.
-    let dt = dt_nominal_s.max(1.0e-3);
-    let gyro_sigma_dps = 0.15_f64;
-    let accel_sigma_mps2 = 0.25_f64;
-    let gyro_sigma_da = deg2rad(gyro_sigma_dps) * dt;
-    let accel_sigma_dv = accel_sigma_mps2 * dt;
-    let var_gyro = (gyro_sigma_da * gyro_sigma_da) as f32;
-    let var_accel = (accel_sigma_dv * accel_sigma_dv) as f32;
-    ekf.p[10][10] = var_gyro;
-    ekf.p[11][11] = var_gyro;
-    ekf.p[12][12] = var_gyro;
-    ekf.p[13][13] = var_accel;
-    ekf.p[14][14] = var_accel;
-    ekf.p[15][15] = var_accel;
-}
-
 #[derive(Clone, Copy)]
 struct ImuPacket {
     t_ms: f64,
@@ -314,20 +294,12 @@ fn build_ekf_compare_traces(
     Vec<Trace>,
     Vec<HeadingSample>,
 ) {
-    const P_INIT: f32 = 1.0;
     const R_BODY_VEL_MOVING: f32 = 60.0;
     const R_BODY_VEL_STARTSTOP: f32 = 100.0;
     const BODY_VEL_SPEED_LOW_MPS: f64 = 0.5;
     const BODY_VEL_SPEED_HIGH_MPS: f64 = 2.0;
     const R_POS_SCALE: f64 = 80.0;
     const R_VEL_SCALE: f64 = 80.0;
-    const R_YAW_DISABLED: f64 = 1.0e12;
-    const DA_VAR_MOVING: f32 = 0.3e-5;
-    const DV_VAR_MOVING: f32 = 1.2e-3;
-    const DGB_P_NOISE_MOVING: f32 = 0.1e-9;
-    const DVB_X_NOISE_MOVING: f32 = 1.0e-8;
-    const DVB_Y_NOISE_MOVING: f32 = 1.0e-8;
-    const DVB_Z_NOISE_MOVING: f32 = 1.0e-8;
     if masters.is_empty() {
         return (
             Vec::new(),
@@ -544,9 +516,6 @@ fn build_ekf_compare_traces(
     let mut map_heading = Vec::<HeadingSample>::new();
 
     let mut ekf = Ekf::default();
-    ekf_init(&mut ekf, P_INIT);
-    set_initial_bias_covariance(&mut ekf, 0.01);
-    ekf.state.q0 = 1.0;
     let mut prev_imu_t: Option<f64> = None;
     let mut alg_idx = 0usize;
     let mut nav_idx = 0usize;
@@ -635,17 +604,7 @@ fn build_ekf_compare_traces(
             dvz: (accel[2] * dt) as f32,
             dt: dt as f32,
         };
-        ekf_predict(
-            &mut ekf,
-            &imu,
-            DA_VAR_MOVING,
-            DV_VAR_MOVING,
-            DGB_P_NOISE_MOVING,
-            DVB_X_NOISE_MOVING,
-            DVB_Y_NOISE_MOVING,
-            DVB_Z_NOISE_MOVING,
-            None,
-        );
+        ekf_predict(&mut ekf, &imu, None);
         clamp_ekf_biases(&mut ekf, dt);
         // Adaptive non-holonomic constraint:
         // weaken around start/stop, tighten as speed increases.
@@ -692,12 +651,6 @@ fn build_ekf_compare_traces(
                 set_quat_yaw_only(&mut ekf.state, yaw_from_vel);
                 yaw_initialized_from_vel = true;
             }
-            // Disable direct heading fusion: use GNSS position/velocity only.
-            // Keep heading equal to predicted yaw with very large variance.
-            let (_, _, yaw_deg) =
-                quat_rpy_deg(ekf.state.q0, ekf.state.q1, ekf.state.q2, ekf.state.q3);
-            let heading_rad = deg2rad(yaw_deg);
-            let r_yaw = R_YAW_DISABLED;
             let h_acc2 = (nav.h_acc_m * nav.h_acc_m).max(0.05) * R_POS_SCALE;
             let v_acc2 = (nav.v_acc_m * nav.v_acc_m).max(0.05) * R_POS_SCALE;
             let s_acc2 = (nav.s_acc_mps * nav.s_acc_mps).max(0.02) * R_VEL_SCALE;
@@ -708,14 +661,12 @@ fn build_ekf_compare_traces(
                 vel_n: nav.vel_n_mps as f32,
                 vel_e: nav.vel_e_mps as f32,
                 vel_d: nav.vel_d_mps as f32,
-                heading_rad: heading_rad as f32,
                 R_POS_N: h_acc2 as f32,
                 R_POS_E: h_acc2 as f32,
                 R_POS_D: v_acc2 as f32,
                 R_VEL_N: s_acc2 as f32,
                 R_VEL_E: s_acc2 as f32,
                 R_VEL_D: s_acc2 as f32,
-                R_YAW: r_yaw as f32,
             };
             ekf_fuse_gps(&mut ekf, &gps);
             clamp_ekf_biases(&mut ekf, dt);

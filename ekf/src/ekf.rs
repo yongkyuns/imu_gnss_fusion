@@ -4,6 +4,10 @@ use std::f32::consts::PI;
 
 pub const N_STATES: usize = 16;
 pub const GRAVITY_MSS: f32 = 9.80665;
+const DEFAULT_P_INIT: f32 = 1.0;
+const DEFAULT_BIAS_DT_S: f32 = 0.01;
+const DEFAULT_GYRO_BIAS_SIGMA_DPS: f32 = 0.15;
+const DEFAULT_ACCEL_BIAS_SIGMA_MPS2: f32 = 0.25;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
@@ -43,13 +47,22 @@ pub struct ImuSample {
 pub struct Ekf {
     pub state: EkfState,
     pub p: [[f32; N_STATES]; N_STATES],
+    pub noise: PredictNoise,
 }
 
 impl Default for Ekf {
     fn default() -> Self {
+        let mut state = EkfState::default();
+        state.q0 = 1.0;
+        let mut p = [[0.0; N_STATES]; N_STATES];
+        let p_diag = default_p_diag();
+        for i in 0..N_STATES {
+            p[i][i] = p_diag[i];
+        }
         Self {
-            state: EkfState::default(),
-            p: [[0.0; N_STATES]; N_STATES],
+            state,
+            p,
+            noise: PredictNoise::default(),
         }
     }
 }
@@ -63,14 +76,12 @@ pub struct GpsData {
     pub vel_n: f32,
     pub vel_e: f32,
     pub vel_d: f32,
-    pub heading_rad: f32,
     pub R_POS_N: f32,
     pub R_POS_E: f32,
     pub R_POS_D: f32,
     pub R_VEL_N: f32,
     pub R_VEL_E: f32,
     pub R_VEL_D: f32,
-    pub R_YAW: f32,
 }
 
 #[repr(C)]
@@ -79,6 +90,43 @@ pub struct EkfDebug {
     pub dvb_x: f32,
     pub dvb_y: f32,
     pub dvb_z: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PredictNoise {
+    // Continuous-time sensor variance inputs in intuitive physical units.
+    pub gyro_var: f32,          // [rad^2/s^2]
+    pub accel_var: f32,         // [(m/s^2)^2]
+    pub gyro_bias_rw_var: f32,  // [rad^2/s^2], applied to bias process model
+    pub accel_bias_rw_var: f32, // [(m/s^2)^2], applied to bias process model
+}
+
+impl Default for PredictNoise {
+    fn default() -> Self {
+        Self {
+            // Defaults aligned with visualize_pygpsdata_log's prior tuning.
+            gyro_var: 0.03,  // [rad^2/s^2]
+            accel_var: 12.0, // [(m/s^2)^2]
+            gyro_bias_rw_var: 0.1e-9,
+            accel_bias_rw_var: 1.0e-8,
+        }
+    }
+}
+
+fn default_p_diag() -> [f32; N_STATES] {
+    let mut p = [DEFAULT_P_INIT; N_STATES];
+    let dt = DEFAULT_BIAS_DT_S;
+    let gyro_sigma_da = (DEFAULT_GYRO_BIAS_SIGMA_DPS * PI / 180.0) * dt;
+    let accel_sigma_dv = DEFAULT_ACCEL_BIAS_SIGMA_MPS2 * dt;
+    let var_gyro = gyro_sigma_da * gyro_sigma_da;
+    let var_accel = accel_sigma_dv * accel_sigma_dv;
+    p[10] = var_gyro;
+    p[11] = var_gyro;
+    p[12] = var_gyro;
+    p[13] = var_accel;
+    p[14] = var_accel;
+    p[15] = var_accel;
+    p
 }
 
 #[inline]
@@ -129,38 +177,46 @@ fn quat2rot(q: &[f32; 4]) -> [[f32; 3]; 3] {
     let q2q2 = q2 * q2;
     let q3q3 = q3 * q3;
     [
-        [1.0 - 2.0 * (q2q2 + q3q3), 2.0 * (q1 * q2 - q0 * q3), 2.0 * (q1 * q3 + q0 * q2)],
-        [2.0 * (q1 * q2 + q0 * q3), 1.0 - 2.0 * (q1q1 + q3q3), 2.0 * (q2 * q3 - q0 * q1)],
-        [2.0 * (q1 * q3 - q0 * q2), 2.0 * (q2 * q3 + q0 * q1), 1.0 - 2.0 * (q1q1 + q2q2)],
+        [
+            1.0 - 2.0 * (q2q2 + q3q3),
+            2.0 * (q1 * q2 - q0 * q3),
+            2.0 * (q1 * q3 + q0 * q2),
+        ],
+        [
+            2.0 * (q1 * q2 + q0 * q3),
+            1.0 - 2.0 * (q1q1 + q3q3),
+            2.0 * (q2 * q3 - q0 * q1),
+        ],
+        [
+            2.0 * (q1 * q3 - q0 * q2),
+            2.0 * (q2 * q3 + q0 * q1),
+            1.0 - 2.0 * (q1q1 + q2q2),
+        ],
     ]
 }
 
-pub fn ekf_init(ekf: &mut Ekf, p_init_val: f32) {
+pub fn ekf_init(ekf: &mut Ekf, p_diag: [f32; N_STATES], noise: PredictNoise) {
     *ekf = Ekf::default();
+    ekf.noise = noise;
     for i in 0..N_STATES {
-        ekf.p[i][i] = p_init_val;
+        ekf.p[i][i] = p_diag[i];
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn ekf_predict(
-    ekf: &mut Ekf,
-    imu: &ImuSample,
-    daVar: f32,
-    dvVar: f32,
-    dgb_p_noise_var: f32,
-    dvb_x_p_noise_var: f32,
-    dvb_y_p_noise_var: f32,
-    dvb_z_p_noise_var: f32,
-    debug_out: Option<&mut EkfDebug>,
-) {
-    let daxVar = daVar;
-    let dayVar = daVar;
-    let dazVar = daVar;
+pub fn ekf_set_predict_noise(ekf: &mut Ekf, noise: PredictNoise) {
+    ekf.noise = noise;
+}
 
-    let dvxVar = dvVar;
-    let dvyVar = dvVar;
-    let dvzVar = dvVar;
+pub fn ekf_predict(ekf: &mut Ekf, imu: &ImuSample, debug_out: Option<&mut EkfDebug>) {
+    let noise = ekf.noise;
+    let dt = imu.dt;
+    let dt2 = dt * dt;
+    // Internal prediction equations are formulated in delta-angle / delta-velocity.
+    // Convert rate-domain variances to increment-domain variances each step.
+    let dAngVar = noise.gyro_var * dt2;
+    let dVelVar = noise.accel_var * dt2;
+    let gyro_bias_rw_var = noise.gyro_bias_rw_var;
+    let accel_bias_rw_var = noise.accel_bias_rw_var;
 
     let q0 = ekf.state.q0;
     let q1 = ekf.state.q1;
@@ -185,7 +241,6 @@ pub fn ekf_predict(
     let dvx = imu.dvx;
     let dvy = imu.dvy;
     let dvz = imu.dvz;
-    let dt = imu.dt;
     let g = GRAVITY_MSS;
 
     if let Some(debug) = debug_out {
@@ -220,7 +275,6 @@ pub fn ekf_fuse_gps(ekf: &mut Ekf, gps: &GpsData) {
     ekf_fuse_gps_vel_n(ekf, gps.vel_n, gps.R_VEL_N);
     ekf_fuse_gps_vel_e(ekf, gps.vel_e, gps.R_VEL_E);
     ekf_fuse_gps_vel_d(ekf, gps.vel_d, gps.R_VEL_D);
-    ekf_fuse_gps_heading(ekf, gps.heading_rad, gps.R_YAW);
 }
 
 pub fn ekf_fuse_body_vel(ekf: &mut Ekf, R_body_vel: f32) {
@@ -228,7 +282,12 @@ pub fn ekf_fuse_body_vel(ekf: &mut Ekf, R_body_vel: f32) {
     ekf_fuse_body_vel_z(ekf, R_body_vel);
 }
 
-fn fuse_measurement(ekf: &mut Ekf, innovation: f32, Hfusion: &[f32; N_STATES], Kfusion: &[f32; N_STATES]) {
+fn fuse_measurement(
+    ekf: &mut Ekf,
+    innovation: f32,
+    Hfusion: &[f32; N_STATES],
+    Kfusion: &[f32; N_STATES],
+) {
     let p_old = ekf.p;
 
     let state_array = state_as_array_mut(&mut ekf.state);
@@ -325,31 +384,6 @@ fn ekf_fuse_gps_vel_d(ekf: &mut Ekf, vel_d: f32, R_VEL_D: f32) {
     let mut Kfusion = [0.0_f32; N_STATES];
 
     include!("ekf_generated/gps_vel_d_generated.rs");
-    fuse_measurement(ekf, innovation, &Hfusion, &Kfusion);
-}
-
-fn ekf_fuse_gps_heading(ekf: &mut Ekf, heading: f32, R_YAW: f32) {
-    let q0 = ekf.state.q0;
-    let q1 = ekf.state.q1;
-    let q2 = ekf.state.q2;
-    let q3 = ekf.state.q3;
-    let P = &ekf.p;
-
-    let R_10 = 2.0 * (q1 * q2 + q0 * q3);
-    let R_00 = 1.0 - 2.0 * (q2 * q2 + q3 * q3);
-    let predicted_yaw = R_10.atan2(R_00);
-
-    let mut innovation = heading - predicted_yaw;
-    if innovation > PI {
-        innovation -= 2.0 * PI;
-    } else if innovation < -PI {
-        innovation += 2.0 * PI;
-    }
-
-    let mut Hfusion = [0.0_f32; N_STATES];
-    let mut Kfusion = [0.0_f32; N_STATES];
-
-    include!("ekf_generated/gps_heading_generated.rs");
     fuse_measurement(ekf, innovation, &Hfusion, &Kfusion);
 }
 

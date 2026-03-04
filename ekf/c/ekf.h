@@ -23,8 +23,17 @@ typedef struct
 
 typedef struct 
 {
+  float gyro_var; // [rad^2/s^2]
+  float accel_var; // [(m/s^2)^2]
+  float gyro_bias_rw_var;
+  float accel_bias_rw_var;
+} predict_noise_t;
+
+typedef struct 
+{
     ekf_state_t state;
     float P[N_STATES][N_STATES]; // State covariance matrix
+    predict_noise_t noise;
 } ekf_t;
 
 typedef struct
@@ -35,14 +44,12 @@ typedef struct
   float vel_n; // North velocity measurement (m/s)
   float vel_e; // East velocity measurement (m/s)
   float vel_d; // Down velocity measurement (m/s)
-  float heading_rad; // Heading measurement (radians)
   float R_POS_N; // Measurement noise variance for North position (m^2)
   float R_POS_E; // Measurement noise variance for East position (m^2)
   float R_POS_D; // Measurement noise variance for Down position (m^2)
   float R_VEL_N; // Measurement noise variance for North velocity (m^2/s^2) 
   float R_VEL_E; // Measurement noise variance for East velocity (m^2/s^2)
   float R_VEL_D; // Measurement noise variance for Down velocity (m^2/s^2)
-  float R_YAW; // Measurement noise variance for heading (rad^2)
 } gps_data_t;
 
 typedef struct
@@ -56,9 +63,11 @@ typedef struct
  * @param ekf Pointer to EKF structure to initialize
  * @param P_init_val Initial value to set for all elements of the covariance matrix P
  */
-void ekf_init(ekf_t *ekf, float P_init_val);
+void ekf_init(ekf_t *ekf, const float P_diag[N_STATES], const predict_noise_t *noise);
 
-void ekf_predict(ekf_t * ekf, const imu_sample_t *imu, const float daVar, const float dvVar, const float dgb_p_noise_var, const float dvb_x_p_noise_var, const float dvb_y_p_noise_var, const float dvb_z_p_noise_var, ekf_debug_t * debug_out);
+void ekf_set_predict_noise(ekf_t *ekf, const predict_noise_t *noise);
+
+void ekf_predict(ekf_t * ekf, const imu_sample_t *imu, ekf_debug_t * debug_out);
 
 void ekf_fuse_gps(ekf_t *ekf, const gps_data_t *gps);
 

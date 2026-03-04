@@ -2,10 +2,6 @@
 #include <math.h>
 #include <string.h>
 
-#ifndef M_PI
-#define M_PI 3.14159265358979323846f
-#endif
-
 static void quat_mult(const float p[4], const float q[4], float r[4]);
 static void quat2Rot(const float q[4], float R[3][3]);
 static void normalize_quat(float q[4]);
@@ -16,29 +12,35 @@ static void ekf_fuse_gps_pos_d(ekf_t *ekf, float pos_d, float R_POS_D);
 static void ekf_fuse_gps_vel_n(ekf_t *ekf, float vel_n, float R_VEL_N);
 static void ekf_fuse_gps_vel_e(ekf_t *ekf, float vel_e, float R_VEL_E);
 static void ekf_fuse_gps_vel_d(ekf_t *ekf, float vel_d, float R_VEL_D);
-static void ekf_fuse_gps_heading(ekf_t *ekf, float heading, float R_YAW);
 static void ekf_fuse_body_vel_y(ekf_t *ekf, const float R_BODY_VEL);
 static void ekf_fuse_body_vel_z(ekf_t *ekf, const float R_BODY_VEL);
 
-void ekf_init(ekf_t *ekf, float P_init_val) {
+void ekf_init(ekf_t *ekf, const float P_diag[N_STATES],
+              const predict_noise_t *noise) {
   memset(ekf, 0, sizeof(ekf_t));
+  if (noise) {
+    ekf->noise = *noise;
+  }
   for (int i = 0; i < N_STATES; i++) {
-    ekf->P[i][i] = P_init_val;
+    ekf->P[i][i] = P_diag ? P_diag[i] : 0.0f;
   }
 }
 
-void ekf_predict(ekf_t *ekf, const imu_sample_t *imu, const float daVar,
-                 const float dvVar, const float dgb_p_noise_var,
-                 const float dvb_x_p_noise_var, const float dvb_y_p_noise_var,
-                 const float dvb_z_p_noise_var, ekf_debug_t *debug_out) {
+void ekf_set_predict_noise(ekf_t *ekf, const predict_noise_t *noise) {
+  if (noise) {
+    ekf->noise = *noise;
+  }
+}
 
-  const float daxVar = daVar;
-  const float dayVar = daVar;
-  const float dazVar = daVar;
-
-  const float dvxVar = dvVar;
-  const float dvyVar = dvVar;
-  const float dvzVar = dvVar;
+void ekf_predict(ekf_t *ekf, const imu_sample_t *imu, ekf_debug_t *debug_out) {
+  const float gyro_var = ekf->noise.gyro_var;
+  const float accel_var = ekf->noise.accel_var;
+  const float gyro_bias_rw_var = ekf->noise.gyro_bias_rw_var;
+  const float accel_bias_rw_var = ekf->noise.accel_bias_rw_var;
+  const float dt = imu->dt;
+  const float dt2 = dt * dt;
+  const float dAngVar = gyro_var * dt2;
+  const float dVelVar = accel_var * dt2;
 
   const float q0 = ekf->state.q0;
   const float q1 = ekf->state.q1;
@@ -63,7 +65,6 @@ void ekf_predict(ekf_t *ekf, const imu_sample_t *imu, const float daVar,
   const float dvx = imu->dvx;
   const float dvy = imu->dvy;
   const float dvz = imu->dvz;
-  const float dt = imu->dt;
   const float g = GRAVITY_MSS;
 
   if (debug_out) {
@@ -98,7 +99,6 @@ void ekf_fuse_gps(ekf_t *ekf, const gps_data_t *gps) {
   ekf_fuse_gps_vel_n(ekf, gps->vel_n, gps->R_VEL_N);
   ekf_fuse_gps_vel_e(ekf, gps->vel_e, gps->R_VEL_E);
   ekf_fuse_gps_vel_d(ekf, gps->vel_d, gps->R_VEL_D);
-  ekf_fuse_gps_heading(ekf, gps->heading_rad, gps->R_YAW);
 }
 
 static void fuse_measurement(ekf_t *ekf, float innovation,
@@ -203,29 +203,6 @@ static void ekf_fuse_gps_vel_d(ekf_t *ekf, float vel_d, float R_VEL_D) {
   float Kfusion[N_STATES];
 
 #include "generated/gps_vel_d_generated.c"
-  fuse_measurement(ekf, innovation, Hfusion, Kfusion);
-}
-
-static void ekf_fuse_gps_heading(ekf_t *ekf, float heading, float R_YAW) {
-  const float q0 = ekf->state.q0, q1 = ekf->state.q1, q2 = ekf->state.q2,
-              q3 = ekf->state.q3;
-  const float (*P)[N_STATES] = ekf->P;
-  const float R_10 = 2.0f * (q1 * q2 + q0 * q3);
-  const float R_00 = 1.0f - 2.0f * (q2 * q2 + q3 * q3);
-  const float predicted_yaw = atan2f(R_10, R_00);
-
-  float innovation = heading - predicted_yaw;
-
-  if (innovation > M_PI) {
-    innovation -= 2.0f * M_PI;
-  } else if (innovation < -M_PI) {
-    innovation += 2.0f * M_PI;
-  }
-
-  float Hfusion[N_STATES];
-  float Kfusion[N_STATES];
-
-#include "generated/gps_heading_generated.c"
   fuse_measurement(ekf, innovation, Hfusion, Kfusion);
 }
 

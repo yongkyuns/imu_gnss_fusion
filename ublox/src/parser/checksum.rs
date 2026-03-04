@@ -240,7 +240,7 @@ mod tests {
                 ) => {
                     assert_eq!(e1, e2);
                     assert_eq!(g1, g2);
-                },
+                }
                 _ => panic!("Error types should match"),
             }
         }
