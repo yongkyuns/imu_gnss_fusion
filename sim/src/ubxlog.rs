@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use ublox::proto31::PacketRef;
+use ublox::esf_alg::{EsfAlgError, EsfAlgStatus};
 use ublox::nav_pvt::common::{NavPvtFlags, NavPvtValidFlags};
 use ublox::{UbxProtocol, proto31::Proto31};
 
@@ -252,6 +253,23 @@ pub fn extract_nav_att(frame: &UbxFrame) -> Option<(i64, f64, f64, f64)> {
 pub fn extract_esf_alg(frame: &UbxFrame) -> Option<(i64, f64, f64, f64)> {
     match decode_packet(frame)? {
         PacketRef::EsfAlg(pkt) => Some((pkt.itow() as i64, pkt.roll(), pkt.pitch(), pkt.yaw())),
+        _ => None,
+    }
+}
+
+pub fn extract_esf_alg_valid(frame: &UbxFrame) -> Option<(i64, f64, f64, f64)> {
+    match decode_packet(frame)? {
+        PacketRef::EsfAlg(pkt) => {
+            let status = pkt.flags().status();
+            let err = pkt.error();
+            let aligned = matches!(status, EsfAlgStatus::CoarseAlignment | EsfAlgStatus::FineAlignment);
+            let no_angle_error = !err.contains(EsfAlgError::ANGLE_ERROR);
+            if aligned && no_angle_error {
+                Some((pkt.itow() as i64, pkt.roll(), pkt.pitch(), pkt.yaw()))
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }

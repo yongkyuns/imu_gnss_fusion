@@ -12,11 +12,19 @@ use sim::ubxlog::{
 struct Args {
     #[arg(value_name = "LOGFILE")]
     logfile: PathBuf,
+    #[arg(long, default_value_t = 365.0)]
+    window_start_s: f64,
+    #[arg(long, default_value_t = 380.0)]
+    window_end_s: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
 enum TransformMode {
     None,
+    RotXyz,
+    RotXyzTranspose,
+    RotXyzNeg,
+    RotXyzNegTranspose,
     TransposeZyx,
     DirectZyx,
     TransposeNegZyx,
@@ -27,6 +35,7 @@ enum TransformMode {
 enum HeadingMode {
     NavPvtMotion,
     NavAtt,
+    Disabled,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -45,6 +54,8 @@ struct Config {
     p_init: f32,
     use_body_vel: bool,
     r_body_vel: f32,
+    turn_aware_nhc: bool,
+    turn_aware_gain: f32,
     gyro_scale: f64,
     accel_scale: f64,
     frame_post_rot: FramePostRot,
@@ -59,6 +70,12 @@ struct Metrics {
     mean_abs_yaw_deg: f64,
     rmse_yaw_fast_deg: f64,
     mean_abs_yaw_fast_deg: f64,
+    n_roll: usize,
+    rmse_roll_deg: f64,
+    mean_abs_roll_deg: f64,
+    n_roll_win: usize,
+    rmse_roll_win_deg: f64,
+    mean_abs_roll_win_deg: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -72,6 +89,8 @@ struct AlgEvent {
 #[derive(Clone, Copy, Debug)]
 struct NavAttEvent {
     t_ms: f64,
+    roll_deg: f64,
+    pitch_deg: f64,
     heading_deg: f64,
 }
 
@@ -146,6 +165,17 @@ fn rot_zyx(yaw_rad: f64, pitch_rad: f64, roll_rad: f64) -> [[f64; 3]; 3] {
         [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
         [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
         [-sp, cp * sr, cp * cr],
+    ]
+}
+
+fn rot_xyz(roll_rad: f64, pitch_rad: f64, yaw_rad: f64) -> [[f64; 3]; 3] {
+    let (sr, cr) = roll_rad.sin_cos();
+    let (sp, cp) = pitch_rad.sin_cos();
+    let (sy, cy) = yaw_rad.sin_cos();
+    [
+        [cp * cy, -cp * sy, sp],
+        [cr * sy + sr * sp * cy, cr * cy - sr * sp * sy, -sr * cp],
+        [sr * sy - cr * sp * cy, sr * cy + cr * sp * sy, cr * cp],
     ]
 }
 
@@ -237,6 +267,8 @@ fn run_config(
     alg_events: &[AlgEvent],
     nav_events: &[(f64, NavPvtObs)],
     nav_att_events: &[NavAttEvent],
+    window_start_s: f64,
+    window_end_s: f64,
 ) -> Metrics {
     let mut ekf = Ekf::default();
     ekf_init(&mut ekf, cfg.p_init);
@@ -263,6 +295,14 @@ fn run_config(
     let mut n_yaw_fast = 0usize;
     let mut se_yaw_fast = 0.0_f64;
     let mut sae_yaw_fast = 0.0_f64;
+    let mut n_roll = 0usize;
+    let mut se_roll = 0.0_f64;
+    let mut sae_roll = 0.0_f64;
+    let mut n_roll_win = 0usize;
+    let mut se_roll_win = 0.0_f64;
+    let mut sae_roll_win = 0.0_f64;
+    let mut nav_att_idx_metric = 0usize;
+    let t0_ms = imu_packets.first().map(|p| p.t_ms).unwrap_or(0.0);
 
     for pkt in imu_packets {
         while alg_idx < alg_events.len() && alg_events[alg_idx].t_ms <= pkt.t_ms {
@@ -281,11 +321,32 @@ fn run_config(
             continue;
         }
 
+        while nav_att_idx_metric + 1 < nav_att_events.len() && nav_att_events[nav_att_idx_metric + 1].t_ms <= pkt.t_ms {
+            nav_att_idx_metric += 1;
+        }
+        if nav_att_idx_metric < nav_att_events.len() && nav_att_events[nav_att_idx_metric].t_ms <= pkt.t_ms {
+            let att = nav_att_events[nav_att_idx_metric];
+            let (ekf_roll, _, _) = quat_rpy_deg(ekf.state.q0, ekf.state.q1, ekf.state.q2, ekf.state.q3);
+            let roll_err = wrap_deg180(ekf_roll - att.roll_deg);
+            n_roll += 1;
+            se_roll += roll_err * roll_err;
+            sae_roll += roll_err.abs();
+            let t_rel_s = (pkt.t_ms - t0_ms) * 1e-3;
+            if t_rel_s >= window_start_s && t_rel_s <= window_end_s {
+                n_roll_win += 1;
+                se_roll_win += roll_err * roll_err;
+                sae_roll_win += roll_err.abs();
+            }
+        }
+
         let mut gyro = [pkt.gx_dps, pkt.gy_dps, pkt.gz_dps];
         let mut accel = [pkt.ax_mps2, pkt.ay_mps2, pkt.az_mps2];
         if let Some(alg) = cur_alg {
             let (roll, pitch, yaw) = match cfg.transform {
-                TransformMode::TransposeNegZyx | TransformMode::DirectNegZyx => {
+                TransformMode::TransposeNegZyx
+                | TransformMode::DirectNegZyx
+                | TransformMode::RotXyzNeg
+                | TransformMode::RotXyzNegTranspose => {
                     (-alg.roll_deg, -alg.pitch_deg, -alg.yaw_deg)
                 }
                 _ => (alg.roll_deg, alg.pitch_deg, alg.yaw_deg),
@@ -293,6 +354,14 @@ fn run_config(
             let r_bs = rot_zyx(deg2rad(yaw), deg2rad(pitch), deg2rad(roll));
             let r = match cfg.transform {
                 TransformMode::None => [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                TransformMode::RotXyz => rot_xyz(deg2rad(roll), deg2rad(pitch), deg2rad(yaw)),
+                TransformMode::RotXyzTranspose => {
+                    transpose(rot_xyz(deg2rad(roll), deg2rad(pitch), deg2rad(yaw)))
+                }
+                TransformMode::RotXyzNeg => rot_xyz(deg2rad(roll), deg2rad(pitch), deg2rad(yaw)),
+                TransformMode::RotXyzNegTranspose => {
+                    transpose(rot_xyz(deg2rad(roll), deg2rad(pitch), deg2rad(yaw)))
+                }
                 TransformMode::TransposeZyx | TransformMode::TransposeNegZyx => transpose(r_bs),
                 TransformMode::DirectZyx | TransformMode::DirectNegZyx => r_bs,
             };
@@ -332,7 +401,15 @@ fn run_config(
         };
         ekf_predict(&mut ekf, &imu, 2.5e-4, 1.2e-3, 5.0e-7, 2.0e-6, 2.5e-6, 3.0e-6, None);
         if cfg.use_body_vel {
-            ekf_fuse_body_vel(&mut ekf, cfg.r_body_vel);
+            let mut r_body = cfg.r_body_vel;
+            if cfg.turn_aware_nhc {
+                let yaw_rate_dps = gyro[2].abs();
+                if yaw_rate_dps > 3.0 {
+                    let alpha = ((yaw_rate_dps - 3.0) / 7.0).clamp(0.0, 1.0) as f32;
+                    r_body = cfg.r_body_vel * (1.0 + cfg.turn_aware_gain * alpha);
+                }
+            }
+            ekf_fuse_body_vel(&mut ekf, r_body);
         }
 
         while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
@@ -379,6 +456,10 @@ fn run_config(
                     };
                     (wrap_pi(h), deg2rad(nav.head_acc_deg).powi(2).max(0.02))
                 }
+                HeadingMode::Disabled => {
+                    let (_, _, yaw_deg) = quat_rpy_deg(ekf.state.q0, ekf.state.q1, ekf.state.q2, ekf.state.q3);
+                    (deg2rad(yaw_deg), 1e12)
+                }
             };
 
             let h_acc2 = (nav.h_acc_m * nav.h_acc_m).max(0.05);
@@ -415,6 +496,7 @@ fn run_config(
                     }
                 }
                 HeadingMode::NavPvtMotion => nav.heading_motion_deg,
+                HeadingMode::Disabled => nav.heading_motion_deg,
             };
             let yaw_err = wrap_deg180(ekf_yaw - yaw_ref);
 
@@ -443,6 +525,12 @@ fn run_config(
         mean_abs_yaw_deg: sae_yaw / n as f64,
         rmse_yaw_fast_deg: if n_yaw_fast > 0 { (se_yaw_fast / n_yaw_fast as f64).sqrt() } else { 0.0 },
         mean_abs_yaw_fast_deg: if n_yaw_fast > 0 { sae_yaw_fast / n_yaw_fast as f64 } else { 0.0 },
+        n_roll,
+        rmse_roll_deg: if n_roll > 0 { (se_roll / n_roll as f64).sqrt() } else { 0.0 },
+        mean_abs_roll_deg: if n_roll > 0 { sae_roll / n_roll as f64 } else { 0.0 },
+        n_roll_win,
+        rmse_roll_win_deg: if n_roll_win > 0 { (se_roll_win / n_roll_win as f64).sqrt() } else { 0.0 },
+        mean_abs_roll_win_deg: if n_roll_win > 0 { sae_roll_win / n_roll_win as f64 } else { 0.0 },
     }
 }
 
@@ -497,9 +585,14 @@ fn main() -> Result<()> {
                 alg_events.push(AlgEvent { t_ms, roll_deg: roll, pitch_deg: pitch, yaw_deg: yaw });
             }
         }
-        if let Some((_itow, _roll, _pitch, heading)) = extract_nav_att(f) {
+        if let Some((_itow, roll, pitch, heading)) = extract_nav_att(f) {
             if let Some(t_ms) = nearest_master_ms(f.seq, &masters) {
-                nav_att_events.push(NavAttEvent { t_ms, heading_deg: normalize_heading_deg(heading) });
+                nav_att_events.push(NavAttEvent {
+                    t_ms,
+                    roll_deg: roll,
+                    pitch_deg: pitch,
+                    heading_deg: normalize_heading_deg(heading),
+                });
             }
         }
         if let Some(obs) = extract_nav_pvt_obs(f) {
@@ -589,56 +682,64 @@ fn main() -> Result<()> {
     imu_packets.sort_by(|a, b| a.t_ms.partial_cmp(&b.t_ms).unwrap_or(std::cmp::Ordering::Equal));
 
     let configs = vec![
-        Config { name: "baseline", transform: TransformMode::TransposeZyx, heading: HeadingMode::NavPvtMotion, p_init: 1.0, use_body_vel: false, r_body_vel: 0.5, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Identity },
-        Config { name: "no_transform", transform: TransformMode::None, heading: HeadingMode::NavPvtMotion, p_init: 1.0, use_body_vel: false, r_body_vel: 0.5, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Identity },
-        Config { name: "direct_zyx", transform: TransformMode::DirectZyx, heading: HeadingMode::NavPvtMotion, p_init: 1.0, use_body_vel: false, r_body_vel: 0.5, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Identity },
-        Config { name: "transpose_neg", transform: TransformMode::TransposeNegZyx, heading: HeadingMode::NavPvtMotion, p_init: 1.0, use_body_vel: false, r_body_vel: 0.5, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Identity },
-        Config { name: "direct_neg", transform: TransformMode::DirectNegZyx, heading: HeadingMode::NavPvtMotion, p_init: 1.0, use_body_vel: false, r_body_vel: 0.5, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Identity },
-        Config { name: "baseline_navatt_heading", transform: TransformMode::TransposeZyx, heading: HeadingMode::NavAtt, p_init: 1.0, use_body_vel: false, r_body_vel: 0.5, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Identity },
-        Config { name: "baseline_pinit_0.1", transform: TransformMode::TransposeZyx, heading: HeadingMode::NavPvtMotion, p_init: 0.1, use_body_vel: false, r_body_vel: 0.5, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Identity },
-        Config { name: "baseline_pinit_10", transform: TransformMode::TransposeZyx, heading: HeadingMode::NavPvtMotion, p_init: 10.0, use_body_vel: false, r_body_vel: 0.5, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Identity },
-        Config { name: "baseline_pinit_1000", transform: TransformMode::TransposeZyx, heading: HeadingMode::NavPvtMotion, p_init: 1000.0, use_body_vel: false, r_body_vel: 0.5, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Identity },
-        Config { name: "baseline_bodyvel", transform: TransformMode::TransposeZyx, heading: HeadingMode::NavPvtMotion, p_init: 1.0, use_body_vel: true, r_body_vel: 0.5, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Identity },
-        Config { name: "baseline_bodyvel_strong", transform: TransformMode::TransposeZyx, heading: HeadingMode::NavPvtMotion, p_init: 1.0, use_body_vel: true, r_body_vel: 0.1, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Identity },
-        Config { name: "baseline_bodyvel_weak", transform: TransformMode::TransposeZyx, heading: HeadingMode::NavPvtMotion, p_init: 1.0, use_body_vel: true, r_body_vel: 2.0, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Identity },
-        Config { name: "bodyvel_weak_p1000", transform: TransformMode::TransposeZyx, heading: HeadingMode::NavPvtMotion, p_init: 1000.0, use_body_vel: true, r_body_vel: 2.0, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Identity },
-        Config { name: "baseline_bodyvel_vweak", transform: TransformMode::TransposeZyx, heading: HeadingMode::NavPvtMotion, p_init: 1.0, use_body_vel: true, r_body_vel: 5.0, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Identity },
-        Config { name: "transpose_neg_bodyvel", transform: TransformMode::TransposeNegZyx, heading: HeadingMode::NavPvtMotion, p_init: 1.0, use_body_vel: true, r_body_vel: 2.0, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Identity },
-        Config { name: "baseline_gyro_x0.5", transform: TransformMode::TransposeZyx, heading: HeadingMode::NavPvtMotion, p_init: 1.0, use_body_vel: false, r_body_vel: 0.5, gyro_scale: 0.5, accel_scale: 1.0, frame_post_rot: FramePostRot::Identity },
-        Config { name: "baseline_gyro_x2.0", transform: TransformMode::TransposeZyx, heading: HeadingMode::NavPvtMotion, p_init: 1.0, use_body_vel: false, r_body_vel: 0.5, gyro_scale: 2.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Identity },
-        Config { name: "baseline_accel_x0.5", transform: TransformMode::TransposeZyx, heading: HeadingMode::NavPvtMotion, p_init: 1.0, use_body_vel: false, r_body_vel: 0.5, gyro_scale: 1.0, accel_scale: 0.5, frame_post_rot: FramePostRot::Identity },
-        Config { name: "baseline_accel_x2.0", transform: TransformMode::TransposeZyx, heading: HeadingMode::NavPvtMotion, p_init: 1.0, use_body_vel: false, r_body_vel: 0.5, gyro_scale: 1.0, accel_scale: 2.0, frame_post_rot: FramePostRot::Identity },
-        Config { name: "bodyvel_rx180", transform: TransformMode::TransposeZyx, heading: HeadingMode::NavPvtMotion, p_init: 1.0, use_body_vel: true, r_body_vel: 2.0, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Rx180 },
-        Config { name: "bodyvel_ry180", transform: TransformMode::TransposeZyx, heading: HeadingMode::NavPvtMotion, p_init: 1.0, use_body_vel: true, r_body_vel: 2.0, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Ry180 },
-        Config { name: "bodyvel_rz180", transform: TransformMode::TransposeZyx, heading: HeadingMode::NavPvtMotion, p_init: 1.0, use_body_vel: true, r_body_vel: 2.0, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Rz180 },
+        Config { name: "xyz_id_r100", transform: TransformMode::RotXyz, heading: HeadingMode::Disabled, p_init: 1.0, use_body_vel: true, r_body_vel: 100.0, turn_aware_nhc: false, turn_aware_gain: 0.0, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Identity },
+        Config { name: "xyz_rx_r100", transform: TransformMode::RotXyz, heading: HeadingMode::Disabled, p_init: 1.0, use_body_vel: true, r_body_vel: 100.0, turn_aware_nhc: false, turn_aware_gain: 0.0, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Rx180 },
+        Config { name: "xyz_ry_r100", transform: TransformMode::RotXyz, heading: HeadingMode::Disabled, p_init: 1.0, use_body_vel: true, r_body_vel: 100.0, turn_aware_nhc: false, turn_aware_gain: 0.0, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Ry180 },
+        Config { name: "xyz_rz_r100", transform: TransformMode::RotXyz, heading: HeadingMode::Disabled, p_init: 1.0, use_body_vel: true, r_body_vel: 100.0, turn_aware_nhc: false, turn_aware_gain: 0.0, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Rz180 },
+        Config { name: "xyzT_id_r100", transform: TransformMode::RotXyzTranspose, heading: HeadingMode::Disabled, p_init: 1.0, use_body_vel: true, r_body_vel: 100.0, turn_aware_nhc: false, turn_aware_gain: 0.0, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Identity },
+        Config { name: "xyzT_rx_r100", transform: TransformMode::RotXyzTranspose, heading: HeadingMode::Disabled, p_init: 1.0, use_body_vel: true, r_body_vel: 100.0, turn_aware_nhc: false, turn_aware_gain: 0.0, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Rx180 },
+        Config { name: "dzyx_id_r100", transform: TransformMode::DirectZyx, heading: HeadingMode::Disabled, p_init: 1.0, use_body_vel: true, r_body_vel: 100.0, turn_aware_nhc: false, turn_aware_gain: 0.0, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Identity },
+        Config { name: "dzyx_rx_r100", transform: TransformMode::DirectZyx, heading: HeadingMode::Disabled, p_init: 1.0, use_body_vel: true, r_body_vel: 100.0, turn_aware_nhc: false, turn_aware_gain: 0.0, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Rx180 },
+        Config { name: "dzyx_ry_r100", transform: TransformMode::DirectZyx, heading: HeadingMode::Disabled, p_init: 1.0, use_body_vel: true, r_body_vel: 100.0, turn_aware_nhc: false, turn_aware_gain: 0.0, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Ry180 },
+        Config { name: "dzyx_rz_r100", transform: TransformMode::DirectZyx, heading: HeadingMode::Disabled, p_init: 1.0, use_body_vel: true, r_body_vel: 100.0, turn_aware_nhc: false, turn_aware_gain: 0.0, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Rz180 },
+        Config { name: "tzyx_rx_r100", transform: TransformMode::TransposeZyx, heading: HeadingMode::Disabled, p_init: 1.0, use_body_vel: true, r_body_vel: 100.0, turn_aware_nhc: false, turn_aware_gain: 0.0, gyro_scale: 1.0, accel_scale: 1.0, frame_post_rot: FramePostRot::Rx180 },
     ];
 
     println!(
-        "{:<24} {:>6} {:>8} {:>8} {:>8} {:>8} {:>8} {:>8}",
-        "config", "N", "pos_h", "vel_h", "yaw", "yaw_f", "yaw_mae", "yawf_mae"
+        "window: [{:.3}, {:.3}] s (relative)\n{:<22} {:>6} {:>8} {:>8} {:>8} {:>8} {:>8} {:>9} {:>9}",
+        args.window_start_s,
+        args.window_end_s,
+        "config",
+        "N",
+        "pos_h",
+        "vel_h",
+        "yaw",
+        "roll",
+        "roll_mae",
+        "roll_w",
+        "rollw_mae",
     );
     let mut scored = Vec::new();
     for cfg in configs {
-        let m = run_config(cfg, &imu_packets, &alg_events, &nav_events, &nav_att_events);
+        let m = run_config(
+            cfg,
+            &imu_packets,
+            &alg_events,
+            &nav_events,
+            &nav_att_events,
+            args.window_start_s,
+            args.window_end_s,
+        );
         println!(
-            "{:<24} {:>6} {:>8.3} {:>8.3} {:>8.3} {:>8.3} {:>8.3} {:>8.3}",
+            "{:<22} {:>6} {:>8.3} {:>8.3} {:>8.3} {:>8.3} {:>8.3} {:>9.3} {:>9.3}",
             cfg.name,
             m.n,
             m.rmse_pos_h,
             m.rmse_vel_h,
             m.rmse_yaw_deg,
-            m.rmse_yaw_fast_deg,
-            m.mean_abs_yaw_deg,
-            m.mean_abs_yaw_fast_deg
+            m.rmse_roll_deg,
+            m.mean_abs_roll_deg,
+            m.rmse_roll_win_deg,
+            m.mean_abs_roll_win_deg
         );
-        let score = m.rmse_pos_h + m.rmse_vel_h * 5.0 + m.rmse_yaw_deg * 0.2;
+        let score = m.rmse_roll_win_deg * 4.0 + m.rmse_roll_deg * 2.0 + m.rmse_pos_h * 0.2;
         scored.push((score, cfg.name, m));
     }
     scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     if let Some((score, name, m)) = scored.first() {
         println!(
-            "\nBEST: {} score={:.3}  pos_h={:.3} vel_h={:.3} yaw_rmse={:.3} yaw_mae={:.3}",
-            name, score, m.rmse_pos_h, m.rmse_vel_h, m.rmse_yaw_deg, m.mean_abs_yaw_deg
+            "\nBEST: {} score={:.3} roll_win_rmse={:.3} roll_win_mae={:.3} roll_rmse={:.3} pos_h={:.3}",
+            name, score, m.rmse_roll_win_deg, m.mean_abs_roll_win_deg, m.rmse_roll_deg, m.rmse_pos_h
         );
     }
     Ok(())
