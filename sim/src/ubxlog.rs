@@ -1,8 +1,8 @@
-use std::collections::HashMap;
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, Utc};
-use ublox::proto31::PacketRef;
+use std::collections::HashMap;
 use ublox::esf_alg::{EsfAlgError, EsfAlgStatus};
 use ublox::nav_pvt::common::{NavPvtFlags, NavPvtValidFlags};
+use ublox::proto31::PacketRef;
 use ublox::{UbxProtocol, proto31::Proto31};
 
 #[derive(Debug, Clone)]
@@ -115,6 +115,7 @@ pub fn identity_from_class_id(class: u8, id: u8) -> String {
         (0x01, 0x03) => "NAV-STATUS",
         (0x01, 0x05) => "NAV-ATT",
         (0x01, 0x07) => "NAV-PVT",
+        (0x29, 0x07) => "NAV2-PVT",
         (0x01, 0x34) => "NAV-ORB",
         (0x01, 0x35) => "NAV-SAT",
         (0x0A, 0x04) => "MON-VER",
@@ -153,7 +154,7 @@ pub fn extract_tag_ms(frame: &UbxFrame) -> Option<i64> {
 }
 
 pub fn extract_nav_pvt(frame: &UbxFrame) -> Option<(i64, f64, f64, f64, f64, f64, f64)> {
-    match decode_packet(frame)? {
+    match decode_nav_pvt_like(frame)? {
         PacketRef::NavPvt(pkt) => Some((
             pkt.itow() as i64,
             pkt.ground_speed_2d(),
@@ -187,7 +188,7 @@ pub struct NavPvtObs {
 }
 
 pub fn extract_nav_pvt_obs(frame: &UbxFrame) -> Option<NavPvtObs> {
-    match decode_packet(frame)? {
+    match decode_nav_pvt_like(frame)? {
         PacketRef::NavPvt(pkt) => {
             let flags = pkt.flags();
             Some(NavPvtObs {
@@ -212,8 +213,15 @@ pub fn extract_nav_pvt_obs(frame: &UbxFrame) -> Option<NavPvtObs> {
     }
 }
 
+pub fn extract_nav2_pvt_obs(frame: &UbxFrame) -> Option<NavPvtObs> {
+    if frame.class != 0x29 || frame.id != 0x07 {
+        return None;
+    }
+    extract_nav_pvt_obs(frame)
+}
+
 pub fn extract_nav_pvt_utc(frame: &UbxFrame) -> Option<DateTime<Utc>> {
-    match decode_packet(frame)? {
+    match decode_nav_pvt_like(frame)? {
         PacketRef::NavPvt(pkt) => {
             let valid = pkt.valid();
             if !valid.contains(NavPvtValidFlags::VALID_DATE)
@@ -262,7 +270,10 @@ pub fn extract_esf_alg_valid(frame: &UbxFrame) -> Option<(i64, f64, f64, f64)> {
         PacketRef::EsfAlg(pkt) => {
             let status = pkt.flags().status();
             let err = pkt.error();
-            let aligned = matches!(status, EsfAlgStatus::CoarseAlignment | EsfAlgStatus::FineAlignment);
+            let aligned = matches!(
+                status,
+                EsfAlgStatus::CoarseAlignment | EsfAlgStatus::FineAlignment
+            );
             let no_angle_error = !err.contains(EsfAlgError::ANGLE_ERROR);
             if aligned && no_angle_error {
                 Some((pkt.itow() as i64, pkt.roll(), pkt.pitch(), pkt.yaw()))
@@ -293,7 +304,10 @@ pub fn extract_nav_sat_cn0(frame: &UbxFrame) -> Vec<(String, f64)> {
     let mut out = Vec::new();
     if let Some(PacketRef::NavSat(pkt)) = decode_packet(frame) {
         for sv in pkt.svs() {
-            out.push((format!("gnss{}-sv{}", sv.gnss_id(), sv.sv_id()), sv.cno() as f64));
+            out.push((
+                format!("gnss{}-sv{}", sv.gnss_id(), sv.sv_id()),
+                sv.cno() as f64,
+            ));
         }
     }
     out
@@ -353,6 +367,16 @@ fn decode_packet(frame: &UbxFrame) -> Option<PacketRef<'_>> {
     <Proto31 as UbxProtocol>::match_packet(frame.class, frame.id, &frame.payload).ok()
 }
 
+fn decode_nav_pvt_like(frame: &UbxFrame) -> Option<PacketRef<'_>> {
+    match (frame.class, frame.id) {
+        (0x01, 0x07) => <Proto31 as UbxProtocol>::match_packet(0x01, 0x07, &frame.payload).ok(),
+        // NAV2-PVT has NAV-PVT-equivalent payload but class/id 0x29/0x07.
+        // Decode via the crate's NAV-PVT parser to avoid manual field parsing.
+        (0x29, 0x07) => <Proto31 as UbxProtocol>::match_packet(0x01, 0x07, &frame.payload).ok(),
+        _ => None,
+    }
+}
+
 pub fn unwrap_counter(values: &[u64], modulus: u64) -> Vec<u64> {
     if values.is_empty() {
         return Vec::new();
@@ -409,7 +433,8 @@ pub fn sensor_meta(dtype: u8) -> (&'static str, &'static str, f64) {
 pub fn identity_counts(frames: &[UbxFrame]) -> HashMap<String, usize> {
     let mut map: HashMap<String, usize> = HashMap::new();
     for f in frames {
-        *map.entry(identity_from_class_id(f.class, f.id)).or_insert(0) += 1;
+        *map.entry(identity_from_class_id(f.class, f.id))
+            .or_insert(0) += 1;
     }
     map
 }

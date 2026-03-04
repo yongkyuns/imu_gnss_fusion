@@ -11,8 +11,8 @@ use ekf_rs::ekf::{
 use sim::ubxlog::{
     extract_esf_alg, extract_esf_cal_samples, extract_esf_ins, extract_esf_meas_samples,
     extract_esf_raw_samples, extract_itow_ms, extract_nav_att, extract_nav_pvt,
-    extract_nav_pvt_obs, extract_nav_sat_cn0, fit_linear_map, parse_ubx_frames, sensor_meta,
-    unwrap_counter,
+    extract_nav_pvt_obs, extract_nav_sat_cn0, extract_nav2_pvt_obs, fit_linear_map,
+    parse_ubx_frames, sensor_meta, unwrap_counter,
 };
 use walkers::sources::{Mapbox, MapboxStyle, OpenStreetMap};
 use walkers::{HttpTiles, Map, MapMemory, Plugin, Position, lon_lat};
@@ -270,6 +270,24 @@ fn clamp_ekf_biases(ekf: &mut Ekf, dt_s: f64) {
     ekf.state.dvz_b = ekf.state.dvz_b.clamp(-max_accel_bias_dv, max_accel_bias_dv);
 }
 
+fn set_initial_bias_covariance(ekf: &mut Ekf, dt_nominal_s: f64) {
+    // Bias states are delta-angle / delta-velocity increments per predict step.
+    // Use tight initial covariance so biases start near zero and settle smoothly.
+    let dt = dt_nominal_s.max(1.0e-3);
+    let gyro_sigma_dps = 0.15_f64;
+    let accel_sigma_mps2 = 0.25_f64;
+    let gyro_sigma_da = deg2rad(gyro_sigma_dps) * dt;
+    let accel_sigma_dv = accel_sigma_mps2 * dt;
+    let var_gyro = (gyro_sigma_da * gyro_sigma_da) as f32;
+    let var_accel = (accel_sigma_dv * accel_sigma_dv) as f32;
+    ekf.p[10][10] = var_gyro;
+    ekf.p[11][11] = var_gyro;
+    ekf.p[12][12] = var_gyro;
+    ekf.p[13][13] = var_accel;
+    ekf.p[14][14] = var_accel;
+    ekf.p[15][15] = var_accel;
+}
+
 #[derive(Clone, Copy)]
 struct ImuPacket {
     t_ms: f64,
@@ -307,9 +325,9 @@ fn build_ekf_compare_traces(
     const DA_VAR_MOVING: f32 = 0.3e-5;
     const DV_VAR_MOVING: f32 = 1.2e-3;
     const DGB_P_NOISE_MOVING: f32 = 0.1e-9;
-    const DVB_X_NOISE_MOVING: f32 = 3.0e-7;
-    const DVB_Y_NOISE_MOVING: f32 = 3.0e-7;
-    const DVB_Z_NOISE_MOVING: f32 = 3.0e-7;
+    const DVB_X_NOISE_MOVING: f32 = 1.0e-8;
+    const DVB_Y_NOISE_MOVING: f32 = 1.0e-8;
+    const DVB_Z_NOISE_MOVING: f32 = 1.0e-8;
     if masters.is_empty() {
         return (
             Vec::new(),
@@ -327,7 +345,8 @@ fn build_ekf_compare_traces(
 
     let mut alg_events = Vec::<AlgEvent>::new();
     let mut nav_att_events = Vec::<NavAttEvent>::new();
-    let mut nav_events = Vec::<(f64, sim::ubxlog::NavPvtObs)>::new();
+    let mut nav_events_pvt = Vec::<(f64, sim::ubxlog::NavPvtObs)>::new();
+    let mut nav_events_nav2 = Vec::<(f64, sim::ubxlog::NavPvtObs)>::new();
     for f in frames {
         if let Some((_, roll, pitch, yaw)) = extract_esf_alg(f) {
             if let Some(t_ms) = nearest_master_ms(f.seq, masters) {
@@ -349,10 +368,14 @@ fn build_ekf_compare_traces(
                 });
             }
         }
-        if let Some(obs) = extract_nav_pvt_obs(f) {
-            if let Some(t_ms) = nearest_master_ms(f.seq, masters) {
+        if let Some(t_ms) = nearest_master_ms(f.seq, masters) {
+            if let Some(obs) = extract_nav2_pvt_obs(f) {
                 if obs.fix_ok && !obs.invalid_llh {
-                    nav_events.push((t_ms, obs));
+                    nav_events_nav2.push((t_ms, obs));
+                }
+            } else if let Some(obs) = extract_nav_pvt_obs(f) {
+                if obs.fix_ok && !obs.invalid_llh {
+                    nav_events_pvt.push((t_ms, obs));
                 }
             }
         }
@@ -367,7 +390,17 @@ fn build_ekf_compare_traces(
             .partial_cmp(&b.t_ms)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    nav_events.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    nav_events_nav2.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    nav_events_pvt.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let nav2_events_for_map = nav_events_nav2.clone();
+    let (nav_events, use_nav2_for_ekf) = if !nav_events_nav2.is_empty() {
+        (nav_events_nav2, true)
+    } else {
+        eprintln!(
+            "WARNING: NAV2-PVT not found; falling back to NAV-PVT downsampled to 2 Hz for EKF GNSS observations."
+        );
+        (nav_events_pvt, false)
+    };
 
     let mut raw_seq = Vec::<u64>::new();
     let mut raw_tag = Vec::<u64>::new();
@@ -506,11 +539,13 @@ fn build_ekf_compare_traces(
     let mut bias_accel_z = Vec::<[f64; 2]>::new();
     let mut cov_diag: [Vec<[f64; 2]>; 16] = std::array::from_fn(|_| Vec::new());
     let mut map_ubx = Vec::<[f64; 2]>::new(); // [lon, lat]
+    let mut map_nav2 = Vec::<[f64; 2]>::new(); // [lon, lat]
     let mut map_ekf = Vec::<[f64; 2]>::new(); // [lon, lat]
     let mut map_heading = Vec::<HeadingSample>::new();
 
     let mut ekf = Ekf::default();
     ekf_init(&mut ekf, P_INIT);
+    set_initial_bias_covariance(&mut ekf, 0.01);
     ekf.state.q0 = 1.0;
     let mut prev_imu_t: Option<f64> = None;
     let mut alg_idx = 0usize;
@@ -549,9 +584,12 @@ fn build_ekf_compare_traces(
         ubx_att_pitch.push([t, att.pitch_deg]);
         ubx_att_yaw.push([t, att.heading_deg]);
     }
+    for (_t_ms, nav2) in &nav2_events_for_map {
+        map_nav2.push([nav2.lon_deg, nav2.lat_deg]);
+    }
 
     let mut next_gps_update_ms = f64::NEG_INFINITY;
-    let gps_period_ms = 500.0_f64; // 2Hz, aligned with EKF integration path.
+    let gps_period_ms = 500.0_f64; // Used only when falling back to NAV-PVT.
     let mut yaw_initialized_from_vel = false;
     let mut speed_h_for_nhc = 0.0_f64;
     for pkt in &imu_packets {
@@ -628,13 +666,15 @@ fn build_ekf_compare_traces(
         while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
             let (t_ms, nav) = nav_events[nav_idx];
             nav_idx += 1;
-            if !next_gps_update_ms.is_finite() {
-                next_gps_update_ms = t_ms;
+            if !use_nav2_for_ekf {
+                if !next_gps_update_ms.is_finite() {
+                    next_gps_update_ms = t_ms;
+                }
+                if t_ms + 1e-6 < next_gps_update_ms {
+                    continue;
+                }
+                next_gps_update_ms += gps_period_ms;
             }
-            if t_ms + 1e-6 < next_gps_update_ms {
-                continue;
-            }
-            next_gps_update_ms += gps_period_ms;
 
             if !origin_set {
                 ref_lat = nav.lat_deg;
@@ -903,6 +943,10 @@ fn build_ekf_compare_traces(
         Trace {
             name: "u-blox path (lon,lat)".to_string(),
             points: map_ubx,
+        },
+        Trace {
+            name: "NAV2-PVT path (GNSS-only, lon,lat)".to_string(),
+            points: map_nav2,
         },
         Trace {
             name: "EKF path (lon,lat)".to_string(),
@@ -1510,6 +1554,7 @@ struct App {
     map_memory: MapMemory,
     map_center: Position,
     show_heading: bool,
+    show_nav2_pvt: bool,
 }
 
 const MAPBOX_ACCESS_TOKEN: &str = "pk.eyJ1IjoieW9uZ2t5dW5zODciLCJhIjoiY21tNjB5NWt6MGJmOTJzcG02MmRvN3RnYiJ9.fu_66qb1G1cgrLzAE54E0w";
@@ -1863,12 +1908,17 @@ impl eframe::App for App {
                     ui.horizontal(|ui| {
                         ui.label("Slippy map overlay: u-blox + EKF");
                         ui.checkbox(&mut self.show_heading, "show heading");
+                        ui.checkbox(&mut self.show_nav2_pvt, "show NAV2-PVT (GNSS-only)");
                         if ui.button("Recenter").clicked() {
                             self.map_memory.follow_my_position();
                         }
                     });
+                    let mut map_traces = self.data.ekf_map.clone();
+                    if !self.show_nav2_pvt {
+                        map_traces.retain(|t| t.name != "NAV2-PVT path (GNSS-only, lon,lat)");
+                    }
                     let track = TrackOverlay {
-                        traces: self.data.ekf_map.clone(),
+                        traces: map_traces,
                         headings: self.data.ekf_map_heading.clone(),
                         show_heading: self.show_heading,
                     };
@@ -2133,6 +2183,7 @@ fn main() -> Result<()> {
                 map_memory,
                 map_center,
                 show_heading: false,
+                show_nav2_pvt: false,
             }))
         }),
     )
