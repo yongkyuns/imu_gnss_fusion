@@ -141,9 +141,9 @@ fn rot_zyx(yaw_rad: f64, pitch_rad: f64, roll_rad: f64) -> [[f64; 3]; 3] {
     let (sp, cp) = pitch_rad.sin_cos();
     let (sr, cr) = roll_rad.sin_cos();
     [
-        [cp * cy, -cp * sy, sp],
-        [sr * sp * cy + cr * sy, -sr * sp * sy + cr * cy, -sr * cp],
-        [-cr * sp * cy + sr * sy, cr * sp * sy + sr * cy, cr * cp],
+        [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+        [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+        [-sp, cp * sr, cp * cr],
     ]
 }
 
@@ -301,15 +301,15 @@ fn build_ekf_compare_traces(
     const R_BODY_VEL_STARTSTOP: f32 = 100.0;
     const BODY_VEL_SPEED_LOW_MPS: f64 = 0.5;
     const BODY_VEL_SPEED_HIGH_MPS: f64 = 2.0;
-    const R_POS_SCALE: f64 = 10.0;
-    const R_VEL_SCALE: f64 = 10.0;
+    const R_POS_SCALE: f64 = 80.0;
+    const R_VEL_SCALE: f64 = 80.0;
     const R_YAW_DISABLED: f64 = 1.0e12;
-    const DA_VAR_MOVING: f32 = 2.5e-4;
+    const DA_VAR_MOVING: f32 = 0.3e-5;
     const DV_VAR_MOVING: f32 = 1.2e-3;
-    const DGB_P_NOISE_MOVING: f32 = 4.0e-6;
-    const DVB_X_NOISE_MOVING: f32 = 8.0e-6;
-    const DVB_Y_NOISE_MOVING: f32 = 8.0e-6;
-    const DVB_Z_NOISE_MOVING: f32 = 8.0e-6;
+    const DGB_P_NOISE_MOVING: f32 = 0.1e-9;
+    const DVB_X_NOISE_MOVING: f32 = 3.0e-7;
+    const DVB_Y_NOISE_MOVING: f32 = 3.0e-7;
+    const DVB_Z_NOISE_MOVING: f32 = 3.0e-7;
     if masters.is_empty() {
         return (
             Vec::new(),
@@ -574,25 +574,20 @@ fn build_ekf_compare_traces(
         let mut gyro = [pkt.gx_dps, pkt.gy_dps, pkt.gz_dps];
         let mut accel = [pkt.ax_mps2, pkt.ay_mps2, pkt.az_mps2];
         if let Some(alg) = cur_alg {
-            let r_sb = rot_xyz(
-                deg2rad(alg.roll_deg),
-                deg2rad(alg.pitch_deg),
+            // Fixed sensor->body mapping selected from exhaustive sweep across logs:
+            // R_sb = R_zyx(yaw, pitch, roll), then Rx(180deg) frame correction.
+            let r_sb = rot_zyx(
                 deg2rad(alg.yaw_deg),
+                deg2rad(alg.pitch_deg),
+                deg2rad(alg.roll_deg),
             );
-            // let r_sb = transpose(rot_zyx(
-            //     deg2rad(alg.yaw_deg),
-            //     deg2rad(alg.pitch_deg),
-            //     deg2rad(alg.roll_deg),
-            // ));
             gyro = mat_vec(r_sb, gyro);
             accel = mat_vec(r_sb, accel);
+            gyro[1] = -gyro[1];
+            gyro[2] = -gyro[2];
+            accel[1] = -accel[1];
+            accel[2] = -accel[2];
         }
-        // Apply a rigid-body frame correction (Rx 180deg) to both gyro and accel:
-        // [x, y, z] -> [x, -y, -z]
-        gyro[1] = -gyro[1];
-        gyro[2] = -gyro[2];
-        accel[1] = -accel[1];
-        accel[2] = -accel[2];
         let imu = ImuSample {
             dax: (deg2rad(gyro[0]) * dt) as f32,
             day: (deg2rad(gyro[1]) * dt) as f32,
