@@ -3,8 +3,8 @@ use std::{f64::consts::PI, fs::File, io::Read, path::PathBuf};
 use anyhow::{Context, Result};
 use clap::Parser;
 use sim::ubxlog::{
-    extract_esf_alg, extract_esf_ins, extract_esf_raw_samples, extract_itow_ms, fit_linear_map, parse_ubx_frames,
-    sensor_meta, unwrap_counter,
+    extract_esf_alg, extract_esf_ins, extract_esf_raw_samples, extract_itow_ms, fit_linear_map,
+    parse_ubx_frames, sensor_meta, unwrap_counter,
 };
 
 #[derive(Parser, Debug)]
@@ -272,8 +272,16 @@ fn main() -> Result<()> {
                 }
             }
         }
-        alg_events.sort_by(|a, b| a.t_ms.partial_cmp(&b.t_ms).unwrap_or(std::cmp::Ordering::Equal));
-        ins_events.sort_by(|a, b| a.t_ms.partial_cmp(&b.t_ms).unwrap_or(std::cmp::Ordering::Equal));
+        alg_events.sort_by(|a, b| {
+            a.t_ms
+                .partial_cmp(&b.t_ms)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        ins_events.sort_by(|a, b| {
+            a.t_ms
+                .partial_cmp(&b.t_ms)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let mut raw_seq = Vec::<u64>::new();
         let mut raw_tag = Vec::<u64>::new();
@@ -298,7 +306,10 @@ fn main() -> Result<()> {
             }
         }
         let (a_raw, b_raw) = fit_linear_map(&x, &y, 1e-3);
-        let master_min = masters.iter().map(|(_, ms)| *ms).fold(f64::INFINITY, f64::min);
+        let master_min = masters
+            .iter()
+            .map(|(_, ms)| *ms)
+            .fold(f64::INFINITY, f64::min);
         let master_max = masters
             .iter()
             .map(|(_, ms)| *ms)
@@ -362,7 +373,11 @@ fn main() -> Result<()> {
                 _ => {}
             }
         }
-        imu_packets.sort_by(|a, b| a.t_ms.partial_cmp(&b.t_ms).unwrap_or(std::cmp::Ordering::Equal));
+        imu_packets.sort_by(|a, b| {
+            a.t_ms
+                .partial_cmp(&b.t_ms)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let mut file_scores = vec![0.0_f64; candidates.len()];
         let mut file_counts = vec![0usize; candidates.len()];
@@ -381,7 +396,8 @@ fn main() -> Result<()> {
             }
             let mut j = ins_i;
             if ins_i + 1 < ins_events.len()
-                && (ins_events[ins_i + 1].t_ms - pkt.t_ms).abs() < (ins_events[ins_i].t_ms - pkt.t_ms).abs()
+                && (ins_events[ins_i + 1].t_ms - pkt.t_ms).abs()
+                    < (ins_events[ins_i].t_ms - pkt.t_ms).abs()
             {
                 j = ins_i + 1;
             }
@@ -396,10 +412,12 @@ fn main() -> Result<()> {
                     [pkt.gx_dps, pkt.gy_dps, pkt.gz_dps],
                     [pkt.ax_mps2, pkt.ay_mps2, pkt.az_mps2],
                 );
-                let eg =
-                    (g[0] - ins.gx_dps).powi(2) + (g[1] - ins.gy_dps).powi(2) + (g[2] - ins.gz_dps).powi(2);
-                let ea =
-                    (a[0] - ins.ax_mps2).powi(2) + (a[1] - ins.ay_mps2).powi(2) + (a[2] - ins.az_mps2).powi(2);
+                let eg = (g[0] - ins.gx_dps).powi(2)
+                    + (g[1] - ins.gy_dps).powi(2)
+                    + (g[2] - ins.gz_dps).powi(2);
+                let ea = (a[0] - ins.ax_mps2).powi(2)
+                    + (a[1] - ins.ay_mps2).powi(2)
+                    + (a[2] - ins.az_mps2).powi(2);
                 file_scores[k] += eg + 0.05 * ea;
                 file_counts[k] += 1;
             }

@@ -1,9 +1,12 @@
 #![allow(non_snake_case)]
 
-use std::f32::consts::PI;
-
 pub const N_STATES: usize = 16;
 pub const GRAVITY_MSS: f32 = 9.80665;
+const DEFAULT_P_INIT: f32 = 1.0;
+const DEFAULT_BIAS_DT_S: f32 = 0.01;
+const DEFAULT_GYRO_BIAS_SIGMA_DPS: f32 = 0.25;
+const DEFAULT_ACCEL_BIAS_SIGMA_MPS2: f32 = 0.15;
+const PI_F32: f32 = 3.141_592_7;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
@@ -26,6 +29,28 @@ pub struct EkfState {
     pub dvz_b: f32,
 }
 
+impl EkfState {
+    #[inline]
+    fn add_scaled_k(&mut self, k: &[f32; N_STATES], innovation: f32) {
+        self.q0 += k[0] * innovation;
+        self.q1 += k[1] * innovation;
+        self.q2 += k[2] * innovation;
+        self.q3 += k[3] * innovation;
+        self.vn += k[4] * innovation;
+        self.ve += k[5] * innovation;
+        self.vd += k[6] * innovation;
+        self.pn += k[7] * innovation;
+        self.pe += k[8] * innovation;
+        self.pd += k[9] * innovation;
+        self.dax_b += k[10] * innovation;
+        self.day_b += k[11] * innovation;
+        self.daz_b += k[12] * innovation;
+        self.dvx_b += k[13] * innovation;
+        self.dvy_b += k[14] * innovation;
+        self.dvz_b += k[15] * innovation;
+    }
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ImuSample {
@@ -43,13 +68,22 @@ pub struct ImuSample {
 pub struct Ekf {
     pub state: EkfState,
     pub p: [[f32; N_STATES]; N_STATES],
+    pub noise: PredictNoise,
 }
 
 impl Default for Ekf {
     fn default() -> Self {
+        let mut state = EkfState::default();
+        state.q0 = 1.0;
+        let mut p = [[0.0; N_STATES]; N_STATES];
+        let p_diag = default_p_diag();
+        for i in 0..N_STATES {
+            p[i][i] = p_diag[i];
+        }
         Self {
-            state: EkfState::default(),
-            p: [[0.0; N_STATES]; N_STATES],
+            state,
+            p,
+            noise: PredictNoise::default(),
         }
     }
 }
@@ -63,14 +97,12 @@ pub struct GpsData {
     pub vel_n: f32,
     pub vel_e: f32,
     pub vel_d: f32,
-    pub heading_rad: f32,
     pub R_POS_N: f32,
     pub R_POS_E: f32,
     pub R_POS_D: f32,
     pub R_VEL_N: f32,
     pub R_VEL_E: f32,
     pub R_VEL_D: f32,
-    pub R_YAW: f32,
 }
 
 #[repr(C)]
@@ -81,22 +113,48 @@ pub struct EkfDebug {
     pub dvb_z: f32,
 }
 
-#[inline]
-fn powf(x: f32, y: f32) -> f32 {
-    x.powf(y)
+#[derive(Debug, Clone, Copy)]
+pub struct PredictNoise {
+    // Continuous-time sensor variance inputs in intuitive physical units.
+    pub gyro_var: f32,          // [rad^2/s^2]
+    pub accel_var: f32,         // [(m/s^2)^2]
+    pub gyro_bias_rw_var: f32,  // [rad^2/s^2], applied to bias process model
+    pub accel_bias_rw_var: f32, // [(m/s^2)^2], applied to bias process model
 }
 
-#[inline]
-fn state_as_array_mut(state: &mut EkfState) -> &mut [f32; N_STATES] {
-    // Safe for #[repr(C)] struct with 16 contiguous f32 fields.
-    unsafe { &mut *(state as *mut EkfState as *mut [f32; N_STATES]) }
+impl Default for PredictNoise {
+    fn default() -> Self {
+        Self {
+            // Defaults aligned with visualize_pygpsdata_log's prior tuning.
+            gyro_var: 0.01,  // [rad^2/s^2]
+            accel_var: 12.0, // [(m/s^2)^2]
+            gyro_bias_rw_var: 0.1e-9,
+            accel_bias_rw_var: 1.0e-8,
+        }
+    }
+}
+
+fn default_p_diag() -> [f32; N_STATES] {
+    let mut p = [DEFAULT_P_INIT; N_STATES];
+    let dt = DEFAULT_BIAS_DT_S;
+    let gyro_sigma_da = (DEFAULT_GYRO_BIAS_SIGMA_DPS * PI_F32 / 180.0) * dt;
+    let accel_sigma_dv = DEFAULT_ACCEL_BIAS_SIGMA_MPS2 * dt;
+    let var_gyro = gyro_sigma_da * gyro_sigma_da;
+    let var_accel = accel_sigma_dv * accel_sigma_dv;
+    p[10] = var_gyro;
+    p[11] = var_gyro;
+    p[12] = var_gyro;
+    p[13] = var_accel;
+    p[14] = var_accel;
+    p[15] = var_accel;
+    p
 }
 
 #[inline]
 fn normalize_quat(q: &mut [f32; 4]) {
     let norm_sq = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
     if norm_sq > 1e-6 {
-        let inv = 1.0 / norm_sq.sqrt();
+        let inv = 1.0 / libm::sqrtf(norm_sq);
         q[0] *= inv;
         q[1] *= inv;
         q[2] *= inv;
@@ -129,38 +187,46 @@ fn quat2rot(q: &[f32; 4]) -> [[f32; 3]; 3] {
     let q2q2 = q2 * q2;
     let q3q3 = q3 * q3;
     [
-        [1.0 - 2.0 * (q2q2 + q3q3), 2.0 * (q1 * q2 - q0 * q3), 2.0 * (q1 * q3 + q0 * q2)],
-        [2.0 * (q1 * q2 + q0 * q3), 1.0 - 2.0 * (q1q1 + q3q3), 2.0 * (q2 * q3 - q0 * q1)],
-        [2.0 * (q1 * q3 - q0 * q2), 2.0 * (q2 * q3 + q0 * q1), 1.0 - 2.0 * (q1q1 + q2q2)],
+        [
+            1.0 - 2.0 * (q2q2 + q3q3),
+            2.0 * (q1 * q2 - q0 * q3),
+            2.0 * (q1 * q3 + q0 * q2),
+        ],
+        [
+            2.0 * (q1 * q2 + q0 * q3),
+            1.0 - 2.0 * (q1q1 + q3q3),
+            2.0 * (q2 * q3 - q0 * q1),
+        ],
+        [
+            2.0 * (q1 * q3 - q0 * q2),
+            2.0 * (q2 * q3 + q0 * q1),
+            1.0 - 2.0 * (q1q1 + q2q2),
+        ],
     ]
 }
 
-pub fn ekf_init(ekf: &mut Ekf, p_init_val: f32) {
+pub fn ekf_init(ekf: &mut Ekf, p_diag: [f32; N_STATES], noise: PredictNoise) {
     *ekf = Ekf::default();
+    ekf.noise = noise;
     for i in 0..N_STATES {
-        ekf.p[i][i] = p_init_val;
+        ekf.p[i][i] = p_diag[i];
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn ekf_predict(
-    ekf: &mut Ekf,
-    imu: &ImuSample,
-    daVar: f32,
-    dvVar: f32,
-    dgb_p_noise_var: f32,
-    dvb_x_p_noise_var: f32,
-    dvb_y_p_noise_var: f32,
-    dvb_z_p_noise_var: f32,
-    debug_out: Option<&mut EkfDebug>,
-) {
-    let daxVar = daVar;
-    let dayVar = daVar;
-    let dazVar = daVar;
+pub fn ekf_set_predict_noise(ekf: &mut Ekf, noise: PredictNoise) {
+    ekf.noise = noise;
+}
 
-    let dvxVar = dvVar;
-    let dvyVar = dvVar;
-    let dvzVar = dvVar;
+pub fn ekf_predict(ekf: &mut Ekf, imu: &ImuSample, debug_out: Option<&mut EkfDebug>) {
+    let noise = ekf.noise;
+    let dt = imu.dt;
+    let dt2 = dt * dt;
+    // Internal prediction equations are formulated in delta-angle / delta-velocity.
+    // Convert rate-domain variances to increment-domain variances each step.
+    let dAngVar = noise.gyro_var * dt2;
+    let dVelVar = noise.accel_var * dt2;
+    let gyro_bias_rw_var = noise.gyro_bias_rw_var;
+    let accel_bias_rw_var = noise.accel_bias_rw_var;
 
     let q0 = ekf.state.q0;
     let q1 = ekf.state.q1;
@@ -185,7 +251,6 @@ pub fn ekf_predict(
     let dvx = imu.dvx;
     let dvy = imu.dvy;
     let dvz = imu.dvz;
-    let dt = imu.dt;
     let g = GRAVITY_MSS;
 
     if let Some(debug) = debug_out {
@@ -220,7 +285,6 @@ pub fn ekf_fuse_gps(ekf: &mut Ekf, gps: &GpsData) {
     ekf_fuse_gps_vel_n(ekf, gps.vel_n, gps.R_VEL_N);
     ekf_fuse_gps_vel_e(ekf, gps.vel_e, gps.R_VEL_E);
     ekf_fuse_gps_vel_d(ekf, gps.vel_d, gps.R_VEL_D);
-    ekf_fuse_gps_heading(ekf, gps.heading_rad, gps.R_YAW);
 }
 
 pub fn ekf_fuse_body_vel(ekf: &mut Ekf, R_body_vel: f32) {
@@ -228,20 +292,17 @@ pub fn ekf_fuse_body_vel(ekf: &mut Ekf, R_body_vel: f32) {
     ekf_fuse_body_vel_z(ekf, R_body_vel);
 }
 
-fn fuse_measurement(ekf: &mut Ekf, innovation: f32, Hfusion: &[f32; N_STATES], Kfusion: &[f32; N_STATES]) {
+fn fuse_measurement(ekf: &mut Ekf, innovation: f32, H: &[f32; N_STATES], K: &[f32; N_STATES]) {
     let p_old = ekf.p;
 
-    let state_array = state_as_array_mut(&mut ekf.state);
-    for i in 0..N_STATES {
-        state_array[i] += Kfusion[i] * innovation;
-    }
+    ekf.state.add_scaled_k(K, innovation);
 
     normalize_state_quat(&mut ekf.state);
 
     let mut HP = [0.0_f32; N_STATES];
     for j in 0..N_STATES {
         for k in 0..N_STATES {
-            HP[j] += Hfusion[k] * p_old[k][j];
+            HP[j] += H[k] * p_old[k][j];
         }
     }
 
@@ -249,7 +310,7 @@ fn fuse_measurement(ekf: &mut Ekf, innovation: f32, Hfusion: &[f32; N_STATES], K
     // P <- P - K (H P), where K and H are computed from the same prior P.
     for i in 0..N_STATES {
         for j in 0..N_STATES {
-            ekf.p[i][j] = p_old[i][j] - Kfusion[i] * HP[j];
+            ekf.p[i][j] = p_old[i][j] - K[i] * HP[j];
         }
     }
 
@@ -266,91 +327,66 @@ fn ekf_fuse_gps_pos_n(ekf: &mut Ekf, pos_n: f32, R_POS_N: f32) {
     let pn = ekf.state.pn;
     let P = &ekf.p;
     let innovation = pos_n - pn;
-    let mut Hfusion = [0.0_f32; N_STATES];
-    let mut Kfusion = [0.0_f32; N_STATES];
+    let mut H = [0.0_f32; N_STATES];
+    let mut K = [0.0_f32; N_STATES];
 
     include!("ekf_generated/gps_pos_n_generated.rs");
-    fuse_measurement(ekf, innovation, &Hfusion, &Kfusion);
+    fuse_measurement(ekf, innovation, &H, &K);
 }
 
 fn ekf_fuse_gps_pos_e(ekf: &mut Ekf, pos_e: f32, R_POS_E: f32) {
     let pe = ekf.state.pe;
     let P = &ekf.p;
     let innovation = pos_e - pe;
-    let mut Hfusion = [0.0_f32; N_STATES];
-    let mut Kfusion = [0.0_f32; N_STATES];
+    let mut H = [0.0_f32; N_STATES];
+    let mut K = [0.0_f32; N_STATES];
 
     include!("ekf_generated/gps_pos_e_generated.rs");
-    fuse_measurement(ekf, innovation, &Hfusion, &Kfusion);
+    fuse_measurement(ekf, innovation, &H, &K);
 }
 
 fn ekf_fuse_gps_pos_d(ekf: &mut Ekf, pos_d: f32, R_POS_D: f32) {
     let pd = ekf.state.pd;
     let P = &ekf.p;
     let innovation = pos_d - pd;
-    let mut Hfusion = [0.0_f32; N_STATES];
-    let mut Kfusion = [0.0_f32; N_STATES];
+    let mut H = [0.0_f32; N_STATES];
+    let mut K = [0.0_f32; N_STATES];
 
     include!("ekf_generated/gps_pos_d_generated.rs");
-    fuse_measurement(ekf, innovation, &Hfusion, &Kfusion);
+    fuse_measurement(ekf, innovation, &H, &K);
 }
 
 fn ekf_fuse_gps_vel_n(ekf: &mut Ekf, vel_n: f32, R_VEL_N: f32) {
     let vn = ekf.state.vn;
     let P = &ekf.p;
     let innovation = vel_n - vn;
-    let mut Hfusion = [0.0_f32; N_STATES];
-    let mut Kfusion = [0.0_f32; N_STATES];
+    let mut H = [0.0_f32; N_STATES];
+    let mut K = [0.0_f32; N_STATES];
 
     include!("ekf_generated/gps_vel_n_generated.rs");
-    fuse_measurement(ekf, innovation, &Hfusion, &Kfusion);
+    fuse_measurement(ekf, innovation, &H, &K);
 }
 
 fn ekf_fuse_gps_vel_e(ekf: &mut Ekf, vel_e: f32, R_VEL_E: f32) {
     let ve = ekf.state.ve;
     let P = &ekf.p;
     let innovation = vel_e - ve;
-    let mut Hfusion = [0.0_f32; N_STATES];
-    let mut Kfusion = [0.0_f32; N_STATES];
+    let mut H = [0.0_f32; N_STATES];
+    let mut K = [0.0_f32; N_STATES];
 
     include!("ekf_generated/gps_vel_e_generated.rs");
-    fuse_measurement(ekf, innovation, &Hfusion, &Kfusion);
+    fuse_measurement(ekf, innovation, &H, &K);
 }
 
 fn ekf_fuse_gps_vel_d(ekf: &mut Ekf, vel_d: f32, R_VEL_D: f32) {
     let vd = ekf.state.vd;
     let P = &ekf.p;
     let innovation = vel_d - vd;
-    let mut Hfusion = [0.0_f32; N_STATES];
-    let mut Kfusion = [0.0_f32; N_STATES];
+    let mut H = [0.0_f32; N_STATES];
+    let mut K = [0.0_f32; N_STATES];
 
     include!("ekf_generated/gps_vel_d_generated.rs");
-    fuse_measurement(ekf, innovation, &Hfusion, &Kfusion);
-}
-
-fn ekf_fuse_gps_heading(ekf: &mut Ekf, heading: f32, R_YAW: f32) {
-    let q0 = ekf.state.q0;
-    let q1 = ekf.state.q1;
-    let q2 = ekf.state.q2;
-    let q3 = ekf.state.q3;
-    let P = &ekf.p;
-
-    let R_10 = 2.0 * (q1 * q2 + q0 * q3);
-    let R_00 = 1.0 - 2.0 * (q2 * q2 + q3 * q3);
-    let predicted_yaw = R_10.atan2(R_00);
-
-    let mut innovation = heading - predicted_yaw;
-    if innovation > PI {
-        innovation -= 2.0 * PI;
-    } else if innovation < -PI {
-        innovation += 2.0 * PI;
-    }
-
-    let mut Hfusion = [0.0_f32; N_STATES];
-    let mut Kfusion = [0.0_f32; N_STATES];
-
-    include!("ekf_generated/gps_heading_generated.rs");
-    fuse_measurement(ekf, innovation, &Hfusion, &Kfusion);
+    fuse_measurement(ekf, innovation, &H, &K);
 }
 
 fn ekf_fuse_body_vel_y(ekf: &mut Ekf, R_BODY_VEL: f32) {
@@ -369,11 +405,11 @@ fn ekf_fuse_body_vel_y(ekf: &mut Ekf, R_BODY_VEL: f32) {
     let v_body_y = R_T_10 * vn + R_T_11 * ve + R_T_12 * vd;
     let innovation = -v_body_y;
 
-    let mut Hfusion = [0.0_f32; N_STATES];
-    let mut Kfusion = [0.0_f32; N_STATES];
+    let mut H = [0.0_f32; N_STATES];
+    let mut K = [0.0_f32; N_STATES];
 
     include!("ekf_generated/body_vel_y_generated.rs");
-    fuse_measurement(ekf, innovation, &Hfusion, &Kfusion);
+    fuse_measurement(ekf, innovation, &H, &K);
 }
 
 fn ekf_fuse_body_vel_z(ekf: &mut Ekf, R_BODY_VEL: f32) {
@@ -392,9 +428,9 @@ fn ekf_fuse_body_vel_z(ekf: &mut Ekf, R_BODY_VEL: f32) {
     let v_body_z = R_T_20 * vn + R_T_21 * ve + R_T_22 * vd;
     let innovation = -v_body_z;
 
-    let mut Hfusion = [0.0_f32; N_STATES];
-    let mut Kfusion = [0.0_f32; N_STATES];
+    let mut H = [0.0_f32; N_STATES];
+    let mut K = [0.0_f32; N_STATES];
 
     include!("ekf_generated/body_vel_z_generated.rs");
-    fuse_measurement(ekf, innovation, &Hfusion, &Kfusion);
+    fuse_measurement(ekf, innovation, &H, &K);
 }

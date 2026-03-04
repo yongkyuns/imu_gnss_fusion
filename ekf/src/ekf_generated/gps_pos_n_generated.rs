@@ -4,41 +4,41 @@ let HK0 = 1.0/(P[7][7] + R_POS_N);
 
 
 // Observation Jacobians
-Hfusion[0] = 0.0;
-Hfusion[1] = 0.0;
-Hfusion[2] = 0.0;
-Hfusion[3] = 0.0;
-Hfusion[4] = 0.0;
-Hfusion[5] = 0.0;
-Hfusion[6] = 0.0;
-Hfusion[7] = 1.0;
-Hfusion[8] = 0.0;
-Hfusion[9] = 0.0;
-Hfusion[10] = 0.0;
-Hfusion[11] = 0.0;
-Hfusion[12] = 0.0;
-Hfusion[13] = 0.0;
-Hfusion[14] = 0.0;
-Hfusion[15] = 0.0;
+H[0] = 0.0;
+H[1] = 0.0;
+H[2] = 0.0;
+H[3] = 0.0;
+H[4] = 0.0;
+H[5] = 0.0;
+H[6] = 0.0;
+H[7] = 1.0;
+H[8] = 0.0;
+H[9] = 0.0;
+H[10] = 0.0;
+H[11] = 0.0;
+H[12] = 0.0;
+H[13] = 0.0;
+H[14] = 0.0;
+H[15] = 0.0;
 
 
 // Kalman gains
-Kfusion[0] = HK0*P[0][7];
-Kfusion[1] = HK0*P[1][7];
-Kfusion[2] = HK0*P[2][7];
-Kfusion[3] = HK0*P[3][7];
-Kfusion[4] = HK0*P[4][7];
-Kfusion[5] = HK0*P[5][7];
-Kfusion[6] = HK0*P[6][7];
-Kfusion[7] = HK0*P[7][7];
-Kfusion[8] = HK0*P[7][8];
-Kfusion[9] = HK0*P[7][9];
-Kfusion[10] = HK0*P[7][10];
-Kfusion[11] = HK0*P[7][11];
-Kfusion[12] = HK0*P[7][12];
-Kfusion[13] = HK0*P[7][13];
-Kfusion[14] = HK0*P[7][14];
-Kfusion[15] = HK0*P[7][15];
+K[0] = HK0*P[0][7];
+K[1] = HK0*P[1][7];
+K[2] = HK0*P[2][7];
+K[3] = HK0*P[3][7];
+K[4] = HK0*P[4][7];
+K[5] = HK0*P[5][7];
+K[6] = HK0*P[6][7];
+K[7] = HK0*P[7][7];
+K[8] = HK0*P[7][8];
+K[9] = HK0*P[7][9];
+K[10] = HK0*P[7][10];
+K[11] = HK0*P[7][11];
+K[12] = HK0*P[7][12];
+K[13] = HK0*P[7][13];
+K[14] = HK0*P[7][14];
+K[15] = HK0*P[7][15];
 
 
 }

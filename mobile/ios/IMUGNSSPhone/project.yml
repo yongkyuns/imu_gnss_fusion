@@ -1,0 +1,38 @@
+name: IMUGNSSPhone
+options:
+  minimumXcodeGenVersion: 2.38.0
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: 5.0
+    PRODUCT_BUNDLE_IDENTIFIER: com.ykshin.ekf.imugnssphone
+    CURRENT_PROJECT_VERSION: 1
+    MARKETING_VERSION: 0.1.0
+targets:
+  IMUGNSSPhone:
+    type: application
+    platform: iOS
+    settings:
+      base:
+        SWIFT_OBJC_BRIDGING_HEADER: App/IMUGNSSPhone-Bridging-Header.h
+    sources:
+      - path: App
+        excludes:
+          - EKF/generated/**
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: IMU GNSS Phone
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        NSLocationWhenInUseUsageDescription: "Location is used to show GNSS position, speed, and accuracy."
+        NSMotionUsageDescription: "Motion data is used to show accelerometer and gyroscope readings."
+schemes:
+  IMUGNSSPhone:
+    build:
+      targets:
+        IMUGNSSPhone: all
+    run:
+      config: Debug

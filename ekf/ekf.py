@@ -105,9 +105,9 @@ def write_equations_to_file(equations, code_generator_id, n_obs):
         code_generator_id.print_string("Sub Expressions")
         code_generator_id.write_subexpressions(equations[0])
         code_generator_id.print_string("Observation Jacobians")
-        code_generator_id.write_matrix(Matrix(equations[1][0][0:n_states]), "Hfusion")
+        code_generator_id.write_matrix(Matrix(equations[1][0][0:n_states]), "H")
         code_generator_id.print_string("Kalman gains")
-        code_generator_id.write_matrix(Matrix(equations[1][0][n_states:]), "Kfusion")
+        code_generator_id.write_matrix(Matrix(equations[1][0][n_states:]), "K")
     else:
         pass
     return
@@ -145,15 +145,6 @@ def gps_speed_observation(P, state, vx, vy):
     observation = sqrt(vx**2 + vy**2 + 1e-6)
     equations = generate_observation_equations(P, state, observation, obs_var)
     cg = CodeGenerator("./c/generated/gps_speed_generated.c")
-    write_equations_to_file(equations, cg, 1)
-    cg.close()
-
-
-def gps_heading_observation(P, state, R_to_earth):
-    obs_var = symbols("R_YAW", real=True)
-    observation = atan2(R_to_earth[1, 0], R_to_earth[0, 0])
-    equations = generate_observation_equations(P, state, observation, obs_var)
-    cg = CodeGenerator("./c/generated/gps_heading_generated.c")
     write_equations_to_file(equations, cg, 1)
     cg.close()
 
@@ -224,16 +215,14 @@ def generate_code():
 
     u = Matrix([d_ang, d_v])
 
-    d_ang_x_var, d_ang_y_var, d_ang_z_var = symbols("daxVar dayVar dazVar", real=True)
-    d_v_x_var, d_v_y_var, d_v_z_var = symbols("dvxVar dvyVar dvzVar", real=True)
+    d_ang_var = symbols("dAngVar", real=True)
+    d_vel_var = symbols("dVelVar", real=True)
     var_u = Matrix.diag(
-        d_ang_x_var, d_ang_y_var, d_ang_z_var, d_v_x_var, d_v_y_var, d_v_z_var
+        d_ang_var, d_ang_var, d_ang_var, d_vel_var, d_vel_var, d_vel_var
     )
 
-    d_ang_b_p_noise_var = symbols("dgb_p_noise_var", real=True)
-    dvb_x_p_noise_var = symbols("dvb_x_p_noise_var", real=True)
-    dvb_y_p_noise_var = symbols("dvb_y_p_noise_var", real=True)
-    dvb_z_p_noise_var = symbols("dvb_z_p_noise_var", real=True)
+    gyro_bias_rw_var = symbols("gyro_bias_rw_var", real=True)
+    accel_bias_rw_var = symbols("accel_bias_rw_var", real=True)
 
     state_vector_names = [
         "q0",
@@ -304,12 +293,13 @@ def generate_code():
 
     P_new = A * P * A.T + G * var_u * G.T
 
-    P_new[10, 10] += d_ang_b_p_noise_var * dt**2
-    P_new[11, 11] += d_ang_b_p_noise_var * dt**2
-    P_new[12, 12] += d_ang_b_p_noise_var * dt**2
-    P_new[13, 13] += dvb_x_p_noise_var * dt**2
-    P_new[14, 14] += dvb_y_p_noise_var * dt**2
-    P_new[15, 15] += dvb_z_p_noise_var * dt**2
+    dt2 = dt * dt
+    P_new[10, 10] += gyro_bias_rw_var * dt2
+    P_new[11, 11] += gyro_bias_rw_var * dt2
+    P_new[12, 12] += gyro_bias_rw_var * dt2
+    P_new[13, 13] += accel_bias_rw_var * dt2
+    P_new[14, 14] += accel_bias_rw_var * dt2
+    P_new[15, 15] += accel_bias_rw_var * dt2
 
     for index in range(n_states):
         for j in range(n_states):
@@ -353,11 +343,7 @@ def generate_code():
     print("Generating Body Z-Velocity observation code...")
     body_vel_z_observation(P, state, R_to_earth, v)
 
-    print("Generating GPS Heading observation code...")
-    gps_heading_observation(P, state, R_to_earth)
-
     print("Code generation complete.")
-
 
 if __name__ == "__main__":
     generate_code()

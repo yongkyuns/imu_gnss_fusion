@@ -3,6 +3,7 @@ name = "sim"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+default-run = "visualizer"
 
 [dependencies]
 anyhow = "1"
@@ -20,5 +21,5 @@ ublox = { path = "../ublox", features = ["std", "ubx_proto23", "ubx_proto27", "u
 walkers = "0.52.0"
 
 [[bin]]
-name = "visualize_pygpsdata_log"
-path = "src/bin/visualize_pygpsdata_log.rs"
+name = "visualizer"
+path = "src/bin/visualizer.rs"

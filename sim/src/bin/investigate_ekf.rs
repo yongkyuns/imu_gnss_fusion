@@ -3,7 +3,8 @@ use std::{f64::consts::PI, fs::File, io::Read, path::PathBuf};
 use anyhow::{Context, Result};
 use clap::Parser;
 use ekf_rs::ekf::{
-    Ekf, GpsData, ImuSample, ekf_fuse_body_vel, ekf_fuse_gps, ekf_init, ekf_predict,
+    Ekf, GpsData, ImuSample, PredictNoise, ekf_fuse_body_vel, ekf_fuse_gps, ekf_predict,
+    ekf_set_predict_noise,
 };
 use sim::ubxlog::{
     NavPvtObs, extract_esf_alg, extract_esf_raw_samples, extract_itow_ms, extract_nav_att,
@@ -272,24 +273,6 @@ fn ecef_to_ned(ecef: [f64; 3], ref_ecef: [f64; 3], ref_lat_deg: f64, ref_lon_deg
     ]
 }
 
-fn set_initial_bias_covariance(ekf: &mut Ekf, dt_nominal_s: f64) {
-    // Bias states are delta-angle / delta-velocity increments per predict step.
-    // Use tight initial covariance so biases start near zero and settle smoothly.
-    let dt = dt_nominal_s.max(1.0e-3);
-    let gyro_sigma_dps = 0.15_f64;
-    let accel_sigma_mps2 = 0.25_f64;
-    let gyro_sigma_da = deg2rad(gyro_sigma_dps) * dt;
-    let accel_sigma_dv = accel_sigma_mps2 * dt;
-    let var_gyro = (gyro_sigma_da * gyro_sigma_da) as f32;
-    let var_accel = (accel_sigma_dv * accel_sigma_dv) as f32;
-    ekf.p[10][10] = var_gyro;
-    ekf.p[11][11] = var_gyro;
-    ekf.p[12][12] = var_gyro;
-    ekf.p[13][13] = var_accel;
-    ekf.p[14][14] = var_accel;
-    ekf.p[15][15] = var_accel;
-}
-
 fn run_config(
     cfg: Config,
     imu_packets: &[ImuPacket],
@@ -301,9 +284,15 @@ fn run_config(
     window_end_s: f64,
 ) -> Metrics {
     let mut ekf = Ekf::default();
-    ekf_init(&mut ekf, cfg.p_init);
-    set_initial_bias_covariance(&mut ekf, 0.01);
-    ekf.state.q0 = 1.0;
+    ekf_set_predict_noise(
+        &mut ekf,
+        PredictNoise {
+            gyro_var: 2.5,
+            accel_var: 12.0,
+            gyro_bias_rw_var: 5.0e-7,
+            accel_bias_rw_var: 2.5e-6,
+        },
+    );
 
     let mut prev_imu_t: Option<f64> = None;
     let mut alg_idx = 0usize;
@@ -435,9 +424,7 @@ fn run_config(
             dvz: (accel[2] * cfg.accel_scale * dt) as f32,
             dt: dt as f32,
         };
-        ekf_predict(
-            &mut ekf, &imu, 2.5e-4, 1.2e-3, 5.0e-7, 2.0e-6, 2.5e-6, 3.0e-6, None,
-        );
+        ekf_predict(&mut ekf, &imu, None);
         if cfg.use_body_vel {
             let mut r_body = cfg.r_body_vel;
             if cfg.turn_aware_nhc {
@@ -473,7 +460,7 @@ fn run_config(
             let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
             let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
 
-            let (heading_rad, r_yaw) = match cfg.heading {
+            let _ = match cfg.heading {
                 HeadingMode::NavPvtMotion => {
                     let speed_h = nav.vel_n_mps.hypot(nav.vel_e_mps);
                     let mut h = wrap_pi(deg2rad(nav.heading_motion_deg));
@@ -518,14 +505,12 @@ fn run_config(
                 vel_n: nav.vel_n_mps as f32,
                 vel_e: nav.vel_e_mps as f32,
                 vel_d: nav.vel_d_mps as f32,
-                heading_rad: heading_rad as f32,
                 R_POS_N: h_acc2 as f32,
                 R_POS_E: h_acc2 as f32,
                 R_POS_D: v_acc2 as f32,
                 R_VEL_N: s_acc2 as f32,
                 R_VEL_E: s_acc2 as f32,
                 R_VEL_D: s_acc2 as f32,
-                R_YAW: r_yaw as f32,
             };
             ekf_fuse_gps(&mut ekf, &gps);
 

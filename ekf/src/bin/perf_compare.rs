@@ -1,5 +1,6 @@
 use ekf_rs::ekf::{
-    Ekf, EkfDebug, EkfState, GpsData, ImuSample, N_STATES, ekf_fuse_gps, ekf_init, ekf_predict,
+    Ekf, EkfDebug, EkfState, GpsData, ImuSample, N_STATES, PredictNoise, ekf_fuse_gps, ekf_init,
+    ekf_predict,
 };
 use std::time::Instant;
 
@@ -41,6 +42,16 @@ struct CImuSample {
 struct CEkf {
     state: CEkfState,
     p: [[f32; N_STATES]; N_STATES],
+    noise: CPredictNoise,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CPredictNoise {
+    gyro_var: f32,
+    accel_var: f32,
+    gyro_bias_rw_var: f32,
+    accel_bias_rw_var: f32,
 }
 
 #[repr(C)]
@@ -52,14 +63,12 @@ struct CGpsData {
     vel_n: f32,
     vel_e: f32,
     vel_d: f32,
-    heading_rad: f32,
     r_pos_n: f32,
     r_pos_e: f32,
     r_pos_d: f32,
     r_vel_n: f32,
     r_vel_e: f32,
     r_vel_d: f32,
-    r_yaw: f32,
 }
 
 #[repr(C)]
@@ -72,19 +81,11 @@ struct CEkfDebug {
 
 unsafe extern "C" {
     #[link_name = "ekf_init"]
-    fn c_ekf_init(ekf: *mut CEkf, p_init_val: f32);
+    fn c_ekf_init(ekf: *mut CEkf, p_diag: *const f32, noise: *const CPredictNoise);
+    #[link_name = "ekf_set_predict_noise"]
+    fn c_ekf_set_predict_noise(ekf: *mut CEkf, noise: *const CPredictNoise);
     #[link_name = "ekf_predict"]
-    fn c_ekf_predict(
-        ekf: *mut CEkf,
-        imu: *const CImuSample,
-        daVar: f32,
-        dvVar: f32,
-        dgb_p_noise_var: f32,
-        dvb_x_p_noise_var: f32,
-        dvb_y_p_noise_var: f32,
-        dvb_z_p_noise_var: f32,
-        debug_out: *mut CEkfDebug,
-    );
+    fn c_ekf_predict(ekf: *mut CEkf, imu: *const CImuSample, debug_out: *mut CEkfDebug);
     #[link_name = "ekf_fuse_gps"]
     fn c_ekf_fuse_gps(ekf: *mut CEkf, gps: *const CGpsData);
 }
@@ -111,14 +112,12 @@ fn to_c_gps(v: &GpsData) -> CGpsData {
         vel_n: v.vel_n,
         vel_e: v.vel_e,
         vel_d: v.vel_d,
-        heading_rad: v.heading_rad,
         r_pos_n: v.R_POS_N,
         r_pos_e: v.R_POS_E,
         r_pos_d: v.R_POS_D,
         r_vel_n: v.R_VEL_N,
         r_vel_e: v.R_VEL_E,
         r_vel_d: v.R_VEL_D,
-        r_yaw: v.R_YAW,
     }
 }
 
@@ -146,12 +145,12 @@ fn main() {
         dvz_b: 0.0001,
     };
 
-    let da_var = 2.5e-4_f32;
-    let dv_var = 1.2e-3_f32;
-    let dgb_p_noise_var = 5.0e-7_f32;
-    let dvb_x_p_noise_var = 2.0e-6_f32;
-    let dvb_y_p_noise_var = 2.5e-6_f32;
-    let dvb_z_p_noise_var = 3.0e-6_f32;
+    let c_noise = CPredictNoise {
+        gyro_var: 2.5_f32,
+        accel_var: 12.0_f32,
+        gyro_bias_rw_var: 5.0e-7_f32,
+        accel_bias_rw_var: 2.5e-6_f32,
+    };
 
     let mut imu_seq = Vec::with_capacity(n_iter);
     let mut gps_seq = Vec::with_capacity(n_iter);
@@ -173,36 +172,33 @@ fn main() {
             vel_n: 0.05 * (0.17 * t).sin(),
             vel_e: -0.03 * (0.07 * t).cos(),
             vel_d: 0.02 * (0.13 * t).sin(),
-            heading_rad: (0.1 * t).sin(),
             R_POS_N: 0.5,
             R_POS_E: 0.5,
             R_POS_D: 0.8,
             R_VEL_N: 0.2,
             R_VEL_E: 0.2,
             R_VEL_D: 0.25,
-            R_YAW: 0.05,
         });
     }
 
     let run_rust = |imu_seq: &[ImuSample], gps_seq: &[GpsData]| -> f64 {
         let mut rust = Ekf::default();
-        ekf_init(&mut rust, 1.0);
+        ekf_init(
+            &mut rust,
+            [1.0; N_STATES],
+            PredictNoise {
+                gyro_var: c_noise.gyro_var,
+                accel_var: c_noise.accel_var,
+                gyro_bias_rw_var: c_noise.gyro_bias_rw_var,
+                accel_bias_rw_var: c_noise.accel_bias_rw_var,
+            },
+        );
         rust.state = init_state;
         let mut rust_dbg = EkfDebug::default();
         let t0 = Instant::now();
         for k in 0..n_iter {
             let imu = imu_seq[k];
-            ekf_predict(
-                &mut rust,
-                &imu,
-                da_var,
-                dv_var,
-                dgb_p_noise_var,
-                dvb_x_p_noise_var,
-                dvb_y_p_noise_var,
-                dvb_z_p_noise_var,
-                Some(&mut rust_dbg),
-            );
+            ekf_predict(&mut rust, &imu, Some(&mut rust_dbg));
             if k % fuse_every == 0 {
                 let mut gps = gps_seq[k];
                 gps.pos_n += rust.state.pn;
@@ -238,9 +234,19 @@ fn main() {
                 dvz_b: init_state.dvz_b,
             },
             p: [[0.0; N_STATES]; N_STATES],
+            noise: c_noise,
         };
         // SAFETY: valid mutable pointer to C-compatible struct.
-        unsafe { c_ekf_init(&mut c as *mut CEkf, 1.0) };
+        let c_p_diag = [1.0_f32; N_STATES];
+        unsafe {
+            c_ekf_init(
+                &mut c as *mut CEkf,
+                c_p_diag.as_ptr(),
+                &c_noise as *const CPredictNoise,
+            )
+        };
+        // SAFETY: valid mutable pointer to C-compatible struct.
+        unsafe { c_ekf_set_predict_noise(&mut c as *mut CEkf, &c_noise as *const CPredictNoise) };
         c.state = CEkfState {
             q0: init_state.q0,
             q1: init_state.q1,
@@ -268,12 +274,6 @@ fn main() {
                 c_ekf_predict(
                     &mut c as *mut CEkf,
                     &c_imu as *const CImuSample,
-                    da_var,
-                    dv_var,
-                    dgb_p_noise_var,
-                    dvb_x_p_noise_var,
-                    dvb_y_p_noise_var,
-                    dvb_z_p_noise_var,
                     &mut c_dbg as *mut CEkfDebug,
                 );
             }
