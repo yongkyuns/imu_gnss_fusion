@@ -298,8 +298,6 @@ fn build_ekf_compare_traces(
     const R_BODY_VEL_STARTSTOP: f32 = 100.0;
     const BODY_VEL_SPEED_LOW_MPS: f64 = 0.5;
     const BODY_VEL_SPEED_HIGH_MPS: f64 = 2.0;
-    const R_POS_SCALE: f64 = 80.0;
-    const R_VEL_SCALE: f64 = 80.0;
     if masters.is_empty() {
         return (
             Vec::new(),
@@ -651,9 +649,9 @@ fn build_ekf_compare_traces(
                 set_quat_yaw_only(&mut ekf.state, yaw_from_vel);
                 yaw_initialized_from_vel = true;
             }
-            let h_acc2 = (nav.h_acc_m * nav.h_acc_m).max(0.05) * R_POS_SCALE;
-            let v_acc2 = (nav.v_acc_m * nav.v_acc_m).max(0.05) * R_POS_SCALE;
-            let s_acc2 = (nav.s_acc_mps * nav.s_acc_mps).max(0.02) * R_VEL_SCALE;
+            let h_acc2 = (nav.h_acc_m * nav.h_acc_m).max(0.05) * 80.0;
+            let v_acc2 = (nav.v_acc_m * nav.v_acc_m).max(0.05) * 80.0;
+            let s_acc2 = (nav.s_acc_mps * nav.s_acc_mps).max(0.02) * 80.0;
             let gps = GpsData {
                 pos_n: ned[0] as f32,
                 pos_e: ned[1] as f32,
