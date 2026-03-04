@@ -1,17 +1,29 @@
-from sympy import ccode
+from sympy import Integer
 from sympy.codegen.ast import float32, real
+from sympy.printing.c import C99CodePrinter
+from sympy.printing.precedence import precedence
+
+
+class EkfC99CodePrinter(C99CodePrinter):
+    def _print_Pow(self, expr):
+        exp = expr.exp
+        if isinstance(exp, Integer) and 2 <= int(exp) <= 4:
+            base = self.parenthesize(expr.base, precedence(expr))
+            return "*".join([base] * int(exp))
+        return super()._print_Pow(expr)
 
 
 class CodeGenerator:
     def __init__(self, file_name):
         self.file_name = file_name
         self.file = open(self.file_name, "w")
+        self.printer = EkfC99CodePrinter({"type_aliases": {real: float32}})
 
     def print_string(self, string):
         self.file.write("// " + string + "\n")
 
     def get_ccode(self, expression):
-        return ccode(expression, type_aliases={real: float32})
+        return self.printer.doprint(expression)
 
     def write_subexpressions(self, subexpressions):
         write_string = ""

@@ -105,9 +105,9 @@ def write_equations_to_file(equations, code_generator_id, n_obs):
         code_generator_id.print_string("Sub Expressions")
         code_generator_id.write_subexpressions(equations[0])
         code_generator_id.print_string("Observation Jacobians")
-        code_generator_id.write_matrix(Matrix(equations[1][0][0:n_states]), "Hfusion")
+        code_generator_id.write_matrix(Matrix(equations[1][0][0:n_states]), "H")
         code_generator_id.print_string("Kalman gains")
-        code_generator_id.write_matrix(Matrix(equations[1][0][n_states:]), "Kfusion")
+        code_generator_id.write_matrix(Matrix(equations[1][0][n_states:]), "K")
     else:
         pass
     return
@@ -293,12 +293,13 @@ def generate_code():
 
     P_new = A * P * A.T + G * var_u * G.T
 
-    P_new[10, 10] += gyro_bias_rw_var * dt**2
-    P_new[11, 11] += gyro_bias_rw_var * dt**2
-    P_new[12, 12] += gyro_bias_rw_var * dt**2
-    P_new[13, 13] += accel_bias_rw_var * dt**2
-    P_new[14, 14] += accel_bias_rw_var * dt**2
-    P_new[15, 15] += accel_bias_rw_var * dt**2
+    dt2 = dt * dt
+    P_new[10, 10] += gyro_bias_rw_var * dt2
+    P_new[11, 11] += gyro_bias_rw_var * dt2
+    P_new[12, 12] += gyro_bias_rw_var * dt2
+    P_new[13, 13] += accel_bias_rw_var * dt2
+    P_new[14, 14] += accel_bias_rw_var * dt2
+    P_new[15, 15] += accel_bias_rw_var * dt2
 
     for index in range(n_states):
         for j in range(n_states):
@@ -343,7 +344,6 @@ def generate_code():
     body_vel_z_observation(P, state, R_to_earth, v)
 
     print("Code generation complete.")
-
 
 if __name__ == "__main__":
     generate_code()

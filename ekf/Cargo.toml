@@ -7,3 +7,6 @@ license = "MIT"
 [lib]
 name = "ekf_rs"
 path = "src/lib.rs"
+
+[dependencies]
+libm = "0.2"
