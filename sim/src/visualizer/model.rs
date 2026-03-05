@@ -25,6 +25,10 @@ pub struct PlotData {
     pub ekf_cov_nonbias: Vec<Trace>,
     pub ekf_map: Vec<Trace>,
     pub ekf_map_heading: Vec<HeadingSample>,
+    pub vma_cmp_att: Vec<Trace>,
+    pub vma_res_vel: Vec<Trace>,
+    pub vma_state_q: Vec<Trace>,
+    pub vma_cov: Vec<Trace>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -66,5 +70,6 @@ pub struct ImuPacket {
 pub enum Page {
     Signals,
     EkfCompare,
+    VmaCompare,
     MapDark,
 }

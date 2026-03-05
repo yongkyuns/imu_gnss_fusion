@@ -1,0 +1,9 @@
+[package]
+name = "vma-rs"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[lib]
+name = "vma_rs"
+path = "src/lib.rs"

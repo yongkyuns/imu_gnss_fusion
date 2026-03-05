@@ -176,6 +176,7 @@ impl eframe::App for App {
                 ui.label("Page:");
                 ui.selectable_value(&mut self.page, Page::Signals, "Signals");
                 ui.selectable_value(&mut self.page, Page::EkfCompare, "EKF Compare");
+                ui.selectable_value(&mut self.page, Page::VmaCompare, "VMA Compare");
                 ui.selectable_value(&mut self.page, Page::MapDark, "Map (Dark)");
             });
         });
@@ -333,6 +334,45 @@ impl eframe::App for App {
                         ui,
                         "ESF-RAW Acceleration",
                         &esf_raw_accel,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                });
+            }
+            Page::VmaCompare => {
+                let half_width = (ctx.content_rect().width() * 0.5).max(260.0);
+                egui::SidePanel::left("vma_compare_left")
+                    .resizable(false)
+                    .exact_width(half_width)
+                    .show(ctx, |ui| {
+                        draw_plot(
+                            ui,
+                            "Euler Angles: VMA vs ESF-ALG",
+                            &self.data.vma_cmp_att,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "VMA Velocity Residuals (Pred-GNSS)",
+                            &self.data.vma_res_vel,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                    });
+
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    draw_plot(
+                        ui,
+                        "VMA Misalignment Quaternion (q_sb)",
+                        &self.data.vma_state_q,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "VMA Covariance Diagonal",
+                        &self.data.vma_cov,
                         true,
                         self.max_points_per_trace,
                     );

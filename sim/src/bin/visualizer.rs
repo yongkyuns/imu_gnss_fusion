@@ -5,7 +5,8 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use sim::visualizer::pipeline::build_plot_data;
 use sim::visualizer::stats::{
-    group_stats, max_gap_sec, max_gap_trace, trace_stats, trace_time_bounds,
+    group_stats, max_gap_sec, max_gap_trace, max_step_abs, trace_stats, trace_time_bounds,
+    trace_value_bounds,
 };
 use sim::visualizer::ui::run_visualizer;
 
@@ -64,6 +65,10 @@ fn main() -> Result<()> {
         group_stats("ekf_cov_bias", &data.ekf_cov_bias),
         group_stats("ekf_cov_nonbias", &data.ekf_cov_nonbias),
         group_stats("ekf_map", &data.ekf_map),
+        group_stats("vma_cmp_att", &data.vma_cmp_att),
+        group_stats("vma_res_vel", &data.vma_res_vel),
+        group_stats("vma_state_q", &data.vma_state_q),
+        group_stats("vma_cov", &data.vma_cov),
     ] {
         eprintln!("[profile] group={} traces={} points={}", name, nt, np);
     }
@@ -79,12 +84,24 @@ fn main() -> Result<()> {
         ("imu_raw_accel", &data.imu_raw_accel),
         ("imu_cal_gyro", &data.imu_cal_gyro),
         ("imu_cal_accel", &data.imu_cal_accel),
+        ("vma_cmp_att", &data.vma_cmp_att),
+        ("vma_res_vel", &data.vma_res_vel),
+        ("vma_cov", &data.vma_cov),
     ] {
         if let Some((name, gap)) = max_gap_trace(traces) {
             eprintln!(
                 "[profile] max_gap_trace group={} signal={} gap_s={:.3}",
                 group, name, gap
             );
+        }
+        if let Some((vmin, vmax)) = trace_value_bounds(traces) {
+            eprintln!(
+                "[profile] value_range group={} min={:.6} max={:.6}",
+                group, vmin, vmax
+            );
+        }
+        if let Some(step) = max_step_abs(traces) {
+            eprintln!("[profile] max_step_abs group={} value={:.6}", group, step);
         }
     }
     if args.profile_only {
