@@ -8,7 +8,7 @@ use crate::ubxlog::{
     extract_nav_pvt_obs, extract_nav2_pvt_obs, sensor_meta,
 };
 
-use super::super::math::{deg2rad, nearest_master_ms, normalize_heading_deg, quat_rpy_deg};
+use super::super::math::{deg2rad, nearest_master_ms, normalize_heading_deg};
 use super::super::model::{AlgEvent, ImuPacket, NavAttEvent, Trace};
 use super::tag_time::fit_tag_ms_map;
 use super::timebase::MasterTimeline;
@@ -190,22 +190,9 @@ pub fn build_vma_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Vma
 
     for ev in &alg_events {
         let t = rel_s(ev.t_ms);
-        // Apply the same effective remap used for VMA output:
-        // R_eff = D * R_sb, D = diag(1,-1,-1).
-        let q_sb = quat_from_rpy_zyx_deg(ev.roll_deg, ev.pitch_deg, ev.yaw_deg);
-        let r_sb = quat_to_rotmat_f64(q_sb);
-        let d = [[1.0_f64, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]];
-        let r_eff = mat3_mul_f64(d, r_sb);
-        let q_eff = rotmat_to_quat_f64(r_eff);
-        let (rr, pp, yy) = quat_rpy_deg(
-            q_eff[0] as f32,
-            q_eff[1] as f32,
-            q_eff[2] as f32,
-            q_eff[3] as f32,
-        );
-        ref_roll.push([t, rr]);
-        ref_pitch.push([t, pp]);
-        ref_yaw.push([t, yy]);
+        ref_roll.push([t, ev.roll_deg]);
+        ref_pitch.push([t, ev.pitch_deg]);
+        ref_yaw.push([t, ev.yaw_deg]);
     }
 
     if nav_att_events.is_empty() {
@@ -297,18 +284,8 @@ pub fn build_vma_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Vma
 
         let t = rel_s(pkt.t_ms);
         let q = vma_q_sb(&vma);
-        // Match full EKF preprocessing effective mapping:
-        // R_eff = D * R_sb, where D = diag(1, -1, -1).
-        let r_sb = quat_to_rotmat_f64([q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64]);
-        let d = [[1.0_f64, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]];
-        let r_eff = mat3_mul_f64(d, r_sb);
-        let q_eff = rotmat_to_quat_f64(r_eff);
-        let (r, p, y) = quat_rpy_deg(
-            q_eff[0] as f32,
-            q_eff[1] as f32,
-            q_eff[2] as f32,
-            q_eff[3] as f32,
-        );
+        // Convert VMA q_sb to the same Euler convention used by ESF-ALG.
+        let (r, p, y) = quat_rpy_alg_deg(q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64);
         out_roll.push([t, r]);
         out_pitch.push([t, p]);
         out_yaw.push([t, y]);
@@ -410,75 +387,25 @@ fn quat_from_rpy_zyx_deg(roll_deg: f64, pitch_deg: f64, yaw_deg: f64) -> [f64; 4
     ]
 }
 
-fn quat_to_rotmat_f64(q: [f64; 4]) -> [[f64; 3]; 3] {
-    let n = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
-    let qn = if n > 1.0e-12 {
-        [q[0] / n, q[1] / n, q[2] / n, q[3] / n]
+// ESF-ALG convention: intrinsic ZYX (equivalently Rx * Ry * Rz composition in this codebase).
+fn quat_rpy_alg_deg(q0: f64, q1: f64, q2: f64, q3: f64) -> (f64, f64, f64) {
+    let n = (q0 * q0 + q1 * q1 + q2 * q2 + q3 * q3).sqrt();
+    let (w, x, y, z) = if n > 1.0e-12 {
+        (q0 / n, q1 / n, q2 / n, q3 / n)
     } else {
-        [1.0, 0.0, 0.0, 0.0]
+        (1.0, 0.0, 0.0, 0.0)
     };
-    let (w, x, y, z) = (qn[0], qn[1], qn[2], qn[3]);
-    [
-        [
-            1.0 - 2.0 * (y * y + z * z),
-            2.0 * (x * y - w * z),
-            2.0 * (x * z + w * y),
-        ],
-        [
-            2.0 * (x * y + w * z),
-            1.0 - 2.0 * (x * x + z * z),
-            2.0 * (y * z - w * x),
-        ],
-        [
-            2.0 * (x * z - w * y),
-            2.0 * (y * z + w * x),
-            1.0 - 2.0 * (x * x + y * y),
-        ],
-    ]
-}
-
-fn mat3_mul_f64(a: [[f64; 3]; 3], b: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
-    let mut out = [[0.0_f64; 3]; 3];
-    for i in 0..3 {
-        for j in 0..3 {
-            out[i][j] = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j];
-        }
-    }
-    out
-}
-
-fn rotmat_to_quat_f64(r: [[f64; 3]; 3]) -> [f64; 4] {
-    let tr = r[0][0] + r[1][1] + r[2][2];
-    let (w, x, y, z);
-    if tr > 0.0 {
-        let s = (tr + 1.0).sqrt() * 2.0;
-        w = 0.25 * s;
-        x = (r[2][1] - r[1][2]) / s;
-        y = (r[0][2] - r[2][0]) / s;
-        z = (r[1][0] - r[0][1]) / s;
-    } else if r[0][0] > r[1][1] && r[0][0] > r[2][2] {
-        let s = (1.0 + r[0][0] - r[1][1] - r[2][2]).sqrt() * 2.0;
-        w = (r[2][1] - r[1][2]) / s;
-        x = 0.25 * s;
-        y = (r[0][1] + r[1][0]) / s;
-        z = (r[0][2] + r[2][0]) / s;
-    } else if r[1][1] > r[2][2] {
-        let s = (1.0 + r[1][1] - r[0][0] - r[2][2]).sqrt() * 2.0;
-        w = (r[0][2] - r[2][0]) / s;
-        x = (r[0][1] + r[1][0]) / s;
-        y = 0.25 * s;
-        z = (r[1][2] + r[2][1]) / s;
-    } else {
-        let s = (1.0 + r[2][2] - r[0][0] - r[1][1]).sqrt() * 2.0;
-        w = (r[1][0] - r[0][1]) / s;
-        x = (r[0][2] + r[2][0]) / s;
-        y = (r[1][2] + r[2][1]) / s;
-        z = 0.25 * s;
-    }
-    let n = (w * w + x * x + y * y + z * z).sqrt();
-    if n > 1.0e-12 {
-        [w / n, x / n, y / n, z / n]
-    } else {
-        [1.0, 0.0, 0.0, 0.0]
-    }
+    let r00 = 1.0 - 2.0 * (y * y + z * z);
+    let r01 = 2.0 * (x * y - w * z);
+    let r02 = 2.0 * (x * z + w * y);
+    let r12 = 2.0 * (y * z - w * x);
+    let r22 = 1.0 - 2.0 * (x * x + y * y);
+    let pitch = r02.clamp(-1.0, 1.0).asin();
+    let roll = (-r12).atan2(r22);
+    let yaw = (-r01).atan2(r00);
+    (
+        roll.to_degrees(),
+        pitch.to_degrees(),
+        normalize_heading_deg(yaw.to_degrees()),
+    )
 }
