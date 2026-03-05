@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use crate::ubxlog::{
-    UbxFrame, extract_esf_alg, extract_esf_cal_samples, extract_esf_ins, extract_esf_meas_samples,
-    extract_esf_raw_samples, extract_nav_att, extract_nav_pvt, extract_nav_sat_cn0, sensor_meta,
+    UbxFrame, extract_esf_alg, extract_esf_alg_status, extract_esf_cal_samples, extract_esf_ins,
+    extract_esf_meas_samples, extract_esf_raw_samples, extract_nav_att, extract_nav_pvt,
+    extract_nav_sat_cn0, sensor_meta,
 };
 
 use super::super::math::normalize_heading_deg;
@@ -68,6 +69,18 @@ pub fn build_signal_traces(
                 .entry("ESF-ALG yaw [deg]".to_string())
                 .or_default()
                 .push([t, normalize_heading_deg(yaw)]);
+        }
+        if let Some((_itow, status_code, is_fine)) = extract_esf_alg_status(f)
+            && let Some(t) = tl.seq_to_rel_s(f.seq)
+        {
+            orient_map
+                .entry("ESF-ALG status_code".to_string())
+                .or_default()
+                .push([t, status_code]);
+            orient_map
+                .entry("ESF-ALG fine_aligned".to_string())
+                .or_default()
+                .push([t, is_fine]);
         }
         for (sat, cno) in extract_nav_sat_cn0(f) {
             if let Some(t) = tl.seq_to_rel_s(f.seq) {

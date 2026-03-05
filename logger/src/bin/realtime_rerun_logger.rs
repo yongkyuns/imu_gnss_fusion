@@ -1260,6 +1260,8 @@ fn main() -> Result<()> {
                     );
                 }
                 PacketRef::EsfAlg(p) => {
+                    let flags = p.flags();
+                    let status = flags.status();
                     log_scalar(
                         &mut viewer_decimator,
                         &rec,
@@ -1284,7 +1286,22 @@ fn main() -> Result<()> {
                         "fusion/esf_alg/pitch_deg",
                         p.pitch(),
                     );
-                    let flags = p.flags();
+                    log_scalar(
+                        &mut viewer_decimator,
+                        &rec,
+                        frame.elapsed_s,
+                        viewer_lag_s,
+                        "fusion/esf_alg/status_code",
+                        status as u8 as f64,
+                    );
+                    log_scalar(
+                        &mut viewer_decimator,
+                        &rec,
+                        frame.elapsed_s,
+                        viewer_lag_s,
+                        "fusion/esf_alg/is_fine_aligned",
+                        matches!(status, ublox::esf_alg::EsfAlgStatus::FineAlignment) as u8 as f64,
+                    );
                     let err = p.error();
                     let _ = rec.log(
                         "status/calibration/summary/esf_alg",
