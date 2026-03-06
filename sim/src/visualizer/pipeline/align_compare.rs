@@ -1,11 +1,8 @@
-use align_rs::align::{
-    Align, MisalignImuSample, MisalignNoise, align_fuse_velocity_forward, align_init,
-    align_predict_gyro, align_q_sb,
-};
+use align_rs::coarse::{CoarseAlignConfig, CoarseAlignMEKF, CoarseWindowSummary, GRAVITY_MPS2};
 
 use crate::ubxlog::{
-    NavPvtObs, UbxFrame, extract_esf_alg, extract_esf_raw_samples, extract_nav_pvt_obs,
-    extract_nav2_pvt_obs, sensor_meta,
+    extract_esf_alg, extract_esf_raw_samples, extract_nav2_pvt_obs, sensor_meta, NavPvtObs,
+    UbxFrame,
 };
 
 use super::super::math::{nearest_master_ms, normalize_heading_deg};
@@ -32,29 +29,23 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
     let rel_s = |master_ms: f64| (master_ms - tl.t0_master_ms) * 1e-3;
 
     let mut alg_events = Vec::<AlgEvent>::new();
-    let mut nav_events_pvt = Vec::<(f64, NavPvtObs)>::new();
-    let mut nav_events_nav2 = Vec::<(f64, NavPvtObs)>::new();
+    let mut nav_events = Vec::<(f64, NavPvtObs)>::new();
     for f in frames {
-        if let Some((_, roll, pitch, yaw)) = extract_esf_alg(f)
-            && let Some(t_ms) = nearest_master_ms(f.seq, &tl.masters)
-        {
-            alg_events.push(AlgEvent {
-                t_ms,
-                roll_deg: roll,
-                pitch_deg: pitch,
-                yaw_deg: normalize_heading_deg(yaw),
-            });
+        if let Some((_, roll, pitch, yaw)) = extract_esf_alg(f) {
+            if let Some(t_ms) = nearest_master_ms(f.seq, &tl.masters) {
+                alg_events.push(AlgEvent {
+                    t_ms,
+                    roll_deg: roll,
+                    pitch_deg: pitch,
+                    yaw_deg: normalize_heading_deg(yaw),
+                });
+            }
         }
         if let Some(t_ms) = nearest_master_ms(f.seq, &tl.masters) {
             if let Some(obs) = extract_nav2_pvt_obs(f) {
                 if obs.fix_ok && !obs.invalid_llh {
-                    nav_events_nav2.push((t_ms, obs));
+                    nav_events.push((t_ms, obs));
                 }
-            } else if let Some(obs) = extract_nav_pvt_obs(f)
-                && obs.fix_ok
-                && !obs.invalid_llh
-            {
-                nav_events_pvt.push((t_ms, obs));
             }
         }
     }
@@ -63,13 +54,7 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
             .partial_cmp(&b.t_ms)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    nav_events_nav2.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    nav_events_pvt.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    let nav_events = if nav_events_nav2.is_empty() {
-        nav_events_pvt
-    } else {
-        nav_events_nav2
-    };
+    nav_events.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
     let mut raw_seq = Vec::<u64>::new();
     let mut raw_tag = Vec::<u64>::new();
@@ -161,9 +146,9 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
     let mut ref_roll = Vec::<[f64; 2]>::new();
     let mut ref_pitch = Vec::<[f64; 2]>::new();
     let mut ref_yaw = Vec::<[f64; 2]>::new();
-    let mut res_vn = Vec::<[f64; 2]>::new();
-    let mut res_ve = Vec::<[f64; 2]>::new();
-    let mut res_vd = Vec::<[f64; 2]>::new();
+    let mut diag_course = Vec::<[f64; 2]>::new();
+    let mut diag_lat = Vec::<[f64; 2]>::new();
+    let mut diag_long = Vec::<[f64; 2]>::new();
     let mut q0_tr = Vec::<[f64; 2]>::new();
     let mut q1_tr = Vec::<[f64; 2]>::new();
     let mut q2_tr = Vec::<[f64; 2]>::new();
@@ -179,83 +164,128 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
         ref_yaw.push([t, ev.yaw_deg]);
     }
 
-    let mut align = Align::default();
-    align_init(
-        &mut align,
-        [0.1, 0.1, 0.1],
-        MisalignNoise {
-            q_theta_rw_var: 5.0e-5,
-        },
-    );
-
-    let mut nav_idx = 0usize;
-    let mut prev_imu_t: Option<f64> = None;
-    for pkt in &imu_packets {
-        let dt = match prev_imu_t {
-            Some(prev) => (pkt.t_ms - prev) * 1e-3,
-            None => {
-                prev_imu_t = Some(pkt.t_ms);
-                continue;
+    let cfg = CoarseAlignConfig::default();
+    let mut align = CoarseAlignMEKF::new(cfg);
+    let mut stationary_accel = Vec::<[f32; 3]>::new();
+    let mut coarse_initialized = false;
+    let mut scan_idx = 0usize;
+    let mut interval_start_idx = 0usize;
+    let mut prev_nav: Option<(f64, NavPvtObs)> = None;
+    for (tn, nav) in &nav_events {
+        while scan_idx < imu_packets.len() && imu_packets[scan_idx].t_ms <= *tn {
+            let pkt = &imu_packets[scan_idx];
+            if !coarse_initialized {
+                let gyro_radps = [
+                    pkt.gx_dps.to_radians() as f32,
+                    pkt.gy_dps.to_radians() as f32,
+                    pkt.gz_dps.to_radians() as f32,
+                ];
+                let accel_b = [pkt.ax_mps2 as f32, pkt.ay_mps2 as f32, pkt.az_mps2 as f32];
+                let gyro_norm = norm3(gyro_radps);
+                let accel_norm = norm3(accel_b);
+                let stationary = gyro_norm <= cfg.max_stationary_gyro_radps
+                    && (accel_norm - GRAVITY_MPS2).abs() <= cfg.max_stationary_accel_norm_err_mps2;
+                if stationary {
+                    stationary_accel.push(accel_b);
+                    if stationary_accel.len() >= 100
+                        && align
+                            .initialize_from_stationary(&stationary_accel, 0.0)
+                            .is_ok()
+                    {
+                        coarse_initialized = true;
+                    }
+                } else {
+                    stationary_accel.clear();
+                }
             }
-        };
-        prev_imu_t = Some(pkt.t_ms);
-        if !(0.001..=0.05).contains(&dt) {
-            continue;
+            scan_idx += 1;
         }
 
-        let imu = MisalignImuSample {
-            dt: dt as f32,
-            f_sx: pkt.ax_mps2 as f32,
-            f_sy: pkt.ay_mps2 as f32,
-            f_sz: pkt.az_mps2 as f32,
-        };
-        align_predict_gyro(
-            &mut align,
-            &imu,
-            (pkt.gx_dps.to_radians()) as f32,
-            (pkt.gy_dps.to_radians()) as f32,
-            (pkt.gz_dps.to_radians()) as f32,
-        );
+        if let Some((t_prev, nav_prev)) = prev_nav {
+            let dt = ((*tn - t_prev) * 1.0e-3) as f32;
+            let interval_packets = &imu_packets[interval_start_idx..scan_idx];
+            if coarse_initialized && dt > 0.0 && !interval_packets.is_empty() {
+                let mut gyro_sum = [0.0_f32; 3];
+                let mut accel_sum = [0.0_f32; 3];
+                for pkt in interval_packets {
+                    gyro_sum[0] += pkt.gx_dps.to_radians() as f32;
+                    gyro_sum[1] += pkt.gy_dps.to_radians() as f32;
+                    gyro_sum[2] += pkt.gz_dps.to_radians() as f32;
+                    accel_sum[0] += pkt.ax_mps2 as f32;
+                    accel_sum[1] += pkt.ay_mps2 as f32;
+                    accel_sum[2] += pkt.az_mps2 as f32;
+                }
+                let inv_n = 1.0 / (interval_packets.len() as f32);
+                let mean_gyro_b = [
+                    gyro_sum[0] * inv_n,
+                    gyro_sum[1] * inv_n,
+                    gyro_sum[2] * inv_n,
+                ];
+                let mean_accel_b = [
+                    accel_sum[0] * inv_n,
+                    accel_sum[1] * inv_n,
+                    accel_sum[2] * inv_n,
+                ];
+                let window = CoarseWindowSummary {
+                    dt,
+                    mean_gyro_b,
+                    mean_accel_b,
+                    gnss_vel_prev_n: [
+                        nav_prev.vel_n_mps as f32,
+                        nav_prev.vel_e_mps as f32,
+                        nav_prev.vel_d_mps as f32,
+                    ],
+                    gnss_vel_curr_n: [
+                        nav.vel_n_mps as f32,
+                        nav.vel_e_mps as f32,
+                        nav.vel_d_mps as f32,
+                    ],
+                };
+                align.update_window(&window);
 
-        while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
-            let (tn, nav) = nav_events[nav_idx];
-            nav_idx += 1;
-            let r = ((nav.s_acc_mps * nav.s_acc_mps).max(0.02) * 20.0) as f32;
-            align_fuse_velocity_forward(
-                &mut align,
-                [
-                    nav.vel_n_mps as f32,
-                    nav.vel_e_mps as f32,
-                    nav.vel_d_mps as f32,
-                ],
-                [r, r, r],
-                [0.08, 0.08, 0.08],
-            );
-            let t = rel_s(tn);
-            res_vn.push([t, align.last_residual_n[0].to_degrees() as f64]);
-            res_ve.push([t, align.last_residual_n[1].to_degrees() as f64]);
-            res_vd.push([t, align.last_residual_n[2].to_degrees() as f64]);
+                let v_prev = [nav_prev.vel_n_mps, nav_prev.vel_e_mps];
+                let v_curr = [nav.vel_n_mps, nav.vel_e_mps];
+                let course_prev = v_prev[1].atan2(v_prev[0]);
+                let course_curr = v_curr[1].atan2(v_curr[0]);
+                let course_rate_dps =
+                    wrap_rad_pi(course_curr - course_prev).to_degrees() / (dt as f64);
+                let a_n = [
+                    (nav.vel_n_mps - nav_prev.vel_n_mps) / (dt as f64),
+                    (nav.vel_e_mps - nav_prev.vel_e_mps) / (dt as f64),
+                ];
+                let v_mid = [0.5 * (v_prev[0] + v_curr[0]), 0.5 * (v_prev[1] + v_curr[1])];
+                let (a_long, a_lat) = if let Some(t_hat) = normalize2(v_mid) {
+                    let lat_hat = [-t_hat[1], t_hat[0]];
+                    (
+                        t_hat[0] * a_n[0] + t_hat[1] * a_n[1],
+                        lat_hat[0] * a_n[0] + lat_hat[1] * a_n[1],
+                    )
+                } else {
+                    (0.0, 0.0)
+                };
+
+                let t = rel_s(*tn);
+                diag_course.push([t, course_rate_dps]);
+                diag_lat.push([t, a_lat]);
+                diag_long.push([t, a_long]);
+
+                let q = align.q_vb;
+                let q_plot = [q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64];
+                let (r, p, y) = quat_rpy_alg_deg(q_plot[0], q_plot[1], q_plot[2], q_plot[3]);
+                out_roll.push([t, r]);
+                out_pitch.push([t, p]);
+                out_yaw.push([t, y]);
+                q0_tr.push([t, q[0] as f64]);
+                q1_tr.push([t, q[1] as f64]);
+                q2_tr.push([t, q[2] as f64]);
+                q3_tr.push([t, q[3] as f64]);
+                p00.push([t, align.P[0][0] as f64]);
+                p11.push([t, align.P[1][1] as f64]);
+                p22.push([t, align.P[2][2] as f64]);
+            }
         }
-
-        let t = rel_s(pkt.t_ms);
-        let q = align_q_sb(&align);
-        // ESF-ALG angles are reported in z-up convention; Align runs in z-down convention.
-        // Convert in rotation space before Euler extraction via Rx(180 deg) post-composition.
-        let qx180 = [0.0, 1.0, 0.0, 0.0];
-        let q_sb = [q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64];
-        let q_cmp = quat_mul(q_sb, qx180);
-        // Convert Align q_sb to the same Euler convention used by ESF-ALG.
-        let (r, p, y) = quat_rpy_alg_deg(q_cmp[0], q_cmp[1], q_cmp[2], q_cmp[3]);
-        out_roll.push([t, r]);
-        out_pitch.push([t, p]);
-        out_yaw.push([t, y]);
-        q0_tr.push([t, q[0] as f64]);
-        q1_tr.push([t, q[1] as f64]);
-        q2_tr.push([t, q[2] as f64]);
-        q3_tr.push([t, q[3] as f64]);
-        p00.push([t, align.P[0][0] as f64]);
-        p11.push([t, align.P[1][1] as f64]);
-        p22.push([t, align.P[2][2] as f64]);
+        prev_nav = Some((*tn, *nav));
+        interval_start_idx = scan_idx;
     }
 
     AlignCompareData {
@@ -287,16 +317,16 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
         ],
         res_vel: vec![
             Trace {
-                name: "res gyro_x [deg/s]".to_string(),
-                points: res_vn,
+                name: "course rate [deg/s]".to_string(),
+                points: diag_course,
             },
             Trace {
-                name: "res gyro_y [deg/s]".to_string(),
-                points: res_ve,
+                name: "a_lat [m/s^2]".to_string(),
+                points: diag_lat,
             },
             Trace {
-                name: "res gyro_z [deg/s]".to_string(),
-                points: res_vd,
+                name: "a_long [m/s^2]".to_string(),
+                points: diag_long,
             },
         ],
         state_q: vec![
@@ -334,7 +364,7 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
     }
 }
 
-// ESF-ALG convention: intrinsic ZYX (equivalently Rx * Ry * Rz composition in this codebase).
+// FRD Euler extraction in the codebase convention: intrinsic Rx * Ry * Rz.
 fn quat_rpy_alg_deg(q0: f64, q1: f64, q2: f64, q3: f64) -> (f64, f64, f64) {
     let n = (q0 * q0 + q1 * q1 + q2 * q2 + q3 * q3).sqrt();
     let (w, x, y, z) = if n > 1.0e-12 {
@@ -357,11 +387,19 @@ fn quat_rpy_alg_deg(q0: f64, q1: f64, q2: f64, q3: f64) -> (f64, f64, f64) {
     )
 }
 
-fn quat_mul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
-    [
-        a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
-        a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
-        a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
-        a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0],
-    ]
+fn norm3(v: [f32; 3]) -> f32 {
+    (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+}
+
+fn normalize2(v: [f64; 2]) -> Option<[f64; 2]> {
+    let n = (v[0] * v[0] + v[1] * v[1]).sqrt();
+    if !n.is_finite() || n <= 1.0e-9 {
+        return None;
+    }
+    Some([v[0] / n, v[1] / n])
+}
+
+fn wrap_rad_pi(x: f64) -> f64 {
+    let two_pi = 2.0 * std::f64::consts::PI;
+    (x + std::f64::consts::PI).rem_euclid(two_pi) - std::f64::consts::PI
 }

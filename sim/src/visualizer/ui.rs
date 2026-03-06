@@ -4,7 +4,7 @@ use anyhow::Result;
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
 use walkers::sources::{Mapbox, MapboxStyle, OpenStreetMap};
-use walkers::{HttpTiles, Map, MapMemory, Plugin, lon_lat};
+use walkers::{lon_lat, HttpTiles, Map, MapMemory, Plugin};
 
 use super::math::heading_endpoint;
 use super::model::{HeadingSample, Page, PlotData, Trace};
@@ -354,7 +354,7 @@ impl eframe::App for App {
                         );
                         draw_plot(
                             ui,
-                            "Gyro Residuals (meas - predicted)",
+                            "Coarse MEKF Window Diagnostics",
                             &self.data.align_res_vel,
                             true,
                             self.max_points_per_trace,
@@ -364,7 +364,7 @@ impl eframe::App for App {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     draw_plot(
                         ui,
-                        "Align Quaternion (q_sb)",
+                        "Coarse MEKF Quaternion (q_vb)",
                         &self.data.align_state_q,
                         true,
                         self.max_points_per_trace,
