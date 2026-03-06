@@ -74,6 +74,7 @@ pub struct Align {
     gravity_ref_valid: bool,
     forward_branch_score: i8,
     forward_branch_locked: bool,
+    solution_locked: bool,
 }
 
 impl Default for Align {
@@ -101,6 +102,7 @@ impl Default for Align {
             gravity_ref_valid: false,
             forward_branch_score: 0,
             forward_branch_locked: false,
+            solution_locked: false,
         }
     }
 }
@@ -152,6 +154,10 @@ pub fn align_predict_gyro(filter: &mut Align, imu: &MisalignImuSample, wx: f32, 
     }
 
     filter.time_s += imu.dt;
+
+    if filter.solution_locked {
+        return;
+    }
 
     let qvar = (filter.noise.q_theta_rw_var * imu.dt).max(0.0);
     filter.P[0][0] += qvar;
@@ -241,6 +247,11 @@ fn align_fuse_motion(
     filter.prev_heading_rad = Some(heading);
     filter.prev_speed_mps = Some(speed_h);
 
+    if filter.solution_locked {
+        clear_motion_window(filter);
+        return;
+    }
+
     if !filter.init_done || dt < 1.0e-3 || speed_h < 3.0 || prev_speed < 3.0 {
         clear_motion_window(filter);
         return;
@@ -305,9 +316,11 @@ fn align_fuse_motion(
                     flip_yaw_branch(filter);
                     filter.forward_branch_score = FORWARD_BRANCH_LOCK_SCORE;
                     filter.forward_branch_locked = true;
+                    filter.solution_locked = true;
                     forward_pred_s = body_forward_in_sensor(filter);
                 } else if filter.forward_branch_score >= FORWARD_BRANCH_LOCK_SCORE {
                     filter.forward_branch_locked = true;
+                    filter.solution_locked = true;
                 }
             }
             let residual = vec3_sub(forward_meas_s, forward_pred_s);

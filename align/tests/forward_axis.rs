@@ -218,3 +218,86 @@ fn forward_axis_update_does_not_flip_on_single_bad_sample() {
         "a single contradictory forward sample should not flip the yaw branch"
     );
 }
+
+#[test]
+fn installation_solution_freezes_after_branch_lock() {
+    let mut f = Align::default();
+    align_init(
+        &mut f,
+        [0.2, 0.2, 0.2],
+        MisalignNoise {
+            q_theta_rw_var: 1.0e-7,
+        },
+    );
+
+    let q_true = quat_from_axis_angle([0.0, 0.0, 1.0], deg2rad(12.0));
+    let r_sb_true = quat_to_rotmat(q_true);
+    let dt = 0.01_f32;
+
+    for _ in 0..120 {
+        let g_s = gravity_sensor(r_sb_true);
+        let imu = MisalignImuSample {
+            dt,
+            f_sx: g_s[0],
+            f_sy: g_s[1],
+            f_sz: g_s[2],
+        };
+        align_predict_gyro(&mut f, &imu, 0.0, 0.0, 0.0);
+    }
+    align_set_q_sb(&mut f, q_true);
+
+    let mut speed = 8.0_f32;
+    for _ in 0..3 {
+        for _ in 0..20 {
+            let sensor_acc = body_acc_sensor(r_sb_true, 0.8);
+            let imu = MisalignImuSample {
+                dt,
+                f_sx: sensor_acc[0],
+                f_sy: sensor_acc[1],
+                f_sz: sensor_acc[2],
+            };
+            align_predict_gyro(&mut f, &imu, 0.0, 0.0, 0.0);
+        }
+        speed += 0.8 * 0.2;
+        align_fuse_velocity_forward(
+            &mut f,
+            [speed, 0.0, 0.0],
+            [0.05, 0.05, 0.05],
+            [0.01, 0.01, 0.01],
+        );
+    }
+
+    let q_locked = align_q_sb(&f);
+
+    for _ in 0..200 {
+        let sensor_acc = body_acc_sensor(r_sb_true, -1.2);
+        let imu = MisalignImuSample {
+            dt,
+            f_sx: sensor_acc[0],
+            f_sy: sensor_acc[1],
+            f_sz: sensor_acc[2],
+        };
+        align_predict_gyro(&mut f, &imu, 0.2, -0.1, 0.3);
+    }
+    align_fuse_velocity_forward(
+        &mut f,
+        [speed - 1.2 * 2.0, 0.0, 0.0],
+        [0.05, 0.05, 0.05],
+        [0.01, 0.01, 0.01],
+    );
+
+    let q_after = align_q_sb(&f);
+    let max_abs_delta = [
+        (q_after[0] - q_locked[0]).abs(),
+        (q_after[1] - q_locked[1]).abs(),
+        (q_after[2] - q_locked[2]).abs(),
+        (q_after[3] - q_locked[3]).abs(),
+    ]
+    .into_iter()
+    .fold(0.0_f32, f32::max);
+
+    assert!(
+        max_abs_delta < 1.0e-6,
+        "installation quaternion should stay fixed after branch lock"
+    );
+}
