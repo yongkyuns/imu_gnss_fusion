@@ -4,8 +4,8 @@ pub const N_STATES: usize = 16;
 pub const GRAVITY_MSS: f32 = 9.80665;
 const DEFAULT_P_INIT: f32 = 1.0;
 const DEFAULT_BIAS_DT_S: f32 = 0.01;
-const DEFAULT_GYRO_BIAS_SIGMA_DPS: f32 = 0.25;
-const DEFAULT_ACCEL_BIAS_SIGMA_MPS2: f32 = 0.15;
+const DEFAULT_GYRO_BIAS_SIGMA_DPS: f32 = 0.06;
+const DEFAULT_ACCEL_BIAS_SIGMA_MPS2: f32 = 0.03;
 const PI_F32: f32 = 3.141_592_7;
 
 #[repr(C)]

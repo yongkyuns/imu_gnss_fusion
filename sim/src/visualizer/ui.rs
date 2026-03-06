@@ -176,7 +176,7 @@ impl eframe::App for App {
                 ui.label("Page:");
                 ui.selectable_value(&mut self.page, Page::Signals, "Signals");
                 ui.selectable_value(&mut self.page, Page::EkfCompare, "EKF Compare");
-                ui.selectable_value(&mut self.page, Page::VmaCompare, "VMA Compare");
+                ui.selectable_value(&mut self.page, Page::VmaCompare, "Misalign Compare");
                 ui.selectable_value(&mut self.page, Page::MapDark, "Map (Dark)");
             });
         });
@@ -347,14 +347,14 @@ impl eframe::App for App {
                     .show(ctx, |ui| {
                         draw_plot(
                             ui,
-                            "Euler Angles: VMA vs ESF-ALG",
+                            "Euler Angles: Misalignment KF vs ESF-ALG",
                             &self.data.vma_cmp_att,
                             true,
                             self.max_points_per_trace,
                         );
                         draw_plot(
                             ui,
-                            "VMA Velocity Residuals (Pred-GNSS)",
+                            "Gyro Residuals (meas - predicted)",
                             &self.data.vma_res_vel,
                             true,
                             self.max_points_per_trace,
@@ -364,14 +364,14 @@ impl eframe::App for App {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     draw_plot(
                         ui,
-                        "VMA Misalignment Quaternion (q_sb)",
+                        "Misalignment Quaternion (q_sb)",
                         &self.data.vma_state_q,
                         true,
                         self.max_points_per_trace,
                     );
                     draw_plot(
                         ui,
-                        "VMA Covariance Diagonal",
+                        "Misalignment Covariance Diagonal",
                         &self.data.vma_cov,
                         true,
                         self.max_points_per_trace,

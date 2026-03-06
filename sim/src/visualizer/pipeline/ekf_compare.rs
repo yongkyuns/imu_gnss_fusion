@@ -1,7 +1,7 @@
 use ekf_rs::ekf::{Ekf, GpsData, ImuSample, ekf_fuse_body_vel, ekf_fuse_gps, ekf_predict};
 
 use crate::ubxlog::{
-    NavPvtObs, UbxFrame, extract_esf_alg, extract_esf_raw_samples, extract_nav_att,
+    NavPvtObs, UbxFrame, extract_esf_alg, extract_esf_alg_status, extract_esf_raw_samples, extract_nav_att,
     extract_nav_pvt_obs, extract_nav2_pvt_obs, sensor_meta,
 };
 
@@ -27,6 +27,7 @@ pub struct EkfCompareData {
 
 pub fn build_ekf_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> EkfCompareData {
     const R_BODY_VEL: f32 = 1.0;
+    const YAW_INIT_SPEED_MPS: f64 = 20.0 / 3.6;
 
     if tl.masters.is_empty() {
         return EkfCompareData {
@@ -45,6 +46,7 @@ pub fn build_ekf_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Ekf
     let rel_s = |master_ms: f64| (master_ms - tl.t0_master_ms) * 1e-3;
 
     let mut alg_events = Vec::<AlgEvent>::new();
+    let mut alg_status_events = Vec::<(f64, u8)>::new();
     let mut nav_att_events = Vec::<NavAttEvent>::new();
     let mut nav_events_pvt = Vec::<(f64, NavPvtObs)>::new();
     let mut nav_events_nav2 = Vec::<(f64, NavPvtObs)>::new();
@@ -58,6 +60,11 @@ pub fn build_ekf_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Ekf
                     yaw_deg: yaw,
                 });
             }
+        }
+        if let Some((_, status_code, _is_fine)) = extract_esf_alg_status(f)
+            && let Some(t_ms) = super::super::math::nearest_master_ms(f.seq, &tl.masters)
+        {
+            alg_status_events.push((t_ms, status_code as u8));
         }
         if let Some((_itow, roll, pitch, heading)) = extract_nav_att(f) {
             if let Some(t_ms) = super::super::math::nearest_master_ms(f.seq, &tl.masters) {
@@ -86,6 +93,7 @@ pub fn build_ekf_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Ekf
             .partial_cmp(&b.t_ms)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+    alg_status_events.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     nav_att_events.sort_by(|a, b| {
         a.t_ms
             .partial_cmp(&b.t_ms)
@@ -223,8 +231,10 @@ pub fn build_ekf_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Ekf
     let mut ekf = Ekf::default();
     let mut prev_imu_t: Option<f64> = None;
     let mut alg_idx = 0usize;
+    let mut alg_status_idx = 0usize;
     let mut nav_idx = 0usize;
     let mut cur_alg: Option<AlgEvent> = None;
+    let mut cur_alg_status: u8 = 0;
 
     let mut origin_set = false;
     let mut ref_lat = 0.0_f64;
@@ -272,6 +282,11 @@ pub fn build_ekf_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Ekf
             cur_alg = Some(alg_events[alg_idx]);
             alg_idx += 1;
         }
+        while alg_status_idx < alg_status_events.len() && alg_status_events[alg_status_idx].0 <= pkt.t_ms
+        {
+            cur_alg_status = alg_status_events[alg_status_idx].1;
+            alg_status_idx += 1;
+        }
         let dt = match prev_imu_t {
             Some(prev) => (pkt.t_ms - prev) * 1e-3,
             None => {
@@ -281,6 +296,12 @@ pub fn build_ekf_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Ekf
         };
         prev_imu_t = Some(pkt.t_ms);
         if !(0.001..=0.05).contains(&dt) {
+            continue;
+        }
+        if cur_alg_status < 3 {
+            while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
+                nav_idx += 1;
+            }
             continue;
         }
 
@@ -337,7 +358,7 @@ pub fn build_ekf_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Ekf
             let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
             let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
             let speed_h = nav.vel_n_mps.hypot(nav.vel_e_mps);
-            if !yaw_initialized_from_vel && speed_h >= 2.0 {
+            if !yaw_initialized_from_vel && speed_h >= YAW_INIT_SPEED_MPS {
                 let yaw_from_vel = nav.vel_e_mps.atan2(nav.vel_n_mps);
                 set_quat_yaw_only(&mut ekf.state, yaw_from_vel);
                 yaw_initialized_from_vel = true;

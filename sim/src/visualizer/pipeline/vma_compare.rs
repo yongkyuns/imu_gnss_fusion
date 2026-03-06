@@ -1,15 +1,14 @@
 use vma_rs::vma::{
-    MisalignAttitudeSample, MisalignImuSample, MisalignNoise, Vma, vma_fuse_velocity, vma_init,
-    vma_predict, vma_q_sb,
+    MisalignImuSample, MisalignNoise, Vma, vma_fuse_velocity, vma_init, vma_predict_gyro, vma_q_sb,
 };
 
 use crate::ubxlog::{
-    NavPvtObs, UbxFrame, extract_esf_alg, extract_esf_raw_samples, extract_nav_att,
-    extract_nav_pvt_obs, extract_nav2_pvt_obs, sensor_meta,
+    NavPvtObs, UbxFrame, extract_esf_alg, extract_esf_raw_samples, extract_nav_pvt_obs,
+    extract_nav2_pvt_obs, sensor_meta,
 };
 
-use super::super::math::{deg2rad, nearest_master_ms, normalize_heading_deg};
-use super::super::model::{AlgEvent, ImuPacket, NavAttEvent, Trace};
+use super::super::math::{nearest_master_ms, normalize_heading_deg};
+use super::super::model::{AlgEvent, ImuPacket, Trace};
 use super::tag_time::fit_tag_ms_map;
 use super::timebase::MasterTimeline;
 
@@ -32,7 +31,6 @@ pub fn build_vma_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Vma
     let rel_s = |master_ms: f64| (master_ms - tl.t0_master_ms) * 1e-3;
 
     let mut alg_events = Vec::<AlgEvent>::new();
-    let mut nav_att_events = Vec::<NavAttEvent>::new();
     let mut nav_events_pvt = Vec::<(f64, NavPvtObs)>::new();
     let mut nav_events_nav2 = Vec::<(f64, NavPvtObs)>::new();
     for f in frames {
@@ -44,16 +42,6 @@ pub fn build_vma_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Vma
                 roll_deg: roll,
                 pitch_deg: pitch,
                 yaw_deg: normalize_heading_deg(yaw),
-            });
-        }
-        if let Some((_itow, roll, pitch, heading)) = extract_nav_att(f)
-            && let Some(t_ms) = nearest_master_ms(f.seq, &tl.masters)
-        {
-            nav_att_events.push(NavAttEvent {
-                t_ms,
-                roll_deg: roll,
-                pitch_deg: pitch,
-                heading_deg: normalize_heading_deg(heading),
             });
         }
         if let Some(t_ms) = nearest_master_ms(f.seq, &tl.masters) {
@@ -70,11 +58,6 @@ pub fn build_vma_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Vma
         }
     }
     alg_events.sort_by(|a, b| {
-        a.t_ms
-            .partial_cmp(&b.t_ms)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    nav_att_events.sort_by(|a, b| {
         a.t_ms
             .partial_cmp(&b.t_ms)
             .unwrap_or(std::cmp::Ordering::Equal)
@@ -195,54 +178,18 @@ pub fn build_vma_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Vma
         ref_yaw.push([t, ev.yaw_deg]);
     }
 
-    if nav_att_events.is_empty() {
-        return VmaCompareData {
-            cmp_att: vec![
-                Trace {
-                    name: "ESF-ALG roll [deg]".to_string(),
-                    points: ref_roll,
-                },
-                Trace {
-                    name: "ESF-ALG pitch [deg]".to_string(),
-                    points: ref_pitch,
-                },
-                Trace {
-                    name: "ESF-ALG yaw [deg]".to_string(),
-                    points: ref_yaw,
-                },
-            ],
-            res_vel: Vec::new(),
-            state_q: Vec::new(),
-            cov: Vec::new(),
-        };
-    }
-
     let mut vma = Vma::default();
     vma_init(
         &mut vma,
-        [0.2, 0.2, 0.2],
+        [1.0, 1.0, 1.0],
         MisalignNoise {
-            q_theta_rw_var: 1.0e-4,
+            q_theta_rw_var: 5.0e-5,
         },
     );
 
-    let mut att_idx = 0usize;
     let mut nav_idx = 0usize;
-    let mut cur_att = nav_att_events[0];
     let mut prev_imu_t: Option<f64> = None;
     for pkt in &imu_packets {
-        while att_idx + 1 < nav_att_events.len() && nav_att_events[att_idx + 1].t_ms <= pkt.t_ms {
-            att_idx += 1;
-            cur_att = nav_att_events[att_idx];
-        }
-
-        let q_nb = quat_from_rpy_zyx_deg(cur_att.roll_deg, cur_att.pitch_deg, cur_att.heading_deg);
-        let att = MisalignAttitudeSample {
-            q_nb0: q_nb[0] as f32,
-            q_nb1: q_nb[1] as f32,
-            q_nb2: q_nb[2] as f32,
-            q_nb3: q_nb[3] as f32,
-        };
         let dt = match prev_imu_t {
             Some(prev) => (pkt.t_ms - prev) * 1e-3,
             None => {
@@ -261,12 +208,18 @@ pub fn build_vma_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Vma
             f_sy: pkt.ay_mps2 as f32,
             f_sz: pkt.az_mps2 as f32,
         };
-        vma_predict(&mut vma, &imu, &att);
+        vma_predict_gyro(
+            &mut vma,
+            &imu,
+            (pkt.gx_dps.to_radians()) as f32,
+            (pkt.gy_dps.to_radians()) as f32,
+            (pkt.gz_dps.to_radians()) as f32,
+        );
 
         while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
             let (tn, nav) = nav_events[nav_idx];
             nav_idx += 1;
-            let r = ((nav.s_acc_mps * nav.s_acc_mps).max(0.05) * 100.0) as f32;
+            let r = ((nav.s_acc_mps * nav.s_acc_mps).max(0.02) * 20.0) as f32;
             vma_fuse_velocity(
                 &mut vma,
                 [
@@ -274,18 +227,24 @@ pub fn build_vma_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Vma
                     nav.vel_e_mps as f32,
                     nav.vel_d_mps as f32,
                 ],
-                [r, r, r * 5.0],
+                [r, r, r],
             );
             let t = rel_s(tn);
-            res_vn.push([t, vma.last_residual_n[0] as f64]);
-            res_ve.push([t, vma.last_residual_n[1] as f64]);
-            res_vd.push([t, vma.last_residual_n[2] as f64]);
+            res_vn.push([t, vma.last_residual_n[0].to_degrees() as f64]);
+            res_ve.push([t, vma.last_residual_n[1].to_degrees() as f64]);
+            res_vd.push([t, vma.last_residual_n[2].to_degrees() as f64]);
         }
 
         let t = rel_s(pkt.t_ms);
         let q = vma_q_sb(&vma);
+        // ESF-ALG angles are reported in z-up convention; VMA runs in navigation z-down.
+        // Convert VMA body->sensor quaternion to ESF-ALG-comparable frame via Rx(180 deg).
+        let q_cmp = quat_mul(
+            [0.0, 1.0, 0.0, 0.0],
+            [q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64],
+        );
         // Convert VMA q_sb to the same Euler convention used by ESF-ALG.
-        let (r, p, y) = quat_rpy_alg_deg(q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64);
+        let (r, p, y) = quat_rpy_alg_deg(q_cmp[0], q_cmp[1], q_cmp[2], q_cmp[3]);
         out_roll.push([t, r]);
         out_pitch.push([t, p]);
         out_yaw.push([t, y]);
@@ -327,15 +286,15 @@ pub fn build_vma_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Vma
         ],
         res_vel: vec![
             Trace {
-                name: "res velN [m/s]".to_string(),
+                name: "res gyro_x [deg/s]".to_string(),
                 points: res_vn,
             },
             Trace {
-                name: "res velE [m/s]".to_string(),
+                name: "res gyro_y [deg/s]".to_string(),
                 points: res_ve,
             },
             Trace {
-                name: "res velD [m/s]".to_string(),
+                name: "res gyro_z [deg/s]".to_string(),
                 points: res_vd,
             },
         ],
@@ -374,19 +333,6 @@ pub fn build_vma_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Vma
     }
 }
 
-fn quat_from_rpy_zyx_deg(roll_deg: f64, pitch_deg: f64, yaw_deg: f64) -> [f64; 4] {
-    let (r, p, y) = (deg2rad(roll_deg), deg2rad(pitch_deg), deg2rad(yaw_deg));
-    let (sr, cr) = (0.5 * r).sin_cos();
-    let (sp, cp) = (0.5 * p).sin_cos();
-    let (sy, cy) = (0.5 * y).sin_cos();
-    [
-        cr * cp * cy + sr * sp * sy,
-        sr * cp * cy - cr * sp * sy,
-        cr * sp * cy + sr * cp * sy,
-        cr * cp * sy - sr * sp * cy,
-    ]
-}
-
 // ESF-ALG convention: intrinsic ZYX (equivalently Rx * Ry * Rz composition in this codebase).
 fn quat_rpy_alg_deg(q0: f64, q1: f64, q2: f64, q3: f64) -> (f64, f64, f64) {
     let n = (q0 * q0 + q1 * q1 + q2 * q2 + q3 * q3).sqrt();
@@ -408,4 +354,13 @@ fn quat_rpy_alg_deg(q0: f64, q1: f64, q2: f64, q3: f64) -> (f64, f64, f64) {
         pitch.to_degrees(),
         normalize_heading_deg(yaw.to_degrees()),
     )
+}
+
+fn quat_mul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
+    [
+        a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
+        a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
+        a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
+        a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0],
+    ]
 }
