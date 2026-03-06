@@ -21,10 +21,10 @@ pub fn trace_stats(data: &PlotData) -> (usize, usize) {
         &data.ekf_bias_accel,
         &data.ekf_cov_bias,
         &data.ekf_cov_nonbias,
-        &data.vma_cmp_att,
-        &data.vma_res_vel,
-        &data.vma_state_q,
-        &data.vma_cov,
+        &data.align_cmp_att,
+        &data.align_res_vel,
+        &data.align_state_q,
+        &data.align_cov,
     ];
     let mut traces = 0usize;
     let mut points = 0usize;
@@ -54,10 +54,10 @@ pub fn trace_time_bounds(data: &PlotData) -> Option<(f64, f64)> {
         &data.ekf_bias_accel,
         &data.ekf_cov_bias,
         &data.ekf_cov_nonbias,
-        &data.vma_cmp_att,
-        &data.vma_res_vel,
-        &data.vma_state_q,
-        &data.vma_cov,
+        &data.align_cmp_att,
+        &data.align_res_vel,
+        &data.align_state_q,
+        &data.align_cov,
         &data.ekf_map,
     ];
     let mut min_t = f64::INFINITY;

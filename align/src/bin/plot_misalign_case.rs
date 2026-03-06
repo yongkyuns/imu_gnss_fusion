@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::Write;
 
-use vma_rs::vma::{MisalignImuSample, MisalignNoise, Vma, vma_fuse_velocity, vma_init, vma_predict_gyro, vma_q_sb, vma_set_q_sb};
+use align_rs::align::{MisalignImuSample, MisalignNoise, Align, align_fuse_velocity, align_init, align_predict_gyro, align_q_sb, align_set_q_sb};
 
 fn deg2rad(v: f32) -> f32 {
     v * std::f32::consts::PI / 180.0
@@ -140,15 +140,15 @@ fn run_case(
     gyro_noise_std: f32,
     vel_noise_std: f32,
 ) -> std::io::Result<()> {
-    let mut f = Vma::default();
-    vma_init(
+    let mut f = Align::default();
+    align_init(
         &mut f,
         [0.4, 0.4, 0.4],
         MisalignNoise {
             q_theta_rw_var: 1.0e-7,
         },
     );
-    vma_set_q_sb(&mut f, [1.0, 0.0, 0.0, 0.0]);
+    align_set_q_sb(&mut f, [1.0, 0.0, 0.0, 0.0]);
 
     let q_true = quat_from_alg_deg(roll_true_deg, pitch_true_deg, yaw_true_deg);
     let r_sb_true = quat_to_rotmat(q_true);
@@ -253,7 +253,7 @@ fn run_case(
             f_sy: f_s[1],
             f_sz: f_s[2],
         };
-        vma_predict_gyro(&mut f, &imu, w_s[0], w_s[1], w_s[2]);
+        align_predict_gyro(&mut f, &imu, w_s[0], w_s[1], w_s[2]);
         let mut gnss_meas = [f32::NAN, f32::NAN, f32::NAN];
         if k % 50 == 0 {
             let r = vel_noise_std * vel_noise_std;
@@ -262,14 +262,14 @@ fn run_case(
                 v_n[1] + rng.noise(vel_noise_std),
                 v_n[2] + rng.noise(vel_noise_std),
             ];
-            vma_fuse_velocity(
+            align_fuse_velocity(
                 &mut f,
                 gnss_meas,
                 [r, r, r],
             );
         }
 
-        let q_est = vma_q_sb(&f);
+        let q_est = align_q_sb(&f);
         let (r_est, p_est, y_est) = quat_to_alg_deg(q_est);
         writeln!(
             out,

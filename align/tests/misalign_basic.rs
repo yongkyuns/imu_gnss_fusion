@@ -1,6 +1,6 @@
-use vma_rs::vma::{
-    MisalignAttitudeSample, MisalignImuSample, MisalignNoise, Vma, vma_fuse_velocity, vma_init,
-    vma_predict, vma_q_sb, vma_set_q_sb,
+use align_rs::align::{
+    MisalignAttitudeSample, MisalignImuSample, MisalignNoise, Align, align_fuse_velocity, align_init,
+    align_predict, align_q_sb, align_set_q_sb,
 };
 
 fn deg2rad(v: f32) -> f32 {
@@ -67,8 +67,8 @@ fn transpose(a: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
 
 #[test]
 fn nonlinear_misalignment_filter_reduces_residual() {
-    let mut f = Vma::default();
-    vma_init(
+    let mut f = Align::default();
+    align_init(
         &mut f,
         [0.5, 0.5, 0.5],
         MisalignNoise {
@@ -83,8 +83,8 @@ fn nonlinear_misalignment_filter_reduces_residual() {
         ),
         quat_from_axis_angle([1.0, 0.0, 0.0], deg2rad(3.0)),
     ));
-    // Start with identity (wrong) misalignment.
-    vma_set_q_sb(&mut f, [1.0, 0.0, 0.0, 0.0]);
+    // Start with identity (wrong) align.
+    align_set_q_sb(&mut f, [1.0, 0.0, 0.0, 0.0]);
 
     let r_sb_true = quat_to_rotmat(q_true);
     let r_bs_true = transpose(r_sb_true);
@@ -131,10 +131,10 @@ fn nonlinear_misalignment_filter_reduces_residual() {
             f_sy: f_sensor[1],
             f_sz: f_sensor[2],
         };
-        vma_predict(&mut f, &imu, &att);
+        align_predict(&mut f, &imu, &att);
 
         if k % 20 == 0 {
-            vma_fuse_velocity(&mut f, v_true, [0.05, 0.05, 0.2]);
+            align_fuse_velocity(&mut f, v_true, [0.05, 0.05, 0.2]);
             let r = f.last_residual_n;
             let mag = (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt();
             prev_res_mag = prev_res_mag.min(mag);
@@ -147,7 +147,7 @@ fn nonlinear_misalignment_filter_reduces_residual() {
         "best residual magnitude too high: {prev_res_mag}"
     );
 
-    let q_est = vma_q_sb(&f);
+    let q_est = align_q_sb(&f);
     let r_bs_est = transpose(quat_to_rotmat(q_est));
     let ex = r_bs_est[0][0] - r_bs_true[0][0];
     let ey = r_bs_est[1][1] - r_bs_true[1][1];

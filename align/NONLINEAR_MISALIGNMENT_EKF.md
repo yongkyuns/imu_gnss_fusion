@@ -1,7 +1,7 @@
-# Nonlinear Misalignment EKF (VMA-Inspired)
+# Nonlinear Align EKF (VMA-Inspired)
 
-This note defines a stripped-down EKF for IMU installation-angle (misalignment) estimation.
-It keeps the idea of Velocity Matching Alignment (VMA): use GNSS velocity (and optional NHC) to observe misalignment.
+This note defines a stripped-down EKF for IMU installation-angle (align) estimation.
+It keeps the idea of Velocity Matching Alignment (VMA): use GNSS velocity (and optional NHC) to observe align.
 Unlike the linear small-angle VMA in Shin 4.2.3, this uses a quaternion state so it is not tied to a fixed small-angle global model.
 
 ## 1. Goal
@@ -52,12 +52,12 @@ where `delta_theta` is a 3D small rotation in tangent space (only local lineariz
 
 Notes:
 
-- This filter estimates mounting/misalignment; it does not replace full navigation mechanization.
+- This filter estimates mounting/align; it does not replace full navigation mechanization.
 - If `q_nb` is unavailable, a coupled formulation with navigation states is required (larger filter).
 
 ## 4. Process Model
 
-Use random-walk model for misalignment and biases:
+Use random-walk model for align and biases:
 
 ```text
 q_sb,k+1 = q_sb,k * Exp( 0.5 * w_theta * dt )
@@ -72,7 +72,7 @@ where:
 
 Typical assumption:
 
-- misalignment is nearly constant -> very small `Q_theta`
+- align is nearly constant -> very small `Q_theta`
 - biases are slow random walks -> small `Q_bg`, `Q_ba`
 
 ## 5. Measurement Model (Velocity Matching)
@@ -166,17 +166,17 @@ Reset error state to zero and continue.
 Shin 4.2.3 uses a globally linear small-angle model for attitude error states.
 Here:
 
-- global attitude/misalignment is represented by quaternion (`q_sb`)
+- global attitude/align is represented by quaternion (`q_sb`)
 - only local correction `delta_theta` is linearized each step
 - relinearization happens every update
 
-So large initial misalignment can be handled better, provided excitation and initialization are reasonable.
+So large initial align can be handled better, provided excitation and initialization are reasonable.
 
 ## 8. Observability and Practical Constraints
 
 - Roll/pitch are usually observable from gravity + vehicle motion.
-- Yaw misalignment is weak without horizontal excitation (turns, accelerations, non-collinear maneuvers).
-- Bias and misalignment are coupled; tune process noise to avoid bias absorbing mounting error.
+- Yaw align is weak without horizontal excitation (turns, accelerations, non-collinear maneuvers).
+- Bias and align are coupled; tune process noise to avoid bias absorbing mounting error.
 - Use gated updates:
   - speed threshold for yaw-sensitive updates
   - reject near-zero-dynamics windows for heading observability
@@ -207,7 +207,7 @@ A convention mismatch here will dominate all tuning.
 4. Visualization:
    - compare estimated mounting angles vs ESF-ALG (reference only, not fused)
 5. Validation:
-   - synthetic truth tests (known fixed misalignment)
+   - synthetic truth tests (known fixed align)
    - replay logs with different mounts
    - convergence time and steady-state error metrics
 

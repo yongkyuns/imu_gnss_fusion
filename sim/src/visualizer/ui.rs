@@ -176,7 +176,7 @@ impl eframe::App for App {
                 ui.label("Page:");
                 ui.selectable_value(&mut self.page, Page::Signals, "Signals");
                 ui.selectable_value(&mut self.page, Page::EkfCompare, "EKF Compare");
-                ui.selectable_value(&mut self.page, Page::VmaCompare, "Misalign Compare");
+                ui.selectable_value(&mut self.page, Page::AlignCompare, "Misalign Compare");
                 ui.selectable_value(&mut self.page, Page::MapDark, "Map (Dark)");
             });
         });
@@ -339,23 +339,23 @@ impl eframe::App for App {
                     );
                 });
             }
-            Page::VmaCompare => {
+            Page::AlignCompare => {
                 let half_width = (ctx.content_rect().width() * 0.5).max(260.0);
-                egui::SidePanel::left("vma_compare_left")
+                egui::SidePanel::left("align_compare_left")
                     .resizable(false)
                     .exact_width(half_width)
                     .show(ctx, |ui| {
                         draw_plot(
                             ui,
-                            "Euler Angles: Misalignment KF vs ESF-ALG",
-                            &self.data.vma_cmp_att,
+                            "Euler Angles: Align KF vs ESF-ALG",
+                            &self.data.align_cmp_att,
                             true,
                             self.max_points_per_trace,
                         );
                         draw_plot(
                             ui,
                             "Gyro Residuals (meas - predicted)",
-                            &self.data.vma_res_vel,
+                            &self.data.align_res_vel,
                             true,
                             self.max_points_per_trace,
                         );
@@ -364,15 +364,15 @@ impl eframe::App for App {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     draw_plot(
                         ui,
-                        "Misalignment Quaternion (q_sb)",
-                        &self.data.vma_state_q,
+                        "Align Quaternion (q_sb)",
+                        &self.data.align_state_q,
                         true,
                         self.max_points_per_trace,
                     );
                     draw_plot(
                         ui,
-                        "Misalignment Covariance Diagonal",
-                        &self.data.vma_cov,
+                        "Align Covariance Diagonal",
+                        &self.data.align_cov,
                         true,
                         self.max_points_per_trace,
                     );

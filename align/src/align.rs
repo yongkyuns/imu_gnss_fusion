@@ -2,7 +2,7 @@
 
 pub const N_STATES: usize = 3;
 pub const GRAVITY_MPS2: f32 = 9.80665;
-const YAW_PROCESS_NOISE_SCALE: f32 = 15.0;
+const YAW_PROCESS_NOISE_SCALE: f32 = 5.0;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -38,7 +38,7 @@ pub struct MisalignAttitudeSample {
 
 #[repr(C)]
 #[derive(Debug, Clone)]
-pub struct Vma {
+pub struct Align {
     // Body->Sensor quaternion.
     pub q_sb0: f32,
     pub q_sb1: f32,
@@ -62,7 +62,7 @@ pub struct Vma {
     init_acc_count: u32,
 }
 
-impl Default for Vma {
+impl Default for Align {
     fn default() -> Self {
         Self {
             q_sb0: 1.0,
@@ -85,155 +85,155 @@ impl Default for Vma {
     }
 }
 
-pub fn vma_init(vma: &mut Vma, p_diag: [f32; N_STATES], noise: MisalignNoise) {
-    *vma = Vma::default();
-    vma.P[0][0] = p_diag[0];
-    vma.P[1][1] = p_diag[1];
-    vma.P[2][2] = p_diag[2];
-    vma.noise = noise;
+pub fn align_init(filter: &mut Align, p_diag: [f32; N_STATES], noise: MisalignNoise) {
+    *filter = Align::default();
+    filter.P[0][0] = p_diag[0];
+    filter.P[1][1] = p_diag[1];
+    filter.P[2][2] = p_diag[2];
+    filter.noise = noise;
 }
 
-pub fn vma_set_noise(vma: &mut Vma, noise: MisalignNoise) {
-    vma.noise = noise;
+pub fn align_set_noise(filter: &mut Align, noise: MisalignNoise) {
+    filter.noise = noise;
 }
 
-pub fn vma_set_q_sb(vma: &mut Vma, q_sb: [f32; 4]) {
+pub fn align_set_q_sb(filter: &mut Align, q_sb: [f32; 4]) {
     let q = quat_normalize(q_sb);
-    vma.q_sb0 = q[0];
-    vma.q_sb1 = q[1];
-    vma.q_sb2 = q[2];
-    vma.q_sb3 = q[3];
-    vma.init_done = true;
+    filter.q_sb0 = q[0];
+    filter.q_sb1 = q[1];
+    filter.q_sb2 = q[2];
+    filter.q_sb3 = q[3];
+    filter.init_done = true;
 }
 
-pub fn vma_q_sb(vma: &Vma) -> [f32; 4] {
-    [vma.q_sb0, vma.q_sb1, vma.q_sb2, vma.q_sb3]
+pub fn align_q_sb(filter: &Align) -> [f32; 4] {
+    [filter.q_sb0, filter.q_sb1, filter.q_sb2, filter.q_sb3]
 }
 
-pub fn vma_reset_window(vma: &mut Vma) {
-    vma.prev_gnss_time_s = None;
-    vma.prev_heading_rad = None;
-    vma.prev_speed_mps = None;
-    vma.gyro_sum = [0.0; 3];
-    vma.gyro_count = 0;
-    vma.last_residual_n = [0.0; 3];
+pub fn align_reset_window(filter: &mut Align) {
+    filter.prev_gnss_time_s = None;
+    filter.prev_heading_rad = None;
+    filter.prev_speed_mps = None;
+    filter.gyro_sum = [0.0; 3];
+    filter.gyro_count = 0;
+    filter.last_residual_n = [0.0; 3];
 }
 
 // Compatibility path. If gyro is unavailable, pass zeros.
-pub fn vma_predict(vma: &mut Vma, imu: &MisalignImuSample, _att: &MisalignAttitudeSample) {
-    vma_predict_gyro(vma, imu, 0.0, 0.0, 0.0);
+pub fn align_predict(filter: &mut Align, imu: &MisalignImuSample, _att: &MisalignAttitudeSample) {
+    align_predict_gyro(filter, imu, 0.0, 0.0, 0.0);
 }
 
-pub fn vma_predict_gyro(vma: &mut Vma, imu: &MisalignImuSample, wx: f32, wy: f32, wz: f32) {
+pub fn align_predict_gyro(filter: &mut Align, imu: &MisalignImuSample, wx: f32, wy: f32, wz: f32) {
     if !imu.dt.is_finite() || imu.dt <= 0.0 {
         return;
     }
 
-    vma.time_s += imu.dt;
+    filter.time_s += imu.dt;
 
-    let qvar = (vma.noise.q_theta_rw_var * imu.dt).max(0.0);
-    vma.P[0][0] += qvar;
-    vma.P[1][1] += qvar;
-    vma.P[2][2] += qvar * YAW_PROCESS_NOISE_SCALE;
+    let qvar = (filter.noise.q_theta_rw_var * imu.dt).max(0.0);
+    filter.P[0][0] += qvar;
+    filter.P[1][1] += qvar;
+    filter.P[2][2] += qvar * YAW_PROCESS_NOISE_SCALE;
 
-    vma.gyro_sum[0] += wx;
-    vma.gyro_sum[1] += wy;
-    vma.gyro_sum[2] += wz;
-    vma.gyro_count = vma.gyro_count.saturating_add(1);
+    filter.gyro_sum[0] += wx;
+    filter.gyro_sum[1] += wy;
+    filter.gyro_sum[2] += wz;
+    filter.gyro_count = filter.gyro_count.saturating_add(1);
 
-    if !vma.init_done {
+    if !filter.init_done {
         let gyro_norm = (wx * wx + wy * wy + wz * wz).sqrt();
         let acc_norm = (imu.f_sx * imu.f_sx + imu.f_sy * imu.f_sy + imu.f_sz * imu.f_sz).sqrt();
         let gyro_stat = gyro_norm <= (1.0_f32.to_radians());
         let acc_stat = (acc_norm - GRAVITY_MPS2).abs() <= 0.35;
         if gyro_stat && acc_stat {
-            vma.init_acc_sum[0] += imu.f_sx;
-            vma.init_acc_sum[1] += imu.f_sy;
-            vma.init_acc_sum[2] += imu.f_sz;
-            vma.init_acc_count = vma.init_acc_count.saturating_add(1);
-            if vma.init_acc_count >= 100 {
-                let inv = 1.0 / (vma.init_acc_count as f32);
-                let ax = vma.init_acc_sum[0] * inv;
-                let ay = vma.init_acc_sum[1] * inv;
-                let az = vma.init_acc_sum[2] * inv;
-                seed_roll_pitch_from_stationary_acc(vma, ax, ay, az);
-                vma.init_done = true;
+            filter.init_acc_sum[0] += imu.f_sx;
+            filter.init_acc_sum[1] += imu.f_sy;
+            filter.init_acc_sum[2] += imu.f_sz;
+            filter.init_acc_count = filter.init_acc_count.saturating_add(1);
+            if filter.init_acc_count >= 100 {
+                let inv = 1.0 / (filter.init_acc_count as f32);
+                let ax = filter.init_acc_sum[0] * inv;
+                let ay = filter.init_acc_sum[1] * inv;
+                let az = filter.init_acc_sum[2] * inv;
+                seed_roll_pitch_from_stationary_acc(filter, ax, ay, az);
+                filter.init_done = true;
             }
         } else {
-            vma.init_acc_sum = [0.0; 3];
-            vma.init_acc_count = 0;
+            filter.init_acc_sum = [0.0; 3];
+            filter.init_acc_count = 0;
         }
     }
 }
 
 // GNSS velocity update is used to infer body yaw-rate and constrain q_sb with gyro measurements.
-pub fn vma_fuse_velocity(vma: &mut Vma, vel_ned: [f32; 3], r_gyro_diag: [f32; 3]) {
+pub fn align_fuse_velocity(filter: &mut Align, vel_ned: [f32; 3], r_gyro_diag: [f32; 3]) {
     let speed_h = (vel_ned[0] * vel_ned[0] + vel_ned[1] * vel_ned[1]).sqrt();
     let heading = vel_ned[1].atan2(vel_ned[0]);
 
-    let Some(prev_t) = vma.prev_gnss_time_s else {
-        vma.prev_gnss_time_s = Some(vma.time_s);
-        vma.prev_heading_rad = Some(heading);
-        vma.prev_speed_mps = Some(speed_h);
-        vma.gyro_sum = [0.0; 3];
-        vma.gyro_count = 0;
+    let Some(prev_t) = filter.prev_gnss_time_s else {
+        filter.prev_gnss_time_s = Some(filter.time_s);
+        filter.prev_heading_rad = Some(heading);
+        filter.prev_speed_mps = Some(speed_h);
+        filter.gyro_sum = [0.0; 3];
+        filter.gyro_count = 0;
         return;
     };
-    let Some(prev_heading) = vma.prev_heading_rad else {
-        vma.prev_gnss_time_s = Some(vma.time_s);
-        vma.prev_heading_rad = Some(heading);
-        vma.prev_speed_mps = Some(speed_h);
+    let Some(prev_heading) = filter.prev_heading_rad else {
+        filter.prev_gnss_time_s = Some(filter.time_s);
+        filter.prev_heading_rad = Some(heading);
+        filter.prev_speed_mps = Some(speed_h);
         return;
     };
-    let prev_speed = vma.prev_speed_mps.unwrap_or(speed_h);
-    let dt = (vma.time_s - prev_t).max(0.0);
+    let prev_speed = filter.prev_speed_mps.unwrap_or(speed_h);
+    let dt = (filter.time_s - prev_t).max(0.0);
 
-    vma.prev_gnss_time_s = Some(vma.time_s);
-    vma.prev_heading_rad = Some(heading);
-    vma.prev_speed_mps = Some(speed_h);
+    filter.prev_gnss_time_s = Some(filter.time_s);
+    filter.prev_heading_rad = Some(heading);
+    filter.prev_speed_mps = Some(speed_h);
 
-    if !vma.init_done || dt < 1.0e-3 || speed_h < 3.0 || prev_speed < 3.0 || vma.gyro_count == 0 {
-        vma.gyro_sum = [0.0; 3];
-        vma.gyro_count = 0;
+    if !filter.init_done || dt < 1.0e-3 || speed_h < 3.0 || prev_speed < 3.0 || filter.gyro_count == 0 {
+        filter.gyro_sum = [0.0; 3];
+        filter.gyro_count = 0;
         return;
     }
 
     let dpsi = wrap_pi(heading - prev_heading);
     let yaw_rate_b = dpsi / dt;
     if !yaw_rate_b.is_finite() || yaw_rate_b.abs() < 1.0e-4 {
-        vma.gyro_sum = [0.0; 3];
-        vma.gyro_count = 0;
+        filter.gyro_sum = [0.0; 3];
+        filter.gyro_count = 0;
         return;
     }
 
-    let inv_n = 1.0 / (vma.gyro_count as f32);
+    let inv_n = 1.0 / (filter.gyro_count as f32);
     let gyro_meas = [
-        vma.gyro_sum[0] * inv_n,
-        vma.gyro_sum[1] * inv_n,
-        vma.gyro_sum[2] * inv_n,
+        filter.gyro_sum[0] * inv_n,
+        filter.gyro_sum[1] * inv_n,
+        filter.gyro_sum[2] * inv_n,
     ];
-    vma.gyro_sum = [0.0; 3];
-    vma.gyro_count = 0;
+    filter.gyro_sum = [0.0; 3];
+    filter.gyro_count = 0;
 
-    let q_sb0 = vma.q_sb0;
-    let q_sb1 = vma.q_sb1;
-    let q_sb2 = vma.q_sb2;
-    let q_sb3 = vma.q_sb3;
+    let q_sb0 = filter.q_sb0;
+    let q_sb1 = filter.q_sb1;
+    let q_sb2 = filter.q_sb2;
+    let q_sb3 = filter.q_sb3;
 
     let mut gyro_pred = [0.0_f32; 3];
-    include!("vma_generated/gyro_rate_pred_generated.rs");
+    include!("align_generated/gyro_rate_pred_generated.rs");
 
     let mut H_gyro = [[0.0_f32; N_STATES]; 3];
-    include!("vma_generated/gyro_rate_obs_jacobian_generated.rs");
+    include!("align_generated/gyro_rate_obs_jacobian_generated.rs");
 
     let residual = [
         gyro_meas[0] - gyro_pred[0],
         gyro_meas[1] - gyro_pred[1],
         gyro_meas[2] - gyro_pred[2],
     ];
-    vma.last_residual_n = residual;
+    filter.last_residual_n = residual;
 
-    let p = vma.P;
+    let p = filter.P;
     let hp = mat3_mul(H_gyro, p);
     let mut s = mat3_mul(hp, mat3_transpose(H_gyro));
     s[0][0] += r_gyro_diag[0].max(1.0e-8);
@@ -246,13 +246,12 @@ pub fn vma_fuse_velocity(vma: &mut Vma, vel_ned: [f32; 3], r_gyro_diag: [f32; 3]
     let ph_t = mat3_mul(p, mat3_transpose(H_gyro));
     let k = mat3_mul(ph_t, s_inv);
     let delta = mat3_vec(k, residual);
-
     let dq = quat_from_small_angle(delta);
-    let q_new = quat_normalize(quat_mul(dq, [vma.q_sb0, vma.q_sb1, vma.q_sb2, vma.q_sb3]));
-    vma.q_sb0 = q_new[0];
-    vma.q_sb1 = q_new[1];
-    vma.q_sb2 = q_new[2];
-    vma.q_sb3 = q_new[3];
+    let q_new = quat_normalize(quat_mul(dq, [filter.q_sb0, filter.q_sb1, filter.q_sb2, filter.q_sb3]));
+    filter.q_sb0 = q_new[0];
+    filter.q_sb1 = q_new[1];
+    filter.q_sb2 = q_new[2];
+    filter.q_sb3 = q_new[3];
 
     let kh = mat3_mul(k, H_gyro);
     let i_kh = mat3_sub(mat3_identity(), kh);
@@ -261,10 +260,10 @@ pub fn vma_fuse_velocity(vma: &mut Vma, vel_ned: [f32; 3], r_gyro_diag: [f32; 3]
     p_new[0][0] = p_new[0][0].max(1.0e-10);
     p_new[1][1] = p_new[1][1].max(1.0e-10);
     p_new[2][2] = p_new[2][2].max(1.0e-10);
-    vma.P = p_new;
+    filter.P = p_new;
 }
 
-fn seed_roll_pitch_from_stationary_acc(vma: &mut Vma, ax: f32, ay: f32, az: f32) {
+fn seed_roll_pitch_from_stationary_acc(filter: &mut Align, ax: f32, ay: f32, az: f32) {
     let n = (ax * ax + ay * ay + az * az).sqrt();
     if n < 1.0e-6 {
         return;
@@ -274,13 +273,15 @@ fn seed_roll_pitch_from_stationary_acc(vma: &mut Vma, ax: f32, ay: f32, az: f32)
     let gz = az / n;
 
     // body->sensor with yaw fixed to 0, inferred from gravity direction only.
-    let roll = (-gy).clamp(-1.0, 1.0).asin();
-    let pitch = gx.atan2(gz);
-    let q = quat_from_rpy_zyx(roll, pitch, 0.0);
-    vma.q_sb0 = q[0];
-    vma.q_sb1 = q[1];
-    vma.q_sb2 = q[2];
-    vma.q_sb3 = q[3];
+    // For g_s = R_sb * [0,0,1], the exact ZYX relations are:
+    //   gx = sin(pitch), gy = -sin(roll)*cos(pitch), gz = cos(roll)*cos(pitch).
+    let roll = (-gy).atan2(gz);
+    let pitch = gx.clamp(-1.0, 1.0).asin();
+    let q = quat_from_alg_rpy(roll, pitch, 0.0);
+    filter.q_sb0 = q[0];
+    filter.q_sb1 = q[1];
+    filter.q_sb2 = q[2];
+    filter.q_sb3 = q[3];
 }
 
 fn wrap_pi(mut a: f32) -> f32 {
@@ -294,16 +295,18 @@ fn wrap_pi(mut a: f32) -> f32 {
     a
 }
 
-fn quat_from_rpy_zyx(roll: f32, pitch: f32, yaw: f32) -> [f32; 4] {
-    let (sr, cr) = (0.5 * roll).sin_cos();
-    let (sp, cp) = (0.5 * pitch).sin_cos();
-    let (sy, cy) = (0.5 * yaw).sin_cos();
-    [
-        cr * cp * cy + sr * sp * sy,
-        sr * cp * cy - cr * sp * sy,
-        cr * sp * cy + sr * cp * sy,
-        cr * cp * sy - sr * sp * cy,
-    ]
+fn quat_from_axis_angle(axis: [f32; 3], angle: f32) -> [f32; 4] {
+    let h = 0.5 * angle;
+    let s = h.sin();
+    quat_normalize([h.cos(), axis[0] * s, axis[1] * s, axis[2] * s])
+}
+
+// ESF-ALG convention in this codebase: Rx * Ry * Rz composition.
+fn quat_from_alg_rpy(roll: f32, pitch: f32, yaw: f32) -> [f32; 4] {
+    let qx = quat_from_axis_angle([1.0, 0.0, 0.0], roll);
+    let qy = quat_from_axis_angle([0.0, 1.0, 0.0], pitch);
+    let qz = quat_from_axis_angle([0.0, 0.0, 1.0], yaw);
+    quat_normalize(quat_mul(quat_mul(qx, qy), qz))
 }
 
 fn quat_mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {

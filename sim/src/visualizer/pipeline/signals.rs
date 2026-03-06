@@ -11,13 +11,13 @@ use super::super::model::{PlotData, Trace};
 use super::ekf_compare::EkfCompareData;
 use super::tag_time::fit_tag_ms_map;
 use super::timebase::MasterTimeline;
-use super::vma_compare::VmaCompareData;
+use super::align_compare::AlignCompareData;
 
 pub fn build_signal_traces(
     frames: &[UbxFrame],
     tl: &MasterTimeline,
     ekf: EkfCompareData,
-    vma: VmaCompareData,
+    align_data: AlignCompareData,
 ) -> PlotData {
     let mut speed_g = Vec::<[f64; 2]>::new();
     let mut speed_n = Vec::<[f64; 2]>::new();
@@ -283,10 +283,10 @@ pub fn build_signal_traces(
     out.ekf_cov_nonbias = ekf.cov_nonbias;
     out.ekf_map = ekf.map;
     out.ekf_map_heading = ekf.map_heading;
-    out.vma_cmp_att = vma.cmp_att;
-    out.vma_res_vel = vma.res_vel;
-    out.vma_state_q = vma.state_q;
-    out.vma_cov = vma.cov;
+    out.align_cmp_att = align_data.cmp_att;
+    out.align_res_vel = align_data.res_vel;
+    out.align_state_q = align_data.state_q;
+    out.align_cov = align_data.cov;
 
     let max_rel_s = ((tl.master_max - tl.t0_master_ms) * 1e-3).max(0.0);
     let sanitize_trace = |trace: &mut Trace| {
@@ -328,10 +328,10 @@ pub fn build_signal_traces(
         &mut out.ekf_bias_accel,
         &mut out.ekf_cov_bias,
         &mut out.ekf_cov_nonbias,
-        &mut out.vma_cmp_att,
-        &mut out.vma_res_vel,
-        &mut out.vma_state_q,
-        &mut out.vma_cov,
+        &mut out.align_cmp_att,
+        &mut out.align_res_vel,
+        &mut out.align_state_q,
+        &mut out.align_cov,
     ] {
         for tr in traces.iter_mut() {
             tr.points

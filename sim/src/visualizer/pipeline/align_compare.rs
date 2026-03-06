@@ -1,5 +1,5 @@
-use vma_rs::vma::{
-    MisalignImuSample, MisalignNoise, Vma, vma_fuse_velocity, vma_init, vma_predict_gyro, vma_q_sb,
+use align_rs::align::{
+    MisalignImuSample, MisalignNoise, Align, align_fuse_velocity, align_init, align_predict_gyro, align_q_sb,
 };
 
 use crate::ubxlog::{
@@ -12,16 +12,16 @@ use super::super::model::{AlgEvent, ImuPacket, Trace};
 use super::tag_time::fit_tag_ms_map;
 use super::timebase::MasterTimeline;
 
-pub struct VmaCompareData {
+pub struct AlignCompareData {
     pub cmp_att: Vec<Trace>,
     pub res_vel: Vec<Trace>,
     pub state_q: Vec<Trace>,
     pub cov: Vec<Trace>,
 }
 
-pub fn build_vma_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> VmaCompareData {
+pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> AlignCompareData {
     if tl.masters.is_empty() {
-        return VmaCompareData {
+        return AlignCompareData {
             cmp_att: Vec::new(),
             res_vel: Vec::new(),
             state_q: Vec::new(),
@@ -178,10 +178,10 @@ pub fn build_vma_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Vma
         ref_yaw.push([t, ev.yaw_deg]);
     }
 
-    let mut vma = Vma::default();
-    vma_init(
-        &mut vma,
-        [1.0, 1.0, 1.0],
+    let mut align = Align::default();
+    align_init(
+        &mut align,
+        [0.1, 0.1, 0.1],
         MisalignNoise {
             q_theta_rw_var: 5.0e-5,
         },
@@ -208,8 +208,8 @@ pub fn build_vma_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Vma
             f_sy: pkt.ay_mps2 as f32,
             f_sz: pkt.az_mps2 as f32,
         };
-        vma_predict_gyro(
-            &mut vma,
+        align_predict_gyro(
+            &mut align,
             &imu,
             (pkt.gx_dps.to_radians()) as f32,
             (pkt.gy_dps.to_radians()) as f32,
@@ -220,8 +220,8 @@ pub fn build_vma_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Vma
             let (tn, nav) = nav_events[nav_idx];
             nav_idx += 1;
             let r = ((nav.s_acc_mps * nav.s_acc_mps).max(0.02) * 20.0) as f32;
-            vma_fuse_velocity(
-                &mut vma,
+            align_fuse_velocity(
+                &mut align,
                 [
                     nav.vel_n_mps as f32,
                     nav.vel_e_mps as f32,
@@ -230,20 +230,19 @@ pub fn build_vma_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Vma
                 [r, r, r],
             );
             let t = rel_s(tn);
-            res_vn.push([t, vma.last_residual_n[0].to_degrees() as f64]);
-            res_ve.push([t, vma.last_residual_n[1].to_degrees() as f64]);
-            res_vd.push([t, vma.last_residual_n[2].to_degrees() as f64]);
+            res_vn.push([t, align.last_residual_n[0].to_degrees() as f64]);
+            res_ve.push([t, align.last_residual_n[1].to_degrees() as f64]);
+            res_vd.push([t, align.last_residual_n[2].to_degrees() as f64]);
         }
 
         let t = rel_s(pkt.t_ms);
-        let q = vma_q_sb(&vma);
-        // ESF-ALG angles are reported in z-up convention; VMA runs in navigation z-down.
-        // Convert VMA body->sensor quaternion to ESF-ALG-comparable frame via Rx(180 deg).
-        let q_cmp = quat_mul(
-            [0.0, 1.0, 0.0, 0.0],
-            [q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64],
-        );
-        // Convert VMA q_sb to the same Euler convention used by ESF-ALG.
+        let q = align_q_sb(&align);
+        // ESF-ALG angles are reported in z-up convention; Align runs in z-down convention.
+        // Convert in rotation space before Euler extraction via Rx(180 deg) post-composition.
+        let qx180 = [0.0, 1.0, 0.0, 0.0];
+        let q_sb = [q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64];
+        let q_cmp = quat_mul(q_sb, qx180);
+        // Convert Align q_sb to the same Euler convention used by ESF-ALG.
         let (r, p, y) = quat_rpy_alg_deg(q_cmp[0], q_cmp[1], q_cmp[2], q_cmp[3]);
         out_roll.push([t, r]);
         out_pitch.push([t, p]);
@@ -252,23 +251,23 @@ pub fn build_vma_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Vma
         q1_tr.push([t, q[1] as f64]);
         q2_tr.push([t, q[2] as f64]);
         q3_tr.push([t, q[3] as f64]);
-        p00.push([t, vma.P[0][0] as f64]);
-        p11.push([t, vma.P[1][1] as f64]);
-        p22.push([t, vma.P[2][2] as f64]);
+        p00.push([t, align.P[0][0] as f64]);
+        p11.push([t, align.P[1][1] as f64]);
+        p22.push([t, align.P[2][2] as f64]);
     }
 
-    VmaCompareData {
+    AlignCompareData {
         cmp_att: vec![
             Trace {
-                name: "VMA roll [deg]".to_string(),
+                name: "Align roll [deg]".to_string(),
                 points: out_roll,
             },
             Trace {
-                name: "VMA pitch [deg]".to_string(),
+                name: "Align pitch [deg]".to_string(),
                 points: out_pitch,
             },
             Trace {
-                name: "VMA yaw [deg]".to_string(),
+                name: "Align yaw [deg]".to_string(),
                 points: out_yaw,
             },
             Trace {

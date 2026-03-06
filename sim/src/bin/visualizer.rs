@@ -65,10 +65,10 @@ fn main() -> Result<()> {
         group_stats("ekf_cov_bias", &data.ekf_cov_bias),
         group_stats("ekf_cov_nonbias", &data.ekf_cov_nonbias),
         group_stats("ekf_map", &data.ekf_map),
-        group_stats("vma_cmp_att", &data.vma_cmp_att),
-        group_stats("vma_res_vel", &data.vma_res_vel),
-        group_stats("vma_state_q", &data.vma_state_q),
-        group_stats("vma_cov", &data.vma_cov),
+        group_stats("align_cmp_att", &data.align_cmp_att),
+        group_stats("align_res_vel", &data.align_res_vel),
+        group_stats("align_state_q", &data.align_state_q),
+        group_stats("align_cov", &data.align_cov),
     ] {
         eprintln!("[profile] group={} traces={} points={}", name, nt, np);
     }
@@ -84,9 +84,9 @@ fn main() -> Result<()> {
         ("imu_raw_accel", &data.imu_raw_accel),
         ("imu_cal_gyro", &data.imu_cal_gyro),
         ("imu_cal_accel", &data.imu_cal_accel),
-        ("vma_cmp_att", &data.vma_cmp_att),
-        ("vma_res_vel", &data.vma_res_vel),
-        ("vma_cov", &data.vma_cov),
+        ("align_cmp_att", &data.align_cmp_att),
+        ("align_res_vel", &data.align_res_vel),
+        ("align_cov", &data.align_cov),
     ] {
         if let Some((name, gap)) = max_gap_trace(traces) {
             eprintln!(

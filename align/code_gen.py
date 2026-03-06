@@ -6,7 +6,7 @@ from sympy.printing.precedence import precedence
 from sympy.printing.rust import RustCodePrinter
 
 
-class VmaC99CodePrinter(C99CodePrinter):
+class MisalignmentC99CodePrinter(C99CodePrinter):
     def _print_Pow(self, expr):
         exp = expr.exp
         if isinstance(exp, Integer) and 2 <= int(exp) <= 4:
@@ -15,7 +15,7 @@ class VmaC99CodePrinter(C99CodePrinter):
         return super()._print_Pow(expr)
 
 
-class VmaRustCodePrinter(RustCodePrinter):
+class MisalignmentRustCodePrinter(RustCodePrinter):
     def _print_Pow(self, expr):
         exp = expr.exp
         if isinstance(exp, Integer) and 2 <= int(exp) <= 4:
@@ -30,9 +30,9 @@ class CodeGenerator:
         self.file = open(self.file_name, "w")
         self.language = language
         if language == "c":
-            self.printer = VmaC99CodePrinter({"type_aliases": {real: float32}})
+            self.printer = MisalignmentC99CodePrinter({"type_aliases": {real: float32}})
         elif language == "rust":
-            self.printer = VmaRustCodePrinter()
+            self.printer = MisalignmentRustCodePrinter()
         else:
             raise ValueError(f"unsupported language: {language}")
 
@@ -45,7 +45,7 @@ class CodeGenerator:
     def get_code(self, expression):
         code = self.printer.doprint(expression)
         if self.language == "rust":
-            # Keep generated snippets in f32 domain for embedding in vma.rs.
+            # Keep generated snippets in f32 domain for embedding in align.rs.
             code = code.replace("_f64", "_f32")
             code = re.sub(r"(?<![\w.])(\d+)(?![\w.])", r"\1.0", code)
         return code
