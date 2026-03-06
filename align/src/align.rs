@@ -1,497 +1,381 @@
 #![allow(non_snake_case)]
 
-pub const N_STATES: usize = 3;
-pub const GRAVITY_MPS2: f32 = 9.80665;
-const YAW_PROCESS_NOISE_SCALE: f32 = 5.0;
-const FORWARD_ACCEL_MIN_MPS2: f32 = 0.15;
-const FORWARD_DYNAMIC_ACCEL_MIN_MPS2: f32 = 0.2;
-const FORWARD_LATERAL_DOMINANCE_RATIO: f32 = 1.5;
-const FORWARD_ALIGN_POS_DOT: f32 = 0.7;
-const FORWARD_ALIGN_NEG_DOT: f32 = -0.7;
-const FORWARD_BRANCH_SCORE_MAX: i8 = 6;
-const FORWARD_BRANCH_FLIP_SCORE: i8 = -3;
-const FORWARD_BRANCH_LOCK_SCORE: i8 = 3;
+use nalgebra::{SMatrix, SVector};
 
-#[repr(C)]
+pub const ALIGN_N_STATES: usize = 3;
+pub const GRAVITY_MPS2: f32 = 9.80665;
+
 #[derive(Debug, Clone, Copy)]
-pub struct MisalignNoise {
-    pub q_theta_rw_var: f32, // [rad^2/s]
+pub struct AlignConfig {
+    pub q_mount_std_rad: [f32; ALIGN_N_STATES],
+    pub r_gravity_std_mps2: f32,
+    pub r_turn_gyro_std_radps: f32,
+    pub r_course_rate_std_radps: f32,
+    pub r_lat_std_mps2: f32,
+    pub r_long_std_mps2: f32,
+    pub gravity_lpf_alpha: f32,
+    pub min_speed_mps: f32,
+    pub min_turn_rate_radps: f32,
+    pub min_lat_acc_mps2: f32,
+    pub min_long_acc_mps2: f32,
+    pub max_stationary_gyro_radps: f32,
+    pub max_stationary_accel_norm_err_mps2: f32,
+    pub use_gravity: bool,
+    pub use_turn_gyro: bool,
+    pub use_course_rate: bool,
+    pub use_lateral_accel: bool,
+    pub use_longitudinal_accel: bool,
 }
 
-impl Default for MisalignNoise {
+impl Default for AlignConfig {
     fn default() -> Self {
         Self {
-            q_theta_rw_var: 1.0e-6,
+            q_mount_std_rad: [
+                0.01_f32.to_radians(),
+                0.01_f32.to_radians(),
+                0.02_f32.to_radians(),
+            ],
+            r_gravity_std_mps2: 0.08,
+            r_turn_gyro_std_radps: 0.2_f32.to_radians(),
+            r_course_rate_std_radps: 0.35_f32.to_radians(),
+            r_lat_std_mps2: 0.10,
+            r_long_std_mps2: 0.10,
+            gravity_lpf_alpha: 0.08,
+            min_speed_mps: 4.0,
+            min_turn_rate_radps: 3.0_f32.to_radians(),
+            min_lat_acc_mps2: 0.35,
+            min_long_acc_mps2: 0.25,
+            max_stationary_gyro_radps: 0.8_f32.to_radians(),
+            max_stationary_accel_norm_err_mps2: 0.2,
+            use_gravity: true,
+            use_turn_gyro: true,
+            use_course_rate: true,
+            use_lateral_accel: true,
+            use_longitudinal_accel: true,
         }
     }
 }
 
-#[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct MisalignImuSample {
+pub struct AlignWindowSummary {
     pub dt: f32,
-    pub f_sx: f32,
-    pub f_sy: f32,
-    pub f_sz: f32,
+    pub mean_gyro_b: [f32; 3],
+    pub mean_accel_b: [f32; 3],
+    pub gnss_vel_prev_n: [f32; 3],
+    pub gnss_vel_curr_n: [f32; 3],
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct MisalignAttitudeSample {
-    pub q_nb0: f32,
-    pub q_nb1: f32,
-    pub q_nb2: f32,
-    pub q_nb3: f32,
-}
-
-#[repr(C)]
 #[derive(Debug, Clone)]
 pub struct Align {
-    // Body->Sensor quaternion.
-    pub q_sb0: f32,
-    pub q_sb1: f32,
-    pub q_sb2: f32,
-    pub q_sb3: f32,
-    // 3x3 covariance for small-angle perturbation.
-    pub P: [[f32; N_STATES]; N_STATES],
-    pub noise: MisalignNoise,
-    pub last_residual_n: [f32; 3],
-
-    time_s: f32,
-    prev_gnss_time_s: Option<f32>,
-    prev_heading_rad: Option<f32>,
-    prev_speed_mps: Option<f32>,
-
-    gyro_sum: [f32; 3],
-    gyro_count: u32,
-    accel_sum: [f32; 3],
-    accel_count: u32,
-
-    init_done: bool,
-    init_acc_sum: [f32; 3],
-    init_acc_count: u32,
-    gravity_ref_s: [f32; 3],
-    gravity_ref_valid: bool,
-    forward_branch_score: i8,
-    forward_branch_locked: bool,
-    solution_locked: bool,
+    pub q_vb: [f32; 4],
+    pub P: [[f32; ALIGN_N_STATES]; ALIGN_N_STATES],
+    pub gravity_lp_b: [f32; 3],
+    pub cfg: AlignConfig,
 }
 
 impl Default for Align {
     fn default() -> Self {
+        Self::new(AlignConfig::default())
+    }
+}
+
+impl Align {
+    pub fn new(cfg: AlignConfig) -> Self {
         Self {
-            q_sb0: 1.0,
-            q_sb1: 0.0,
-            q_sb2: 0.0,
-            q_sb3: 0.0,
-            P: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
-            noise: MisalignNoise::default(),
-            last_residual_n: [0.0; 3],
-            time_s: 0.0,
-            prev_gnss_time_s: None,
-            prev_heading_rad: None,
-            prev_speed_mps: None,
-            gyro_sum: [0.0; 3],
-            gyro_count: 0,
-            accel_sum: [0.0; 3],
-            accel_count: 0,
-            init_done: false,
-            init_acc_sum: [0.0; 3],
-            init_acc_count: 0,
-            gravity_ref_s: [0.0; 3],
-            gravity_ref_valid: false,
-            forward_branch_score: 0,
-            forward_branch_locked: false,
-            solution_locked: false,
+            q_vb: [1.0, 0.0, 0.0, 0.0],
+            P: diag3([
+                20.0_f32.to_radians().powi(2),
+                20.0_f32.to_radians().powi(2),
+                60.0_f32.to_radians().powi(2),
+            ]),
+            gravity_lp_b: [0.0, 0.0, -GRAVITY_MPS2],
+            cfg,
         }
     }
-}
 
-pub fn align_init(filter: &mut Align, p_diag: [f32; N_STATES], noise: MisalignNoise) {
-    *filter = Align::default();
-    filter.P[0][0] = p_diag[0];
-    filter.P[1][1] = p_diag[1];
-    filter.P[2][2] = p_diag[2];
-    filter.noise = noise;
-}
+    pub fn initialize_from_stationary(
+        &mut self,
+        accel_samples_b: &[[f32; 3]],
+        yaw_seed_rad: f32,
+    ) -> Result<(), &'static str> {
+        if accel_samples_b.is_empty() {
+            return Err("stationary initialization requires samples");
+        }
+        let mut f_mean_b = [0.0_f32; 3];
+        for sample in accel_samples_b {
+            f_mean_b = vec3_add(f_mean_b, *sample);
+        }
+        let inv_n = 1.0 / (accel_samples_b.len() as f32);
+        f_mean_b = vec3_scale(f_mean_b, inv_n);
+        let n = vec3_norm(f_mean_b);
+        if n < 1.0e-6 {
+            return Err("stationary initialization requires nonzero accel mean");
+        }
 
-pub fn align_set_noise(filter: &mut Align, noise: MisalignNoise) {
-    filter.noise = noise;
-}
-
-pub fn align_set_q_sb(filter: &mut Align, q_sb: [f32; 4]) {
-    let q = quat_normalize(q_sb);
-    filter.q_sb0 = q[0];
-    filter.q_sb1 = q[1];
-    filter.q_sb2 = q[2];
-    filter.q_sb3 = q[3];
-    filter.init_done = true;
-}
-
-pub fn align_q_sb(filter: &Align) -> [f32; 4] {
-    [filter.q_sb0, filter.q_sb1, filter.q_sb2, filter.q_sb3]
-}
-
-pub fn align_reset_window(filter: &mut Align) {
-    filter.prev_gnss_time_s = None;
-    filter.prev_heading_rad = None;
-    filter.prev_speed_mps = None;
-    filter.gyro_sum = [0.0; 3];
-    filter.gyro_count = 0;
-    filter.accel_sum = [0.0; 3];
-    filter.accel_count = 0;
-    filter.last_residual_n = [0.0; 3];
-}
-
-// Compatibility path. If gyro is unavailable, pass zeros.
-pub fn align_predict(filter: &mut Align, imu: &MisalignImuSample, _att: &MisalignAttitudeSample) {
-    align_predict_gyro(filter, imu, 0.0, 0.0, 0.0);
-}
-
-pub fn align_predict_gyro(filter: &mut Align, imu: &MisalignImuSample, wx: f32, wy: f32, wz: f32) {
-    if !imu.dt.is_finite() || imu.dt <= 0.0 {
-        return;
+        let z_v_in_b = vec3_scale(f_mean_b, -1.0 / n);
+        let mut x_ref = [1.0, 0.0, 0.0];
+        let mut x_v_in_b = vec3_sub(x_ref, vec3_scale(z_v_in_b, vec3_dot(z_v_in_b, x_ref)));
+        if vec3_norm(x_v_in_b) < 1.0e-6 {
+            x_ref = [0.0, 1.0, 0.0];
+            x_v_in_b = vec3_sub(x_ref, vec3_scale(z_v_in_b, vec3_dot(z_v_in_b, x_ref)));
+        }
+        x_v_in_b = vec3_normalize(x_v_in_b).ok_or("failed to initialize x axis")?;
+        let mut y_v_in_b = vec3_cross(z_v_in_b, x_v_in_b);
+        y_v_in_b = vec3_normalize(y_v_in_b).ok_or("failed to initialize y axis")?;
+        x_v_in_b = vec3_cross(y_v_in_b, z_v_in_b);
+        let C_v_b = [
+            [x_v_in_b[0], y_v_in_b[0], z_v_in_b[0]],
+            [x_v_in_b[1], y_v_in_b[1], z_v_in_b[1]],
+            [x_v_in_b[2], y_v_in_b[2], z_v_in_b[2]],
+        ];
+        let mut rpy = rot_to_euler_zyx(C_v_b);
+        rpy[2] = wrap_angle_rad(yaw_seed_rad);
+        self.q_vb = quat_from_euler_zyx(rpy[0], rpy[1], rpy[2]);
+        self.P = diag3([
+            6.0_f32.to_radians().powi(2),
+            6.0_f32.to_radians().powi(2),
+            20.0_f32.to_radians().powi(2),
+        ]);
+        self.gravity_lp_b = f_mean_b;
+        Ok(())
     }
 
-    filter.time_s += imu.dt;
-
-    if filter.solution_locked {
-        return;
+    pub fn predict(&mut self, dt: f32) {
+        let dt = dt.max(1.0e-3);
+        self.P[0][0] += self.cfg.q_mount_std_rad[0].powi(2) * dt;
+        self.P[1][1] += self.cfg.q_mount_std_rad[1].powi(2) * dt;
+        self.P[2][2] += self.cfg.q_mount_std_rad[2].powi(2) * dt;
     }
 
-    let qvar = (filter.noise.q_theta_rw_var * imu.dt).max(0.0);
-    filter.P[0][0] += qvar;
-    filter.P[1][1] += qvar;
-    filter.P[2][2] += qvar * YAW_PROCESS_NOISE_SCALE;
+    pub fn update_window(&mut self, window: &AlignWindowSummary) -> f32 {
+        self.predict(window.dt);
+        let mut score = 0.0_f32;
 
-    filter.gyro_sum[0] += wx;
-    filter.gyro_sum[1] += wy;
-    filter.gyro_sum[2] += wz;
-    filter.gyro_count = filter.gyro_count.saturating_add(1);
-    filter.accel_sum[0] += imu.f_sx;
-    filter.accel_sum[1] += imu.f_sy;
-    filter.accel_sum[2] += imu.f_sz;
-    filter.accel_count = filter.accel_count.saturating_add(1);
+        let alpha = self.cfg.gravity_lpf_alpha;
+        self.gravity_lp_b = vec3_add(
+            vec3_scale(self.gravity_lp_b, 1.0 - alpha),
+            vec3_scale(window.mean_accel_b, alpha),
+        );
 
-    if !filter.init_done {
-        let gyro_norm = (wx * wx + wy * wy + wz * wz).sqrt();
-        let acc_norm = (imu.f_sx * imu.f_sx + imu.f_sy * imu.f_sy + imu.f_sz * imu.f_sz).sqrt();
-        let gyro_stat = gyro_norm <= (1.0_f32.to_radians());
-        let acc_stat = (acc_norm - GRAVITY_MPS2).abs() <= 0.35;
-        if gyro_stat && acc_stat {
-            filter.init_acc_sum[0] += imu.f_sx;
-            filter.init_acc_sum[1] += imu.f_sy;
-            filter.init_acc_sum[2] += imu.f_sz;
-            filter.init_acc_count = filter.init_acc_count.saturating_add(1);
-            if filter.init_acc_count >= 100 {
-                let inv = 1.0 / (filter.init_acc_count as f32);
-                let ax = filter.init_acc_sum[0] * inv;
-                let ay = filter.init_acc_sum[1] * inv;
-                let az = filter.init_acc_sum[2] * inv;
-                seed_roll_pitch_from_stationary_acc(filter, ax, ay, az);
-                filter.gravity_ref_s = [ax, ay, az];
-                filter.gravity_ref_valid = true;
-                filter.init_done = true;
+        let v_prev = window.gnss_vel_prev_n;
+        let v_curr = window.gnss_vel_curr_n;
+        let speed_prev = vec2_norm([v_prev[0], v_prev[1]]);
+        let speed_curr = vec2_norm([v_curr[0], v_curr[1]]);
+        let speed_mid = 0.5 * (speed_prev + speed_curr);
+
+        let course_prev = v_prev[1].atan2(v_prev[0]);
+        let course_curr = v_curr[1].atan2(v_curr[0]);
+        let course_rate = wrap_angle_rad(course_curr - course_prev) / window.dt.max(1.0e-3);
+
+        let a_n = vec3_scale(vec3_sub(v_curr, v_prev), 1.0 / window.dt.max(1.0e-3));
+        let v_mid_h = [0.5 * (v_prev[0] + v_curr[0]), 0.5 * (v_prev[1] + v_curr[1])];
+        let t_hat = vec2_normalize(v_mid_h);
+        let lat_hat = t_hat.map(|t| [-t[1], t[0]]);
+        let a_long = t_hat.map(|t| t[0] * a_n[0] + t[1] * a_n[1]).unwrap_or(0.0);
+        let a_lat = lat_hat
+            .map(|l| l[0] * a_n[0] + l[1] * a_n[1])
+            .unwrap_or(0.0);
+
+        let gyro_norm = vec3_norm(window.mean_gyro_b);
+        let accel_norm = vec3_norm(window.mean_accel_b);
+        let stationary = gyro_norm <= self.cfg.max_stationary_gyro_radps
+            && (accel_norm - GRAVITY_MPS2).abs() <= self.cfg.max_stationary_accel_norm_err_mps2
+            && speed_mid < 0.5;
+        let turn_valid = speed_mid > self.cfg.min_speed_mps
+            && course_rate.abs() > self.cfg.min_turn_rate_radps
+            && a_lat.abs() > self.cfg.min_lat_acc_mps2;
+        let long_valid = speed_mid > self.cfg.min_speed_mps
+            && a_long.abs() > self.cfg.min_long_acc_mps2
+            && a_lat.abs() < (0.5_f32).max(0.6 * a_long.abs());
+
+        if self.cfg.use_gravity && stationary {
+            score += self.apply_update2(
+                [0.0, 0.0],
+                [3, 4],
+                self.gravity_lp_b,
+                window.mean_gyro_b,
+                [self.cfg.r_gravity_std_mps2.powi(2); 2],
+            );
+        }
+
+        if turn_valid {
+            if self.cfg.use_turn_gyro {
+                score += self.apply_update2(
+                    [0.0, 0.0],
+                    [0, 1],
+                    window.mean_accel_b,
+                    window.mean_gyro_b,
+                    [self.cfg.r_turn_gyro_std_radps.powi(2); 2],
+                );
             }
-        } else {
-            filter.init_acc_sum = [0.0; 3];
-            filter.init_acc_count = 0;
-        }
-    }
-}
-
-// GNSS velocity update is used to infer body yaw-rate and constrain q_sb with gyro measurements.
-pub fn align_fuse_velocity(filter: &mut Align, vel_ned: [f32; 3], r_gyro_diag: [f32; 3]) {
-    align_fuse_motion(filter, vel_ned, Some(r_gyro_diag), None);
-}
-
-// Combined GNSS motion update:
-// - gyro/course-rate update constrains yaw-axis consistency
-// - signed forward-accel update breaks the 180 deg yaw ambiguity
-pub fn align_fuse_velocity_forward(
-    filter: &mut Align,
-    vel_ned: [f32; 3],
-    r_gyro_diag: [f32; 3],
-    r_forward_diag: [f32; 3],
-) {
-    align_fuse_motion(filter, vel_ned, Some(r_gyro_diag), Some(r_forward_diag));
-}
-
-fn align_fuse_motion(
-    filter: &mut Align,
-    vel_ned: [f32; 3],
-    r_gyro_diag: Option<[f32; 3]>,
-    r_forward_diag: Option<[f32; 3]>,
-) {
-    let speed_h = (vel_ned[0] * vel_ned[0] + vel_ned[1] * vel_ned[1]).sqrt();
-    let heading = vel_ned[1].atan2(vel_ned[0]);
-
-    let Some(prev_t) = filter.prev_gnss_time_s else {
-        filter.prev_gnss_time_s = Some(filter.time_s);
-        filter.prev_heading_rad = Some(heading);
-        filter.prev_speed_mps = Some(speed_h);
-        clear_motion_window(filter);
-        return;
-    };
-    let Some(prev_heading) = filter.prev_heading_rad else {
-        filter.prev_gnss_time_s = Some(filter.time_s);
-        filter.prev_heading_rad = Some(heading);
-        filter.prev_speed_mps = Some(speed_h);
-        clear_motion_window(filter);
-        return;
-    };
-    let prev_speed = filter.prev_speed_mps.unwrap_or(speed_h);
-    let dt = (filter.time_s - prev_t).max(0.0);
-
-    filter.prev_gnss_time_s = Some(filter.time_s);
-    filter.prev_heading_rad = Some(heading);
-    filter.prev_speed_mps = Some(speed_h);
-
-    if filter.solution_locked {
-        clear_motion_window(filter);
-        return;
-    }
-
-    if !filter.init_done || dt < 1.0e-3 || speed_h < 3.0 || prev_speed < 3.0 {
-        clear_motion_window(filter);
-        return;
-    }
-
-    let dpsi = wrap_pi(heading - prev_heading);
-    let yaw_rate_b = dpsi / dt;
-    let gyro_meas = if filter.gyro_count > 0 {
-        let inv_n = 1.0 / (filter.gyro_count as f32);
-        Some([
-            filter.gyro_sum[0] * inv_n,
-            filter.gyro_sum[1] * inv_n,
-            filter.gyro_sum[2] * inv_n,
-        ])
-    } else {
-        None
-    };
-    let accel_meas = if filter.accel_count > 0 {
-        let inv_n = 1.0 / (filter.accel_count as f32);
-        Some([
-            filter.accel_sum[0] * inv_n,
-            filter.accel_sum[1] * inv_n,
-            filter.accel_sum[2] * inv_n,
-        ])
-    } else {
-        None
-    };
-    clear_motion_window(filter);
-
-    if let (Some(r_gyro_diag), Some(gyro_meas)) = (r_gyro_diag, gyro_meas) {
-        if yaw_rate_b.is_finite() && yaw_rate_b.abs() >= 1.0e-4 {
-            let q_sb0 = filter.q_sb0;
-            let q_sb1 = filter.q_sb1;
-            let q_sb2 = filter.q_sb2;
-            let q_sb3 = filter.q_sb3;
-
-            let mut gyro_pred = [0.0_f32; 3];
-            include!("align_generated/gyro_rate_pred_generated.rs");
-
-            let mut H_gyro = [[0.0_f32; N_STATES]; 3];
-            include!("align_generated/gyro_rate_obs_jacobian_generated.rs");
-
-            let residual = [
-                gyro_meas[0] - gyro_pred[0],
-                gyro_meas[1] - gyro_pred[1],
-                gyro_meas[2] - gyro_pred[2],
-            ];
-            filter.last_residual_n = residual;
-            apply_measurement_update(filter, residual, H_gyro, r_gyro_diag);
-        }
-    }
-
-    if let (Some(r_forward_diag), Some(accel_meas)) = (r_forward_diag, accel_meas) {
-        if let Some(forward_meas_s) =
-            build_forward_axis_measurement(filter, accel_meas, speed_h, prev_speed, yaw_rate_b, dt)
-        {
-            let mut forward_pred_s = body_forward_in_sensor(filter);
-            let forward_dot = vec3_dot(forward_meas_s, forward_pred_s);
-            if !filter.forward_branch_locked {
-                update_forward_branch_score(filter, forward_dot);
-                if filter.forward_branch_score <= FORWARD_BRANCH_FLIP_SCORE {
-                    flip_yaw_branch(filter);
-                    filter.forward_branch_score = FORWARD_BRANCH_LOCK_SCORE;
-                    filter.forward_branch_locked = true;
-                    filter.solution_locked = true;
-                    forward_pred_s = body_forward_in_sensor(filter);
-                } else if filter.forward_branch_score >= FORWARD_BRANCH_LOCK_SCORE {
-                    filter.forward_branch_locked = true;
-                    filter.solution_locked = true;
-                }
+            if self.cfg.use_course_rate {
+                score += self.apply_update1(
+                    course_rate,
+                    2,
+                    window.mean_accel_b,
+                    window.mean_gyro_b,
+                    self.cfg.r_course_rate_std_radps.powi(2),
+                );
             }
-            let residual = vec3_sub(forward_meas_s, forward_pred_s);
-            let h_forward = neg_skew(forward_pred_s);
-            filter.last_residual_n = residual;
-            apply_measurement_update(filter, residual, h_forward, r_forward_diag);
+            if self.cfg.use_lateral_accel {
+                score += self.apply_update1(
+                    a_lat,
+                    4,
+                    window.mean_accel_b,
+                    window.mean_gyro_b,
+                    self.cfg.r_lat_std_mps2.powi(2),
+                );
+            }
         }
-    }
-}
 
-fn seed_roll_pitch_from_stationary_acc(filter: &mut Align, ax: f32, ay: f32, az: f32) {
-    let n = (ax * ax + ay * ay + az * az).sqrt();
-    if n < 1.0e-6 {
-        return;
-    }
-    let gx = ax / n;
-    let gy = ay / n;
-    let gz = az / n;
+        if long_valid && self.cfg.use_longitudinal_accel {
+            score += self.apply_update1(
+                a_long,
+                3,
+                window.mean_accel_b,
+                window.mean_gyro_b,
+                self.cfg.r_long_std_mps2.powi(2),
+            );
+        }
 
-    // body->sensor with yaw fixed to 0, inferred from gravity direction only.
-    // For g_s = R_sb * [0,0,1], the exact ZYX relations are:
-    //   gx = sin(pitch), gy = -sin(roll)*cos(pitch), gz = cos(roll)*cos(pitch).
-    let roll = (-gy).atan2(gz);
-    let pitch = gx.clamp(-1.0, 1.0).asin();
-    let q = quat_from_alg_rpy(roll, pitch, 0.0);
-    filter.q_sb0 = q[0];
-    filter.q_sb1 = q[1];
-    filter.q_sb2 = q[2];
-    filter.q_sb3 = q[3];
-}
-
-fn clear_motion_window(filter: &mut Align) {
-    filter.gyro_sum = [0.0; 3];
-    filter.gyro_count = 0;
-    filter.accel_sum = [0.0; 3];
-    filter.accel_count = 0;
-}
-
-fn build_forward_axis_measurement(
-    filter: &Align,
-    accel_meas: [f32; 3],
-    speed_h: f32,
-    prev_speed: f32,
-    yaw_rate_b: f32,
-    dt: f32,
-) -> Option<[f32; 3]> {
-    if !dt.is_finite() || dt <= 1.0e-3 {
-        return None;
-    }
-    let long_acc = (speed_h - prev_speed) / dt;
-    if !long_acc.is_finite() || long_acc.abs() < FORWARD_ACCEL_MIN_MPS2 {
-        return None;
-    }
-    let lateral_acc = if yaw_rate_b.is_finite() {
-        0.5 * (speed_h + prev_speed) * yaw_rate_b.abs()
-    } else {
-        0.0
-    };
-    if lateral_acc > long_acc.abs() / FORWARD_LATERAL_DOMINANCE_RATIO {
-        return None;
+        score
     }
 
-    let gravity_ref_s = if filter.gravity_ref_valid {
-        filter.gravity_ref_s
-    } else {
-        let r_sb = quat_to_rotmat([filter.q_sb0, filter.q_sb1, filter.q_sb2, filter.q_sb3]);
+    pub fn mount_angles_rad(&self) -> [f32; 3] {
+        rot_to_euler_zyx(quat_to_rotmat(self.q_vb))
+    }
+
+    pub fn mount_angles_deg(&self) -> [f32; 3] {
+        let r = self.mount_angles_rad();
+        [r[0].to_degrees(), r[1].to_degrees(), r[2].to_degrees()]
+    }
+
+    pub fn sigma_deg(&self) -> [f32; 3] {
         [
-            r_sb[0][2] * GRAVITY_MPS2,
-            r_sb[1][2] * GRAVITY_MPS2,
-            r_sb[2][2] * GRAVITY_MPS2,
+            self.P[0][0].max(0.0).sqrt().to_degrees(),
+            self.P[1][1].max(0.0).sqrt().to_degrees(),
+            self.P[2][2].max(0.0).sqrt().to_degrees(),
         ]
-    };
-    let z_s = vec3_normalize(gravity_ref_s)?;
-    let accel_dyn = vec3_sub(accel_meas, gravity_ref_s);
-    let horiz = vec3_sub(accel_dyn, vec3_scale(z_s, vec3_dot(accel_dyn, z_s)));
-    let horiz_norm = vec3_norm(horiz);
-    if !horiz_norm.is_finite() || horiz_norm < FORWARD_DYNAMIC_ACCEL_MIN_MPS2 {
-        return None;
     }
 
-    let mut forward_meas_s = vec3_scale(horiz, horiz_norm.recip());
-    if long_acc < 0.0 {
-        forward_meas_s = vec3_scale(forward_meas_s, -1.0);
+    fn apply_update1(
+        &mut self,
+        z: f32,
+        obs_idx: usize,
+        accel_b: [f32; 3],
+        gyro_b: [f32; 3],
+        r_var: f32,
+    ) -> f32 {
+        let obs = align_obs(self.q_vb, gyro_b, accel_b);
+        let H_full = align_obs_jacobian(self.q_vb, gyro_b, accel_b);
+        let H = SMatrix::<f32, 1, 3>::from_row_slice(&[
+            H_full[obs_idx][0],
+            H_full[obs_idx][1],
+            H_full[obs_idx][2],
+        ]);
+        let y = SVector::<f32, 1>::from_row_slice(&[z - obs[obs_idx]]);
+        let P = mat3_to_smatrix(self.P);
+        let S = H * P * H.transpose() + SMatrix::<f32, 1, 1>::from_diagonal_element(r_var);
+        let S_inv = S
+            .try_inverse()
+            .unwrap_or_else(SMatrix::<f32, 1, 1>::identity);
+        let K = P * H.transpose() * S_inv;
+        let dtheta = K * y;
+        self.inject_small_angle([dtheta[0], dtheta[1], dtheta[2]]);
+        let I = SMatrix::<f32, 3, 3>::identity();
+        let P_new = (I - K * H) * P;
+        self.P = smatrix_to_mat3(symmetrize3(P_new));
+        (y.transpose() * S_inv * y)[0]
     }
-    Some(forward_meas_s)
-}
 
-fn apply_measurement_update(
-    filter: &mut Align,
-    residual: [f32; 3],
-    h: [[f32; 3]; 3],
-    r_diag: [f32; 3],
-) {
-    let p = filter.P;
-    let hp = mat3_mul(h, p);
-    let mut s = mat3_mul(hp, mat3_transpose(h));
-    s[0][0] += r_diag[0].max(1.0e-8);
-    s[1][1] += r_diag[1].max(1.0e-8);
-    s[2][2] += r_diag[2].max(1.0e-8);
-    let Some(s_inv) = mat3_inv(s) else {
-        return;
-    };
-    let ph_t = mat3_mul(p, mat3_transpose(h));
-    let k = mat3_mul(ph_t, s_inv);
-    let delta = mat3_vec(k, residual);
-    let dq = quat_from_small_angle(delta);
-    let q_new = quat_normalize(quat_mul(
-        dq,
-        [filter.q_sb0, filter.q_sb1, filter.q_sb2, filter.q_sb3],
-    ));
-    filter.q_sb0 = q_new[0];
-    filter.q_sb1 = q_new[1];
-    filter.q_sb2 = q_new[2];
-    filter.q_sb3 = q_new[3];
+    fn apply_update2(
+        &mut self,
+        z: [f32; 2],
+        obs_idx: [usize; 2],
+        accel_b: [f32; 3],
+        gyro_b: [f32; 3],
+        r_var: [f32; 2],
+    ) -> f32 {
+        let obs = align_obs(self.q_vb, gyro_b, accel_b);
+        let H_full = align_obs_jacobian(self.q_vb, gyro_b, accel_b);
+        let H = SMatrix::<f32, 2, 3>::from_row_slice(&[
+            H_full[obs_idx[0]][0],
+            H_full[obs_idx[0]][1],
+            H_full[obs_idx[0]][2],
+            H_full[obs_idx[1]][0],
+            H_full[obs_idx[1]][1],
+            H_full[obs_idx[1]][2],
+        ]);
+        let y =
+            SVector::<f32, 2>::from_row_slice(&[z[0] - obs[obs_idx[0]], z[1] - obs[obs_idx[1]]]);
+        let P = mat3_to_smatrix(self.P);
+        let R = SMatrix::<f32, 2, 2>::from_diagonal(&SVector::<f32, 2>::from_row_slice(&r_var));
+        let S = H * P * H.transpose() + R;
+        let S_inv = S
+            .try_inverse()
+            .unwrap_or_else(SMatrix::<f32, 2, 2>::identity);
+        let K = P * H.transpose() * S_inv;
+        let dtheta = K * y;
+        self.inject_small_angle([dtheta[0], dtheta[1], dtheta[2]]);
+        let I = SMatrix::<f32, 3, 3>::identity();
+        let P_new = (I - K * H) * P;
+        self.P = smatrix_to_mat3(symmetrize3(P_new));
+        (y.transpose() * S_inv * y)[0]
+    }
 
-    let kh = mat3_mul(k, h);
-    let i_kh = mat3_sub(mat3_identity(), kh);
-    let mut p_new = mat3_mul(i_kh, p);
-    p_new = mat3_symmetrize(p_new);
-    p_new[0][0] = p_new[0][0].max(1.0e-10);
-    p_new[1][1] = p_new[1][1].max(1.0e-10);
-    p_new[2][2] = p_new[2][2].max(1.0e-10);
-    filter.P = p_new;
-}
-
-fn body_forward_in_sensor(filter: &Align) -> [f32; 3] {
-    let r_sb = quat_to_rotmat([filter.q_sb0, filter.q_sb1, filter.q_sb2, filter.q_sb3]);
-    [r_sb[0][0], r_sb[1][0], r_sb[2][0]]
-}
-
-fn flip_yaw_branch(filter: &mut Align) {
-    let qz_pi = [0.0, 0.0, 0.0, 1.0];
-    let q_new = quat_normalize(quat_mul(
-        [filter.q_sb0, filter.q_sb1, filter.q_sb2, filter.q_sb3],
-        qz_pi,
-    ));
-    filter.q_sb0 = q_new[0];
-    filter.q_sb1 = q_new[1];
-    filter.q_sb2 = q_new[2];
-    filter.q_sb3 = q_new[3];
-}
-
-fn update_forward_branch_score(filter: &mut Align, forward_dot: f32) {
-    if forward_dot >= FORWARD_ALIGN_POS_DOT {
-        filter.forward_branch_score =
-            (filter.forward_branch_score.saturating_add(1)).min(FORWARD_BRANCH_SCORE_MAX);
-    } else if forward_dot <= FORWARD_ALIGN_NEG_DOT {
-        filter.forward_branch_score =
-            (filter.forward_branch_score.saturating_sub(1)).max(-FORWARD_BRANCH_SCORE_MAX);
-    } else if filter.forward_branch_score > 0 {
-        filter.forward_branch_score -= 1;
-    } else if filter.forward_branch_score < 0 {
-        filter.forward_branch_score += 1;
+    fn inject_small_angle(&mut self, dtheta: [f32; 3]) {
+        self.q_vb = quat_normalize(quat_mul(quat_from_small_angle(dtheta), self.q_vb));
     }
 }
 
-fn wrap_pi(mut a: f32) -> f32 {
-    let two_pi = 2.0 * std::f32::consts::PI;
-    while a > std::f32::consts::PI {
-        a -= two_pi;
-    }
-    while a < -std::f32::consts::PI {
-        a += two_pi;
-    }
-    a
+fn align_obs(q_vb: [f32; 4], gyro_b: [f32; 3], accel_b: [f32; 3]) -> [f32; 6] {
+    let c_bv = transpose3x3(quat_to_rotmat(q_vb));
+    let gyro_v = mat3_vec(c_bv, gyro_b);
+    let accel_v = mat3_vec(c_bv, accel_b);
+    [gyro_v[0], gyro_v[1], gyro_v[2], accel_v[0], accel_v[1], accel_v[2]]
 }
 
-fn quat_from_axis_angle(axis: [f32; 3], angle: f32) -> [f32; 4] {
-    let h = 0.5 * angle;
-    let s = h.sin();
-    quat_normalize([h.cos(), axis[0] * s, axis[1] * s, axis[2] * s])
+fn align_obs_jacobian(q_vb: [f32; 4], gyro_b: [f32; 3], accel_b: [f32; 3]) -> [[f32; 3]; 6] {
+    let c_bv = transpose3x3(quat_to_rotmat(q_vb));
+    let h_gyro = mat3_mul(c_bv, skew3(gyro_b));
+    let h_accel = mat3_mul(c_bv, skew3(accel_b));
+    [
+        h_gyro[0], h_gyro[1], h_gyro[2], h_accel[0], h_accel[1], h_accel[2],
+    ]
+}
+
+fn quat_mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    [
+        a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
+        a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
+        a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
+        a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0],
+    ]
+}
+
+fn quat_normalize(q: [f32; 4]) -> [f32; 4] {
+    let n2 = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
+    if n2 <= 1.0e-12 {
+        return [1.0, 0.0, 0.0, 0.0];
+    }
+    let inv = n2.sqrt().recip();
+    [q[0] * inv, q[1] * inv, q[2] * inv, q[3] * inv]
+}
+
+fn quat_from_small_angle(dtheta: [f32; 3]) -> [f32; 4] {
+    quat_normalize([1.0, 0.5 * dtheta[0], 0.5 * dtheta[1], 0.5 * dtheta[2]])
+}
+
+fn quat_from_euler_zyx(roll: f32, pitch: f32, yaw: f32) -> [f32; 4] {
+    let (sr, cr) = (0.5 * roll).sin_cos();
+    let (sp, cp) = (0.5 * pitch).sin_cos();
+    let (sy, cy) = (0.5 * yaw).sin_cos();
+    quat_normalize([
+        cr * cp * cy + sr * sp * sy,
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
+    ])
 }
 
 fn quat_to_rotmat(q: [f32; 4]) -> [[f32; 3]; 3] {
@@ -516,70 +400,7 @@ fn quat_to_rotmat(q: [f32; 4]) -> [[f32; 3]; 3] {
     ]
 }
 
-// ESF-ALG convention in this codebase: Rx * Ry * Rz composition.
-fn quat_from_alg_rpy(roll: f32, pitch: f32, yaw: f32) -> [f32; 4] {
-    let qx = quat_from_axis_angle([1.0, 0.0, 0.0], roll);
-    let qy = quat_from_axis_angle([0.0, 1.0, 0.0], pitch);
-    let qz = quat_from_axis_angle([0.0, 0.0, 1.0], yaw);
-    quat_normalize(quat_mul(quat_mul(qx, qy), qz))
-}
-
-fn quat_mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
-    [
-        a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
-        a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
-        a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
-        a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0],
-    ]
-}
-
-fn quat_normalize(q: [f32; 4]) -> [f32; 4] {
-    let n2 = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
-    if n2 <= 1.0e-12 {
-        return [1.0, 0.0, 0.0, 0.0];
-    }
-    let inv = n2.sqrt().recip();
-    [q[0] * inv, q[1] * inv, q[2] * inv, q[3] * inv]
-}
-
-fn quat_from_small_angle(dtheta: [f32; 3]) -> [f32; 4] {
-    let half = [0.5 * dtheta[0], 0.5 * dtheta[1], 0.5 * dtheta[2]];
-    quat_normalize([1.0, half[0], half[1], half[2]])
-}
-
-fn vec3_dot(a: [f32; 3], b: [f32; 3]) -> f32 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-fn vec3_norm(v: [f32; 3]) -> f32 {
-    vec3_dot(v, v).sqrt()
-}
-
-fn vec3_scale(v: [f32; 3], s: f32) -> [f32; 3] {
-    [v[0] * s, v[1] * s, v[2] * s]
-}
-
-fn vec3_sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-
-fn vec3_normalize(v: [f32; 3]) -> Option<[f32; 3]> {
-    let n = vec3_norm(v);
-    if !n.is_finite() || n < 1.0e-6 {
-        return None;
-    }
-    Some(vec3_scale(v, n.recip()))
-}
-
-fn neg_skew(v: [f32; 3]) -> [[f32; 3]; 3] {
-    [[0.0, v[2], -v[1]], [-v[2], 0.0, v[0]], [v[1], -v[0], 0.0]]
-}
-
-fn mat3_identity() -> [[f32; 3]; 3] {
-    [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
-}
-
-fn mat3_transpose(a: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
+fn transpose3x3(a: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
     [
         [a[0][0], a[1][0], a[2][0]],
         [a[0][1], a[1][1], a[2][1]],
@@ -587,8 +408,76 @@ fn mat3_transpose(a: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
     ]
 }
 
+fn rot_to_euler_zyx(C: [[f32; 3]; 3]) -> [f32; 3] {
+    let pitch = (-C[2][0]).clamp(-1.0, 1.0).asin();
+    let roll = C[2][1].atan2(C[2][2]);
+    let yaw = wrap_angle_rad(C[1][0].atan2(C[0][0]));
+    [roll, pitch, yaw]
+}
+
+fn wrap_angle_rad(x: f32) -> f32 {
+    let two_pi = 2.0 * core::f32::consts::PI;
+    (x + core::f32::consts::PI).rem_euclid(two_pi) - core::f32::consts::PI
+}
+
+fn vec3_add(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+fn vec3_sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn vec3_scale(v: [f32; 3], s: f32) -> [f32; 3] {
+    [v[0] * s, v[1] * s, v[2] * s]
+}
+
+fn vec3_dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn vec3_cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn vec3_norm(v: [f32; 3]) -> f32 {
+    vec3_dot(v, v).sqrt()
+}
+
+fn vec3_normalize(v: [f32; 3]) -> Option<[f32; 3]> {
+    let n = vec3_norm(v);
+    if !n.is_finite() || n <= 1.0e-8 {
+        return None;
+    }
+    Some(vec3_scale(v, 1.0 / n))
+}
+
+fn vec2_norm(v: [f32; 2]) -> f32 {
+    (v[0] * v[0] + v[1] * v[1]).sqrt()
+}
+
+fn vec2_normalize(v: [f32; 2]) -> Option<[f32; 2]> {
+    let n = vec2_norm(v);
+    if !n.is_finite() || n <= 1.0e-8 {
+        return None;
+    }
+    Some([v[0] / n, v[1] / n])
+}
+
+fn diag3(d: [f32; 3]) -> [[f32; 3]; 3] {
+    [[d[0], 0.0, 0.0], [0.0, d[1], 0.0], [0.0, 0.0, d[2]]]
+}
+
+fn skew3(v: [f32; 3]) -> [[f32; 3]; 3] {
+    [[0.0, -v[2], v[1]], [v[2], 0.0, -v[0]], [-v[1], v[0], 0.0]]
+}
+
 fn mat3_mul(a: [[f32; 3]; 3], b: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
-    let mut c = [[0.0; 3]; 3];
+    let mut c = [[0.0_f32; 3]; 3];
     for i in 0..3 {
         for j in 0..3 {
             c[i][j] = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j];
@@ -605,49 +494,20 @@ fn mat3_vec(a: [[f32; 3]; 3], x: [f32; 3]) -> [f32; 3] {
     ]
 }
 
-fn mat3_sub(a: [[f32; 3]; 3], b: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
+fn mat3_to_smatrix(a: [[f32; 3]; 3]) -> SMatrix<f32, 3, 3> {
+    SMatrix::<f32, 3, 3>::from_row_slice(&[
+        a[0][0], a[0][1], a[0][2], a[1][0], a[1][1], a[1][2], a[2][0], a[2][1], a[2][2],
+    ])
+}
+
+fn smatrix_to_mat3(a: SMatrix<f32, 3, 3>) -> [[f32; 3]; 3] {
     [
-        [a[0][0] - b[0][0], a[0][1] - b[0][1], a[0][2] - b[0][2]],
-        [a[1][0] - b[1][0], a[1][1] - b[1][1], a[1][2] - b[1][2]],
-        [a[2][0] - b[2][0], a[2][1] - b[2][1], a[2][2] - b[2][2]],
+        [a[(0, 0)], a[(0, 1)], a[(0, 2)]],
+        [a[(1, 0)], a[(1, 1)], a[(1, 2)]],
+        [a[(2, 0)], a[(2, 1)], a[(2, 2)]],
     ]
 }
 
-fn mat3_symmetrize(a: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
-    let mut out = a;
-    for i in 0..3 {
-        for j in i..3 {
-            let v = 0.5 * (out[i][j] + out[j][i]);
-            out[i][j] = v;
-            out[j][i] = v;
-        }
-    }
-    out
-}
-
-fn mat3_inv(a: [[f32; 3]; 3]) -> Option<[[f32; 3]; 3]> {
-    let det = a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1])
-        - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
-        + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
-    if det.abs() < 1.0e-12 {
-        return None;
-    }
-    let inv_det = 1.0 / det;
-    Some([
-        [
-            (a[1][1] * a[2][2] - a[1][2] * a[2][1]) * inv_det,
-            (a[0][2] * a[2][1] - a[0][1] * a[2][2]) * inv_det,
-            (a[0][1] * a[1][2] - a[0][2] * a[1][1]) * inv_det,
-        ],
-        [
-            (a[1][2] * a[2][0] - a[1][0] * a[2][2]) * inv_det,
-            (a[0][0] * a[2][2] - a[0][2] * a[2][0]) * inv_det,
-            (a[0][2] * a[1][0] - a[0][0] * a[1][2]) * inv_det,
-        ],
-        [
-            (a[1][0] * a[2][1] - a[1][1] * a[2][0]) * inv_det,
-            (a[0][1] * a[2][0] - a[0][0] * a[2][1]) * inv_det,
-            (a[0][0] * a[1][1] - a[0][1] * a[1][0]) * inv_det,
-        ],
-    ])
+fn symmetrize3(a: SMatrix<f32, 3, 3>) -> SMatrix<f32, 3, 3> {
+    0.5 * (a + a.transpose())
 }

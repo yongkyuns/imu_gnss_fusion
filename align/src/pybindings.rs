@@ -1,15 +1,15 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-use crate::coarse::{CoarseAlignConfig, CoarseAlignMEKF, CoarseWindowSummary};
+use crate::align::{AlignConfig, Align, AlignWindowSummary};
 
-#[pyclass(name = "CoarseAlignMEKF")]
-struct PyCoarseAlignMEKF {
-    inner: CoarseAlignMEKF,
+#[pyclass(name = "Align")]
+struct PyAlign {
+    inner: Align,
 }
 
 #[pymethods]
-impl PyCoarseAlignMEKF {
+impl PyAlign {
     #[new]
     #[pyo3(signature = (
         use_gravity = true,
@@ -25,14 +25,14 @@ impl PyCoarseAlignMEKF {
         use_lateral_accel: bool,
         use_longitudinal_accel: bool,
     ) -> Self {
-        let mut cfg = CoarseAlignConfig::default();
+        let mut cfg = AlignConfig::default();
         cfg.use_gravity = use_gravity;
         cfg.use_turn_gyro = use_turn_gyro;
         cfg.use_course_rate = use_course_rate;
         cfg.use_lateral_accel = use_lateral_accel;
         cfg.use_longitudinal_accel = use_longitudinal_accel;
         Self {
-            inner: CoarseAlignMEKF::new(cfg),
+            inner: Align::new(cfg),
         }
     }
 
@@ -60,7 +60,7 @@ impl PyCoarseAlignMEKF {
         gnss_vel_prev_n: (f32, f32, f32),
         gnss_vel_curr_n: (f32, f32, f32),
     ) -> f32 {
-        let window = CoarseWindowSummary {
+        let window = AlignWindowSummary {
             dt,
             mean_gyro_b: [mean_gyro_b.0, mean_gyro_b.1, mean_gyro_b.2],
             mean_accel_b: [mean_accel_b.0, mean_accel_b.1, mean_accel_b.2],
@@ -93,6 +93,6 @@ impl PyCoarseAlignMEKF {
 
 #[pymodule]
 fn align_rs(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyCoarseAlignMEKF>()?;
+    m.add_class::<PyAlign>()?;
     Ok(())
 }

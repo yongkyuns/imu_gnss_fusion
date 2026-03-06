@@ -138,7 +138,7 @@ def numerical_jacobian(func, x: np.ndarray, eps: float = 1.0e-6) -> np.ndarray:
 
 
 @dataclass
-class CoarseAlignConfig:
+class AlignConfig:
     q_mount_std_rad: np.ndarray = np.deg2rad(np.array([0.01, 0.01, 0.02]))
     r_gravity_std_mps2: float = 0.08
     r_turn_gyro_std_radps: float = np.deg2rad(0.2)
@@ -184,8 +184,8 @@ class TrialHistory:
     sigma_deg: np.ndarray
 
 
-class CoarseAlignEKF:
-    def __init__(self, cfg: CoarseAlignConfig):
+class AlignEKF:
+    def __init__(self, cfg: AlignConfig):
         self.cfg = cfg
         self.q_vb = np.array([1.0, 0.0, 0.0, 0.0])
         self.P = np.diag(np.deg2rad([20.0, 20.0, 60.0]) ** 2)
@@ -456,7 +456,7 @@ def simulate_vehicle_and_sensors(
 
 def run_trial_with_history(
     truth_mount_deg: np.ndarray,
-    cfg: CoarseAlignConfig,
+    cfg: AlignConfig,
     seed: int,
     repeat_count: int = 1,
     yaw_seed_deg: float = 0.0,
@@ -466,7 +466,7 @@ def run_trial_with_history(
         seed=seed,
         repeat_count=repeat_count,
     )
-    ekf = CoarseAlignEKF(cfg)
+    ekf = AlignEKF(cfg)
     ekf.initialize_from_stationary(stationary_accel, np.deg2rad(yaw_seed_deg))
     times = []
     estimates = []
@@ -499,7 +499,7 @@ def run_trial_with_history(
 def run_trial(
     label: str,
     truth_mount_deg: np.ndarray,
-    cfg: CoarseAlignConfig,
+    cfg: AlignConfig,
     seed: int,
     repeat_count: int = 1,
     yaw_seed_deg: float = 0.0,
@@ -522,7 +522,7 @@ def summarize_results(results: list[TrialResult]) -> None:
 def monte_carlo_summary(
     label: str,
     truth_mount_deg: np.ndarray,
-    cfg: CoarseAlignConfig,
+    cfg: AlignConfig,
     seeds: list[int],
 ) -> np.ndarray:
     errs = []
@@ -572,8 +572,8 @@ def summarize_window_inputs(
 def make_demo_plots(output_dir: Path) -> tuple[Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     truth_mount_deg = np.array([4.0, -3.0, 28.0])
-    full_cfg = CoarseAlignConfig()
-    weak_cfg = CoarseAlignConfig(
+    full_cfg = AlignConfig()
+    weak_cfg = AlignConfig(
         use_gravity=True,
         use_turn_gyro=True,
         use_course_rate=True,
@@ -593,7 +593,7 @@ def make_demo_plots(output_dir: Path) -> tuple[Path, Path]:
 
     t_s, gyro_dps, accel, speed, gnss_derived = summarize_window_inputs(windows)
 
-    input_fig = output_dir / "coarse_align_inputs.png"
+    input_fig = output_dir / "align_inputs.png"
     fig, axes = plt.subplots(5, 1, figsize=(11, 14), sharex=True)
     axes[0].plot(t_s, gyro_dps[:, 0], label="gyro x")
     axes[0].plot(t_s, gyro_dps[:, 1], label="gyro y")
@@ -631,7 +631,7 @@ def make_demo_plots(output_dir: Path) -> tuple[Path, Path]:
     fig.savefig(input_fig, dpi=160)
     plt.close(fig)
 
-    angle_fig = output_dir / "coarse_align_angles.png"
+    angle_fig = output_dir / "align_angles.png"
     fig, axes = plt.subplots(3, 1, figsize=(11, 10), sharex=True)
     labels = ["roll", "pitch", "yaw"]
     for i, ax in enumerate(axes):
@@ -659,11 +659,11 @@ def make_long_run_plot(output_dir: Path) -> tuple[Path, TrialResult, TrialHistor
     truth_mount_deg = np.array([4.0, -3.0, 28.0])
     result, history = run_trial_with_history(
         truth_mount_deg,
-        CoarseAlignConfig(),
+        AlignConfig(),
         seed=3,
         repeat_count=4,
     )
-    plot_path = output_dir / "coarse_align_long_run.png"
+    plot_path = output_dir / "align_long_run.png"
     fig, axes = plt.subplots(2, 1, figsize=(11, 10), sharex=True)
     labels = ["roll", "pitch", "yaw"]
     for i, label in enumerate(labels):
@@ -692,26 +692,26 @@ def make_long_run_plot(output_dir: Path) -> tuple[Path, TrialResult, TrialHistor
     fig.tight_layout()
     fig.savefig(plot_path, dpi=160)
     plt.close(fig)
-    result.label = "long-run full coarse filter"
+    result.label = "long-run full align filter"
     return plot_path, result, history
 
 
 def run_demo() -> list[TrialResult]:
     truth_mount_deg = np.array([4.0, -3.0, 28.0])
-    weak_cfg = CoarseAlignConfig(
+    weak_cfg = AlignConfig(
         use_gravity=True,
         use_turn_gyro=True,
         use_course_rate=True,
         use_lateral_accel=False,
         use_longitudinal_accel=False,
     )
-    full_cfg = CoarseAlignConfig()
+    full_cfg = AlignConfig()
 
     results = [
-        run_trial("weak gyro/course-rate coarse filter", truth_mount_deg, weak_cfg, seed=3),
-        run_trial("full gravity+gyro+lat/long coarse filter", truth_mount_deg, full_cfg, seed=3),
+        run_trial("weak gyro/course-rate align filter", truth_mount_deg, weak_cfg, seed=3),
+        run_trial("full gravity+gyro+lat/long align filter", truth_mount_deg, full_cfg, seed=3),
         run_trial(
-            "full gravity+gyro+lat/long coarse filter (second seed)",
+            "full gravity+gyro+lat/long align filter (second seed)",
             truth_mount_deg,
             full_cfg,
             seed=8,
@@ -720,10 +720,10 @@ def run_demo() -> list[TrialResult]:
     summarize_results(results)
     seeds = [1, 2, 3, 4, 5, 8]
     weak_mean = monte_carlo_summary(
-        "weak gyro/course-rate coarse filter", truth_mount_deg, weak_cfg, seeds
+        "weak gyro/course-rate align filter", truth_mount_deg, weak_cfg, seeds
     )
     full_mean = monte_carlo_summary(
-        "full gravity+gyro+lat/long coarse filter", truth_mount_deg, full_cfg, seeds
+        "full gravity+gyro+lat/long align filter", truth_mount_deg, full_cfg, seeds
     )
     print("yaw improvement factor:", round(weak_mean[2] / full_mean[2], 3))
     return results
@@ -749,6 +749,6 @@ if __name__ == "__main__":
     weak = demo_results[0]
     full = demo_results[1]
     if abs(full.err_deg[0]) > 1.5 or abs(full.err_deg[1]) > 1.5 or abs(full.err_deg[2]) > 3.0:
-        raise SystemExit("full coarse filter did not converge tightly enough")
+        raise SystemExit("full align filter did not converge tightly enough")
     if abs(full.err_deg[2]) >= abs(weak.err_deg[2]):
-        raise SystemExit("full coarse filter did not improve yaw over weak baseline")
+        raise SystemExit("full align filter did not improve yaw over weak baseline")

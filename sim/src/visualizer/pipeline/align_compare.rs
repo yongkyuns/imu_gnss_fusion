@@ -1,4 +1,4 @@
-use align_rs::coarse::{CoarseAlignConfig, CoarseAlignMEKF, CoarseWindowSummary, GRAVITY_MPS2};
+use align_rs::align::{AlignConfig, Align, AlignWindowSummary, GRAVITY_MPS2};
 
 use crate::ubxlog::{
     extract_esf_alg, extract_esf_raw_samples, extract_nav2_pvt_obs, sensor_meta, NavPvtObs,
@@ -164,17 +164,17 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
         ref_yaw.push([t, ev.yaw_deg]);
     }
 
-    let cfg = CoarseAlignConfig::default();
-    let mut align = CoarseAlignMEKF::new(cfg);
+    let cfg = AlignConfig::default();
+    let mut align = Align::new(cfg);
     let mut stationary_accel = Vec::<[f32; 3]>::new();
-    let mut coarse_initialized = false;
+    let mut align_initialized = false;
     let mut scan_idx = 0usize;
     let mut interval_start_idx = 0usize;
     let mut prev_nav: Option<(f64, NavPvtObs)> = None;
     for (tn, nav) in &nav_events {
         while scan_idx < imu_packets.len() && imu_packets[scan_idx].t_ms <= *tn {
             let pkt = &imu_packets[scan_idx];
-            if !coarse_initialized {
+            if !align_initialized {
                 let gyro_radps = [
                     pkt.gx_dps.to_radians() as f32,
                     pkt.gy_dps.to_radians() as f32,
@@ -192,7 +192,7 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
                             .initialize_from_stationary(&stationary_accel, 0.0)
                             .is_ok()
                     {
-                        coarse_initialized = true;
+                        align_initialized = true;
                     }
                 } else {
                     stationary_accel.clear();
@@ -204,7 +204,7 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
         if let Some((t_prev, nav_prev)) = prev_nav {
             let dt = ((*tn - t_prev) * 1.0e-3) as f32;
             let interval_packets = &imu_packets[interval_start_idx..scan_idx];
-            if coarse_initialized && dt > 0.0 && !interval_packets.is_empty() {
+            if align_initialized && dt > 0.0 && !interval_packets.is_empty() {
                 let mut gyro_sum = [0.0_f32; 3];
                 let mut accel_sum = [0.0_f32; 3];
                 for pkt in interval_packets {
@@ -226,7 +226,7 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
                     accel_sum[1] * inv_n,
                     accel_sum[2] * inv_n,
                 ];
-                let window = CoarseWindowSummary {
+                let window = AlignWindowSummary {
                     dt,
                     mean_gyro_b,
                     mean_accel_b,

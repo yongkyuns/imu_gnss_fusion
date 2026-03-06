@@ -354,7 +354,7 @@ impl eframe::App for App {
                         );
                         draw_plot(
                             ui,
-                            "Coarse MEKF Window Diagnostics",
+                            "Align Window Diagnostics",
                             &self.data.align_res_vel,
                             true,
                             self.max_points_per_trace,
@@ -364,7 +364,7 @@ impl eframe::App for App {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     draw_plot(
                         ui,
-                        "Coarse MEKF Quaternion (q_vb)",
+                        "Align Quaternion (q_vb)",
                         &self.data.align_state_q,
                         true,
                         self.max_points_per_trace,

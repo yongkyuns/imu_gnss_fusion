@@ -1,5 +1,5 @@
 pub mod align;
-pub mod coarse;
+pub use align::*;
 
 #[cfg(feature = "python")]
 mod pybindings;

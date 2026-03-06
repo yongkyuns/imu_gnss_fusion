@@ -5,7 +5,7 @@ import numpy as np
 import align_rs
 
 from prototype import (
-    CoarseAlignConfig,
+    AlignConfig,
     TrialHistory,
     TrialResult,
     simulate_vehicle_and_sensors,
@@ -22,14 +22,14 @@ def _run_rust_filter(
     seed: int,
     repeat_count: int,
     yaw_seed_deg: float,
-    cfg: CoarseAlignConfig,
+    cfg: AlignConfig,
 ) -> tuple[float, TrialResult, TrialHistory]:
     stationary_accel, windows = simulate_vehicle_and_sensors(
         truth_mount_deg=truth_mount_deg,
         seed=seed,
         repeat_count=repeat_count,
     )
-    ekf = align_rs.CoarseAlignMEKF(
+    ekf = align_rs.Align(
         use_gravity=cfg.use_gravity,
         use_turn_gyro=cfg.use_turn_gyro,
         use_course_rate=cfg.use_course_rate,
@@ -81,9 +81,9 @@ def run_rust_trial_with_history(
     seed: int,
     repeat_count: int = 1,
     yaw_seed_deg: float = 0.0,
-    cfg: CoarseAlignConfig | None = None,
+    cfg: AlignConfig | None = None,
 ) -> tuple[TrialResult, TrialHistory]:
-    cfg = cfg or CoarseAlignConfig()
+    cfg = cfg or AlignConfig()
     result, history = _run_rust_filter(
         truth_mount_deg=truth_mount_deg,
         seed=seed,
@@ -109,7 +109,7 @@ def run_representative_sweep(seed: int = 3) -> None:
                 if worst is None or np.max(np.abs(result.err_deg)) > np.max(np.abs(worst.err_deg)):
                     worst = result
     errs = np.asarray(errs)
-    print("Rust MEKF representative sweep")
+    print("Rust Align representative sweep")
     print("  cases:", errs.shape[0])
     print("  mean abs err [deg]:", np.round(np.mean(errs, axis=0), 3))
     print("  rmse [deg]:", np.round(np.sqrt(np.mean(errs**2, axis=0)), 3))
@@ -135,7 +135,7 @@ def run_large_angle_checks(seed: int = 3) -> None:
         np.array([80.0, -60.0, 179.0]),
         np.array([-80.0, 60.0, -179.0]),
     ]
-    print("Rust MEKF large-angle checks")
+    print("Rust Align large-angle checks")
     for truth in truths:
         result, history = run_rust_trial_with_history(truth, seed=seed, repeat_count=4)
         tail = max(20, len(history.t_s) // 5)
