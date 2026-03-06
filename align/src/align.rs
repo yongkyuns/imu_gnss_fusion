@@ -6,6 +6,11 @@ const YAW_PROCESS_NOISE_SCALE: f32 = 5.0;
 const FORWARD_ACCEL_MIN_MPS2: f32 = 0.15;
 const FORWARD_DYNAMIC_ACCEL_MIN_MPS2: f32 = 0.2;
 const FORWARD_LATERAL_DOMINANCE_RATIO: f32 = 1.5;
+const FORWARD_ALIGN_POS_DOT: f32 = 0.7;
+const FORWARD_ALIGN_NEG_DOT: f32 = -0.7;
+const FORWARD_BRANCH_SCORE_MAX: i8 = 6;
+const FORWARD_BRANCH_FLIP_SCORE: i8 = -3;
+const FORWARD_BRANCH_LOCK_SCORE: i8 = 3;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -67,6 +72,8 @@ pub struct Align {
     init_acc_count: u32,
     gravity_ref_s: [f32; 3],
     gravity_ref_valid: bool,
+    forward_branch_score: i8,
+    forward_branch_locked: bool,
 }
 
 impl Default for Align {
@@ -92,6 +99,8 @@ impl Default for Align {
             init_acc_count: 0,
             gravity_ref_s: [0.0; 3],
             gravity_ref_valid: false,
+            forward_branch_score: 0,
+            forward_branch_locked: false,
         }
     }
 }
@@ -289,9 +298,17 @@ fn align_fuse_motion(
             build_forward_axis_measurement(filter, accel_meas, speed_h, prev_speed, yaw_rate_b, dt)
         {
             let mut forward_pred_s = body_forward_in_sensor(filter);
-            if vec3_dot(forward_meas_s, forward_pred_s) < -0.25 {
-                flip_yaw_branch(filter);
-                forward_pred_s = body_forward_in_sensor(filter);
+            let forward_dot = vec3_dot(forward_meas_s, forward_pred_s);
+            if !filter.forward_branch_locked {
+                update_forward_branch_score(filter, forward_dot);
+                if filter.forward_branch_score <= FORWARD_BRANCH_FLIP_SCORE {
+                    flip_yaw_branch(filter);
+                    filter.forward_branch_score = FORWARD_BRANCH_LOCK_SCORE;
+                    filter.forward_branch_locked = true;
+                    forward_pred_s = body_forward_in_sensor(filter);
+                } else if filter.forward_branch_score >= FORWARD_BRANCH_LOCK_SCORE {
+                    filter.forward_branch_locked = true;
+                }
             }
             let residual = vec3_sub(forward_meas_s, forward_pred_s);
             let h_forward = neg_skew(forward_pred_s);
@@ -431,6 +448,20 @@ fn flip_yaw_branch(filter: &mut Align) {
     filter.q_sb1 = q_new[1];
     filter.q_sb2 = q_new[2];
     filter.q_sb3 = q_new[3];
+}
+
+fn update_forward_branch_score(filter: &mut Align, forward_dot: f32) {
+    if forward_dot >= FORWARD_ALIGN_POS_DOT {
+        filter.forward_branch_score =
+            (filter.forward_branch_score.saturating_add(1)).min(FORWARD_BRANCH_SCORE_MAX);
+    } else if forward_dot <= FORWARD_ALIGN_NEG_DOT {
+        filter.forward_branch_score =
+            (filter.forward_branch_score.saturating_sub(1)).max(-FORWARD_BRANCH_SCORE_MAX);
+    } else if filter.forward_branch_score > 0 {
+        filter.forward_branch_score -= 1;
+    } else if filter.forward_branch_score < 0 {
+        filter.forward_branch_score += 1;
+    }
 }
 
 fn wrap_pi(mut a: f32) -> f32 {

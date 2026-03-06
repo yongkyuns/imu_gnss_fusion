@@ -67,6 +67,14 @@ fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
+fn gravity_sensor(r_sb: [[f32; 3]; 3]) -> [f32; 3] {
+    mat_vec(r_sb, [0.0, 0.0, 9.80665])
+}
+
+fn body_acc_sensor(r_sb: [[f32; 3]; 3], ax: f32) -> [f32; 3] {
+    mat_vec(r_sb, [ax, 0.0, 9.80665])
+}
+
 #[test]
 fn forward_axis_update_resolves_pi_yaw_branch() {
     let mut f = Align::default();
@@ -87,7 +95,7 @@ fn forward_axis_update_resolves_pi_yaw_branch() {
     let dt = 0.01_f32;
 
     for _ in 0..120 {
-        let g_s = mat_vec(r_sb_true, [0.0, 0.0, 9.80665]);
+        let g_s = gravity_sensor(r_sb_true);
         let imu = MisalignImuSample {
             dt,
             f_sx: g_s[0],
@@ -102,8 +110,7 @@ fn forward_axis_update_resolves_pi_yaw_branch() {
     let mut speed = 0.0_f32;
     for k in 0..900 {
         speed += 0.8 * dt;
-        let body_acc = [0.8, 0.0, 9.80665];
-        let sensor_acc = mat_vec(r_sb_true, body_acc);
+        let sensor_acc = body_acc_sensor(r_sb_true, 0.8);
         let imu = MisalignImuSample {
             dt,
             f_sx: sensor_acc[0],
@@ -133,5 +140,81 @@ fn forward_axis_update_resolves_pi_yaw_branch() {
     assert!(
         dot(est_forward, flipped_forward) < -0.98,
         "estimated forward axis stayed near the 180 deg flipped branch"
+    );
+}
+
+#[test]
+fn forward_axis_update_does_not_flip_on_single_bad_sample() {
+    let mut f = Align::default();
+    align_init(
+        &mut f,
+        [0.2, 0.2, 0.2],
+        MisalignNoise {
+            q_theta_rw_var: 1.0e-7,
+        },
+    );
+
+    let q_true = quat_from_axis_angle([0.0, 0.0, 1.0], deg2rad(18.0));
+    let r_sb_true = quat_to_rotmat(q_true);
+    let dt = 0.01_f32;
+
+    for _ in 0..120 {
+        let g_s = gravity_sensor(r_sb_true);
+        let imu = MisalignImuSample {
+            dt,
+            f_sx: g_s[0],
+            f_sy: g_s[1],
+            f_sz: g_s[2],
+        };
+        align_predict_gyro(&mut f, &imu, 0.0, 0.0, 0.0);
+    }
+    align_set_q_sb(&mut f, q_true);
+
+    let mut speed = 8.0_f32;
+    for _ in 0..3 {
+        for _ in 0..20 {
+            let sensor_acc = body_acc_sensor(r_sb_true, 0.8);
+            let imu = MisalignImuSample {
+                dt,
+                f_sx: sensor_acc[0],
+                f_sy: sensor_acc[1],
+                f_sz: sensor_acc[2],
+            };
+            align_predict_gyro(&mut f, &imu, 0.0, 0.0, 0.0);
+        }
+        speed += 0.8 * 0.2;
+        align_fuse_velocity_forward(
+            &mut f,
+            [speed, 0.0, 0.0],
+            [0.05, 0.05, 0.05],
+            [0.01, 0.01, 0.01],
+        );
+    }
+
+    for _ in 0..6 {
+        for _ in 0..20 {
+            let sensor_acc = body_acc_sensor(r_sb_true, -0.8);
+            let imu = MisalignImuSample {
+                dt,
+                f_sx: sensor_acc[0],
+                f_sy: sensor_acc[1],
+                f_sz: sensor_acc[2],
+            };
+            align_predict_gyro(&mut f, &imu, 0.0, 0.0, 0.0);
+        }
+        speed -= 0.8 * 0.2;
+        align_fuse_velocity_forward(
+            &mut f,
+            [speed, 0.0, 0.0],
+            [0.05, 0.05, 0.05],
+            [0.01, 0.01, 0.01],
+        );
+    }
+
+    let est_forward = body_forward_in_sensor(align_q_sb(&f));
+    let true_forward = body_forward_in_sensor(q_true);
+    assert!(
+        dot(est_forward, true_forward) > 0.98,
+        "a single contradictory forward sample should not flip the yaw branch"
     );
 }
