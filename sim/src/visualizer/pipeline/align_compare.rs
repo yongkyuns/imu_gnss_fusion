@@ -1,5 +1,6 @@
 use align_rs::align::{
-    MisalignImuSample, MisalignNoise, Align, align_fuse_velocity, align_init, align_predict_gyro, align_q_sb,
+    Align, MisalignImuSample, MisalignNoise, align_fuse_velocity_forward, align_init,
+    align_predict_gyro, align_q_sb,
 };
 
 use crate::ubxlog::{
@@ -220,7 +221,7 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
             let (tn, nav) = nav_events[nav_idx];
             nav_idx += 1;
             let r = ((nav.s_acc_mps * nav.s_acc_mps).max(0.02) * 20.0) as f32;
-            align_fuse_velocity(
+            align_fuse_velocity_forward(
                 &mut align,
                 [
                     nav.vel_n_mps as f32,
@@ -228,6 +229,7 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
                     nav.vel_d_mps as f32,
                 ],
                 [r, r, r],
+                [0.08, 0.08, 0.08],
             );
             let t = rel_s(tn);
             res_vn.push([t, align.last_residual_n[0].to_degrees() as f64]);
