@@ -27,6 +27,88 @@ def euler_zyx_to_rot(roll: float, pitch: float, yaw: float) -> np.ndarray:
     )
 
 
+def quat_normalize(q: np.ndarray) -> np.ndarray:
+    q = np.asarray(q, dtype=float)
+    n = np.linalg.norm(q)
+    if n < 1.0e-12:
+        return np.array([1.0, 0.0, 0.0, 0.0])
+    return q / n
+
+
+def quat_mul(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    aw, ax, ay, az = a
+    bw, bx, by, bz = b
+    return np.array(
+        [
+            aw * bw - ax * bx - ay * by - az * bz,
+            aw * bx + ax * bw + ay * bz - az * by,
+            aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw,
+        ]
+    )
+
+
+def quat_from_small_angle(dtheta: np.ndarray) -> np.ndarray:
+    half = 0.5 * np.asarray(dtheta, dtype=float)
+    return quat_normalize(np.array([1.0, half[0], half[1], half[2]]))
+
+
+def quat_to_rot(q: np.ndarray) -> np.ndarray:
+    w, x, y, z = quat_normalize(q)
+    return np.array(
+        [
+            [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - w * z), 2.0 * (x * z + w * y)],
+            [2.0 * (x * y + w * z), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - w * x)],
+            [2.0 * (x * z - w * y), 2.0 * (y * z + w * x), 1.0 - 2.0 * (x * x + y * y)],
+        ]
+    )
+
+
+def quat_from_rot(C: np.ndarray) -> np.ndarray:
+    tr = np.trace(C)
+    if tr > 0.0:
+        s = np.sqrt(tr + 1.0) * 2.0
+        q = np.array(
+            [
+                0.25 * s,
+                (C[2, 1] - C[1, 2]) / s,
+                (C[0, 2] - C[2, 0]) / s,
+                (C[1, 0] - C[0, 1]) / s,
+            ]
+        )
+    elif C[0, 0] > C[1, 1] and C[0, 0] > C[2, 2]:
+        s = np.sqrt(1.0 + C[0, 0] - C[1, 1] - C[2, 2]) * 2.0
+        q = np.array(
+            [
+                (C[2, 1] - C[1, 2]) / s,
+                0.25 * s,
+                (C[0, 1] + C[1, 0]) / s,
+                (C[0, 2] + C[2, 0]) / s,
+            ]
+        )
+    elif C[1, 1] > C[2, 2]:
+        s = np.sqrt(1.0 + C[1, 1] - C[0, 0] - C[2, 2]) * 2.0
+        q = np.array(
+            [
+                (C[0, 2] - C[2, 0]) / s,
+                (C[0, 1] + C[1, 0]) / s,
+                0.25 * s,
+                (C[1, 2] + C[2, 1]) / s,
+            ]
+        )
+    else:
+        s = np.sqrt(1.0 + C[2, 2] - C[0, 0] - C[1, 1]) * 2.0
+        q = np.array(
+            [
+                (C[1, 0] - C[0, 1]) / s,
+                (C[0, 2] + C[2, 0]) / s,
+                (C[1, 2] + C[2, 1]) / s,
+                0.25 * s,
+            ]
+        )
+    return quat_normalize(q)
+
+
 def vehicle_to_body_rotation(mount_angles: np.ndarray) -> np.ndarray:
     roll_m, pitch_m, yaw_m = mount_angles
     return euler_zyx_to_rot(roll_m, pitch_m, yaw_m)
@@ -102,18 +184,10 @@ class TrialHistory:
     sigma_deg: np.ndarray
 
 
-@dataclass
-class HypothesisResult:
-    yaw_seed_deg: float
-    score: float
-    result: TrialResult
-    history: TrialHistory
-
-
 class CoarseAlignEKF:
     def __init__(self, cfg: CoarseAlignConfig):
         self.cfg = cfg
-        self.x = np.zeros(3)
+        self.q_vb = np.array([1.0, 0.0, 0.0, 0.0])
         self.P = np.diag(np.deg2rad([20.0, 20.0, 60.0]) ** 2)
         self.gravity_lp_b = np.array([0.0, 0.0, -GRAVITY_MPS2])
 
@@ -136,32 +210,50 @@ class CoarseAlignEKF:
         y_v_in_b /= np.linalg.norm(y_v_in_b)
         x_v_in_b = np.cross(y_v_in_b, z_v_in_b)
         C_v_b = np.column_stack((x_v_in_b, y_v_in_b, z_v_in_b))
-        self.x = rot_to_euler_zyx(C_v_b)
-        self.x[2] = wrap_angle_rad(yaw_seed_rad)
+        init_rpy = rot_to_euler_zyx(C_v_b)
+        init_rpy[2] = wrap_angle_rad(yaw_seed_rad)
+        self.q_vb = quat_from_rot(euler_zyx_to_rot(*init_rpy))
         self.P = np.diag(np.deg2rad([6.0, 6.0, 20.0]) ** 2)
         self.gravity_lp_b = f_mean_b.copy()
 
     def predict(self, dt: float) -> None:
         self.P = self.P + np.diag(self.cfg.q_mount_std_rad**2) * max(dt, 1.0e-3)
 
-    def _candidate_vehicle_specific_force(
-        self, x: np.ndarray, accel_b: np.ndarray
-    ) -> np.ndarray:
-        return body_to_vehicle_rotation(x) @ accel_b
+    def _body_to_vehicle_rotation_from_quat(self, q_vb: np.ndarray) -> np.ndarray:
+        return quat_to_rot(q_vb).T
 
-    def _candidate_vehicle_gyro(self, x: np.ndarray, gyro_b: np.ndarray) -> np.ndarray:
-        return body_to_vehicle_rotation(x) @ gyro_b
+    def _candidate_vehicle_specific_force(
+        self, q_vb: np.ndarray, accel_b: np.ndarray
+    ) -> np.ndarray:
+        return self._body_to_vehicle_rotation_from_quat(q_vb) @ accel_b
+
+    def _candidate_vehicle_gyro(self, q_vb: np.ndarray, gyro_b: np.ndarray) -> np.ndarray:
+        return self._body_to_vehicle_rotation_from_quat(q_vb) @ gyro_b
+
+    def _numerical_attitude_jacobian(self, func) -> np.ndarray:
+        y0 = func(self.q_vb)
+        H = np.zeros((y0.size, 3))
+        eps = 1.0e-6
+        for i in range(3):
+            dtheta = np.zeros(3)
+            dtheta[i] = eps
+            qp = quat_mul(quat_from_small_angle(dtheta), self.q_vb)
+            qm = quat_mul(quat_from_small_angle(-dtheta), self.q_vb)
+            yp = func(quat_normalize(qp))
+            ym = func(quat_normalize(qm))
+            H[:, i] = (yp - ym) / (2.0 * eps)
+        return H
 
     def _ekf_update(self, z: np.ndarray, func, R_diag: np.ndarray) -> float:
-        h = func(self.x)
-        H = numerical_jacobian(func, self.x)
+        h = func(self.q_vb)
+        H = self._numerical_attitude_jacobian(func)
         y = z - h
         S = H @ self.P @ H.T + np.diag(R_diag)
         S_inv = np.linalg.inv(S)
         K = self.P @ H.T @ S_inv
         score = float(y.T @ S_inv @ y)
-        self.x = self.x + K @ y
-        self.x[2] = wrap_angle_rad(self.x[2])
+        dtheta = K @ y
+        self.q_vb = quat_normalize(quat_mul(quat_from_small_angle(dtheta), self.q_vb))
         self.P = (np.eye(3) - K @ H) @ self.P
         self.P = 0.5 * (self.P + self.P.T)
         return score
@@ -214,34 +306,34 @@ class CoarseAlignEKF:
         )
 
         if self.cfg.use_gravity and stationary:
-            z = np.array([0.0, 0.0])
-            score += self._ekf_update(
-                z,
-                lambda x: self._candidate_vehicle_specific_force(x, self.gravity_lp_b)[:2],
-                np.full(2, self.cfg.r_gravity_std_mps2**2),
-            )
+                z = np.array([0.0, 0.0])
+                score += self._ekf_update(
+                    z,
+                    lambda q: self._candidate_vehicle_specific_force(q, self.gravity_lp_b)[:2],
+                    np.full(2, self.cfg.r_gravity_std_mps2**2),
+                )
 
         if turn_valid:
             if self.cfg.use_turn_gyro:
                 z = np.array([0.0, 0.0])
                 score += self._ekf_update(
                     z,
-                    lambda x: self._candidate_vehicle_gyro(x, window.mean_gyro_b)[:2],
+                    lambda q: self._candidate_vehicle_gyro(q, window.mean_gyro_b)[:2],
                     np.full(2, self.cfg.r_turn_gyro_std_radps**2),
                 )
             if self.cfg.use_course_rate:
                 z = np.array([course_rate])
                 score += self._ekf_update(
                     z,
-                    lambda x: self._candidate_vehicle_gyro(x, window.mean_gyro_b)[2:3],
+                    lambda q: self._candidate_vehicle_gyro(q, window.mean_gyro_b)[2:3],
                     np.array([self.cfg.r_course_rate_std_radps**2]),
                 )
             if self.cfg.use_lateral_accel:
                 z = np.array([a_lat])
                 score += self._ekf_update(
                     z,
-                    lambda x: self._candidate_vehicle_specific_force(
-                        x, window.mean_accel_b
+                    lambda q: self._candidate_vehicle_specific_force(
+                        q, window.mean_accel_b
                     )[1:2],
                     np.array([self.cfg.r_lat_std_mps2**2]),
                 )
@@ -250,8 +342,8 @@ class CoarseAlignEKF:
             z = np.array([a_long])
             score += self._ekf_update(
                 z,
-                lambda x: self._candidate_vehicle_specific_force(
-                    x, window.mean_accel_b
+                lambda q: self._candidate_vehicle_specific_force(
+                    q, window.mean_accel_b
                 )[:1],
                 np.array([self.cfg.r_long_std_mps2**2]),
             )
@@ -259,11 +351,11 @@ class CoarseAlignEKF:
 
     @property
     def mount_angles_rad(self) -> np.ndarray:
-        return self.x.copy()
+        return rot_to_euler_zyx(quat_to_rot(self.q_vb))
 
     @property
     def mount_angles_deg(self) -> np.ndarray:
-        return np.rad2deg(self.x)
+        return np.rad2deg(self.mount_angles_rad)
 
 
 @dataclass
@@ -419,58 +511,6 @@ def run_trial(
     return result
 
 
-def run_multi_hypothesis_trial(
-    truth_mount_deg: np.ndarray,
-    cfg: CoarseAlignConfig,
-    seed: int,
-    repeat_count: int = 1,
-    yaw_step_deg: float = 15.0,
-) -> HypothesisResult:
-    stationary_accel, windows = simulate_vehicle_and_sensors(
-        truth_mount_deg=truth_mount_deg,
-        seed=seed,
-        repeat_count=repeat_count,
-    )
-    seeds_deg = np.arange(-180.0, 180.0, yaw_step_deg)
-    best: HypothesisResult | None = None
-    for yaw_seed_deg in seeds_deg:
-        ekf = CoarseAlignEKF(cfg)
-        ekf.initialize_from_stationary(stationary_accel, np.deg2rad(yaw_seed_deg))
-        times = []
-        estimates = []
-        sigmas = []
-        score = 0.0
-        for window in windows[1:]:
-            score += ekf.update_window(window)
-            times.append(window.t_end_s)
-            estimates.append(ekf.mount_angles_deg.copy())
-            sigmas.append(np.rad2deg(np.sqrt(np.maximum(np.diag(ekf.P), 0.0))))
-        est_deg = ekf.mount_angles_deg
-        truth_deg = truth_mount_deg.astype(float)
-        err_deg = est_deg - truth_deg
-        err_deg[2] = np.rad2deg(wrap_angle_rad(np.deg2rad(err_deg[2])))
-        cand = HypothesisResult(
-            yaw_seed_deg=float(yaw_seed_deg),
-            score=float(score),
-            result=TrialResult(
-                label="multi-hypothesis",
-                truth_deg=truth_deg,
-                est_deg=est_deg,
-                err_deg=err_deg,
-            ),
-            history=TrialHistory(
-                t_s=np.asarray(times),
-                est_deg=np.asarray(estimates),
-                sigma_deg=np.asarray(sigmas),
-            ),
-        )
-        if best is None or cand.score < best.score:
-            best = cand
-    if best is None:
-        raise RuntimeError("no yaw hypotheses evaluated")
-    return best
-
-
 def summarize_results(results: list[TrialResult]) -> None:
     for result in results:
         print(result.label)
@@ -495,32 +535,6 @@ def monte_carlo_summary(
     print(label + " Monte Carlo")
     print(f"  mean abs err [deg] : {np.round(mean_err, 3)}")
     print(f"  max  abs err [deg] : {np.round(max_err, 3)}")
-    return mean_err
-
-
-def monte_carlo_hypothesis_summary(
-    label: str,
-    truth_mount_deg: np.ndarray,
-    cfg: CoarseAlignConfig,
-    seeds: list[int],
-    repeat_count: int = 1,
-    yaw_step_deg: float = 15.0,
-) -> np.ndarray:
-    errs = []
-    chosen = []
-    for seed in seeds:
-        result = run_multi_hypothesis_trial(
-            truth_mount_deg, cfg, seed, repeat_count=repeat_count, yaw_step_deg=yaw_step_deg
-        )
-        errs.append(np.abs(result.result.err_deg))
-        chosen.append(result.yaw_seed_deg)
-    errs = np.asarray(errs)
-    mean_err = np.mean(errs, axis=0)
-    max_err = np.max(errs, axis=0)
-    print(label + " Monte Carlo")
-    print(f"  mean abs err [deg] : {np.round(mean_err, 3)}")
-    print(f"  max  abs err [deg] : {np.round(max_err, 3)}")
-    print(f"  chosen yaw seeds [deg] : {chosen}")
     return mean_err
 
 

@@ -105,6 +105,43 @@ def generate_code():
         is_matrix=True,
     )
 
+    # Coarse mount MEKF observation model: vehicle-frame gyro and accel from q_vb.
+    qv0, qv1, qv2, qv3 = symbols("q_vb0 q_vb1 q_vb2 q_vb3", real=True)
+    q_vb = Matrix([qv0, qv1, qv2, qv3])
+    dq = Matrix([1, 0.5 * dtx, 0.5 * dty, 0.5 * dtz])
+    q_vb_plus = quat_mult(dq, q_vb)
+
+    gyro_bx, gyro_by, gyro_bz = symbols("gyro_bx gyro_by gyro_bz", real=True)
+    accel_bx, accel_by, accel_bz = symbols("accel_bx accel_by accel_bz", real=True)
+    gyro_b = Matrix([gyro_bx, gyro_by, gyro_bz])
+    accel_b = Matrix([accel_bx, accel_by, accel_bz])
+
+    C_bv = quat2rot(q_vb).T
+    C_bv_plus = quat2rot(q_vb_plus).T
+    coarse_obs = Matrix.vstack(C_bv * gyro_b, C_bv * accel_b)
+    coarse_obs_plus = Matrix.vstack(C_bv_plus * gyro_b, C_bv_plus * accel_b)
+    H_coarse = coarse_obs_plus.jacobian(Matrix([dtx, dty, dtz])).subs(
+        {dtx: 0, dty: 0, dtz: 0}
+    )
+
+    coarse_simple = cse(coarse_obs, symbols("c_0:400"), optimizations="basic")
+    write_pair(
+        "coarse_mekf_obs_generated",
+        coarse_simple[0],
+        coarse_simple[1][0],
+        "coarse_obs",
+        is_matrix=False,
+    )
+
+    coarse_jac = cse(H_coarse, symbols("j_0:600"), optimizations="basic")
+    write_pair(
+        "coarse_mekf_obs_jacobian_generated",
+        coarse_jac[0],
+        coarse_jac[1][0],
+        "H_coarse",
+        is_matrix=True,
+    )
+
     print("Align symbolic code generation complete.")
 
 
