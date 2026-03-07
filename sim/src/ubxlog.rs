@@ -139,7 +139,6 @@ pub fn extract_itow_ms(frame: &UbxFrame) -> Option<i64> {
         PacketRef::EsfIns(pkt) => Some(pkt.itow() as i64),
         PacketRef::EsfAlg(pkt) => Some(pkt.itow() as i64),
         PacketRef::EsfStatus(pkt) => Some(pkt.itow() as i64),
-        PacketRef::EsfMeas(pkt) => Some(pkt.itow() as i64),
         _ => None,
     }
 }

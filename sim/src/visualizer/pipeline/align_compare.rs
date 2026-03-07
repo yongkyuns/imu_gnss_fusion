@@ -1,8 +1,8 @@
-use align_rs::align::{AlignConfig, Align, AlignWindowSummary, GRAVITY_MPS2};
+use align_rs::align::{Align, AlignConfig, AlignWindowSummary, GRAVITY_MPS2};
 
 use crate::ubxlog::{
-    extract_esf_alg, extract_esf_raw_samples, extract_nav2_pvt_obs, sensor_meta, NavPvtObs,
-    UbxFrame,
+    NavPvtObs, UbxFrame, extract_esf_alg, extract_esf_raw_samples, extract_nav2_pvt_obs,
+    sensor_meta,
 };
 
 use super::super::math::{nearest_master_ms, normalize_heading_deg};
@@ -15,6 +15,23 @@ pub struct AlignCompareData {
     pub res_vel: Vec<Trace>,
     pub state_q: Vec<Trace>,
     pub cov: Vec<Trace>,
+}
+
+#[derive(Clone, Copy)]
+struct BootstrapConfig {
+    ema_alpha: f32,
+    max_speed_mps: f32,
+    stationary_samples: usize,
+    max_gyro_radps: f32,
+    max_accel_norm_err_mps2: f32,
+}
+
+struct BootstrapDetector {
+    cfg: BootstrapConfig,
+    gyro_ema: Option<f32>,
+    accel_err_ema: Option<f32>,
+    speed_ema: Option<f32>,
+    stationary_accel: Vec<[f32; 3]>,
 }
 
 pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> AlignCompareData {
@@ -166,7 +183,14 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
 
     let cfg = AlignConfig::default();
     let mut align = Align::new(cfg);
-    let mut stationary_accel = Vec::<[f32; 3]>::new();
+    let bootstrap_cfg = BootstrapConfig {
+        ema_alpha: 0.05,
+        max_speed_mps: 0.35,
+        stationary_samples: 100,
+        max_gyro_radps: cfg.max_stationary_gyro_radps,
+        max_accel_norm_err_mps2: cfg.max_stationary_accel_norm_err_mps2,
+    };
+    let mut bootstrap = BootstrapDetector::new(bootstrap_cfg);
     let mut align_initialized = false;
     let mut scan_idx = 0usize;
     let mut interval_start_idx = 0usize;
@@ -181,21 +205,13 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
                     pkt.gz_dps.to_radians() as f32,
                 ];
                 let accel_b = [pkt.ax_mps2 as f32, pkt.ay_mps2 as f32, pkt.az_mps2 as f32];
-                let gyro_norm = norm3(gyro_radps);
-                let accel_norm = norm3(accel_b);
-                let stationary = gyro_norm <= cfg.max_stationary_gyro_radps
-                    && (accel_norm - GRAVITY_MPS2).abs() <= cfg.max_stationary_accel_norm_err_mps2;
-                if stationary {
-                    stationary_accel.push(accel_b);
-                    if stationary_accel.len() >= 100
-                        && align
-                            .initialize_from_stationary(&stationary_accel, 0.0)
-                            .is_ok()
-                    {
-                        align_initialized = true;
-                    }
-                } else {
-                    stationary_accel.clear();
+                let speed_mps = speed_for_bootstrap(prev_nav, (*tn, *nav), pkt.t_ms) as f32;
+                if bootstrap.update(accel_b, gyro_radps, speed_mps)
+                    && align
+                        .initialize_from_stationary(&bootstrap.stationary_accel, 0.0)
+                        .is_ok()
+                {
+                    align_initialized = true;
                 }
             }
             scan_idx += 1;
@@ -389,6 +405,71 @@ fn quat_rpy_alg_deg(q0: f64, q1: f64, q2: f64, q3: f64) -> (f64, f64, f64) {
 
 fn norm3(v: [f32; 3]) -> f32 {
     (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+}
+
+impl BootstrapDetector {
+    fn new(cfg: BootstrapConfig) -> Self {
+        Self {
+            cfg,
+            gyro_ema: None,
+            accel_err_ema: None,
+            speed_ema: None,
+            stationary_accel: Vec::new(),
+        }
+    }
+
+    fn update(&mut self, accel_b: [f32; 3], gyro_radps: [f32; 3], speed_mps: f32) -> bool {
+        let gyro_norm = norm3(gyro_radps);
+        let accel_err = (norm3(accel_b) - GRAVITY_MPS2).abs();
+        self.gyro_ema = Some(ema_update(self.gyro_ema, gyro_norm, self.cfg.ema_alpha));
+        self.accel_err_ema = Some(ema_update(
+            self.accel_err_ema,
+            accel_err,
+            self.cfg.ema_alpha,
+        ));
+        self.speed_ema = Some(ema_update(self.speed_ema, speed_mps, self.cfg.ema_alpha));
+
+        let stationary = self.speed_ema.unwrap_or(speed_mps) <= self.cfg.max_speed_mps
+            && self.gyro_ema.unwrap_or(gyro_norm) <= self.cfg.max_gyro_radps
+            && self.accel_err_ema.unwrap_or(accel_err) <= self.cfg.max_accel_norm_err_mps2;
+
+        if stationary {
+            self.stationary_accel.push(accel_b);
+        } else {
+            self.stationary_accel.clear();
+        }
+        self.stationary_accel.len() >= self.cfg.stationary_samples
+    }
+}
+
+fn ema_update(prev: Option<f32>, sample: f32, alpha: f32) -> f32 {
+    let alpha = alpha.clamp(1.0e-4, 1.0);
+    match prev {
+        Some(prev) => (1.0 - alpha) * prev + alpha * sample,
+        None => sample,
+    }
+}
+
+fn speed_for_bootstrap(
+    prev_nav: Option<(f64, NavPvtObs)>,
+    curr_nav: (f64, NavPvtObs),
+    t_ms: f64,
+) -> f64 {
+    let speed_curr = horizontal_speed(curr_nav.1);
+    let Some((t_prev, nav_prev)) = prev_nav else {
+        return speed_curr;
+    };
+    let speed_prev = horizontal_speed(nav_prev);
+    let dt = curr_nav.0 - t_prev;
+    if dt <= 1.0e-6 {
+        return speed_curr;
+    }
+    let alpha = ((t_ms - t_prev) / dt).clamp(0.0, 1.0);
+    speed_prev + alpha * (speed_curr - speed_prev)
+}
+
+fn horizontal_speed(nav: NavPvtObs) -> f64 {
+    (nav.vel_n_mps * nav.vel_n_mps + nav.vel_e_mps * nav.vel_e_mps).sqrt()
 }
 
 fn normalize2(v: [f64; 2]) -> Option<[f64; 2]> {
