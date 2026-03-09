@@ -13,6 +13,7 @@ use super::timebase::MasterTimeline;
 pub struct AlignCompareData {
     pub cmp_att: Vec<Trace>,
     pub res_vel: Vec<Trace>,
+    pub motion: Vec<Trace>,
     pub state_q: Vec<Trace>,
     pub cov: Vec<Trace>,
 }
@@ -39,6 +40,7 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
         return AlignCompareData {
             cmp_att: Vec::new(),
             res_vel: Vec::new(),
+            motion: Vec::new(),
             state_q: Vec::new(),
             cov: Vec::new(),
         };
@@ -167,6 +169,14 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
     let mut diag_course = Vec::<[f64; 2]>::new();
     let mut diag_lat = Vec::<[f64; 2]>::new();
     let mut diag_long = Vec::<[f64; 2]>::new();
+    let mut cls_stationary = Vec::<[f64; 2]>::new();
+    let mut cls_turn = Vec::<[f64; 2]>::new();
+    let mut cls_long = Vec::<[f64; 2]>::new();
+    let mut upd_gravity = Vec::<[f64; 2]>::new();
+    let mut upd_turn_gyro = Vec::<[f64; 2]>::new();
+    let mut upd_course = Vec::<[f64; 2]>::new();
+    let mut upd_lat = Vec::<[f64; 2]>::new();
+    let mut upd_long = Vec::<[f64; 2]>::new();
     let mut q0_tr = Vec::<[f64; 2]>::new();
     let mut q1_tr = Vec::<[f64; 2]>::new();
     let mut q2_tr = Vec::<[f64; 2]>::new();
@@ -282,9 +292,45 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
                 };
 
                 let t = rel_s(*tn);
+                let gyro_norm = (mean_gyro_b[0] * mean_gyro_b[0]
+                    + mean_gyro_b[1] * mean_gyro_b[1]
+                    + mean_gyro_b[2] * mean_gyro_b[2])
+                    .sqrt();
+                let accel_norm = (mean_accel_b[0] * mean_accel_b[0]
+                    + mean_accel_b[1] * mean_accel_b[1]
+                    + mean_accel_b[2] * mean_accel_b[2])
+                    .sqrt();
+                let speed_prev = (v_prev[0] * v_prev[0] + v_prev[1] * v_prev[1]).sqrt() as f32;
+                let speed_curr = (v_curr[0] * v_curr[0] + v_curr[1] * v_curr[1]).sqrt() as f32;
+                let speed_mid = 0.5_f32 * (speed_prev + speed_curr);
+                let stationary = gyro_norm <= cfg.max_stationary_gyro_radps
+                    && (accel_norm - GRAVITY_MPS2).abs() <= cfg.max_stationary_accel_norm_err_mps2
+                    && speed_mid < 0.5;
+                let turn_valid = speed_mid > cfg.min_speed_mps
+                    && course_rate_dps.abs() > cfg.min_turn_rate_radps.to_degrees() as f64
+                    && a_lat.abs() > cfg.min_lat_acc_mps2 as f64;
+                let long_valid = speed_mid > cfg.min_speed_mps
+                    && a_long.abs() > cfg.min_long_acc_mps2 as f64
+                    && a_lat.abs() < (0.5_f64).max(0.6 * a_long.abs());
+
                 diag_course.push([t, course_rate_dps]);
                 diag_lat.push([t, a_lat]);
                 diag_long.push([t, a_long]);
+                cls_stationary.push([t, if stationary { 1.0 } else { 0.0 }]);
+                cls_turn.push([t, if turn_valid { 1.0 } else { 0.0 }]);
+                cls_long.push([t, if long_valid { 1.0 } else { 0.0 }]);
+                upd_gravity.push([t, if cfg.use_gravity && stationary { 1.0 } else { 0.0 }]);
+                upd_turn_gyro.push([t, if cfg.use_turn_gyro && turn_valid { 1.0 } else { 0.0 }]);
+                upd_course.push([t, if cfg.use_course_rate && turn_valid { 1.0 } else { 0.0 }]);
+                upd_lat.push([t, if cfg.use_lateral_accel && turn_valid { 1.0 } else { 0.0 }]);
+                upd_long.push([
+                    t,
+                    if cfg.use_longitudinal_accel && long_valid {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                ]);
 
                 let q = align.q_vb;
                 let q_plot = [q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64];
@@ -344,6 +390,40 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
             Trace {
                 name: "a_long [m/s^2]".to_string(),
                 points: diag_long,
+            },
+        ],
+        motion: vec![
+            Trace {
+                name: "class stationary".to_string(),
+                points: cls_stationary,
+            },
+            Trace {
+                name: "class turn".to_string(),
+                points: cls_turn,
+            },
+            Trace {
+                name: "class longitudinal".to_string(),
+                points: cls_long,
+            },
+            Trace {
+                name: "update gravity".to_string(),
+                points: upd_gravity,
+            },
+            Trace {
+                name: "update turn gyro".to_string(),
+                points: upd_turn_gyro,
+            },
+            Trace {
+                name: "update course rate".to_string(),
+                points: upd_course,
+            },
+            Trace {
+                name: "update lateral accel".to_string(),
+                points: upd_lat,
+            },
+            Trace {
+                name: "update longitudinal accel".to_string(),
+                points: upd_long,
             },
         ],
         state_q: vec![

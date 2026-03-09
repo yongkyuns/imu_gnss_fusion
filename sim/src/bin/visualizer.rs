@@ -67,6 +67,7 @@ fn main() -> Result<()> {
         group_stats("ekf_map", &data.ekf_map),
         group_stats("align_cmp_att", &data.align_cmp_att),
         group_stats("align_res_vel", &data.align_res_vel),
+        group_stats("align_motion", &data.align_motion),
         group_stats("align_state_q", &data.align_state_q),
         group_stats("align_cov", &data.align_cov),
     ] {
@@ -86,6 +87,7 @@ fn main() -> Result<()> {
         ("imu_cal_accel", &data.imu_cal_accel),
         ("align_cmp_att", &data.align_cmp_att),
         ("align_res_vel", &data.align_res_vel),
+        ("align_motion", &data.align_motion),
         ("align_cov", &data.align_cov),
     ] {
         if let Some((name, gap)) = max_gap_trace(traces) {

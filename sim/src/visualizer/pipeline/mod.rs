@@ -1,16 +1,16 @@
+mod align_compare;
 mod ekf_compare;
 mod signals;
 mod tag_time;
 mod timebase;
-mod align_compare;
 
 use crate::ubxlog::parse_ubx_frames;
 
 use super::model::PlotData;
+use align_compare::build_align_compare_traces;
 use ekf_compare::build_ekf_compare_traces;
 use signals::build_signal_traces;
 use timebase::build_master_timeline;
-use align_compare::build_align_compare_traces;
 
 pub fn build_plot_data(bytes: &[u8], max_records: Option<usize>) -> (PlotData, bool) {
     let frames = parse_ubx_frames(bytes, max_records);

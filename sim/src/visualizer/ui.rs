@@ -4,7 +4,7 @@ use anyhow::Result;
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints};
 use walkers::sources::{Mapbox, MapboxStyle, OpenStreetMap};
-use walkers::{lon_lat, HttpTiles, Map, MapMemory, Plugin};
+use walkers::{HttpTiles, Map, MapMemory, Plugin, lon_lat};
 
 use super::math::heading_endpoint;
 use super::model::{HeadingSample, Page, PlotData, Trace};
@@ -356,6 +356,13 @@ impl eframe::App for App {
                             ui,
                             "Align Window Diagnostics",
                             &self.data.align_res_vel,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "Align Motion Classification / Updates",
+                            &self.data.align_motion,
                             true,
                             self.max_points_per_trace,
                         );

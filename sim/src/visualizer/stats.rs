@@ -23,6 +23,7 @@ pub fn trace_stats(data: &PlotData) -> (usize, usize) {
         &data.ekf_cov_nonbias,
         &data.align_cmp_att,
         &data.align_res_vel,
+        &data.align_motion,
         &data.align_state_q,
         &data.align_cov,
     ];
@@ -56,6 +57,7 @@ pub fn trace_time_bounds(data: &PlotData) -> Option<(f64, f64)> {
         &data.ekf_cov_nonbias,
         &data.align_cmp_att,
         &data.align_res_vel,
+        &data.align_motion,
         &data.align_state_q,
         &data.align_cov,
         &data.ekf_map,

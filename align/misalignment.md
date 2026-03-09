@@ -1,714 +1,568 @@
-# Pre-Fusion IMU Mount-Alignment Estimator for Ground Vehicles
+# Align MEKF Derivation
 
-This note defines a two-stage IMU mount-alignment design for automotive use:
+This note documents the filter that is currently implemented in `align/src/align.rs`.
 
-1. coarse alignment
-2. fine alignment
+It is not the earlier two-stage coarse/fine design. The shipped implementation is a single reduced-state mount-alignment filter that estimates a constant vehicle-to-IMU rotation using:
 
-The coarse stage uses only:
+- `ESF-RAW` gyro and accelerometer data
+- `NAV2-PVT` GNSS velocity over each GNSS interval
+- a stationary accelerometer bootstrap
 
-- `ESF-RAW` IMU gyro `\omega^b`
-- `ESF-RAW` IMU accelerometer `f^b`
-- `NAV2-PVT` GNSS velocity `v^n`
+The state is the constant mount rotation `q_vb`, represented by a nominal quaternion and a 3-state small-angle covariance.
 
-The fine stage starts only after a usable coarse mount estimate exists.
+## 1. Frames and Conventions
 
-The intent is the bootstrap flow used by vehicle systems:
+Frames:
 
-- estimate mount roll/pitch from gravity
-- estimate mount yaw from turning and acceleration events
-- rotate IMU data by the coarse mount estimate
-- start the full GNSS/INS EKF
-- optionally refine mount inside the full EKF
+- `v`: vehicle frame, FRD (forward, right, down)
+- `b`: IMU/body frame, the raw `ESF-RAW` sensor frame
+- `n`: local navigation frame used by GNSS velocity, with horizontal components `[v_N, v_E]`
 
-No `NAV-ATT` or externally supplied attitude is assumed.
-
----
-
-## 1. Goal
-
-Estimate the constant rotation between:
-
-- vehicle frame `v`: forward-right-down
-- IMU frame `b`
-
-using only raw IMU and GNSS velocity, before the full navigation filter is trusted.
-
-We denote the mount rotation by:
+The filter stores:
 
 ```math
-C_v^b(\phi_m, \theta_m, \psi_m)
+q_{vb}
 ```
 
-where:
+which represents the vehicle-to-body rotation.
 
-- `\phi_m`: roll mount angle
-- `\theta_m`: pitch mount angle
-- `\psi_m`: yaw mount angle
+The corresponding rotation matrix is:
 
-The inverse rotation is:
+```math
+C_v^b = C(q_{vb})
+```
+
+and the inverse used for measurements is:
 
 ```math
 C_b^v = (C_v^b)^T
 ```
 
-which rotates IMU signals into the candidate vehicle frame.
-
----
-
-## 2. Two-Stage Design
-
-### Stage A: Coarse alignment
-
-Estimate only the three constant mount angles:
+The code extracts mount Euler angles from `C_v^b` using the repository's FRD convention:
 
 ```math
-x =
-\begin{bmatrix}
-\phi_m \\
-\theta_m \\
-\psi_m
-\end{bmatrix}
-```
-
-This stage is intentionally reduced-state and motion-model based.
-
-It does not estimate full vehicle attitude, position, or biases as part of the main navigation state.
-
-### Stage B: Fine alignment
-
-Once a sufficiently good coarse `C_b^v` exists:
-
-- rotate IMU into the vehicle frame
-- start the full GNSS/INS EKF
-- let the full EKF refine navigation states and, if desired, refine mount parameters
-
-The coarse stage is only responsible for getting close enough that the full EKF becomes reliable.
-
----
-
-## 3. Coarse-Stage State
-
-Use only the three mount angles:
-
-```math
-x_k =
-\begin{bmatrix}
-\phi_m \\
-\theta_m \\
-\psi_m
-\end{bmatrix}
-```
-
-with a slow random-walk process model:
-
-```math
-x_{k+1} = x_k + w_k
-```
-
-where `w_k` is very small.
-
-This can be implemented as:
-
-- a recursive EKF on the three angles
-- or a sliding-window nonlinear least-squares fit
-
-Both are acceptable. The measurement structure below is the important part.
-
----
-
-## 4. Available Measurements from `NAV2-PVT`
-
-From GNSS velocity:
-
-```math
-v^n =
-\begin{bmatrix}
-v_N \\
-v_E
-\end{bmatrix}
-```
-
-compute:
-
-### Speed
-
-```math
-s = \sqrt{v_N^2 + v_E^2}
-```
-
-### Course
-
-```math
-\chi = \operatorname{atan2}(v_E, v_N)
-```
-
-### Course rate
-
-```math
-\dot\chi_k \approx \frac{\mathrm{wrap}(\chi_k - \chi_{k-1})}{\Delta t}
-```
-
-### Horizontal acceleration
-
-```math
-a_k^n \approx \frac{v_k^n - v_{k-1}^n}{\Delta t}
-```
-
-Define unit tangent and lateral directions from GNSS velocity:
-
-```math
-t^n =
-\frac{1}{s}
-\begin{bmatrix}
-v_N \\
-v_E
-\end{bmatrix}
-```
-
-```math
-\ell^n =
-\begin{bmatrix}
--t_E \\
-t_N
-\end{bmatrix}
-```
-
-Then define:
-
-### Longitudinal acceleration
-
-```math
-a_{long} = {t^n}^T a^n
-```
-
-### Lateral acceleration
-
-```math
-a_{lat} = {\ell^n}^T a^n
-```
-
-These GNSS-derived signals are the main horizontal observability source for coarse yaw.
-
----
-
-## 5. Rotate IMU into a Candidate Vehicle Frame
-
-For a candidate mount estimate `x`, define:
-
-```math
-\omega^v = C_b^v(x)\,\omega^b
-```
-
-```math
-f^v = C_b^v(x)\,f^b
-```
-
-If `x` is correct, then transformed IMU signals should look like ordinary ground-vehicle motion.
-
----
-
-## 6. Ground-Vehicle Structure Used by Coarse Alignment
-
-For normal on-road motion, use the approximate vehicle-frame structure:
-
-```math
-\omega^v \approx
-\begin{bmatrix}
-0 \\
-0 \\
-r
-\end{bmatrix}
-```
-
-```math
-f^v \approx
-\begin{bmatrix}
-a_x \\
-a_y \\
-g
-\end{bmatrix}
-```
-
-where:
-
-- `r` is vehicle yaw rate
-- `a_x` is longitudinal acceleration
-- `a_y` is lateral acceleration
-- `g` is gravity in the down direction
-
-A wrong mount estimate causes:
-
-- yaw-rate leakage into `\omega_x^v`, `\omega_y^v`
-- gravity leakage into `f_x^v`, `f_y^v`
-- lateral acceleration leakage into the wrong horizontal axis
-- longitudinal acceleration leakage into the wrong horizontal axis
-
-This is the physical basis of the coarse filter.
-
----
-
-## 7. Observability in the Coarse Stage
-
-The coarse stage should be designed around what is actually observable from raw IMU and GNSS velocity.
-
-### Roll and pitch
-
-Roll and pitch are primarily observed from gravity:
-
-- stationary windows
-- smooth-driving low-pass accelerometer windows
-
-### Yaw
-
-Yaw is not robustly observable from gravity.
-
-Yaw is only weakly constrained by:
-
-- course-rate matching `\omega_z^v \approx \dot\chi`
-- planar-turn structure `\omega_x^v \approx 0`, `\omega_y^v \approx 0`
-
-Those terms help, but by themselves they mostly constrain the vehicle vertical axis and can leave a forward/backward ambiguity or a very weak yaw estimate.
-
-The decisive yaw information comes from matching the transformed IMU horizontal acceleration to GNSS-derived:
-
-- lateral acceleration `a_{lat}`
-- longitudinal acceleration `a_{long}`
-
-So the coarse stage should not rely on course-rate alone for yaw.
-
----
-
-## 8. Window Types
-
-Do not treat all samples identically. Classify short windows and only apply the measurements valid for each window.
-
-### 8.1 Stationary windows
-
-Use when:
-
-- `||\omega^b||` is small
-- `||\,||f^b|| - g\,||` is small
-
-These windows are used for:
-
-- gravity alignment
-- rough roll/pitch initialization
-
-### 8.2 Turn windows
-
-Use when:
-
-- speed is above threshold
-- `|\dot\chi|` is above threshold
-- lateral acceleration is above threshold
-- GNSS velocity quality is good
-
-These windows are used for:
-
-- planar gyro structure
-- yaw-rate matching
-- lateral-acceleration matching
-
-### 8.3 Longitudinal excitation windows
-
-Use when:
-
-- speed is above threshold
-- `|a_{long}|` is above threshold
-- reverse motion is rejected
-
-These windows are used for:
-
-- forward-direction disambiguation
-- longitudinal-acceleration matching
-
----
-
-## 9. Coarse-Stage Measurements
-
-The coarse filter should use four pseudo-measurement blocks.
-
-### 9.1 Gravity consistency
-
-For low-pass accelerometer or stationary average:
-
-```math
-z_g =
-\begin{bmatrix}
-0 \\
-0
-\end{bmatrix}
+C_v^b = R_x(\phi) R_y(\theta) R_z(\psi)
 ```
 
 with:
 
 ```math
-h_g(x) =
+\theta = \arcsin(-C_{31}), \quad
+\phi = \operatorname{atan2}(C_{32}, C_{33}), \quad
+\psi = \operatorname{atan2}(C_{21}, C_{11})
+```
+
+## 2. State and Error-State Model
+
+The nominal state is only the mount quaternion:
+
+```math
+\hat q_{vb}
+```
+
+The covariance is defined on a 3-vector small-angle error state:
+
+```math
+\delta x = \delta\theta \in \mathbb{R}^3
+```
+
+So the filter covariance is:
+
+```math
+P \in \mathbb{R}^{3\times 3}
+```
+
+The mount is assumed constant, so the process model is a random walk on the error-state:
+
+```math
+\delta\theta_{k+1} = \delta\theta_k + w_k
+```
+
+with diagonal process noise from configuration:
+
+```math
+Q_c = \operatorname{diag}(\sigma_{q,roll}^2, \sigma_{q,pitch}^2, \sigma_{q,yaw}^2)
+```
+
+The implementation applies this in discrete time as:
+
+```math
+P_{k+1|k} = P_{k|k} + Q_c \, \Delta t
+```
+
+with no nominal-state propagation beyond keeping `q_vb` constant.
+
+## 3. Stationary Initialization
+
+Initialization uses a set of stationary accelerometer samples:
+
+```math
+f_i^b, \quad i = 1,\dots,N
+```
+
+and forms the mean:
+
+```math
+\bar f^b = \frac{1}{N} \sum_{i=1}^N f_i^b
+```
+
+At rest, specific force is approximately opposite gravity, so the vehicle down axis expressed in the body frame is seeded as:
+
+```math
+\hat z_v^b = -\frac{\bar f^b}{\|\bar f^b\|}
+```
+
+A reference horizontal axis is then constructed by projecting a fixed reference vector onto the plane orthogonal to `\hat z_v^b`.
+
+First try body x:
+
+```math
+x_{ref} = [1,0,0]^T
+```
+
+and project:
+
+```math
+\tilde x_v^b = x_{ref} - \hat z_v^b (\hat z_v^{bT} x_{ref})
+```
+
+If degenerate, use body y instead. Normalize:
+
+```math
+\hat x_v^b = \frac{\tilde x_v^b}{\|\tilde x_v^b\|}
+```
+
+Then form:
+
+```math
+\hat y_v^b = \frac{\hat z_v^b \times \hat x_v^b}{\|\hat z_v^b \times \hat x_v^b\|}
+```
+
+and re-orthogonalize:
+
+```math
+\hat x_v^b = \hat y_v^b \times \hat z_v^b
+```
+
+This gives the initial vehicle-to-body rotation:
+
+```math
+\hat C_v^b = [\hat x_v^b\; \hat y_v^b\; \hat z_v^b]
+```
+
+where the columns are the vehicle axes expressed in the body frame.
+
+Roll and pitch come from `\hat C_v^b`. Yaw is not observable from stationary accelerometer data, so the implementation overwrites the initialized yaw with a supplied seed `\psi_0`:
+
+```math
+\hat q_{vb,0} = q(\hat\phi, \hat\theta, \psi_0)
+```
+
+The covariance is reset to a smaller diagonal prior after initialization.
+
+## 4. GNSS-Window Summary
+
+The update operates once per GNSS interval using:
+
+```math
+\Delta t,
+\bar\omega^b,
+\bar f^b,
+ v_{k-1}^n,
+ v_k^n
+```
+
+stored in `AlignWindowSummary`.
+
+The IMU part is a simple average over all `ESF-RAW` packets in the interval:
+
+```math
+\bar\omega^b = \frac{1}{M} \sum_{j=1}^M \omega_j^b,
+\qquad
+\bar f^b = \frac{1}{M} \sum_{j=1}^M f_j^b
+```
+
+The filter also maintains a low-pass accelerometer state used by the stationary gravity update:
+
+```math
+f_{g,lp,k}^b = (1-\alpha) f_{g,lp,k-1}^b + \alpha \, \bar f_k^b
+```
+
+## 5. GNSS-Derived Kinematics
+
+From the two GNSS velocity samples:
+
+```math
+v_{k-1}^n = [v_{N,k-1}, v_{E,k-1}, v_{D,k-1}]^T,
+\qquad
+v_k^n = [v_{N,k}, v_{E,k}, v_{D,k}]^T
+```
+
+compute horizontal speeds:
+
+```math
+s_{k-1} = \sqrt{v_{N,k-1}^2 + v_{E,k-1}^2},
+\qquad
+s_k = \sqrt{v_{N,k}^2 + v_{E,k}^2}
+```
+
+and the mid-speed:
+
+```math
+s_{mid} = \frac{s_{k-1} + s_k}{2}
+```
+
+Course angles:
+
+```math
+\chi_{k-1} = \operatorname{atan2}(v_{E,k-1}, v_{N,k-1}),
+\qquad
+\chi_k = \operatorname{atan2}(v_{E,k}, v_{N,k})
+```
+
+Course rate:
+
+```math
+\dot\chi_k = \frac{\operatorname{wrap}(\chi_k - \chi_{k-1})}{\Delta t}
+```
+
+Navigation-frame acceleration estimate:
+
+```math
+a_k^n = \frac{v_k^n - v_{k-1}^n}{\Delta t}
+```
+
+Mid-interval horizontal velocity:
+
+```math
+v_{mid,h}^n = \frac{1}{2}
 \begin{bmatrix}
-f_{x,LP}^v(x) \\
-f_{y,LP}^v(x)
+v_{N,k-1} + v_{N,k} \\
+v_{E,k-1} + v_{E,k}
 \end{bmatrix}
 ```
 
-Interpretation:
-
-- in the correct vehicle frame, gravity should point along vehicle down
-- the horizontal components should vanish
-
-This is the main rough initializer for `\phi_m` and `\theta_m`.
-
-### 9.2 Planar-turn gyro structure
-
-During ordinary turning:
+If `v_{mid,h}^n` is nonzero, define tangent and lateral unit vectors:
 
 ```math
-z_\omega =
+t^n = \frac{v_{mid,h}^n}{\|v_{mid,h}^n\|},
+\qquad
+\ell^n = \begin{bmatrix} -t_E \\ t_N \end{bmatrix}
+```
+
+Then longitudinal and lateral accelerations are:
+
+```math
+a_{long} = t^{nT} a_h^n,
+\qquad
+a_{lat} = \ell^{nT} a_h^n
+```
+
+where `a_h^n = [a_N, a_E]^T`.
+
+## 6. Motion Classification and Gating
+
+The implementation classifies the current GNSS interval into three possible update types.
+
+### Stationary
+
+```math
+\|\bar\omega^b\| \le \omega_{stat,max}
+```
+
+```math
+\left| \|\bar f^b\| - g \right| \le a_{stat,max}
+```
+
+```math
+s_{mid} < 0.5 \text{ m/s}
+```
+
+### Turn-valid
+
+```math
+s_{mid} > s_{min}
+```
+
+```math
+|\dot\chi_k| > \dot\chi_{min}
+```
+
+```math
+|a_{lat}| > a_{lat,min}
+```
+
+### Longitudinal-valid
+
+```math
+s_{mid} > s_{min}
+```
+
+```math
+|a_{long}| > a_{long,min}
+```
+
+```math
+|a_{lat}| < \max(0.5, 0.6 |a_{long}|)
+```
+
+Only the enabled and valid measurements are fused in each window.
+
+## 7. Observation Model
+
+For a candidate mount quaternion `q_vb`, rotate averaged gyro and accelerometer into the candidate vehicle frame:
+
+```math
+\omega^v = C_b^v(q_{vb}) \, \bar\omega^b
+```
+
+```math
+f^v = C_b^v(q_{vb}) \, \bar f^b
+```
+
+The full observation vector used by the implementation is:
+
+```math
+h(q_{vb}) =
 \begin{bmatrix}
-0 \\
-0
+\omega_x^v \\
+\omega_y^v \\
+\omega_z^v \\
+f_x^v \\
+f_y^v \\
+f_z^v
 \end{bmatrix}
 ```
 
-with:
+The filter never fuses all six rows at once. It selects subsets depending on motion class.
+
+## 8. Measurement Equations Actually Used
+
+### 8.1 Stationary gravity pseudo-measurement
+
+The current implementation uses only the horizontal accelerometer components of the low-pass gravity estimate:
 
 ```math
-h_\omega(x) =
-\begin{bmatrix}
-\omega_x^v(x) \\
-\omega_y^v(x)
-\end{bmatrix}
+z_g = \begin{bmatrix} 0 \\ 0 \end{bmatrix}
 ```
-
-Interpretation:
-
-- most vehicle angular rate should appear on vehicle `z`
-- `\omega_x^v` and `\omega_y^v` should be small
-
-This strongly helps roll/pitch and reduces bad yaw hypotheses, but it is not by itself a sufficient yaw observable.
-
-### 9.3 GNSS course-rate vs transformed yaw-rate
-
-During turning:
 
 ```math
-z_r = \dot\chi
+h_g(q_{vb}) = \begin{bmatrix} f_x^v \\ f_y^v \end{bmatrix}
 ```
 
-with:
+with `f^b = f_{g,lp}^b`.
+
+This enforces that gravity should lie on the vehicle z-axis, but it does not explicitly fuse `f_z^v \approx -g`.
+
+### 8.2 Turn gyro pseudo-measurement
+
+During turning windows:
 
 ```math
-h_r(x) = \omega_z^v(x)
+z_{turn,gyro} = \begin{bmatrix} 0 \\ 0 \end{bmatrix}
 ```
 
-Interpretation:
+```math
+h_{turn,gyro}(q_{vb}) = \begin{bmatrix} \omega_x^v \\ \omega_y^v \end{bmatrix}
+```
 
-- transformed IMU yaw-like rate should match GNSS course rate
+This encodes the planar-vehicle assumption that body rotation is predominantly about vehicle z.
 
-This is a useful yaw-related bridge, but it should not be the only yaw term.
+### 8.3 Course-rate measurement
 
-### 9.4 GNSS lateral and longitudinal acceleration matching
+```math
+z_{course} = \dot\chi_k
+```
 
-During turning, use:
+```math
+h_{course}(q_{vb}) = \omega_z^v
+```
+
+So the transformed gyro z component is matched to GNSS course rate.
+
+### 8.4 Lateral-acceleration measurement
 
 ```math
 z_{lat} = a_{lat}
 ```
 
-with:
-
 ```math
-h_{lat}(x) = f_y^v(x)
+h_{lat}(q_{vb}) = f_y^v
 ```
 
-During accel/brake windows, use:
+This uses the transformed accelerometer lateral component as a proxy for GNSS-derived lateral acceleration.
+
+### 8.5 Longitudinal-acceleration measurement
 
 ```math
 z_{long} = a_{long}
 ```
 
-with:
-
 ```math
-h_{long}(x) = f_x^v(x)
+h_{long}(q_{vb}) = f_x^v
 ```
 
-Interpretation:
+This uses the transformed accelerometer longitudinal component as a proxy for GNSS-derived longitudinal acceleration.
 
-- if the mount yaw is wrong, transformed horizontal specific force is rotated into the wrong vehicle axes
-- matching `f_y^v` to GNSS lateral acceleration helps identify yaw during left/right turns
-- matching `f_x^v` to GNSS longitudinal acceleration helps identify forward direction and reject the 180 degree yaw branch
+## 9. Analytical Jacobian Used by the Code
 
-These are the missing yaw observables that the coarse stage must use.
-
----
-
-## 10. Recommended Batch Cost
-
-If the coarse stage is implemented as a sliding-window nonlinear least-squares problem, use:
+For any body-frame vector `u^b`, define:
 
 ```math
-J(\phi_m,\theta_m,\psi_m)
-=
-\sum_{k\in S_g} w_{g,k}\left(f_{x,LP,k}^v{}^2 + f_{y,LP,k}^v{}^2\right)
-+
-\sum_{k\in S_t} w_{\omega,k}\left(\omega_{x,k}^v{}^2 + \omega_{y,k}^v{}^2\right)
-+
-\sum_{k\in S_t} w_{r,k}\left(\omega_{z,k}^v - \dot\chi_k\right)^2
-+
-\sum_{k\in S_t} w_{lat,k}\left(f_{y,k}^v - a_{lat,k}\right)^2
-+
-\sum_{k\in S_x} w_{long,k}\left(f_{x,k}^v - a_{long,k}\right)^2
+u^v = C_b^v(q_{vb}) u^b
 ```
 
-where:
-
-- `S_g` are gravity/stationary windows
-- `S_t` are turn windows
-- `S_x` are longitudinal excitation windows
-
-Interpretation:
-
-- gravity term aligns vehicle down
-- planar gyro term enforces turn-axis structure
-- course-rate term matches GNSS turning geometry
-- lateral-accel term makes yaw observable in turns
-- longitudinal-accel term disambiguates forward direction
-
-This preserves the original coarse-filter design, but makes the yaw observability story correct.
-
----
-
-## 11. Recursive EKF Formulation
-
-If a recursive filter is preferred, keep the same 3-angle state:
+The filter uses a left-multiplicative small-angle correction:
 
 ```math
-x =
+q_{vb}^{+} = \delta q(\delta\theta) \otimes q_{vb}
+```
+
+with small-angle quaternion:
+
+```math
+\delta q(\delta\theta) \approx \begin{bmatrix} 1 \\ \tfrac{1}{2}\delta\theta \end{bmatrix}
+```
+
+For this convention, the implementation uses the linearization:
+
+```math
+\delta \nu^v \approx C_b^v [u^b]_{\times} \, \delta\theta
+```
+
+where `[u]_{\times}` is the skew-symmetric cross-product matrix.
+
+So the stacked Jacobian for the 6-vector observation is:
+
+```math
+H(q_{vb}) =
 \begin{bmatrix}
-\phi_m \\
-\theta_m \\
-\psi_m
+C_b^v [\bar\omega^b]_{\times} \\
+C_b^v [\bar f^b]_{\times}
 \end{bmatrix}
+\in \mathbb{R}^{6\times 3}
 ```
 
-with random-walk prediction:
+The implementation forms this as:
 
 ```math
-x_{k+1} = x_k + w_k
-```
-
-Use separate measurement updates by window class.
-
-### 11.1 Gravity update
-
-```math
-z_g =
-\begin{bmatrix}
-0 \\
-0
-\end{bmatrix}
-,\quad
-h_g(x)=
-\begin{bmatrix}
-f_{x,LP}^v(x) \\
-f_{y,LP}^v(x)
-\end{bmatrix}
-```
-
-### 11.2 Turn update
-
-```math
-z_t =
-\begin{bmatrix}
-0 \\
-0 \\
-\dot\chi \\
-a_{lat}
-\end{bmatrix}
+H_\omega = C_b^v [\bar\omega^b]_{\times}
 ```
 
 ```math
-h_t(x)=
-\begin{bmatrix}
-\omega_x^v(x) \\
-\omega_y^v(x) \\
-\omega_z^v(x) \\
-f_y^v(x)
-\end{bmatrix}
+H_f = C_b^v [\bar f^b]_{\times}
 ```
 
-### 11.3 Longitudinal excitation update
+and then selects the required rows for each scalar or 2-vector update.
+
+## 10. EKF Update Equations
+
+For a selected measurement subset:
 
 ```math
-z_x = a_{long}
-,\quad
-h_x(x)=f_x^v(x)
+z = h(q_{vb}) + v,
+\qquad v \sim \mathcal N(0,R)
 ```
 
-Innovation:
+with residual:
 
 ```math
-y_k = z_k - h(x_k)
+y = z - h(\hat q_{vb})
 ```
 
-Jacobian:
+and selected Jacobian `H`, the filter computes:
 
 ```math
-H_k = \frac{\partial h}{\partial x}\Bigg|_{x=\hat x_k}
+S = H P H^T + R
 ```
 
-For implementation, `H_k` can be computed numerically with small perturbations in:
+```math
+K = P H^T S^{-1}
+```
 
-- `\phi_m`
-- `\theta_m`
-- `\psi_m`
+```math
+\delta\theta = K y
+```
 
-This is simple and sufficient for the coarse stage.
+and injects the correction multiplicatively:
 
----
+```math
+\hat q_{vb}^{+} = \operatorname{normalize}(\delta q(\delta\theta) \otimes \hat q_{vb})
+```
 
-## 12. Practical Coarse-Alignment Sequence
+Covariance update:
 
-### Step 1: Rough roll/pitch from gravity
+```math
+P^{+} = (I - K H) P
+```
 
-Use stationary or low-dynamic windows:
+followed by explicit symmetrization in code.
 
-- low-pass accelerometer
-- estimate `\phi_m`, `\theta_m`
-- hold `\psi_m` weakly constrained or fixed initially
+The implementation uses only:
 
-### Step 2: Rough yaw from turning
+- `1 x 1` innovation inversions for scalar updates
+- `2 x 2` innovation inversions for vector updates
 
-Use speed-qualified turn windows:
+## 11. Measurement Noise Mapping
 
-- compute GNSS course and course rate
-- compute GNSS lateral acceleration
-- rotate gyro and accel with candidate mount estimate
-- fit `\psi_m` so that:
-  - `\omega_z^v \approx \dot\chi`
-  - `\omega_x^v \approx 0`
-  - `\omega_y^v \approx 0`
-  - `f_y^v \approx a_{lat}`
+The configuration maps directly to the measurement covariances:
 
-### Step 3: Forward-direction disambiguation
+### Gravity update
 
-Use accel/brake windows:
+```math
+R_g = \sigma_g^2 I_2
+```
 
-- compute GNSS longitudinal acceleration
-- fit `\psi_m` so that `f_x^v \approx a_{long}`
-- reject the 180 degree wrong-forward solution
+### Turn-gyro update
 
-### Step 4: Joint coarse refinement
+```math
+R_{turn,gyro} = \sigma_{turn,gyro}^2 I_2
+```
 
-Run the batch fit or recursive filter over all valid windows until the coarse covariance or residuals are acceptable.
+### Course-rate update
 
----
+```math
+R_{course} = \sigma_{course}^2
+```
 
-## 13. Data Selection Rules
+### Lateral update
 
-Use only windows that pass quality gates such as:
+```math
+R_{lat} = \sigma_{lat}^2
+```
 
-- speed above threshold
-- GNSS velocity quality is good
-- turn windows have sufficient `|\dot\chi|`
-- lateral-accel windows have sufficient `|a_{lat}|`
-- longitudinal windows have sufficient `|a_{long}|`
-- reject reverse motion
-- reject very low speed
-- reject violent bumps for gravity estimation
-- require both left and right turns for robust yaw convergence
+### Longitudinal update
 
-The coarse stage is driven as much by window selection as by the filter equations.
+```math
+R_{long} = \sigma_{long}^2
+```
 
----
+## 12. What the Current Filter Is and Is Not
 
-## 14. Why Straight Driving Is Not Enough
+The current implementation is:
 
-Straight driving mostly provides gravity.
+- a single-stage reduced-state mount-alignment MEKF
+- windowed on GNSS intervals
+- driven by averaged IMU and GNSS-derived pseudo-measurements
+- initialized by stationary accelerometer tilt plus a yaw seed
 
-That is usually enough for:
+It is not:
 
-- roll mount angle
-- pitch mount angle
+- a full navigation EKF
+- a fine-alignment filter with navigation attitude in the state
+- a batch optimizer
+- a two-stage coarse/fine pipeline in the current code
 
-but not enough for robust yaw mount alignment because:
+## 13. Important Implementation Consequence
 
-- `\dot\chi \approx 0`
-- `a_{lat} \approx 0`
-- horizontal excitation is weak
+Because the stationary update uses only:
 
-Repeated left and right turns help because:
+```math
+f_x^v \approx 0, \qquad f_y^v \approx 0
+```
 
-- `a_{lat}` changes sign
-- `\dot\chi` changes sign
-- gravity remains fixed
-- the estimator can separate fixed mount tilt from true vehicle dynamics
+and not the full signed gravity vector, the current implementation constrains the gravity direction only through horizontality, not through an explicit `f_z^v \approx -g` residual.
 
-Longitudinal accel/brake events add the missing forward-direction information that removes the 180 degree yaw ambiguity.
+That is a property of the current code, not a theoretical recommendation.
 
----
-
-## 15. Limitations
-
-This pre-fusion estimator produces a coarse mount estimate, not a final calibration.
-
-Its estimate can absorb errors from:
-
-- gyro bias
-- accelerometer bias
-- GNSS velocity noise
-- vehicle sideslip
-- lever arm effects
-- road bank and slope
-- timing mismatch
-
-That is acceptable at bootstrap.
-
-The goal is only to get close enough for the full EKF to start reliably.
-
----
-
-## 16. Fine Alignment Stage
-
-After coarse alignment converges sufficiently:
-
-1. rotate IMU measurements by `C_b^v`
-2. initialize the full GNSS/INS EKF
-3. let the full-state filter refine navigation states
-4. optionally refine mount inside the full EKF using the better vehicle attitude and bias estimates
-
-This is where a full quaternion `q_{sb}` or equivalent mount state belongs.
-
-The coarse stage should remain intentionally simple and motion-model based.
-
----
-
-## 17. Summary
-
-The intended architecture is correct:
-
-- coarse reduced-state mount estimator first
-- fine full-state EKF second
-
-For the coarse stage, the correct design is:
-
-- use only raw IMU and GNSS velocity
-- rotate IMU into a candidate vehicle frame
-- enforce ground-vehicle motion structure
-- estimate `[\phi_m,\theta_m,\psi_m]`
-
-The measurements that should drive the coarse estimator are:
-
-- gravity consistency for roll/pitch
-- planar-turn gyro structure
-- GNSS course-rate matching
-- GNSS lateral-acceleration matching
-- GNSS longitudinal-acceleration matching
-
-The important correction is:
-
-- course-rate and planar-turn gyro terms help yaw, but they are not enough alone
-- lateral and longitudinal acceleration matching are required for robust coarse yaw identification and forward-direction disambiguation
-
-This gives a coarse estimate suitable for handing off to the fine alignment EKF.
+Any redesign discussion should start from this exact measurement set, because it determines the current observability and branch behavior seen in replay.

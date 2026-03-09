@@ -1,4 +1,4 @@
-use align_rs::{AlignConfig, Align, AlignWindowSummary};
+use align_rs::{Align, AlignConfig, AlignWindowSummary};
 
 #[derive(Clone, Copy)]
 struct Segment {
@@ -31,7 +31,10 @@ fn mat_vec(a: [[f32; 3]; 3], v: [f32; 3]) -> [f32; 3] {
     ]
 }
 
-fn simulate_windows(truth_deg: [f32; 3], repeat_count: usize) -> (Vec<[f32; 3]>, Vec<AlignWindowSummary>) {
+fn simulate_windows(
+    truth_deg: [f32; 3],
+    repeat_count: usize,
+) -> (Vec<[f32; 3]>, Vec<AlignWindowSummary>) {
     let truth_rad = [
         truth_deg[0].to_radians(),
         truth_deg[1].to_radians(),
@@ -136,8 +139,16 @@ fn simulate_windows(truth_deg: [f32; 3], repeat_count: usize) -> (Vec<[f32; 3]>,
                     mean_gyro[2] += sample[2];
                 }
                 let inv_n = 1.0 / (steps_per_gnss as f32);
-                mean_accel = [mean_accel[0] * inv_n, mean_accel[1] * inv_n, mean_accel[2] * inv_n];
-                mean_gyro = [mean_gyro[0] * inv_n, mean_gyro[1] * inv_n, mean_gyro[2] * inv_n];
+                mean_accel = [
+                    mean_accel[0] * inv_n,
+                    mean_accel[1] * inv_n,
+                    mean_accel[2] * inv_n,
+                ];
+                mean_gyro = [
+                    mean_gyro[0] * inv_n,
+                    mean_gyro[1] * inv_n,
+                    mean_gyro[2] * inv_n,
+                ];
                 windows.push(AlignWindowSummary {
                     dt: steps_per_gnss as f32 * dt_imu,
                     mean_gyro_b: mean_gyro,
@@ -190,5 +201,9 @@ fn align_converges_on_synthetic_case() {
     assert!(err[0].abs() < 3.0, "roll err {:?}", err);
     assert!(err[1].abs() < 4.0, "pitch err {:?}", err);
     assert!(err[2].abs() < 8.0, "yaw err {:?}", err);
-    assert!(sigma[0] < 1.5 && sigma[1] < 1.5 && sigma[2] < 1.5, "sigma {:?}", sigma);
+    assert!(
+        sigma[0] < 1.5 && sigma[1] < 1.5 && sigma[2] < 1.5,
+        "sigma {:?}",
+        sigma
+    );
 }

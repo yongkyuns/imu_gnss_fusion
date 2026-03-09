@@ -1,7 +1,7 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-use crate::align::{AlignConfig, Align, AlignWindowSummary};
+use crate::align::{Align, AlignConfig, AlignWindowSummary};
 
 #[pyclass(name = "Align")]
 struct PyAlign {

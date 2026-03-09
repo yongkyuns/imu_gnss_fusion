@@ -1,8 +1,8 @@
 use ekf_rs::ekf::{Ekf, GpsData, ImuSample, ekf_fuse_body_vel, ekf_fuse_gps, ekf_predict};
 
 use crate::ubxlog::{
-    NavPvtObs, UbxFrame, extract_esf_alg, extract_esf_alg_status, extract_esf_raw_samples, extract_nav_att,
-    extract_nav_pvt_obs, extract_nav2_pvt_obs, sensor_meta,
+    NavPvtObs, UbxFrame, extract_esf_alg, extract_esf_alg_status, extract_esf_raw_samples,
+    extract_nav_att, extract_nav_pvt_obs, extract_nav2_pvt_obs, sensor_meta,
 };
 
 use super::super::math::{
@@ -282,7 +282,8 @@ pub fn build_ekf_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Ekf
             cur_alg = Some(alg_events[alg_idx]);
             alg_idx += 1;
         }
-        while alg_status_idx < alg_status_events.len() && alg_status_events[alg_status_idx].0 <= pkt.t_ms
+        while alg_status_idx < alg_status_events.len()
+            && alg_status_events[alg_status_idx].0 <= pkt.t_ms
         {
             cur_alg_status = alg_status_events[alg_status_idx].1;
             alg_status_idx += 1;

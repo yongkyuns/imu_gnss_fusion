@@ -8,10 +8,10 @@ use crate::ubxlog::{
 
 use super::super::math::normalize_heading_deg;
 use super::super::model::{PlotData, Trace};
+use super::align_compare::AlignCompareData;
 use super::ekf_compare::EkfCompareData;
 use super::tag_time::fit_tag_ms_map;
 use super::timebase::MasterTimeline;
-use super::align_compare::AlignCompareData;
 
 pub fn build_signal_traces(
     frames: &[UbxFrame],
@@ -285,6 +285,7 @@ pub fn build_signal_traces(
     out.ekf_map_heading = ekf.map_heading;
     out.align_cmp_att = align_data.cmp_att;
     out.align_res_vel = align_data.res_vel;
+    out.align_motion = align_data.motion;
     out.align_state_q = align_data.state_q;
     out.align_cov = align_data.cov;
 
@@ -330,6 +331,7 @@ pub fn build_signal_traces(
         &mut out.ekf_cov_nonbias,
         &mut out.align_cmp_att,
         &mut out.align_res_vel,
+        &mut out.align_motion,
         &mut out.align_state_q,
         &mut out.align_cov,
     ] {
