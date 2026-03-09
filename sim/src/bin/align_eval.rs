@@ -52,7 +52,7 @@ struct Args {
     q_pitch_std_deg: f32,
     #[arg(long, default_value_t = 0.02)]
     q_yaw_std_deg: f32,
-    #[arg(long, default_value_t = 0.08)]
+    #[arg(long, default_value_t = 0.18)]
     r_gravity_std_mps2: f32,
     #[arg(long, default_value_t = 0.2)]
     r_turn_gyro_std_dps: f32,

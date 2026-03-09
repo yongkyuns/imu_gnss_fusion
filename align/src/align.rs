@@ -35,7 +35,7 @@ impl Default for AlignConfig {
                 0.01_f32.to_radians(),
                 0.02_f32.to_radians(),
             ],
-            r_gravity_std_mps2: 0.08,
+            r_gravity_std_mps2: 3.58,
             r_turn_gyro_std_radps: 0.2_f32.to_radians(),
             r_course_rate_std_radps: 0.35_f32.to_radians(),
             r_lat_std_mps2: 0.10,
@@ -332,7 +332,9 @@ fn align_obs(q_vb: [f32; 4], gyro_b: [f32; 3], accel_b: [f32; 3]) -> [f32; 6] {
     let c_bv = transpose3x3(quat_to_rotmat(q_vb));
     let gyro_v = mat3_vec(c_bv, gyro_b);
     let accel_v = mat3_vec(c_bv, accel_b);
-    [gyro_v[0], gyro_v[1], gyro_v[2], accel_v[0], accel_v[1], accel_v[2]]
+    [
+        gyro_v[0], gyro_v[1], gyro_v[2], accel_v[0], accel_v[1], accel_v[2],
+    ]
 }
 
 fn align_obs_jacobian(q_vb: [f32; 4], gyro_b: [f32; 3], accel_b: [f32; 3]) -> [[f32; 3]; 6] {
