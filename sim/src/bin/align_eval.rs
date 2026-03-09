@@ -5,11 +5,11 @@ use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
 use align_rs::align::{Align, AlignConfig, AlignWindowSummary, GRAVITY_MPS2};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
 use sim::ubxlog::{
-    extract_esf_alg, extract_esf_alg_valid, extract_esf_raw_samples, extract_nav2_pvt_obs,
-    fit_linear_map, parse_ubx_frames, sensor_meta, unwrap_counter, NavPvtObs, UbxFrame,
+    NavPvtObs, UbxFrame, extract_esf_alg, extract_esf_alg_valid, extract_esf_raw_samples,
+    extract_nav2_pvt_obs, fit_linear_map, parse_ubx_frames, sensor_meta, unwrap_counter,
 };
 use sim::visualizer::math::{nearest_master_ms, normalize_heading_deg, unwrap_i64_counter};
 
@@ -152,6 +152,7 @@ struct ResidualSample {
     course_rate_dps: f64,
     a_lat_mps2: f64,
     a_long_mps2: f64,
+    rot_err_deg: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -179,6 +180,9 @@ struct EvalMetrics {
     mae_roll_deg: f64,
     mae_pitch_deg: f64,
     mae_yaw_deg: f64,
+    mean_rot_err_deg: f64,
+    max_rot_err_deg: f64,
+    final_rot_err_deg: f64,
     final_err_roll_deg: f64,
     final_err_pitch_deg: f64,
     final_err_yaw_deg: f64,
@@ -386,11 +390,12 @@ fn load_dataset(
                 extract_esf_alg(frame)
             };
             if let Some((_, roll, pitch, yaw)) = alg {
+                let (roll_frd, pitch_frd, yaw_frd) = esf_alg_flu_to_frd_mount_deg(roll, pitch, yaw);
                 alg_events.push(AlgEvent {
                     t_ms,
-                    roll_deg: roll,
-                    pitch_deg: pitch,
-                    yaw_deg: normalize_heading_deg(yaw),
+                    roll_deg: roll_frd,
+                    pitch_deg: pitch_frd,
+                    yaw_deg: normalize_heading_deg(yaw_frd),
                 });
             }
             if let Some(obs) = extract_nav2_pvt_obs(frame) {
@@ -636,7 +641,6 @@ fn evaluate_config(
             }
             scan_idx += 1;
         }
-
         if let Some((t_prev, nav_prev)) = prev_nav {
             let dt = ((*tn - t_prev) * 1.0e-3) as f32;
             let interval_packets = &dataset.imu_packets[interval_start_idx..scan_idx];
@@ -662,10 +666,14 @@ fn evaluate_config(
                 let q = align.q_vb;
                 let (align_roll_deg, align_pitch_deg, align_yaw_deg) =
                     quat_rpy_alg_deg(q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64);
+                let q_align_cmp =
+                    quat_from_rpy_alg_deg(align_roll_deg, align_pitch_deg, align_yaw_deg);
                 let sigma = align.sigma_deg();
                 if let Some((alg_roll_deg, alg_pitch_deg, alg_yaw_deg)) =
                     interpolate_alg(&dataset.alg_events, *tn)
                 {
+                    let q_alg = quat_from_rpy_alg_deg(alg_roll_deg, alg_pitch_deg, alg_yaw_deg);
+                    let rot_err_deg = quat_angle_deg(q_align_cmp, q_alg);
                     let v_prev = [nav_prev.vel_n_mps, nav_prev.vel_e_mps];
                     let v_curr = [nav.vel_n_mps, nav.vel_e_mps];
                     let course_prev = v_prev[1].atan2(v_prev[0]);
@@ -687,7 +695,7 @@ fn evaluate_config(
                         (0.0, 0.0)
                     };
 
-                    let err_roll_deg = align_roll_deg - alg_roll_deg;
+                    let err_roll_deg = wrap_deg180(align_roll_deg - alg_roll_deg);
                     let err_pitch_deg = align_pitch_deg - alg_pitch_deg;
                     let err_yaw_deg = wrap_deg180(align_yaw_deg - alg_yaw_deg);
                     samples.push(ResidualSample {
@@ -707,6 +715,7 @@ fn evaluate_config(
                         course_rate_dps,
                         a_lat_mps2: a_lat,
                         a_long_mps2: a_long,
+                        rot_err_deg,
                     });
                 }
             }
@@ -863,6 +872,8 @@ fn score_samples(samples: &[ResidualSample], total_nav: usize, init_time_s: f64)
     let mut sum_abs_roll = 0.0;
     let mut sum_abs_pitch = 0.0;
     let mut sum_abs_yaw = 0.0;
+    let mut sum_rot = 0.0;
+    let mut max_rot = 0.0_f64;
     for s in samples {
         sum_sq_roll += s.err_roll_deg * s.err_roll_deg;
         sum_sq_pitch += s.err_pitch_deg * s.err_pitch_deg;
@@ -870,6 +881,8 @@ fn score_samples(samples: &[ResidualSample], total_nav: usize, init_time_s: f64)
         sum_abs_roll += s.err_roll_deg.abs();
         sum_abs_pitch += s.err_pitch_deg.abs();
         sum_abs_yaw += s.err_yaw_deg.abs();
+        sum_rot += s.rot_err_deg;
+        max_rot = max_rot.max(s.rot_err_deg);
     }
     let n = samples.len() as f64;
     let rmse_roll_deg = (sum_sq_roll / n).sqrt();
@@ -878,6 +891,7 @@ fn score_samples(samples: &[ResidualSample], total_nav: usize, init_time_s: f64)
     let mae_roll_deg = sum_abs_roll / n;
     let mae_pitch_deg = sum_abs_pitch / n;
     let mae_yaw_deg = sum_abs_yaw / n;
+    let mean_rot_err_deg = sum_rot / n;
     let final_sample = samples[samples.len() - 1];
     let coverage = (samples.len() as f64 / total_nav.max(1) as f64).clamp(0.0, 1.0);
     let horizon_s = samples[samples.len() - 1].t_s - samples[0].t_s;
@@ -906,6 +920,9 @@ fn score_samples(samples: &[ResidualSample], total_nav: usize, init_time_s: f64)
         mae_roll_deg,
         mae_pitch_deg,
         mae_yaw_deg,
+        mean_rot_err_deg,
+        max_rot_err_deg: max_rot,
+        final_rot_err_deg: final_sample.rot_err_deg,
         final_err_roll_deg: final_sample.err_roll_deg,
         final_err_pitch_deg: final_sample.err_pitch_deg,
         final_err_yaw_deg: final_sample.err_yaw_deg,
@@ -934,6 +951,10 @@ fn print_metrics(label: &str, metrics: &EvalMetrics) {
     eprintln!(
         "[{}] final_err_deg roll={:.3} pitch={:.3} yaw={:.3}",
         label, metrics.final_err_roll_deg, metrics.final_err_pitch_deg, metrics.final_err_yaw_deg
+    );
+    eprintln!(
+        "[{}] rot_err_deg mean={:.3} max={:.3} final={:.3}",
+        label, metrics.mean_rot_err_deg, metrics.max_rot_err_deg, metrics.final_rot_err_deg
     );
 }
 
@@ -979,12 +1000,12 @@ fn write_residual_csv(path: &PathBuf, samples: &[ResidualSample]) -> Result<()> 
     let mut w = BufWriter::new(file);
     writeln!(
         w,
-        "t_s,align_roll_deg,align_pitch_deg,align_yaw_deg,alg_roll_deg,alg_pitch_deg,alg_yaw_deg,err_roll_deg,err_pitch_deg,err_yaw_deg,sigma_roll_deg,sigma_pitch_deg,sigma_yaw_deg,course_rate_dps,a_lat_mps2,a_long_mps2"
+        "t_s,align_roll_deg,align_pitch_deg,align_yaw_deg,alg_roll_deg,alg_pitch_deg,alg_yaw_deg,err_roll_deg,err_pitch_deg,err_yaw_deg,sigma_roll_deg,sigma_pitch_deg,sigma_yaw_deg,course_rate_dps,a_lat_mps2,a_long_mps2,rot_err_deg"
     )?;
     for s in samples {
         writeln!(
             w,
-            "{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
+            "{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
             s.t_s,
             s.align_roll_deg,
             s.align_pitch_deg,
@@ -1000,7 +1021,8 @@ fn write_residual_csv(path: &PathBuf, samples: &[ResidualSample]) -> Result<()> 
             s.sigma_yaw_deg,
             s.course_rate_dps,
             s.a_lat_mps2,
-            s.a_long_mps2
+            s.a_long_mps2,
+            s.rot_err_deg
         )?;
     }
     Ok(())
@@ -1135,6 +1157,50 @@ fn quat_rpy_alg_deg(q0: f64, q1: f64, q2: f64, q3: f64) -> (f64, f64, f64) {
         pitch.to_degrees(),
         normalize_heading_deg(yaw.to_degrees()),
     )
+}
+
+fn quat_from_rpy_alg_deg(roll_deg: f64, pitch_deg: f64, yaw_deg: f64) -> [f64; 4] {
+    let (sr, cr) = (0.5 * roll_deg.to_radians()).sin_cos();
+    let (sp, cp) = (0.5 * pitch_deg.to_radians()).sin_cos();
+    let (sy, cy) = (0.5 * yaw_deg.to_radians()).sin_cos();
+    quat_normalize([
+        cr * cp * cy + sr * sp * sy,
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
+    ])
+}
+
+fn quat_normalize(q: [f64; 4]) -> [f64; 4] {
+    let n = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+    if n <= 1.0e-12 {
+        [1.0, 0.0, 0.0, 0.0]
+    } else {
+        [q[0] / n, q[1] / n, q[2] / n, q[3] / n]
+    }
+}
+
+fn quat_mul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
+    [
+        a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
+        a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
+        a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
+        a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0],
+    ]
+}
+
+fn quat_conj(q: [f64; 4]) -> [f64; 4] {
+    [q[0], -q[1], -q[2], -q[3]]
+}
+
+fn quat_angle_deg(a: [f64; 4], b: [f64; 4]) -> f64 {
+    let dq = quat_normalize(quat_mul(quat_conj(a), b));
+    let w = dq[0].abs().clamp(-1.0, 1.0);
+    2.0 * w.acos().to_degrees()
+}
+
+fn esf_alg_flu_to_frd_mount_deg(roll_deg: f64, pitch_deg: f64, yaw_deg: f64) -> (f64, f64, f64) {
+    (wrap_deg180(180.0 - roll_deg), pitch_deg, yaw_deg)
 }
 
 fn norm3(v: [f32; 3]) -> f32 {

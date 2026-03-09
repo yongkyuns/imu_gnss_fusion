@@ -50,11 +50,12 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
     for f in frames {
         if let Some((_, roll, pitch, yaw)) = extract_esf_alg(f) {
             if let Some(t_ms) = nearest_master_ms(f.seq, &tl.masters) {
+                let (roll_frd, pitch_frd, yaw_frd) = esf_alg_flu_to_frd_mount_deg(roll, pitch, yaw);
                 alg_events.push(AlgEvent {
                     t_ms,
-                    roll_deg: roll,
-                    pitch_deg: pitch,
-                    yaw_deg: normalize_heading_deg(yaw),
+                    roll_deg: roll_frd,
+                    pitch_deg: pitch_frd,
+                    yaw_deg: normalize_heading_deg(yaw_frd),
                 });
             }
         }
@@ -380,6 +381,12 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
     }
 }
 
+// ESF-ALG publishes canonical mount angles in FLU. Converting them as a general quaternion
+// over-rotates pitch/yaw. The cross-log-consistent FRD mapping is a roll branch remap only.
+fn esf_alg_flu_to_frd_mount_deg(roll_deg: f64, pitch_deg: f64, yaw_deg: f64) -> (f64, f64, f64) {
+    (wrap_deg180(180.0 - roll_deg), pitch_deg, yaw_deg)
+}
+
 // FRD Euler extraction in the codebase convention: intrinsic Rx * Ry * Rz.
 fn quat_rpy_alg_deg(q0: f64, q1: f64, q2: f64, q3: f64) -> (f64, f64, f64) {
     let n = (q0 * q0 + q1 * q1 + q2 * q2 + q3 * q3).sqrt();
@@ -483,4 +490,8 @@ fn normalize2(v: [f64; 2]) -> Option<[f64; 2]> {
 fn wrap_rad_pi(x: f64) -> f64 {
     let two_pi = 2.0 * std::f64::consts::PI;
     (x + std::f64::consts::PI).rem_euclid(two_pi) - std::f64::consts::PI
+}
+
+fn wrap_deg180(x: f64) -> f64 {
+    (x + 180.0).rem_euclid(360.0) - 180.0
 }
