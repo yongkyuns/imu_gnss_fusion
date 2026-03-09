@@ -151,12 +151,6 @@ impl Align {
         self.predict(window.dt);
         let mut score = 0.0_f32;
 
-        let alpha = self.cfg.gravity_lpf_alpha;
-        self.gravity_lp_b = vec3_add(
-            vec3_scale(self.gravity_lp_b, 1.0 - alpha),
-            vec3_scale(window.mean_accel_b, alpha),
-        );
-
         let v_prev = window.gnss_vel_prev_n;
         let v_curr = window.gnss_vel_curr_n;
         let speed_prev = vec2_norm([v_prev[0], v_prev[1]]);
@@ -178,6 +172,14 @@ impl Align {
 
         let gyro_norm = vec3_norm(window.mean_gyro_b);
         let accel_norm = vec3_norm(window.mean_accel_b);
+        let horiz_accel_b = if let Some(g_hat_b) = vec3_normalize(self.gravity_lp_b) {
+            vec3_sub(
+                window.mean_accel_b,
+                vec3_scale(g_hat_b, vec3_dot(window.mean_accel_b, g_hat_b)),
+            )
+        } else {
+            window.mean_accel_b
+        };
         let stationary = gyro_norm <= self.cfg.max_stationary_gyro_radps
             && (accel_norm - GRAVITY_MPS2).abs() <= self.cfg.max_stationary_accel_norm_err_mps2
             && speed_mid < 0.5;
@@ -187,6 +189,14 @@ impl Align {
         let long_valid = speed_mid > self.cfg.min_speed_mps
             && a_long.abs() > self.cfg.min_long_acc_mps2
             && a_lat.abs() < (0.5_f32).max(0.6 * a_long.abs());
+
+        if stationary {
+            let alpha = self.cfg.gravity_lpf_alpha;
+            self.gravity_lp_b = vec3_add(
+                vec3_scale(self.gravity_lp_b, 1.0 - alpha),
+                vec3_scale(window.mean_accel_b, alpha),
+            );
+        }
 
         if self.cfg.use_gravity && stationary {
             score += self.apply_update2(
@@ -221,7 +231,7 @@ impl Align {
                 score += self.apply_update1(
                     a_lat,
                     4,
-                    window.mean_accel_b,
+                    horiz_accel_b,
                     window.mean_gyro_b,
                     self.cfg.r_lat_std_mps2.powi(2),
                 );
@@ -232,7 +242,7 @@ impl Align {
             score += self.apply_update1(
                 a_long,
                 3,
-                window.mean_accel_b,
+                horiz_accel_b,
                 window.mean_gyro_b,
                 self.cfg.r_long_std_mps2.powi(2),
             );
