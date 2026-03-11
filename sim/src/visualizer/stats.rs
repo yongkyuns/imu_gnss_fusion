@@ -23,8 +23,11 @@ pub fn trace_stats(data: &PlotData) -> (usize, usize) {
         &data.ekf_cov_nonbias,
         &data.align_cmp_att,
         &data.align_res_vel,
+        &data.align_axis_err,
         &data.align_motion,
-        &data.align_state_q,
+        &data.align_roll_contrib,
+        &data.align_pitch_contrib,
+        &data.align_yaw_contrib,
         &data.align_cov,
     ];
     let mut traces = 0usize;
@@ -57,8 +60,11 @@ pub fn trace_time_bounds(data: &PlotData) -> Option<(f64, f64)> {
         &data.ekf_cov_nonbias,
         &data.align_cmp_att,
         &data.align_res_vel,
+        &data.align_axis_err,
         &data.align_motion,
-        &data.align_state_q,
+        &data.align_roll_contrib,
+        &data.align_pitch_contrib,
+        &data.align_yaw_contrib,
         &data.align_cov,
         &data.ekf_map,
     ];

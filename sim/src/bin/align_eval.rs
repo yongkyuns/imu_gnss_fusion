@@ -153,6 +153,8 @@ struct ResidualSample {
     a_lat_mps2: f64,
     a_long_mps2: f64,
     rot_err_deg: f64,
+    fwd_err_deg: f64,
+    down_err_deg: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -183,6 +185,12 @@ struct EvalMetrics {
     mean_rot_err_deg: f64,
     max_rot_err_deg: f64,
     final_rot_err_deg: f64,
+    mean_fwd_err_deg: f64,
+    max_fwd_err_deg: f64,
+    final_fwd_err_deg: f64,
+    mean_down_err_deg: f64,
+    max_down_err_deg: f64,
+    final_down_err_deg: f64,
     final_err_roll_deg: f64,
     final_err_pitch_deg: f64,
     final_err_yaw_deg: f64,
@@ -674,6 +682,14 @@ fn evaluate_config(
                 {
                     let q_alg = quat_from_rpy_alg_deg(alg_roll_deg, alg_pitch_deg, alg_yaw_deg);
                     let rot_err_deg = quat_angle_deg(q_align_cmp, q_alg);
+                    let fwd_err_deg = axis_angle_deg(
+                        quat_rotate(q_align_cmp, [1.0, 0.0, 0.0]),
+                        quat_rotate(q_alg, [1.0, 0.0, 0.0]),
+                    );
+                    let down_err_deg = axis_angle_deg(
+                        quat_rotate(q_align_cmp, [0.0, 0.0, 1.0]),
+                        quat_rotate(q_alg, [0.0, 0.0, 1.0]),
+                    );
                     let v_prev = [nav_prev.vel_n_mps, nav_prev.vel_e_mps];
                     let v_curr = [nav.vel_n_mps, nav.vel_e_mps];
                     let course_prev = v_prev[1].atan2(v_prev[0]);
@@ -716,6 +732,8 @@ fn evaluate_config(
                         a_lat_mps2: a_lat,
                         a_long_mps2: a_long,
                         rot_err_deg,
+                        fwd_err_deg,
+                        down_err_deg,
                     });
                 }
             }
@@ -874,6 +892,10 @@ fn score_samples(samples: &[ResidualSample], total_nav: usize, init_time_s: f64)
     let mut sum_abs_yaw = 0.0;
     let mut sum_rot = 0.0;
     let mut max_rot = 0.0_f64;
+    let mut sum_fwd = 0.0;
+    let mut max_fwd = 0.0_f64;
+    let mut sum_down = 0.0;
+    let mut max_down = 0.0_f64;
     for s in samples {
         sum_sq_roll += s.err_roll_deg * s.err_roll_deg;
         sum_sq_pitch += s.err_pitch_deg * s.err_pitch_deg;
@@ -883,6 +905,10 @@ fn score_samples(samples: &[ResidualSample], total_nav: usize, init_time_s: f64)
         sum_abs_yaw += s.err_yaw_deg.abs();
         sum_rot += s.rot_err_deg;
         max_rot = max_rot.max(s.rot_err_deg);
+        sum_fwd += s.fwd_err_deg;
+        max_fwd = max_fwd.max(s.fwd_err_deg);
+        sum_down += s.down_err_deg;
+        max_down = max_down.max(s.down_err_deg);
     }
     let n = samples.len() as f64;
     let rmse_roll_deg = (sum_sq_roll / n).sqrt();
@@ -892,6 +918,8 @@ fn score_samples(samples: &[ResidualSample], total_nav: usize, init_time_s: f64)
     let mae_pitch_deg = sum_abs_pitch / n;
     let mae_yaw_deg = sum_abs_yaw / n;
     let mean_rot_err_deg = sum_rot / n;
+    let mean_fwd_err_deg = sum_fwd / n;
+    let mean_down_err_deg = sum_down / n;
     let final_sample = samples[samples.len() - 1];
     let coverage = (samples.len() as f64 / total_nav.max(1) as f64).clamp(0.0, 1.0);
     let horizon_s = samples[samples.len() - 1].t_s - samples[0].t_s;
@@ -923,6 +951,12 @@ fn score_samples(samples: &[ResidualSample], total_nav: usize, init_time_s: f64)
         mean_rot_err_deg,
         max_rot_err_deg: max_rot,
         final_rot_err_deg: final_sample.rot_err_deg,
+        mean_fwd_err_deg,
+        max_fwd_err_deg: max_fwd,
+        final_fwd_err_deg: final_sample.fwd_err_deg,
+        mean_down_err_deg,
+        max_down_err_deg: max_down,
+        final_down_err_deg: final_sample.down_err_deg,
         final_err_roll_deg: final_sample.err_roll_deg,
         final_err_pitch_deg: final_sample.err_pitch_deg,
         final_err_yaw_deg: final_sample.err_yaw_deg,
@@ -955,6 +989,16 @@ fn print_metrics(label: &str, metrics: &EvalMetrics) {
     eprintln!(
         "[{}] rot_err_deg mean={:.3} max={:.3} final={:.3}",
         label, metrics.mean_rot_err_deg, metrics.max_rot_err_deg, metrics.final_rot_err_deg
+    );
+    eprintln!(
+        "[{}] axis_err_deg fwd mean={:.3} max={:.3} final={:.3} | down mean={:.3} max={:.3} final={:.3}",
+        label,
+        metrics.mean_fwd_err_deg,
+        metrics.max_fwd_err_deg,
+        metrics.final_fwd_err_deg,
+        metrics.mean_down_err_deg,
+        metrics.max_down_err_deg,
+        metrics.final_down_err_deg
     );
 }
 
@@ -1000,12 +1044,12 @@ fn write_residual_csv(path: &PathBuf, samples: &[ResidualSample]) -> Result<()> 
     let mut w = BufWriter::new(file);
     writeln!(
         w,
-        "t_s,align_roll_deg,align_pitch_deg,align_yaw_deg,alg_roll_deg,alg_pitch_deg,alg_yaw_deg,err_roll_deg,err_pitch_deg,err_yaw_deg,sigma_roll_deg,sigma_pitch_deg,sigma_yaw_deg,course_rate_dps,a_lat_mps2,a_long_mps2,rot_err_deg"
+        "t_s,align_roll_deg,align_pitch_deg,align_yaw_deg,alg_roll_deg,alg_pitch_deg,alg_yaw_deg,err_roll_deg,err_pitch_deg,err_yaw_deg,sigma_roll_deg,sigma_pitch_deg,sigma_yaw_deg,course_rate_dps,a_lat_mps2,a_long_mps2,rot_err_deg,fwd_err_deg,down_err_deg"
     )?;
     for s in samples {
         writeln!(
             w,
-            "{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
+            "{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
             s.t_s,
             s.align_roll_deg,
             s.align_pitch_deg,
@@ -1022,7 +1066,9 @@ fn write_residual_csv(path: &PathBuf, samples: &[ResidualSample]) -> Result<()> 
             s.course_rate_dps,
             s.a_lat_mps2,
             s.a_long_mps2,
-            s.rot_err_deg
+            s.rot_err_deg,
+            s.fwd_err_deg,
+            s.down_err_deg
         )?;
     }
     Ok(())
@@ -1199,8 +1245,31 @@ fn quat_angle_deg(a: [f64; 4], b: [f64; 4]) -> f64 {
     2.0 * w.acos().to_degrees()
 }
 
+fn quat_rotate(q: [f64; 4], v: [f64; 3]) -> [f64; 3] {
+    let q = quat_normalize(q);
+    let p = [0.0, v[0], v[1], v[2]];
+    let qp = quat_mul(q, p);
+    let qpq = quat_mul(qp, quat_conj(q));
+    [qpq[1], qpq[2], qpq[3]]
+}
+
+fn axis_angle_deg(a: [f64; 3], b: [f64; 3]) -> f64 {
+    let na = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+    let nb = (b[0] * b[0] + b[1] * b[1] + b[2] * b[2]).sqrt();
+    if na <= 1.0e-12 || nb <= 1.0e-12 {
+        return f64::NAN;
+    }
+    let dot = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (na * nb);
+    dot.clamp(-1.0, 1.0).acos().to_degrees()
+}
+
 fn esf_alg_flu_to_frd_mount_deg(roll_deg: f64, pitch_deg: f64, yaw_deg: f64) -> (f64, f64, f64) {
-    (wrap_deg180(180.0 - roll_deg), pitch_deg, yaw_deg)
+    let q_flu = quat_from_rpy_alg_deg(roll_deg, pitch_deg, yaw_deg);
+    let q_x_180 = [0.0, 1.0, 0.0, 0.0];
+    // Same physical vehicle->sensor rotation, re-expressed in FRD instead of FLU:
+    // R_frd = X * R_flu * X, where X = Rx(pi).
+    let q_frd = quat_normalize(quat_mul(quat_mul(q_x_180, q_flu), q_x_180));
+    quat_rpy_alg_deg(q_frd[0], q_frd[1], q_frd[2], q_frd[3])
 }
 
 fn norm3(v: [f32; 3]) -> f32 {

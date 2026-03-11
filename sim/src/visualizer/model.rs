@@ -27,6 +27,7 @@ pub struct PlotData {
     pub ekf_map_heading: Vec<HeadingSample>,
     pub align_cmp_att: Vec<Trace>,
     pub align_res_vel: Vec<Trace>,
+    pub align_axis_err: Vec<Trace>,
     pub align_motion: Vec<Trace>,
     pub align_roll_contrib: Vec<Trace>,
     pub align_pitch_contrib: Vec<Trace>,

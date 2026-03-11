@@ -361,6 +361,13 @@ impl eframe::App for App {
                         );
                         draw_plot(
                             ui,
+                            "Align Axis Error vs ESF-ALG",
+                            &self.data.align_axis_err,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
                             "Align Motion Classification / Updates",
                             &self.data.align_motion,
                             true,
@@ -371,8 +378,22 @@ impl eframe::App for App {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     draw_plot(
                         ui,
-                        "Align Quaternion (q_vb)",
-                        &self.data.align_state_q,
+                        "Align Roll Update Contributions",
+                        &self.data.align_roll_contrib,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "Align Pitch Update Contributions",
+                        &self.data.align_pitch_contrib,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "Align Yaw Update Contributions",
+                        &self.data.align_yaw_contrib,
                         true,
                         self.max_points_per_trace,
                     );

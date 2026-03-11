@@ -1,4 +1,4 @@
-use align_rs::align::{Align, AlignConfig, AlignWindowSummary, GRAVITY_MPS2};
+use align_rs::align::{Align, AlignConfig, AlignUpdateTrace, AlignWindowSummary, GRAVITY_MPS2};
 
 use crate::ubxlog::{
     NavPvtObs, UbxFrame, extract_esf_alg, extract_esf_raw_samples, extract_nav2_pvt_obs,
@@ -13,8 +13,11 @@ use super::timebase::MasterTimeline;
 pub struct AlignCompareData {
     pub cmp_att: Vec<Trace>,
     pub res_vel: Vec<Trace>,
+    pub axis_err: Vec<Trace>,
     pub motion: Vec<Trace>,
-    pub state_q: Vec<Trace>,
+    pub roll_contrib: Vec<Trace>,
+    pub pitch_contrib: Vec<Trace>,
+    pub yaw_contrib: Vec<Trace>,
     pub cov: Vec<Trace>,
 }
 
@@ -40,8 +43,11 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
         return AlignCompareData {
             cmp_att: Vec::new(),
             res_vel: Vec::new(),
+            axis_err: Vec::new(),
             motion: Vec::new(),
-            state_q: Vec::new(),
+            roll_contrib: Vec::new(),
+            pitch_contrib: Vec::new(),
+            yaw_contrib: Vec::new(),
             cov: Vec::new(),
         };
     }
@@ -169,6 +175,8 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
     let mut diag_course = Vec::<[f64; 2]>::new();
     let mut diag_lat = Vec::<[f64; 2]>::new();
     let mut diag_long = Vec::<[f64; 2]>::new();
+    let mut fwd_err = Vec::<[f64; 2]>::new();
+    let mut down_err = Vec::<[f64; 2]>::new();
     let mut cls_stationary = Vec::<[f64; 2]>::new();
     let mut cls_turn = Vec::<[f64; 2]>::new();
     let mut cls_long = Vec::<[f64; 2]>::new();
@@ -177,10 +185,18 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
     let mut upd_course = Vec::<[f64; 2]>::new();
     let mut upd_lat = Vec::<[f64; 2]>::new();
     let mut upd_long = Vec::<[f64; 2]>::new();
-    let mut q0_tr = Vec::<[f64; 2]>::new();
-    let mut q1_tr = Vec::<[f64; 2]>::new();
-    let mut q2_tr = Vec::<[f64; 2]>::new();
-    let mut q3_tr = Vec::<[f64; 2]>::new();
+    let mut roll_turn_gyro = Vec::<[f64; 2]>::new();
+    let mut roll_course = Vec::<[f64; 2]>::new();
+    let mut roll_lat = Vec::<[f64; 2]>::new();
+    let mut roll_long = Vec::<[f64; 2]>::new();
+    let mut pitch_turn_gyro = Vec::<[f64; 2]>::new();
+    let mut pitch_course = Vec::<[f64; 2]>::new();
+    let mut pitch_lat = Vec::<[f64; 2]>::new();
+    let mut pitch_long = Vec::<[f64; 2]>::new();
+    let mut yaw_turn_gyro = Vec::<[f64; 2]>::new();
+    let mut yaw_course = Vec::<[f64; 2]>::new();
+    let mut yaw_lat = Vec::<[f64; 2]>::new();
+    let mut yaw_long = Vec::<[f64; 2]>::new();
     let mut p00 = Vec::<[f64; 2]>::new();
     let mut p11 = Vec::<[f64; 2]>::new();
     let mut p22 = Vec::<[f64; 2]>::new();
@@ -268,7 +284,7 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
                         nav.vel_d_mps as f32,
                     ],
                 };
-                align.update_window(&window);
+                let (_, trace) = align.update_window_with_trace(&window);
 
                 let v_prev = [nav_prev.vel_n_mps, nav_prev.vel_e_mps];
                 let v_curr = [nav.vel_n_mps, nav.vel_e_mps];
@@ -338,10 +354,36 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
                 out_roll.push([t, r]);
                 out_pitch.push([t, p]);
                 out_yaw.push([t, y]);
-                q0_tr.push([t, q[0] as f64]);
-                q1_tr.push([t, q[1] as f64]);
-                q2_tr.push([t, q[2] as f64]);
-                q3_tr.push([t, q[3] as f64]);
+                if let Some((alg_roll, alg_pitch, alg_yaw)) = interpolate_alg(&alg_events, *tn) {
+                    let q_alg = quat_from_rpy_alg_deg(alg_roll, alg_pitch, alg_yaw);
+                    fwd_err.push([
+                        t,
+                        axis_angle_deg(
+                            quat_rotate(q_plot, [1.0, 0.0, 0.0]),
+                            quat_rotate(q_alg, [1.0, 0.0, 0.0]),
+                        ),
+                    ]);
+                    down_err.push([
+                        t,
+                        axis_angle_deg(
+                            quat_rotate(q_plot, [0.0, 0.0, 1.0]),
+                            quat_rotate(q_alg, [0.0, 0.0, 1.0]),
+                        ),
+                    ]);
+                }
+                let contrib = align_update_contrib_deg(trace);
+                roll_turn_gyro.push([t, contrib.turn_gyro[0]]);
+                roll_course.push([t, contrib.course_rate[0]]);
+                roll_lat.push([t, contrib.lateral_accel[0]]);
+                roll_long.push([t, contrib.longitudinal_accel[0]]);
+                pitch_turn_gyro.push([t, contrib.turn_gyro[1]]);
+                pitch_course.push([t, contrib.course_rate[1]]);
+                pitch_lat.push([t, contrib.lateral_accel[1]]);
+                pitch_long.push([t, contrib.longitudinal_accel[1]]);
+                yaw_turn_gyro.push([t, contrib.turn_gyro[2]]);
+                yaw_course.push([t, contrib.course_rate[2]]);
+                yaw_lat.push([t, contrib.lateral_accel[2]]);
+                yaw_long.push([t, contrib.longitudinal_accel[2]]);
                 p00.push([t, align.P[0][0] as f64]);
                 p11.push([t, align.P[1][1] as f64]);
                 p22.push([t, align.P[2][2] as f64]);
@@ -392,6 +434,16 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
                 points: diag_long,
             },
         ],
+        axis_err: vec![
+            Trace {
+                name: "forward-axis error [deg]".to_string(),
+                points: fwd_err,
+            },
+            Trace {
+                name: "down-axis error [deg]".to_string(),
+                points: down_err,
+            },
+        ],
         motion: vec![
             Trace {
                 name: "class stationary".to_string(),
@@ -426,22 +478,58 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
                 points: upd_long,
             },
         ],
-        state_q: vec![
+        roll_contrib: vec![
             Trace {
-                name: "q0".to_string(),
-                points: q0_tr,
+                name: "turn gyro".to_string(),
+                points: roll_turn_gyro,
             },
             Trace {
-                name: "q1".to_string(),
-                points: q1_tr,
+                name: "course rate".to_string(),
+                points: roll_course,
             },
             Trace {
-                name: "q2".to_string(),
-                points: q2_tr,
+                name: "lateral accel".to_string(),
+                points: roll_lat,
             },
             Trace {
-                name: "q3".to_string(),
-                points: q3_tr,
+                name: "longitudinal accel".to_string(),
+                points: roll_long,
+            },
+        ],
+        pitch_contrib: vec![
+            Trace {
+                name: "turn gyro".to_string(),
+                points: pitch_turn_gyro,
+            },
+            Trace {
+                name: "course rate".to_string(),
+                points: pitch_course,
+            },
+            Trace {
+                name: "lateral accel".to_string(),
+                points: pitch_lat,
+            },
+            Trace {
+                name: "longitudinal accel".to_string(),
+                points: pitch_long,
+            },
+        ],
+        yaw_contrib: vec![
+            Trace {
+                name: "turn gyro".to_string(),
+                points: yaw_turn_gyro,
+            },
+            Trace {
+                name: "course rate".to_string(),
+                points: yaw_course,
+            },
+            Trace {
+                name: "lateral accel".to_string(),
+                points: yaw_lat,
+            },
+            Trace {
+                name: "longitudinal accel".to_string(),
+                points: yaw_long,
             },
         ],
         cov: vec![
@@ -464,7 +552,20 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
 // ESF-ALG publishes canonical mount angles in FLU. Converting them as a general quaternion
 // over-rotates pitch/yaw. The cross-log-consistent FRD mapping is a roll branch remap only.
 fn esf_alg_flu_to_frd_mount_deg(roll_deg: f64, pitch_deg: f64, yaw_deg: f64) -> (f64, f64, f64) {
-    (wrap_deg180(180.0 - roll_deg), pitch_deg, yaw_deg)
+    let q_flu = quat_from_rpy_alg_deg(roll_deg, pitch_deg, yaw_deg);
+    let q_x_180 = [0.0, 1.0, 0.0, 0.0];
+    // Same physical vehicle->sensor rotation, re-expressed in FRD instead of FLU:
+    // R_frd = X * R_flu * X, where X = Rx(pi).
+    let q_frd = quat_normalize(quat_mul(quat_mul(q_x_180, q_flu), q_x_180));
+    quat_rpy_alg_deg(q_frd[0], q_frd[1], q_frd[2], q_frd[3])
+}
+
+#[derive(Clone, Copy, Default)]
+struct AlignEulerContrib {
+    turn_gyro: [f64; 3],
+    course_rate: [f64; 3],
+    lateral_accel: [f64; 3],
+    longitudinal_accel: [f64; 3],
 }
 
 // FRD Euler extraction in the codebase convention: intrinsic Rx * Ry * Rz.
@@ -559,6 +660,33 @@ fn horizontal_speed(nav: NavPvtObs) -> f64 {
     (nav.vel_n_mps * nav.vel_n_mps + nav.vel_e_mps * nav.vel_e_mps).sqrt()
 }
 
+fn interpolate_alg(events: &[AlgEvent], t_ms: f64) -> Option<(f64, f64, f64)> {
+    if events.is_empty() {
+        return None;
+    }
+    let idx = events.partition_point(|e| e.t_ms < t_ms);
+    if idx == 0 {
+        return Some((events[0].roll_deg, events[0].pitch_deg, events[0].yaw_deg));
+    }
+    if idx >= events.len() {
+        let e = events[events.len() - 1];
+        return Some((e.roll_deg, e.pitch_deg, e.yaw_deg));
+    }
+
+    let e0 = events[idx - 1];
+    let e1 = events[idx];
+    let dt = e1.t_ms - e0.t_ms;
+    if dt.abs() <= 1.0e-9 {
+        return Some((e0.roll_deg, e0.pitch_deg, e0.yaw_deg));
+    }
+    let alpha = ((t_ms - e0.t_ms) / dt).clamp(0.0, 1.0);
+    let roll = e0.roll_deg + alpha * (e1.roll_deg - e0.roll_deg);
+    let pitch = e0.pitch_deg + alpha * (e1.pitch_deg - e0.pitch_deg);
+    let yaw_delta = wrap_deg180(e1.yaw_deg - e0.yaw_deg);
+    let yaw = normalize_heading_deg(e0.yaw_deg + alpha * yaw_delta);
+    Some((roll, pitch, yaw))
+}
+
 fn normalize2(v: [f64; 2]) -> Option<[f64; 2]> {
     let n = (v[0] * v[0] + v[1] * v[1]).sqrt();
     if !n.is_finite() || n <= 1.0e-9 {
@@ -574,4 +702,95 @@ fn wrap_rad_pi(x: f64) -> f64 {
 
 fn wrap_deg180(x: f64) -> f64 {
     (x + 180.0).rem_euclid(360.0) - 180.0
+}
+
+fn quat_from_rpy_alg_deg(roll_deg: f64, pitch_deg: f64, yaw_deg: f64) -> [f64; 4] {
+    let (sr, cr) = (0.5 * roll_deg.to_radians()).sin_cos();
+    let (sp, cp) = (0.5 * pitch_deg.to_radians()).sin_cos();
+    let (sy, cy) = (0.5 * yaw_deg.to_radians()).sin_cos();
+    quat_normalize([
+        cr * cp * cy + sr * sp * sy,
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
+    ])
+}
+
+fn quat_normalize(q: [f64; 4]) -> [f64; 4] {
+    let n = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+    if n <= 1.0e-12 {
+        [1.0, 0.0, 0.0, 0.0]
+    } else {
+        [q[0] / n, q[1] / n, q[2] / n, q[3] / n]
+    }
+}
+
+fn quat_mul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
+    [
+        a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
+        a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
+        a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
+        a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0],
+    ]
+}
+
+fn quat_conj(q: [f64; 4]) -> [f64; 4] {
+    [q[0], -q[1], -q[2], -q[3]]
+}
+
+fn quat_rotate(q: [f64; 4], v: [f64; 3]) -> [f64; 3] {
+    let q = quat_normalize(q);
+    let p = [0.0, v[0], v[1], v[2]];
+    let qp = quat_mul(q, p);
+    let qpq = quat_mul(qp, quat_conj(q));
+    [qpq[1], qpq[2], qpq[3]]
+}
+
+fn axis_angle_deg(a: [f64; 3], b: [f64; 3]) -> f64 {
+    let na = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+    let nb = (b[0] * b[0] + b[1] * b[1] + b[2] * b[2]).sqrt();
+    if na <= 1.0e-12 || nb <= 1.0e-12 {
+        return f64::NAN;
+    }
+    let dot = ((a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (na * nb)).clamp(-1.0, 1.0);
+    dot.acos().to_degrees()
+}
+
+fn quat_to_rpy_alg_deg(q: [f32; 4]) -> [f64; 3] {
+    let (r, p, y) = quat_rpy_alg_deg(q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64);
+    [r, p, y]
+}
+
+fn rpy_delta_deg(before_q: [f32; 4], after_q: [f32; 4]) -> [f64; 3] {
+    let before = quat_to_rpy_alg_deg(before_q);
+    let after = quat_to_rpy_alg_deg(after_q);
+    [
+        wrap_deg180(after[0] - before[0]),
+        wrap_deg180(after[1] - before[1]),
+        wrap_deg180(after[2] - before[2]),
+    ]
+}
+
+fn align_update_contrib_deg(trace: AlignUpdateTrace) -> AlignEulerContrib {
+    let mut out = AlignEulerContrib::default();
+    let mut prev_q = trace.q_start;
+    if let Some(q) = trace.after_gravity {
+        prev_q = q;
+    }
+    if let Some(q) = trace.after_turn_gyro {
+        out.turn_gyro = rpy_delta_deg(prev_q, q);
+        prev_q = q;
+    }
+    if let Some(q) = trace.after_course_rate {
+        out.course_rate = rpy_delta_deg(prev_q, q);
+        prev_q = q;
+    }
+    if let Some(q) = trace.after_lateral_accel {
+        out.lateral_accel = rpy_delta_deg(prev_q, q);
+        prev_q = q;
+    }
+    if let Some(q) = trace.after_longitudinal_accel {
+        out.longitudinal_accel = rpy_delta_deg(prev_q, q);
+    }
+    out
 }
