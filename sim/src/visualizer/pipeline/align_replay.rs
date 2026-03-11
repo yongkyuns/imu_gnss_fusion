@@ -82,6 +82,7 @@ pub struct AlignReplaySample {
 
 pub struct AlignReplayData {
     pub alg_events: Vec<AlgEvent>,
+    pub final_alg_q: Option<[f64; 4]>,
     pub samples: Vec<AlignReplaySample>,
 }
 
@@ -345,7 +346,12 @@ pub fn build_align_replay(
         interval_start_idx = scan_idx;
     }
 
-    AlignReplayData { alg_events, samples }
+    let final_alg_q = alg_events.last().map(|ev| ev.q_frd);
+    AlignReplayData {
+        alg_events,
+        final_alg_q,
+        samples,
+    }
 }
 
 impl BootstrapDetector {

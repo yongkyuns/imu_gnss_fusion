@@ -653,9 +653,11 @@ fn evaluate_config(
     let mut samples = Vec::<ResidualSample>::new();
     let replay = build_align_replay(&dataset.frames, &dataset.timeline, *cfg, *bootstrap_cfg);
     let init_time_s = replay.samples.first().map(|s| s.t_s).unwrap_or(f64::NAN);
+    let final_alg_q = replay.final_alg_q;
 
     for sample in &replay.samples {
         if let (Some(q_alg), Some(alg_rpy_deg)) = (sample.alg_q, sample.alg_rpy_deg) {
+            let q_ref_axis = final_alg_q.unwrap_or(q_alg);
             let err_roll_deg = wrap_deg180(sample.align_rpy_deg[0] - alg_rpy_deg[0]);
             let err_pitch_deg = sample.align_rpy_deg[1] - alg_rpy_deg[1];
             let err_yaw_deg = wrap_deg180(sample.align_rpy_deg[2] - alg_rpy_deg[2]);
@@ -679,21 +681,21 @@ fn evaluate_config(
                 rot_err_deg: quat_angle_deg(sample.q_align, q_alg),
                 fwd_err_deg: axis_angle_deg(
                     quat_rotate(sample.q_align, [1.0, 0.0, 0.0]),
-                    quat_rotate(q_alg, [1.0, 0.0, 0.0]),
+                    quat_rotate(q_ref_axis, [1.0, 0.0, 0.0]),
                 ),
                 down_err_deg: axis_angle_deg(
                     quat_rotate(sample.q_align, [0.0, 0.0, 1.0]),
-                    quat_rotate(q_alg, [0.0, 0.0, 1.0]),
+                    quat_rotate(q_ref_axis, [0.0, 0.0, 1.0]),
                 ),
                 fwd_err_signed_deg: signed_projected_axis_angle_deg(
                     quat_rotate(sample.q_align, [1.0, 0.0, 0.0]),
-                    quat_rotate(q_alg, [1.0, 0.0, 0.0]),
-                    quat_rotate(q_alg, [0.0, 0.0, 1.0]),
+                    quat_rotate(q_ref_axis, [1.0, 0.0, 0.0]),
+                    quat_rotate(q_ref_axis, [0.0, 0.0, 1.0]),
                 ),
                 down_err_signed_deg: signed_projected_axis_angle_deg(
                     quat_rotate(sample.q_align, [0.0, 0.0, 1.0]),
-                    quat_rotate(q_alg, [0.0, 0.0, 1.0]),
-                    quat_rotate(q_alg, [0.0, 1.0, 0.0]),
+                    quat_rotate(q_ref_axis, [0.0, 0.0, 1.0]),
+                    quat_rotate(q_ref_axis, [0.0, 1.0, 0.0]),
                 ),
                 long_base_valid: sample.long_trace.base_valid,
                 long_emitted: sample.long_trace.emitted,
