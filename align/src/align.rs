@@ -44,7 +44,7 @@ impl Default for AlignConfig {
             r_gravity_std_mps2: 1.28,
             r_turn_gyro_std_radps: 0.1_f32.to_radians(),
             r_course_rate_std_radps: 1.10_f32.to_radians(),
-            r_lat_std_mps2: 0.1,
+            r_lat_std_mps2: 0.01,
             r_long_std_mps2: 0.3,
             gravity_lpf_alpha: 0.08,
             long_lpf_alpha: 0.05,
@@ -217,6 +217,7 @@ impl Align {
         } else {
             window.mean_accel_b
         };
+        let horiz_obs = align_obs(self.q_vb, window.mean_gyro_b, horiz_accel_b);
         let stationary = gyro_norm <= self.cfg.max_stationary_gyro_radps
             && (accel_norm - GRAVITY_MPS2).abs() <= self.cfg.max_stationary_accel_norm_err_mps2
             && speed_mid < 0.5;
@@ -280,11 +281,10 @@ impl Align {
                 trace.after_course_rate = Some(self.q_vb);
             }
             if self.cfg.use_lateral_accel {
-                score += self.apply_update1(
+                score += self.apply_vehicle_yaw_scalar(
                     a_lat,
-                    4,
-                    horiz_accel_b,
-                    window.mean_gyro_b,
+                    horiz_obs[4],
+                    -horiz_obs[3],
                     self.cfg.r_lat_std_mps2.powi(2),
                 );
                 trace.after_lateral_accel = Some(self.q_vb);
@@ -292,7 +292,6 @@ impl Align {
         }
 
         if self.cfg.use_longitudinal_accel {
-            let horiz_obs = align_obs(self.q_vb, window.mean_gyro_b, horiz_accel_b);
             let (cue, long_trace) = self.long_filter.update_with_trace(
                 HorizontalHeadingCueConfig {
                     alpha: self.cfg.long_lpf_alpha,

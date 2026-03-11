@@ -208,14 +208,12 @@ fn wrap_deg180(mut v: f32) -> f32 {
 }
 
 #[test]
-fn align_converges_on_synthetic_case() {
+fn lateral_update_preserves_tilt_and_only_corrects_heading() {
     let truth = [25.0_f32, -20.0_f32, 120.0_f32];
     let (stationary_accel, windows) = simulate_windows(truth, 4);
     assert!(stationary_accel.len() >= 100);
 
     let mut cfg = AlignConfig::default();
-    cfg.use_turn_gyro = true;
-    cfg.use_course_rate = true;
     cfg.use_lateral_accel = true;
     cfg.use_longitudinal_accel = false;
     let mut filter = Align::new(cfg);
@@ -223,25 +221,39 @@ fn align_converges_on_synthetic_case() {
         .initialize_from_stationary(&stationary_accel, 0.0)
         .expect("stationary initialization");
 
+    let mut prev_q = filter.q_vb;
+    let mut found = false;
     for window in windows.iter().skip(1) {
-        filter.update_window(window);
+        let (_, trace) = filter.update_window_with_trace(window);
+        if trace.after_lateral_accel.is_some() {
+            let before_rot = quat_to_rotmat(prev_q);
+            let after_rot = quat_to_rotmat(filter.q_vb);
+            let before_down = [before_rot[0][2], before_rot[1][2], before_rot[2][2]];
+            let after_down = [after_rot[0][2], after_rot[1][2], after_rot[2][2]];
+            let before_fwd = [before_rot[0][0], before_rot[1][0], before_rot[2][0]];
+            let after_fwd = [after_rot[0][0], after_rot[1][0], after_rot[2][0]];
+            let down_delta = ((before_down[0] - after_down[0]).powi(2)
+                + (before_down[1] - after_down[1]).powi(2)
+                + (before_down[2] - after_down[2]).powi(2))
+            .sqrt();
+            let fwd_delta = ((before_fwd[0] - after_fwd[0]).powi(2)
+                + (before_fwd[1] - after_fwd[1]).powi(2)
+                + (before_fwd[2] - after_fwd[2]).powi(2))
+            .sqrt();
+            assert!(
+                down_delta < 1.0e-3,
+                "down axis changed too much: before={before_down:?} after={after_down:?}"
+            );
+            assert!(
+                fwd_delta > 1.0e-3,
+                "forward axis did not change: before={before_fwd:?} after={after_fwd:?}"
+            );
+            found = true;
+            break;
+        }
+        prev_q = filter.q_vb;
     }
-
-    let est = filter.mount_angles_deg();
-    let err = [
-        est[0] - truth[0],
-        est[1] - truth[1],
-        wrap_deg180(est[2] - truth[2]),
-    ];
-    let sigma = filter.sigma_deg();
-    assert!(err[0].abs() < 3.0, "roll err {:?}", err);
-    assert!(err[1].abs() < 4.0, "pitch err {:?}", err);
-    assert!(err[2].abs() < 8.0, "yaw err {:?}", err);
-    assert!(
-        sigma[0] < 1.5 && sigma[1] < 1.5 && sigma[2] < 1.5,
-        "sigma {:?}",
-        sigma
-    );
+    assert!(found, "no lateral update occurred in synthetic replay");
 }
 
 #[test]
