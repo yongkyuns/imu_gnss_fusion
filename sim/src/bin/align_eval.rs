@@ -49,51 +49,51 @@ struct Args {
     #[arg(long, default_value_t = 2)]
     tune_passes: usize,
 
-    #[arg(long, default_value_t = 0.001)]
-    q_roll_std_deg: f32,
-    #[arg(long, default_value_t = 0.001)]
-    q_pitch_std_deg: f32,
-    #[arg(long, default_value_t = 0.001)]
-    q_yaw_std_deg: f32,
-    #[arg(long, default_value_t = 1.28)]
-    r_gravity_std_mps2: f32,
-    #[arg(long, default_value_t = 0.1)]
-    r_turn_gyro_std_dps: f32,
-    #[arg(long, default_value_t = 1.10)]
-    r_course_rate_std_dps: f32,
-    #[arg(long, default_value_t = 0.10)]
-    r_lat_std_mps2: f32,
-    #[arg(long, default_value_t = 0.003)]
-    r_long_std_mps2: f32,
-    #[arg(long, default_value_t = 0.08)]
-    gravity_lpf_alpha: f32,
-    #[arg(long, default_value_t = 0.05)]
-    long_lpf_alpha: f32,
-    #[arg(long, default_value_t = 25.0 / 3.6)]
-    min_speed_mps: f32,
-    #[arg(long, default_value_t = 3.0)]
-    min_turn_rate_dps: f32,
-    #[arg(long, default_value_t = 0.35)]
-    min_lat_acc_mps2: f32,
-    #[arg(long, default_value_t = 0.18)]
-    min_long_acc_mps2: f32,
-    #[arg(long, default_value_t = 2)]
-    min_long_sign_stable_windows: usize,
-    #[arg(long, default_value_t = 0.8)]
-    max_stationary_gyro_dps: f32,
-    #[arg(long, default_value_t = 0.2)]
-    max_stationary_accel_norm_err_mps2: f32,
+    #[arg(long)]
+    q_roll_std_deg: Option<f32>,
+    #[arg(long)]
+    q_pitch_std_deg: Option<f32>,
+    #[arg(long)]
+    q_yaw_std_deg: Option<f32>,
+    #[arg(long)]
+    r_gravity_std_mps2: Option<f32>,
+    #[arg(long)]
+    r_turn_gyro_std_dps: Option<f32>,
+    #[arg(long)]
+    r_course_rate_std_dps: Option<f32>,
+    #[arg(long)]
+    r_lat_std_mps2: Option<f32>,
+    #[arg(long)]
+    r_long_std_mps2: Option<f32>,
+    #[arg(long)]
+    gravity_lpf_alpha: Option<f32>,
+    #[arg(long)]
+    long_lpf_alpha: Option<f32>,
+    #[arg(long)]
+    min_speed_mps: Option<f32>,
+    #[arg(long)]
+    min_turn_rate_dps: Option<f32>,
+    #[arg(long)]
+    min_lat_acc_mps2: Option<f32>,
+    #[arg(long)]
+    min_long_acc_mps2: Option<f32>,
+    #[arg(long)]
+    min_long_sign_stable_windows: Option<usize>,
+    #[arg(long)]
+    max_stationary_gyro_dps: Option<f32>,
+    #[arg(long)]
+    max_stationary_accel_norm_err_mps2: Option<f32>,
 
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-    use_gravity: bool,
-    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
-    use_turn_gyro: bool,
-    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
-    use_course_rate: bool,
-    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
-    use_lateral_accel: bool,
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-    use_longitudinal_accel: bool,
+    #[arg(long, action = clap::ArgAction::Set)]
+    use_gravity: Option<bool>,
+    #[arg(long, action = clap::ArgAction::Set)]
+    use_turn_gyro: Option<bool>,
+    #[arg(long, action = clap::ArgAction::Set)]
+    use_course_rate: Option<bool>,
+    #[arg(long, action = clap::ArgAction::Set)]
+    use_lateral_accel: Option<bool>,
+    #[arg(long, action = clap::ArgAction::Set)]
+    use_longitudinal_accel: Option<bool>,
 }
 
 #[derive(Clone)]
@@ -325,33 +325,74 @@ fn main() -> Result<()> {
 }
 
 fn config_from_args(args: &Args) -> AlignConfig {
-    AlignConfig {
-        q_mount_std_rad: [
-            args.q_roll_std_deg.to_radians(),
-            args.q_pitch_std_deg.to_radians(),
-            args.q_yaw_std_deg.to_radians(),
-        ],
-        r_gravity_std_mps2: args.r_gravity_std_mps2,
-        r_turn_gyro_std_radps: args.r_turn_gyro_std_dps.to_radians(),
-        r_course_rate_std_radps: args.r_course_rate_std_dps.to_radians(),
-        r_lat_std_mps2: args.r_lat_std_mps2,
-        r_long_std_mps2: args.r_long_std_mps2,
-        gravity_lpf_alpha: args.gravity_lpf_alpha,
-        long_lpf_alpha: args.long_lpf_alpha,
-        min_speed_mps: args.min_speed_mps,
-        min_turn_rate_radps: args.min_turn_rate_dps.to_radians(),
-        min_lat_acc_mps2: args.min_lat_acc_mps2,
-        min_long_acc_mps2: args.min_long_acc_mps2,
-        min_long_sign_stable_windows: args.min_long_sign_stable_windows,
-        max_stationary_gyro_radps: args.max_stationary_gyro_dps.to_radians(),
-        max_stationary_accel_norm_err_mps2: args.max_stationary_accel_norm_err_mps2,
-        use_gravity: args.use_gravity,
-        use_turn_gyro: args.use_turn_gyro,
-        use_course_rate: args.use_course_rate,
-        use_lateral_accel: args.use_lateral_accel,
-        use_longitudinal_accel: args.use_longitudinal_accel,
-        ..AlignConfig::default()
+    let mut cfg = AlignConfig::default();
+    if let Some(v) = args.q_roll_std_deg {
+        cfg.q_mount_std_rad[0] = v.to_radians();
     }
+    if let Some(v) = args.q_pitch_std_deg {
+        cfg.q_mount_std_rad[1] = v.to_radians();
+    }
+    if let Some(v) = args.q_yaw_std_deg {
+        cfg.q_mount_std_rad[2] = v.to_radians();
+    }
+    if let Some(v) = args.r_gravity_std_mps2 {
+        cfg.r_gravity_std_mps2 = v;
+    }
+    if let Some(v) = args.r_turn_gyro_std_dps {
+        cfg.r_turn_gyro_std_radps = v.to_radians();
+    }
+    if let Some(v) = args.r_course_rate_std_dps {
+        cfg.r_course_rate_std_radps = v.to_radians();
+    }
+    if let Some(v) = args.r_lat_std_mps2 {
+        cfg.r_lat_std_mps2 = v;
+    }
+    if let Some(v) = args.r_long_std_mps2 {
+        cfg.r_long_std_mps2 = v;
+    }
+    if let Some(v) = args.gravity_lpf_alpha {
+        cfg.gravity_lpf_alpha = v;
+    }
+    if let Some(v) = args.long_lpf_alpha {
+        cfg.long_lpf_alpha = v;
+    }
+    if let Some(v) = args.min_speed_mps {
+        cfg.min_speed_mps = v;
+    }
+    if let Some(v) = args.min_turn_rate_dps {
+        cfg.min_turn_rate_radps = v.to_radians();
+    }
+    if let Some(v) = args.min_lat_acc_mps2 {
+        cfg.min_lat_acc_mps2 = v;
+    }
+    if let Some(v) = args.min_long_acc_mps2 {
+        cfg.min_long_acc_mps2 = v;
+    }
+    if let Some(v) = args.min_long_sign_stable_windows {
+        cfg.min_long_sign_stable_windows = v;
+    }
+    if let Some(v) = args.max_stationary_gyro_dps {
+        cfg.max_stationary_gyro_radps = v.to_radians();
+    }
+    if let Some(v) = args.max_stationary_accel_norm_err_mps2 {
+        cfg.max_stationary_accel_norm_err_mps2 = v;
+    }
+    if let Some(v) = args.use_gravity {
+        cfg.use_gravity = v;
+    }
+    if let Some(v) = args.use_turn_gyro {
+        cfg.use_turn_gyro = v;
+    }
+    if let Some(v) = args.use_course_rate {
+        cfg.use_course_rate = v;
+    }
+    if let Some(v) = args.use_lateral_accel {
+        cfg.use_lateral_accel = v;
+    }
+    if let Some(v) = args.use_longitudinal_accel {
+        cfg.use_longitudinal_accel = v;
+    }
+    cfg
 }
 
 fn bootstrap_config_from_args(args: &Args, cfg: &AlignConfig) -> BootstrapConfig {
