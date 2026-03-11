@@ -31,7 +31,7 @@ struct Args {
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     alg_valid_only: bool,
 
-    #[arg(long, default_value_t = 100)]
+    #[arg(long, default_value_t = 300)]
     stationary_samples: usize,
 
     #[arg(long, default_value_t = 0.05)]

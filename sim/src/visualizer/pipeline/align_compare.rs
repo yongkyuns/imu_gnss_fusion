@@ -213,7 +213,7 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
     let bootstrap_cfg = BootstrapConfig {
         ema_alpha: 0.05,
         max_speed_mps: 0.35,
-        stationary_samples: 100,
+        stationary_samples: 300,
         max_gyro_radps: cfg.max_stationary_gyro_radps,
         max_accel_norm_err_mps2: cfg.max_stationary_accel_norm_err_mps2,
     };

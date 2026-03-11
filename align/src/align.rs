@@ -35,11 +35,11 @@ impl Default for AlignConfig {
                 0.01_f32.to_radians(),
                 0.01_f32.to_radians(),
             ],
-            r_gravity_std_mps2: 1.88,
+            r_gravity_std_mps2: 1.28,
             r_turn_gyro_std_radps: 0.1_f32.to_radians(),
             r_course_rate_std_radps: 1.10_f32.to_radians(),
             r_lat_std_mps2: 0.1,
-            r_long_std_mps2: 0.03,
+            r_long_std_mps2: 0.003,
             gravity_lpf_alpha: 0.08,
             min_speed_mps: 25.0 / 3.6,
             min_turn_rate_radps: 3.0_f32.to_radians(),
@@ -271,13 +271,12 @@ impl Align {
         }
 
         if long_valid && self.cfg.use_longitudinal_accel {
-            score += self.apply_update1_masked(
+            score += self.apply_update1_vehicle_yaw(
                 a_long,
                 3,
                 horiz_accel_b,
                 window.mean_gyro_b,
                 self.cfg.r_long_std_mps2.powi(2),
-                [false, false, true],
             );
             trace.after_longitudinal_accel = Some(self.q_vb);
         }
@@ -356,6 +355,37 @@ impl Align {
         (y.transpose() * S_inv * y)[0]
     }
 
+    fn apply_update1_vehicle_yaw(
+        &mut self,
+        z: f32,
+        obs_idx: usize,
+        accel_b: [f32; 3],
+        gyro_b: [f32; 3],
+        r_var: f32,
+    ) -> f32 {
+        let obs = align_obs(self.q_vb, gyro_b, accel_b);
+        let h = obs[obs_idx];
+        let h_yaw = match obs_idx {
+            // For right-multiplied vehicle-frame yaw, a_v' = Rz(-psi) a_v.
+            // So d(a_v.x)/dpsi = a_v.y and d(a_v.y)/dpsi = -a_v.x at psi = 0.
+            3 => obs[4],
+            4 => -obs[3],
+            _ => 0.0,
+        };
+        let y = z - h;
+        let pzz = self.P[2][2].max(0.0);
+        let s = h_yaw * h_yaw * pzz + r_var.max(1.0e-9);
+        let k = if s > 1.0e-9 { pzz * h_yaw / s } else { 0.0 };
+        let dpsi = k * y;
+        self.inject_vehicle_yaw(dpsi);
+        self.P[2][2] = ((1.0 - k * h_yaw) * pzz).max(0.0);
+        self.P[0][2] = 0.0;
+        self.P[2][0] = 0.0;
+        self.P[1][2] = 0.0;
+        self.P[2][1] = 0.0;
+        y * y / s
+    }
+
     fn apply_update2(
         &mut self,
         z: [f32; 2],
@@ -393,6 +423,10 @@ impl Align {
 
     fn inject_small_angle(&mut self, dtheta: [f32; 3]) {
         self.q_vb = quat_normalize(quat_mul(quat_from_small_angle(dtheta), self.q_vb));
+    }
+
+    fn inject_vehicle_yaw(&mut self, dpsi: f32) {
+        self.q_vb = quat_normalize(quat_mul(self.q_vb, quat_from_small_angle([0.0, 0.0, dpsi])));
     }
 }
 
