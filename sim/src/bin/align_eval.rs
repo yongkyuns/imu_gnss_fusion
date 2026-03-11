@@ -28,7 +28,7 @@ struct Args {
     #[arg(long)]
     bootstrap_debug_csv: Option<PathBuf>,
 
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     alg_valid_only: bool,
 
     #[arg(long, default_value_t = 300)]
@@ -359,6 +359,7 @@ fn config_from_args(args: &Args) -> AlignConfig {
         use_course_rate: args.use_course_rate,
         use_lateral_accel: args.use_lateral_accel,
         use_longitudinal_accel: args.use_longitudinal_accel,
+        ..AlignConfig::default()
     }
 }
 
@@ -672,10 +673,13 @@ fn evaluate_config(
                 align.update_window(&window);
 
                 let q = align.q_vb;
-                let (align_roll_deg, align_pitch_deg, align_yaw_deg) =
-                    quat_rpy_alg_deg(q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64);
-                let q_align_cmp =
-                    quat_from_rpy_alg_deg(align_roll_deg, align_pitch_deg, align_yaw_deg);
+                let q_align_cmp = [q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64];
+                let (align_roll_deg, align_pitch_deg, align_yaw_deg) = quat_rpy_alg_deg(
+                    q_align_cmp[0],
+                    q_align_cmp[1],
+                    q_align_cmp[2],
+                    q_align_cmp[3],
+                );
                 let sigma = align.sigma_deg();
                 if let Some((alg_roll_deg, alg_pitch_deg, alg_yaw_deg)) =
                     interpolate_alg(&dataset.alg_events, *tn)
