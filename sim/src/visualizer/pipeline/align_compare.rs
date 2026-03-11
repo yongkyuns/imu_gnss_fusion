@@ -3,8 +3,8 @@ use align_rs::align::AlignConfig;
 use crate::ubxlog::UbxFrame;
 
 use super::align_replay::{
-    BootstrapConfig as ReplayBootstrapConfig, build_align_replay, quat_rpy_alg_deg, axis_angle_deg,
-    quat_rotate,
+    BootstrapConfig as ReplayBootstrapConfig, build_align_replay, quat_rpy_alg_deg,
+    quat_rotate, signed_projected_axis_angle_deg,
 };
 
 use super::super::model::Trace;
@@ -108,23 +108,22 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
         out_pitch.push([t, sample.align_rpy_deg[1]]);
         out_yaw.push([t, sample.align_rpy_deg[2]]);
         if let Some(q_alg) = sample.alg_q {
+            let align_fwd = quat_rotate(sample.q_align, [1.0, 0.0, 0.0]);
+            let ref_fwd = quat_rotate(q_alg, [1.0, 0.0, 0.0]);
+            let align_down = quat_rotate(sample.q_align, [0.0, 0.0, 1.0]);
+            let ref_down = quat_rotate(q_alg, [0.0, 0.0, 1.0]);
+            let ref_right = quat_rotate(q_alg, [0.0, 1.0, 0.0]);
             fwd_err.push([
                 t,
-                axis_angle_deg(
-                    quat_rotate(sample.q_align, [1.0, 0.0, 0.0]),
-                    quat_rotate(q_alg, [1.0, 0.0, 0.0]),
-                ),
+                signed_projected_axis_angle_deg(align_fwd, ref_fwd, ref_down),
             ]);
             down_err.push([
                 t,
-                axis_angle_deg(
-                    quat_rotate(sample.q_align, [0.0, 0.0, 1.0]),
-                    quat_rotate(q_alg, [0.0, 0.0, 1.0]),
-                ),
+                signed_projected_axis_angle_deg(align_down, ref_down, ref_right),
             ]);
         }
         if sample.long_trace.emitted {
-            heading_vec_err.push([t, sample.long_trace.angle_err_deg.abs()]);
+            heading_vec_err.push([t, sample.long_trace.angle_err_deg]);
         }
         let contrib = sample.contrib;
         roll_turn_gyro.push([t, contrib.turn_gyro[0]]);
@@ -187,15 +186,15 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
         ],
         axis_err: vec![
             Trace {
-                name: "forward-axis error [deg]".to_string(),
+                name: "forward-axis error signed [deg]".to_string(),
                 points: fwd_err,
             },
             Trace {
-                name: "down-axis error [deg]".to_string(),
+                name: "down-axis error signed [deg]".to_string(),
                 points: down_err,
             },
             Trace {
-                name: "horiz-vector angle diff [deg]".to_string(),
+                name: "horiz-vector angle diff signed [deg]".to_string(),
                 points: heading_vec_err,
             },
         ],

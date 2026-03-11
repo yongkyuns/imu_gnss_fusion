@@ -12,7 +12,7 @@ use sim::ubxlog::{
 };
 use sim::visualizer::math::nearest_master_ms;
 use sim::visualizer::pipeline::align_replay::{
-    BootstrapConfig, axis_angle_deg, build_align_replay, quat_rotate,
+    BootstrapConfig, axis_angle_deg, build_align_replay, quat_rotate, signed_projected_axis_angle_deg,
 };
 use sim::visualizer::pipeline::timebase::{MasterTimeline, build_master_timeline};
 
@@ -133,6 +133,8 @@ struct ResidualSample {
     rot_err_deg: f64,
     fwd_err_deg: f64,
     down_err_deg: f64,
+    fwd_err_signed_deg: f64,
+    down_err_signed_deg: f64,
     long_base_valid: bool,
     long_emitted: bool,
     long_stable_windows: usize,
@@ -642,6 +644,16 @@ fn evaluate_config(
                     quat_rotate(sample.q_align, [0.0, 0.0, 1.0]),
                     quat_rotate(q_alg, [0.0, 0.0, 1.0]),
                 ),
+                fwd_err_signed_deg: signed_projected_axis_angle_deg(
+                    quat_rotate(sample.q_align, [1.0, 0.0, 0.0]),
+                    quat_rotate(q_alg, [1.0, 0.0, 0.0]),
+                    quat_rotate(q_alg, [0.0, 0.0, 1.0]),
+                ),
+                down_err_signed_deg: signed_projected_axis_angle_deg(
+                    quat_rotate(sample.q_align, [0.0, 0.0, 1.0]),
+                    quat_rotate(q_alg, [0.0, 0.0, 1.0]),
+                    quat_rotate(q_alg, [0.0, 1.0, 0.0]),
+                ),
                 long_base_valid: sample.long_trace.base_valid,
                 long_emitted: sample.long_trace.emitted,
                 long_stable_windows: sample.long_trace.stable_windows,
@@ -962,12 +974,12 @@ fn write_residual_csv(path: &PathBuf, samples: &[ResidualSample]) -> Result<()> 
     let mut w = BufWriter::new(file);
     writeln!(
         w,
-        "t_s,align_roll_deg,align_pitch_deg,align_yaw_deg,alg_roll_deg,alg_pitch_deg,alg_yaw_deg,err_roll_deg,err_pitch_deg,err_yaw_deg,sigma_roll_deg,sigma_pitch_deg,sigma_yaw_deg,course_rate_dps,a_lat_mps2,a_long_mps2,rot_err_deg,fwd_err_deg,down_err_deg,long_base_valid,long_emitted,long_stable_windows,long_gnss_long_lp_mps2,long_gnss_lat_lp_mps2,long_imu_long_lp_mps2,long_imu_lat_lp_mps2,long_angle_err_deg,long_angle_err_signed_deg"
+        "t_s,align_roll_deg,align_pitch_deg,align_yaw_deg,alg_roll_deg,alg_pitch_deg,alg_yaw_deg,err_roll_deg,err_pitch_deg,err_yaw_deg,sigma_roll_deg,sigma_pitch_deg,sigma_yaw_deg,course_rate_dps,a_lat_mps2,a_long_mps2,rot_err_deg,fwd_err_deg,down_err_deg,fwd_err_signed_deg,down_err_signed_deg,long_base_valid,long_emitted,long_stable_windows,long_gnss_long_lp_mps2,long_gnss_lat_lp_mps2,long_imu_long_lp_mps2,long_imu_lat_lp_mps2,long_angle_err_deg,long_angle_err_signed_deg"
     )?;
     for s in samples {
         writeln!(
             w,
-            "{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
+            "{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
             s.t_s,
             s.align_roll_deg,
             s.align_pitch_deg,
@@ -987,6 +999,8 @@ fn write_residual_csv(path: &PathBuf, samples: &[ResidualSample]) -> Result<()> 
             s.rot_err_deg,
             s.fwd_err_deg,
             s.down_err_deg,
+            s.fwd_err_signed_deg,
+            s.down_err_signed_deg,
             s.long_base_valid as u8,
             s.long_emitted as u8,
             s.long_stable_windows,

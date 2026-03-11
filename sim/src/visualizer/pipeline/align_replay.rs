@@ -507,6 +507,22 @@ pub fn axis_angle_deg(a: [f64; 3], b: [f64; 3]) -> f64 {
     dot.acos().to_degrees()
 }
 
+pub fn signed_projected_axis_angle_deg(a: [f64; 3], b: [f64; 3], axis: [f64; 3]) -> f64 {
+    let axis = normalize3_f64(axis);
+    let ap = project_orth_f64(a, axis);
+    let bp = project_orth_f64(b, axis);
+    let na = norm3_f64(ap);
+    let nb = norm3_f64(bp);
+    if na <= 1.0e-12 || nb <= 1.0e-12 {
+        return f64::NAN;
+    }
+    let au = [ap[0] / na, ap[1] / na, ap[2] / na];
+    let bu = [bp[0] / nb, bp[1] / nb, bp[2] / nb];
+    let dot = dot3_f64(au, bu).clamp(-1.0, 1.0);
+    let cross = cross3_f64(au, bu);
+    dot3_f64(axis, cross).atan2(dot).to_degrees()
+}
+
 fn quat_to_rpy_alg_deg(q: [f32; 4]) -> [f64; 3] {
     let (r, p, y) = quat_rpy_alg_deg(q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64);
     [r, p, y]
@@ -552,6 +568,40 @@ fn align_update_contrib_deg(trace: AlignUpdateTrace) -> AlignEulerContrib {
 
 fn norm3(v: [f32; 3]) -> f32 {
     (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+}
+
+fn norm3_f64(v: [f64; 3]) -> f64 {
+    (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+}
+
+fn normalize3_f64(v: [f64; 3]) -> [f64; 3] {
+    let n = norm3_f64(v);
+    if n > 1.0e-12 {
+        [v[0] / n, v[1] / n, v[2] / n]
+    } else {
+        [1.0, 0.0, 0.0]
+    }
+}
+
+fn project_orth_f64(v: [f64; 3], axis: [f64; 3]) -> [f64; 3] {
+    let d = dot3_f64(v, axis);
+    [
+        v[0] - d * axis[0],
+        v[1] - d * axis[1],
+        v[2] - d * axis[2],
+    ]
+}
+
+fn dot3_f64(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn cross3_f64(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
 }
 
 fn normalize2(v: [f64; 2]) -> Option<[f64; 2]> {
