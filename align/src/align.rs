@@ -45,20 +45,20 @@ impl Default for AlignConfig {
             r_turn_gyro_std_radps: 0.1_f32.to_radians(),
             r_course_rate_std_radps: 1.10_f32.to_radians(),
             r_lat_std_mps2: 0.1,
-            r_long_std_mps2: 0.003,
+            r_long_std_mps2: 0.3,
             gravity_lpf_alpha: 0.08,
-            long_lpf_alpha: 0.1,
-            min_speed_mps: 30.0 / 3.6,
-            min_turn_rate_radps: 3.0_f32.to_radians(),
-            min_lat_acc_mps2: 0.35,
-            min_long_acc_mps2: 0.25,
-            min_long_sign_stable_windows: 3,
+            long_lpf_alpha: 0.05,
+            min_speed_mps: 3.0 / 3.6,
+            min_turn_rate_radps: 2.0_f32.to_radians(),
+            min_lat_acc_mps2: 0.10,
+            min_long_acc_mps2: 0.18,
+            min_long_sign_stable_windows: 2,
             max_stationary_gyro_radps: 0.8_f32.to_radians(),
             max_stationary_accel_norm_err_mps2: 0.2,
             use_gravity: true,
             use_turn_gyro: false,
             use_course_rate: false,
-            use_lateral_accel: false,
+            use_lateral_accel: true,
             use_longitudinal_accel: true,
         }
     }
@@ -224,8 +224,13 @@ impl Align {
             && course_rate.abs() > self.cfg.min_turn_rate_radps
             && a_lat.abs() > self.cfg.min_lat_acc_mps2;
         let horiz_gnss_norm = (a_long * a_long + a_lat * a_lat).sqrt();
-        let long_valid =
-            speed_mid > self.cfg.min_speed_mps && horiz_gnss_norm > self.cfg.min_long_acc_mps2;
+        let long_valid = speed_mid > self.cfg.min_speed_mps
+            && a_long.abs() > self.cfg.min_long_acc_mps2
+            // Use the horizontal-vector angle only when motion is still predominantly
+            // longitudinal. In lateral-dominant motion, the instantaneous accel-vector
+            // heading is not the forward cue we want from this update.
+            && a_lat.abs() < (0.5_f32).max(0.6 * a_long.abs())
+            && horiz_gnss_norm > self.cfg.min_long_acc_mps2;
 
         if stationary {
             let alpha = self.cfg.gravity_lpf_alpha;
@@ -293,6 +298,8 @@ impl Align {
                     alpha: self.cfg.long_lpf_alpha,
                     min_abs_horiz_mps2: self.cfg.min_long_acc_mps2,
                     min_stable_windows: self.cfg.min_long_sign_stable_windows,
+                    max_lat_to_long_ratio: 0.8,
+                    min_abs_lat_guard_mps2: 0.35,
                 },
                 HorizontalHeadingCueSample {
                     gnss_horiz_mps2: [a_long, a_lat],
@@ -302,7 +309,8 @@ impl Align {
             );
             trace.longitudinal_trace = Some(long_trace);
             if let Some(cue) = cue {
-                score += self.apply_vehicle_yaw_angle(cue.angle_err_rad, self.cfg.r_long_std_mps2.powi(2));
+                score += self
+                    .apply_vehicle_yaw_angle(cue.angle_err_rad, self.cfg.r_long_std_mps2.powi(2));
                 trace.after_longitudinal_accel = Some(self.q_vb);
             }
         }

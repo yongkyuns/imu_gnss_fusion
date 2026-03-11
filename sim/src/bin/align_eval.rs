@@ -69,15 +69,15 @@ struct Args {
     gravity_lpf_alpha: f32,
     #[arg(long, default_value_t = 0.05)]
     long_lpf_alpha: f32,
-    #[arg(long, default_value_t = 30.0 / 3.6)]
+    #[arg(long, default_value_t = 25.0 / 3.6)]
     min_speed_mps: f32,
     #[arg(long, default_value_t = 3.0)]
     min_turn_rate_dps: f32,
     #[arg(long, default_value_t = 0.35)]
     min_lat_acc_mps2: f32,
-    #[arg(long, default_value_t = 0.25)]
+    #[arg(long, default_value_t = 0.18)]
     min_long_acc_mps2: f32,
-    #[arg(long, default_value_t = 3)]
+    #[arg(long, default_value_t = 2)]
     min_long_sign_stable_windows: usize,
     #[arg(long, default_value_t = 0.8)]
     max_stationary_gyro_dps: f32,

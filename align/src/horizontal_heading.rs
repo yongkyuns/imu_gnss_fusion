@@ -3,6 +3,8 @@ pub struct HorizontalHeadingCueConfig {
     pub alpha: f32,
     pub min_abs_horiz_mps2: f32,
     pub min_stable_windows: usize,
+    pub max_lat_to_long_ratio: f32,
+    pub min_abs_lat_guard_mps2: f32,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -97,6 +99,16 @@ impl HorizontalHeadingCueFilter {
             return (None, trace);
         }
 
+        let gnss_long_abs = gnss_long_lp.abs();
+        let gnss_lat_abs = gnss_lat_lp.abs();
+        let max_lat_abs = cfg
+            .min_abs_lat_guard_mps2
+            .max(cfg.max_lat_to_long_ratio * gnss_long_abs);
+        if gnss_long_abs < cfg.min_abs_horiz_mps2 || gnss_lat_abs > max_lat_abs {
+            self.stable_windows = 0;
+            return (None, trace);
+        }
+
         self.stable_windows += 1;
         trace.stable_windows = self.stable_windows;
         if self.stable_windows < cfg.min_stable_windows.max(1) {
@@ -141,6 +153,8 @@ mod tests {
             alpha: 1.0,
             min_abs_horiz_mps2: 0.25,
             min_stable_windows: 2,
+            max_lat_to_long_ratio: 0.6,
+            min_abs_lat_guard_mps2: 0.5,
         };
         let mut filter = HorizontalHeadingCueFilter::new();
         let sample = HorizontalHeadingCueSample {
@@ -158,6 +172,8 @@ mod tests {
             alpha: 1.0,
             min_abs_horiz_mps2: 0.25,
             min_stable_windows: 1,
+            max_lat_to_long_ratio: 0.6,
+            min_abs_lat_guard_mps2: 0.5,
         };
         let mut filter = HorizontalHeadingCueFilter::new();
         let cue = filter
@@ -172,5 +188,23 @@ mod tests {
             .0
             .unwrap();
         assert!((cue.angle_err_rad + std::f32::consts::FRAC_PI_2).abs() < 1.0e-5);
+    }
+
+    #[test]
+    fn rejects_filtered_lateral_dominant_gnss_vector() {
+        let cfg = HorizontalHeadingCueConfig {
+            alpha: 1.0,
+            min_abs_horiz_mps2: 0.25,
+            min_stable_windows: 1,
+            max_lat_to_long_ratio: 0.6,
+            min_abs_lat_guard_mps2: 0.5,
+        };
+        let mut filter = HorizontalHeadingCueFilter::new();
+        let sample = HorizontalHeadingCueSample {
+            gnss_horiz_mps2: [0.05, 0.40],
+            imu_horiz_mps2: [0.30, 0.10],
+            base_valid: true,
+        };
+        assert!(filter.update_with_trace(cfg, sample).0.is_none());
     }
 }
