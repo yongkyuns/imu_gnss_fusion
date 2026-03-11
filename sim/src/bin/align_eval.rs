@@ -157,6 +157,14 @@ struct ResidualSample {
     rot_err_deg: f64,
     fwd_err_deg: f64,
     down_err_deg: f64,
+    long_base_valid: bool,
+    long_emitted: bool,
+    long_stable_windows: usize,
+    long_gnss_long_lp_mps2: f64,
+    long_gnss_lat_lp_mps2: f64,
+    long_imu_long_lp_mps2: f64,
+    long_imu_lat_lp_mps2: f64,
+    long_angle_err_deg: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -671,7 +679,8 @@ fn evaluate_config(
                         nav.vel_d_mps as f32,
                     ],
                 };
-                align.update_window(&window);
+                let (_, trace) = align.update_window_with_trace(&window);
+                let long_trace = trace.longitudinal_trace.unwrap_or_default();
 
                 let q = align.q_vb;
                 let q_align_cmp = [q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64];
@@ -739,6 +748,14 @@ fn evaluate_config(
                         rot_err_deg,
                         fwd_err_deg,
                         down_err_deg,
+                        long_base_valid: long_trace.base_valid,
+                        long_emitted: long_trace.emitted,
+                        long_stable_windows: long_trace.stable_windows,
+                        long_gnss_long_lp_mps2: long_trace.gnss_long_lp_mps2 as f64,
+                        long_gnss_lat_lp_mps2: long_trace.gnss_lat_lp_mps2 as f64,
+                        long_imu_long_lp_mps2: long_trace.imu_long_lp_mps2 as f64,
+                        long_imu_lat_lp_mps2: long_trace.imu_lat_lp_mps2 as f64,
+                        long_angle_err_deg: (long_trace.angle_err_rad as f64).to_degrees(),
                     });
                 }
             }
@@ -1030,6 +1047,11 @@ fn print_config(cfg: &AlignConfig, bootstrap_cfg: &BootstrapConfig) {
         cfg.max_stationary_accel_norm_err_mps2
     );
     eprintln!(
+        "[config] long_alpha={:.3} min_long_sign_windows={}",
+        cfg.long_lpf_alpha,
+        cfg.min_long_sign_stable_windows
+    );
+    eprintln!(
         "[config] bootstrap_ema_alpha={:.3} bootstrap_max_speed={:.3} stationary_samples={}",
         bootstrap_cfg.ema_alpha, bootstrap_cfg.max_speed_mps, bootstrap_cfg.stationary_samples
     );
@@ -1049,12 +1071,12 @@ fn write_residual_csv(path: &PathBuf, samples: &[ResidualSample]) -> Result<()> 
     let mut w = BufWriter::new(file);
     writeln!(
         w,
-        "t_s,align_roll_deg,align_pitch_deg,align_yaw_deg,alg_roll_deg,alg_pitch_deg,alg_yaw_deg,err_roll_deg,err_pitch_deg,err_yaw_deg,sigma_roll_deg,sigma_pitch_deg,sigma_yaw_deg,course_rate_dps,a_lat_mps2,a_long_mps2,rot_err_deg,fwd_err_deg,down_err_deg"
+        "t_s,align_roll_deg,align_pitch_deg,align_yaw_deg,alg_roll_deg,alg_pitch_deg,alg_yaw_deg,err_roll_deg,err_pitch_deg,err_yaw_deg,sigma_roll_deg,sigma_pitch_deg,sigma_yaw_deg,course_rate_dps,a_lat_mps2,a_long_mps2,rot_err_deg,fwd_err_deg,down_err_deg,long_base_valid,long_emitted,long_stable_windows,long_gnss_long_lp_mps2,long_gnss_lat_lp_mps2,long_imu_long_lp_mps2,long_imu_lat_lp_mps2,long_angle_err_deg"
     )?;
     for s in samples {
         writeln!(
             w,
-            "{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
+            "{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.6}",
             s.t_s,
             s.align_roll_deg,
             s.align_pitch_deg,
@@ -1073,7 +1095,15 @@ fn write_residual_csv(path: &PathBuf, samples: &[ResidualSample]) -> Result<()> 
             s.a_long_mps2,
             s.rot_err_deg,
             s.fwd_err_deg,
-            s.down_err_deg
+            s.down_err_deg,
+            s.long_base_valid as u8,
+            s.long_emitted as u8,
+            s.long_stable_windows,
+            s.long_gnss_long_lp_mps2,
+            s.long_gnss_lat_lp_mps2,
+            s.long_imu_long_lp_mps2,
+            s.long_imu_lat_lp_mps2,
+            s.long_angle_err_deg
         )?;
     }
     Ok(())

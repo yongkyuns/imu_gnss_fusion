@@ -1,6 +1,9 @@
 #![allow(non_snake_case)]
 
-use crate::longitudinal::{LongitudinalCueConfig, LongitudinalCueFilter, LongitudinalCueSample};
+use crate::horizontal_heading::{
+    HorizontalHeadingCueConfig, HorizontalHeadingCueFilter, HorizontalHeadingCueSample,
+    HorizontalHeadingTrace,
+};
 use nalgebra::{SMatrix, SVector};
 
 pub const ALIGN_N_STATES: usize = 3;
@@ -78,6 +81,7 @@ pub struct AlignUpdateTrace {
     pub after_course_rate: Option<[f32; 4]>,
     pub after_lateral_accel: Option<[f32; 4]>,
     pub after_longitudinal_accel: Option<[f32; 4]>,
+    pub longitudinal_trace: Option<HorizontalHeadingTrace>,
 }
 
 #[derive(Debug, Clone)]
@@ -85,7 +89,7 @@ pub struct Align {
     pub q_vb: [f32; 4],
     pub P: [[f32; ALIGN_N_STATES]; ALIGN_N_STATES],
     pub gravity_lp_b: [f32; 3],
-    long_filter: LongitudinalCueFilter,
+    long_filter: HorizontalHeadingCueFilter,
     pub cfg: AlignConfig,
 }
 
@@ -105,7 +109,7 @@ impl Align {
                 60.0_f32.to_radians().powi(2),
             ]),
             gravity_lp_b: [0.0, 0.0, -GRAVITY_MPS2],
-            long_filter: LongitudinalCueFilter::new(),
+            long_filter: HorizontalHeadingCueFilter::new(),
             cfg,
         }
     }
@@ -219,9 +223,9 @@ impl Align {
         let turn_valid = speed_mid > self.cfg.min_speed_mps
             && course_rate.abs() > self.cfg.min_turn_rate_radps
             && a_lat.abs() > self.cfg.min_lat_acc_mps2;
-        let long_valid = speed_mid > self.cfg.min_speed_mps
-            && a_long.abs() > self.cfg.min_long_acc_mps2
-            && a_lat.abs() < (0.5_f32).max(0.6 * a_long.abs());
+        let horiz_gnss_norm = (a_long * a_long + a_lat * a_lat).sqrt();
+        let long_valid =
+            speed_mid > self.cfg.min_speed_mps && horiz_gnss_norm > self.cfg.min_long_acc_mps2;
 
         if stationary {
             let alpha = self.cfg.gravity_lpf_alpha;
@@ -284,26 +288,21 @@ impl Align {
 
         if self.cfg.use_longitudinal_accel {
             let horiz_obs = align_obs(self.q_vb, window.mean_gyro_b, horiz_accel_b);
-            let cue = self.long_filter.update(
-                LongitudinalCueConfig {
+            let (cue, long_trace) = self.long_filter.update_with_trace(
+                HorizontalHeadingCueConfig {
                     alpha: self.cfg.long_lpf_alpha,
-                    min_abs_long_mps2: self.cfg.min_long_acc_mps2,
-                    min_sign_stable_windows: self.cfg.min_long_sign_stable_windows,
+                    min_abs_horiz_mps2: self.cfg.min_long_acc_mps2,
+                    min_stable_windows: self.cfg.min_long_sign_stable_windows,
                 },
-                LongitudinalCueSample {
-                    gnss_long_mps2: a_long,
-                    imu_long_mps2: horiz_obs[3],
-                    imu_lat_mps2: horiz_obs[4],
+                HorizontalHeadingCueSample {
+                    gnss_horiz_mps2: [a_long, a_lat],
+                    imu_horiz_mps2: [horiz_obs[3], horiz_obs[4]],
                     base_valid: long_valid,
                 },
             );
+            trace.longitudinal_trace = Some(long_trace);
             if let Some(cue) = cue {
-                score += self.apply_vehicle_yaw_scalar(
-                    cue.z_long_mps2,
-                    cue.h_long_mps2,
-                    cue.h_yaw_jac,
-                    self.cfg.r_long_std_mps2.powi(2),
-                );
+                score += self.apply_vehicle_yaw_angle(cue.angle_err_rad, self.cfg.r_long_std_mps2.powi(2));
                 trace.after_longitudinal_accel = Some(self.q_vb);
             }
         }
@@ -395,6 +394,20 @@ impl Align {
         self.P[1][2] = 0.0;
         self.P[2][1] = 0.0;
         y * y / s
+    }
+
+    fn apply_vehicle_yaw_angle(&mut self, angle_err_rad: f32, r_var: f32) -> f32 {
+        let pzz = self.P[2][2].max(0.0);
+        let s = pzz + r_var.max(1.0e-9);
+        let k = if s > 1.0e-9 { pzz / s } else { 0.0 };
+        let dpsi = -k * angle_err_rad;
+        self.inject_vehicle_yaw(dpsi);
+        self.P[2][2] = ((1.0 - k) * pzz).max(0.0);
+        self.P[0][2] = 0.0;
+        self.P[2][0] = 0.0;
+        self.P[1][2] = 0.0;
+        self.P[2][1] = 0.0;
+        angle_err_rad * angle_err_rad / s
     }
 
     fn apply_update2(
