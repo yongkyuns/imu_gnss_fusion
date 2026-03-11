@@ -22,6 +22,10 @@ struct Args {
     profile_only: bool,
     #[arg(long, default_value = "align", value_parser = parse_ekf_imu_source)]
     ekf_imu_source: EkfImuSource,
+    #[arg(long)]
+    dump_align_axis_time_s: Option<f64>,
+    #[arg(long, default_value_t = 3.0)]
+    dump_window_s: f64,
 }
 
 fn main() -> Result<()> {
@@ -116,6 +120,10 @@ fn main() -> Result<()> {
             eprintln!("[profile] max_step_abs group={} value={:.6}", group, step);
         }
     }
+    if let Some(t_s) = args.dump_align_axis_time_s {
+        dump_traces_near_time("align_cmp_att", &data.align_cmp_att, t_s, args.dump_window_s);
+        dump_traces_near_time("align_axis_err", &data.align_axis_err, t_s, args.dump_window_s);
+    }
     if args.profile_only {
         return Ok(());
     }
@@ -130,5 +138,28 @@ fn parse_ekf_imu_source(s: &str) -> Result<EkfImuSource, String> {
         _ => Err(format!(
             "invalid ekf IMU source '{s}', expected 'align' or 'esf-alg'"
         )),
+    }
+}
+
+fn dump_traces_near_time(group: &str, traces: &[sim::visualizer::model::Trace], t_s: f64, window_s: f64) {
+    let half = 0.5 * window_s.abs();
+    eprintln!(
+        "[dump] group={} center_t_s={:.3} window_s={:.3}",
+        group, t_s, window_s
+    );
+    for trace in traces {
+        let mut any = false;
+        for p in &trace.points {
+            if (p[0] - t_s).abs() <= half {
+                if !any {
+                    eprintln!("[dump] trace={}", trace.name);
+                    any = true;
+                }
+                eprintln!("[dump]   t_s={:.3} value={:.6}", p[0], p[1]);
+            }
+        }
+        if !any {
+            eprintln!("[dump] trace={} no points in window", trace.name);
+        }
     }
 }

@@ -1,17 +1,20 @@
 use std::cmp::Ordering;
-use std::f64::consts::PI;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
-use align_rs::align::{Align, AlignConfig, AlignWindowSummary, GRAVITY_MPS2};
+use align_rs::align::{AlignConfig, GRAVITY_MPS2};
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use sim::ubxlog::{
-    NavPvtObs, UbxFrame, extract_esf_alg, extract_esf_alg_valid, extract_esf_raw_samples,
-    extract_nav2_pvt_obs, fit_linear_map, parse_ubx_frames, sensor_meta, unwrap_counter,
+    NavPvtObs, UbxFrame, extract_esf_raw_samples, extract_nav2_pvt_obs, fit_linear_map,
+    parse_ubx_frames, sensor_meta, unwrap_counter,
 };
-use sim::visualizer::math::{nearest_master_ms, normalize_heading_deg, unwrap_i64_counter};
+use sim::visualizer::math::nearest_master_ms;
+use sim::visualizer::pipeline::align_replay::{
+    BootstrapConfig, axis_angle_deg, build_align_replay, quat_rotate,
+};
+use sim::visualizer::pipeline::timebase::{MasterTimeline, build_master_timeline};
 
 #[derive(Parser, Debug)]
 #[command(name = "align_eval")]
@@ -46,11 +49,11 @@ struct Args {
     #[arg(long, default_value_t = 2)]
     tune_passes: usize,
 
-    #[arg(long, default_value_t = 0.01)]
+    #[arg(long, default_value_t = 0.001)]
     q_roll_std_deg: f32,
-    #[arg(long, default_value_t = 0.01)]
+    #[arg(long, default_value_t = 0.001)]
     q_pitch_std_deg: f32,
-    #[arg(long, default_value_t = 0.01)]
+    #[arg(long, default_value_t = 0.001)]
     q_yaw_std_deg: f32,
     #[arg(long, default_value_t = 1.28)]
     r_gravity_std_mps2: f32,
@@ -93,41 +96,14 @@ struct Args {
     use_longitudinal_accel: bool,
 }
 
-#[derive(Clone, Copy, Debug)]
-struct AlgEvent {
-    t_ms: f64,
-    q_frd: [f64; 4],
-}
-
-#[derive(Clone, Copy, Debug)]
-struct ImuPacket {
-    t_ms: f64,
-    gx_dps: f64,
-    gy_dps: f64,
-    gz_dps: f64,
-    ax_mps2: f64,
-    ay_mps2: f64,
-    az_mps2: f64,
-}
-
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct AlignDataset {
-    t0_master_ms: f64,
-    nav_events: Vec<(f64, NavPvtObs)>,
-    alg_events: Vec<AlgEvent>,
-    imu_packets: Vec<ImuPacket>,
+    frames: Vec<UbxFrame>,
+    timeline: MasterTimeline,
+    total_nav_events: usize,
 }
 
-#[derive(Clone, Copy, Debug)]
-struct BootstrapConfig {
-    ema_alpha: f32,
-    max_speed_mps: f32,
-    stationary_samples: usize,
-    max_gyro_radps: f32,
-    max_accel_norm_err_mps2: f32,
-}
-
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct BootstrapDetector {
     cfg: BootstrapConfig,
     gyro_ema: Option<f32>,
@@ -207,7 +183,7 @@ struct EvalMetrics {
     score: f64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct EvalResult {
     cfg: AlignConfig,
     bootstrap_cfg: BootstrapConfig,
@@ -388,7 +364,7 @@ fn bootstrap_config_from_args(args: &Args, cfg: &AlignConfig) -> BootstrapConfig
 fn load_dataset(
     logfile: &PathBuf,
     max_records: Option<usize>,
-    alg_valid_only: bool,
+    _alg_valid_only: bool,
 ) -> Result<AlignDataset> {
     let bytes =
         fs::read(logfile).with_context(|| format!("failed to read {}", logfile.display()))?;
@@ -401,48 +377,30 @@ fn load_dataset(
         bail!("log does not contain a usable iTOW timeline");
     }
 
-    let mut alg_events = Vec::new();
-    let mut nav_events = Vec::new();
-    for frame in &frames {
-        if let Some(t_ms) = nearest_master_ms(frame.seq, &timeline.masters) {
-            let alg = if alg_valid_only {
-                extract_esf_alg_valid(frame)
-            } else {
-                extract_esf_alg(frame)
-            };
-            if let Some((_, roll, pitch, yaw)) = alg {
-                alg_events.push(AlgEvent {
-                    t_ms,
-                    q_frd: esf_alg_flu_to_frd_mount_quat(roll, pitch, yaw),
-                });
-            }
-            if let Some(obs) = extract_nav2_pvt_obs(frame) {
-                if obs.fix_ok && !obs.invalid_llh {
-                    nav_events.push((t_ms, obs));
-                }
-            }
-        }
-    }
-    alg_events.sort_by(|a, b| a.t_ms.partial_cmp(&b.t_ms).unwrap_or(Ordering::Equal));
-    nav_events.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
-    if alg_events.is_empty() {
-        bail!("no ESF-ALG samples found for benchmarking");
-    }
-    if nav_events.len() < 2 {
+    let total_nav_events = collect_nav_events(&frames, &timeline).len();
+    if total_nav_events < 2 {
         bail!("need at least two NAV2-PVT observations");
     }
-
-    let imu_packets = build_imu_packets(&frames, &timeline)?;
-    if imu_packets.is_empty() {
+    if build_imu_packets(&frames, &timeline)?.is_empty() {
         bail!("no complete ESF-RAW IMU packets found");
     }
 
     Ok(AlignDataset {
-        t0_master_ms: timeline.t0_master_ms,
-        nav_events,
-        alg_events,
-        imu_packets,
+        frames,
+        timeline,
+        total_nav_events,
     })
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ImuPacket {
+    t_ms: f64,
+    gx_dps: f64,
+    gy_dps: f64,
+    gz_dps: f64,
+    ax_mps2: f64,
+    ay_mps2: f64,
+    az_mps2: f64,
 }
 
 fn build_imu_packets(frames: &[UbxFrame], timeline: &MasterTimeline) -> Result<Vec<ImuPacket>> {
@@ -532,6 +490,21 @@ fn build_imu_packets(frames: &[UbxFrame], timeline: &MasterTimeline) -> Result<V
     Ok(imu_packets)
 }
 
+fn collect_nav_events(frames: &[UbxFrame], timeline: &MasterTimeline) -> Vec<(f64, NavPvtObs)> {
+    let mut nav_events = Vec::new();
+    for frame in frames {
+        if let Some(t_ms) = sim::visualizer::math::nearest_master_ms(frame.seq, &timeline.masters)
+            && let Some(obs) = extract_nav2_pvt_obs(frame)
+            && obs.fix_ok
+            && !obs.invalid_llh
+        {
+            nav_events.push((t_ms, obs));
+        }
+    }
+    nav_events.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    nav_events
+}
+
 impl BootstrapDetector {
     fn new(cfg: BootstrapConfig) -> Self {
         Self {
@@ -598,13 +571,18 @@ fn build_bootstrap_debug_trace(
     dataset: &AlignDataset,
     bootstrap_cfg: &BootstrapConfig,
 ) -> Vec<BootstrapDebugSample> {
+    let imu_packets = match build_imu_packets(&dataset.frames, &dataset.timeline) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    let nav_events = collect_nav_events(&dataset.frames, &dataset.timeline);
     let mut bootstrap = BootstrapDetector::new(*bootstrap_cfg);
-    let mut out = Vec::with_capacity(dataset.imu_packets.len());
+    let mut out = Vec::with_capacity(imu_packets.len());
     let mut scan_idx = 0usize;
     let mut prev_nav: Option<(f64, NavPvtObs)> = None;
-    for (tn, nav) in &dataset.nav_events {
-        while scan_idx < dataset.imu_packets.len() && dataset.imu_packets[scan_idx].t_ms <= *tn {
-            let pkt = &dataset.imu_packets[scan_idx];
+    for (tn, nav) in &nav_events {
+        while scan_idx < imu_packets.len() && imu_packets[scan_idx].t_ms <= *tn {
+            let pkt = &imu_packets[scan_idx];
             let gyro_radps = [
                 pkt.gx_dps.to_radians() as f32,
                 pkt.gy_dps.to_radians() as f32,
@@ -614,7 +592,7 @@ fn build_bootstrap_debug_trace(
             let speed_mps = speed_for_bootstrap(prev_nav, (*tn, *nav), pkt.t_ms) as f32;
             bootstrap.update(accel_b, gyro_radps, speed_mps);
             let mut row = bootstrap.snapshot(speed_mps, gyro_radps, accel_b);
-            row.t_s = (pkt.t_ms - dataset.t0_master_ms) * 1.0e-3;
+            row.t_s = (pkt.t_ms - dataset.timeline.t0_master_ms) * 1.0e-3;
             out.push(row);
             scan_idx += 1;
         }
@@ -628,143 +606,54 @@ fn evaluate_config(
     cfg: &AlignConfig,
     bootstrap_cfg: &BootstrapConfig,
 ) -> Result<EvalResult> {
-    let mut align = Align::new(*cfg);
-    let mut bootstrap = BootstrapDetector::new(*bootstrap_cfg);
-    let mut align_initialized = false;
-    let mut init_time_s = f64::NAN;
-    let mut scan_idx = 0usize;
-    let mut interval_start_idx = 0usize;
-    let mut prev_nav: Option<(f64, NavPvtObs)> = None;
     let mut samples = Vec::<ResidualSample>::new();
+    let replay = build_align_replay(&dataset.frames, &dataset.timeline, *cfg, *bootstrap_cfg);
+    let init_time_s = replay.samples.first().map(|s| s.t_s).unwrap_or(f64::NAN);
 
-    for (tn, nav) in &dataset.nav_events {
-        while scan_idx < dataset.imu_packets.len() && dataset.imu_packets[scan_idx].t_ms <= *tn {
-            let pkt = &dataset.imu_packets[scan_idx];
-            if !align_initialized {
-                let gyro_radps = [
-                    pkt.gx_dps.to_radians() as f32,
-                    pkt.gy_dps.to_radians() as f32,
-                    pkt.gz_dps.to_radians() as f32,
-                ];
-                let accel_b = [pkt.ax_mps2 as f32, pkt.ay_mps2 as f32, pkt.az_mps2 as f32];
-                let speed_mps = speed_for_bootstrap(prev_nav, (*tn, *nav), pkt.t_ms) as f32;
-                if bootstrap.update(accel_b, gyro_radps, speed_mps)
-                    && align
-                        .initialize_from_stationary(&bootstrap.stationary_accel, 0.0)
-                        .is_ok()
-                {
-                    align_initialized = true;
-                    init_time_s = (*tn - dataset.t0_master_ms) * 1.0e-3;
-                }
-            }
-            scan_idx += 1;
+    for sample in &replay.samples {
+        if let (Some(q_alg), Some(alg_rpy_deg)) = (sample.alg_q, sample.alg_rpy_deg) {
+            let err_roll_deg = wrap_deg180(sample.align_rpy_deg[0] - alg_rpy_deg[0]);
+            let err_pitch_deg = sample.align_rpy_deg[1] - alg_rpy_deg[1];
+            let err_yaw_deg = wrap_deg180(sample.align_rpy_deg[2] - alg_rpy_deg[2]);
+            samples.push(ResidualSample {
+                t_s: sample.t_s,
+                align_roll_deg: sample.align_rpy_deg[0],
+                align_pitch_deg: sample.align_rpy_deg[1],
+                align_yaw_deg: sample.align_rpy_deg[2],
+                alg_roll_deg: alg_rpy_deg[0],
+                alg_pitch_deg: alg_rpy_deg[1],
+                alg_yaw_deg: alg_rpy_deg[2],
+                err_roll_deg,
+                err_pitch_deg,
+                err_yaw_deg,
+                sigma_roll_deg: sample.p_diag[0].sqrt().to_degrees(),
+                sigma_pitch_deg: sample.p_diag[1].sqrt().to_degrees(),
+                sigma_yaw_deg: sample.p_diag[2].sqrt().to_degrees(),
+                course_rate_dps: sample.course_rate_dps,
+                a_lat_mps2: sample.a_lat_mps2,
+                a_long_mps2: sample.a_long_mps2,
+                rot_err_deg: quat_angle_deg(sample.q_align, q_alg),
+                fwd_err_deg: axis_angle_deg(
+                    quat_rotate(sample.q_align, [1.0, 0.0, 0.0]),
+                    quat_rotate(q_alg, [1.0, 0.0, 0.0]),
+                ),
+                down_err_deg: axis_angle_deg(
+                    quat_rotate(sample.q_align, [0.0, 0.0, 1.0]),
+                    quat_rotate(q_alg, [0.0, 0.0, 1.0]),
+                ),
+                long_base_valid: sample.long_trace.base_valid,
+                long_emitted: sample.long_trace.emitted,
+                long_stable_windows: sample.long_trace.stable_windows,
+                long_gnss_long_lp_mps2: sample.long_trace.gnss_long_lp_mps2,
+                long_gnss_lat_lp_mps2: sample.long_trace.gnss_lat_lp_mps2,
+                long_imu_long_lp_mps2: sample.long_trace.imu_long_lp_mps2,
+                long_imu_lat_lp_mps2: sample.long_trace.imu_lat_lp_mps2,
+                long_angle_err_deg: sample.long_trace.angle_err_deg,
+            });
         }
-        if let Some((t_prev, nav_prev)) = prev_nav {
-            let dt = ((*tn - t_prev) * 1.0e-3) as f32;
-            let interval_packets = &dataset.imu_packets[interval_start_idx..scan_idx];
-            if align_initialized && dt > 0.0 && !interval_packets.is_empty() {
-                let (mean_gyro_b, mean_accel_b) = mean_imu(interval_packets);
-                let window = AlignWindowSummary {
-                    dt,
-                    mean_gyro_b,
-                    mean_accel_b,
-                    gnss_vel_prev_n: [
-                        nav_prev.vel_n_mps as f32,
-                        nav_prev.vel_e_mps as f32,
-                        nav_prev.vel_d_mps as f32,
-                    ],
-                    gnss_vel_curr_n: [
-                        nav.vel_n_mps as f32,
-                        nav.vel_e_mps as f32,
-                        nav.vel_d_mps as f32,
-                    ],
-                };
-                let (_, trace) = align.update_window_with_trace(&window);
-                let long_trace = trace.longitudinal_trace.unwrap_or_default();
-
-                let q = align.q_vb;
-                let q_align_cmp = [q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64];
-                let (align_roll_deg, align_pitch_deg, align_yaw_deg) = quat_rpy_alg_deg(
-                    q_align_cmp[0],
-                    q_align_cmp[1],
-                    q_align_cmp[2],
-                    q_align_cmp[3],
-                );
-                let sigma = align.sigma_deg();
-                if let Some(q_alg) = interpolate_alg_quat(&dataset.alg_events, *tn)
-                {
-                    let (alg_roll_deg, alg_pitch_deg, alg_yaw_deg) =
-                        quat_rpy_alg_deg(q_alg[0], q_alg[1], q_alg[2], q_alg[3]);
-                    let rot_err_deg = quat_angle_deg(q_align_cmp, q_alg);
-                    let fwd_err_deg = axis_angle_deg(
-                        quat_rotate(q_align_cmp, [1.0, 0.0, 0.0]),
-                        quat_rotate(q_alg, [1.0, 0.0, 0.0]),
-                    );
-                    let down_err_deg = axis_angle_deg(
-                        quat_rotate(q_align_cmp, [0.0, 0.0, 1.0]),
-                        quat_rotate(q_alg, [0.0, 0.0, 1.0]),
-                    );
-                    let v_prev = [nav_prev.vel_n_mps, nav_prev.vel_e_mps];
-                    let v_curr = [nav.vel_n_mps, nav.vel_e_mps];
-                    let course_prev = v_prev[1].atan2(v_prev[0]);
-                    let course_curr = v_curr[1].atan2(v_curr[0]);
-                    let course_rate_dps =
-                        wrap_rad_pi(course_curr - course_prev).to_degrees() / (dt as f64);
-                    let a_n = [
-                        (nav.vel_n_mps - nav_prev.vel_n_mps) / (dt as f64),
-                        (nav.vel_e_mps - nav_prev.vel_e_mps) / (dt as f64),
-                    ];
-                    let v_mid = [0.5 * (v_prev[0] + v_curr[0]), 0.5 * (v_prev[1] + v_curr[1])];
-                    let (a_long, a_lat) = if let Some(t_hat) = normalize2(v_mid) {
-                        let lat_hat = [-t_hat[1], t_hat[0]];
-                        (
-                            t_hat[0] * a_n[0] + t_hat[1] * a_n[1],
-                            lat_hat[0] * a_n[0] + lat_hat[1] * a_n[1],
-                        )
-                    } else {
-                        (0.0, 0.0)
-                    };
-
-                    let err_roll_deg = wrap_deg180(align_roll_deg - alg_roll_deg);
-                    let err_pitch_deg = align_pitch_deg - alg_pitch_deg;
-                    let err_yaw_deg = wrap_deg180(align_yaw_deg - alg_yaw_deg);
-                    samples.push(ResidualSample {
-                        t_s: (*tn - dataset.t0_master_ms) * 1.0e-3,
-                        align_roll_deg,
-                        align_pitch_deg,
-                        align_yaw_deg,
-                        alg_roll_deg,
-                        alg_pitch_deg,
-                        alg_yaw_deg,
-                        err_roll_deg,
-                        err_pitch_deg,
-                        err_yaw_deg,
-                        sigma_roll_deg: sigma[0] as f64,
-                        sigma_pitch_deg: sigma[1] as f64,
-                        sigma_yaw_deg: sigma[2] as f64,
-                        course_rate_dps,
-                        a_lat_mps2: a_lat,
-                        a_long_mps2: a_long,
-                        rot_err_deg,
-                        fwd_err_deg,
-                        down_err_deg,
-                        long_base_valid: long_trace.base_valid,
-                        long_emitted: long_trace.emitted,
-                        long_stable_windows: long_trace.stable_windows,
-                        long_gnss_long_lp_mps2: long_trace.gnss_long_lp_mps2 as f64,
-                        long_gnss_lat_lp_mps2: long_trace.gnss_lat_lp_mps2 as f64,
-                        long_imu_long_lp_mps2: long_trace.imu_long_lp_mps2 as f64,
-                        long_imu_lat_lp_mps2: long_trace.imu_lat_lp_mps2 as f64,
-                        long_angle_err_deg: (long_trace.angle_err_rad as f64).to_degrees(),
-                    });
-                }
-            }
-        }
-        prev_nav = Some((*tn, *nav));
-        interval_start_idx = scan_idx;
     }
 
-    let metrics = score_samples(&samples, dataset.nav_events.len(), init_time_s);
+    let metrics = score_samples(&samples, dataset.total_nav_events, init_time_s);
     Ok(EvalResult {
         cfg: *cfg,
         bootstrap_cfg: *bootstrap_cfg,
@@ -1135,32 +1024,6 @@ fn write_bootstrap_debug_csv(path: &PathBuf, samples: &[BootstrapDebugSample]) -
     Ok(())
 }
 
-fn mean_imu(interval_packets: &[ImuPacket]) -> ([f32; 3], [f32; 3]) {
-    let mut gyro_sum = [0.0_f32; 3];
-    let mut accel_sum = [0.0_f32; 3];
-    for pkt in interval_packets {
-        gyro_sum[0] += pkt.gx_dps.to_radians() as f32;
-        gyro_sum[1] += pkt.gy_dps.to_radians() as f32;
-        gyro_sum[2] += pkt.gz_dps.to_radians() as f32;
-        accel_sum[0] += pkt.ax_mps2 as f32;
-        accel_sum[1] += pkt.ay_mps2 as f32;
-        accel_sum[2] += pkt.az_mps2 as f32;
-    }
-    let inv_n = 1.0 / (interval_packets.len() as f32);
-    (
-        [
-            gyro_sum[0] * inv_n,
-            gyro_sum[1] * inv_n,
-            gyro_sum[2] * inv_n,
-        ],
-        [
-            accel_sum[0] * inv_n,
-            accel_sum[1] * inv_n,
-            accel_sum[2] * inv_n,
-        ],
-    )
-}
-
 fn ema_update(prev: Option<f32>, sample: f32, alpha: f32) -> f32 {
     let alpha = alpha.clamp(1.0e-4, 1.0);
     match prev {
@@ -1191,144 +1054,8 @@ fn horizontal_speed(nav: NavPvtObs) -> f64 {
     (nav.vel_n_mps * nav.vel_n_mps + nav.vel_e_mps * nav.vel_e_mps).sqrt()
 }
 
-fn interpolate_alg_quat(events: &[AlgEvent], t_ms: f64) -> Option<[f64; 4]> {
-    if events.is_empty() {
-        return None;
-    }
-    let idx = events.partition_point(|e| e.t_ms < t_ms);
-    if idx == 0 {
-        return Some(events[0].q_frd);
-    }
-    if idx >= events.len() {
-        return Some(events[events.len() - 1].q_frd);
-    }
-
-    let e0 = events[idx - 1];
-    let e1 = events[idx];
-    let dt = e1.t_ms - e0.t_ms;
-    if dt.abs() <= 1.0e-9 {
-        return Some(e0.q_frd);
-    }
-    let alpha = ((t_ms - e0.t_ms) / dt).clamp(0.0, 1.0);
-    Some(quat_nlerp_shortest(e0.q_frd, e1.q_frd, alpha))
-}
-
-fn quat_rpy_alg_deg(q0: f64, q1: f64, q2: f64, q3: f64) -> (f64, f64, f64) {
-    let n = (q0 * q0 + q1 * q1 + q2 * q2 + q3 * q3).sqrt();
-    let (w, x, y, z) = if n > 1.0e-12 {
-        (q0 / n, q1 / n, q2 / n, q3 / n)
-    } else {
-        (1.0, 0.0, 0.0, 0.0)
-    };
-    let r00 = 1.0 - 2.0 * (y * y + z * z);
-    let r10 = 2.0 * (x * y + w * z);
-    let r20 = 2.0 * (x * z - w * y);
-    let r21 = 2.0 * (y * z + w * x);
-    let r22 = 1.0 - 2.0 * (x * x + y * y);
-    let pitch = (-r20).clamp(-1.0, 1.0).asin();
-    let roll = r21.atan2(r22);
-    let yaw = r10.atan2(r00);
-    (
-        roll.to_degrees(),
-        pitch.to_degrees(),
-        normalize_heading_deg(yaw.to_degrees()),
-    )
-}
-
-fn quat_from_rpy_alg_deg(roll_deg: f64, pitch_deg: f64, yaw_deg: f64) -> [f64; 4] {
-    let (sr, cr) = (0.5 * roll_deg.to_radians()).sin_cos();
-    let (sp, cp) = (0.5 * pitch_deg.to_radians()).sin_cos();
-    let (sy, cy) = (0.5 * yaw_deg.to_radians()).sin_cos();
-    quat_normalize([
-        cr * cp * cy + sr * sp * sy,
-        sr * cp * cy - cr * sp * sy,
-        cr * sp * cy + sr * cp * sy,
-        cr * cp * sy - sr * sp * cy,
-    ])
-}
-
-fn quat_normalize(q: [f64; 4]) -> [f64; 4] {
-    let n = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
-    if n <= 1.0e-12 {
-        [1.0, 0.0, 0.0, 0.0]
-    } else {
-        [q[0] / n, q[1] / n, q[2] / n, q[3] / n]
-    }
-}
-
-fn quat_mul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
-    [
-        a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
-        a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
-        a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
-        a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0],
-    ]
-}
-
-fn quat_conj(q: [f64; 4]) -> [f64; 4] {
-    [q[0], -q[1], -q[2], -q[3]]
-}
-
-fn quat_angle_deg(a: [f64; 4], b: [f64; 4]) -> f64 {
-    let dq = quat_normalize(quat_mul(quat_conj(a), b));
-    let w = dq[0].abs().clamp(-1.0, 1.0);
-    2.0 * w.acos().to_degrees()
-}
-
-fn quat_rotate(q: [f64; 4], v: [f64; 3]) -> [f64; 3] {
-    let q = quat_normalize(q);
-    let p = [0.0, v[0], v[1], v[2]];
-    let qp = quat_mul(q, p);
-    let qpq = quat_mul(qp, quat_conj(q));
-    [qpq[1], qpq[2], qpq[3]]
-}
-
-fn axis_angle_deg(a: [f64; 3], b: [f64; 3]) -> f64 {
-    let na = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
-    let nb = (b[0] * b[0] + b[1] * b[1] + b[2] * b[2]).sqrt();
-    if na <= 1.0e-12 || nb <= 1.0e-12 {
-        return f64::NAN;
-    }
-    let dot = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (na * nb);
-    dot.clamp(-1.0, 1.0).acos().to_degrees()
-}
-
-fn esf_alg_flu_to_frd_mount_quat(roll_deg: f64, pitch_deg: f64, yaw_deg: f64) -> [f64; 4] {
-    let q_flu = quat_from_rpy_alg_deg(roll_deg, pitch_deg, yaw_deg);
-    let q_x_180 = [0.0, 1.0, 0.0, 0.0];
-    quat_normalize(quat_mul(quat_conj(q_flu), q_x_180))
-}
-
-fn quat_nlerp_shortest(a: [f64; 4], b: [f64; 4], alpha: f64) -> [f64; 4] {
-    let dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
-    let bb = if dot < 0.0 {
-        [-b[0], -b[1], -b[2], -b[3]]
-    } else {
-        b
-    };
-    quat_normalize([
-        a[0] + alpha * (bb[0] - a[0]),
-        a[1] + alpha * (bb[1] - a[1]),
-        a[2] + alpha * (bb[2] - a[2]),
-        a[3] + alpha * (bb[3] - a[3]),
-    ])
-}
-
 fn norm3(v: [f32; 3]) -> f32 {
     (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
-}
-
-fn normalize2(v: [f64; 2]) -> Option<[f64; 2]> {
-    let n = (v[0] * v[0] + v[1] * v[1]).sqrt();
-    if !n.is_finite() || n <= 1.0e-9 {
-        return None;
-    }
-    Some([v[0] / n, v[1] / n])
-}
-
-fn wrap_rad_pi(x: f64) -> f64 {
-    let two_pi = 2.0 * PI;
-    (x + PI).rem_euclid(two_pi) - PI
 }
 
 fn wrap_deg180(mut deg: f64) -> f64 {
@@ -1341,106 +1068,32 @@ fn wrap_deg180(mut deg: f64) -> f64 {
     deg
 }
 
-#[derive(Clone)]
-struct MasterTimeline {
-    masters: Vec<(u64, f64)>,
-    has_itow: bool,
-    t0_master_ms: f64,
-    master_min: f64,
-    master_max: f64,
-}
-
-impl MasterTimeline {
-    fn map_tag_ms(&self, a: f64, b: f64, tag: f64, seq: u64) -> Option<f64> {
-        let seq_ms = nearest_master_ms(seq, &self.masters)?;
-        let mut ms = a * tag + b;
-        if !ms.is_finite()
-            || ms < self.master_min - 1000.0
-            || ms > self.master_max + 1000.0
-            || (ms - seq_ms).abs() > 2000.0
-        {
-            ms = seq_ms;
-        }
-        Some(ms)
+fn norm_quat(q: [f64; 4]) -> [f64; 4] {
+    let n = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+    if n <= 1.0e-12 {
+        [1.0, 0.0, 0.0, 0.0]
+    } else {
+        [q[0] / n, q[1] / n, q[2] / n, q[3] / n]
     }
 }
 
-fn build_master_timeline(frames: &[UbxFrame]) -> MasterTimeline {
-    let mut masters: Vec<(u64, f64)> = Vec::new();
-    for frame in frames {
-        if let Some(itow) = sim::ubxlog::extract_itow_ms(frame) {
-            if (0..604_800_000).contains(&itow) {
-                masters.push((frame.seq, itow as f64));
-            }
-        }
-    }
-    masters.sort_by_key(|x| x.0);
+fn quat_mul_local(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
+    [
+        a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
+        a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
+        a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
+        a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0],
+    ]
+}
 
-    if !masters.is_empty() {
-        let raw: Vec<i64> = masters.iter().map(|(_, ms)| *ms as i64).collect();
-        let unwrapped = unwrap_i64_counter(&raw, 604_800_000);
-        for (m, msu) in masters.iter_mut().zip(unwrapped.into_iter()) {
-            m.1 = msu as f64;
-        }
+fn quat_conj_local(q: [f64; 4]) -> [f64; 4] {
+    [q[0], -q[1], -q[2], -q[3]]
+}
 
-        let mut filtered: Vec<(u64, f64)> = Vec::with_capacity(masters.len());
-        let mut last_ms: Option<f64> = None;
-        for (seq, ms) in masters.iter().copied() {
-            match last_ms {
-                None => {
-                    filtered.push((seq, ms));
-                    last_ms = Some(ms);
-                }
-                Some(prev) => {
-                    let dt = ms - prev;
-                    if (0.0..=10_000.0).contains(&dt) {
-                        filtered.push((seq, ms));
-                        last_ms = Some(ms);
-                    }
-                }
-            }
-        }
-        if filtered.len() >= 10 {
-            masters = filtered;
-        }
-    }
-
-    let has_itow = !masters.is_empty();
-    let t0_master_ms = masters
-        .iter()
-        .map(|(_, ms)| *ms)
-        .fold(f64::INFINITY, f64::min);
-    let t0_master_ms = if t0_master_ms.is_finite() {
-        t0_master_ms
-    } else {
-        0.0
-    };
-    let master_min = masters
-        .iter()
-        .map(|(_, ms)| *ms)
-        .fold(f64::INFINITY, f64::min);
-    let master_min = if master_min.is_finite() {
-        master_min
-    } else {
-        0.0
-    };
-    let master_max = masters
-        .iter()
-        .map(|(_, ms)| *ms)
-        .fold(f64::NEG_INFINITY, f64::max);
-    let master_max = if master_max.is_finite() {
-        master_max
-    } else {
-        master_min
-    };
-
-    MasterTimeline {
-        masters,
-        has_itow,
-        t0_master_ms,
-        master_min,
-        master_max,
-    }
+fn quat_angle_deg(a: [f64; 4], b: [f64; 4]) -> f64 {
+    let dq = norm_quat(quat_mul_local(quat_conj_local(a), b));
+    let w = dq[0].abs().clamp(-1.0, 1.0);
+    2.0 * w.acos().to_degrees()
 }
 
 fn fit_tag_ms_map(

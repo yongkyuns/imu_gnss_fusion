@@ -1,8 +1,9 @@
+pub mod align_replay;
 mod align_compare;
 mod ekf_compare;
 mod signals;
 mod tag_time;
-mod timebase;
+pub mod timebase;
 
 use crate::ubxlog::parse_ubx_frames;
 
