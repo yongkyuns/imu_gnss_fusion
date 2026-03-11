@@ -31,6 +31,37 @@ fn mat_vec(a: [[f32; 3]; 3], v: [f32; 3]) -> [f32; 3] {
     ]
 }
 
+fn normalize3(v: [f32; 3]) -> [f32; 3] {
+    let n = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    [v[0] / n, v[1] / n, v[2] / n]
+}
+
+fn quat_to_rotmat(q: [f32; 4]) -> [[f32; 3]; 3] {
+    let n = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+    let (w, x, y, z) = if n > 1.0e-8 {
+        (q[0] / n, q[1] / n, q[2] / n, q[3] / n)
+    } else {
+        (1.0, 0.0, 0.0, 0.0)
+    };
+    [
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y - w * z),
+            2.0 * (x * z + w * y),
+        ],
+        [
+            2.0 * (x * y + w * z),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z - w * x),
+        ],
+        [
+            2.0 * (x * z - w * y),
+            2.0 * (y * z + w * x),
+            1.0 - 2.0 * (x * x + y * y),
+        ],
+    ]
+}
+
 fn simulate_windows(
     truth_deg: [f32; 3],
     repeat_count: usize,
@@ -211,4 +242,38 @@ fn align_converges_on_synthetic_case() {
         "sigma {:?}",
         sigma
     );
+}
+
+#[test]
+fn stationary_yaw_seed_preserves_gravity_down_axis() {
+    let truth_deg = [18.0_f32, -27.0_f32, 115.0_f32];
+    let truth_rad = [
+        truth_deg[0].to_radians(),
+        truth_deg[1].to_radians(),
+        truth_deg[2].to_radians(),
+    ];
+    let c_v_b = euler_zyx_to_rot(truth_rad[0], truth_rad[1], truth_rad[2]);
+    let accel_b = mat_vec(c_v_b, [0.0, 0.0, -9.80665]);
+    let stationary = vec![accel_b; 300];
+
+    let mut f0 = Align::new(AlignConfig::default());
+    f0.initialize_from_stationary(&stationary, 0.0).unwrap();
+    let c0 = quat_to_rotmat(f0.q_vb);
+    let down0_b = [c0[0][2], c0[1][2], c0[2][2]];
+
+    let mut f1 = Align::new(AlignConfig::default());
+    f1.initialize_from_stationary(&stationary, 90.0_f32.to_radians())
+        .unwrap();
+    let c1 = quat_to_rotmat(f1.q_vb);
+    let down1_b = [c1[0][2], c1[1][2], c1[2][2]];
+
+    let expected_down_b = normalize3([-accel_b[0], -accel_b[1], -accel_b[2]]);
+    for (name, got) in [("seed0", down0_b), ("seed90", down1_b)] {
+        let got = normalize3(got);
+        let err = ((got[0] - expected_down_b[0]).powi(2)
+            + (got[1] - expected_down_b[1]).powi(2)
+            + (got[2] - expected_down_b[2]).powi(2))
+        .sqrt();
+        assert!(err < 1.0e-3, "{name} down-axis mismatch: {got:?} vs {expected_down_b:?}");
+    }
 }

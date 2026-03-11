@@ -145,9 +145,13 @@ impl Align {
             [x_v_in_b[1], y_v_in_b[1], z_v_in_b[1]],
             [x_v_in_b[2], y_v_in_b[2], z_v_in_b[2]],
         ];
-        let mut rpy = rot_to_euler_zyx(C_v_b);
-        rpy[2] = wrap_angle_rad(yaw_seed_rad);
-        self.q_vb = quat_from_euler_zyx(rpy[0], rpy[1], rpy[2]);
+        let rpy = rot_to_euler_zyx(C_v_b);
+        let dyaw = wrap_angle_rad(yaw_seed_rad - rpy[2]);
+        let (s, c) = dyaw.sin_cos();
+        let c_delta = [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]];
+        // Apply the yaw seed as a vehicle-frame rotation on the right so the measured
+        // gravity/down axis (third column of C_v_b) is preserved exactly.
+        self.q_vb = quat_from_rotmat(mat3_mul(C_v_b, c_delta));
         self.P = diag3([
             6.0_f32.to_radians().powi(2),
             6.0_f32.to_radians().powi(2),
@@ -477,18 +481,6 @@ fn quat_from_small_angle(dtheta: [f32; 3]) -> [f32; 4] {
     quat_normalize([1.0, 0.5 * dtheta[0], 0.5 * dtheta[1], 0.5 * dtheta[2]])
 }
 
-fn quat_from_euler_zyx(roll: f32, pitch: f32, yaw: f32) -> [f32; 4] {
-    let (sr, cr) = (0.5 * roll).sin_cos();
-    let (sp, cp) = (0.5 * pitch).sin_cos();
-    let (sy, cy) = (0.5 * yaw).sin_cos();
-    quat_normalize([
-        cr * cp * cy + sr * sp * sy,
-        sr * cp * cy - cr * sp * sy,
-        cr * sp * cy + sr * cp * sy,
-        cr * cp * sy - sr * sp * cy,
-    ])
-}
-
 fn quat_to_rotmat(q: [f32; 4]) -> [[f32; 3]; 3] {
     let q = quat_normalize(q);
     let (w, x, y, z) = (q[0], q[1], q[2], q[3]);
@@ -509,6 +501,44 @@ fn quat_to_rotmat(q: [f32; 4]) -> [[f32; 3]; 3] {
             1.0 - 2.0 * (x * x + y * y),
         ],
     ]
+}
+
+fn quat_from_rotmat(c: [[f32; 3]; 3]) -> [f32; 4] {
+    let trace = c[0][0] + c[1][1] + c[2][2];
+    let q = if trace > 0.0 {
+        let s = (trace + 1.0).sqrt() * 2.0;
+        [
+            0.25 * s,
+            (c[2][1] - c[1][2]) / s,
+            (c[0][2] - c[2][0]) / s,
+            (c[1][0] - c[0][1]) / s,
+        ]
+    } else if c[0][0] > c[1][1] && c[0][0] > c[2][2] {
+        let s = (1.0 + c[0][0] - c[1][1] - c[2][2]).sqrt() * 2.0;
+        [
+            (c[2][1] - c[1][2]) / s,
+            0.25 * s,
+            (c[0][1] + c[1][0]) / s,
+            (c[0][2] + c[2][0]) / s,
+        ]
+    } else if c[1][1] > c[2][2] {
+        let s = (1.0 + c[1][1] - c[0][0] - c[2][2]).sqrt() * 2.0;
+        [
+            (c[0][2] - c[2][0]) / s,
+            (c[0][1] + c[1][0]) / s,
+            0.25 * s,
+            (c[1][2] + c[2][1]) / s,
+        ]
+    } else {
+        let s = (1.0 + c[2][2] - c[0][0] - c[1][1]).sqrt() * 2.0;
+        [
+            (c[1][0] - c[0][1]) / s,
+            (c[0][2] + c[2][0]) / s,
+            (c[1][2] + c[2][1]) / s,
+            0.25 * s,
+        ]
+    };
+    quat_normalize(q)
 }
 
 fn transpose3x3(a: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
