@@ -1,8 +1,6 @@
 #![allow(non_snake_case)]
 
-use crate::longitudinal::{
-    LongitudinalCueConfig, LongitudinalCueFilter, LongitudinalCueSample,
-};
+use crate::longitudinal::{LongitudinalCueConfig, LongitudinalCueFilter, LongitudinalCueSample};
 use nalgebra::{SMatrix, SVector};
 
 pub const ALIGN_N_STATES: usize = 3;
@@ -36,9 +34,9 @@ impl Default for AlignConfig {
     fn default() -> Self {
         Self {
             q_mount_std_rad: [
-                0.01_f32.to_radians(),
-                0.01_f32.to_radians(),
-                0.01_f32.to_radians(),
+                0.001_f32.to_radians(),
+                0.001_f32.to_radians(),
+                0.001_f32.to_radians(),
             ],
             r_gravity_std_mps2: 1.28,
             r_turn_gyro_std_radps: 0.1_f32.to_radians(),
@@ -380,13 +378,7 @@ impl Align {
         (y.transpose() * S_inv * y)[0]
     }
 
-    fn apply_vehicle_yaw_scalar(
-        &mut self,
-        z: f32,
-        h: f32,
-        h_yaw: f32,
-        r_var: f32,
-    ) -> f32 {
+    fn apply_vehicle_yaw_scalar(&mut self, z: f32, h: f32, h_yaw: f32, r_var: f32) -> f32 {
         let y = z - h;
         let pzz = self.P[2][2].max(0.0);
         let s = h_yaw * h_yaw * pzz + r_var.max(1.0e-9);
