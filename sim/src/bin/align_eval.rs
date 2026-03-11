@@ -96,9 +96,7 @@ struct Args {
 #[derive(Clone, Copy, Debug)]
 struct AlgEvent {
     t_ms: f64,
-    roll_deg: f64,
-    pitch_deg: f64,
-    yaw_deg: f64,
+    q_frd: [f64; 4],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -405,12 +403,9 @@ fn load_dataset(
                 extract_esf_alg(frame)
             };
             if let Some((_, roll, pitch, yaw)) = alg {
-                let (roll_frd, pitch_frd, yaw_frd) = esf_alg_flu_to_frd_mount_deg(roll, pitch, yaw);
                 alg_events.push(AlgEvent {
                     t_ms,
-                    roll_deg: roll_frd,
-                    pitch_deg: pitch_frd,
-                    yaw_deg: normalize_heading_deg(yaw_frd),
+                    q_frd: esf_alg_flu_to_frd_mount_quat(roll, pitch, yaw),
                 });
             }
             if let Some(obs) = extract_nav2_pvt_obs(frame) {
@@ -687,10 +682,10 @@ fn evaluate_config(
                     q_align_cmp[3],
                 );
                 let sigma = align.sigma_deg();
-                if let Some((alg_roll_deg, alg_pitch_deg, alg_yaw_deg)) =
-                    interpolate_alg(&dataset.alg_events, *tn)
+                if let Some(q_alg) = interpolate_alg_quat(&dataset.alg_events, *tn)
                 {
-                    let q_alg = quat_from_rpy_alg_deg(alg_roll_deg, alg_pitch_deg, alg_yaw_deg);
+                    let (alg_roll_deg, alg_pitch_deg, alg_yaw_deg) =
+                        quat_rpy_alg_deg(q_alg[0], q_alg[1], q_alg[2], q_alg[3]);
                     let rot_err_deg = quat_angle_deg(q_align_cmp, q_alg);
                     let fwd_err_deg = axis_angle_deg(
                         quat_rotate(q_align_cmp, [1.0, 0.0, 0.0]),
@@ -1166,31 +1161,26 @@ fn horizontal_speed(nav: NavPvtObs) -> f64 {
     (nav.vel_n_mps * nav.vel_n_mps + nav.vel_e_mps * nav.vel_e_mps).sqrt()
 }
 
-fn interpolate_alg(events: &[AlgEvent], t_ms: f64) -> Option<(f64, f64, f64)> {
+fn interpolate_alg_quat(events: &[AlgEvent], t_ms: f64) -> Option<[f64; 4]> {
     if events.is_empty() {
         return None;
     }
     let idx = events.partition_point(|e| e.t_ms < t_ms);
     if idx == 0 {
-        return Some((events[0].roll_deg, events[0].pitch_deg, events[0].yaw_deg));
+        return Some(events[0].q_frd);
     }
     if idx >= events.len() {
-        let e = events[events.len() - 1];
-        return Some((e.roll_deg, e.pitch_deg, e.yaw_deg));
+        return Some(events[events.len() - 1].q_frd);
     }
 
     let e0 = events[idx - 1];
     let e1 = events[idx];
     let dt = e1.t_ms - e0.t_ms;
     if dt.abs() <= 1.0e-9 {
-        return Some((e0.roll_deg, e0.pitch_deg, e0.yaw_deg));
+        return Some(e0.q_frd);
     }
     let alpha = ((t_ms - e0.t_ms) / dt).clamp(0.0, 1.0);
-    let roll = e0.roll_deg + alpha * (e1.roll_deg - e0.roll_deg);
-    let pitch = e0.pitch_deg + alpha * (e1.pitch_deg - e0.pitch_deg);
-    let yaw_delta = wrap_deg180(e1.yaw_deg - e0.yaw_deg);
-    let yaw = normalize_heading_deg(e0.yaw_deg + alpha * yaw_delta);
-    Some((roll, pitch, yaw))
+    Some(quat_nlerp_shortest(e0.q_frd, e1.q_frd, alpha))
 }
 
 fn quat_rpy_alg_deg(q0: f64, q1: f64, q2: f64, q3: f64) -> (f64, f64, f64) {
@@ -1201,13 +1191,13 @@ fn quat_rpy_alg_deg(q0: f64, q1: f64, q2: f64, q3: f64) -> (f64, f64, f64) {
         (1.0, 0.0, 0.0, 0.0)
     };
     let r00 = 1.0 - 2.0 * (y * y + z * z);
-    let r01 = 2.0 * (x * y - w * z);
-    let r02 = 2.0 * (x * z + w * y);
-    let r12 = 2.0 * (y * z - w * x);
+    let r10 = 2.0 * (x * y + w * z);
+    let r20 = 2.0 * (x * z - w * y);
+    let r21 = 2.0 * (y * z + w * x);
     let r22 = 1.0 - 2.0 * (x * x + y * y);
-    let pitch = r02.clamp(-1.0, 1.0).asin();
-    let roll = (-r12).atan2(r22);
-    let yaw = (-r01).atan2(r00);
+    let pitch = (-r20).clamp(-1.0, 1.0).asin();
+    let roll = r21.atan2(r22);
+    let yaw = r10.atan2(r00);
     (
         roll.to_degrees(),
         pitch.to_degrees(),
@@ -1273,13 +1263,25 @@ fn axis_angle_deg(a: [f64; 3], b: [f64; 3]) -> f64 {
     dot.clamp(-1.0, 1.0).acos().to_degrees()
 }
 
-fn esf_alg_flu_to_frd_mount_deg(roll_deg: f64, pitch_deg: f64, yaw_deg: f64) -> (f64, f64, f64) {
+fn esf_alg_flu_to_frd_mount_quat(roll_deg: f64, pitch_deg: f64, yaw_deg: f64) -> [f64; 4] {
     let q_flu = quat_from_rpy_alg_deg(roll_deg, pitch_deg, yaw_deg);
     let q_x_180 = [0.0, 1.0, 0.0, 0.0];
-    // Same physical vehicle->sensor rotation, re-expressed in FRD instead of FLU:
-    // R_frd = X * R_flu * X, where X = Rx(pi).
-    let q_frd = quat_normalize(quat_mul(quat_mul(q_x_180, q_flu), q_x_180));
-    quat_rpy_alg_deg(q_frd[0], q_frd[1], q_frd[2], q_frd[3])
+    quat_normalize(quat_mul(quat_conj(q_flu), q_x_180))
+}
+
+fn quat_nlerp_shortest(a: [f64; 4], b: [f64; 4], alpha: f64) -> [f64; 4] {
+    let dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+    let bb = if dot < 0.0 {
+        [-b[0], -b[1], -b[2], -b[3]]
+    } else {
+        b
+    };
+    quat_normalize([
+        a[0] + alpha * (bb[0] - a[0]),
+        a[1] + alpha * (bb[1] - a[1]),
+        a[2] + alpha * (bb[2] - a[2]),
+        a[3] + alpha * (bb[3] - a[3]),
+    ])
 }
 
 fn norm3(v: [f32; 3]) -> f32 {
