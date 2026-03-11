@@ -67,7 +67,7 @@ struct Args {
     r_long_std_mps2: f32,
     #[arg(long, default_value_t = 0.08)]
     gravity_lpf_alpha: f32,
-    #[arg(long, default_value_t = 0.1)]
+    #[arg(long, default_value_t = 0.05)]
     long_lpf_alpha: f32,
     #[arg(long, default_value_t = 30.0 / 3.6)]
     min_speed_mps: f32,
@@ -141,6 +141,7 @@ struct ResidualSample {
     long_imu_long_lp_mps2: f64,
     long_imu_lat_lp_mps2: f64,
     long_angle_err_deg: f64,
+    long_angle_err_signed_deg: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -648,7 +649,8 @@ fn evaluate_config(
                 long_gnss_lat_lp_mps2: sample.long_trace.gnss_lat_lp_mps2,
                 long_imu_long_lp_mps2: sample.long_trace.imu_long_lp_mps2,
                 long_imu_lat_lp_mps2: sample.long_trace.imu_lat_lp_mps2,
-                long_angle_err_deg: sample.long_trace.angle_err_deg,
+                long_angle_err_deg: sample.long_trace.angle_err_deg.abs(),
+                long_angle_err_signed_deg: sample.long_trace.angle_err_deg,
             });
         }
     }
@@ -960,12 +962,12 @@ fn write_residual_csv(path: &PathBuf, samples: &[ResidualSample]) -> Result<()> 
     let mut w = BufWriter::new(file);
     writeln!(
         w,
-        "t_s,align_roll_deg,align_pitch_deg,align_yaw_deg,alg_roll_deg,alg_pitch_deg,alg_yaw_deg,err_roll_deg,err_pitch_deg,err_yaw_deg,sigma_roll_deg,sigma_pitch_deg,sigma_yaw_deg,course_rate_dps,a_lat_mps2,a_long_mps2,rot_err_deg,fwd_err_deg,down_err_deg,long_base_valid,long_emitted,long_stable_windows,long_gnss_long_lp_mps2,long_gnss_lat_lp_mps2,long_imu_long_lp_mps2,long_imu_lat_lp_mps2,long_angle_err_deg"
+        "t_s,align_roll_deg,align_pitch_deg,align_yaw_deg,alg_roll_deg,alg_pitch_deg,alg_yaw_deg,err_roll_deg,err_pitch_deg,err_yaw_deg,sigma_roll_deg,sigma_pitch_deg,sigma_yaw_deg,course_rate_dps,a_lat_mps2,a_long_mps2,rot_err_deg,fwd_err_deg,down_err_deg,long_base_valid,long_emitted,long_stable_windows,long_gnss_long_lp_mps2,long_gnss_lat_lp_mps2,long_imu_long_lp_mps2,long_imu_lat_lp_mps2,long_angle_err_deg,long_angle_err_signed_deg"
     )?;
     for s in samples {
         writeln!(
             w,
-            "{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.6}",
+            "{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
             s.t_s,
             s.align_roll_deg,
             s.align_pitch_deg,
@@ -992,7 +994,8 @@ fn write_residual_csv(path: &PathBuf, samples: &[ResidualSample]) -> Result<()> 
             s.long_gnss_lat_lp_mps2,
             s.long_imu_long_lp_mps2,
             s.long_imu_lat_lp_mps2,
-            s.long_angle_err_deg
+            s.long_angle_err_deg,
+            s.long_angle_err_signed_deg
         )?;
     }
     Ok(())
