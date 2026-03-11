@@ -3,6 +3,7 @@ use std::{fs::File, io::Read, path::PathBuf};
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use sim::visualizer::model::EkfImuSource;
 use sim::visualizer::pipeline::build_plot_data;
 use sim::visualizer::stats::{
     group_stats, max_gap_sec, max_gap_trace, max_step_abs, trace_stats, trace_time_bounds,
@@ -19,6 +20,8 @@ struct Args {
     max_records: Option<usize>,
     #[arg(long)]
     profile_only: bool,
+    #[arg(long, default_value = "align", value_parser = parse_ekf_imu_source)]
+    ekf_imu_source: EkfImuSource,
 }
 
 fn main() -> Result<()> {
@@ -31,7 +34,7 @@ fn main() -> Result<()> {
         .context("failed to read log")?;
     let t_read = Instant::now();
 
-    let (data, has_itow) = build_plot_data(&bytes, args.max_records);
+    let (data, has_itow) = build_plot_data(&bytes, args.max_records, args.ekf_imu_source);
     let t_build = Instant::now();
     let (n_traces, n_points) = trace_stats(&data);
     let (tmin, tmax) = trace_time_bounds(&data).unwrap_or((f64::NAN, f64::NAN));
@@ -68,7 +71,9 @@ fn main() -> Result<()> {
         group_stats("align_cmp_att", &data.align_cmp_att),
         group_stats("align_res_vel", &data.align_res_vel),
         group_stats("align_motion", &data.align_motion),
-        group_stats("align_state_q", &data.align_state_q),
+        group_stats("align_roll_contrib", &data.align_roll_contrib),
+        group_stats("align_pitch_contrib", &data.align_pitch_contrib),
+        group_stats("align_yaw_contrib", &data.align_yaw_contrib),
         group_stats("align_cov", &data.align_cov),
     ] {
         eprintln!("[profile] group={} traces={} points={}", name, nt, np);
@@ -88,6 +93,9 @@ fn main() -> Result<()> {
         ("align_cmp_att", &data.align_cmp_att),
         ("align_res_vel", &data.align_res_vel),
         ("align_motion", &data.align_motion),
+        ("align_roll_contrib", &data.align_roll_contrib),
+        ("align_pitch_contrib", &data.align_pitch_contrib),
+        ("align_yaw_contrib", &data.align_yaw_contrib),
         ("align_cov", &data.align_cov),
     ] {
         if let Some((name, gap)) = max_gap_trace(traces) {
@@ -111,4 +119,14 @@ fn main() -> Result<()> {
     }
 
     run_visualizer(data, has_itow)
+}
+
+fn parse_ekf_imu_source(s: &str) -> Result<EkfImuSource, String> {
+    match s.to_ascii_lowercase().as_str() {
+        "align" => Ok(EkfImuSource::Align),
+        "esf-alg" | "esf_alg" | "alg" => Ok(EkfImuSource::EsfAlg),
+        _ => Err(format!(
+            "invalid ekf IMU source '{s}', expected 'align' or 'esf-alg'"
+        )),
+    }
 }

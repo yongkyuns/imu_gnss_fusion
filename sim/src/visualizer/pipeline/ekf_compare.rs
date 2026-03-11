@@ -1,3 +1,4 @@
+use align_rs::align::{Align, AlignConfig, AlignWindowSummary, GRAVITY_MPS2};
 use ekf_rs::ekf::{Ekf, GpsData, ImuSample, ekf_fuse_body_vel, ekf_fuse_gps, ekf_predict};
 
 use crate::ubxlog::{
@@ -9,7 +10,7 @@ use super::super::math::{
     clamp_ekf_biases, deg2rad, ecef_to_ned, lla_to_ecef, mat_vec, ned_to_lla_approx,
     normalize_heading_deg, quat_rpy_deg, rad2deg, rot_zyx, set_quat_yaw_only,
 };
-use super::super::model::{AlgEvent, HeadingSample, ImuPacket, NavAttEvent, Trace};
+use super::super::model::{AlgEvent, EkfImuSource, HeadingSample, ImuPacket, NavAttEvent, Trace};
 use super::tag_time::fit_tag_ms_map;
 use super::timebase::MasterTimeline;
 
@@ -25,7 +26,28 @@ pub struct EkfCompareData {
     pub map_heading: Vec<HeadingSample>,
 }
 
-pub fn build_ekf_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> EkfCompareData {
+#[derive(Clone, Copy)]
+struct BootstrapConfig {
+    ema_alpha: f32,
+    max_speed_mps: f32,
+    stationary_samples: usize,
+    max_gyro_radps: f32,
+    max_accel_norm_err_mps2: f32,
+}
+
+struct BootstrapDetector {
+    cfg: BootstrapConfig,
+    gyro_ema: Option<f32>,
+    accel_err_ema: Option<f32>,
+    speed_ema: Option<f32>,
+    stationary_accel: Vec<[f32; 3]>,
+}
+
+pub fn build_ekf_compare_traces(
+    frames: &[UbxFrame],
+    tl: &MasterTimeline,
+    ekf_imu_source: EkfImuSource,
+) -> EkfCompareData {
     const R_BODY_VEL: f32 = 1.0;
     const YAW_INIT_SPEED_MPS: f64 = 20.0 / 3.6;
 
@@ -51,8 +73,10 @@ pub fn build_ekf_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Ekf
     let mut nav_events_pvt = Vec::<(f64, NavPvtObs)>::new();
     let mut nav_events_nav2 = Vec::<(f64, NavPvtObs)>::new();
     for f in frames {
-        if let Some((_, roll, pitch, yaw)) = extract_esf_alg(f) {
-            if let Some(t_ms) = super::super::math::nearest_master_ms(f.seq, &tl.masters) {
+        if ekf_imu_source == EkfImuSource::EsfAlg {
+            if let Some((_, roll, pitch, yaw)) = extract_esf_alg(f)
+                && let Some(t_ms) = super::super::math::nearest_master_ms(f.seq, &tl.masters)
+            {
                 alg_events.push(AlgEvent {
                     t_ms,
                     roll_deg: roll,
@@ -60,11 +84,11 @@ pub fn build_ekf_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Ekf
                     yaw_deg: yaw,
                 });
             }
-        }
-        if let Some((_, status_code, _is_fine)) = extract_esf_alg_status(f)
-            && let Some(t_ms) = super::super::math::nearest_master_ms(f.seq, &tl.masters)
-        {
-            alg_status_events.push((t_ms, status_code as u8));
+            if let Some((_, status_code, _is_fine)) = extract_esf_alg_status(f)
+                && let Some(t_ms) = super::super::math::nearest_master_ms(f.seq, &tl.masters)
+            {
+                alg_status_events.push((t_ms, status_code as u8));
+            }
         }
         if let Some((_itow, roll, pitch, heading)) = extract_nav_att(f) {
             if let Some(t_ms) = super::super::math::nearest_master_ms(f.seq, &tl.masters) {
@@ -195,6 +219,11 @@ pub fn build_ekf_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Ekf
             .partial_cmp(&b.t_ms)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+    let align_events = if ekf_imu_source == EkfImuSource::Align {
+        build_align_mount_events(&imu_packets, &nav_events)
+    } else {
+        Vec::new()
+    };
 
     let mut cmp_pos_n = Vec::<[f64; 2]>::new();
     let mut cmp_pos_e = Vec::<[f64; 2]>::new();
@@ -232,9 +261,11 @@ pub fn build_ekf_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Ekf
     let mut prev_imu_t: Option<f64> = None;
     let mut alg_idx = 0usize;
     let mut alg_status_idx = 0usize;
+    let mut align_idx = 0usize;
     let mut nav_idx = 0usize;
     let mut cur_alg: Option<AlgEvent> = None;
     let mut cur_alg_status: u8 = 0;
+    let mut cur_align_q_vb: Option<[f32; 4]> = None;
 
     let mut origin_set = false;
     let mut ref_lat = 0.0_f64;
@@ -288,6 +319,10 @@ pub fn build_ekf_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Ekf
             cur_alg_status = alg_status_events[alg_status_idx].1;
             alg_status_idx += 1;
         }
+        while align_idx < align_events.len() && align_events[align_idx].0 <= pkt.t_ms {
+            cur_align_q_vb = Some(align_events[align_idx].1);
+            align_idx += 1;
+        }
         let dt = match prev_imu_t {
             Some(prev) => (pkt.t_ms - prev) * 1e-3,
             None => {
@@ -299,7 +334,11 @@ pub fn build_ekf_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Ekf
         if !(0.001..=0.05).contains(&dt) {
             continue;
         }
-        if cur_alg_status < 3 {
+        let imu_ready = match ekf_imu_source {
+            EkfImuSource::Align => cur_align_q_vb.is_some(),
+            EkfImuSource::EsfAlg => cur_alg_status >= 3 && cur_alg.is_some(),
+        };
+        if !imu_ready {
             while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
                 nav_idx += 1;
             }
@@ -308,18 +347,34 @@ pub fn build_ekf_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Ekf
 
         let mut gyro = [pkt.gx_dps, pkt.gy_dps, pkt.gz_dps];
         let mut accel = [pkt.ax_mps2, pkt.ay_mps2, pkt.az_mps2];
-        if let Some(alg) = cur_alg {
-            let r_sb = rot_zyx(
-                deg2rad(alg.yaw_deg),
-                deg2rad(alg.pitch_deg),
-                deg2rad(alg.roll_deg),
-            );
-            gyro = mat_vec(r_sb, gyro);
-            accel = mat_vec(r_sb, accel);
-            gyro[1] = -gyro[1];
-            gyro[2] = -gyro[2];
-            accel[1] = -accel[1];
-            accel[2] = -accel[2];
+        match ekf_imu_source {
+            EkfImuSource::Align => {
+                if let Some(q_vb) = cur_align_q_vb {
+                    let c_bv = transpose3(quat_to_rotmat_f64([
+                        q_vb[0] as f64,
+                        q_vb[1] as f64,
+                        q_vb[2] as f64,
+                        q_vb[3] as f64,
+                    ]));
+                    gyro = mat_vec(c_bv, gyro);
+                    accel = mat_vec(c_bv, accel);
+                }
+            }
+            EkfImuSource::EsfAlg => {
+                if let Some(alg) = cur_alg {
+                    let r_sb = rot_zyx(
+                        deg2rad(alg.yaw_deg),
+                        deg2rad(alg.pitch_deg),
+                        deg2rad(alg.roll_deg),
+                    );
+                    gyro = mat_vec(r_sb, gyro);
+                    accel = mat_vec(r_sb, accel);
+                    gyro[1] = -gyro[1];
+                    gyro[2] = -gyro[2];
+                    accel[1] = -accel[1];
+                    accel[2] = -accel[2];
+                }
+            }
         }
         let imu = ImuSample {
             dax: (deg2rad(gyro[0]) * dt) as f32,
@@ -628,4 +683,197 @@ pub fn build_ekf_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> Ekf
         map,
         map_heading,
     }
+}
+
+impl BootstrapDetector {
+    fn new(cfg: BootstrapConfig) -> Self {
+        Self {
+            cfg,
+            gyro_ema: None,
+            accel_err_ema: None,
+            speed_ema: None,
+            stationary_accel: Vec::new(),
+        }
+    }
+
+    fn update(&mut self, accel_b: [f32; 3], gyro_radps: [f32; 3], speed_mps: f32) -> bool {
+        let gyro_norm = norm3(gyro_radps);
+        let accel_err = (norm3(accel_b) - GRAVITY_MPS2).abs();
+        self.gyro_ema = Some(ema_update(self.gyro_ema, gyro_norm, self.cfg.ema_alpha));
+        self.accel_err_ema = Some(ema_update(self.accel_err_ema, accel_err, self.cfg.ema_alpha));
+        self.speed_ema = Some(ema_update(self.speed_ema, speed_mps, self.cfg.ema_alpha));
+
+        let stationary = self.speed_ema.unwrap_or(speed_mps) <= self.cfg.max_speed_mps
+            && self.gyro_ema.unwrap_or(gyro_norm) <= self.cfg.max_gyro_radps
+            && self.accel_err_ema.unwrap_or(accel_err) <= self.cfg.max_accel_norm_err_mps2;
+
+        if stationary {
+            self.stationary_accel.push(accel_b);
+        } else {
+            self.stationary_accel.clear();
+        }
+        self.stationary_accel.len() >= self.cfg.stationary_samples
+    }
+}
+
+fn build_align_mount_events(
+    imu_packets: &[ImuPacket],
+    nav_events: &[(f64, NavPvtObs)],
+) -> Vec<(f64, [f32; 4])> {
+    if imu_packets.is_empty() || nav_events.len() < 2 {
+        return Vec::new();
+    }
+
+    let cfg = AlignConfig::default();
+    let bootstrap_cfg = BootstrapConfig {
+        ema_alpha: 0.05,
+        max_speed_mps: 0.35,
+        stationary_samples: 100,
+        max_gyro_radps: cfg.max_stationary_gyro_radps,
+        max_accel_norm_err_mps2: cfg.max_stationary_accel_norm_err_mps2,
+    };
+
+    let mut align = Align::new(cfg);
+    let mut bootstrap = BootstrapDetector::new(bootstrap_cfg);
+    let mut out = Vec::<(f64, [f32; 4])>::new();
+    let mut align_initialized = false;
+    let mut scan_idx = 0usize;
+    let mut interval_start_idx = 0usize;
+    let mut prev_nav: Option<(f64, NavPvtObs)> = None;
+
+    for (tn, nav) in nav_events {
+        while scan_idx < imu_packets.len() && imu_packets[scan_idx].t_ms <= *tn {
+            let pkt = &imu_packets[scan_idx];
+            if !align_initialized {
+                let gyro_radps = [
+                    pkt.gx_dps.to_radians() as f32,
+                    pkt.gy_dps.to_radians() as f32,
+                    pkt.gz_dps.to_radians() as f32,
+                ];
+                let accel_b = [pkt.ax_mps2 as f32, pkt.ay_mps2 as f32, pkt.az_mps2 as f32];
+                let speed_mps = speed_for_bootstrap(prev_nav, (*tn, *nav), pkt.t_ms) as f32;
+                if bootstrap.update(accel_b, gyro_radps, speed_mps)
+                    && align
+                        .initialize_from_stationary(&bootstrap.stationary_accel, 0.0)
+                        .is_ok()
+                {
+                    align_initialized = true;
+                    out.push((pkt.t_ms, align.q_vb));
+                }
+            }
+            scan_idx += 1;
+        }
+
+        if let Some((t_prev, nav_prev)) = prev_nav {
+            let dt = ((*tn - t_prev) * 1.0e-3) as f32;
+            let interval_packets = &imu_packets[interval_start_idx..scan_idx];
+            if align_initialized && dt > 0.0 && !interval_packets.is_empty() {
+                let mut gyro_sum = [0.0_f32; 3];
+                let mut accel_sum = [0.0_f32; 3];
+                for pkt in interval_packets {
+                    gyro_sum[0] += pkt.gx_dps.to_radians() as f32;
+                    gyro_sum[1] += pkt.gy_dps.to_radians() as f32;
+                    gyro_sum[2] += pkt.gz_dps.to_radians() as f32;
+                    accel_sum[0] += pkt.ax_mps2 as f32;
+                    accel_sum[1] += pkt.ay_mps2 as f32;
+                    accel_sum[2] += pkt.az_mps2 as f32;
+                }
+                let inv_n = 1.0 / (interval_packets.len() as f32);
+                let window = AlignWindowSummary {
+                    dt,
+                    mean_gyro_b: [gyro_sum[0] * inv_n, gyro_sum[1] * inv_n, gyro_sum[2] * inv_n],
+                    mean_accel_b: [
+                        accel_sum[0] * inv_n,
+                        accel_sum[1] * inv_n,
+                        accel_sum[2] * inv_n,
+                    ],
+                    gnss_vel_prev_n: [
+                        nav_prev.vel_n_mps as f32,
+                        nav_prev.vel_e_mps as f32,
+                        nav_prev.vel_d_mps as f32,
+                    ],
+                    gnss_vel_curr_n: [
+                        nav.vel_n_mps as f32,
+                        nav.vel_e_mps as f32,
+                        nav.vel_d_mps as f32,
+                    ],
+                };
+                align.update_window(&window);
+                out.push((*tn, align.q_vb));
+            }
+        }
+
+        prev_nav = Some((*tn, *nav));
+        interval_start_idx = scan_idx;
+    }
+
+    out
+}
+
+fn ema_update(prev: Option<f32>, sample: f32, alpha: f32) -> f32 {
+    let alpha = alpha.clamp(1.0e-4, 1.0);
+    match prev {
+        Some(prev) => (1.0 - alpha) * prev + alpha * sample,
+        None => sample,
+    }
+}
+
+fn speed_for_bootstrap(
+    prev_nav: Option<(f64, NavPvtObs)>,
+    curr_nav: (f64, NavPvtObs),
+    t_ms: f64,
+) -> f64 {
+    let speed_curr = horizontal_speed(curr_nav.1);
+    let Some((t_prev, nav_prev)) = prev_nav else {
+        return speed_curr;
+    };
+    let speed_prev = horizontal_speed(nav_prev);
+    let dt = curr_nav.0 - t_prev;
+    if dt <= 1.0e-6 {
+        return speed_curr;
+    }
+    let alpha = ((t_ms - t_prev) / dt).clamp(0.0, 1.0);
+    speed_prev + alpha * (speed_curr - speed_prev)
+}
+
+fn horizontal_speed(nav: NavPvtObs) -> f64 {
+    (nav.vel_n_mps * nav.vel_n_mps + nav.vel_e_mps * nav.vel_e_mps).sqrt()
+}
+
+fn norm3(v: [f32; 3]) -> f32 {
+    (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+}
+
+fn quat_to_rotmat_f64(q: [f64; 4]) -> [[f64; 3]; 3] {
+    let n = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+    let (w, x, y, z) = if n > 1.0e-12 {
+        (q[0] / n, q[1] / n, q[2] / n, q[3] / n)
+    } else {
+        (1.0, 0.0, 0.0, 0.0)
+    };
+    [
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y - w * z),
+            2.0 * (x * z + w * y),
+        ],
+        [
+            2.0 * (x * y + w * z),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z - w * x),
+        ],
+        [
+            2.0 * (x * z - w * y),
+            2.0 * (y * z + w * x),
+            1.0 - 2.0 * (x * x + y * y),
+        ],
+    ]
+}
+
+fn transpose3(a: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    [
+        [a[0][0], a[1][0], a[2][0]],
+        [a[0][1], a[1][1], a[2][1]],
+        [a[0][2], a[1][2], a[2][2]],
+    ]
 }

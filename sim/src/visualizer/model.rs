@@ -28,8 +28,17 @@ pub struct PlotData {
     pub align_cmp_att: Vec<Trace>,
     pub align_res_vel: Vec<Trace>,
     pub align_motion: Vec<Trace>,
-    pub align_state_q: Vec<Trace>,
+    pub align_roll_contrib: Vec<Trace>,
+    pub align_pitch_contrib: Vec<Trace>,
+    pub align_yaw_contrib: Vec<Trace>,
     pub align_cov: Vec<Trace>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EkfImuSource {
+    #[default]
+    Align,
+    EsfAlg,
 }
 
 #[derive(Clone, Copy, Default)]

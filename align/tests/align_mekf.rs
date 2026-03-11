@@ -182,7 +182,11 @@ fn align_converges_on_synthetic_case() {
     let (stationary_accel, windows) = simulate_windows(truth, 4);
     assert!(stationary_accel.len() >= 100);
 
-    let mut filter = Align::new(AlignConfig::default());
+    let mut cfg = AlignConfig::default();
+    cfg.use_turn_gyro = true;
+    cfg.use_course_rate = true;
+    cfg.use_lateral_accel = true;
+    let mut filter = Align::new(cfg);
     filter
         .initialize_from_stationary(&stationary_accel, 0.0)
         .expect("stationary initialization");

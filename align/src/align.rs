@@ -33,24 +33,24 @@ impl Default for AlignConfig {
             q_mount_std_rad: [
                 0.01_f32.to_radians(),
                 0.01_f32.to_radians(),
-                0.02_f32.to_radians(),
+                0.01_f32.to_radians(),
             ],
-            r_gravity_std_mps2: 3.58,
-            r_turn_gyro_std_radps: 0.2_f32.to_radians(),
-            r_course_rate_std_radps: 0.10_f32.to_radians(),
-            r_lat_std_mps2: 0.15,
-            r_long_std_mps2: 0.30,
+            r_gravity_std_mps2: 1.88,
+            r_turn_gyro_std_radps: 0.1_f32.to_radians(),
+            r_course_rate_std_radps: 1.10_f32.to_radians(),
+            r_lat_std_mps2: 0.1,
+            r_long_std_mps2: 0.03,
             gravity_lpf_alpha: 0.08,
-            min_speed_mps: 4.0,
+            min_speed_mps: 25.0 / 3.6,
             min_turn_rate_radps: 3.0_f32.to_radians(),
             min_lat_acc_mps2: 0.35,
             min_long_acc_mps2: 0.25,
             max_stationary_gyro_radps: 0.8_f32.to_radians(),
             max_stationary_accel_norm_err_mps2: 0.2,
             use_gravity: true,
-            use_turn_gyro: true,
-            use_course_rate: true,
-            use_lateral_accel: true,
+            use_turn_gyro: false,
+            use_course_rate: false,
+            use_lateral_accel: false,
             use_longitudinal_accel: true,
         }
     }
@@ -63,6 +63,16 @@ pub struct AlignWindowSummary {
     pub mean_accel_b: [f32; 3],
     pub gnss_vel_prev_n: [f32; 3],
     pub gnss_vel_curr_n: [f32; 3],
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AlignUpdateTrace {
+    pub q_start: [f32; 4],
+    pub after_gravity: Option<[f32; 4]>,
+    pub after_turn_gyro: Option<[f32; 4]>,
+    pub after_course_rate: Option<[f32; 4]>,
+    pub after_lateral_accel: Option<[f32; 4]>,
+    pub after_longitudinal_accel: Option<[f32; 4]>,
 }
 
 #[derive(Debug, Clone)]
@@ -148,8 +158,19 @@ impl Align {
     }
 
     pub fn update_window(&mut self, window: &AlignWindowSummary) -> f32 {
+        self.update_window_with_trace(window).0
+    }
+
+    pub fn update_window_with_trace(
+        &mut self,
+        window: &AlignWindowSummary,
+    ) -> (f32, AlignUpdateTrace) {
         self.predict(window.dt);
         let mut score = 0.0_f32;
+        let mut trace = AlignUpdateTrace {
+            q_start: self.q_vb,
+            ..AlignUpdateTrace::default()
+        };
 
         let v_prev = window.gnss_vel_prev_n;
         let v_curr = window.gnss_vel_curr_n;
@@ -206,6 +227,14 @@ impl Align {
                 window.mean_gyro_b,
                 [self.cfg.r_gravity_std_mps2.powi(2); 2],
             );
+            score += self.apply_update1(
+                -vec3_norm(self.gravity_lp_b),
+                5,
+                self.gravity_lp_b,
+                window.mean_gyro_b,
+                self.cfg.r_gravity_std_mps2.powi(2),
+            );
+            trace.after_gravity = Some(self.q_vb);
         }
 
         if turn_valid {
@@ -217,6 +246,7 @@ impl Align {
                     window.mean_gyro_b,
                     [self.cfg.r_turn_gyro_std_radps.powi(2); 2],
                 );
+                trace.after_turn_gyro = Some(self.q_vb);
             }
             if self.cfg.use_course_rate {
                 score += self.apply_update1(
@@ -226,6 +256,7 @@ impl Align {
                     window.mean_gyro_b,
                     self.cfg.r_course_rate_std_radps.powi(2),
                 );
+                trace.after_course_rate = Some(self.q_vb);
             }
             if self.cfg.use_lateral_accel {
                 score += self.apply_update1(
@@ -235,20 +266,23 @@ impl Align {
                     window.mean_gyro_b,
                     self.cfg.r_lat_std_mps2.powi(2),
                 );
+                trace.after_lateral_accel = Some(self.q_vb);
             }
         }
 
         if long_valid && self.cfg.use_longitudinal_accel {
-            score += self.apply_update1(
+            score += self.apply_update1_masked(
                 a_long,
                 3,
                 horiz_accel_b,
                 window.mean_gyro_b,
                 self.cfg.r_long_std_mps2.powi(2),
+                [false, false, true],
             );
+            trace.after_longitudinal_accel = Some(self.q_vb);
         }
 
-        score
+        (score, trace)
     }
 
     pub fn mount_angles_rad(&self) -> [f32; 3] {
@@ -276,12 +310,36 @@ impl Align {
         gyro_b: [f32; 3],
         r_var: f32,
     ) -> f32 {
+        self.apply_update1_masked(z, obs_idx, accel_b, gyro_b, r_var, [true, true, true])
+    }
+
+    fn apply_update1_masked(
+        &mut self,
+        z: f32,
+        obs_idx: usize,
+        accel_b: [f32; 3],
+        gyro_b: [f32; 3],
+        r_var: f32,
+        state_mask: [bool; 3],
+    ) -> f32 {
         let obs = align_obs(self.q_vb, gyro_b, accel_b);
         let H_full = align_obs_jacobian(self.q_vb, gyro_b, accel_b);
         let H = SMatrix::<f32, 1, 3>::from_row_slice(&[
-            H_full[obs_idx][0],
-            H_full[obs_idx][1],
-            H_full[obs_idx][2],
+            if state_mask[0] {
+                H_full[obs_idx][0]
+            } else {
+                0.0
+            },
+            if state_mask[1] {
+                H_full[obs_idx][1]
+            } else {
+                0.0
+            },
+            if state_mask[2] {
+                H_full[obs_idx][2]
+            } else {
+                0.0
+            },
         ]);
         let y = SVector::<f32, 1>::from_row_slice(&[z - obs[obs_idx]]);
         let P = mat3_to_smatrix(self.P);
