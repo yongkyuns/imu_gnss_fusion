@@ -4,6 +4,7 @@ use crate::horizontal_heading::{
     HorizontalHeadingCueConfig, HorizontalHeadingCueFilter, HorizontalHeadingCueSample,
     HorizontalHeadingTrace,
 };
+use crate::yaw_pca::{YawPcaConfig, YawPcaInitializer, YawPcaSample};
 use nalgebra::{SMatrix, SVector};
 
 pub const ALIGN_N_STATES: usize = 3;
@@ -24,6 +25,12 @@ pub struct AlignConfig {
     pub min_lat_acc_mps2: f32,
     pub min_long_acc_mps2: f32,
     pub min_long_sign_stable_windows: usize,
+    pub use_pca_yaw_seed: bool,
+    pub pca_min_speed_mps: f32,
+    pub pca_min_horiz_acc_mps2: f32,
+    pub pca_min_windows: usize,
+    pub pca_max_windows: usize,
+    pub pca_min_anisotropy_ratio: f32,
     pub max_stationary_gyro_radps: f32,
     pub max_stationary_accel_norm_err_mps2: f32,
     pub use_gravity: bool,
@@ -37,14 +44,14 @@ impl Default for AlignConfig {
     fn default() -> Self {
         Self {
             q_mount_std_rad: [
-                0.001_f32.to_radians(),
-                0.001_f32.to_radians(),
-                0.001_f32.to_radians(),
+                0.0003_f32.to_radians(),
+                0.0003_f32.to_radians(),
+                0.0003_f32.to_radians(),
             ],
             r_gravity_std_mps2: 1.28,
             r_turn_gyro_std_radps: 0.1_f32.to_radians(),
             r_course_rate_std_radps: 1.10_f32.to_radians(),
-            r_lat_std_mps2: 0.003,
+            r_lat_std_mps2: 0.02,
             r_long_std_mps2: 0.3,
             gravity_lpf_alpha: 0.08,
             long_lpf_alpha: 0.05,
@@ -53,6 +60,12 @@ impl Default for AlignConfig {
             min_lat_acc_mps2: 0.10,
             min_long_acc_mps2: 0.18,
             min_long_sign_stable_windows: 2,
+            use_pca_yaw_seed: true,
+            pca_min_speed_mps: 5.0 / 3.6,
+            pca_min_horiz_acc_mps2: 0.15,
+            pca_min_windows: 4,
+            pca_max_windows: 12,
+            pca_min_anisotropy_ratio: 1.3,
             max_stationary_gyro_radps: 0.8_f32.to_radians(),
             max_stationary_accel_norm_err_mps2: 0.2,
             use_gravity: true,
@@ -76,6 +89,7 @@ pub struct AlignWindowSummary {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AlignUpdateTrace {
     pub q_start: [f32; 4],
+    pub after_pca_yaw_seed: Option<[f32; 4]>,
     pub after_gravity: Option<[f32; 4]>,
     pub after_turn_gyro: Option<[f32; 4]>,
     pub after_course_rate: Option<[f32; 4]>,
@@ -90,6 +104,7 @@ pub struct Align {
     pub P: [[f32; ALIGN_N_STATES]; ALIGN_N_STATES],
     pub gravity_lp_b: [f32; 3],
     long_filter: HorizontalHeadingCueFilter,
+    yaw_pca: YawPcaInitializer,
     pub cfg: AlignConfig,
 }
 
@@ -110,6 +125,7 @@ impl Align {
             ]),
             gravity_lp_b: [0.0, 0.0, -GRAVITY_MPS2],
             long_filter: HorizontalHeadingCueFilter::new(),
+            yaw_pca: YawPcaInitializer::new(),
             cfg,
         }
     }
@@ -163,6 +179,7 @@ impl Align {
         ]);
         self.gravity_lp_b = f_mean_b;
         self.long_filter.reset();
+        self.yaw_pca.reset(self.cfg.use_pca_yaw_seed);
         Ok(())
     }
 
@@ -232,6 +249,31 @@ impl Align {
             // heading is not the forward cue we want from this update.
             && a_lat.abs() < (0.5_f32).max(0.6 * a_long.abs())
             && horiz_gnss_norm > self.cfg.min_long_acc_mps2;
+        let heading_updates_enabled = if self.yaw_pca.is_active() {
+            let pca_cfg = YawPcaConfig {
+                enabled: self.cfg.use_pca_yaw_seed,
+                min_speed_mps: self.cfg.pca_min_speed_mps,
+                min_horiz_acc_mps2: self.cfg.pca_min_horiz_acc_mps2,
+                min_windows: self.cfg.pca_min_windows,
+                max_windows: self.cfg.pca_max_windows,
+                min_anisotropy_ratio: self.cfg.pca_min_anisotropy_ratio,
+            };
+            if let Some(dpsi) = self.yaw_pca.update(
+                pca_cfg,
+                YawPcaSample {
+                    speed_mps: speed_mid,
+                    horiz_accel_v: [horiz_obs[3], horiz_obs[4]],
+                    gnss_long_mps2: a_long,
+                },
+            ) {
+                self.inject_vehicle_yaw(dpsi);
+                self.long_filter.reset();
+                trace.after_pca_yaw_seed = Some(self.q_vb);
+            }
+            !self.yaw_pca.is_active()
+        } else {
+            true
+        };
 
         if stationary {
             let alpha = self.cfg.gravity_lpf_alpha;
@@ -270,7 +312,7 @@ impl Align {
                 );
                 trace.after_turn_gyro = Some(self.q_vb);
             }
-            if self.cfg.use_course_rate {
+            if heading_updates_enabled && self.cfg.use_course_rate {
                 score += self.apply_update1(
                     course_rate,
                     2,
@@ -280,7 +322,7 @@ impl Align {
                 );
                 trace.after_course_rate = Some(self.q_vb);
             }
-            if self.cfg.use_lateral_accel {
+            if heading_updates_enabled && self.cfg.use_lateral_accel {
                 score += self.apply_vehicle_yaw_scalar(
                     a_lat,
                     horiz_obs[4],
@@ -291,7 +333,7 @@ impl Align {
             }
         }
 
-        if self.cfg.use_longitudinal_accel {
+        if heading_updates_enabled && self.cfg.use_longitudinal_accel {
             let (cue, long_trace) = self.long_filter.update_with_trace(
                 HorizontalHeadingCueConfig {
                     alpha: self.cfg.long_lpf_alpha,

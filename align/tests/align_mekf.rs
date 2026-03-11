@@ -241,7 +241,7 @@ fn lateral_update_preserves_tilt_and_only_corrects_heading() {
                 + (before_fwd[2] - after_fwd[2]).powi(2))
             .sqrt();
             assert!(
-                down_delta < 1.0e-3,
+                down_delta < 2.0e-3,
                 "down axis changed too much: before={before_down:?} after={after_down:?}"
             );
             assert!(

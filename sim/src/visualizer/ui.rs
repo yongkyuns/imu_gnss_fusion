@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use eframe::egui;
-use egui_plot::{Legend, Line, Plot, PlotPoints};
+use egui_plot::{Legend, Line, Plot, PlotPoints, Points};
 use walkers::sources::{Mapbox, MapboxStyle, OpenStreetMap};
 use walkers::{HttpTiles, Map, MapMemory, Plugin, lon_lat};
 
@@ -573,7 +573,11 @@ fn draw_plot(
                     continue;
                 }
                 let points: PlotPoints<'_> = reduced.into();
-                plot_ui.line(Line::new(t.name.clone(), points));
+                if t.name == "yaw initialized" {
+                    plot_ui.points(Points::new(t.name.clone(), points).radius(4.0));
+                } else {
+                    plot_ui.line(Line::new(t.name.clone(), points));
+                }
             }
         });
     });
