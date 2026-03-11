@@ -1,5 +1,8 @@
 #![allow(non_snake_case)]
 
+use crate::longitudinal::{
+    LongitudinalCueConfig, LongitudinalCueFilter, LongitudinalCueSample,
+};
 use nalgebra::{SMatrix, SVector};
 
 pub const ALIGN_N_STATES: usize = 3;
@@ -14,10 +17,12 @@ pub struct AlignConfig {
     pub r_lat_std_mps2: f32,
     pub r_long_std_mps2: f32,
     pub gravity_lpf_alpha: f32,
+    pub long_lpf_alpha: f32,
     pub min_speed_mps: f32,
     pub min_turn_rate_radps: f32,
     pub min_lat_acc_mps2: f32,
     pub min_long_acc_mps2: f32,
+    pub min_long_sign_stable_windows: usize,
     pub max_stationary_gyro_radps: f32,
     pub max_stationary_accel_norm_err_mps2: f32,
     pub use_gravity: bool,
@@ -41,10 +46,12 @@ impl Default for AlignConfig {
             r_lat_std_mps2: 0.1,
             r_long_std_mps2: 0.003,
             gravity_lpf_alpha: 0.08,
-            min_speed_mps: 25.0 / 3.6,
+            long_lpf_alpha: 0.1,
+            min_speed_mps: 30.0 / 3.6,
             min_turn_rate_radps: 3.0_f32.to_radians(),
             min_lat_acc_mps2: 0.35,
             min_long_acc_mps2: 0.25,
+            min_long_sign_stable_windows: 3,
             max_stationary_gyro_radps: 0.8_f32.to_radians(),
             max_stationary_accel_norm_err_mps2: 0.2,
             use_gravity: true,
@@ -80,6 +87,7 @@ pub struct Align {
     pub q_vb: [f32; 4],
     pub P: [[f32; ALIGN_N_STATES]; ALIGN_N_STATES],
     pub gravity_lp_b: [f32; 3],
+    long_filter: LongitudinalCueFilter,
     pub cfg: AlignConfig,
 }
 
@@ -99,6 +107,7 @@ impl Align {
                 60.0_f32.to_radians().powi(2),
             ]),
             gravity_lp_b: [0.0, 0.0, -GRAVITY_MPS2],
+            long_filter: LongitudinalCueFilter::new(),
             cfg,
         }
     }
@@ -147,6 +156,7 @@ impl Align {
             20.0_f32.to_radians().powi(2),
         ]);
         self.gravity_lp_b = f_mean_b;
+        self.long_filter.reset();
         Ok(())
     }
 
@@ -270,15 +280,30 @@ impl Align {
             }
         }
 
-        if long_valid && self.cfg.use_longitudinal_accel {
-            score += self.apply_update1_vehicle_yaw(
-                a_long,
-                3,
-                horiz_accel_b,
-                window.mean_gyro_b,
-                self.cfg.r_long_std_mps2.powi(2),
+        if self.cfg.use_longitudinal_accel {
+            let horiz_obs = align_obs(self.q_vb, window.mean_gyro_b, horiz_accel_b);
+            let cue = self.long_filter.update(
+                LongitudinalCueConfig {
+                    alpha: self.cfg.long_lpf_alpha,
+                    min_abs_long_mps2: self.cfg.min_long_acc_mps2,
+                    min_sign_stable_windows: self.cfg.min_long_sign_stable_windows,
+                },
+                LongitudinalCueSample {
+                    gnss_long_mps2: a_long,
+                    imu_long_mps2: horiz_obs[3],
+                    imu_lat_mps2: horiz_obs[4],
+                    base_valid: long_valid,
+                },
             );
-            trace.after_longitudinal_accel = Some(self.q_vb);
+            if let Some(cue) = cue {
+                score += self.apply_vehicle_yaw_scalar(
+                    cue.z_long_mps2,
+                    cue.h_long_mps2,
+                    cue.h_yaw_jac,
+                    self.cfg.r_long_std_mps2.powi(2),
+                );
+                trace.after_longitudinal_accel = Some(self.q_vb);
+            }
         }
 
         (score, trace)
@@ -355,23 +380,13 @@ impl Align {
         (y.transpose() * S_inv * y)[0]
     }
 
-    fn apply_update1_vehicle_yaw(
+    fn apply_vehicle_yaw_scalar(
         &mut self,
         z: f32,
-        obs_idx: usize,
-        accel_b: [f32; 3],
-        gyro_b: [f32; 3],
+        h: f32,
+        h_yaw: f32,
         r_var: f32,
     ) -> f32 {
-        let obs = align_obs(self.q_vb, gyro_b, accel_b);
-        let h = obs[obs_idx];
-        let h_yaw = match obs_idx {
-            // For right-multiplied vehicle-frame yaw, a_v' = Rz(-psi) a_v.
-            // So d(a_v.x)/dpsi = a_v.y and d(a_v.y)/dpsi = -a_v.x at psi = 0.
-            3 => obs[4],
-            4 => -obs[3],
-            _ => 0.0,
-        };
         let y = z - h;
         let pzz = self.P[2][2].max(0.0);
         let s = h_yaw * h_yaw * pzz + r_var.max(1.0e-9);

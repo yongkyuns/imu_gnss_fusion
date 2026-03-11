@@ -186,6 +186,7 @@ fn align_converges_on_synthetic_case() {
     cfg.use_turn_gyro = true;
     cfg.use_course_rate = true;
     cfg.use_lateral_accel = true;
+    cfg.use_longitudinal_accel = false;
     let mut filter = Align::new(cfg);
     filter
         .initialize_from_stationary(&stationary_accel, 0.0)

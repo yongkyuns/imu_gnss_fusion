@@ -50,21 +50,23 @@ struct Args {
     q_roll_std_deg: f32,
     #[arg(long, default_value_t = 0.01)]
     q_pitch_std_deg: f32,
-    #[arg(long, default_value_t = 0.02)]
+    #[arg(long, default_value_t = 0.01)]
     q_yaw_std_deg: f32,
-    #[arg(long, default_value_t = 0.18)]
+    #[arg(long, default_value_t = 1.28)]
     r_gravity_std_mps2: f32,
-    #[arg(long, default_value_t = 0.2)]
+    #[arg(long, default_value_t = 0.1)]
     r_turn_gyro_std_dps: f32,
-    #[arg(long, default_value_t = 0.35)]
+    #[arg(long, default_value_t = 1.10)]
     r_course_rate_std_dps: f32,
     #[arg(long, default_value_t = 0.10)]
     r_lat_std_mps2: f32,
-    #[arg(long, default_value_t = 0.10)]
+    #[arg(long, default_value_t = 0.003)]
     r_long_std_mps2: f32,
     #[arg(long, default_value_t = 0.08)]
     gravity_lpf_alpha: f32,
-    #[arg(long, default_value_t = 4.0)]
+    #[arg(long, default_value_t = 0.1)]
+    long_lpf_alpha: f32,
+    #[arg(long, default_value_t = 30.0 / 3.6)]
     min_speed_mps: f32,
     #[arg(long, default_value_t = 3.0)]
     min_turn_rate_dps: f32,
@@ -72,6 +74,8 @@ struct Args {
     min_lat_acc_mps2: f32,
     #[arg(long, default_value_t = 0.25)]
     min_long_acc_mps2: f32,
+    #[arg(long, default_value_t = 3)]
+    min_long_sign_stable_windows: usize,
     #[arg(long, default_value_t = 0.8)]
     max_stationary_gyro_dps: f32,
     #[arg(long, default_value_t = 0.2)]
@@ -79,11 +83,11 @@ struct Args {
 
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     use_gravity: bool,
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     use_turn_gyro: bool,
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     use_course_rate: bool,
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     use_lateral_accel: bool,
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     use_longitudinal_accel: bool,
@@ -348,10 +352,12 @@ fn config_from_args(args: &Args) -> AlignConfig {
         r_lat_std_mps2: args.r_lat_std_mps2,
         r_long_std_mps2: args.r_long_std_mps2,
         gravity_lpf_alpha: args.gravity_lpf_alpha,
+        long_lpf_alpha: args.long_lpf_alpha,
         min_speed_mps: args.min_speed_mps,
         min_turn_rate_radps: args.min_turn_rate_dps.to_radians(),
         min_lat_acc_mps2: args.min_lat_acc_mps2,
         min_long_acc_mps2: args.min_long_acc_mps2,
+        min_long_sign_stable_windows: args.min_long_sign_stable_windows,
         max_stationary_gyro_radps: args.max_stationary_gyro_dps.to_radians(),
         max_stationary_accel_norm_err_mps2: args.max_stationary_accel_norm_err_mps2,
         use_gravity: args.use_gravity,
