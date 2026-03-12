@@ -4,6 +4,7 @@ use crate::horizontal_heading::{
     HorizontalHeadingCueConfig, HorizontalHeadingCueFilter, HorizontalHeadingCueSample,
     HorizontalHeadingTrace,
 };
+use crate::init_monitor::{InitMonitor, InitMonitorConfig, InitMonitorSample};
 use crate::yaw_pca::{YawPcaConfig, YawPcaInitializer, YawPcaSample};
 use nalgebra::{SMatrix, SVector};
 
@@ -69,7 +70,7 @@ impl Default for AlignConfig {
             max_stationary_gyro_radps: 0.8_f32.to_radians(),
             max_stationary_accel_norm_err_mps2: 0.2,
             use_gravity: true,
-            use_turn_gyro: true,
+            use_turn_gyro: false,
             use_course_rate: true,
             use_lateral_accel: true,
             use_longitudinal_accel: true,
@@ -90,6 +91,7 @@ pub struct AlignWindowSummary {
 pub struct AlignUpdateTrace {
     pub q_start: [f32; 4],
     pub after_pca_yaw_seed: Option<[f32; 4]>,
+    pub yaw_reinitialized: bool,
     pub after_gravity: Option<[f32; 4]>,
     pub after_turn_gyro: Option<[f32; 4]>,
     pub after_course_rate: Option<[f32; 4]>,
@@ -105,6 +107,7 @@ pub struct Align {
     pub gravity_lp_b: [f32; 3],
     long_filter: HorizontalHeadingCueFilter,
     yaw_pca: YawPcaInitializer,
+    init_monitor: InitMonitor,
     pub cfg: AlignConfig,
 }
 
@@ -126,6 +129,7 @@ impl Align {
             gravity_lp_b: [0.0, 0.0, -GRAVITY_MPS2],
             long_filter: HorizontalHeadingCueFilter::new(),
             yaw_pca: YawPcaInitializer::new(),
+            init_monitor: InitMonitor::new(),
             cfg,
         }
     }
@@ -173,13 +177,14 @@ impl Align {
         // gravity/down axis (third column of C_v_b) is preserved exactly.
         self.q_vb = quat_from_rotmat(mat3_mul(C_v_b, c_delta));
         self.P = diag3([
-            6.0_f32.to_radians().powi(2),
-            6.0_f32.to_radians().powi(2),
-            20.0_f32.to_radians().powi(2),
+            0.2_f32.to_radians().powi(2),
+            0.2_f32.to_radians().powi(2),
+            10_f32.to_radians().powi(2),
         ]);
         self.gravity_lp_b = f_mean_b;
         self.long_filter.reset();
         self.yaw_pca.reset(self.cfg.use_pca_yaw_seed);
+        self.init_monitor.reset();
         Ok(())
     }
 
@@ -356,6 +361,45 @@ impl Align {
             }
         }
 
+        let post_horiz_obs = align_obs(self.q_vb, window.mean_gyro_b, horiz_accel_b);
+        let post_gravity_obs = align_obs(self.q_vb, window.mean_gyro_b, window.mean_accel_b);
+        let gravity_leak = if stationary {
+            let g_ref = vec3_norm(self.gravity_lp_b).max(GRAVITY_MPS2 * 0.5);
+            let z_err = post_gravity_obs[5] + g_ref;
+            (post_gravity_obs[3] * post_gravity_obs[3]
+                + post_gravity_obs[4] * post_gravity_obs[4]
+                + z_err * z_err)
+                .sqrt()
+        } else {
+            0.0
+        };
+        let course_residual = post_horiz_obs[2] - course_rate;
+        let heading_residual = trace
+            .longitudinal_trace
+            .map(|lt| lt.angle_err_rad)
+            .unwrap_or(0.0);
+        let mon_trace = self.init_monitor.update(
+            InitMonitorConfig::default(),
+            InitMonitorSample {
+                heading_valid: trace
+                    .longitudinal_trace
+                    .map(|lt| lt.emitted)
+                    .unwrap_or(false),
+                heading_residual_rad: heading_residual,
+                gravity_valid: stationary,
+                gravity_leak_mps2: gravity_leak,
+                course_valid: turn_valid && self.cfg.use_course_rate,
+                course_residual_radps: course_residual,
+            },
+        );
+        if mon_trace.should_reinitialize {
+            self.yaw_pca.reset(self.cfg.use_pca_yaw_seed);
+            self.long_filter.reset();
+            self.init_monitor.reset();
+            self.reset_yaw_covariance();
+            trace.yaw_reinitialized = true;
+        }
+
         (score, trace)
     }
 
@@ -500,6 +544,14 @@ impl Align {
 
     fn inject_vehicle_yaw(&mut self, dpsi: f32) {
         self.q_vb = quat_normalize(quat_mul(self.q_vb, quat_from_small_angle([0.0, 0.0, dpsi])));
+    }
+
+    fn reset_yaw_covariance(&mut self) {
+        self.P[2][2] = 10_f32.to_radians().powi(2);
+        self.P[0][2] = 0.0;
+        self.P[2][0] = 0.0;
+        self.P[1][2] = 0.0;
+        self.P[2][1] = 0.0;
     }
 }
 
