@@ -139,7 +139,6 @@ pub fn extract_itow_ms(frame: &UbxFrame) -> Option<i64> {
         PacketRef::EsfIns(pkt) => Some(pkt.itow() as i64),
         PacketRef::EsfAlg(pkt) => Some(pkt.itow() as i64),
         PacketRef::EsfStatus(pkt) => Some(pkt.itow() as i64),
-        PacketRef::EsfMeas(pkt) => Some(pkt.itow() as i64),
         _ => None,
     }
 }
@@ -261,6 +260,21 @@ pub fn extract_nav_att(frame: &UbxFrame) -> Option<(i64, f64, f64, f64)> {
 pub fn extract_esf_alg(frame: &UbxFrame) -> Option<(i64, f64, f64, f64)> {
     match decode_packet(frame)? {
         PacketRef::EsfAlg(pkt) => Some((pkt.itow() as i64, pkt.roll(), pkt.pitch(), pkt.yaw())),
+        _ => None,
+    }
+}
+
+pub fn extract_esf_alg_status(frame: &UbxFrame) -> Option<(i64, f64, f64)> {
+    match decode_packet(frame)? {
+        PacketRef::EsfAlg(pkt) => {
+            let status = pkt.flags().status();
+            let fine = matches!(status, EsfAlgStatus::FineAlignment);
+            Some((
+                pkt.itow() as i64,
+                status as u8 as f64,
+                if fine { 1.0 } else { 0.0 },
+            ))
+        }
         _ => None,
     }
 }

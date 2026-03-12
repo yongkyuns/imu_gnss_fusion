@@ -1,0 +1,18 @@
+[package]
+name = "align-rs"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[features]
+default = []
+python = ["dep:pyo3"]
+
+[lib]
+name = "align_rs"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+nalgebra = { version = "0.33", default-features = false, features = ["std"] }
+pyo3 = { version = "0.23", optional = true, features = ["abi3-py310", "extension-module"] }

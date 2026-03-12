@@ -1,12 +1,14 @@
 use std::collections::HashMap;
 
 use crate::ubxlog::{
-    UbxFrame, extract_esf_alg, extract_esf_cal_samples, extract_esf_ins, extract_esf_meas_samples,
-    extract_esf_raw_samples, extract_nav_att, extract_nav_pvt, extract_nav_sat_cn0, sensor_meta,
+    UbxFrame, extract_esf_alg, extract_esf_alg_status, extract_esf_cal_samples, extract_esf_ins,
+    extract_esf_meas_samples, extract_esf_raw_samples, extract_nav_att, extract_nav_pvt,
+    extract_nav_sat_cn0, sensor_meta,
 };
 
 use super::super::math::normalize_heading_deg;
 use super::super::model::{PlotData, Trace};
+use super::align_compare::AlignCompareData;
 use super::ekf_compare::EkfCompareData;
 use super::tag_time::fit_tag_ms_map;
 use super::timebase::MasterTimeline;
@@ -15,6 +17,7 @@ pub fn build_signal_traces(
     frames: &[UbxFrame],
     tl: &MasterTimeline,
     ekf: EkfCompareData,
+    align_data: AlignCompareData,
 ) -> PlotData {
     let mut speed_g = Vec::<[f64; 2]>::new();
     let mut speed_n = Vec::<[f64; 2]>::new();
@@ -66,6 +69,18 @@ pub fn build_signal_traces(
                 .entry("ESF-ALG yaw [deg]".to_string())
                 .or_default()
                 .push([t, normalize_heading_deg(yaw)]);
+        }
+        if let Some((_itow, status_code, is_fine)) = extract_esf_alg_status(f)
+            && let Some(t) = tl.seq_to_rel_s(f.seq)
+        {
+            orient_map
+                .entry("ESF-ALG status_code".to_string())
+                .or_default()
+                .push([t, status_code]);
+            orient_map
+                .entry("ESF-ALG fine_aligned".to_string())
+                .or_default()
+                .push([t, is_fine]);
         }
         for (sat, cno) in extract_nav_sat_cn0(f) {
             if let Some(t) = tl.seq_to_rel_s(f.seq) {
@@ -268,6 +283,14 @@ pub fn build_signal_traces(
     out.ekf_cov_nonbias = ekf.cov_nonbias;
     out.ekf_map = ekf.map;
     out.ekf_map_heading = ekf.map_heading;
+    out.align_cmp_att = align_data.cmp_att;
+    out.align_res_vel = align_data.res_vel;
+    out.align_axis_err = align_data.axis_err;
+    out.align_motion = align_data.motion;
+    out.align_roll_contrib = align_data.roll_contrib;
+    out.align_pitch_contrib = align_data.pitch_contrib;
+    out.align_yaw_contrib = align_data.yaw_contrib;
+    out.align_cov = align_data.cov;
 
     let max_rel_s = ((tl.master_max - tl.t0_master_ms) * 1e-3).max(0.0);
     let sanitize_trace = |trace: &mut Trace| {
@@ -309,6 +332,14 @@ pub fn build_signal_traces(
         &mut out.ekf_bias_accel,
         &mut out.ekf_cov_bias,
         &mut out.ekf_cov_nonbias,
+        &mut out.align_cmp_att,
+        &mut out.align_res_vel,
+        &mut out.align_axis_err,
+        &mut out.align_motion,
+        &mut out.align_roll_contrib,
+        &mut out.align_pitch_contrib,
+        &mut out.align_yaw_contrib,
+        &mut out.align_cov,
     ] {
         for tr in traces.iter_mut() {
             tr.points

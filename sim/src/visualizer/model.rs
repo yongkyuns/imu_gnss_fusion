@@ -25,6 +25,21 @@ pub struct PlotData {
     pub ekf_cov_nonbias: Vec<Trace>,
     pub ekf_map: Vec<Trace>,
     pub ekf_map_heading: Vec<HeadingSample>,
+    pub align_cmp_att: Vec<Trace>,
+    pub align_res_vel: Vec<Trace>,
+    pub align_axis_err: Vec<Trace>,
+    pub align_motion: Vec<Trace>,
+    pub align_roll_contrib: Vec<Trace>,
+    pub align_pitch_contrib: Vec<Trace>,
+    pub align_yaw_contrib: Vec<Trace>,
+    pub align_cov: Vec<Trace>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EkfImuSource {
+    #[default]
+    Align,
+    EsfAlg,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -66,5 +81,6 @@ pub struct ImuPacket {
 pub enum Page {
     Signals,
     EkfCompare,
+    AlignCompare,
     MapDark,
 }

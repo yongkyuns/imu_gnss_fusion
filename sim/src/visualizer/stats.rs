@@ -21,6 +21,14 @@ pub fn trace_stats(data: &PlotData) -> (usize, usize) {
         &data.ekf_bias_accel,
         &data.ekf_cov_bias,
         &data.ekf_cov_nonbias,
+        &data.align_cmp_att,
+        &data.align_res_vel,
+        &data.align_axis_err,
+        &data.align_motion,
+        &data.align_roll_contrib,
+        &data.align_pitch_contrib,
+        &data.align_yaw_contrib,
+        &data.align_cov,
     ];
     let mut traces = 0usize;
     let mut points = 0usize;
@@ -50,6 +58,14 @@ pub fn trace_time_bounds(data: &PlotData) -> Option<(f64, f64)> {
         &data.ekf_bias_accel,
         &data.ekf_cov_bias,
         &data.ekf_cov_nonbias,
+        &data.align_cmp_att,
+        &data.align_res_vel,
+        &data.align_axis_err,
+        &data.align_motion,
+        &data.align_roll_contrib,
+        &data.align_pitch_contrib,
+        &data.align_yaw_contrib,
+        &data.align_cov,
         &data.ekf_map,
     ];
     let mut min_t = f64::INFINITY;
@@ -112,6 +128,45 @@ pub fn max_gap_trace(traces: &[Trace]) -> Option<(String, f64)> {
         }
     }
     best
+}
+
+pub fn trace_value_bounds(traces: &[Trace]) -> Option<(f64, f64)> {
+    let mut min_v = f64::INFINITY;
+    let mut max_v = f64::NEG_INFINITY;
+    for tr in traces {
+        for p in &tr.points {
+            let v = p[1];
+            if v.is_finite() {
+                min_v = min_v.min(v);
+                max_v = max_v.max(v);
+            }
+        }
+    }
+    if min_v.is_finite() && max_v.is_finite() {
+        Some((min_v, max_v))
+    } else {
+        None
+    }
+}
+
+pub fn max_step_abs(traces: &[Trace]) -> Option<f64> {
+    let mut best = 0.0_f64;
+    let mut any = false;
+    for tr in traces {
+        let mut prev: Option<f64> = None;
+        for p in &tr.points {
+            let v = p[1];
+            if !v.is_finite() {
+                continue;
+            }
+            if let Some(pv) = prev {
+                best = best.max((v - pv).abs());
+                any = true;
+            }
+            prev = Some(v);
+        }
+    }
+    if any { Some(best) } else { None }
 }
 
 pub fn map_center_from_traces(traces: &[Trace]) -> Position {

@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use eframe::egui;
-use egui_plot::{Legend, Line, Plot, PlotPoints};
+use egui_plot::{Legend, Line, Plot, PlotPoints, Points};
 use walkers::sources::{Mapbox, MapboxStyle, OpenStreetMap};
 use walkers::{HttpTiles, Map, MapMemory, Plugin, lon_lat};
 
@@ -176,6 +176,7 @@ impl eframe::App for App {
                 ui.label("Page:");
                 ui.selectable_value(&mut self.page, Page::Signals, "Signals");
                 ui.selectable_value(&mut self.page, Page::EkfCompare, "EKF Compare");
+                ui.selectable_value(&mut self.page, Page::AlignCompare, "Misalign Compare");
                 ui.selectable_value(&mut self.page, Page::MapDark, "Map (Dark)");
             });
         });
@@ -333,6 +334,73 @@ impl eframe::App for App {
                         ui,
                         "ESF-RAW Acceleration",
                         &esf_raw_accel,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                });
+            }
+            Page::AlignCompare => {
+                let half_width = (ctx.content_rect().width() * 0.5).max(260.0);
+                egui::SidePanel::left("align_compare_left")
+                    .resizable(false)
+                    .exact_width(half_width)
+                    .show(ctx, |ui| {
+                        draw_plot(
+                            ui,
+                            "Euler Angles: Align KF vs ESF-ALG",
+                            &self.data.align_cmp_att,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "Align Window Diagnostics",
+                            &self.data.align_res_vel,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "Align Axis Error vs ESF-ALG",
+                            &self.data.align_axis_err,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "Align Motion Classification / Updates",
+                            &self.data.align_motion,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                    });
+
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    draw_plot(
+                        ui,
+                        "Align Roll Update Contributions",
+                        &self.data.align_roll_contrib,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "Align Pitch Update Contributions",
+                        &self.data.align_pitch_contrib,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "Align Yaw Update Contributions",
+                        &self.data.align_yaw_contrib,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "Align Covariance Diagonal",
+                        &self.data.align_cov,
                         true,
                         self.max_points_per_trace,
                     );
@@ -505,7 +573,11 @@ fn draw_plot(
                     continue;
                 }
                 let points: PlotPoints<'_> = reduced.into();
-                plot_ui.line(Line::new(t.name.clone(), points));
+                if t.name == "yaw initialized" {
+                    plot_ui.points(Points::new(t.name.clone(), points).radius(4.0));
+                } else {
+                    plot_ui.line(Line::new(t.name.clone(), points));
+                }
             }
         });
     });

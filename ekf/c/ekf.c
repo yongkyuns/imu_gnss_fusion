@@ -4,8 +4,8 @@
 
 #define DEFAULT_P_INIT 1.0f
 #define DEFAULT_BIAS_DT_S 0.01f
-#define DEFAULT_GYRO_BIAS_SIGMA_DPS 0.15f
-#define DEFAULT_ACCEL_BIAS_SIGMA_MPS2 0.25f
+#define DEFAULT_GYRO_BIAS_SIGMA_DPS 0.125f
+#define DEFAULT_ACCEL_BIAS_SIGMA_MPS2 0.075f
 #define PI_F32 3.1415927f
 
 static void quat_mult(const float p[4], const float q[4], float r[4]);
