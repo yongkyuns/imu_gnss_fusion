@@ -4,6 +4,7 @@ use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
 use align_rs::align::{AlignConfig, GRAVITY_MPS2};
+use align_rs::{AlignNhc, AlignNhcConfig};
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use sim::ubxlog::{
@@ -12,7 +13,8 @@ use sim::ubxlog::{
 };
 use sim::visualizer::math::nearest_master_ms;
 use sim::visualizer::pipeline::align_replay::{
-    BootstrapConfig, axis_angle_deg, build_align_replay, quat_rotate, signed_projected_axis_angle_deg,
+    BootstrapConfig, axis_angle_deg, build_align_replay, interpolate_alg_quat, quat_rotate,
+    quat_rpy_alg_deg, signed_projected_axis_angle_deg,
 };
 use sim::visualizer::pipeline::timebase::{MasterTimeline, build_master_timeline};
 
@@ -45,6 +47,9 @@ struct Args {
 
     #[arg(long, default_value_t = false)]
     tune: bool,
+
+    #[arg(long, default_value = "align")]
+    filter_mode: String,
 
     #[arg(long, default_value_t = 2)]
     tune_passes: usize,
@@ -110,6 +115,7 @@ struct BootstrapDetector {
     accel_err_ema: Option<f32>,
     speed_ema: Option<f32>,
     stationary_accel: Vec<[f32; 3]>,
+    stationary_gyro: Vec<[f32; 3]>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -144,6 +150,12 @@ struct ResidualSample {
     long_imu_lat_lp_mps2: f64,
     long_angle_err_deg: f64,
     long_angle_err_signed_deg: f64,
+    nhc_valid: bool,
+    nhc_residual_vy_mps: f64,
+    nhc_residual_vz_mps: f64,
+    planar_gyro_valid: bool,
+    planar_gyro_residual_x_dps: f64,
+    planar_gyro_residual_y_dps: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -294,6 +306,7 @@ impl TuneParam {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    let filter_mode = parse_filter_mode(&args.filter_mode)?;
     let cfg = config_from_args(&args);
     let bootstrap_cfg = bootstrap_config_from_args(&args, &cfg);
     let dataset = load_dataset(&args.logfile, args.max_records, args.alg_valid_only)?;
@@ -303,11 +316,14 @@ fn main() -> Result<()> {
         eprintln!("wrote bootstrap debug CSV: {}", path.display());
     }
 
-    let base = evaluate_config(&dataset, &cfg, &bootstrap_cfg)?;
+    let base = evaluate_dispatch(filter_mode, &dataset, &cfg, &bootstrap_cfg)?;
     print_metrics("baseline", &base.metrics);
 
     let mut best = base;
     if args.tune {
+        if !matches!(filter_mode, FilterMode::Align) {
+            bail!("tuning is only supported for --filter-mode align");
+        }
         let tuned = tune_config(&dataset, &best.cfg, &bootstrap_cfg, args.tune_passes)?;
         best = tuned;
         print_metrics("best", &best.metrics);
@@ -322,6 +338,20 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FilterMode {
+    Align,
+    Nhc,
+}
+
+fn parse_filter_mode(s: &str) -> Result<FilterMode> {
+    match s {
+        "align" => Ok(FilterMode::Align),
+        "nhc" => Ok(FilterMode::Nhc),
+        _ => bail!("unknown --filter-mode {}, expected align or nhc", s),
+    }
 }
 
 fn config_from_args(args: &Args) -> AlignConfig {
@@ -557,6 +587,7 @@ impl BootstrapDetector {
             accel_err_ema: None,
             speed_ema: None,
             stationary_accel: Vec::new(),
+            stationary_gyro: Vec::new(),
         }
     }
 
@@ -577,8 +608,10 @@ impl BootstrapDetector {
 
         if stationary {
             self.stationary_accel.push(accel_b);
+            self.stationary_gyro.push(gyro_radps);
         } else {
             self.stationary_accel.clear();
+            self.stationary_gyro.clear();
         }
         self.stationary_accel.len() >= self.cfg.stationary_samples
     }
@@ -706,8 +739,244 @@ fn evaluate_config(
                 long_imu_lat_lp_mps2: sample.long_trace.imu_lat_lp_mps2,
                 long_angle_err_deg: sample.long_trace.angle_err_deg.abs(),
                 long_angle_err_signed_deg: sample.long_trace.angle_err_deg,
+                nhc_valid: false,
+                nhc_residual_vy_mps: f64::NAN,
+                nhc_residual_vz_mps: f64::NAN,
+                planar_gyro_valid: false,
+                planar_gyro_residual_x_dps: f64::NAN,
+                planar_gyro_residual_y_dps: f64::NAN,
             });
         }
+    }
+
+    let metrics = score_samples(&samples, dataset.total_nav_events, init_time_s);
+    Ok(EvalResult {
+        cfg: *cfg,
+        bootstrap_cfg: *bootstrap_cfg,
+        metrics,
+        samples,
+    })
+}
+
+fn evaluate_dispatch(
+    mode: FilterMode,
+    dataset: &AlignDataset,
+    cfg: &AlignConfig,
+    bootstrap_cfg: &BootstrapConfig,
+) -> Result<EvalResult> {
+    match mode {
+        FilterMode::Align => evaluate_config(dataset, cfg, bootstrap_cfg),
+        FilterMode::Nhc => evaluate_nhc(dataset, cfg, bootstrap_cfg),
+    }
+}
+
+fn evaluate_nhc(
+    dataset: &AlignDataset,
+    cfg: &AlignConfig,
+    bootstrap_cfg: &BootstrapConfig,
+) -> Result<EvalResult> {
+    let imu_packets = build_imu_packets(&dataset.frames, &dataset.timeline)?;
+    let nav_events = collect_nav_events(&dataset.frames, &dataset.timeline);
+    if nav_events.len() < 2 {
+        bail!("need at least two NAV2-PVT observations");
+    }
+
+    let replay_ref = build_align_replay(&dataset.frames, &dataset.timeline, *cfg, *bootstrap_cfg);
+    let final_alg_q = replay_ref.final_alg_q;
+
+    let mut nhc = AlignNhc::new(AlignNhcConfig::default());
+    let mut bootstrap = BootstrapDetector::new(*bootstrap_cfg);
+    let mut initialized = false;
+    let mut nav_yaw_seeded = false;
+    let mut init_time_s = f64::NAN;
+    let mut samples = Vec::<ResidualSample>::new();
+
+    let mut scan_idx = 0usize;
+    let mut interval_start_idx = 0usize;
+    let mut prev_nav: Option<(f64, NavPvtObs)> = None;
+
+    for (tn, nav) in &nav_events {
+        while scan_idx < imu_packets.len() && imu_packets[scan_idx].t_ms <= *tn {
+            let pkt = &imu_packets[scan_idx];
+            let gyro_radps = [
+                pkt.gx_dps.to_radians() as f32,
+                pkt.gy_dps.to_radians() as f32,
+                pkt.gz_dps.to_radians() as f32,
+            ];
+            let accel_b = [pkt.ax_mps2 as f32, pkt.ay_mps2 as f32, pkt.az_mps2 as f32];
+            if !initialized {
+                let speed_mps = speed_for_bootstrap(prev_nav, (*tn, *nav), pkt.t_ms) as f32;
+                if bootstrap.update(accel_b, gyro_radps, speed_mps)
+                    && nhc
+                        .initialize_from_stationary(
+                            &bootstrap.stationary_accel,
+                            &bootstrap.stationary_gyro,
+                            0.0,
+                            [1.0, 0.0, 0.0, 0.0],
+                        )
+                        .is_ok()
+                {
+                    initialized = true;
+                    init_time_s = (pkt.t_ms - dataset.timeline.t0_master_ms) * 1.0e-3;
+                }
+            }
+            scan_idx += 1;
+        }
+
+        if initialized && !nav_yaw_seeded {
+            let speed_h = (nav.vel_n_mps * nav.vel_n_mps + nav.vel_e_mps * nav.vel_e_mps).sqrt();
+            if speed_h >= 5.0 / 3.6 {
+                nhc.seed_nav_yaw_from_course(nav.vel_e_mps.atan2(nav.vel_n_mps) as f32, 5.0_f32.to_radians());
+                nav_yaw_seeded = true;
+            }
+        }
+
+        if let Some((t_prev, nav_prev)) = prev_nav {
+            let interval_packets = &imu_packets[interval_start_idx..scan_idx];
+            if initialized && !interval_packets.is_empty() {
+                let mut last_t = t_prev;
+                for pkt in interval_packets {
+                    let dt = ((pkt.t_ms - last_t) * 1.0e-3).max(1.0e-3) as f32;
+                    nhc.predict_imu(
+                        dt,
+                        [pkt.ax_mps2 as f32, pkt.ay_mps2 as f32, pkt.az_mps2 as f32],
+                        [
+                            pkt.gx_dps.to_radians() as f32,
+                            pkt.gy_dps.to_radians() as f32,
+                            pkt.gz_dps.to_radians() as f32,
+                        ],
+                    );
+                    last_t = pkt.t_ms;
+                }
+
+                let v_prev = [nav_prev.vel_n_mps, nav_prev.vel_e_mps];
+                let v_curr = [nav.vel_n_mps, nav.vel_e_mps];
+                let dt_nav = ((*tn - t_prev) * 1.0e-3).max(1.0e-3);
+                let course_prev = v_prev[1].atan2(v_prev[0]);
+                let course_curr = v_curr[1].atan2(v_curr[0]);
+                let course_rate_dps =
+                    wrap_rad_pi(course_curr - course_prev).to_degrees() / dt_nav;
+                let a_n = [
+                    (nav.vel_n_mps - nav_prev.vel_n_mps) / dt_nav,
+                    (nav.vel_e_mps - nav_prev.vel_e_mps) / dt_nav,
+                ];
+                let v_mid = [0.5 * (v_prev[0] + v_curr[0]), 0.5 * (v_prev[1] + v_curr[1])];
+                let (a_long, a_lat) = if let Some(t_hat) = normalize2(v_mid) {
+                    let lat_hat = [-t_hat[1], t_hat[0]];
+                    (
+                        t_hat[0] * a_n[0] + t_hat[1] * a_n[1],
+                        lat_hat[0] * a_n[0] + lat_hat[1] * a_n[1],
+                    )
+                } else {
+                    (0.0, 0.0)
+                };
+
+                let speed_prev = (v_prev[0] * v_prev[0] + v_prev[1] * v_prev[1]).sqrt() as f32;
+                let speed_curr = (v_curr[0] * v_curr[0] + v_curr[1] * v_curr[1]).sqrt() as f32;
+                let speed_mid = 0.5_f32 * (speed_prev + speed_curr);
+                let turn_valid = speed_mid > cfg.min_speed_mps
+                    && course_rate_dps.abs() > cfg.min_turn_rate_radps.to_degrees() as f64
+                    && a_lat.abs() > cfg.min_lat_acc_mps2 as f64;
+
+                let omega_last_b = interval_packets
+                    .last()
+                    .map(|pkt| {
+                        [
+                            pkt.gx_dps.to_radians() as f32,
+                            pkt.gy_dps.to_radians() as f32,
+                            pkt.gz_dps.to_radians() as f32,
+                        ]
+                    })
+                    .unwrap_or([0.0, 0.0, 0.0]);
+
+                let (_, nhc_trace) = nhc.update_all(
+                    [
+                        nav.vel_n_mps as f32,
+                        nav.vel_e_mps as f32,
+                        nav.vel_d_mps as f32,
+                    ],
+                    omega_last_b,
+                    speed_mid > cfg.min_speed_mps,
+                    turn_valid && cfg.use_turn_gyro,
+                );
+
+                let q_align = [
+                    nhc.q_vb[0] as f64,
+                    nhc.q_vb[1] as f64,
+                    nhc.q_vb[2] as f64,
+                    nhc.q_vb[3] as f64,
+                ];
+                let align_rpy_deg = {
+                    let (r, p, y) = quat_rpy_alg_deg(q_align[0], q_align[1], q_align[2], q_align[3]);
+                    [r, p, y]
+                };
+                let alg_q = interpolate_alg_quat(&replay_ref.alg_events, *tn);
+                let alg_rpy_deg = alg_q.map(|q| {
+                    let (r, p, y) = quat_rpy_alg_deg(q[0], q[1], q[2], q[3]);
+                    [r, p, y]
+                });
+                if let (Some(q_alg), Some(alg_rpy_deg)) = (alg_q, alg_rpy_deg) {
+                    let q_ref_axis = final_alg_q.unwrap_or(q_alg);
+                    let err_roll_deg = wrap_deg180(align_rpy_deg[0] - alg_rpy_deg[0]);
+                    let err_pitch_deg = align_rpy_deg[1] - alg_rpy_deg[1];
+                    let err_yaw_deg = wrap_deg180(align_rpy_deg[2] - alg_rpy_deg[2]);
+                    samples.push(ResidualSample {
+                        t_s: (*tn - dataset.timeline.t0_master_ms) * 1.0e-3,
+                        align_roll_deg: align_rpy_deg[0],
+                        align_pitch_deg: align_rpy_deg[1],
+                        align_yaw_deg: align_rpy_deg[2],
+                        alg_roll_deg: alg_rpy_deg[0],
+                        alg_pitch_deg: alg_rpy_deg[1],
+                        alg_yaw_deg: alg_rpy_deg[2],
+                        err_roll_deg,
+                        err_pitch_deg,
+                        err_yaw_deg,
+                        sigma_roll_deg: nhc.P[6][6].sqrt().to_degrees() as f64,
+                        sigma_pitch_deg: nhc.P[7][7].sqrt().to_degrees() as f64,
+                        sigma_yaw_deg: nhc.P[8][8].sqrt().to_degrees() as f64,
+                        course_rate_dps,
+                        a_lat_mps2: a_lat,
+                        a_long_mps2: a_long,
+                        rot_err_deg: quat_angle_deg(q_align, q_alg),
+                        fwd_err_deg: axis_angle_deg(
+                            quat_rotate(q_align, [1.0, 0.0, 0.0]),
+                            quat_rotate(q_ref_axis, [1.0, 0.0, 0.0]),
+                        ),
+                        down_err_deg: axis_angle_deg(
+                            quat_rotate(q_align, [0.0, 0.0, 1.0]),
+                            quat_rotate(q_ref_axis, [0.0, 0.0, 1.0]),
+                        ),
+                        fwd_err_signed_deg: signed_projected_axis_angle_deg(
+                            quat_rotate(q_align, [1.0, 0.0, 0.0]),
+                            quat_rotate(q_ref_axis, [1.0, 0.0, 0.0]),
+                            quat_rotate(q_ref_axis, [0.0, 0.0, 1.0]),
+                        ),
+                        down_err_signed_deg: signed_projected_axis_angle_deg(
+                            quat_rotate(q_align, [0.0, 0.0, 1.0]),
+                            quat_rotate(q_ref_axis, [0.0, 0.0, 1.0]),
+                            quat_rotate(q_ref_axis, [0.0, 1.0, 0.0]),
+                        ),
+                        long_base_valid: false,
+                        long_emitted: false,
+                        long_stable_windows: 0,
+                        long_gnss_long_lp_mps2: f64::NAN,
+                        long_gnss_lat_lp_mps2: f64::NAN,
+                        long_imu_long_lp_mps2: f64::NAN,
+                        long_imu_lat_lp_mps2: f64::NAN,
+                        long_angle_err_deg: f64::NAN,
+                        long_angle_err_signed_deg: f64::NAN,
+                        nhc_valid: nhc_trace.nhc_valid,
+                        nhc_residual_vy_mps: nhc_trace.nhc_residual_vy_mps as f64,
+                        nhc_residual_vz_mps: nhc_trace.nhc_residual_vz_mps as f64,
+                        planar_gyro_valid: nhc_trace.planar_gyro_valid,
+                        planar_gyro_residual_x_dps: nhc_trace.planar_gyro_residual_x_radps.to_degrees() as f64,
+                        planar_gyro_residual_y_dps: nhc_trace.planar_gyro_residual_y_radps.to_degrees() as f64,
+                    });
+                }
+            }
+        }
+        prev_nav = Some((*tn, *nav));
+        interval_start_idx = scan_idx;
     }
 
     let metrics = score_samples(&samples, dataset.total_nav_events, init_time_s);
@@ -1017,12 +1286,12 @@ fn write_residual_csv(path: &PathBuf, samples: &[ResidualSample]) -> Result<()> 
     let mut w = BufWriter::new(file);
     writeln!(
         w,
-        "t_s,align_roll_deg,align_pitch_deg,align_yaw_deg,alg_roll_deg,alg_pitch_deg,alg_yaw_deg,err_roll_deg,err_pitch_deg,err_yaw_deg,sigma_roll_deg,sigma_pitch_deg,sigma_yaw_deg,course_rate_dps,a_lat_mps2,a_long_mps2,rot_err_deg,fwd_err_deg,down_err_deg,fwd_err_signed_deg,down_err_signed_deg,long_base_valid,long_emitted,long_stable_windows,long_gnss_long_lp_mps2,long_gnss_lat_lp_mps2,long_imu_long_lp_mps2,long_imu_lat_lp_mps2,long_angle_err_deg,long_angle_err_signed_deg"
+        "t_s,align_roll_deg,align_pitch_deg,align_yaw_deg,alg_roll_deg,alg_pitch_deg,alg_yaw_deg,err_roll_deg,err_pitch_deg,err_yaw_deg,sigma_roll_deg,sigma_pitch_deg,sigma_yaw_deg,course_rate_dps,a_lat_mps2,a_long_mps2,rot_err_deg,fwd_err_deg,down_err_deg,fwd_err_signed_deg,down_err_signed_deg,long_base_valid,long_emitted,long_stable_windows,long_gnss_long_lp_mps2,long_gnss_lat_lp_mps2,long_imu_long_lp_mps2,long_imu_lat_lp_mps2,long_angle_err_deg,long_angle_err_signed_deg,nhc_valid,nhc_residual_vy_mps,nhc_residual_vz_mps,planar_gyro_valid,planar_gyro_residual_x_dps,planar_gyro_residual_y_dps"
     )?;
     for s in samples {
         writeln!(
             w,
-            "{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
+            "{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{:.6},{:.6},{},{:.6},{:.6}",
             s.t_s,
             s.align_roll_deg,
             s.align_pitch_deg,
@@ -1052,7 +1321,13 @@ fn write_residual_csv(path: &PathBuf, samples: &[ResidualSample]) -> Result<()> 
             s.long_imu_long_lp_mps2,
             s.long_imu_lat_lp_mps2,
             s.long_angle_err_deg,
-            s.long_angle_err_signed_deg
+            s.long_angle_err_signed_deg,
+            s.nhc_valid as u8,
+            s.nhc_residual_vy_mps,
+            s.nhc_residual_vz_mps,
+            s.planar_gyro_valid as u8,
+            s.planar_gyro_residual_x_dps,
+            s.planar_gyro_residual_y_dps
         )?;
     }
     Ok(())
@@ -1112,6 +1387,19 @@ fn speed_for_bootstrap(
 
 fn horizontal_speed(nav: NavPvtObs) -> f64 {
     (nav.vel_n_mps * nav.vel_n_mps + nav.vel_e_mps * nav.vel_e_mps).sqrt()
+}
+
+fn normalize2(v: [f64; 2]) -> Option<[f64; 2]> {
+    let n = (v[0] * v[0] + v[1] * v[1]).sqrt();
+    if n <= 1.0e-12 {
+        None
+    } else {
+        Some([v[0] / n, v[1] / n])
+    }
+}
+
+fn wrap_rad_pi(x: f64) -> f64 {
+    (x + std::f64::consts::PI).rem_euclid(2.0 * std::f64::consts::PI) - std::f64::consts::PI
 }
 
 fn norm3(v: [f32; 3]) -> f32 {
