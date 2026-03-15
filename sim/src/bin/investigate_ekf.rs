@@ -72,6 +72,9 @@ struct Metrics {
     rmse_vel_h: f64,
     rmse_yaw_deg: f64,
     mean_abs_yaw_deg: f64,
+    n_yaw_win: usize,
+    rmse_yaw_win_deg: f64,
+    mean_abs_yaw_win_deg: f64,
     rmse_yaw_fast_deg: f64,
     mean_abs_yaw_fast_deg: f64,
     n_roll: usize,
@@ -312,6 +315,9 @@ fn run_config(
     let mut se_vel_h = 0.0_f64;
     let mut se_yaw = 0.0_f64;
     let mut sae_yaw = 0.0_f64;
+    let mut n_yaw_win = 0usize;
+    let mut se_yaw_win = 0.0_f64;
+    let mut sae_yaw_win = 0.0_f64;
     let mut n_yaw_fast = 0usize;
     let mut se_yaw_fast = 0.0_f64;
     let mut sae_yaw_fast = 0.0_f64;
@@ -540,6 +546,12 @@ fn run_config(
             se_vel_h += vel_h_err * vel_h_err;
             se_yaw += yaw_err * yaw_err;
             sae_yaw += yaw_err.abs();
+            let t_rel_s = (pkt.t_ms - t0_ms) * 1e-3;
+            if t_rel_s >= window_start_s && t_rel_s <= window_end_s {
+                n_yaw_win += 1;
+                se_yaw_win += yaw_err * yaw_err;
+                sae_yaw_win += yaw_err.abs();
+            }
             let speed_h = nav.vel_n_mps.hypot(nav.vel_e_mps);
             if speed_h > 2.0 {
                 n_yaw_fast += 1;
@@ -558,6 +570,17 @@ fn run_config(
         rmse_vel_h: (se_vel_h / n as f64).sqrt(),
         rmse_yaw_deg: (se_yaw / n as f64).sqrt(),
         mean_abs_yaw_deg: sae_yaw / n as f64,
+        n_yaw_win,
+        rmse_yaw_win_deg: if n_yaw_win > 0 {
+            (se_yaw_win / n_yaw_win as f64).sqrt()
+        } else {
+            0.0
+        },
+        mean_abs_yaw_win_deg: if n_yaw_win > 0 {
+            sae_yaw_win / n_yaw_win as f64
+        } else {
+            0.0
+        },
         rmse_yaw_fast_deg: if n_yaw_fast > 0 {
             (se_yaw_fast / n_yaw_fast as f64).sqrt()
         } else {
@@ -949,7 +972,7 @@ fn main() -> Result<()> {
     ];
 
     println!(
-        "window: [{:.3}, {:.3}] s (relative)\n{:<22} {:>6} {:>8} {:>8} {:>8} {:>8} {:>8} {:>9} {:>9}",
+        "window: [{:.3}, {:.3}] s (relative)\n{:<22} {:>6} {:>8} {:>8} {:>8} {:>8} {:>8} {:>9} {:>9} {:>9}",
         args.window_start_s,
         args.window_end_s,
         "config",
@@ -957,6 +980,7 @@ fn main() -> Result<()> {
         "pos_h",
         "vel_h",
         "yaw",
+        "yaw_w",
         "roll",
         "roll_mae",
         "roll_w",
@@ -975,12 +999,13 @@ fn main() -> Result<()> {
             args.window_end_s,
         );
         println!(
-            "{:<22} {:>6} {:>8.3} {:>8.3} {:>8.3} {:>8.3} {:>8.3} {:>9.3} {:>9.3}",
+            "{:<22} {:>6} {:>8.3} {:>8.3} {:>8.3} {:>8.3} {:>8.3} {:>9.3} {:>9.3} {:>9.3}",
             cfg.name,
             m.n,
             m.rmse_pos_h,
             m.rmse_vel_h,
             m.rmse_yaw_deg,
+            m.rmse_yaw_win_deg,
             m.rmse_roll_deg,
             m.mean_abs_roll_deg,
             m.rmse_roll_win_deg,
@@ -992,9 +1017,10 @@ fn main() -> Result<()> {
     scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     if let Some((score, name, m)) = scored.first() {
         println!(
-            "\nBEST: {} score={:.3} roll_win_rmse={:.3} roll_win_mae={:.3} roll_rmse={:.3} pos_h={:.3}",
+            "\nBEST: {} score={:.3} yaw_win_rmse={:.3} roll_win_rmse={:.3} roll_win_mae={:.3} roll_rmse={:.3} pos_h={:.3}",
             name,
             score,
+            m.rmse_yaw_win_deg,
             m.rmse_roll_win_deg,
             m.mean_abs_roll_win_deg,
             m.rmse_roll_deg,

@@ -9803,6 +9803,7 @@ dependencies = [
  "egui",
  "egui_plot",
  "ekf-rs",
+ "nalgebra",
  "polars",
  "serde",
  "serde_json",

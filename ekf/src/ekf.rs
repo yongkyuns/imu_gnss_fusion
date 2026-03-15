@@ -292,6 +292,11 @@ pub fn ekf_fuse_body_vel(ekf: &mut Ekf, R_body_vel: f32) {
     ekf_fuse_body_vel_z(ekf, R_body_vel);
 }
 
+pub fn ekf_fuse_vehicle_vel(ekf: &mut Ekf, q_vb: [f32; 4], r_vehicle_vel: f32) {
+    ekf_fuse_vehicle_vel_axis(ekf, q_vb, r_vehicle_vel, 1);
+    ekf_fuse_vehicle_vel_axis(ekf, q_vb, r_vehicle_vel, 2);
+}
+
 fn fuse_measurement(ekf: &mut Ekf, innovation: f32, H: &[f32; N_STATES], K: &[f32; N_STATES]) {
     let p_old = ekf.p;
 
@@ -433,4 +438,81 @@ fn ekf_fuse_body_vel_z(ekf: &mut Ekf, R_BODY_VEL: f32) {
 
     include!("ekf_generated/body_vel_z_generated.rs");
     fuse_measurement(ekf, innovation, &H, &K);
+}
+
+fn ekf_fuse_vehicle_vel_axis(ekf: &mut Ekf, q_vb: [f32; 4], r_vehicle_vel: f32, axis: usize) {
+    let pred = vehicle_velocity_prediction(&ekf.state, q_vb);
+    let innovation = -pred[axis - 1];
+    let h = vehicle_vel_jacobian_row(&ekf.state, q_vb, axis);
+
+    let p_old = ekf.p;
+    let mut ph = [0.0_f32; N_STATES];
+    for i in 0..N_STATES {
+        for (j, hj) in h.iter().enumerate() {
+            ph[i] += p_old[i][j] * *hj;
+        }
+    }
+
+    let mut s = r_vehicle_vel.max(1.0e-9);
+    for j in 0..N_STATES {
+        s += h[j] * ph[j];
+    }
+    let inv_s = if s > 1.0e-9 { 1.0 / s } else { 0.0 };
+
+    let mut k = [0.0_f32; N_STATES];
+    for i in 0..N_STATES {
+        k[i] = ph[i] * inv_s;
+    }
+
+    fuse_measurement(ekf, innovation, &h, &k);
+}
+
+fn vehicle_velocity_prediction(state: &EkfState, q_vb: [f32; 4]) -> [f32; 2] {
+    let c_n_b = quat2rot(&[state.q0, state.q1, state.q2, state.q3]);
+    let c_b_n = transpose3(c_n_b);
+    let v_n = [state.vn, state.ve, state.vd];
+    let v_b = mat3_vec(c_b_n, v_n);
+    let v_v = mat3_vec(quat2rot(&q_vb), v_b);
+    [v_v[1], v_v[2]]
+}
+
+fn vehicle_vel_jacobian_row(state: &EkfState, q_vb: [f32; 4], axis: usize) -> [f32; N_STATES] {
+    let base = vehicle_velocity_prediction(state, q_vb)[axis - 1];
+    let mut h = [0.0_f32; N_STATES];
+    let eps = 1.0e-5_f32;
+    for idx in 0..7 {
+        let mut perturbed = *state;
+        match idx {
+            0 => perturbed.q0 += eps,
+            1 => perturbed.q1 += eps,
+            2 => perturbed.q2 += eps,
+            3 => perturbed.q3 += eps,
+            4 => perturbed.vn += eps,
+            5 => perturbed.ve += eps,
+            6 => perturbed.vd += eps,
+            _ => unreachable!(),
+        }
+        normalize_state_quat(&mut perturbed);
+        let shifted = vehicle_velocity_prediction(&perturbed, q_vb)[axis - 1];
+        h[idx] = (shifted - base) / eps;
+    }
+    h
+}
+
+#[inline]
+fn transpose3(m: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
+    [
+        [m[0][0], m[1][0], m[2][0]],
+        [m[0][1], m[1][1], m[2][1]],
+        [m[0][2], m[1][2], m[2][2]],
+    ]
+}
+
+#[inline]
+fn mat3_vec(m: [[f32; 3]; 3], v: [f32; 3]) -> [f32; 3] {
+    [
+        m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+        m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+        m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2],
+    ]
 }
