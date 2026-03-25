@@ -178,6 +178,7 @@ impl eframe::App for App {
                 ui.selectable_value(&mut self.page, Page::EkfCompare, "EKF Compare");
                 ui.selectable_value(&mut self.page, Page::MisalignCompare, "Misalign Compare");
                 ui.selectable_value(&mut self.page, Page::AlignCompare, "Align Compare");
+                ui.selectable_value(&mut self.page, Page::AlignStartup, "Align Startup");
                 ui.selectable_value(&mut self.page, Page::AlignNhcCompare, "Align NHC");
                 ui.selectable_value(&mut self.page, Page::AlignPcaVectors, "PCA Vectors");
                 ui.selectable_value(&mut self.page, Page::MapDark, "Map (Dark)");
@@ -457,6 +458,45 @@ impl eframe::App for App {
                         ui,
                         "Align Covariance Diagonal",
                         &self.data.align_cov,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                });
+            }
+            Page::AlignStartup => {
+                let half_width = (ctx.content_rect().width() * 0.5).max(260.0);
+                egui::SidePanel::left("align_startup_left")
+                    .resizable(false)
+                    .exact_width(half_width)
+                    .show(ctx, |ui| {
+                        draw_plot(
+                            ui,
+                            "Unified Startup Components",
+                            &self.data.align_startup,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "Unified Startup Angles",
+                            &self.data.align_startup_angles,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                    });
+
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    draw_plot(
+                        ui,
+                        "Align Window Diagnostics",
+                        &self.data.align_res_vel,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "Align Axis Error vs ESF-ALG",
+                        &self.data.align_axis_err,
                         true,
                         self.max_points_per_trace,
                     );

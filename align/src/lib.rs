@@ -6,6 +6,7 @@ pub(crate) mod longitudinal;
 pub mod misalign_coarse;
 pub(crate) mod stationary_mount;
 pub(crate) mod yaw_pca;
+pub mod yaw_startup;
 pub use align::*;
 pub use align_misalign::{
     ALIGN_MISALIGN_STATES, AlignMisalign, AlignMisalignConfig, AlignMisalignTrace,

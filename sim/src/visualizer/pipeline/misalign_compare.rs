@@ -626,7 +626,10 @@ fn resolve_misalign_yaw_seed(
     for k in 0..=steps {
         let yaw_deg = center_yaw_deg as f32 - search_half_span_deg + k as f32 * yaw_step_deg;
         let mut cand = base.clone();
-        cand.set_mount_yaw(wrap_rad_pi(yaw_deg.to_radians() as f64) as f32, 5.0_f32.to_radians());
+        cand.set_mount_yaw(
+            wrap_rad_pi(yaw_deg.to_radians() as f64) as f32,
+            5.0_f32.to_radians(),
+        );
         let mut cost = 0.0_f32;
         let mut n_terms = 0usize;
         for sample in samples {

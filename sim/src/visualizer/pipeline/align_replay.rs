@@ -1,6 +1,10 @@
 use std::cmp::Ordering;
 
-use align_rs::align::{Align, AlignConfig, AlignUpdateTrace, AlignWindowSummary, GRAVITY_MPS2};
+use align_rs::align::{
+    Align, AlignConfig, AlignUpdateTrace, AlignWindowSummary, GRAVITY_MPS2,
+    leveled_horiz_accel_xy,
+};
+use align_rs::yaw_startup::{YawStartupConfig, YawStartupInitializer, YawStartupSample};
 
 use crate::ubxlog::{
     NavPvtObs, UbxFrame, extract_esf_alg, extract_esf_raw_samples, extract_nav2_pvt_obs,
@@ -55,6 +59,20 @@ pub struct LongTraceSample {
     pub angle_err_deg: f64,
 }
 
+#[derive(Clone, Copy, Default)]
+pub struct StartupTraceSample {
+    pub gnss_long_lp_mps2: f64,
+    pub gnss_lat_lp_mps2: f64,
+    pub imu_long_lp_mps2: f64,
+    pub imu_lat_lp_mps2: f64,
+    pub gate_valid: bool,
+    pub accepted: bool,
+    pub stable_windows: usize,
+    pub sample_count: usize,
+    pub alignment_score: f64,
+    pub emitted: bool,
+}
+
 #[derive(Clone, Copy)]
 pub struct AlignReplaySample {
     pub t_ms: f64,
@@ -78,6 +96,7 @@ pub struct AlignReplaySample {
     pub contrib: AlignEulerContrib,
     pub p_diag: [f64; 3],
     pub long_trace: LongTraceSample,
+    pub startup_trace: StartupTraceSample,
     pub pca_input_long_mps2: f64,
     pub pca_input_lat_mps2: f64,
 }
@@ -197,6 +216,18 @@ pub fn build_align_replay(
     imu_packets.sort_by(|a, b| a.t_ms.partial_cmp(&b.t_ms).unwrap_or(Ordering::Equal));
 
     let mut align = Align::new(cfg);
+    let startup_cfg = YawStartupConfig {
+        enabled: true,
+        alpha: cfg.long_lpf_alpha,
+        min_speed_mps: cfg.startup_min_speed_mps,
+        min_horiz_acc_mps2: cfg.startup_min_horiz_acc_mps2,
+        min_stable_windows: cfg.startup_min_stable_windows,
+        min_windows: cfg.startup_min_windows,
+        max_windows: cfg.startup_max_windows,
+        min_alignment_score: cfg.startup_min_vector_concentration,
+    };
+    let mut startup_diag = YawStartupInitializer::new();
+    startup_diag.reset(true);
     let mut bootstrap = BootstrapDetector::new(bootstrap_cfg);
     let mut align_initialized = false;
     let mut scan_idx = 0usize;
@@ -336,6 +367,52 @@ pub fn build_align_replay(
                     imu_lat_lp_mps2: long_trace.imu_lat_lp_mps2 as f64,
                     angle_err_deg: (long_trace.angle_err_rad as f64).to_degrees(),
                 };
+                let pca_horiz_xy = trace.pca_input_xy.unwrap_or_else(|| {
+                    let g_norm = (align.gravity_lp_b[0] * align.gravity_lp_b[0]
+                        + align.gravity_lp_b[1] * align.gravity_lp_b[1]
+                        + align.gravity_lp_b[2] * align.gravity_lp_b[2])
+                        .sqrt();
+                    let horiz_accel_b = if g_norm > 1.0e-6 {
+                        let g_hat_b = [
+                            align.gravity_lp_b[0] / g_norm,
+                            align.gravity_lp_b[1] / g_norm,
+                            align.gravity_lp_b[2] / g_norm,
+                        ];
+                        let accel_proj = mean_accel_b[0] * g_hat_b[0]
+                            + mean_accel_b[1] * g_hat_b[1]
+                            + mean_accel_b[2] * g_hat_b[2];
+                        [
+                            mean_accel_b[0] - g_hat_b[0] * accel_proj,
+                            mean_accel_b[1] - g_hat_b[1] * accel_proj,
+                            mean_accel_b[2] - g_hat_b[2] * accel_proj,
+                        ]
+                    } else {
+                        mean_accel_b
+                    };
+                    leveled_horiz_accel_xy(align.gravity_lp_b, horiz_accel_b)
+                        .unwrap_or([horiz_accel_b[0], horiz_accel_b[1]])
+                });
+                let (_, startup_trace) = startup_diag.update_with_trace(
+                    startup_cfg,
+                    YawStartupSample {
+                        speed_mps: speed_mid,
+                        horiz_accel_xy: pca_horiz_xy,
+                        gnss_long_mps2: a_long as f32,
+                        gnss_lat_mps2: a_lat as f32,
+                    },
+                );
+                let startup_trace = StartupTraceSample {
+                    gnss_long_lp_mps2: startup_trace.gnss_long_lp_mps2 as f64,
+                    gnss_lat_lp_mps2: startup_trace.gnss_lat_lp_mps2 as f64,
+                    imu_long_lp_mps2: startup_trace.imu_long_lp_mps2 as f64,
+                    imu_lat_lp_mps2: startup_trace.imu_lat_lp_mps2 as f64,
+                    gate_valid: startup_trace.gate_valid,
+                    accepted: startup_trace.accepted,
+                    stable_windows: startup_trace.stable_windows,
+                    sample_count: startup_trace.sample_count,
+                    alignment_score: startup_trace.alignment_score as f64,
+                    emitted: startup_trace.emitted,
+                };
 
                 samples.push(AlignReplaySample {
                     t_ms: *tn,
@@ -363,6 +440,7 @@ pub fn build_align_replay(
                         align.P[2][2] as f64,
                     ],
                     long_trace,
+                    startup_trace,
                     pca_input_long_mps2: trace
                         .pca_input_xy
                         .map(|xy| xy[0] as f64)

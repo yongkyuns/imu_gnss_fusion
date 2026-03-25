@@ -4,8 +4,9 @@ use std::collections::VecDeque;
 use crate::ubxlog::{UbxFrame, extract_esf_alg};
 
 use super::align_replay::{
-    BootstrapConfig as ReplayBootstrapConfig, build_align_replay, frd_mount_quat_to_esf_alg_flu_quat,
-    quat_rotate, quat_rpy_alg_deg, signed_projected_axis_angle_deg,
+    BootstrapConfig as ReplayBootstrapConfig, build_align_replay,
+    frd_mount_quat_to_esf_alg_flu_quat, quat_rotate, quat_rpy_alg_deg,
+    signed_projected_axis_angle_deg,
 };
 
 use super::super::math::nearest_master_ms;
@@ -17,6 +18,8 @@ pub struct AlignCompareData {
     pub res_vel: Vec<Trace>,
     pub axis_err: Vec<Trace>,
     pub motion: Vec<Trace>,
+    pub startup: Vec<Trace>,
+    pub startup_angles: Vec<Trace>,
     pub pca_vectors: Vec<Trace>,
     pub roll_contrib: Vec<Trace>,
     pub pitch_contrib: Vec<Trace>,
@@ -31,6 +34,8 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
             res_vel: Vec::new(),
             axis_err: Vec::new(),
             motion: Vec::new(),
+            startup: Vec::new(),
+            startup_angles: Vec::new(),
             pca_vectors: Vec::new(),
             roll_contrib: Vec::new(),
             pitch_contrib: Vec::new(),
@@ -65,6 +70,15 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
     let mut final_alg_heading = Vec::<[f64; 2]>::new();
     let mut instantaneous_pca_heading = Vec::<[f64; 2]>::new();
     let mut cumulative_pca_heading = Vec::<[f64; 2]>::new();
+    let mut startup_gnss_long = Vec::<[f64; 2]>::new();
+    let mut startup_gnss_lat = Vec::<[f64; 2]>::new();
+    let mut startup_imu_long = Vec::<[f64; 2]>::new();
+    let mut startup_imu_lat = Vec::<[f64; 2]>::new();
+    let mut startup_gnss_ang = Vec::<[f64; 2]>::new();
+    let mut startup_imu_ang = Vec::<[f64; 2]>::new();
+    let mut startup_ang_err = Vec::<[f64; 2]>::new();
+    let mut startup_gate = Vec::<[f64; 2]>::new();
+    let mut startup_accept = Vec::<[f64; 2]>::new();
     let mut imu_pca_points = Vec::<[f64; 2]>::new();
     let mut gnss_pca_points = Vec::<[f64; 2]>::new();
     let mut roll_turn_gyro = Vec::<[f64; 2]>::new();
@@ -107,6 +121,25 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
         diag_course.push([t, sample.course_rate_dps]);
         diag_lat.push([t, sample.a_lat_mps2]);
         diag_long.push([t, sample.a_long_mps2]);
+        if sample.startup_trace.gate_valid {
+            startup_gate.push([t, 1.0]);
+        }
+        if sample.startup_trace.accepted {
+            startup_accept.push([t, 1.0]);
+            let g_long = sample.startup_trace.gnss_long_lp_mps2;
+            let g_lat = sample.startup_trace.gnss_lat_lp_mps2;
+            let i_long = sample.startup_trace.imu_long_lp_mps2;
+            let i_lat = sample.startup_trace.imu_lat_lp_mps2;
+            startup_gnss_long.push([t, g_long]);
+            startup_gnss_lat.push([t, g_lat]);
+            startup_imu_long.push([t, i_long]);
+            startup_imu_lat.push([t, i_lat]);
+            let g_ang = wrap_signed_deg(g_lat.atan2(g_long).to_degrees());
+            let i_ang = wrap_signed_deg(i_lat.atan2(i_long).to_degrees());
+            startup_gnss_ang.push([t, g_ang]);
+            startup_imu_ang.push([t, i_ang]);
+            startup_ang_err.push([t, wrap_signed_deg(i_ang - g_ang)]);
+        }
         if let Some(yaw_deg) = final_alg_heading_deg {
             final_alg_heading.push([t, yaw_deg]);
         }
@@ -296,6 +329,46 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
                 points: cumulative_pca_heading,
             },
         ],
+        startup: vec![
+            Trace {
+                name: "GNSS long LP [m/s^2]".to_string(),
+                points: startup_gnss_long,
+            },
+            Trace {
+                name: "GNSS lat LP [m/s^2]".to_string(),
+                points: startup_gnss_lat,
+            },
+            Trace {
+                name: "IMU long LP [m/s^2]".to_string(),
+                points: startup_imu_long,
+            },
+            Trace {
+                name: "IMU lat LP [m/s^2]".to_string(),
+                points: startup_imu_lat,
+            },
+            Trace {
+                name: "startup gate valid".to_string(),
+                points: startup_gate,
+            },
+            Trace {
+                name: "startup accepted".to_string(),
+                points: startup_accept,
+            },
+        ],
+        startup_angles: vec![
+            Trace {
+                name: "GNSS accel angle [deg]".to_string(),
+                points: startup_gnss_ang,
+            },
+            Trace {
+                name: "IMU accel angle [deg]".to_string(),
+                points: startup_imu_ang,
+            },
+            Trace {
+                name: "IMU-GNSS accel angle err [deg]".to_string(),
+                points: startup_ang_err,
+            },
+        ],
         pca_vectors: pca_vector_traces(&imu_pca_points, &gnss_pca_points),
         roll_contrib: vec![
             Trace {
@@ -435,4 +508,8 @@ fn pca_axis_line(points: &[[f64; 2]], name: &str) -> Option<Trace> {
 
 fn wrap_heading_deg(x: f64) -> f64 {
     x.rem_euclid(360.0)
+}
+
+fn wrap_signed_deg(x: f64) -> f64 {
+    (x + 180.0).rem_euclid(360.0) - 180.0
 }

@@ -8,6 +8,7 @@ use crate::horizontal_heading::{
 };
 use crate::stationary_mount::bootstrap_vehicle_to_body_from_stationary;
 use crate::yaw_pca::{YawPcaConfig, YawPcaInitializer, YawPcaSample};
+use crate::yaw_startup::{YawStartupConfig, YawStartupInitializer, YawStartupSample};
 use nalgebra::{SMatrix, SVector};
 
 pub const ALIGN_N_STATES: usize = 3;
@@ -36,6 +37,17 @@ pub struct AlignConfig {
     pub turn_consistency_max_abs_lat_err_mps2: f32,
     pub turn_consistency_max_rel_lat_err: f32,
     pub min_long_sign_stable_windows: usize,
+    pub use_unified_yaw_startup: bool,
+    pub startup_min_speed_mps: f32,
+    pub startup_min_horiz_acc_mps2: f32,
+    pub startup_min_long_mps2: f32,
+    pub startup_max_lat_to_long_ratio: f32,
+    pub startup_min_abs_lat_guard_mps2: f32,
+    pub startup_min_stable_windows: usize,
+    pub startup_min_windows: usize,
+    pub startup_max_windows: usize,
+    pub startup_min_vector_concentration: f32,
+    pub startup_min_sign_agreement: f32,
     pub use_pca_yaw_seed: bool,
     pub pca_min_speed_mps: f32,
     pub pca_min_horiz_acc_mps2: f32,
@@ -83,6 +95,17 @@ impl Default for AlignConfig {
             turn_consistency_max_abs_lat_err_mps2: 0.35,
             turn_consistency_max_rel_lat_err: 0.6,
             min_long_sign_stable_windows: 2,
+            use_unified_yaw_startup: true,
+            startup_min_speed_mps: 10.0 / 3.6,
+            startup_min_horiz_acc_mps2: 0.15,
+            startup_min_long_mps2: 0.18,
+            startup_max_lat_to_long_ratio: 0.6,
+            startup_min_abs_lat_guard_mps2: 0.35,
+            startup_min_stable_windows: 2,
+            startup_min_windows: 8,
+            startup_max_windows: 48,
+            startup_min_vector_concentration: 0.8,
+            startup_min_sign_agreement: 0.8,
             use_pca_yaw_seed: true,
             pca_min_speed_mps: 10.0 / 3.6,
             pca_min_horiz_acc_mps2: 0.15,
@@ -133,6 +156,7 @@ pub struct Align {
     pub gravity_lp_b: [f32; 3],
     long_filter: HorizontalHeadingCueFilter,
     yaw_dual: Option<YawDualHypothesis>,
+    yaw_startup: YawStartupInitializer,
     yaw_pca: YawPcaInitializer,
     turn_consistency: TurnConsistencyGate,
     pub cfg: AlignConfig,
@@ -166,6 +190,7 @@ impl Align {
             gravity_lp_b: [0.0, 0.0, -GRAVITY_MPS2],
             long_filter: HorizontalHeadingCueFilter::new(),
             yaw_dual: None,
+            yaw_startup: YawStartupInitializer::new(),
             yaw_pca: YawPcaInitializer::new(),
             turn_consistency: TurnConsistencyGate::new(),
             cfg,
@@ -194,7 +219,9 @@ impl Align {
             alt_forward_score: 0.0,
             forward_windows: 0,
         });
-        self.yaw_pca.reset(self.cfg.use_pca_yaw_seed);
+        self.yaw_startup.reset(self.cfg.use_unified_yaw_startup);
+        self.yaw_pca
+            .reset(self.cfg.use_pca_yaw_seed && !self.cfg.use_unified_yaw_startup);
         self.turn_consistency.reset();
         Ok(())
     }
@@ -275,7 +302,17 @@ impl Align {
             // heading is not the forward cue we want from this update.
             && a_lat.abs() < (0.5_f32).max(0.6 * a_long.abs())
             && horiz_gnss_norm > self.cfg.min_long_acc_mps2;
-        let heading_updates_enabled = if self.yaw_dual.is_some() {
+        let startup_cfg = YawStartupConfig {
+            enabled: self.cfg.use_unified_yaw_startup,
+            alpha: self.cfg.long_lpf_alpha,
+            min_speed_mps: self.cfg.startup_min_speed_mps,
+            min_horiz_acc_mps2: self.cfg.startup_min_horiz_acc_mps2,
+            min_stable_windows: self.cfg.startup_min_stable_windows,
+            min_windows: self.cfg.startup_min_windows,
+            max_windows: self.cfg.startup_max_windows,
+            min_alignment_score: self.cfg.startup_min_vector_concentration,
+        };
+        let heading_updates_enabled = if self.yaw_startup.is_active() || self.yaw_dual.is_some() {
             false
         } else if self.yaw_pca.is_active() {
             let pca_cfg = YawPcaConfig {
@@ -301,7 +338,11 @@ impl Align {
                     gnss_lat_mps2: a_lat,
                 },
             ) {
-                Self::inject_vehicle_yaw_state(&mut self.q_vb, dpsi);
+                Self::set_vehicle_heading_in_level_frame(
+                    &mut self.q_vb,
+                    self.gravity_lp_b,
+                    dpsi,
+                );
                 self.P[2][2] = self.cfg.pca_yaw_seed_std_rad.powi(2);
                 self.P[0][2] = 0.0;
                 self.P[2][0] = 0.0;
@@ -309,7 +350,11 @@ impl Align {
                 self.P[2][1] = 0.0;
                 self.long_filter.reset();
                 if let Some(alt) = &mut self.yaw_dual {
-                    Self::inject_vehicle_yaw_state(&mut alt.q_vb, dpsi);
+                    Self::set_vehicle_heading_in_level_frame(
+                        &mut alt.q_vb,
+                        self.gravity_lp_b,
+                        dpsi,
+                    );
                     alt.p[2][2] = self.cfg.pca_yaw_seed_std_rad.powi(2);
                     alt.p[0][2] = 0.0;
                     alt.p[2][0] = 0.0;
@@ -428,7 +473,44 @@ impl Align {
             }
         }
 
-        if self.yaw_dual.is_some() && self.cfg.use_longitudinal_accel {
+        if self.yaw_startup.is_active() {
+            let pca_horiz_xy = leveled_horiz_accel_xy(self.gravity_lp_b, horiz_accel_b)
+                .unwrap_or([horiz_accel_b[0], horiz_accel_b[1]]);
+            trace.pca_input_xy = Some(pca_horiz_xy);
+            if let Some(dpsi) = self.yaw_startup.update(
+                startup_cfg,
+                YawStartupSample {
+                    speed_mps: speed_mid,
+                    horiz_accel_xy: pca_horiz_xy,
+                    gnss_long_mps2: a_long,
+                    gnss_lat_mps2: a_lat,
+                },
+            ) {
+                Self::set_vehicle_heading_in_level_frame(
+                    &mut self.q_vb,
+                    self.gravity_lp_b,
+                    dpsi,
+                );
+                self.P[2][2] = self.cfg.pca_yaw_seed_std_rad.powi(2);
+                self.P[0][2] = 0.0;
+                self.P[2][0] = 0.0;
+                self.P[1][2] = 0.0;
+                self.P[2][1] = 0.0;
+                self.long_filter.reset();
+                self.yaw_dual = None;
+                self.yaw_pca.reset(false);
+                self.turn_consistency.reset();
+                trace.after_pca_yaw_seed = Some(self.q_vb);
+            } else if self.yaw_startup.timed_out(startup_cfg) {
+                self.yaw_startup.reset(false);
+                self.yaw_pca.reset(self.cfg.use_pca_yaw_seed);
+            }
+        }
+
+        if self.yaw_dual.is_some()
+            && !self.yaw_startup.is_active()
+            && self.cfg.use_longitudinal_accel
+        {
             let (cue, long_trace) = self.long_filter.update_with_trace(
                 HorizontalHeadingCueConfig {
                     alpha: self.cfg.long_lpf_alpha,
@@ -756,11 +838,26 @@ impl Align {
         Self::inject_vehicle_yaw_state(&mut self.q_vb, dpsi);
     }
 
+    fn set_vehicle_heading_in_level_frame(
+        q_vb: &mut [f32; 4],
+        gravity_b: [f32; 3],
+        heading_target: f32,
+    ) {
+        let current_heading =
+            leveled_forward_heading_xy(*q_vb, gravity_b).unwrap_or_else(|| rot_to_euler_zyx(quat_to_rotmat(*q_vb))[2]);
+        let dpsi = wrap_angle_rad(heading_target - current_heading);
+        Self::inject_vehicle_yaw_state(q_vb, dpsi);
+    }
+
     fn inject_vehicle_yaw_state(q_vb: &mut [f32; 4], dpsi: f32) {
         *q_vb = quat_normalize(quat_mul(*q_vb, quat_from_yaw(dpsi)));
     }
 
-    fn predict_covariance(p: &mut [[f32; ALIGN_N_STATES]; ALIGN_N_STATES], cfg: &AlignConfig, dt: f32) {
+    fn predict_covariance(
+        p: &mut [[f32; ALIGN_N_STATES]; ALIGN_N_STATES],
+        cfg: &AlignConfig,
+        dt: f32,
+    ) {
         p[0][0] += cfg.q_mount_std_rad[0].powi(2) * dt;
         p[1][1] += cfg.q_mount_std_rad[1].powi(2) * dt;
         p[2][2] += cfg.q_mount_std_rad[2].powi(2) * dt;
@@ -908,6 +1005,21 @@ fn align_obs_jacobian(q_vb: [f32; 4], gyro_b: [f32; 3], accel_b: [f32; 3]) -> [[
 }
 
 pub fn leveled_horiz_accel_xy(gravity_b: [f32; 3], horiz_accel_b: [f32; 3]) -> Option<[f32; 2]> {
+    let (x_in_b, y_in_b) = leveled_xy_axes(gravity_b)?;
+    Some([
+        vec3_dot(horiz_accel_b, x_in_b),
+        vec3_dot(horiz_accel_b, y_in_b),
+    ])
+}
+
+fn leveled_forward_heading_xy(q_vb: [f32; 4], gravity_b: [f32; 3]) -> Option<f32> {
+    let (x_in_b, y_in_b) = leveled_xy_axes(gravity_b)?;
+    let c_b_v = quat_to_rotmat(q_vb);
+    let x_v_in_b = [c_b_v[0][0], c_b_v[1][0], c_b_v[2][0]];
+    Some(vec3_dot(x_v_in_b, y_in_b).atan2(vec3_dot(x_v_in_b, x_in_b)))
+}
+
+fn leveled_xy_axes(gravity_b: [f32; 3]) -> Option<([f32; 3], [f32; 3])> {
     let z_in_b = vec3_scale(vec3_normalize(gravity_b)?, -1.0);
     let mut x_ref = [1.0, 0.0, 0.0];
     let mut x_in_b = vec3_sub(x_ref, vec3_scale(z_in_b, vec3_dot(z_in_b, x_ref)));
@@ -917,10 +1029,7 @@ pub fn leveled_horiz_accel_xy(gravity_b: [f32; 3], horiz_accel_b: [f32; 3]) -> O
     }
     let x_in_b = vec3_normalize(x_in_b)?;
     let y_in_b = vec3_normalize(vec3_cross(z_in_b, x_in_b))?;
-    Some([
-        vec3_dot(horiz_accel_b, x_in_b),
-        vec3_dot(horiz_accel_b, y_in_b),
-    ])
+    Some((x_in_b, y_in_b))
 }
 
 fn quat_mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
