@@ -81,5 +81,10 @@ fn vehicle_vel_update_reduces_vehicle_lateral_velocity_for_wrong_nav_yaw() {
     }
     let lat1 = vehicle_lateral_velocity(&ekf, q_vb).abs();
 
-    assert!(lat1 < lat0, "vehicle lateral velocity did not decrease: {} -> {}", lat0, lat1);
+    assert!(
+        lat1 < lat0,
+        "vehicle lateral velocity did not decrease: {} -> {}",
+        lat0,
+        lat1
+    );
 }

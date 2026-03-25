@@ -286,6 +286,9 @@ fn stationary_yaw_seed_preserves_gravity_down_axis() {
             + (got[1] - expected_down_b[1]).powi(2)
             + (got[2] - expected_down_b[2]).powi(2))
         .sqrt();
-        assert!(err < 1.0e-3, "{name} down-axis mismatch: {got:?} vs {expected_down_b:?}");
+        assert!(
+            err < 1.0e-3,
+            "{name} down-axis mismatch: {got:?} vs {expected_down_b:?}"
+        );
     }
 }

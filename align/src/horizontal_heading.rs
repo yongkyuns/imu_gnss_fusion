@@ -120,7 +120,12 @@ impl HorizontalHeadingCueFilter {
         let angle_err = cross.atan2(dot);
         trace.angle_err_rad = angle_err;
         trace.emitted = true;
-        (Some(HorizontalHeadingCue { angle_err_rad: angle_err }), trace)
+        (
+            Some(HorizontalHeadingCue {
+                angle_err_rad: angle_err,
+            }),
+            trace,
+        )
     }
 }
 

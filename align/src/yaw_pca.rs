@@ -11,7 +11,7 @@ pub struct YawPcaConfig {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct YawPcaSample {
     pub speed_mps: f32,
-    pub horiz_accel_v: [f32; 2],
+    pub horiz_accel_xy: [f32; 2],
     pub gnss_long_mps2: f32,
 }
 
@@ -58,12 +58,12 @@ impl YawPcaInitializer {
             return None;
         }
         if sample.speed_mps < cfg.min_speed_mps
-            || vec2_norm(sample.horiz_accel_v) < cfg.min_horiz_acc_mps2
+            || vec2_norm(sample.horiz_accel_xy) < cfg.min_horiz_acc_mps2
         {
             return None;
         }
         self.samples.push(StoredSample {
-            horiz_accel_v: sample.horiz_accel_v,
+            horiz_accel_v: sample.horiz_accel_xy,
             gnss_long_mps2: sample.gnss_long_mps2,
         });
         if self.samples.len() < cfg.min_windows {
@@ -155,7 +155,7 @@ mod tests {
                 cfg,
                 YawPcaSample {
                     speed_mps: 8.0,
-                    horiz_accel_v: [m * axis[0], m * axis[1]],
+                    horiz_accel_xy: [m * axis[0], m * axis[1]],
                     gnss_long_mps2: m,
                 },
             );
@@ -185,7 +185,7 @@ mod tests {
                 cfg,
                 YawPcaSample {
                     speed_mps: 8.0,
-                    horiz_accel_v: [m * axis[0], m * axis[1]],
+                    horiz_accel_xy: [m * axis[0], m * axis[1]],
                     gnss_long_mps2: -m,
                 },
             );
