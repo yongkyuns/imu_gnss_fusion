@@ -27,6 +27,10 @@ pub struct AlignConfig {
     pub min_turn_rate_radps: f32,
     pub min_lat_acc_mps2: f32,
     pub min_long_acc_mps2: f32,
+    pub yaw_dual_resolve_min_speed_mps: f32,
+    pub yaw_dual_resolve_min_long_acc_mps2: f32,
+    pub yaw_dual_resolve_max_lat_to_long_ratio: f32,
+    pub yaw_dual_resolve_min_windows: usize,
     pub turn_consistency_min_windows: usize,
     pub turn_consistency_min_fraction: f32,
     pub turn_consistency_max_abs_lat_err_mps2: f32,
@@ -70,6 +74,10 @@ impl Default for AlignConfig {
             min_turn_rate_radps: 2.0_f32.to_radians(),
             min_lat_acc_mps2: 0.10,
             min_long_acc_mps2: 0.18,
+            yaw_dual_resolve_min_speed_mps: 10.0 / 3.6,
+            yaw_dual_resolve_min_long_acc_mps2: 0.3,
+            yaw_dual_resolve_max_lat_to_long_ratio: 0.35,
+            yaw_dual_resolve_min_windows: 3,
             turn_consistency_min_windows: 5,
             turn_consistency_min_fraction: 0.8,
             turn_consistency_max_abs_lat_err_mps2: 0.35,
@@ -135,6 +143,9 @@ struct YawDualHypothesis {
     q_vb: [f32; 4],
     p: [[f32; ALIGN_N_STATES]; ALIGN_N_STATES],
     long_filter: HorizontalHeadingCueFilter,
+    primary_forward_score: f32,
+    alt_forward_score: f32,
+    forward_windows: usize,
 }
 
 impl Default for Align {
@@ -179,6 +190,9 @@ impl Align {
             q_vb: quat_normalize(quat_mul(self.q_vb, quat_yaw_pi())),
             p: self.P,
             long_filter: HorizontalHeadingCueFilter::new(),
+            primary_forward_score: 0.0,
+            alt_forward_score: 0.0,
+            forward_windows: 0,
         });
         self.yaw_pca.reset(self.cfg.use_pca_yaw_seed);
         self.turn_consistency.reset();
@@ -432,7 +446,7 @@ impl Align {
             trace.longitudinal_trace = Some(long_trace);
             if let Some(alt) = &mut self.yaw_dual {
                 let alt_horiz_obs = align_obs(alt.q_vb, window.mean_gyro_b, horiz_accel_b);
-                let (cue_alt, _) = alt.long_filter.update_with_trace(
+                let (cue_alt, alt_long_trace) = alt.long_filter.update_with_trace(
                     HorizontalHeadingCueConfig {
                         alpha: self.cfg.long_lpf_alpha,
                         min_abs_horiz_mps2: self.cfg.min_long_acc_mps2,
@@ -447,17 +461,26 @@ impl Align {
                     },
                 );
                 if let (Some(cue_primary), Some(cue_alt)) = (cue, cue_alt) {
-                    let choose_alt = cue_alt.angle_err_rad.abs() + 1.0e-4 < cue_primary.angle_err_rad.abs();
-                    self.resolve_yaw_dual(choose_alt);
-                    score += self.apply_vehicle_yaw_angle(
-                        if choose_alt {
-                            cue_alt.angle_err_rad
-                        } else {
-                            cue_primary.angle_err_rad
-                        },
-                        self.cfg.r_long_std_mps2.powi(2),
-                    );
-                    trace.after_longitudinal_accel = Some(self.q_vb);
+                    if let Some(choose_alt) = Self::update_yaw_dual_forward_resolver(
+                        &self.cfg,
+                        alt,
+                        speed_mid,
+                        a_long,
+                        a_lat,
+                        &long_trace,
+                        &alt_long_trace,
+                    ) {
+                        self.resolve_yaw_dual(choose_alt);
+                        score += self.apply_vehicle_yaw_angle(
+                            if choose_alt {
+                                cue_alt.angle_err_rad
+                            } else {
+                                cue_primary.angle_err_rad
+                            },
+                            self.cfg.r_long_std_mps2.powi(2),
+                        );
+                        trace.after_longitudinal_accel = Some(self.q_vb);
+                    }
                 }
             }
         } else if heading_updates_enabled && self.cfg.use_longitudinal_accel {
@@ -758,6 +781,48 @@ impl Align {
             self.yaw_pca.reset(false);
             self.turn_consistency.reset();
         }
+    }
+
+    fn update_yaw_dual_forward_resolver(
+        cfg: &AlignConfig,
+        dual: &mut YawDualHypothesis,
+        speed_mid: f32,
+        a_long: f32,
+        a_lat: f32,
+        primary_trace: &HorizontalHeadingTrace,
+        alt_trace: &HorizontalHeadingTrace,
+    ) -> Option<bool> {
+        if speed_mid < cfg.yaw_dual_resolve_min_speed_mps
+            || a_long.abs() < cfg.yaw_dual_resolve_min_long_acc_mps2
+            || a_lat.abs() > cfg.yaw_dual_resolve_max_lat_to_long_ratio * a_long.abs()
+        {
+            return None;
+        }
+
+        let gnss_long = primary_trace.gnss_long_lp_mps2;
+        let primary_long = primary_trace.imu_long_lp_mps2;
+        let alt_long = alt_trace.imu_long_lp_mps2;
+        if gnss_long.abs() < cfg.yaw_dual_resolve_min_long_acc_mps2
+            || primary_long.abs() < cfg.yaw_dual_resolve_min_long_acc_mps2
+            || alt_long.abs() < cfg.yaw_dual_resolve_min_long_acc_mps2
+        {
+            return None;
+        }
+
+        dual.primary_forward_score += (gnss_long * primary_long).signum();
+        dual.alt_forward_score += (gnss_long * alt_long).signum();
+        dual.forward_windows += 1;
+
+        if dual.forward_windows < cfg.yaw_dual_resolve_min_windows {
+            return None;
+        }
+
+        let score_gap = dual.alt_forward_score - dual.primary_forward_score;
+        if score_gap.abs() < 1.0 {
+            return None;
+        }
+
+        Some(score_gap > 0.0)
     }
 }
 
