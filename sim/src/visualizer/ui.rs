@@ -176,7 +176,8 @@ impl eframe::App for App {
                 ui.label("Page:");
                 ui.selectable_value(&mut self.page, Page::Signals, "Signals");
                 ui.selectable_value(&mut self.page, Page::EkfCompare, "EKF Compare");
-                ui.selectable_value(&mut self.page, Page::AlignCompare, "Misalign Compare");
+                ui.selectable_value(&mut self.page, Page::MisalignCompare, "Misalign Compare");
+                ui.selectable_value(&mut self.page, Page::AlignCompare, "Align Compare");
                 ui.selectable_value(&mut self.page, Page::AlignNhcCompare, "Align NHC");
                 ui.selectable_value(&mut self.page, Page::AlignPcaVectors, "PCA Vectors");
                 ui.selectable_value(&mut self.page, Page::MapDark, "Map (Dark)");
@@ -336,6 +337,59 @@ impl eframe::App for App {
                         ui,
                         "ESF-RAW Acceleration",
                         &esf_raw_accel,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                });
+            }
+            Page::MisalignCompare => {
+                let half_width = (ctx.content_rect().width() * 0.5).max(260.0);
+                egui::SidePanel::left("misalign_compare_left")
+                    .resizable(false)
+                    .exact_width(half_width)
+                    .show(ctx, |ui| {
+                        draw_plot(
+                            ui,
+                            "Euler Angles: Misalign vs ESF-ALG",
+                            &self.data.misalign_cmp_att,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "Misalign Diagnostics",
+                            &self.data.misalign_diag,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "Misalign Axis Error vs ESF-ALG",
+                            &self.data.misalign_axis_err,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "Misalign Residuals",
+                            &self.data.misalign_residuals,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                    });
+
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    draw_plot(
+                        ui,
+                        "Misalign Gates",
+                        &self.data.misalign_gates,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "Misalign Covariance Diagonal",
+                        &self.data.misalign_cov,
                         true,
                         self.max_points_per_trace,
                     );

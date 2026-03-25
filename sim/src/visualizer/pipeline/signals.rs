@@ -11,6 +11,7 @@ use super::super::model::{PlotData, Trace};
 use super::align_compare::AlignCompareData;
 use super::align_nhc_compare::AlignNhcCompareData;
 use super::ekf_compare::EkfCompareData;
+use super::misalign_compare::MisalignCompareData;
 use super::tag_time::fit_tag_ms_map;
 use super::timebase::MasterTimeline;
 
@@ -18,6 +19,7 @@ pub fn build_signal_traces(
     frames: &[UbxFrame],
     tl: &MasterTimeline,
     ekf: EkfCompareData,
+    misalign_data: MisalignCompareData,
     align_data: AlignCompareData,
     align_nhc_data: AlignNhcCompareData,
 ) -> PlotData {
@@ -285,6 +287,12 @@ pub fn build_signal_traces(
     out.ekf_cov_nonbias = ekf.cov_nonbias;
     out.ekf_map = ekf.map;
     out.ekf_map_heading = ekf.map_heading;
+    out.misalign_cmp_att = misalign_data.cmp_att;
+    out.misalign_diag = misalign_data.diag;
+    out.misalign_axis_err = misalign_data.axis_err;
+    out.misalign_residuals = misalign_data.residuals;
+    out.misalign_gates = misalign_data.gates;
+    out.misalign_cov = misalign_data.cov;
     out.align_cmp_att = align_data.cmp_att;
     out.align_res_vel = align_data.res_vel;
     out.align_axis_err = align_data.axis_err;
@@ -341,6 +349,12 @@ pub fn build_signal_traces(
         &mut out.ekf_bias_accel,
         &mut out.ekf_cov_bias,
         &mut out.ekf_cov_nonbias,
+        &mut out.misalign_cmp_att,
+        &mut out.misalign_diag,
+        &mut out.misalign_axis_err,
+        &mut out.misalign_residuals,
+        &mut out.misalign_gates,
+        &mut out.misalign_cov,
         &mut out.align_cmp_att,
         &mut out.align_res_vel,
         &mut out.align_axis_err,
