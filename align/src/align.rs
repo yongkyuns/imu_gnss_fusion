@@ -81,7 +81,7 @@ impl Default for AlignConfig {
             pca_min_long_mps2: 0.18,
             pca_max_lat_to_long_ratio: 0.6,
             pca_min_abs_lat_guard_mps2: 0.35,
-            pca_yaw_seed_std_rad: 0.5_f32.to_radians(),
+            pca_yaw_seed_std_rad: 0.01_f32.to_radians(),
             pca_min_windows: 100,
             pca_max_windows: 200,
             pca_min_anisotropy_ratio: 1.3,
@@ -271,7 +271,7 @@ impl Align {
                 },
             ) {
                 self.inject_vehicle_yaw(dpsi);
-                self.P[2][2] = self.P[2][2].max(self.cfg.pca_yaw_seed_std_rad.powi(2));
+                self.P[2][2] = self.cfg.pca_yaw_seed_std_rad.powi(2);
                 self.P[0][2] = 0.0;
                 self.P[2][0] = 0.0;
                 self.P[1][2] = 0.0;
@@ -313,12 +313,13 @@ impl Align {
 
         if turn_valid {
             if self.cfg.use_turn_gyro {
-                score += self.apply_update2(
+                score += self.apply_update2_masked(
                     [0.0, 0.0],
                     [0, 1],
                     window.mean_accel_b,
                     window.mean_gyro_b,
                     [self.cfg.r_turn_gyro_std_radps.powi(2); 2],
+                    [true, true, heading_updates_enabled && turn_heading_valid],
                 );
                 trace.after_turn_gyro = Some(self.q_vb);
             }
@@ -477,15 +478,51 @@ impl Align {
         gyro_b: [f32; 3],
         r_var: [f32; 2],
     ) -> f32 {
+        self.apply_update2_masked(z, obs_idx, accel_b, gyro_b, r_var, [true, true, true])
+    }
+
+    fn apply_update2_masked(
+        &mut self,
+        z: [f32; 2],
+        obs_idx: [usize; 2],
+        accel_b: [f32; 3],
+        gyro_b: [f32; 3],
+        r_var: [f32; 2],
+        state_mask: [bool; 3],
+    ) -> f32 {
         let obs = align_obs(self.q_vb, gyro_b, accel_b);
         let H_full = align_obs_jacobian(self.q_vb, gyro_b, accel_b);
         let H = SMatrix::<f32, 2, 3>::from_row_slice(&[
-            H_full[obs_idx[0]][0],
-            H_full[obs_idx[0]][1],
-            H_full[obs_idx[0]][2],
-            H_full[obs_idx[1]][0],
-            H_full[obs_idx[1]][1],
-            H_full[obs_idx[1]][2],
+            if state_mask[0] {
+                H_full[obs_idx[0]][0]
+            } else {
+                0.0
+            },
+            if state_mask[1] {
+                H_full[obs_idx[0]][1]
+            } else {
+                0.0
+            },
+            if state_mask[2] {
+                H_full[obs_idx[0]][2]
+            } else {
+                0.0
+            },
+            if state_mask[0] {
+                H_full[obs_idx[1]][0]
+            } else {
+                0.0
+            },
+            if state_mask[1] {
+                H_full[obs_idx[1]][1]
+            } else {
+                0.0
+            },
+            if state_mask[2] {
+                H_full[obs_idx[1]][2]
+            } else {
+                0.0
+            },
         ]);
         let y =
             SVector::<f32, 2>::from_row_slice(&[z[0] - obs[obs_idx[0]], z[1] - obs[obs_idx[1]]]);
