@@ -21,6 +21,8 @@ use ublox::UbxProtocol;
 const CFG_VALSET_ID: u8 = 0x8A;
 const CFG_VALGET_ID: u8 = 0x8B;
 const CFG_MSG_ID: u8 = 0x01;
+const ESF_RESETALG_CLASS: u8 = 0x10;
+const ESF_RESETALG_ID: u8 = 0x13;
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "realtime_rerun_logger")]
@@ -209,6 +211,17 @@ fn ubx_checksum(bytes: &[u8]) -> (u8, u8) {
     (a, b)
 }
 
+fn build_ubx_packet(msg_class: u8, msg_id: u8, payload: &[u8]) -> Vec<u8> {
+    let mut pkt = Vec::with_capacity(8 + payload.len());
+    pkt.extend_from_slice(&[0xB5, 0x62, msg_class, msg_id]);
+    pkt.extend_from_slice(&(payload.len() as u16).to_le_bytes());
+    pkt.extend_from_slice(payload);
+    let (ck_a, ck_b) = ubx_checksum(&pkt[2..]);
+    pkt.push(ck_a);
+    pkt.push(ck_b);
+    pkt
+}
+
 fn build_cfg_valset_packet(items: &[CfgItem], layers: u8) -> Vec<u8> {
     let mut payload = vec![0u8, layers, 0u8, 0u8];
     for it in items {
@@ -221,14 +234,7 @@ fn build_cfg_valset_packet(items: &[CfgItem], layers: u8) -> Vec<u8> {
             _ => {}
         }
     }
-    let mut pkt = Vec::with_capacity(8 + payload.len());
-    pkt.extend_from_slice(&[0xB5, 0x62, 0x06, CFG_VALSET_ID]);
-    pkt.extend_from_slice(&(payload.len() as u16).to_le_bytes());
-    pkt.extend_from_slice(&payload);
-    let (ck_a, ck_b) = ubx_checksum(&pkt[2..]);
-    pkt.push(ck_a);
-    pkt.push(ck_b);
-    pkt
+    build_ubx_packet(0x06, CFG_VALSET_ID, &payload)
 }
 
 fn build_cfg_valget_packet(keys: &[u32], layer: u8) -> Vec<u8> {
@@ -236,26 +242,16 @@ fn build_cfg_valget_packet(keys: &[u32], layer: u8) -> Vec<u8> {
     for k in keys {
         payload.extend_from_slice(&k.to_le_bytes());
     }
-    let mut pkt = Vec::with_capacity(8 + payload.len());
-    pkt.extend_from_slice(&[0xB5, 0x62, 0x06, CFG_VALGET_ID]);
-    pkt.extend_from_slice(&(payload.len() as u16).to_le_bytes());
-    pkt.extend_from_slice(&payload);
-    let (ck_a, ck_b) = ubx_checksum(&pkt[2..]);
-    pkt.push(ck_a);
-    pkt.push(ck_b);
-    pkt
+    build_ubx_packet(0x06, CFG_VALGET_ID, &payload)
 }
 
 fn build_cfg_msg_rate_packet(msg_class: u8, msg_id: u8, uart1_rate: u8, usb_rate: u8) -> Vec<u8> {
     let payload = [msg_class, msg_id, 0u8, uart1_rate, 0u8, usb_rate, 0u8, 0u8];
-    let mut pkt = Vec::with_capacity(8 + payload.len());
-    pkt.extend_from_slice(&[0xB5, 0x62, 0x06, CFG_MSG_ID]);
-    pkt.extend_from_slice(&(payload.len() as u16).to_le_bytes());
-    pkt.extend_from_slice(&payload);
-    let (ck_a, ck_b) = ubx_checksum(&pkt[2..]);
-    pkt.push(ck_a);
-    pkt.push(ck_b);
-    pkt
+    build_ubx_packet(0x06, CFG_MSG_ID, &payload)
+}
+
+fn build_esf_resetalg_packet() -> Vec<u8> {
+    build_ubx_packet(ESF_RESETALG_CLASS, ESF_RESETALG_ID, &[])
 }
 
 fn extract_ubx_frames(buffer: &mut Vec<u8>) -> Vec<Vec<u8>> {
@@ -293,10 +289,19 @@ fn extract_ubx_frames(buffer: &mut Vec<u8>) -> Vec<Vec<u8>> {
 }
 
 fn wait_cfg_valset_ack(port: &mut dyn SerialPort, timeout: Duration) -> Result<bool> {
-    wait_cfg_ack(port, CFG_VALSET_ID, timeout)
+    wait_ubx_ack(port, 0x06, CFG_VALSET_ID, timeout)
 }
 
 fn wait_cfg_ack(port: &mut dyn SerialPort, cfg_msg_id: u8, timeout: Duration) -> Result<bool> {
+    wait_ubx_ack(port, 0x06, cfg_msg_id, timeout)
+}
+
+fn wait_ubx_ack(
+    port: &mut dyn SerialPort,
+    msg_class: u8,
+    msg_id: u8,
+    timeout: Duration,
+) -> Result<bool> {
     let deadline = Instant::now() + timeout;
     let mut tmp = [0u8; 1024];
     let mut buf = Vec::<u8>::new();
@@ -311,11 +316,11 @@ fn wait_cfg_ack(port: &mut dyn SerialPort, cfg_msg_id: u8, timeout: Duration) ->
                     let class = fr[2];
                     let id = fr[3];
                     if class == 0x05 && id == 0x01 {
-                        if fr[6] == 0x06 && fr[7] == cfg_msg_id {
+                        if fr[6] == msg_class && fr[7] == msg_id {
                             return Ok(true);
                         }
                     } else if class == 0x05 && id == 0x00 {
-                        if fr[6] == 0x06 && fr[7] == cfg_msg_id {
+                        if fr[6] == msg_class && fr[7] == msg_id {
                             return Ok(false);
                         }
                     }
@@ -345,6 +350,13 @@ fn send_startup_config(
     port.write_all(&nav2_pvt_cfg_msg)?;
     port.flush()?;
     let _ = wait_cfg_ack(port, CFG_MSG_ID, timeout)?;
+
+    let resetalg = build_esf_resetalg_packet();
+    port.write_all(&resetalg)?;
+    port.flush()?;
+    if !wait_ubx_ack(port, ESF_RESETALG_CLASS, ESF_RESETALG_ID, timeout)? {
+        anyhow::bail!("no ACK for UBX-ESF-RESETALG");
+    }
     Ok(true)
 }
 
