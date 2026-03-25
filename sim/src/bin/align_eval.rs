@@ -16,7 +16,7 @@ use sim::ubxlog::{
 };
 use sim::visualizer::math::{clamp_ekf_biases, ecef_to_ned, lla_to_ecef, nearest_master_ms};
 use sim::visualizer::model::ImuPacket;
-use sim::visualizer::pipeline::align_nhc_bootstrap::resolve_align_nhc_bootstrap_x_ref;
+use sim::visualizer::pipeline::align_nhc_bootstrap::resolve_align_nhc_bootstrap_q_vb_seed;
 use sim::visualizer::pipeline::align_replay::{
     BootstrapConfig, axis_angle_deg, build_align_replay, interpolate_alg_quat, quat_rotate,
     quat_rpy_alg_deg, signed_projected_axis_angle_deg,
@@ -194,6 +194,13 @@ struct ObservabilitySummary {
     cond: f64,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct MisalignYawSeedSample {
+    q_nb: [f32; 4],
+    v_n: [f32; 3],
+    omega_b_corr: [f32; 3],
+}
+
 impl MisalignObservabilityWindow {
     fn new(horizon_s: f64) -> Self {
         Self {
@@ -260,6 +267,59 @@ impl MisalignObservabilityWindow {
             cond,
         }
     }
+}
+
+fn resolve_misalign_yaw_seed(
+    base: &AlignMisalign,
+    samples: &[MisalignYawSeedSample],
+    yaw_step_deg: f32,
+) -> Option<f32> {
+    if samples.is_empty() || yaw_step_deg <= 0.0 {
+        return None;
+    }
+    let mut best_cost = f32::INFINITY;
+    let mut best_yaw = None;
+    let (_, _, center_yaw_deg) = quat_rpy_alg_deg(
+        base.q_vb[0] as f64,
+        base.q_vb[1] as f64,
+        base.q_vb[2] as f64,
+        base.q_vb[3] as f64,
+    );
+    let search_half_span_deg = 120.0_f32;
+    let steps = ((2.0 * search_half_span_deg) / yaw_step_deg).round() as i32;
+    for k in 0..=steps {
+        let yaw_deg = center_yaw_deg as f32 - search_half_span_deg + k as f32 * yaw_step_deg;
+        let mut cand = base.clone();
+        cand.set_mount_yaw(
+            wrap_rad_pi(yaw_deg.to_radians() as f64) as f32,
+            5.0_f32.to_radians(),
+        );
+        let mut cost = 0.0_f32;
+        let mut n_terms = 0usize;
+        for s in samples {
+            if cand.nhc_gate(s.v_n) {
+                let pred = cand.nhc_prediction(s.q_nb, s.v_n);
+                let sigma = cand.cfg.r_nhc_std_mps.max(1.0e-6);
+                cost += (pred[0] / sigma).powi(2) + (pred[1] / sigma).powi(2);
+                n_terms += 2;
+            }
+            if cand.planar_gyro_gate(s.v_n, s.omega_b_corr) {
+                let pred = cand.planar_gyro_prediction(s.omega_b_corr);
+                let sigma = cand.cfg.r_planar_gyro_std_radps.max(1.0e-6);
+                cost += (pred[0] / sigma).powi(2) + (pred[1] / sigma).powi(2);
+                n_terms += 2;
+            }
+        }
+        if n_terms == 0 {
+            continue;
+        }
+        let mean_cost = cost / n_terms as f32;
+        if mean_cost < best_cost {
+            best_cost = mean_cost;
+            best_yaw = Some(yaw_deg.to_radians());
+        }
+    }
+    best_yaw
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -456,7 +516,10 @@ fn parse_filter_mode(s: &str) -> Result<FilterMode> {
         "align" => Ok(FilterMode::Align),
         "nhc" => Ok(FilterMode::Nhc),
         "misalign" => Ok(FilterMode::Misalign),
-        _ => bail!("unknown --filter-mode {}, expected align, nhc, or misalign", s),
+        _ => bail!(
+            "unknown --filter-mode {}, expected align, nhc, or misalign",
+            s
+        ),
     }
 }
 
@@ -912,9 +975,8 @@ fn evaluate_nhc(
             if !initialized {
                 let speed_mps = speed_for_bootstrap(prev_nav, (*tn, *nav), pkt.t_ms) as f32;
                 if bootstrap.update(accel_b, gyro_radps, speed_mps) {
-                    let x_ref = resolve_align_nhc_bootstrap_x_ref(
+                    let q_vb_seed = resolve_align_nhc_bootstrap_q_vb_seed(
                         &bootstrap.stationary_accel,
-                        &bootstrap.stationary_gyro,
                         prev_nav,
                         &nav_events,
                         nav_idx,
@@ -922,16 +984,14 @@ fn evaluate_nhc(
                         scan_idx + 1,
                         &imu_packets,
                         *cfg,
-                        nhc.cfg,
-                        24,
+                        cfg.pca_max_windows.saturating_mul(3),
                     );
                     if nhc
-                        .initialize_from_stationary_with_x_ref(
+                        .initialize_from_stationary_with_mount_seed(
                             &bootstrap.stationary_accel,
                             &bootstrap.stationary_gyro,
                             0.0,
-                            [1.0, 0.0, 0.0, 0.0],
-                            x_ref,
+                            q_vb_seed,
                         )
                         .is_ok()
                     {
@@ -946,7 +1006,10 @@ fn evaluate_nhc(
         if initialized && !nav_yaw_seeded {
             let speed_h = (nav.vel_n_mps * nav.vel_n_mps + nav.vel_e_mps * nav.vel_e_mps).sqrt();
             if speed_h >= 5.0 / 3.6 {
-                nhc.seed_nav_yaw_from_course(nav.vel_e_mps.atan2(nav.vel_n_mps) as f32, 5.0_f32.to_radians());
+                nhc.seed_nav_yaw_from_course(
+                    nav.vel_e_mps.atan2(nav.vel_n_mps) as f32,
+                    5.0_f32.to_radians(),
+                );
                 nav_yaw_seeded = true;
             }
         }
@@ -974,8 +1037,7 @@ fn evaluate_nhc(
                 let dt_nav = ((*tn - t_prev) * 1.0e-3).max(1.0e-3);
                 let course_prev = v_prev[1].atan2(v_prev[0]);
                 let course_curr = v_curr[1].atan2(v_curr[0]);
-                let course_rate_dps =
-                    wrap_rad_pi(course_curr - course_prev).to_degrees() / dt_nav;
+                let course_rate_dps = wrap_rad_pi(course_curr - course_prev).to_degrees() / dt_nav;
                 let a_n = [
                     (nav.vel_n_mps - nav_prev.vel_n_mps) / dt_nav,
                     (nav.vel_e_mps - nav_prev.vel_e_mps) / dt_nav,
@@ -1020,14 +1082,16 @@ fn evaluate_nhc(
                     turn_valid && cfg.use_turn_gyro,
                 );
 
-                let q_align = [
+                let q_align_bv = [
                     nhc.q_vb[0] as f64,
                     nhc.q_vb[1] as f64,
                     nhc.q_vb[2] as f64,
                     nhc.q_vb[3] as f64,
                 ];
+                let q_align = quat_conj_local(q_align_bv);
                 let align_rpy_deg = {
-                    let (r, p, y) = quat_rpy_alg_deg(q_align[0], q_align[1], q_align[2], q_align[3]);
+                    let (r, p, y) =
+                        quat_rpy_alg_deg(q_align[0], q_align[1], q_align[2], q_align[3]);
                     [r, p, y]
                 };
                 let alg_q = interpolate_alg_quat(&replay_ref.alg_events, *tn);
@@ -1093,8 +1157,14 @@ fn evaluate_nhc(
                         misalign_omega_v_yaw_abs_dps: f64::NAN,
                         misalign_omega_v_transverse_dps: f64::NAN,
                         misalign_omega_v_transverse_ratio: f64::NAN,
-                        planar_gyro_residual_x_dps: nhc_trace.planar_gyro_residual_x_radps.to_degrees() as f64,
-                        planar_gyro_residual_y_dps: nhc_trace.planar_gyro_residual_y_radps.to_degrees() as f64,
+                        planar_gyro_residual_x_dps: nhc_trace
+                            .planar_gyro_residual_x_radps
+                            .to_degrees()
+                            as f64,
+                        planar_gyro_residual_y_dps: nhc_trace
+                            .planar_gyro_residual_y_radps
+                            .to_degrees()
+                            as f64,
                         obs_rows: 0,
                         obs_sigma_max: f64::NAN,
                         obs_sigma_mid: f64::NAN,
@@ -1123,6 +1193,11 @@ fn evaluate_misalign(
     bootstrap_cfg: &BootstrapConfig,
 ) -> Result<EvalResult> {
     const OBS_HORIZON_S: f64 = 20.0;
+    const MISALIGN_NAV_VEHICLE_VEL_R: f32 = 100.0;
+    const MISALIGN_YAW_SEED_WINDOW_S: f64 = 1.5;
+    const MISALIGN_YAW_SEED_MIN_SPEED_MPS: f32 = 5.0 / 3.6;
+    const MISALIGN_YAW_SEED_MIN_SAMPLES: usize = 10;
+    const MISALIGN_YAW_SEED_STEP_DEG: f32 = 5.0;
 
     let imu_packets = build_imu_packets(&dataset.frames, &dataset.timeline)?;
     let nav_events = collect_nav_events(&dataset.frames, &dataset.timeline);
@@ -1137,6 +1212,9 @@ fn evaluate_misalign(
     let mut obs_window = MisalignObservabilityWindow::new(OBS_HORIZON_S);
     let mut bootstrap = BootstrapDetector::new(*bootstrap_cfg);
     let mut initialized = false;
+    let mut nav_yaw_seeded = false;
+    let mut mount_yaw_seeded = false;
+    let mut yaw_seed_samples = Vec::<MisalignYawSeedSample>::new();
     let mut init_time_s = f64::NAN;
     let mut samples = Vec::<ResidualSample>::new();
 
@@ -1199,7 +1277,7 @@ fn evaluate_misalign(
         ekf_predict(&mut ekf, &imu, None);
         clamp_ekf_biases(&mut ekf, dt);
         if initialized {
-            ekf_fuse_vehicle_vel(&mut ekf, misalign.q_vb, 100.0);
+            ekf_fuse_vehicle_vel(&mut ekf, misalign.q_vb, MISALIGN_NAV_VEHICLE_VEL_R);
             clamp_ekf_biases(&mut ekf, dt);
         }
 
@@ -1243,6 +1321,44 @@ fn evaluate_misalign(
             clamp_ekf_biases(&mut ekf, dt);
 
             if initialized {
+                if !nav_yaw_seeded {
+                    let speed_h =
+                        (nav.vel_n_mps * nav.vel_n_mps + nav.vel_e_mps * nav.vel_e_mps).sqrt();
+                    if speed_h >= 5.0 / 3.6 {
+                        let course_rad = (nav.vel_e_mps as f32).atan2(nav.vel_n_mps as f32);
+                        seed_ekf_yaw_from_course(&mut ekf, course_rad);
+                        let q_nb_seed = [ekf.state.q0, ekf.state.q1, ekf.state.q2, ekf.state.q3];
+                        let mut nav_seed = misalign.clone();
+                        nav_seed.seed_mount_from_nav_course_full(
+                            q_nb_seed,
+                            course_rad,
+                            2.0_f32.to_radians(),
+                            10.0_f32.to_radians(),
+                        );
+                        let down_curr = quat_rotate(
+                            [
+                                misalign.q_vb[0] as f64,
+                                misalign.q_vb[1] as f64,
+                                misalign.q_vb[2] as f64,
+                                misalign.q_vb[3] as f64,
+                            ],
+                            [0.0, 0.0, 1.0],
+                        );
+                        let down_seed = quat_rotate(
+                            [
+                                nav_seed.q_vb[0] as f64,
+                                nav_seed.q_vb[1] as f64,
+                                nav_seed.q_vb[2] as f64,
+                                nav_seed.q_vb[3] as f64,
+                            ],
+                            [0.0, 0.0, 1.0],
+                        );
+                        if angle_between_unit_deg(down_curr, down_seed) <= 10.0 {
+                            misalign = nav_seed;
+                        }
+                        nav_yaw_seeded = true;
+                    }
+                }
                 let t_s = (t_ms - dataset.timeline.t0_master_ms) * 1.0e-3;
                 let q_nb = [ekf.state.q0, ekf.state.q1, ekf.state.q2, ekf.state.q3];
                 let v_n = [ekf.state.vn, ekf.state.ve, ekf.state.vd];
@@ -1257,6 +1373,36 @@ fn evaluate_misalign(
                     gyro_radps[1] - ekf.state.day_b / dt_safe,
                     gyro_radps[2] - ekf.state.daz_b / dt_safe,
                 ];
+                let accel_b_corr = [
+                    accel_b[0] - ekf.state.dvx_b / dt_safe,
+                    accel_b[1] - ekf.state.dvy_b / dt_safe,
+                    accel_b[2] - ekf.state.dvz_b / dt_safe,
+                ];
+                if nav_yaw_seeded && !mount_yaw_seeded {
+                    if misalign.horizontal_speed_mps(v_n) >= MISALIGN_YAW_SEED_MIN_SPEED_MPS {
+                        yaw_seed_samples.push(MisalignYawSeedSample {
+                            q_nb,
+                            v_n,
+                            omega_b_corr,
+                        });
+                    }
+                    if t_s - init_time_s >= MISALIGN_YAW_SEED_WINDOW_S
+                        && yaw_seed_samples.len() >= MISALIGN_YAW_SEED_MIN_SAMPLES
+                    {
+                        if let Some(yaw_seed_rad) = resolve_misalign_yaw_seed(
+                            &misalign,
+                            &yaw_seed_samples,
+                            MISALIGN_YAW_SEED_STEP_DEG,
+                        ) {
+                            misalign.set_mount_yaw(yaw_seed_rad, 5.0_f32.to_radians());
+                            mount_yaw_seeded = true;
+                        }
+                    }
+                }
+                if !mount_yaw_seeded {
+                    prev_nav = Some((t_ms, nav));
+                    continue;
+                }
                 let nhc_valid = misalign.nhc_gate(v_n);
                 if nhc_valid {
                     let h = misalign.nhc_mount_jacobian(q_nb, v_n);
@@ -1271,7 +1417,7 @@ fn evaluate_misalign(
                     obs_window.push_row(t_s, [h[0][0] / sigma, h[0][1] / sigma, h[0][2] / sigma]);
                     obs_window.push_row(t_s, [h[1][0] / sigma, h[1][1] / sigma, h[1][2] / sigma]);
                 }
-                let (_, tr) = misalign.update_all(dt_update, q_nb, v_n, omega_b_corr);
+                let (_, tr) = misalign.update_all(dt_update, q_nb, v_n, omega_b_corr, accel_b_corr);
                 obs_window.prune(t_s);
                 let obs = obs_window.summary();
 
@@ -1282,7 +1428,8 @@ fn evaluate_misalign(
                     misalign.q_vb[3] as f64,
                 ];
                 let align_rpy_deg = {
-                    let (r, p, y) = quat_rpy_alg_deg(q_align[0], q_align[1], q_align[2], q_align[3]);
+                    let (r, p, y) =
+                        quat_rpy_alg_deg(q_align[0], q_align[1], q_align[2], q_align[3]);
                     [r, p, y]
                 };
                 let alg_q = interpolate_alg_quat(&replay_ref.alg_events, t_ms);
@@ -1383,10 +1530,13 @@ fn evaluate_misalign(
                         planar_gyro_valid: tr.planar_gyro_valid,
                         misalign_speed_h_mps: tr.speed_h_mps as f64,
                         misalign_omega_v_yaw_abs_dps: tr.omega_v_yaw_abs_radps.to_degrees() as f64,
-                        misalign_omega_v_transverse_dps: tr.omega_v_transverse_radps.to_degrees() as f64,
+                        misalign_omega_v_transverse_dps: tr.omega_v_transverse_radps.to_degrees()
+                            as f64,
                         misalign_omega_v_transverse_ratio: tr.omega_v_transverse_ratio as f64,
-                        planar_gyro_residual_x_dps: tr.planar_gyro_residual_x_radps.to_degrees() as f64,
-                        planar_gyro_residual_y_dps: tr.planar_gyro_residual_y_radps.to_degrees() as f64,
+                        planar_gyro_residual_x_dps: tr.planar_gyro_residual_x_radps.to_degrees()
+                            as f64,
+                        planar_gyro_residual_y_dps: tr.planar_gyro_residual_y_radps.to_degrees()
+                            as f64,
                         obs_rows: obs.rows,
                         obs_sigma_max: obs.sigma_max,
                         obs_sigma_mid: obs.sigma_mid,
@@ -1401,7 +1551,12 @@ fn evaluate_misalign(
     }
 
     let metrics = score_samples(&samples, dataset.total_nav_events, init_time_s);
-    Ok(EvalResult { cfg: *cfg, bootstrap_cfg: *bootstrap_cfg, metrics, samples })
+    Ok(EvalResult {
+        cfg: *cfg,
+        bootstrap_cfg: *bootstrap_cfg,
+        metrics,
+        samples,
+    })
 }
 
 fn tune_config(
@@ -1679,8 +1834,7 @@ fn print_config(cfg: &AlignConfig, bootstrap_cfg: &BootstrapConfig) {
     );
     eprintln!(
         "[config] long_alpha={:.3} min_long_sign_windows={}",
-        cfg.long_lpf_alpha,
-        cfg.min_long_sign_stable_windows
+        cfg.long_lpf_alpha, cfg.min_long_sign_stable_windows
     );
     eprintln!(
         "[config] bootstrap_ema_alpha={:.3} bootstrap_max_speed={:.3} stationary_samples={}",
@@ -1849,6 +2003,11 @@ fn wrap_deg180(mut deg: f64) -> f64 {
     deg
 }
 
+fn angle_between_unit_deg(a: [f64; 3], b: [f64; 3]) -> f64 {
+    let dot = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]).clamp(-1.0, 1.0);
+    dot.acos().to_degrees()
+}
+
 fn norm_quat(q: [f64; 4]) -> [f64; 4] {
     let n = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
     if n <= 1.0e-12 {
@@ -1856,6 +2015,36 @@ fn norm_quat(q: [f64; 4]) -> [f64; 4] {
     } else {
         [q[0] / n, q[1] / n, q[2] / n, q[3] / n]
     }
+}
+
+fn quat_from_rpy_rad_local(roll: f64, pitch: f64, yaw: f64) -> [f64; 4] {
+    let (sr, cr) = (0.5 * roll).sin_cos();
+    let (sp, cp) = (0.5 * pitch).sin_cos();
+    let (sy, cy) = (0.5 * yaw).sin_cos();
+    norm_quat([
+        cr * cp * cy + sr * sp * sy,
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
+    ])
+}
+
+fn seed_ekf_yaw_from_course(ekf: &mut Ekf, course_rad: f32) {
+    let (roll_deg, pitch_deg, _) = quat_rpy_alg_deg(
+        ekf.state.q0 as f64,
+        ekf.state.q1 as f64,
+        ekf.state.q2 as f64,
+        ekf.state.q3 as f64,
+    );
+    let q = quat_from_rpy_rad_local(
+        roll_deg.to_radians(),
+        pitch_deg.to_radians(),
+        course_rad as f64,
+    );
+    ekf.state.q0 = q[0] as f32;
+    ekf.state.q1 = q[1] as f32;
+    ekf.state.q2 = q[2] as f32;
+    ekf.state.q3 = q[3] as f32;
 }
 
 fn quat_mul_local(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {

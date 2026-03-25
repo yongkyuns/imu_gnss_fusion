@@ -1,6 +1,10 @@
 #![allow(non_snake_case)]
 
-use nalgebra::{SMatrix, SVector};
+use crate::stationary_mount::{
+    StationaryMountBootstrap, bootstrap_vehicle_to_body_from_stationary,
+    bootstrap_vehicle_to_body_from_stationary_with_x_ref,
+};
+use nalgebra::SMatrix;
 
 pub const GRAVITY_MPS2: f32 = 9.80665;
 pub const ALIGN_NHC_ERR_STATES: usize = 15;
@@ -119,41 +123,79 @@ impl AlignNhc {
         yaw_seed_rad: f32,
         q_vb_seed: [f32; 4],
     ) -> Result<(), &'static str> {
+        let c_b_v_seed = transpose3x3(quat_to_rotmat(quat_normalize(q_vb_seed)));
+        let mount_yaw_seed_rad = c_b_v_seed[1][0].atan2(c_b_v_seed[0][0]);
+        let mount = bootstrap_vehicle_to_body_from_stationary(accel_samples_b, mount_yaw_seed_rad)?;
+        self.initialize_from_stationary_with_mount(gyro_samples_b, yaw_seed_rad, mount)
+    }
+
+    pub fn initialize_from_stationary_with_mount_seed(
+        &mut self,
+        accel_samples_b: &[[f32; 3]],
+        gyro_samples_b: &[[f32; 3]],
+        yaw_seed_rad: f32,
+        q_vb_seed: [f32; 4],
+    ) -> Result<(), &'static str> {
         if accel_samples_b.is_empty() || gyro_samples_b.is_empty() {
             return Err("stationary initialization requires accel and gyro samples");
         }
         let f_mean = mean3(accel_samples_b);
         let w_mean = mean3(gyro_samples_b);
-        let n = vec3_norm(f_mean);
-        if n < 1.0e-6 {
-            return Err("stationary initialization requires nonzero accel mean");
+        let c_b_v = quat_to_rotmat(quat_normalize(q_vb_seed));
+        let c_v_b = transpose3x3(c_b_v);
+
+        let (s, c) = yaw_seed_rad.sin_cos();
+        let c_n_v = [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]];
+        let c_n_b = mat3_mul(c_n_v, c_v_b);
+
+        self.q_nb = quat_from_rotmat(c_n_b);
+        self.v_n = [0.0, 0.0, 0.0];
+        self.q_vb = quat_from_rotmat(c_v_b);
+        self.b_g = w_mean;
+        let g_b = mat3_vec(transpose3x3(c_n_b), [0.0, 0.0, GRAVITY_MPS2]);
+        self.b_a = vec3_add(f_mean, g_b);
+
+        self.P = [[0.0_f32; ALIGN_NHC_ERR_STATES]; ALIGN_NHC_ERR_STATES];
+        for i in 0..3 {
+            self.P[i][i] = 1.0_f32.to_radians().powi(2);
+            self.P[3 + i][3 + i] = 1.0_f32.powi(2);
+            self.P[6 + i][6 + i] = 10.0_f32.to_radians().powi(2);
+            self.P[9 + i][9 + i] = 0.2_f32.to_radians().powi(2);
+            self.P[12 + i][12 + i] = 0.2_f32.powi(2);
         }
+        Ok(())
+    }
 
-        let z_v_in_b = vec3_scale(f_mean, -1.0 / n);
-        let mut x_ref = [1.0, 0.0, 0.0];
-        let mut x_v_in_b = vec3_sub(x_ref, vec3_scale(z_v_in_b, vec3_dot(z_v_in_b, x_ref)));
-        if vec3_norm(x_v_in_b) < 1.0e-6 {
-            x_ref = [0.0, 1.0, 0.0];
-            x_v_in_b = vec3_sub(x_ref, vec3_scale(z_v_in_b, vec3_dot(z_v_in_b, x_ref)));
+    pub fn initialize_from_stationary_with_x_ref(
+        &mut self,
+        accel_samples_b: &[[f32; 3]],
+        gyro_samples_b: &[[f32; 3]],
+        yaw_seed_rad: f32,
+        q_vb_seed: [f32; 4],
+        x_ref: [f32; 3],
+    ) -> Result<(), &'static str> {
+        let c_b_v_seed = transpose3x3(quat_to_rotmat(quat_normalize(q_vb_seed)));
+        let mount_yaw_seed_rad = c_b_v_seed[1][0].atan2(c_b_v_seed[0][0]);
+        let mount = bootstrap_vehicle_to_body_from_stationary_with_x_ref(
+            accel_samples_b,
+            mount_yaw_seed_rad,
+            x_ref,
+        )?;
+        self.initialize_from_stationary_with_mount(gyro_samples_b, yaw_seed_rad, mount)
+    }
+
+    fn initialize_from_stationary_with_mount(
+        &mut self,
+        gyro_samples_b: &[[f32; 3]],
+        yaw_seed_rad: f32,
+        mount: StationaryMountBootstrap,
+    ) -> Result<(), &'static str> {
+        if gyro_samples_b.is_empty() {
+            return Err("stationary initialization requires accel and gyro samples");
         }
-        x_v_in_b = vec3_normalize(x_v_in_b).ok_or("failed to initialize x axis")?;
-        let mut y_v_in_b = vec3_normalize(vec3_cross(z_v_in_b, x_v_in_b))
-            .ok_or("failed to initialize y axis")?;
-        x_v_in_b = vec3_cross(y_v_in_b, z_v_in_b);
-        y_v_in_b = vec3_normalize(y_v_in_b).ok_or("failed to orthonormalize y axis")?;
-        x_v_in_b = vec3_normalize(x_v_in_b).ok_or("failed to orthonormalize x axis")?;
-        // x_v_in_b/y_v_in_b/z_v_in_b are the vehicle axes expressed in body coordinates, so they
-        // form the rows of C_v_b (body -> vehicle), not the columns.
-        let c_v_b_tilt = [x_v_in_b, y_v_in_b, z_v_in_b];
-
-        // Gravity identifies mount roll/pitch but not mount yaw. Preserve the mount-yaw seed
-        // on the right so the down axis from the stationary accel is held exactly.
-        let c_v_b_seed = quat_to_rotmat(quat_normalize(q_vb_seed));
-        let yaw_vb_seed = c_v_b_seed[1][0].atan2(c_v_b_seed[0][0]);
-        let (sy, cy) = yaw_vb_seed.sin_cos();
-        let c_delta_vb = [[cy, -sy, 0.0], [sy, cy, 0.0], [0.0, 0.0, 1.0]];
-        let c_v_b = mat3_mul(c_v_b_tilt, c_delta_vb);
-
+        let f_mean = mount.mean_accel_b;
+        let w_mean = mean3(gyro_samples_b);
+        let c_v_b = transpose3x3(mount.c_b_v);
         // Assume the stationary vehicle is locally level; the navigation-to-vehicle attitude is
         // therefore yaw-only at bootstrap, and the navigation-to-body attitude is its product
         // with the mount rotation.
@@ -182,7 +224,10 @@ impl AlignNhc {
     pub fn predict_imu(&mut self, dt: f32, f_m_b: [f32; 3], omega_m_b: [f32; 3]) {
         let dt = dt.max(1.0e-3);
         let omega_b = vec3_sub(omega_m_b, self.b_g);
-        self.q_nb = quat_normalize(quat_mul(self.q_nb, quat_from_small_angle(vec3_scale(omega_b, dt))));
+        self.q_nb = quat_normalize(quat_mul(
+            self.q_nb,
+            quat_from_small_angle(vec3_scale(omega_b, dt)),
+        ));
 
         let f_b = vec3_sub(f_m_b, self.b_a);
         let c_n_b = quat_to_rotmat(self.q_nb);
@@ -241,27 +286,50 @@ impl AlignNhc {
         self.P[2][1] = 0.0;
     }
 
+    pub fn seed_mount_yaw_from_course(&mut self, course_rad: f32, yaw_std_rad: f32) {
+        let c_n_b = quat_to_rotmat(self.q_nb);
+        let (s, c) = course_rad.sin_cos();
+        let c_n_v = [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]];
+        let c_v_n = transpose3x3(c_n_v);
+        let c_v_b_target = mat3_mul(c_v_n, c_n_b);
+        self.q_vb = quat_from_rotmat(c_v_b_target);
+
+        self.P[8][8] = yaw_std_rad.powi(2);
+        self.P[6][8] = 0.0;
+        self.P[7][8] = 0.0;
+        self.P[8][6] = 0.0;
+        self.P[8][7] = 0.0;
+    }
+
     pub fn update_gnss_velocity(&mut self, z_v_n: [f32; 3]) -> f32 {
-        let y = vec3_sub(z_v_n, self.v_n);
-        let r = SMatrix::<f32, 3, 3>::identity() * self.cfg.r_gnss_vel_std_mps.powi(2);
-        let h = self.gnss_velocity_jacobian();
-        self.apply_measurement::<3>(SVector::<f32, 3>::from_row_slice(&y), h, r)
+        let mut score = 0.0_f32;
+        for axis in 0..3 {
+            let innovation = z_v_n[axis] - self.gnss_velocity_prediction()[axis];
+            let h = self.gnss_velocity_jacobian_row(axis);
+            score += self.apply_measurement1(innovation, &h, self.cfg.r_gnss_vel_std_mps.powi(2));
+        }
+        score
     }
 
     pub fn update_nhc(&mut self, allow_mount_yaw: bool) -> f32 {
-        let h_pred = self.nhc_prediction();
-        let y = SVector::<f32, 2>::from_row_slice(&[-h_pred[0], -h_pred[1]]);
-        let r = SMatrix::<f32, 2, 2>::identity() * self.cfg.r_nhc_std_mps.powi(2);
-        let h = self.nhc_jacobian(allow_mount_yaw);
-        self.apply_measurement::<2>(y, h, r)
+        let mut score = 0.0_f32;
+        for axis in 0..2 {
+            let innovation = -self.nhc_prediction()[axis];
+            let h = self.nhc_jacobian_row(axis, allow_mount_yaw);
+            score += self.apply_measurement1(innovation, &h, self.cfg.r_nhc_std_mps.powi(2));
+        }
+        score
     }
 
     pub fn update_planar_gyro(&mut self, omega_m_b: [f32; 3]) -> f32 {
-        let h_pred = self.planar_gyro_prediction(omega_m_b);
-        let y = SVector::<f32, 2>::from_row_slice(&[-h_pred[0], -h_pred[1]]);
-        let r = SMatrix::<f32, 2, 2>::identity() * self.cfg.r_planar_gyro_std_radps.powi(2);
-        let h = self.planar_gyro_jacobian(omega_m_b);
-        self.apply_measurement::<2>(y, h, r)
+        let mut score = 0.0_f32;
+        for axis in 0..2 {
+            let innovation = -self.planar_gyro_prediction(omega_m_b)[axis];
+            let h = self.planar_gyro_jacobian_row(axis, omega_m_b);
+            score +=
+                self.apply_measurement1(innovation, &h, self.cfg.r_planar_gyro_std_radps.powi(2));
+        }
+        score
     }
 
     pub fn update_all(
@@ -337,80 +405,109 @@ impl AlignNhc {
         transverse <= self.cfg.max_planar_transverse_ratio * yaw_abs
     }
 
-    fn gnss_velocity_jacobian(&self) -> SMatrix<f32, 3, ALIGN_NHC_ERR_STATES> {
-        let mut h = SMatrix::<f32, 3, ALIGN_NHC_ERR_STATES>::zeros();
-        h[(0, 3)] = 1.0;
-        h[(1, 4)] = 1.0;
-        h[(2, 5)] = 1.0;
+    fn gnss_velocity_jacobian_row(&self, axis: usize) -> [f32; ALIGN_NHC_ERR_STATES] {
+        let mut h = [0.0_f32; ALIGN_NHC_ERR_STATES];
+        h[3 + axis] = 1.0;
         h
     }
 
-    fn nhc_jacobian(&self, allow_mount_yaw: bool) -> SMatrix<f32, 2, ALIGN_NHC_ERR_STATES> {
+    fn nhc_jacobian_row(&self, axis: usize, allow_mount_yaw: bool) -> [f32; ALIGN_NHC_ERR_STATES] {
         let c_n_b = quat_to_rotmat(self.q_nb);
         let c_b_n = transpose3x3(c_n_b);
         let c_v_b = quat_to_rotmat(self.q_vb);
         let v_b = mat3_vec(c_b_n, self.v_n);
-        let mut h = SMatrix::<f32, 2, ALIGN_NHC_ERR_STATES>::zeros();
         let s_yz = [[0.0_f32, 1.0, 0.0], [0.0_f32, 0.0, 1.0]];
         let h_theta_nb = mat2x3_mul3x3(s_yz, mat3_mul(c_v_b, skew3(v_b)));
         let h_vn = mat2x3_mul3x3(s_yz, mat3_mul(c_v_b, c_b_n));
         let h_theta_vb = mat2x3_mul3x3(s_yz, mat3_mul(c_v_b, negate3(skew3(v_b))));
-        for r in 0..2 {
-            for c in 0..3 {
-                h[(r, c)] = h_theta_nb[r][c];
-                h[(r, 3 + c)] = h_vn[r][c];
-                h[(r, 6 + c)] = h_theta_vb[r][c];
-            }
+        let mut h = [0.0_f32; ALIGN_NHC_ERR_STATES];
+        for c in 0..3 {
+            h[c] = h_theta_nb[axis][c];
+            h[3 + c] = h_vn[axis][c];
+            h[6 + c] = h_theta_vb[axis][c];
         }
         if !allow_mount_yaw {
-            h[(0, 8)] *= self.cfg.nhc_straight_mount_yaw_scale;
-            h[(1, 8)] *= self.cfg.nhc_straight_mount_yaw_scale;
+            h[8] *= self.cfg.nhc_straight_mount_yaw_scale;
         }
         h
     }
 
-    fn planar_gyro_jacobian(&self, omega_m_b: [f32; 3]) -> SMatrix<f32, 2, ALIGN_NHC_ERR_STATES> {
+    fn planar_gyro_jacobian_row(
+        &self,
+        axis: usize,
+        omega_m_b: [f32; 3],
+    ) -> [f32; ALIGN_NHC_ERR_STATES] {
         let omega_b = vec3_sub(omega_m_b, self.b_g);
         let c_v_b = quat_to_rotmat(self.q_vb);
         let s_xy = [[1.0_f32, 0.0, 0.0], [0.0_f32, 1.0, 0.0]];
         let h_bg = mat2x3_mul3x3(s_xy, negate3(c_v_b));
         let h_theta_vb = mat2x3_mul3x3(s_xy, mat3_mul(c_v_b, negate3(skew3(omega_b))));
-        let mut h = SMatrix::<f32, 2, ALIGN_NHC_ERR_STATES>::zeros();
-        for r in 0..2 {
-            for c in 0..3 {
-                h[(r, 6 + c)] = h_theta_vb[r][c];
-                h[(r, 9 + c)] = h_bg[r][c];
-            }
+        let mut h = [0.0_f32; ALIGN_NHC_ERR_STATES];
+        for c in 0..3 {
+            h[6 + c] = h_theta_vb[axis][c];
+            h[9 + c] = h_bg[axis][c];
         }
         h
     }
 
-    fn apply_measurement<const M: usize>(
+    fn apply_measurement1(
         &mut self,
-        y: SVector<f32, M>,
-        h: SMatrix<f32, M, ALIGN_NHC_ERR_STATES>,
-        r: SMatrix<f32, M, M>,
+        innovation: f32,
+        h: &[f32; ALIGN_NHC_ERR_STATES],
+        r_var: f32,
     ) -> f32 {
-        let p = mat_to_smatrix::<ALIGN_NHC_ERR_STATES>(self.P);
-        let s = h * p * h.transpose() + r;
-        let s_inv = s
-            .try_inverse()
-            .unwrap_or_else(SMatrix::<f32, M, M>::identity);
-        let k = p * h.transpose() * s_inv;
-        let dx = k * y;
-        let mut dx_arr = [0.0_f32; ALIGN_NHC_ERR_STATES];
-        dx_arr.copy_from_slice(dx.as_slice());
-        self.inject_error(dx_arr);
-        let i = SMatrix::<f32, ALIGN_NHC_ERR_STATES, ALIGN_NHC_ERR_STATES>::identity();
-        let p_new = (i - k * h) * p;
-        self.P = smatrix_to_mat::<ALIGN_NHC_ERR_STATES>(symmetrize::<ALIGN_NHC_ERR_STATES>(p_new));
-        (y.transpose() * s_inv * y)[0]
+        let p_old = self.P;
+
+        let mut ph = [0.0_f32; ALIGN_NHC_ERR_STATES];
+        for i in 0..ALIGN_NHC_ERR_STATES {
+            for (j, hj) in h.iter().enumerate() {
+                ph[i] += p_old[i][j] * *hj;
+            }
+        }
+
+        let mut s = r_var.max(1.0e-9);
+        for j in 0..ALIGN_NHC_ERR_STATES {
+            s += h[j] * ph[j];
+        }
+        let inv_s = if s > 1.0e-9 { 1.0 / s } else { 0.0 };
+
+        let mut k = [0.0_f32; ALIGN_NHC_ERR_STATES];
+        for i in 0..ALIGN_NHC_ERR_STATES {
+            k[i] = ph[i] * inv_s;
+        }
+
+        let mut dx = [0.0_f32; ALIGN_NHC_ERR_STATES];
+        for i in 0..ALIGN_NHC_ERR_STATES {
+            dx[i] = k[i] * innovation;
+        }
+        self.inject_error(dx);
+
+        let mut hp = [0.0_f32; ALIGN_NHC_ERR_STATES];
+        for j in 0..ALIGN_NHC_ERR_STATES {
+            for kk in 0..ALIGN_NHC_ERR_STATES {
+                hp[j] += h[kk] * p_old[kk][j];
+            }
+        }
+
+        for i in 0..ALIGN_NHC_ERR_STATES {
+            for j in 0..ALIGN_NHC_ERR_STATES {
+                self.P[i][j] = p_old[i][j] - k[i] * hp[j];
+            }
+        }
+        self.P = symmetrize_mat::<ALIGN_NHC_ERR_STATES>(self.P);
+        innovation * innovation * inv_s
     }
 
     fn inject_error(&mut self, dx: [f32; ALIGN_NHC_ERR_STATES]) {
-        self.q_nb = quat_normalize(quat_mul(self.q_nb, quat_from_small_angle([dx[0], dx[1], dx[2]])));
+        self.q_nb = quat_normalize(quat_mul(
+            self.q_nb,
+            quat_from_small_angle([dx[0], dx[1], dx[2]]),
+        ));
         self.v_n = vec3_add(self.v_n, [dx[3], dx[4], dx[5]]);
-        self.q_vb = quat_normalize(quat_mul(self.q_vb, quat_from_small_angle([dx[6], dx[7], dx[8]])));
+        self.q_vb = quat_normalize(quat_mul(
+            self.q_vb,
+            quat_from_small_angle([dx[6], dx[7], dx[8]]),
+        ));
         self.b_g = vec3_add(self.b_g, [dx[9], dx[10], dx[11]]);
         self.b_a = vec3_add(self.b_a, [dx[12], dx[13], dx[14]]);
     }
@@ -442,6 +539,17 @@ fn smatrix_to_mat<const N: usize>(m: SMatrix<f32, N, N>) -> [[f32; N]; N] {
         }
     }
     out
+}
+
+fn symmetrize_mat<const N: usize>(mut m: [[f32; N]; N]) -> [[f32; N]; N] {
+    for i in 0..N {
+        for j in i..N {
+            let temp = 0.5 * (m[i][j] + m[j][i]);
+            m[i][j] = temp;
+            m[j][i] = temp;
+        }
+    }
+    m
 }
 
 fn symmetrize<const N: usize>(m: SMatrix<f32, N, N>) -> SMatrix<f32, N, N> {
@@ -479,9 +587,7 @@ fn mat3_to_smatrix(a: [[f32; 3]; 3]) -> SMatrix<f32, 3, 3> {
 }
 
 fn skew_smatrix3(v: [f32; 3]) -> SMatrix<f32, 3, 3> {
-    SMatrix::<f32, 3, 3>::from_row_slice(&[
-        0.0, -v[2], v[1], v[2], 0.0, -v[0], -v[1], v[0], 0.0,
-    ])
+    SMatrix::<f32, 3, 3>::from_row_slice(&[0.0, -v[2], v[1], v[2], 0.0, -v[0], -v[1], v[0], 0.0])
 }
 
 fn quat_mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
@@ -604,22 +710,17 @@ fn vec3_scale(v: [f32; 3], s: f32) -> [f32; 3] {
     [v[0] * s, v[1] * s, v[2] * s]
 }
 
+#[cfg(test)]
 fn vec3_dot(a: [f32; 3], b: [f32; 3]) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
-fn vec3_cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-
+#[cfg(test)]
 fn vec3_norm(v: [f32; 3]) -> f32 {
     (vec3_dot(v, v)).sqrt()
 }
 
+#[cfg(test)]
 fn vec3_normalize(v: [f32; 3]) -> Option<[f32; 3]> {
     let n = vec3_norm(v);
     if n < 1.0e-6 {
@@ -631,6 +732,8 @@ fn vec3_normalize(v: [f32; 3]) -> Option<[f32; 3]> {
 
 #[cfg(test)]
 mod tests {
+    use crate::align::Align;
+
     use super::*;
 
     fn finite_difference_jacobian<const M: usize, F>(
@@ -693,14 +796,38 @@ mod tests {
 
     fn simulate_truth(
         q_vb_true: [f32; 4],
-    ) -> (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<([f32; 3], [f32; 3], [f32; 3], [f32; 4])>) {
+    ) -> (
+        Vec<[f32; 3]>,
+        Vec<[f32; 3]>,
+        Vec<([f32; 3], [f32; 3], [f32; 3], [f32; 4])>,
+    ) {
         let dt = 0.01_f32;
         let base = [
-            SimSeg { duration_s: 10.0, a_long_mps2: 0.7, yaw_rate_radps: 0.0 },
-            SimSeg { duration_s: 8.0, a_long_mps2: 0.0, yaw_rate_radps: 10.0_f32.to_radians() },
-            SimSeg { duration_s: 8.0, a_long_mps2: 0.0, yaw_rate_radps: -11.0_f32.to_radians() },
-            SimSeg { duration_s: 8.0, a_long_mps2: 0.4, yaw_rate_radps: 8.0_f32.to_radians() },
-            SimSeg { duration_s: 8.0, a_long_mps2: -0.4, yaw_rate_radps: -8.0_f32.to_radians() },
+            SimSeg {
+                duration_s: 10.0,
+                a_long_mps2: 0.7,
+                yaw_rate_radps: 0.0,
+            },
+            SimSeg {
+                duration_s: 8.0,
+                a_long_mps2: 0.0,
+                yaw_rate_radps: 10.0_f32.to_radians(),
+            },
+            SimSeg {
+                duration_s: 8.0,
+                a_long_mps2: 0.0,
+                yaw_rate_radps: -11.0_f32.to_radians(),
+            },
+            SimSeg {
+                duration_s: 8.0,
+                a_long_mps2: 0.4,
+                yaw_rate_radps: 8.0_f32.to_radians(),
+            },
+            SimSeg {
+                duration_s: 8.0,
+                a_long_mps2: -0.4,
+                yaw_rate_radps: -8.0_f32.to_radians(),
+            },
         ];
 
         let c_v_b = quat_to_rotmat(q_vb_true);
@@ -712,7 +839,11 @@ mod tests {
         let mut yaw = 0.0_f32;
         let mut speed = 0.0_f32;
 
-        let stationary = SimSeg { duration_s: 8.0, a_long_mps2: 0.0, yaw_rate_radps: 0.0 };
+        let stationary = SimSeg {
+            duration_s: 8.0,
+            a_long_mps2: 0.0,
+            yaw_rate_radps: 0.0,
+        };
         let steps = (stationary.duration_s / dt).round() as usize;
         for _ in 0..steps {
             let c_n_v = euler_zyx_to_rot(0.0, 0.0, yaw);
@@ -833,10 +964,24 @@ mod tests {
     #[test]
     fn nhc_jacobian_matches_finite_difference() {
         let mut f = AlignNhc::default();
-        f.q_nb = quat_from_small_angle([3.0_f32.to_radians(), -2.0_f32.to_radians(), 15.0_f32.to_radians()]);
-        f.q_vb = quat_from_small_angle([2.0_f32.to_radians(), -1.0_f32.to_radians(), 8.0_f32.to_radians()]);
+        f.q_nb = quat_from_small_angle([
+            3.0_f32.to_radians(),
+            -2.0_f32.to_radians(),
+            15.0_f32.to_radians(),
+        ]);
+        f.q_vb = quat_from_small_angle([
+            2.0_f32.to_radians(),
+            -1.0_f32.to_radians(),
+            8.0_f32.to_radians(),
+        ]);
         f.v_n = [12.0, 1.5, 0.3];
-        let h_analytic = f.nhc_jacobian(true);
+        let h_analytic = SMatrix::<f32, 2, ALIGN_NHC_ERR_STATES>::from_row_slice(
+            &[
+                f.nhc_jacobian_row(0, true).as_slice(),
+                f.nhc_jacobian_row(1, true).as_slice(),
+            ]
+            .concat(),
+        );
         let h_numeric = finite_difference_jacobian(&f, AlignNhc::nhc_prediction);
         let diff = h_analytic - h_numeric;
         assert!(
@@ -852,10 +997,20 @@ mod tests {
     #[test]
     fn planar_gyro_jacobian_matches_finite_difference() {
         let mut f = AlignNhc::default();
-        f.q_vb = quat_from_small_angle([2.0_f32.to_radians(), -3.0_f32.to_radians(), 7.0_f32.to_radians()]);
+        f.q_vb = quat_from_small_angle([
+            2.0_f32.to_radians(),
+            -3.0_f32.to_radians(),
+            7.0_f32.to_radians(),
+        ]);
         f.b_g = [0.01, -0.02, 0.005];
         let omega_m = [0.03, -0.04, 0.35];
-        let h_analytic = f.planar_gyro_jacobian(omega_m);
+        let h_analytic = SMatrix::<f32, 2, ALIGN_NHC_ERR_STATES>::from_row_slice(
+            &[
+                f.planar_gyro_jacobian_row(0, omega_m).as_slice(),
+                f.planar_gyro_jacobian_row(1, omega_m).as_slice(),
+            ]
+            .concat(),
+        );
         let h_numeric = finite_difference_jacobian(&f, |s| s.planar_gyro_prediction(omega_m));
         assert!((h_analytic - h_numeric).amax() < 2.0e-3);
     }
@@ -869,8 +1024,13 @@ mod tests {
         ]);
         let (stationary_accel, stationary_gyro, data) = simulate_truth(q_vb_true);
         let mut f = AlignNhc::default();
-        f.initialize_from_stationary(&stationary_accel, &stationary_gyro, 0.0, [1.0, 0.0, 0.0, 0.0])
-            .unwrap();
+        f.initialize_from_stationary(
+            &stationary_accel,
+            &stationary_gyro,
+            0.0,
+            [1.0, 0.0, 0.0, 0.0],
+        )
+        .unwrap();
 
         f.v_n = [0.0, 0.0, 0.0];
 
@@ -884,7 +1044,12 @@ mod tests {
             let _ = f.update_planar_gyro(omega_b);
         }
         let err1 = mount_angle_deg(f.q_vb, q_vb_true);
-        assert!(err1 < err0 - 2.0, "mount error did not drop enough: {} -> {}", err0, err1);
+        assert!(
+            err1 < err0 - 2.0,
+            "mount error did not drop enough: {} -> {}",
+            err0,
+            err1
+        );
         assert!(err1 < 4.0, "final mount error too large: {}", err1);
     }
 
@@ -903,25 +1068,65 @@ mod tests {
 
         let down_est = mat3_vec(quat_to_rotmat(f.q_vb), [0.0, 0.0, 1.0]);
         let down_true = mat3_vec(quat_to_rotmat(q_vb_true), [0.0, 0.0, 1.0]);
-        let cosang = vec3_dot(vec3_normalize(down_est).unwrap(), vec3_normalize(down_true).unwrap())
-            .clamp(-1.0, 1.0);
+        let cosang = vec3_dot(
+            vec3_normalize(down_est).unwrap(),
+            vec3_normalize(down_true).unwrap(),
+        )
+        .clamp(-1.0, 1.0);
         let err_deg = cosang.acos().to_degrees();
-        assert!(err_deg < 0.5, "down-axis bootstrap error too large: {}", err_deg);
+        assert!(
+            err_deg < 0.5,
+            "down-axis bootstrap error too large: {}",
+            err_deg
+        );
+    }
+
+    #[test]
+    fn stationary_init_matches_align_shared_mount_bootstrap() {
+        let q_vb_true = quat_from_small_angle([8.0_f32.to_radians(), -6.0_f32.to_radians(), 0.0]);
+        let (stationary_accel, stationary_gyro, _data) = simulate_truth(q_vb_true);
+
+        let mut align = Align::default();
+        align
+            .initialize_from_stationary(&stationary_accel, 0.0)
+            .unwrap();
+
+        let mut nhc = AlignNhc::default();
+        nhc.initialize_from_stationary(
+            &stationary_accel,
+            &stationary_gyro,
+            0.0,
+            [1.0, 0.0, 0.0, 0.0],
+        )
+        .unwrap();
+
+        let q_b_v_from_nhc = quat_from_rotmat(transpose3x3(quat_to_rotmat(nhc.q_vb)));
+        assert!(mount_angle_deg(q_b_v_from_nhc, align.q_vb) < 1.0e-3);
     }
 
     #[test]
     fn seed_nav_yaw_from_course_preserves_mount_and_sets_course() {
         let mut f = AlignNhc::default();
-        let q_vb_true = quat_from_small_angle([8.0_f32.to_radians(), -6.0_f32.to_radians(), 5.0_f32.to_radians()]);
+        let q_vb_true = quat_from_small_angle([
+            8.0_f32.to_radians(),
+            -6.0_f32.to_radians(),
+            5.0_f32.to_radians(),
+        ]);
         let (stationary_accel, stationary_gyro, _data) = simulate_truth(q_vb_true);
-        f.initialize_from_stationary(&stationary_accel, &stationary_gyro, 0.0, [1.0, 0.0, 0.0, 0.0])
-            .unwrap();
+        f.initialize_from_stationary(
+            &stationary_accel,
+            &stationary_gyro,
+            0.0,
+            [1.0, 0.0, 0.0, 0.0],
+        )
+        .unwrap();
 
         let q_vb_before = f.q_vb;
         f.seed_nav_yaw_from_course(35.0_f32.to_radians(), 5.0_f32.to_radians());
 
         let c_n_b = quat_to_rotmat(f.q_nb);
-        let yaw = euler_from_rot(c_n_b)[2];
+        let c_b_v = transpose3x3(quat_to_rotmat(f.q_vb));
+        let yaw = euler_from_rot(mat3_mul(c_n_b, c_b_v))[2];
         let mut yaw_err = yaw - 35.0_f32.to_radians();
         while yaw_err > std::f32::consts::PI {
             yaw_err -= 2.0 * std::f32::consts::PI;
@@ -935,16 +1140,55 @@ mod tests {
     }
 
     #[test]
+    fn seed_mount_yaw_from_course_sets_mount_yaw_without_tilt_jump() {
+        let mut f = AlignNhc::default();
+        let q_vb_true = quat_from_small_angle([
+            8.0_f32.to_radians(),
+            -6.0_f32.to_radians(),
+            35.0_f32.to_radians(),
+        ]);
+        let (stationary_accel, stationary_gyro, data) = simulate_truth(q_vb_true);
+        f.initialize_from_stationary(
+            &stationary_accel,
+            &stationary_gyro,
+            0.0,
+            [1.0, 0.0, 0.0, 0.0],
+        )
+        .unwrap();
+
+        let dt = 0.01_f32;
+        for (f_m_b, omega_m_b, _, _) in data.iter().take(20) {
+            f.predict_imu(dt, *f_m_b, *omega_m_b);
+        }
+
+        let c_n_b = quat_to_rotmat(f.q_nb);
+        let (s, c) = 35.0_f32.to_radians().sin_cos();
+        let c_n_v = [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]];
+        let q_vb_target = quat_from_rotmat(mat3_mul(transpose3x3(c_n_v), c_n_b));
+        f.seed_mount_yaw_from_course(35.0_f32.to_radians(), 5.0_f32.to_radians());
+        assert!(mount_angle_deg(f.q_vb, q_vb_target) < 1.0e-3);
+        assert!((f.P[8][8].sqrt().to_degrees() - 5.0).abs() < 1.0e-3);
+    }
+
+    #[test]
     fn nhc_can_reduce_direct_mount_yaw_sensitivity() {
         let mut f = AlignNhc::default();
-        f.q_nb =
-            quat_from_small_angle([1.0_f32.to_radians(), -2.0_f32.to_radians(), 15.0_f32.to_radians()]);
-        f.q_vb =
-            quat_from_small_angle([2.0_f32.to_radians(), -1.0_f32.to_radians(), 8.0_f32.to_radians()]);
+        f.q_nb = quat_from_small_angle([
+            1.0_f32.to_radians(),
+            -2.0_f32.to_radians(),
+            15.0_f32.to_radians(),
+        ]);
+        f.q_vb = quat_from_small_angle([
+            2.0_f32.to_radians(),
+            -1.0_f32.to_radians(),
+            8.0_f32.to_radians(),
+        ]);
         f.v_n = [12.0, 1.5, 0.3];
-        let h_full = f.nhc_jacobian(true);
-        let h_reduced = f.nhc_jacobian(false);
-        assert!((h_reduced[(0, 8)] - h_full[(0, 8)] * f.cfg.nhc_straight_mount_yaw_scale).abs() < 1.0e-6);
-        assert!((h_reduced[(1, 8)] - h_full[(1, 8)] * f.cfg.nhc_straight_mount_yaw_scale).abs() < 1.0e-6);
+        let h_full_0 = f.nhc_jacobian_row(0, true);
+        let h_full_1 = f.nhc_jacobian_row(1, true);
+        let h_reduced_0 = f.nhc_jacobian_row(0, false);
+        let h_reduced_1 = f.nhc_jacobian_row(1, false);
+        assert!((h_reduced_0[8] - h_full_0[8] * f.cfg.nhc_straight_mount_yaw_scale).abs() < 1.0e-6);
+        assert!((h_reduced_1[8] - h_full_1[8] * f.cfg.nhc_straight_mount_yaw_scale).abs() < 1.0e-6);
     }
 }

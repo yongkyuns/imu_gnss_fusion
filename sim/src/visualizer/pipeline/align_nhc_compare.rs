@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 
+use align_rs::align::AlignConfig;
 use align_rs::{AlignNhc, AlignNhcConfig};
 
 use crate::ubxlog::{
@@ -7,10 +8,12 @@ use crate::ubxlog::{
     sensor_meta,
 };
 
-use super::super::model::Trace;
+use super::super::math::normalize_heading_deg;
+use super::super::model::{ImuPacket, Trace};
+use super::align_nhc_bootstrap::resolve_align_nhc_bootstrap_q_vb_seed;
 use super::align_replay::{
-    esf_alg_flu_to_frd_mount_quat, interpolate_alg_quat, quat_rotate,
-    quat_rpy_alg_deg, signed_projected_axis_angle_deg,
+    esf_alg_flu_to_frd_mount_quat, frd_mount_quat_to_esf_alg_flu_quat, interpolate_alg_quat,
+    quat_rotate, quat_rpy_alg_deg, signed_projected_axis_angle_deg,
 };
 use super::tag_time::fit_tag_ms_map;
 use super::timebase::MasterTimeline;
@@ -42,17 +45,6 @@ struct BootstrapDetector {
     stationary_gyro: Vec<[f32; 3]>,
 }
 
-#[derive(Clone, Copy)]
-struct ImuPacket {
-    t_ms: f64,
-    gx_dps: f64,
-    gy_dps: f64,
-    gz_dps: f64,
-    ax_mps2: f64,
-    ay_mps2: f64,
-    az_mps2: f64,
-}
-
 pub fn build_align_nhc_compare_traces(
     frames: &[UbxFrame],
     tl: &MasterTimeline,
@@ -78,12 +70,14 @@ pub fn build_align_nhc_compare_traces(
     };
 
     let mut alg_events = Vec::<(f64, [f64; 4])>::new();
+    let mut alg_raw_events = Vec::<(f64, f64, f64, f64)>::new();
     let mut nav_events = Vec::<(f64, NavPvtObs)>::new();
     for f in frames {
         if let Some((_, roll, pitch, yaw)) = extract_esf_alg(f)
             && let Some(t_ms) = nearest_master_ms(f.seq, &tl.masters)
         {
             alg_events.push((t_ms, esf_alg_flu_to_frd_mount_quat(roll, pitch, yaw)));
+            alg_raw_events.push((t_ms, roll, pitch, normalize_heading_deg(yaw)));
         }
         if let Some(t_ms) = nearest_master_ms(f.seq, &tl.masters)
             && let Some(obs) = extract_nav2_pvt_obs(f)
@@ -94,6 +88,7 @@ pub fn build_align_nhc_compare_traces(
         }
     }
     alg_events.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+    alg_raw_events.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
     nav_events.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
     let final_alg_q = alg_events.last().map(|ev| ev.1);
 
@@ -139,15 +134,15 @@ pub fn build_align_nhc_compare_traces(
     let mut sigma_ve = Vec::<[f64; 2]>::new();
     let mut sigma_vd = Vec::<[f64; 2]>::new();
 
-    for (t_ms, q_alg) in &alg_events {
+    for (t_ms, roll, pitch, yaw) in &alg_raw_events {
         let t = (*t_ms - tl.t0_master_ms) * 1.0e-3;
-        let (r, p, y) = quat_rpy_alg_deg(q_alg[0], q_alg[1], q_alg[2], q_alg[3]);
-        ref_roll.push([t, r]);
-        ref_pitch.push([t, p]);
-        ref_yaw.push([t, y]);
+        ref_roll.push([t, *roll]);
+        ref_pitch.push([t, *pitch]);
+        ref_yaw.push([t, *yaw]);
     }
 
-    for (tn, nav) in &nav_events {
+    let align_cfg = AlignConfig::default();
+    for (nav_idx, (tn, nav)) in nav_events.iter().enumerate() {
         while scan_idx < imu_packets.len() && imu_packets[scan_idx].t_ms <= *tn {
             let pkt = &imu_packets[scan_idx];
             let gyro_radps = [
@@ -158,17 +153,29 @@ pub fn build_align_nhc_compare_traces(
             let accel_b = [pkt.ax_mps2 as f32, pkt.ay_mps2 as f32, pkt.az_mps2 as f32];
             if !initialized {
                 let speed_mps = speed_for_bootstrap(prev_nav, (*tn, *nav), pkt.t_ms) as f32;
-                if bootstrap.update(accel_b, gyro_radps, speed_mps)
-                    && nhc
-                        .initialize_from_stationary(
+                if bootstrap.update(accel_b, gyro_radps, speed_mps) {
+                    let q_vb_seed = resolve_align_nhc_bootstrap_q_vb_seed(
+                        &bootstrap.stationary_accel,
+                        prev_nav,
+                        &nav_events,
+                        nav_idx,
+                        interval_start_idx,
+                        scan_idx + 1,
+                        &imu_packets,
+                        align_cfg,
+                        align_cfg.pca_max_windows.saturating_mul(3),
+                    );
+                    if nhc
+                        .initialize_from_stationary_with_mount_seed(
                             &bootstrap.stationary_accel,
                             &bootstrap.stationary_gyro,
                             0.0,
-                            [1.0, 0.0, 0.0, 0.0],
+                            q_vb_seed,
                         )
                         .is_ok()
-                {
-                    initialized = true;
+                    {
+                        initialized = true;
+                    }
                 }
             }
             scan_idx += 1;
@@ -177,7 +184,10 @@ pub fn build_align_nhc_compare_traces(
         if initialized && !nav_yaw_seeded {
             let speed_h = (nav.vel_n_mps * nav.vel_n_mps + nav.vel_e_mps * nav.vel_e_mps).sqrt();
             if speed_h >= 5.0 / 3.6 {
-                nhc.seed_nav_yaw_from_course(nav.vel_e_mps.atan2(nav.vel_n_mps) as f32, 5.0_f32.to_radians());
+                nhc.seed_nav_yaw_from_course(
+                    nav.vel_e_mps.atan2(nav.vel_n_mps) as f32,
+                    5.0_f32.to_radians(),
+                );
                 nav_yaw_seeded = true;
             }
         }
@@ -205,8 +215,7 @@ pub fn build_align_nhc_compare_traces(
                 let dt_nav = ((*tn - t_prev) * 1.0e-3).max(1.0e-3);
                 let course_prev = v_prev[1].atan2(v_prev[0]);
                 let course_curr = v_curr[1].atan2(v_curr[0]);
-                let course_rate_dps =
-                    wrap_rad_pi(course_curr - course_prev).to_degrees() / dt_nav;
+                let course_rate_dps = wrap_rad_pi(course_curr - course_prev).to_degrees() / dt_nav;
                 let a_n = [
                     (nav.vel_n_mps - nav_prev.vel_n_mps) / dt_nav,
                     (nav.vel_e_mps - nav_prev.vel_e_mps) / dt_nav,
@@ -225,7 +234,8 @@ pub fn build_align_nhc_compare_traces(
                 let speed_curr = (v_curr[0] * v_curr[0] + v_curr[1] * v_curr[1]).sqrt() as f32;
                 let speed_mid = 0.5_f32 * (speed_prev + speed_curr);
                 let turn_valid = speed_mid > nhc_cfg.min_planar_speed_mps
-                    && course_rate_dps.abs() > nhc_cfg.min_planar_yaw_rate_radps.to_degrees() as f64;
+                    && course_rate_dps.abs()
+                        > nhc_cfg.min_planar_yaw_rate_radps.to_degrees() as f64;
 
                 let omega_last_b = interval_packets
                     .last()
@@ -238,20 +248,31 @@ pub fn build_align_nhc_compare_traces(
                     })
                     .unwrap_or([0.0, 0.0, 0.0]);
                 let (_, tr) = nhc.update_all(
-                    [nav.vel_n_mps as f32, nav.vel_e_mps as f32, nav.vel_d_mps as f32],
+                    [
+                        nav.vel_n_mps as f32,
+                        nav.vel_e_mps as f32,
+                        nav.vel_d_mps as f32,
+                    ],
                     omega_last_b,
                     speed_mid > nhc_cfg.min_nhc_speed_mps,
                     turn_valid,
                 );
 
                 let t = (*tn - tl.t0_master_ms) * 1.0e-3;
-                let q_align = [
+                let q_align_bv = [
                     nhc.q_vb[0] as f64,
                     nhc.q_vb[1] as f64,
                     nhc.q_vb[2] as f64,
                     nhc.q_vb[3] as f64,
                 ];
-                let (r, p, y) = quat_rpy_alg_deg(q_align[0], q_align[1], q_align[2], q_align[3]);
+                let q_align = quat_conj_f64(q_align_bv);
+                let q_align_flu = frd_mount_quat_to_esf_alg_flu_quat(q_align);
+                let (r, p, y) = quat_rpy_alg_deg(
+                    q_align_flu[0],
+                    q_align_flu[1],
+                    q_align_flu[2],
+                    q_align_flu[3],
+                );
                 out_roll.push([t, r]);
                 out_pitch.push([t, p]);
                 out_yaw.push([t, y]);
@@ -276,7 +297,13 @@ pub fn build_align_nhc_compare_traces(
                 sigma_mount_y.push([t, nhc.P[8][8].sqrt().to_degrees() as f64]);
 
                 if let Some(q_alg) = interpolate_alg_quat(
-                    &alg_events.iter().map(|(t, q)| super::align_replay::AlgEvent { t_ms: *t, q_frd: *q }).collect::<Vec<_>>(),
+                    &alg_events
+                        .iter()
+                        .map(|(t, q)| super::align_replay::AlgEvent {
+                            t_ms: *t,
+                            q_frd: *q,
+                        })
+                        .collect::<Vec<_>>(),
                     *tn,
                 ) {
                     if let Some(q_ref_final) = final_alg_q {
@@ -285,8 +312,14 @@ pub fn build_align_nhc_compare_traces(
                         let ref_fwd = quat_rotate(q_ref_final, [1.0, 0.0, 0.0]);
                         let ref_down = quat_rotate(q_ref_final, [0.0, 0.0, 1.0]);
                         let ref_right = quat_rotate(q_ref_final, [0.0, 1.0, 0.0]);
-                        fwd_err.push([t, signed_projected_axis_angle_deg(align_fwd, ref_fwd, ref_down)]);
-                        down_err.push([t, signed_projected_axis_angle_deg(align_down, ref_down, ref_right)]);
+                        fwd_err.push([
+                            t,
+                            signed_projected_axis_angle_deg(align_fwd, ref_fwd, ref_down),
+                        ]);
+                        down_err.push([
+                            t,
+                            signed_projected_axis_angle_deg(align_down, ref_down, ref_right),
+                        ]);
                     }
                     let _ = q_alg;
                 }
@@ -298,44 +331,126 @@ pub fn build_align_nhc_compare_traces(
 
     AlignNhcCompareData {
         cmp_att: vec![
-            Trace { name: "AlignNhc roll [deg]".to_string(), points: out_roll },
-            Trace { name: "AlignNhc pitch [deg]".to_string(), points: out_pitch },
-            Trace { name: "AlignNhc yaw [deg]".to_string(), points: out_yaw },
-            Trace { name: "ESF-ALG roll [deg]".to_string(), points: ref_roll },
-            Trace { name: "ESF-ALG pitch [deg]".to_string(), points: ref_pitch },
-            Trace { name: "ESF-ALG yaw [deg]".to_string(), points: ref_yaw },
+            Trace {
+                name: "AlignNhc (FLU) roll [deg]".to_string(),
+                points: out_roll,
+            },
+            Trace {
+                name: "AlignNhc (FLU) pitch [deg]".to_string(),
+                points: out_pitch,
+            },
+            Trace {
+                name: "AlignNhc (FLU) yaw [deg]".to_string(),
+                points: out_yaw,
+            },
+            Trace {
+                name: "ESF-ALG roll [deg]".to_string(),
+                points: ref_roll,
+            },
+            Trace {
+                name: "ESF-ALG pitch [deg]".to_string(),
+                points: ref_pitch,
+            },
+            Trace {
+                name: "ESF-ALG yaw [deg]".to_string(),
+                points: ref_yaw,
+            },
         ],
         diag: vec![
-            Trace { name: "course rate [deg/s]".to_string(), points: course_rate },
-            Trace { name: "a_lat [m/s^2]".to_string(), points: a_lat },
-            Trace { name: "a_long [m/s^2]".to_string(), points: a_long },
+            Trace {
+                name: "course rate [deg/s]".to_string(),
+                points: course_rate,
+            },
+            Trace {
+                name: "a_lat [m/s^2]".to_string(),
+                points: a_lat,
+            },
+            Trace {
+                name: "a_long [m/s^2]".to_string(),
+                points: a_long,
+            },
         ],
         axis_err: vec![
-            Trace { name: "forward-axis error signed [deg]".to_string(), points: fwd_err },
-            Trace { name: "down-axis error signed [deg]".to_string(), points: down_err },
+            Trace {
+                name: "forward-axis error signed [deg]".to_string(),
+                points: fwd_err,
+            },
+            Trace {
+                name: "down-axis error signed [deg]".to_string(),
+                points: down_err,
+            },
         ],
         residuals: vec![
-            Trace { name: "NHC vy residual [m/s]".to_string(), points: nhc_vy },
-            Trace { name: "NHC vz residual [m/s]".to_string(), points: nhc_vz },
-            Trace { name: "planar gyro wx residual [deg/s]".to_string(), points: planar_wx },
-            Trace { name: "planar gyro wy residual [deg/s]".to_string(), points: planar_wy },
+            Trace {
+                name: "NHC vy residual [m/s]".to_string(),
+                points: nhc_vy,
+            },
+            Trace {
+                name: "NHC vz residual [m/s]".to_string(),
+                points: nhc_vz,
+            },
+            Trace {
+                name: "planar gyro wx residual [deg/s]".to_string(),
+                points: planar_wx,
+            },
+            Trace {
+                name: "planar gyro wy residual [deg/s]".to_string(),
+                points: planar_wy,
+            },
         ],
         gates: vec![
-            Trace { name: "NHC valid".to_string(), points: nhc_valid },
-            Trace { name: "planar gyro valid".to_string(), points: planar_valid },
+            Trace {
+                name: "NHC valid".to_string(),
+                points: nhc_valid,
+            },
+            Trace {
+                name: "planar gyro valid".to_string(),
+                points: planar_valid,
+            },
         ],
         cov: vec![
-            Trace { name: "sigma nav roll [deg]".to_string(), points: sigma_nav_r },
-            Trace { name: "sigma nav pitch [deg]".to_string(), points: sigma_nav_p },
-            Trace { name: "sigma nav yaw [deg]".to_string(), points: sigma_nav_y },
-            Trace { name: "sigma vel N [m/s]".to_string(), points: sigma_vn },
-            Trace { name: "sigma vel E [m/s]".to_string(), points: sigma_ve },
-            Trace { name: "sigma vel D [m/s]".to_string(), points: sigma_vd },
-            Trace { name: "sigma mount roll [deg]".to_string(), points: sigma_mount_r },
-            Trace { name: "sigma mount pitch [deg]".to_string(), points: sigma_mount_p },
-            Trace { name: "sigma mount yaw [deg]".to_string(), points: sigma_mount_y },
+            Trace {
+                name: "sigma nav roll [deg]".to_string(),
+                points: sigma_nav_r,
+            },
+            Trace {
+                name: "sigma nav pitch [deg]".to_string(),
+                points: sigma_nav_p,
+            },
+            Trace {
+                name: "sigma nav yaw [deg]".to_string(),
+                points: sigma_nav_y,
+            },
+            Trace {
+                name: "sigma vel N [m/s]".to_string(),
+                points: sigma_vn,
+            },
+            Trace {
+                name: "sigma vel E [m/s]".to_string(),
+                points: sigma_ve,
+            },
+            Trace {
+                name: "sigma vel D [m/s]".to_string(),
+                points: sigma_vd,
+            },
+            Trace {
+                name: "sigma mount roll [deg]".to_string(),
+                points: sigma_mount_r,
+            },
+            Trace {
+                name: "sigma mount pitch [deg]".to_string(),
+                points: sigma_mount_p,
+            },
+            Trace {
+                name: "sigma mount yaw [deg]".to_string(),
+                points: sigma_mount_y,
+            },
         ],
     }
+}
+
+fn quat_conj_f64(q: [f64; 4]) -> [f64; 4] {
+    [q[0], -q[1], -q[2], -q[3]]
 }
 
 impl BootstrapDetector {
@@ -354,7 +469,11 @@ impl BootstrapDetector {
         let gyro_norm = norm3(gyro_radps);
         let accel_err = (norm3(accel_b) - align_rs::align::GRAVITY_MPS2).abs();
         self.gyro_ema = Some(ema_update(self.gyro_ema, gyro_norm, self.cfg.ema_alpha));
-        self.accel_err_ema = Some(ema_update(self.accel_err_ema, accel_err, self.cfg.ema_alpha));
+        self.accel_err_ema = Some(ema_update(
+            self.accel_err_ema,
+            accel_err,
+            self.cfg.ema_alpha,
+        ));
         self.speed_ema = Some(ema_update(self.speed_ema, speed_mps, self.cfg.ema_alpha));
         let stationary = self.speed_ema.unwrap_or(speed_mps) <= self.cfg.max_speed_mps
             && self.gyro_ema.unwrap_or(gyro_norm) <= self.cfg.max_gyro_radps
@@ -395,12 +514,25 @@ fn build_imu_packets(frames: &[UbxFrame], tl: &MasterTimeline) -> Vec<ImuPacket>
     let mut ax: Option<f64> = None;
     let mut ay: Option<f64> = None;
     let mut az: Option<f64> = None;
-    for (((seq, tag_u), dtype), val) in raw_seq.iter().zip(raw_tag_u.iter()).zip(raw_dtype.iter()).zip(raw_val.iter()) {
+    for (((seq, tag_u), dtype), val) in raw_seq
+        .iter()
+        .zip(raw_tag_u.iter())
+        .zip(raw_dtype.iter())
+        .zip(raw_val.iter())
+    {
         if current_tag != Some(*tag_u) {
             if let (Some(gxv), Some(gyv), Some(gzv), Some(axv), Some(ayv), Some(azv)) =
                 (gx, gy, gz, ax, ay, az)
             {
-                imu_packets.push(ImuPacket { t_ms, gx_dps: gxv, gy_dps: gyv, gz_dps: gzv, ax_mps2: axv, ay_mps2: ayv, az_mps2: azv });
+                imu_packets.push(ImuPacket {
+                    t_ms,
+                    gx_dps: gxv,
+                    gy_dps: gyv,
+                    gz_dps: gzv,
+                    ax_mps2: axv,
+                    ay_mps2: ayv,
+                    az_mps2: azv,
+                });
             }
             gx = None;
             gy = None;
@@ -423,8 +555,18 @@ fn build_imu_packets(frames: &[UbxFrame], tl: &MasterTimeline) -> Vec<ImuPacket>
             _ => {}
         }
     }
-    if let (Some(gxv), Some(gyv), Some(gzv), Some(axv), Some(ayv), Some(azv)) = (gx, gy, gz, ax, ay, az) {
-        imu_packets.push(ImuPacket { t_ms, gx_dps: gxv, gy_dps: gyv, gz_dps: gzv, ax_mps2: axv, ay_mps2: ayv, az_mps2: azv });
+    if let (Some(gxv), Some(gyv), Some(gzv), Some(axv), Some(ayv), Some(azv)) =
+        (gx, gy, gz, ax, ay, az)
+    {
+        imu_packets.push(ImuPacket {
+            t_ms,
+            gx_dps: gxv,
+            gy_dps: gyv,
+            gz_dps: gzv,
+            ax_mps2: axv,
+            ay_mps2: ayv,
+            az_mps2: azv,
+        });
     }
     imu_packets.sort_by(|a, b| a.t_ms.partial_cmp(&b.t_ms).unwrap_or(Ordering::Equal));
     imu_packets
@@ -450,7 +592,11 @@ fn nearest_master_ms(seq: u64, masters: &[(u64, f64)]) -> Option<f64> {
     }
 }
 
-fn speed_for_bootstrap(prev_nav: Option<(f64, NavPvtObs)>, curr_nav: (f64, NavPvtObs), t_ms: f64) -> f64 {
+fn speed_for_bootstrap(
+    prev_nav: Option<(f64, NavPvtObs)>,
+    curr_nav: (f64, NavPvtObs),
+    t_ms: f64,
+) -> f64 {
     let speed_curr = horizontal_speed(curr_nav.1);
     let Some((t_prev, nav_prev)) = prev_nav else {
         return speed_curr;

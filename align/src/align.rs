@@ -4,7 +4,7 @@ use crate::horizontal_heading::{
     HorizontalHeadingCueConfig, HorizontalHeadingCueFilter, HorizontalHeadingCueSample,
     HorizontalHeadingTrace,
 };
-use crate::init_monitor::{InitMonitor, InitMonitorConfig, InitMonitorSample};
+use crate::stationary_mount::bootstrap_vehicle_to_body_from_stationary;
 use crate::yaw_pca::{YawPcaConfig, YawPcaInitializer, YawPcaSample};
 use nalgebra::{SMatrix, SVector};
 
@@ -45,9 +45,9 @@ impl Default for AlignConfig {
     fn default() -> Self {
         Self {
             q_mount_std_rad: [
-                0.0003_f32.to_radians(),
-                0.0003_f32.to_radians(),
-                0.0003_f32.to_radians(),
+                0.003_f32.to_radians(),
+                0.003_f32.to_radians(),
+                0.003_f32.to_radians(),
             ],
             r_gravity_std_mps2: 1.28,
             r_turn_gyro_std_radps: 0.1_f32.to_radians(),
@@ -62,15 +62,15 @@ impl Default for AlignConfig {
             min_long_acc_mps2: 0.18,
             min_long_sign_stable_windows: 2,
             use_pca_yaw_seed: true,
-            pca_min_speed_mps: 5.0 / 3.6,
+            pca_min_speed_mps: 10.0 / 3.6,
             pca_min_horiz_acc_mps2: 0.15,
-            pca_min_windows: 4,
-            pca_max_windows: 12,
+            pca_min_windows: 100,
+            pca_max_windows: 200,
             pca_min_anisotropy_ratio: 1.3,
             max_stationary_gyro_radps: 0.8_f32.to_radians(),
             max_stationary_accel_norm_err_mps2: 0.2,
             use_gravity: true,
-            use_turn_gyro: false,
+            use_turn_gyro: true,
             use_course_rate: true,
             use_lateral_accel: true,
             use_longitudinal_accel: true,
@@ -90,8 +90,8 @@ pub struct AlignWindowSummary {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AlignUpdateTrace {
     pub q_start: [f32; 4],
+    pub pca_input_xy: Option<[f32; 2]>,
     pub after_pca_yaw_seed: Option<[f32; 4]>,
-    pub yaw_reinitialized: bool,
     pub after_gravity: Option<[f32; 4]>,
     pub after_turn_gyro: Option<[f32; 4]>,
     pub after_course_rate: Option<[f32; 4]>,
@@ -107,7 +107,6 @@ pub struct Align {
     pub gravity_lp_b: [f32; 3],
     long_filter: HorizontalHeadingCueFilter,
     yaw_pca: YawPcaInitializer,
-    init_monitor: InitMonitor,
     pub cfg: AlignConfig,
 }
 
@@ -129,7 +128,6 @@ impl Align {
             gravity_lp_b: [0.0, 0.0, -GRAVITY_MPS2],
             long_filter: HorizontalHeadingCueFilter::new(),
             yaw_pca: YawPcaInitializer::new(),
-            init_monitor: InitMonitor::new(),
             cfg,
         }
     }
@@ -139,52 +137,16 @@ impl Align {
         accel_samples_b: &[[f32; 3]],
         yaw_seed_rad: f32,
     ) -> Result<(), &'static str> {
-        if accel_samples_b.is_empty() {
-            return Err("stationary initialization requires samples");
-        }
-        let mut f_mean_b = [0.0_f32; 3];
-        for sample in accel_samples_b {
-            f_mean_b = vec3_add(f_mean_b, *sample);
-        }
-        let inv_n = 1.0 / (accel_samples_b.len() as f32);
-        f_mean_b = vec3_scale(f_mean_b, inv_n);
-        let n = vec3_norm(f_mean_b);
-        if n < 1.0e-6 {
-            return Err("stationary initialization requires nonzero accel mean");
-        }
-
-        let z_v_in_b = vec3_scale(f_mean_b, -1.0 / n);
-        let mut x_ref = [1.0, 0.0, 0.0];
-        let mut x_v_in_b = vec3_sub(x_ref, vec3_scale(z_v_in_b, vec3_dot(z_v_in_b, x_ref)));
-        if vec3_norm(x_v_in_b) < 1.0e-6 {
-            x_ref = [0.0, 1.0, 0.0];
-            x_v_in_b = vec3_sub(x_ref, vec3_scale(z_v_in_b, vec3_dot(z_v_in_b, x_ref)));
-        }
-        x_v_in_b = vec3_normalize(x_v_in_b).ok_or("failed to initialize x axis")?;
-        let mut y_v_in_b = vec3_cross(z_v_in_b, x_v_in_b);
-        y_v_in_b = vec3_normalize(y_v_in_b).ok_or("failed to initialize y axis")?;
-        x_v_in_b = vec3_cross(y_v_in_b, z_v_in_b);
-        let C_v_b = [
-            [x_v_in_b[0], y_v_in_b[0], z_v_in_b[0]],
-            [x_v_in_b[1], y_v_in_b[1], z_v_in_b[1]],
-            [x_v_in_b[2], y_v_in_b[2], z_v_in_b[2]],
-        ];
-        let rpy = rot_to_euler_zyx(C_v_b);
-        let dyaw = wrap_angle_rad(yaw_seed_rad - rpy[2]);
-        let (s, c) = dyaw.sin_cos();
-        let c_delta = [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]];
-        // Apply the yaw seed as a vehicle-frame rotation on the right so the measured
-        // gravity/down axis (third column of C_v_b) is preserved exactly.
-        self.q_vb = quat_from_rotmat(mat3_mul(C_v_b, c_delta));
+        let init = bootstrap_vehicle_to_body_from_stationary(accel_samples_b, yaw_seed_rad)?;
+        self.q_vb = quat_from_rotmat(init.c_b_v);
         self.P = diag3([
             0.2_f32.to_radians().powi(2),
             0.2_f32.to_radians().powi(2),
             10_f32.to_radians().powi(2),
         ]);
-        self.gravity_lp_b = f_mean_b;
+        self.gravity_lp_b = init.mean_accel_b;
         self.long_filter.reset();
         self.yaw_pca.reset(self.cfg.use_pca_yaw_seed);
-        self.init_monitor.reset();
         Ok(())
     }
 
@@ -263,15 +225,23 @@ impl Align {
                 max_windows: self.cfg.pca_max_windows,
                 min_anisotropy_ratio: self.cfg.pca_min_anisotropy_ratio,
             };
+            let pca_horiz_xy = leveled_horiz_accel_xy(self.gravity_lp_b, horiz_accel_b)
+                .unwrap_or([horiz_accel_b[0], horiz_accel_b[1]]);
+            trace.pca_input_xy = Some(pca_horiz_xy);
             if let Some(dpsi) = self.yaw_pca.update(
                 pca_cfg,
                 YawPcaSample {
                     speed_mps: speed_mid,
-                    horiz_accel_v: [horiz_obs[3], horiz_obs[4]],
+                    horiz_accel_xy: pca_horiz_xy,
                     gnss_long_mps2: a_long,
                 },
             ) {
                 self.inject_vehicle_yaw(dpsi);
+                self.P[2][2] = 10_f32.to_radians().powi(2);
+                self.P[0][2] = 0.0;
+                self.P[2][0] = 0.0;
+                self.P[1][2] = 0.0;
+                self.P[2][1] = 0.0;
                 self.long_filter.reset();
                 trace.after_pca_yaw_seed = Some(self.q_vb);
             }
@@ -359,45 +329,6 @@ impl Align {
                     .apply_vehicle_yaw_angle(cue.angle_err_rad, self.cfg.r_long_std_mps2.powi(2));
                 trace.after_longitudinal_accel = Some(self.q_vb);
             }
-        }
-
-        let post_horiz_obs = align_obs(self.q_vb, window.mean_gyro_b, horiz_accel_b);
-        let post_gravity_obs = align_obs(self.q_vb, window.mean_gyro_b, window.mean_accel_b);
-        let gravity_leak = if stationary {
-            let g_ref = vec3_norm(self.gravity_lp_b).max(GRAVITY_MPS2 * 0.5);
-            let z_err = post_gravity_obs[5] + g_ref;
-            (post_gravity_obs[3] * post_gravity_obs[3]
-                + post_gravity_obs[4] * post_gravity_obs[4]
-                + z_err * z_err)
-                .sqrt()
-        } else {
-            0.0
-        };
-        let course_residual = post_horiz_obs[2] - course_rate;
-        let heading_residual = trace
-            .longitudinal_trace
-            .map(|lt| lt.angle_err_rad)
-            .unwrap_or(0.0);
-        let mon_trace = self.init_monitor.update(
-            InitMonitorConfig::default(),
-            InitMonitorSample {
-                heading_valid: trace
-                    .longitudinal_trace
-                    .map(|lt| lt.emitted)
-                    .unwrap_or(false),
-                heading_residual_rad: heading_residual,
-                gravity_valid: stationary,
-                gravity_leak_mps2: gravity_leak,
-                course_valid: turn_valid && self.cfg.use_course_rate,
-                course_residual_radps: course_residual,
-            },
-        );
-        if mon_trace.should_reinitialize {
-            self.yaw_pca.reset(self.cfg.use_pca_yaw_seed);
-            self.long_filter.reset();
-            self.init_monitor.reset();
-            self.reset_yaw_covariance();
-            trace.yaw_reinitialized = true;
         }
 
         (score, trace)
@@ -545,14 +476,6 @@ impl Align {
     fn inject_vehicle_yaw(&mut self, dpsi: f32) {
         self.q_vb = quat_normalize(quat_mul(self.q_vb, quat_from_small_angle([0.0, 0.0, dpsi])));
     }
-
-    fn reset_yaw_covariance(&mut self) {
-        self.P[2][2] = 10_f32.to_radians().powi(2);
-        self.P[0][2] = 0.0;
-        self.P[2][0] = 0.0;
-        self.P[1][2] = 0.0;
-        self.P[2][1] = 0.0;
-    }
 }
 
 fn align_obs(q_vb: [f32; 4], gyro_b: [f32; 3], accel_b: [f32; 3]) -> [f32; 6] {
@@ -571,6 +494,22 @@ fn align_obs_jacobian(q_vb: [f32; 4], gyro_b: [f32; 3], accel_b: [f32; 3]) -> [[
     [
         h_gyro[0], h_gyro[1], h_gyro[2], h_accel[0], h_accel[1], h_accel[2],
     ]
+}
+
+pub fn leveled_horiz_accel_xy(gravity_b: [f32; 3], horiz_accel_b: [f32; 3]) -> Option<[f32; 2]> {
+    let z_in_b = vec3_scale(vec3_normalize(gravity_b)?, -1.0);
+    let mut x_ref = [1.0, 0.0, 0.0];
+    let mut x_in_b = vec3_sub(x_ref, vec3_scale(z_in_b, vec3_dot(z_in_b, x_ref)));
+    if vec3_norm(x_in_b) < 1.0e-6 {
+        x_ref = [0.0, 1.0, 0.0];
+        x_in_b = vec3_sub(x_ref, vec3_scale(z_in_b, vec3_dot(z_in_b, x_ref)));
+    }
+    let x_in_b = vec3_normalize(x_in_b)?;
+    let y_in_b = vec3_normalize(vec3_cross(z_in_b, x_in_b))?;
+    Some([
+        vec3_dot(horiz_accel_b, x_in_b),
+        vec3_dot(horiz_accel_b, y_in_b),
+    ])
 }
 
 fn quat_mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
