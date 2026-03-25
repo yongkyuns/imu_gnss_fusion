@@ -3,5 +3,12 @@
 **/target/
 **/.cargo-ok
 **/.cargo_vcs_info.json
+**/.DS_Store
+**/__pycache__/
 logger/ubx_raw_*.bin
 logger/data/*.bin
+docs/*.aux
+docs/*.log
+docs/*.out
+docs/*.toc
+doc.pdf
