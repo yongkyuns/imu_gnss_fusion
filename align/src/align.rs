@@ -124,9 +124,17 @@ pub struct Align {
     pub P: [[f32; ALIGN_N_STATES]; ALIGN_N_STATES],
     pub gravity_lp_b: [f32; 3],
     long_filter: HorizontalHeadingCueFilter,
+    yaw_dual: Option<YawDualHypothesis>,
     yaw_pca: YawPcaInitializer,
     turn_consistency: TurnConsistencyGate,
     pub cfg: AlignConfig,
+}
+
+#[derive(Debug, Clone)]
+struct YawDualHypothesis {
+    q_vb: [f32; 4],
+    p: [[f32; ALIGN_N_STATES]; ALIGN_N_STATES],
+    long_filter: HorizontalHeadingCueFilter,
 }
 
 impl Default for Align {
@@ -146,6 +154,7 @@ impl Align {
             ]),
             gravity_lp_b: [0.0, 0.0, -GRAVITY_MPS2],
             long_filter: HorizontalHeadingCueFilter::new(),
+            yaw_dual: None,
             yaw_pca: YawPcaInitializer::new(),
             turn_consistency: TurnConsistencyGate::new(),
             cfg,
@@ -166,6 +175,11 @@ impl Align {
         ]);
         self.gravity_lp_b = init.mean_accel_b;
         self.long_filter.reset();
+        self.yaw_dual = Some(YawDualHypothesis {
+            q_vb: quat_normalize(quat_mul(self.q_vb, quat_yaw_pi())),
+            p: self.P,
+            long_filter: HorizontalHeadingCueFilter::new(),
+        });
         self.yaw_pca.reset(self.cfg.use_pca_yaw_seed);
         self.turn_consistency.reset();
         Ok(())
@@ -173,9 +187,10 @@ impl Align {
 
     pub fn predict(&mut self, dt: f32) {
         let dt = dt.max(1.0e-3);
-        self.P[0][0] += self.cfg.q_mount_std_rad[0].powi(2) * dt;
-        self.P[1][1] += self.cfg.q_mount_std_rad[1].powi(2) * dt;
-        self.P[2][2] += self.cfg.q_mount_std_rad[2].powi(2) * dt;
+        Self::predict_covariance(&mut self.P, &self.cfg, dt);
+        if let Some(alt) = &mut self.yaw_dual {
+            Self::predict_covariance(&mut alt.p, &self.cfg, dt);
+        }
     }
 
     pub fn update_window(&mut self, window: &AlignWindowSummary) -> f32 {
@@ -246,7 +261,9 @@ impl Align {
             // heading is not the forward cue we want from this update.
             && a_lat.abs() < (0.5_f32).max(0.6 * a_long.abs())
             && horiz_gnss_norm > self.cfg.min_long_acc_mps2;
-        let heading_updates_enabled = if self.yaw_pca.is_active() {
+        let heading_updates_enabled = if self.yaw_dual.is_some() {
+            false
+        } else if self.yaw_pca.is_active() {
             let pca_cfg = YawPcaConfig {
                 enabled: self.cfg.use_pca_yaw_seed,
                 min_speed_mps: self.cfg.pca_min_speed_mps,
@@ -270,13 +287,24 @@ impl Align {
                     gnss_lat_mps2: a_lat,
                 },
             ) {
-                self.inject_vehicle_yaw(dpsi);
+                Self::inject_vehicle_yaw_state(&mut self.q_vb, dpsi);
                 self.P[2][2] = self.cfg.pca_yaw_seed_std_rad.powi(2);
                 self.P[0][2] = 0.0;
                 self.P[2][0] = 0.0;
                 self.P[1][2] = 0.0;
                 self.P[2][1] = 0.0;
                 self.long_filter.reset();
+                if let Some(alt) = &mut self.yaw_dual {
+                    Self::inject_vehicle_yaw_state(&mut alt.q_vb, dpsi);
+                    alt.p[2][2] = self.cfg.pca_yaw_seed_std_rad.powi(2);
+                    alt.p[0][2] = 0.0;
+                    alt.p[2][0] = 0.0;
+                    alt.p[1][2] = 0.0;
+                    alt.p[2][1] = 0.0;
+                    alt.long_filter.reset();
+                } else {
+                    self.yaw_dual = None;
+                }
                 self.turn_consistency.reset();
                 trace.after_pca_yaw_seed = Some(self.q_vb);
             }
@@ -293,21 +321,51 @@ impl Align {
             );
         }
 
+        let gravity_state_mask = if self.yaw_dual.is_some() {
+            [true, true, false]
+        } else {
+            [true, true, true]
+        };
+
         if self.cfg.use_gravity && stationary {
-            score += self.apply_update2(
+            score += self.apply_update2_masked(
                 [0.0, 0.0],
                 [3, 4],
                 self.gravity_lp_b,
                 window.mean_gyro_b,
                 [self.cfg.r_gravity_std_mps2.powi(2); 2],
+                gravity_state_mask,
             );
-            score += self.apply_update1(
+            score += self.apply_update1_masked(
                 -vec3_norm(self.gravity_lp_b),
                 5,
                 self.gravity_lp_b,
                 window.mean_gyro_b,
                 self.cfg.r_gravity_std_mps2.powi(2),
+                gravity_state_mask,
             );
+            if let Some(alt) = &mut self.yaw_dual {
+                score += Self::apply_update2_masked_state(
+                    &mut alt.q_vb,
+                    &mut alt.p,
+                    [0.0, 0.0],
+                    [3, 4],
+                    self.gravity_lp_b,
+                    window.mean_gyro_b,
+                    [self.cfg.r_gravity_std_mps2.powi(2); 2],
+                    gravity_state_mask,
+                );
+                score += Self::apply_update1_masked_state(
+                    &mut alt.q_vb,
+                    &mut alt.p,
+                    -vec3_norm(self.gravity_lp_b),
+                    5,
+                    self.gravity_lp_b,
+                    window.mean_gyro_b,
+                    self.cfg.r_gravity_std_mps2.powi(2),
+                    gravity_state_mask,
+                );
+            }
             trace.after_gravity = Some(self.q_vb);
         }
 
@@ -321,6 +379,18 @@ impl Align {
                     [self.cfg.r_turn_gyro_std_radps.powi(2); 2],
                     [true, true, heading_updates_enabled && turn_heading_valid],
                 );
+                if let Some(alt) = &mut self.yaw_dual {
+                    score += Self::apply_update2_masked_state(
+                        &mut alt.q_vb,
+                        &mut alt.p,
+                        [0.0, 0.0],
+                        [0, 1],
+                        window.mean_accel_b,
+                        window.mean_gyro_b,
+                        [self.cfg.r_turn_gyro_std_radps.powi(2); 2],
+                        [true, true, heading_updates_enabled && turn_heading_valid],
+                    );
+                }
                 trace.after_turn_gyro = Some(self.q_vb);
             }
             if heading_updates_enabled && turn_heading_valid && self.cfg.use_course_rate {
@@ -344,7 +414,53 @@ impl Align {
             }
         }
 
-        if heading_updates_enabled && self.cfg.use_longitudinal_accel {
+        if self.yaw_dual.is_some() && self.cfg.use_longitudinal_accel {
+            let (cue, long_trace) = self.long_filter.update_with_trace(
+                HorizontalHeadingCueConfig {
+                    alpha: self.cfg.long_lpf_alpha,
+                    min_abs_horiz_mps2: self.cfg.min_long_acc_mps2,
+                    min_stable_windows: self.cfg.min_long_sign_stable_windows,
+                    max_lat_to_long_ratio: 0.8,
+                    min_abs_lat_guard_mps2: 0.35,
+                },
+                HorizontalHeadingCueSample {
+                    gnss_horiz_mps2: [a_long, a_lat],
+                    imu_horiz_mps2: [horiz_obs[3], horiz_obs[4]],
+                    base_valid: long_valid,
+                },
+            );
+            trace.longitudinal_trace = Some(long_trace);
+            if let Some(alt) = &mut self.yaw_dual {
+                let alt_horiz_obs = align_obs(alt.q_vb, window.mean_gyro_b, horiz_accel_b);
+                let (cue_alt, _) = alt.long_filter.update_with_trace(
+                    HorizontalHeadingCueConfig {
+                        alpha: self.cfg.long_lpf_alpha,
+                        min_abs_horiz_mps2: self.cfg.min_long_acc_mps2,
+                        min_stable_windows: self.cfg.min_long_sign_stable_windows,
+                        max_lat_to_long_ratio: 0.8,
+                        min_abs_lat_guard_mps2: 0.35,
+                    },
+                    HorizontalHeadingCueSample {
+                        gnss_horiz_mps2: [a_long, a_lat],
+                        imu_horiz_mps2: [alt_horiz_obs[3], alt_horiz_obs[4]],
+                        base_valid: long_valid,
+                    },
+                );
+                if let (Some(cue_primary), Some(cue_alt)) = (cue, cue_alt) {
+                    let choose_alt = cue_alt.angle_err_rad.abs() + 1.0e-4 < cue_primary.angle_err_rad.abs();
+                    self.resolve_yaw_dual(choose_alt);
+                    score += self.apply_vehicle_yaw_angle(
+                        if choose_alt {
+                            cue_alt.angle_err_rad
+                        } else {
+                            cue_primary.angle_err_rad
+                        },
+                        self.cfg.r_long_std_mps2.powi(2),
+                    );
+                    trace.after_longitudinal_accel = Some(self.q_vb);
+                }
+            }
+        } else if heading_updates_enabled && self.cfg.use_longitudinal_accel {
             let (cue, long_trace) = self.long_filter.update_with_trace(
                 HorizontalHeadingCueConfig {
                     alpha: self.cfg.long_lpf_alpha,
@@ -407,8 +523,30 @@ impl Align {
         r_var: f32,
         state_mask: [bool; 3],
     ) -> f32 {
-        let obs = align_obs(self.q_vb, gyro_b, accel_b);
-        let H_full = align_obs_jacobian(self.q_vb, gyro_b, accel_b);
+        Self::apply_update1_masked_state(
+            &mut self.q_vb,
+            &mut self.P,
+            z,
+            obs_idx,
+            accel_b,
+            gyro_b,
+            r_var,
+            state_mask,
+        )
+    }
+
+    fn apply_update1_masked_state(
+        q_vb: &mut [f32; 4],
+        p: &mut [[f32; ALIGN_N_STATES]; ALIGN_N_STATES],
+        z: f32,
+        obs_idx: usize,
+        accel_b: [f32; 3],
+        gyro_b: [f32; 3],
+        r_var: f32,
+        state_mask: [bool; 3],
+    ) -> f32 {
+        let obs = align_obs(*q_vb, gyro_b, accel_b);
+        let H_full = align_obs_jacobian(*q_vb, gyro_b, accel_b);
         let H = SMatrix::<f32, 1, 3>::from_row_slice(&[
             if state_mask[0] {
                 H_full[obs_idx][0]
@@ -427,46 +565,66 @@ impl Align {
             },
         ]);
         let y = SVector::<f32, 1>::from_row_slice(&[z - obs[obs_idx]]);
-        let P = mat3_to_smatrix(self.P);
+        let P = mat3_to_smatrix(*p);
         let S = H * P * H.transpose() + SMatrix::<f32, 1, 1>::from_diagonal_element(r_var);
         let S_inv = S
             .try_inverse()
             .unwrap_or_else(SMatrix::<f32, 1, 1>::identity);
         let K = P * H.transpose() * S_inv;
         let dtheta = K * y;
-        self.inject_small_angle([dtheta[0], dtheta[1], dtheta[2]]);
+        Self::inject_small_angle_state(q_vb, [dtheta[0], dtheta[1], dtheta[2]]);
         let I = SMatrix::<f32, 3, 3>::identity();
         let P_new = (I - K * H) * P;
-        self.P = smatrix_to_mat3(symmetrize3(P_new));
+        *p = smatrix_to_mat3(symmetrize3(P_new));
         (y.transpose() * S_inv * y)[0]
     }
 
     fn apply_vehicle_yaw_scalar(&mut self, z: f32, h: f32, h_yaw: f32, r_var: f32) -> f32 {
+        Self::apply_vehicle_yaw_scalar_state(&mut self.q_vb, &mut self.P, z, h, h_yaw, r_var)
+    }
+
+    fn apply_vehicle_yaw_scalar_state(
+        q_vb: &mut [f32; 4],
+        p: &mut [[f32; ALIGN_N_STATES]; ALIGN_N_STATES],
+        z: f32,
+        h: f32,
+        h_yaw: f32,
+        r_var: f32,
+    ) -> f32 {
         let y = z - h;
-        let pzz = self.P[2][2].max(0.0);
+        let pzz = p[2][2].max(0.0);
         let s = h_yaw * h_yaw * pzz + r_var.max(1.0e-9);
         let k = if s > 1.0e-9 { pzz * h_yaw / s } else { 0.0 };
         let dpsi = k * y;
-        self.inject_vehicle_yaw(dpsi);
-        self.P[2][2] = ((1.0 - k * h_yaw) * pzz).max(0.0);
-        self.P[0][2] = 0.0;
-        self.P[2][0] = 0.0;
-        self.P[1][2] = 0.0;
-        self.P[2][1] = 0.0;
+        Self::inject_vehicle_yaw_state(q_vb, dpsi);
+        p[2][2] = ((1.0 - k * h_yaw) * pzz).max(0.0);
+        p[0][2] = 0.0;
+        p[2][0] = 0.0;
+        p[1][2] = 0.0;
+        p[2][1] = 0.0;
         y * y / s
     }
 
     fn apply_vehicle_yaw_angle(&mut self, angle_err_rad: f32, r_var: f32) -> f32 {
-        let pzz = self.P[2][2].max(0.0);
+        Self::apply_vehicle_yaw_angle_state(&mut self.q_vb, &mut self.P, angle_err_rad, r_var)
+    }
+
+    fn apply_vehicle_yaw_angle_state(
+        q_vb: &mut [f32; 4],
+        p: &mut [[f32; ALIGN_N_STATES]; ALIGN_N_STATES],
+        angle_err_rad: f32,
+        r_var: f32,
+    ) -> f32 {
+        let pzz = p[2][2].max(0.0);
         let s = pzz + r_var.max(1.0e-9);
         let k = if s > 1.0e-9 { pzz / s } else { 0.0 };
         let dpsi = -k * angle_err_rad;
-        self.inject_vehicle_yaw(dpsi);
-        self.P[2][2] = ((1.0 - k) * pzz).max(0.0);
-        self.P[0][2] = 0.0;
-        self.P[2][0] = 0.0;
-        self.P[1][2] = 0.0;
-        self.P[2][1] = 0.0;
+        Self::inject_vehicle_yaw_state(q_vb, dpsi);
+        p[2][2] = ((1.0 - k) * pzz).max(0.0);
+        p[0][2] = 0.0;
+        p[2][0] = 0.0;
+        p[1][2] = 0.0;
+        p[2][1] = 0.0;
         angle_err_rad * angle_err_rad / s
     }
 
@@ -490,8 +648,30 @@ impl Align {
         r_var: [f32; 2],
         state_mask: [bool; 3],
     ) -> f32 {
-        let obs = align_obs(self.q_vb, gyro_b, accel_b);
-        let H_full = align_obs_jacobian(self.q_vb, gyro_b, accel_b);
+        Self::apply_update2_masked_state(
+            &mut self.q_vb,
+            &mut self.P,
+            z,
+            obs_idx,
+            accel_b,
+            gyro_b,
+            r_var,
+            state_mask,
+        )
+    }
+
+    fn apply_update2_masked_state(
+        q_vb: &mut [f32; 4],
+        p: &mut [[f32; ALIGN_N_STATES]; ALIGN_N_STATES],
+        z: [f32; 2],
+        obs_idx: [usize; 2],
+        accel_b: [f32; 3],
+        gyro_b: [f32; 3],
+        r_var: [f32; 2],
+        state_mask: [bool; 3],
+    ) -> f32 {
+        let obs = align_obs(*q_vb, gyro_b, accel_b);
+        let H_full = align_obs_jacobian(*q_vb, gyro_b, accel_b);
         let H = SMatrix::<f32, 2, 3>::from_row_slice(&[
             if state_mask[0] {
                 H_full[obs_idx[0]][0]
@@ -526,7 +706,7 @@ impl Align {
         ]);
         let y =
             SVector::<f32, 2>::from_row_slice(&[z[0] - obs[obs_idx[0]], z[1] - obs[obs_idx[1]]]);
-        let P = mat3_to_smatrix(self.P);
+        let P = mat3_to_smatrix(*p);
         let R = SMatrix::<f32, 2, 2>::from_diagonal(&SVector::<f32, 2>::from_row_slice(&r_var));
         let S = H * P * H.transpose() + R;
         let S_inv = S
@@ -534,19 +714,50 @@ impl Align {
             .unwrap_or_else(SMatrix::<f32, 2, 2>::identity);
         let K = P * H.transpose() * S_inv;
         let dtheta = K * y;
-        self.inject_small_angle([dtheta[0], dtheta[1], dtheta[2]]);
+        Self::inject_small_angle_state(q_vb, [dtheta[0], dtheta[1], dtheta[2]]);
         let I = SMatrix::<f32, 3, 3>::identity();
         let P_new = (I - K * H) * P;
-        self.P = smatrix_to_mat3(symmetrize3(P_new));
+        *p = smatrix_to_mat3(symmetrize3(P_new));
         (y.transpose() * S_inv * y)[0]
     }
 
     fn inject_small_angle(&mut self, dtheta: [f32; 3]) {
-        self.q_vb = quat_normalize(quat_mul(quat_from_small_angle(dtheta), self.q_vb));
+        Self::inject_small_angle_state(&mut self.q_vb, dtheta);
+    }
+
+    fn inject_small_angle_state(q_vb: &mut [f32; 4], dtheta: [f32; 3]) {
+        *q_vb = quat_normalize(quat_mul(quat_from_small_angle(dtheta), *q_vb));
     }
 
     fn inject_vehicle_yaw(&mut self, dpsi: f32) {
-        self.q_vb = quat_normalize(quat_mul(self.q_vb, quat_from_small_angle([0.0, 0.0, dpsi])));
+        Self::inject_vehicle_yaw_state(&mut self.q_vb, dpsi);
+    }
+
+    fn inject_vehicle_yaw_state(q_vb: &mut [f32; 4], dpsi: f32) {
+        *q_vb = quat_normalize(quat_mul(*q_vb, quat_from_yaw(dpsi)));
+    }
+
+    fn predict_covariance(p: &mut [[f32; ALIGN_N_STATES]; ALIGN_N_STATES], cfg: &AlignConfig, dt: f32) {
+        p[0][0] += cfg.q_mount_std_rad[0].powi(2) * dt;
+        p[1][1] += cfg.q_mount_std_rad[1].powi(2) * dt;
+        p[2][2] += cfg.q_mount_std_rad[2].powi(2) * dt;
+    }
+
+    fn resolve_yaw_dual(&mut self, choose_alt: bool) {
+        if let Some(alt) = self.yaw_dual.take() {
+            if choose_alt {
+                self.q_vb = alt.q_vb;
+                self.P = alt.p;
+                self.long_filter = alt.long_filter;
+            }
+            self.P[2][2] = self.cfg.pca_yaw_seed_std_rad.powi(2);
+            self.P[0][2] = 0.0;
+            self.P[2][0] = 0.0;
+            self.P[1][2] = 0.0;
+            self.P[2][1] = 0.0;
+            self.yaw_pca.reset(false);
+            self.turn_consistency.reset();
+        }
     }
 }
 
@@ -667,6 +878,15 @@ fn quat_normalize(q: [f32; 4]) -> [f32; 4] {
 
 fn quat_from_small_angle(dtheta: [f32; 3]) -> [f32; 4] {
     quat_normalize([1.0, 0.5 * dtheta[0], 0.5 * dtheta[1], 0.5 * dtheta[2]])
+}
+
+fn quat_from_yaw(yaw_rad: f32) -> [f32; 4] {
+    let half = 0.5 * yaw_rad;
+    [half.cos(), 0.0, 0.0, half.sin()]
+}
+
+fn quat_yaw_pi() -> [f32; 4] {
+    quat_from_yaw(core::f32::consts::PI)
 }
 
 fn quat_to_rotmat(q: [f32; 4]) -> [[f32; 3]; 3] {
