@@ -3,6 +3,9 @@ pub struct YawPcaConfig {
     pub enabled: bool,
     pub min_speed_mps: f32,
     pub min_horiz_acc_mps2: f32,
+    pub min_long_mps2: f32,
+    pub max_lat_to_long_ratio: f32,
+    pub min_abs_lat_guard_mps2: f32,
     pub min_windows: usize,
     pub max_windows: usize,
     pub min_anisotropy_ratio: f32,
@@ -13,6 +16,7 @@ pub struct YawPcaSample {
     pub speed_mps: f32,
     pub horiz_accel_xy: [f32; 2],
     pub gnss_long_mps2: f32,
+    pub gnss_lat_mps2: f32,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -59,7 +63,14 @@ impl YawPcaInitializer {
         }
         if sample.speed_mps < cfg.min_speed_mps
             || vec2_norm(sample.horiz_accel_xy) < cfg.min_horiz_acc_mps2
+            || sample.gnss_long_mps2.abs() < cfg.min_long_mps2
         {
+            return None;
+        }
+        let max_lat_abs = cfg
+            .min_abs_lat_guard_mps2
+            .max(cfg.max_lat_to_long_ratio * sample.gnss_long_mps2.abs());
+        if sample.gnss_lat_mps2.abs() > max_lat_abs {
             return None;
         }
         self.samples.push(StoredSample {
@@ -140,6 +151,9 @@ mod tests {
             enabled: true,
             min_speed_mps: 2.0,
             min_horiz_acc_mps2: 0.1,
+            min_long_mps2: 0.1,
+            max_lat_to_long_ratio: 0.6,
+            min_abs_lat_guard_mps2: 0.3,
             min_windows: 4,
             max_windows: 8,
             min_anisotropy_ratio: 1.2,
@@ -157,6 +171,7 @@ mod tests {
                     speed_mps: 8.0,
                     horiz_accel_xy: [m * axis[0], m * axis[1]],
                     gnss_long_mps2: m,
+                    gnss_lat_mps2: 0.0,
                 },
             );
         }
@@ -170,6 +185,9 @@ mod tests {
             enabled: true,
             min_speed_mps: 2.0,
             min_horiz_acc_mps2: 0.1,
+            min_long_mps2: 0.1,
+            max_lat_to_long_ratio: 0.6,
+            min_abs_lat_guard_mps2: 0.3,
             min_windows: 4,
             max_windows: 8,
             min_anisotropy_ratio: 1.2,
@@ -187,11 +205,43 @@ mod tests {
                     speed_mps: 8.0,
                     horiz_accel_xy: [m * axis[0], m * axis[1]],
                     gnss_long_mps2: -m,
+                    gnss_lat_mps2: 0.0,
                 },
             );
         }
         let dpsi = out.expect("pca should resolve");
         let expected = wrap_pi(theta + std::f32::consts::PI);
         assert!((wrap_pi(dpsi - expected)).abs() < 5.0_f32.to_radians());
+    }
+
+    #[test]
+    fn rejects_lateral_dominant_samples() {
+        let cfg = YawPcaConfig {
+            enabled: true,
+            min_speed_mps: 2.0,
+            min_horiz_acc_mps2: 0.1,
+            min_long_mps2: 0.1,
+            max_lat_to_long_ratio: 0.6,
+            min_abs_lat_guard_mps2: 0.3,
+            min_windows: 4,
+            max_windows: 8,
+            min_anisotropy_ratio: 1.2,
+        };
+        let mut init = YawPcaInitializer::new();
+        init.reset(true);
+        let mut out = None;
+        for _ in 0..6 {
+            out = init.update(
+                cfg,
+                YawPcaSample {
+                    speed_mps: 8.0,
+                    horiz_accel_xy: [0.3, 1.0],
+                    gnss_long_mps2: 0.2,
+                    gnss_lat_mps2: 1.0,
+                },
+            );
+        }
+        assert!(out.is_none());
+        assert!(init.is_active());
     }
 }

@@ -1,13 +1,14 @@
 use align_rs::align::AlignConfig;
 use std::collections::VecDeque;
 
-use crate::ubxlog::UbxFrame;
+use crate::ubxlog::{UbxFrame, extract_esf_alg};
 
 use super::align_replay::{
-    BootstrapConfig as ReplayBootstrapConfig, build_align_replay, quat_rotate, quat_rpy_alg_deg,
-    signed_projected_axis_angle_deg,
+    BootstrapConfig as ReplayBootstrapConfig, build_align_replay, frd_mount_quat_to_esf_alg_flu_quat,
+    quat_rotate, quat_rpy_alg_deg, signed_projected_axis_angle_deg,
 };
 
+use super::super::math::nearest_master_ms;
 use super::super::model::Trace;
 use super::timebase::MasterTimeline;
 
@@ -91,13 +92,15 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
     let mut instantaneous_pca_flip = None::<bool>;
     let mut pca_window = VecDeque::<(f64, f64, f64, f64)>::new();
 
-    for ev in &replay.alg_events {
-        let t = rel_s(ev.t_ms);
-        let (roll_deg, pitch_deg, yaw_deg) =
-            quat_rpy_alg_deg(ev.q_frd[0], ev.q_frd[1], ev.q_frd[2], ev.q_frd[3]);
-        ref_roll.push([t, roll_deg]);
-        ref_pitch.push([t, pitch_deg]);
-        ref_yaw.push([t, yaw_deg]);
+    for f in frames {
+        if let Some((_, roll_deg, pitch_deg, yaw_deg)) = extract_esf_alg(f)
+            && let Some(t_ms) = nearest_master_ms(f.seq, &tl.masters)
+        {
+            let t = rel_s(t_ms);
+            ref_roll.push([t, roll_deg]);
+            ref_pitch.push([t, pitch_deg]);
+            ref_yaw.push([t, yaw_deg]);
+        }
     }
     for sample in &replay.samples {
         let t = sample.t_s;
@@ -108,9 +111,16 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
             final_alg_heading.push([t, yaw_deg]);
         }
 
-        out_roll.push([t, sample.align_rpy_deg[0]]);
-        out_pitch.push([t, sample.align_rpy_deg[1]]);
-        out_yaw.push([t, sample.align_rpy_deg[2]]);
+        let q_align_flu = frd_mount_quat_to_esf_alg_flu_quat(sample.q_align);
+        let (align_roll_deg, align_pitch_deg, align_yaw_deg) = quat_rpy_alg_deg(
+            q_align_flu[0],
+            q_align_flu[1],
+            q_align_flu[2],
+            q_align_flu[3],
+        );
+        out_roll.push([t, align_roll_deg]);
+        out_pitch.push([t, align_pitch_deg]);
+        out_yaw.push([t, align_yaw_deg]);
         if sample.alg_q.is_some() {
             let align_fwd = quat_rotate(sample.q_align, [1.0, 0.0, 0.0]);
             let align_down = quat_rotate(sample.q_align, [0.0, 0.0, 1.0]);
@@ -220,15 +230,15 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
     AlignCompareData {
         cmp_att: vec![
             Trace {
-                name: "Align roll [deg]".to_string(),
+                name: "Align (FLU) roll [deg]".to_string(),
                 points: out_roll,
             },
             Trace {
-                name: "Align pitch [deg]".to_string(),
+                name: "Align (FLU) pitch [deg]".to_string(),
                 points: out_pitch,
             },
             Trace {
-                name: "Align yaw [deg]".to_string(),
+                name: "Align (FLU) yaw [deg]".to_string(),
                 points: out_yaw,
             },
             Trace {

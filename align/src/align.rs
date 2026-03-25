@@ -1,5 +1,7 @@
 #![allow(non_snake_case)]
 
+use std::collections::VecDeque;
+
 use crate::horizontal_heading::{
     HorizontalHeadingCueConfig, HorizontalHeadingCueFilter, HorizontalHeadingCueSample,
     HorizontalHeadingTrace,
@@ -25,10 +27,18 @@ pub struct AlignConfig {
     pub min_turn_rate_radps: f32,
     pub min_lat_acc_mps2: f32,
     pub min_long_acc_mps2: f32,
+    pub turn_consistency_min_windows: usize,
+    pub turn_consistency_min_fraction: f32,
+    pub turn_consistency_max_abs_lat_err_mps2: f32,
+    pub turn_consistency_max_rel_lat_err: f32,
     pub min_long_sign_stable_windows: usize,
     pub use_pca_yaw_seed: bool,
     pub pca_min_speed_mps: f32,
     pub pca_min_horiz_acc_mps2: f32,
+    pub pca_min_long_mps2: f32,
+    pub pca_max_lat_to_long_ratio: f32,
+    pub pca_min_abs_lat_guard_mps2: f32,
+    pub pca_yaw_seed_std_rad: f32,
     pub pca_min_windows: usize,
     pub pca_max_windows: usize,
     pub pca_min_anisotropy_ratio: f32,
@@ -45,7 +55,7 @@ impl Default for AlignConfig {
     fn default() -> Self {
         Self {
             q_mount_std_rad: [
-                0.003_f32.to_radians(),
+                0.001_f32.to_radians(),
                 0.003_f32.to_radians(),
                 0.003_f32.to_radians(),
             ],
@@ -60,10 +70,18 @@ impl Default for AlignConfig {
             min_turn_rate_radps: 2.0_f32.to_radians(),
             min_lat_acc_mps2: 0.10,
             min_long_acc_mps2: 0.18,
+            turn_consistency_min_windows: 5,
+            turn_consistency_min_fraction: 0.8,
+            turn_consistency_max_abs_lat_err_mps2: 0.35,
+            turn_consistency_max_rel_lat_err: 0.6,
             min_long_sign_stable_windows: 2,
             use_pca_yaw_seed: true,
             pca_min_speed_mps: 10.0 / 3.6,
             pca_min_horiz_acc_mps2: 0.15,
+            pca_min_long_mps2: 0.18,
+            pca_max_lat_to_long_ratio: 0.6,
+            pca_min_abs_lat_guard_mps2: 0.35,
+            pca_yaw_seed_std_rad: 0.5_f32.to_radians(),
             pca_min_windows: 100,
             pca_max_windows: 200,
             pca_min_anisotropy_ratio: 1.3,
@@ -107,6 +125,7 @@ pub struct Align {
     pub gravity_lp_b: [f32; 3],
     long_filter: HorizontalHeadingCueFilter,
     yaw_pca: YawPcaInitializer,
+    turn_consistency: TurnConsistencyGate,
     pub cfg: AlignConfig,
 }
 
@@ -128,6 +147,7 @@ impl Align {
             gravity_lp_b: [0.0, 0.0, -GRAVITY_MPS2],
             long_filter: HorizontalHeadingCueFilter::new(),
             yaw_pca: YawPcaInitializer::new(),
+            turn_consistency: TurnConsistencyGate::new(),
             cfg,
         }
     }
@@ -147,6 +167,7 @@ impl Align {
         self.gravity_lp_b = init.mean_accel_b;
         self.long_filter.reset();
         self.yaw_pca.reset(self.cfg.use_pca_yaw_seed);
+        self.turn_consistency.reset();
         Ok(())
     }
 
@@ -208,6 +229,15 @@ impl Align {
         let turn_valid = speed_mid > self.cfg.min_speed_mps
             && course_rate.abs() > self.cfg.min_turn_rate_radps
             && a_lat.abs() > self.cfg.min_lat_acc_mps2;
+        let turn_heading_valid = self.turn_consistency.update(
+            &self.cfg,
+            turn_valid,
+            TurnConsistencySample {
+                speed_mps: speed_mid,
+                course_rate_radps: course_rate,
+                a_lat_mps2: a_lat,
+            },
+        );
         let horiz_gnss_norm = (a_long * a_long + a_lat * a_lat).sqrt();
         let long_valid = speed_mid > self.cfg.min_speed_mps
             && a_long.abs() > self.cfg.min_long_acc_mps2
@@ -221,6 +251,9 @@ impl Align {
                 enabled: self.cfg.use_pca_yaw_seed,
                 min_speed_mps: self.cfg.pca_min_speed_mps,
                 min_horiz_acc_mps2: self.cfg.pca_min_horiz_acc_mps2,
+                min_long_mps2: self.cfg.pca_min_long_mps2,
+                max_lat_to_long_ratio: self.cfg.pca_max_lat_to_long_ratio,
+                min_abs_lat_guard_mps2: self.cfg.pca_min_abs_lat_guard_mps2,
                 min_windows: self.cfg.pca_min_windows,
                 max_windows: self.cfg.pca_max_windows,
                 min_anisotropy_ratio: self.cfg.pca_min_anisotropy_ratio,
@@ -234,15 +267,17 @@ impl Align {
                     speed_mps: speed_mid,
                     horiz_accel_xy: pca_horiz_xy,
                     gnss_long_mps2: a_long,
+                    gnss_lat_mps2: a_lat,
                 },
             ) {
                 self.inject_vehicle_yaw(dpsi);
-                self.P[2][2] = 10_f32.to_radians().powi(2);
+                self.P[2][2] = self.P[2][2].max(self.cfg.pca_yaw_seed_std_rad.powi(2));
                 self.P[0][2] = 0.0;
                 self.P[2][0] = 0.0;
                 self.P[1][2] = 0.0;
                 self.P[2][1] = 0.0;
                 self.long_filter.reset();
+                self.turn_consistency.reset();
                 trace.after_pca_yaw_seed = Some(self.q_vb);
             }
             !self.yaw_pca.is_active()
@@ -287,7 +322,7 @@ impl Align {
                 );
                 trace.after_turn_gyro = Some(self.q_vb);
             }
-            if heading_updates_enabled && self.cfg.use_course_rate {
+            if heading_updates_enabled && turn_heading_valid && self.cfg.use_course_rate {
                 score += self.apply_update1(
                     course_rate,
                     2,
@@ -297,7 +332,7 @@ impl Align {
                 );
                 trace.after_course_rate = Some(self.q_vb);
             }
-            if heading_updates_enabled && self.cfg.use_lateral_accel {
+            if heading_updates_enabled && turn_heading_valid && self.cfg.use_lateral_accel {
                 score += self.apply_vehicle_yaw_scalar(
                     a_lat,
                     horiz_obs[4],
@@ -475,6 +510,69 @@ impl Align {
 
     fn inject_vehicle_yaw(&mut self, dpsi: f32) {
         self.q_vb = quat_normalize(quat_mul(self.q_vb, quat_from_small_angle([0.0, 0.0, dpsi])));
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TurnConsistencySample {
+    speed_mps: f32,
+    course_rate_radps: f32,
+    a_lat_mps2: f32,
+}
+
+#[derive(Debug, Clone)]
+struct TurnConsistencyGate {
+    samples: VecDeque<TurnConsistencySample>,
+}
+
+impl TurnConsistencyGate {
+    fn new() -> Self {
+        Self {
+            samples: VecDeque::new(),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.samples.clear();
+    }
+
+    fn update(
+        &mut self,
+        cfg: &AlignConfig,
+        turn_valid: bool,
+        sample: TurnConsistencySample,
+    ) -> bool {
+        if !turn_valid {
+            self.samples.clear();
+            return false;
+        }
+
+        self.samples.push_back(sample);
+        while self.samples.len() > cfg.turn_consistency_min_windows.max(1) {
+            self.samples.pop_front();
+        }
+        if self.samples.len() < cfg.turn_consistency_min_windows.max(1) {
+            return false;
+        }
+
+        let mut sign_ok = 0usize;
+        let mut model_ok = 0usize;
+        for s in &self.samples {
+            let a_lat_pred = s.speed_mps * s.course_rate_radps;
+            if a_lat_pred * s.a_lat_mps2 > 0.0 {
+                sign_ok += 1;
+            }
+            let tol = cfg.turn_consistency_max_abs_lat_err_mps2.max(
+                cfg.turn_consistency_max_rel_lat_err * a_lat_pred.abs().max(s.a_lat_mps2.abs()),
+            );
+            if (s.a_lat_mps2 - a_lat_pred).abs() <= tol {
+                model_ok += 1;
+            }
+        }
+
+        let min_ok = (cfg.turn_consistency_min_fraction.clamp(0.0, 1.0) * self.samples.len() as f32)
+            .ceil() as usize;
+        sign_ok >= min_ok && model_ok >= min_ok
     }
 }
 

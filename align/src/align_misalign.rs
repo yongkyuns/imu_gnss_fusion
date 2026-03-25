@@ -29,7 +29,7 @@ impl Default for AlignMisalignConfig {
     fn default() -> Self {
         Self {
             q_mount_std_rad: [
-                0.003_f32.to_radians(),
+                0.0005_f32.to_radians(),
                 0.003_f32.to_radians(),
                 0.003_f32.to_radians(),
             ],
