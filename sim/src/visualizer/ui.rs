@@ -177,6 +177,8 @@ impl eframe::App for App {
                 ui.selectable_value(&mut self.page, Page::Signals, "Signals");
                 ui.selectable_value(&mut self.page, Page::EkfCompare, "EKF Compare");
                 ui.selectable_value(&mut self.page, Page::AlignCompare, "Misalign Compare");
+                ui.selectable_value(&mut self.page, Page::AlignNhcCompare, "Align NHC");
+                ui.selectable_value(&mut self.page, Page::AlignPcaVectors, "PCA Vectors");
                 ui.selectable_value(&mut self.page, Page::MapDark, "Map (Dark)");
             });
         });
@@ -368,7 +370,7 @@ impl eframe::App for App {
                         );
                         draw_plot(
                             ui,
-                            "Align Motion Classification / Updates",
+                            "Final ESF-ALG vs PCA Heading",
                             &self.data.align_motion,
                             true,
                             self.max_points_per_trace,
@@ -401,6 +403,68 @@ impl eframe::App for App {
                         ui,
                         "Align Covariance Diagonal",
                         &self.data.align_cov,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                });
+            }
+            Page::AlignPcaVectors => {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    draw_scatter_plot(
+                        ui,
+                        "PCA Input Accel Vectors (x=lateral, y=longitudinal)",
+                        &self.data.align_pca_vectors,
+                    );
+                });
+            }
+            Page::AlignNhcCompare => {
+                let half_width = (ctx.content_rect().width() * 0.5).max(260.0);
+                egui::SidePanel::left("align_nhc_compare_left")
+                    .resizable(false)
+                    .exact_width(half_width)
+                    .show(ctx, |ui| {
+                        draw_plot(
+                            ui,
+                            "Euler Angles: AlignNhc vs ESF-ALG",
+                            &self.data.align_nhc_cmp_att,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "AlignNhc Window Diagnostics",
+                            &self.data.align_nhc_diag,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "AlignNhc Axis Error vs ESF-ALG",
+                            &self.data.align_nhc_axis_err,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                    });
+
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    draw_plot(
+                        ui,
+                        "AlignNhc Residuals",
+                        &self.data.align_nhc_residuals,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "AlignNhc Gates",
+                        &self.data.align_nhc_gates,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "AlignNhc Covariance Diagonal",
+                        &self.data.align_nhc_cov,
                         true,
                         self.max_points_per_trace,
                     );
@@ -580,6 +644,35 @@ fn draw_plot(
                 }
             }
         });
+    });
+}
+
+fn draw_scatter_plot(ui: &mut egui::Ui, title: &str, traces: &[Trace]) {
+    ui.vertical(|ui| {
+        ui.label(title);
+        Plot::new(title)
+            .height(520.0)
+            .data_aspect(1.0)
+            .allow_drag(true)
+            .allow_zoom(true)
+            .allow_scroll(true)
+            .allow_boxed_zoom(true)
+            .allow_axis_zoom_drag(true)
+            .legend(Legend::default())
+            .show(ui, |plot_ui| {
+                for t in traces {
+                    if t.points.is_empty() {
+                        continue;
+                    }
+                    let points: PlotPoints<'_> = t.points.clone().into();
+                    if t.name.ends_with("points") {
+                        let radius = if t.name.starts_with("IMU") { 1.8 } else { 2.2 };
+                        plot_ui.points(Points::new(t.name.clone(), points).radius(radius));
+                    } else {
+                        plot_ui.line(Line::new(t.name.clone(), points));
+                    }
+                }
+            });
     });
 }
 

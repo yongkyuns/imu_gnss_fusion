@@ -700,7 +700,11 @@ impl BootstrapDetector {
         let gyro_norm = norm3(gyro_radps);
         let accel_err = (norm3(accel_b) - GRAVITY_MPS2).abs();
         self.gyro_ema = Some(ema_update(self.gyro_ema, gyro_norm, self.cfg.ema_alpha));
-        self.accel_err_ema = Some(ema_update(self.accel_err_ema, accel_err, self.cfg.ema_alpha));
+        self.accel_err_ema = Some(ema_update(
+            self.accel_err_ema,
+            accel_err,
+            self.cfg.ema_alpha,
+        ));
         self.speed_ema = Some(ema_update(self.speed_ema, speed_mps, self.cfg.ema_alpha));
 
         let stationary = self.speed_ema.unwrap_or(speed_mps) <= self.cfg.max_speed_mps
@@ -781,7 +785,11 @@ fn build_align_mount_events(
                 let inv_n = 1.0 / (interval_packets.len() as f32);
                 let window = AlignWindowSummary {
                     dt,
-                    mean_gyro_b: [gyro_sum[0] * inv_n, gyro_sum[1] * inv_n, gyro_sum[2] * inv_n],
+                    mean_gyro_b: [
+                        gyro_sum[0] * inv_n,
+                        gyro_sum[1] * inv_n,
+                        gyro_sum[2] * inv_n,
+                    ],
                     mean_accel_b: [
                         accel_sum[0] * inv_n,
                         accel_sum[1] * inv_n,

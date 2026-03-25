@@ -76,6 +76,13 @@ fn main() -> Result<()> {
         group_stats("align_res_vel", &data.align_res_vel),
         group_stats("align_axis_err", &data.align_axis_err),
         group_stats("align_motion", &data.align_motion),
+        group_stats("align_pca_vectors", &data.align_pca_vectors),
+        group_stats("align_nhc_cmp_att", &data.align_nhc_cmp_att),
+        group_stats("align_nhc_diag", &data.align_nhc_diag),
+        group_stats("align_nhc_axis_err", &data.align_nhc_axis_err),
+        group_stats("align_nhc_residuals", &data.align_nhc_residuals),
+        group_stats("align_nhc_gates", &data.align_nhc_gates),
+        group_stats("align_nhc_cov", &data.align_nhc_cov),
         group_stats("align_roll_contrib", &data.align_roll_contrib),
         group_stats("align_pitch_contrib", &data.align_pitch_contrib),
         group_stats("align_yaw_contrib", &data.align_yaw_contrib),
@@ -99,6 +106,12 @@ fn main() -> Result<()> {
         ("align_res_vel", &data.align_res_vel),
         ("align_axis_err", &data.align_axis_err),
         ("align_motion", &data.align_motion),
+        ("align_nhc_cmp_att", &data.align_nhc_cmp_att),
+        ("align_nhc_diag", &data.align_nhc_diag),
+        ("align_nhc_axis_err", &data.align_nhc_axis_err),
+        ("align_nhc_residuals", &data.align_nhc_residuals),
+        ("align_nhc_gates", &data.align_nhc_gates),
+        ("align_nhc_cov", &data.align_nhc_cov),
         ("align_roll_contrib", &data.align_roll_contrib),
         ("align_pitch_contrib", &data.align_pitch_contrib),
         ("align_yaw_contrib", &data.align_yaw_contrib),
@@ -121,8 +134,18 @@ fn main() -> Result<()> {
         }
     }
     if let Some(t_s) = args.dump_align_axis_time_s {
-        dump_traces_near_time("align_cmp_att", &data.align_cmp_att, t_s, args.dump_window_s);
-        dump_traces_near_time("align_axis_err", &data.align_axis_err, t_s, args.dump_window_s);
+        dump_traces_near_time(
+            "align_cmp_att",
+            &data.align_cmp_att,
+            t_s,
+            args.dump_window_s,
+        );
+        dump_traces_near_time(
+            "align_axis_err",
+            &data.align_axis_err,
+            t_s,
+            args.dump_window_s,
+        );
     }
     if args.profile_only {
         return Ok(());
@@ -141,7 +164,12 @@ fn parse_ekf_imu_source(s: &str) -> Result<EkfImuSource, String> {
     }
 }
 
-fn dump_traces_near_time(group: &str, traces: &[sim::visualizer::model::Trace], t_s: f64, window_s: f64) {
+fn dump_traces_near_time(
+    group: &str,
+    traces: &[sim::visualizer::model::Trace],
+    t_s: f64,
+    window_s: f64,
+) {
     let half = 0.5 * window_s.abs();
     eprintln!(
         "[dump] group={} center_t_s={:.3} window_s={:.3}",

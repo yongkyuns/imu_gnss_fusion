@@ -1,10 +1,11 @@
 use align_rs::align::AlignConfig;
+use std::collections::VecDeque;
 
 use crate::ubxlog::UbxFrame;
 
 use super::align_replay::{
-    BootstrapConfig as ReplayBootstrapConfig, build_align_replay, quat_rpy_alg_deg,
-    quat_rotate, signed_projected_axis_angle_deg,
+    BootstrapConfig as ReplayBootstrapConfig, build_align_replay, quat_rotate, quat_rpy_alg_deg,
+    signed_projected_axis_angle_deg,
 };
 
 use super::super::model::Trace;
@@ -15,12 +16,12 @@ pub struct AlignCompareData {
     pub res_vel: Vec<Trace>,
     pub axis_err: Vec<Trace>,
     pub motion: Vec<Trace>,
+    pub pca_vectors: Vec<Trace>,
     pub roll_contrib: Vec<Trace>,
     pub pitch_contrib: Vec<Trace>,
     pub yaw_contrib: Vec<Trace>,
     pub cov: Vec<Trace>,
 }
-
 
 pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> AlignCompareData {
     if tl.masters.is_empty() {
@@ -29,6 +30,7 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
             res_vel: Vec::new(),
             axis_err: Vec::new(),
             motion: Vec::new(),
+            pca_vectors: Vec::new(),
             roll_contrib: Vec::new(),
             pitch_contrib: Vec::new(),
             yaw_contrib: Vec::new(),
@@ -59,14 +61,11 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
     let mut fwd_err = Vec::<[f64; 2]>::new();
     let mut down_err = Vec::<[f64; 2]>::new();
     let mut yaw_init = Vec::<[f64; 2]>::new();
-    let mut cls_stationary = Vec::<[f64; 2]>::new();
-    let mut cls_turn = Vec::<[f64; 2]>::new();
-    let mut cls_long = Vec::<[f64; 2]>::new();
-    let mut upd_gravity = Vec::<[f64; 2]>::new();
-    let mut upd_turn_gyro = Vec::<[f64; 2]>::new();
-    let mut upd_course = Vec::<[f64; 2]>::new();
-    let mut upd_lat = Vec::<[f64; 2]>::new();
-    let mut upd_long = Vec::<[f64; 2]>::new();
+    let mut final_alg_heading = Vec::<[f64; 2]>::new();
+    let mut instantaneous_pca_heading = Vec::<[f64; 2]>::new();
+    let mut cumulative_pca_heading = Vec::<[f64; 2]>::new();
+    let mut imu_pca_points = Vec::<[f64; 2]>::new();
+    let mut gnss_pca_points = Vec::<[f64; 2]>::new();
     let mut roll_turn_gyro = Vec::<[f64; 2]>::new();
     let mut roll_course = Vec::<[f64; 2]>::new();
     let mut roll_lat = Vec::<[f64; 2]>::new();
@@ -82,6 +81,15 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
     let mut p00 = Vec::<[f64; 2]>::new();
     let mut p11 = Vec::<[f64; 2]>::new();
     let mut p22 = Vec::<[f64; 2]>::new();
+    let final_alg_heading_deg = final_alg_q.map(|q| quat_rpy_alg_deg(q[0], q[1], q[2], q[3]).2);
+    let mut pca_sxx = 0.0_f64;
+    let mut pca_sxy = 0.0_f64;
+    let mut pca_syy = 0.0_f64;
+    let mut pca_corr = 0.0_f64;
+    let mut pca_count = 0usize;
+    let mut cumulative_pca_flip = None::<bool>;
+    let mut instantaneous_pca_flip = None::<bool>;
+    let mut pca_window = VecDeque::<(f64, f64, f64, f64)>::new();
 
     for ev in &replay.alg_events {
         let t = rel_s(ev.t_ms);
@@ -96,27 +104,21 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
         diag_course.push([t, sample.course_rate_dps]);
         diag_lat.push([t, sample.a_lat_mps2]);
         diag_long.push([t, sample.a_long_mps2]);
-        cls_stationary.push([t, if sample.stationary { 1.0 } else { 0.0 }]);
-        cls_turn.push([t, if sample.turn_valid { 1.0 } else { 0.0 }]);
-        cls_long.push([t, if sample.long_valid { 1.0 } else { 0.0 }]);
-        upd_gravity.push([t, if sample.upd_gravity { 1.0 } else { 0.0 }]);
-        upd_turn_gyro.push([t, if sample.upd_turn_gyro { 1.0 } else { 0.0 }]);
-        upd_course.push([t, if sample.upd_course { 1.0 } else { 0.0 }]);
-        upd_lat.push([t, if sample.upd_lat { 1.0 } else { 0.0 }]);
-        upd_long.push([t, if sample.upd_long { 1.0 } else { 0.0 }]);
+        if let Some(yaw_deg) = final_alg_heading_deg {
+            final_alg_heading.push([t, yaw_deg]);
+        }
 
         out_roll.push([t, sample.align_rpy_deg[0]]);
         out_pitch.push([t, sample.align_rpy_deg[1]]);
         out_yaw.push([t, sample.align_rpy_deg[2]]);
-        if let Some(q_alg) = sample.alg_q {
+        if sample.alg_q.is_some() {
             let align_fwd = quat_rotate(sample.q_align, [1.0, 0.0, 0.0]);
             let align_down = quat_rotate(sample.q_align, [0.0, 0.0, 1.0]);
             if let Some(q_ref_final) = final_alg_q {
                 let ref_fwd = quat_rotate(q_ref_final, [1.0, 0.0, 0.0]);
                 let ref_down = quat_rotate(q_ref_final, [0.0, 0.0, 1.0]);
                 let ref_right = quat_rotate(q_ref_final, [0.0, 1.0, 0.0]);
-                let fwd_signed =
-                    signed_projected_axis_angle_deg(align_fwd, ref_fwd, ref_down);
+                let fwd_signed = signed_projected_axis_angle_deg(align_fwd, ref_fwd, ref_down);
                 fwd_err.push([t, fwd_signed]);
                 down_err.push([
                     t,
@@ -124,6 +126,76 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
                 ]);
                 if sample.yaw_initialized {
                     yaw_init.push([t, fwd_signed]);
+                }
+            }
+        }
+        let x = sample.pca_input_long_mps2;
+        let y = sample.pca_input_lat_mps2;
+        if x.is_finite() && y.is_finite() {
+            imu_pca_points.push([sample.pca_input_lat_mps2, sample.pca_input_long_mps2]);
+            gnss_pca_points.push([sample.a_lat_mps2, sample.a_long_mps2]);
+            pca_window.push_back((x, y, sample.a_long_mps2, sample.a_lat_mps2));
+            while pca_window.len() > cfg.pca_max_windows {
+                pca_window.pop_front();
+            }
+            pca_sxx += x * x;
+            pca_sxy += x * y;
+            pca_syy += y * y;
+            pca_count += 1;
+            let theta = 0.5 * (2.0 * pca_sxy).atan2(pca_sxx - pca_syy);
+            let axis = [theta.cos(), theta.sin()];
+            pca_corr += sample.a_long_mps2 * axis[0] + sample.a_lat_mps2 * axis[1];
+            if pca_count >= cfg.pca_min_windows {
+                let trace_cov = pca_sxx + pca_syy;
+                let disc =
+                    ((pca_sxx - pca_syy) * (pca_sxx - pca_syy) + 4.0 * pca_sxy * pca_sxy).sqrt();
+                let lambda_max = 0.5 * (trace_cov + disc);
+                let lambda_min = (0.5 * (trace_cov - disc)).max(1.0e-9);
+                let anisotropy = lambda_max / lambda_min;
+                if anisotropy >= cfg.pca_min_anisotropy_ratio as f64 {
+                    let flip = *cumulative_pca_flip.get_or_insert(pca_corr < 0.0);
+                    let signed_theta_deg = if flip {
+                        wrap_heading_deg(theta.to_degrees() + 180.0)
+                    } else {
+                        wrap_heading_deg(theta.to_degrees())
+                    };
+                    cumulative_pca_heading.push([
+                        t,
+                        wrap_heading_deg(sample.align_rpy_deg[2] + signed_theta_deg),
+                    ]);
+                }
+            }
+            if pca_window.len() >= cfg.pca_min_windows {
+                let mut wsxx = 0.0_f64;
+                let mut wsxy = 0.0_f64;
+                let mut wsyy = 0.0_f64;
+                for (wx, wy, _, _) in &pca_window {
+                    wsxx += wx * wx;
+                    wsxy += wx * wy;
+                    wsyy += wy * wy;
+                }
+                let wtrace = wsxx + wsyy;
+                let wdisc = ((wsxx - wsyy) * (wsxx - wsyy) + 4.0 * wsxy * wsxy).sqrt();
+                let wlambda_max = 0.5 * (wtrace + wdisc);
+                let wlambda_min = (0.5 * (wtrace - wdisc)).max(1.0e-9);
+                let wanisotropy = wlambda_max / wlambda_min;
+                if wanisotropy >= cfg.pca_min_anisotropy_ratio as f64 {
+                    let wtheta = 0.5 * (2.0 * wsxy).atan2(wsxx - wsyy);
+                    let waxis = [wtheta.cos(), wtheta.sin()];
+                    let mut wcorr = 0.0_f64;
+                    for (_, _, wlong, wlat) in &pca_window {
+                        wcorr += wlong * waxis[0] + wlat * waxis[1];
+                    }
+                    let flip = *instantaneous_pca_flip.get_or_insert(wcorr < 0.0);
+                    let wsigned_theta_deg = if flip {
+                        wrap_heading_deg(wtheta.to_degrees() + 180.0)
+                    } else {
+                        wrap_heading_deg(wtheta.to_degrees())
+                    };
+                    instantaneous_pca_heading.push([
+                        t,
+                        wrap_heading_deg(sample.align_rpy_deg[2] + wsigned_theta_deg),
+                    ]);
                 }
             }
         }
@@ -202,38 +274,19 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
         ],
         motion: vec![
             Trace {
-                name: "class stationary".to_string(),
-                points: cls_stationary,
+                name: "final ESF-ALG heading [deg]".to_string(),
+                points: final_alg_heading,
             },
             Trace {
-                name: "class turn".to_string(),
-                points: cls_turn,
+                name: "instantaneous PCA heading (GNSS-sign) [deg]".to_string(),
+                points: instantaneous_pca_heading,
             },
             Trace {
-                name: "class longitudinal".to_string(),
-                points: cls_long,
-            },
-            Trace {
-                name: "update gravity".to_string(),
-                points: upd_gravity,
-            },
-            Trace {
-                name: "update turn gyro".to_string(),
-                points: upd_turn_gyro,
-            },
-            Trace {
-                name: "update course rate".to_string(),
-                points: upd_course,
-            },
-            Trace {
-                name: "update lateral accel".to_string(),
-                points: upd_lat,
-            },
-            Trace {
-                name: "update longitudinal accel".to_string(),
-                points: upd_long,
+                name: "cumulative PCA heading (GNSS-sign) [deg]".to_string(),
+                points: cumulative_pca_heading,
             },
         ],
+        pca_vectors: pca_vector_traces(&imu_pca_points, &gnss_pca_points),
         roll_contrib: vec![
             Trace {
                 name: "turn gyro".to_string(),
@@ -303,4 +356,73 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
             },
         ],
     }
+}
+
+fn pca_vector_traces(imu_points: &[[f64; 2]], gnss_points: &[[f64; 2]]) -> Vec<Trace> {
+    let mut out = vec![
+        Trace {
+            name: "IMU accel points".to_string(),
+            points: imu_points.to_vec(),
+        },
+        Trace {
+            name: "GNSS accel points".to_string(),
+            points: gnss_points.to_vec(),
+        },
+    ];
+    if let Some(line) = pca_axis_line(imu_points, "IMU PCA axis") {
+        out.push(line);
+    }
+    if let Some(line) = pca_axis_line(gnss_points, "GNSS PCA axis") {
+        out.push(line);
+    }
+    out
+}
+
+fn pca_axis_line(points: &[[f64; 2]], name: &str) -> Option<Trace> {
+    if points.len() < 2 {
+        return None;
+    }
+    let mut mx = 0.0_f64;
+    let mut my = 0.0_f64;
+    let mut n = 0usize;
+    for p in points {
+        if p[0].is_finite() && p[1].is_finite() {
+            mx += p[0];
+            my += p[1];
+            n += 1;
+        }
+    }
+    if n < 2 {
+        return None;
+    }
+    mx /= n as f64;
+    my /= n as f64;
+    let mut sxx = 0.0_f64;
+    let mut sxy = 0.0_f64;
+    let mut syy = 0.0_f64;
+    for p in points {
+        if !p[0].is_finite() || !p[1].is_finite() {
+            continue;
+        }
+        let dx = p[0] - mx;
+        let dy = p[1] - my;
+        sxx += dx * dx;
+        sxy += dx * dy;
+        syy += dy * dy;
+    }
+    let theta = 0.5 * (2.0 * sxy).atan2(sxx - syy);
+    let dir = [theta.cos(), theta.sin()];
+    let lambda_max = 0.5 * (sxx + syy + ((sxx - syy) * (sxx - syy) + 4.0 * sxy * sxy).sqrt());
+    let half_len = (lambda_max.max(0.0) / n as f64).sqrt().max(0.1) * 2.0;
+    Some(Trace {
+        name: name.to_string(),
+        points: vec![
+            [mx - half_len * dir[0], my - half_len * dir[1]],
+            [mx + half_len * dir[0], my + half_len * dir[1]],
+        ],
+    })
+}
+
+fn wrap_heading_deg(x: f64) -> f64 {
+    x.rem_euclid(360.0)
 }
