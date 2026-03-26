@@ -8,7 +8,9 @@ use crate::horizontal_heading::{
 };
 use crate::stationary_mount::bootstrap_vehicle_to_body_from_stationary;
 use crate::yaw_pca::{YawPcaConfig, YawPcaInitializer, YawPcaSample};
-use crate::yaw_startup::{YawStartupConfig, YawStartupInitializer, YawStartupSample, YawStartupTrace};
+use crate::yaw_startup::{
+    YawStartupConfig, YawStartupInitializer, YawStartupSample, YawStartupTrace,
+};
 use nalgebra::{SMatrix, SVector};
 
 pub const ALIGN_N_STATES: usize = 3;
@@ -19,6 +21,7 @@ pub struct AlignConfig {
     pub q_mount_std_rad: [f32; ALIGN_N_STATES],
     pub r_gravity_std_mps2: f32,
     pub r_turn_gyro_std_radps: f32,
+    pub turn_gyro_yaw_scale: f32,
     pub r_course_rate_std_radps: f32,
     pub r_lat_std_mps2: f32,
     pub r_long_std_mps2: f32,
@@ -78,6 +81,7 @@ impl Default for AlignConfig {
             ],
             r_gravity_std_mps2: 1.28,
             r_turn_gyro_std_radps: 0.1_f32.to_radians(),
+            turn_gyro_yaw_scale: 1.0,
             r_course_rate_std_radps: 1.10_f32.to_radians(),
             r_lat_std_mps2: 0.02,
             r_long_std_mps2: 0.3,
@@ -210,7 +214,7 @@ impl Align {
         self.P = diag3([
             0.2_f32.to_radians().powi(2),
             0.2_f32.to_radians().powi(2),
-            10_f32.to_radians().powi(2),
+            0.5_f32.to_radians().powi(2),
         ]);
         self.gravity_lp_b = init.mean_accel_b;
         self.long_filter.reset();
@@ -345,11 +349,7 @@ impl Align {
                     gnss_lat_mps2: a_lat,
                 },
             ) {
-                Self::set_vehicle_heading_in_level_frame(
-                    &mut self.q_vb,
-                    self.gravity_lp_b,
-                    dpsi,
-                );
+                Self::set_vehicle_heading_in_level_frame(&mut self.q_vb, self.gravity_lp_b, dpsi);
                 self.P[2][2] = self.cfg.pca_yaw_seed_std_rad.powi(2);
                 self.P[0][2] = 0.0;
                 self.P[2][0] = 0.0;
@@ -437,16 +437,22 @@ impl Align {
 
         if turn_valid {
             if self.cfg.use_turn_gyro {
-                score += self.apply_update2_masked(
+                let turn_gyro_yaw_scale = if heading_updates_enabled && turn_heading_valid {
+                    self.cfg.turn_gyro_yaw_scale
+                } else {
+                    0.0
+                };
+                score += self.apply_update2_scaled_masked(
                     [0.0, 0.0],
                     [0, 1],
                     window.mean_accel_b,
                     window.mean_gyro_b,
                     [self.cfg.r_turn_gyro_std_radps.powi(2); 2],
-                    [true, true, heading_updates_enabled && turn_heading_valid],
+                    [true, true, turn_gyro_yaw_scale > 0.0],
+                    [1.0, 1.0, turn_gyro_yaw_scale],
                 );
                 if let Some(alt) = &mut self.yaw_dual {
-                    score += Self::apply_update2_masked_state(
+                    score += Self::apply_update2_scaled_masked_state(
                         &mut alt.q_vb,
                         &mut alt.p,
                         [0.0, 0.0],
@@ -454,7 +460,8 @@ impl Align {
                         window.mean_accel_b,
                         window.mean_gyro_b,
                         [self.cfg.r_turn_gyro_std_radps.powi(2); 2],
-                        [true, true, heading_updates_enabled && turn_heading_valid],
+                        [true, true, turn_gyro_yaw_scale > 0.0],
+                        [1.0, 1.0, turn_gyro_yaw_scale],
                     );
                 }
                 trace.after_turn_gyro = Some(self.q_vb);
@@ -764,6 +771,29 @@ impl Align {
         )
     }
 
+    fn apply_update2_scaled_masked(
+        &mut self,
+        z: [f32; 2],
+        obs_idx: [usize; 2],
+        accel_b: [f32; 3],
+        gyro_b: [f32; 3],
+        r_var: [f32; 2],
+        state_mask: [bool; 3],
+        state_scale: [f32; 3],
+    ) -> f32 {
+        Self::apply_update2_scaled_masked_state(
+            &mut self.q_vb,
+            &mut self.P,
+            z,
+            obs_idx,
+            accel_b,
+            gyro_b,
+            r_var,
+            state_mask,
+            state_scale,
+        )
+    }
+
     fn apply_update2_masked_state(
         q_vb: &mut [f32; 4],
         p: &mut [[f32; ALIGN_N_STATES]; ALIGN_N_STATES],
@@ -774,36 +804,60 @@ impl Align {
         r_var: [f32; 2],
         state_mask: [bool; 3],
     ) -> f32 {
+        Self::apply_update2_scaled_masked_state(
+            q_vb,
+            p,
+            z,
+            obs_idx,
+            accel_b,
+            gyro_b,
+            r_var,
+            state_mask,
+            [1.0, 1.0, 1.0],
+        )
+    }
+
+    fn apply_update2_scaled_masked_state(
+        q_vb: &mut [f32; 4],
+        p: &mut [[f32; ALIGN_N_STATES]; ALIGN_N_STATES],
+        z: [f32; 2],
+        obs_idx: [usize; 2],
+        accel_b: [f32; 3],
+        gyro_b: [f32; 3],
+        r_var: [f32; 2],
+        state_mask: [bool; 3],
+        state_scale: [f32; 3],
+    ) -> f32 {
         let obs = align_obs(*q_vb, gyro_b, accel_b);
         let H_full = align_obs_jacobian(*q_vb, gyro_b, accel_b);
         let H = SMatrix::<f32, 2, 3>::from_row_slice(&[
             if state_mask[0] {
-                H_full[obs_idx[0]][0]
+                state_scale[0] * H_full[obs_idx[0]][0]
             } else {
                 0.0
             },
             if state_mask[1] {
-                H_full[obs_idx[0]][1]
+                state_scale[1] * H_full[obs_idx[0]][1]
             } else {
                 0.0
             },
             if state_mask[2] {
-                H_full[obs_idx[0]][2]
+                state_scale[2] * H_full[obs_idx[0]][2]
             } else {
                 0.0
             },
             if state_mask[0] {
-                H_full[obs_idx[1]][0]
+                state_scale[0] * H_full[obs_idx[1]][0]
             } else {
                 0.0
             },
             if state_mask[1] {
-                H_full[obs_idx[1]][1]
+                state_scale[1] * H_full[obs_idx[1]][1]
             } else {
                 0.0
             },
             if state_mask[2] {
-                H_full[obs_idx[1]][2]
+                state_scale[2] * H_full[obs_idx[1]][2]
             } else {
                 0.0
             },
@@ -842,8 +896,8 @@ impl Align {
         gravity_b: [f32; 3],
         heading_target: f32,
     ) {
-        let current_heading =
-            leveled_forward_heading_xy(*q_vb, gravity_b).unwrap_or_else(|| rot_to_euler_zyx(quat_to_rotmat(*q_vb))[2]);
+        let current_heading = leveled_forward_heading_xy(*q_vb, gravity_b)
+            .unwrap_or_else(|| rot_to_euler_zyx(quat_to_rotmat(*q_vb))[2]);
         let dpsi = wrap_angle_rad(heading_target - current_heading);
         Self::inject_vehicle_yaw_state(q_vb, dpsi);
     }

@@ -658,13 +658,31 @@ fn wrap_deg180(x: f64) -> f64 {
     (x + 180.0).rem_euclid(360.0) - 180.0
 }
 
-fn rpy_delta_deg(before_q: [f32; 4], after_q: [f32; 4]) -> [f64; 3] {
-    let before = quat_to_rpy_alg_deg(before_q);
-    let after = quat_to_rpy_alg_deg(after_q);
+fn local_rotation_delta_deg(before_q: [f32; 4], after_q: [f32; 4]) -> [f64; 3] {
+    let before = [
+        before_q[0] as f64,
+        before_q[1] as f64,
+        before_q[2] as f64,
+        before_q[3] as f64,
+    ];
+    let after = [
+        after_q[0] as f64,
+        after_q[1] as f64,
+        after_q[2] as f64,
+        after_q[3] as f64,
+    ];
+    let dq = quat_normalize(quat_mul(after, quat_conj(before)));
+    let v = [dq[1], dq[2], dq[3]];
+    let s = norm3_f64(v);
+    if s <= 1.0e-12 {
+        return [0.0, 0.0, 0.0];
+    }
+    let angle = 2.0 * s.atan2(dq[0]);
+    let scale = angle / s;
     [
-        wrap_deg180(after[0] - before[0]),
-        wrap_deg180(after[1] - before[1]),
-        wrap_deg180(after[2] - before[2]),
+        (v[0] * scale).to_degrees(),
+        (v[1] * scale).to_degrees(),
+        (v[2] * scale).to_degrees(),
     ]
 }
 
@@ -675,19 +693,19 @@ fn align_update_contrib_deg(trace: AlignUpdateTrace) -> AlignEulerContrib {
         prev_q = q;
     }
     if let Some(q) = trace.after_turn_gyro {
-        out.turn_gyro = rpy_delta_deg(prev_q, q);
+        out.turn_gyro = local_rotation_delta_deg(prev_q, q);
         prev_q = q;
     }
     if let Some(q) = trace.after_course_rate {
-        out.course_rate = rpy_delta_deg(prev_q, q);
+        out.course_rate = local_rotation_delta_deg(prev_q, q);
         prev_q = q;
     }
     if let Some(q) = trace.after_lateral_accel {
-        out.lateral_accel = rpy_delta_deg(prev_q, q);
+        out.lateral_accel = local_rotation_delta_deg(prev_q, q);
         prev_q = q;
     }
     if let Some(q) = trace.after_longitudinal_accel {
-        out.longitudinal_accel = rpy_delta_deg(prev_q, q);
+        out.longitudinal_accel = local_rotation_delta_deg(prev_q, q);
     }
     out
 }

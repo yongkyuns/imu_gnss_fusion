@@ -264,9 +264,9 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
         yaw_course.push([t, contrib.course_rate[2]]);
         yaw_lat.push([t, contrib.lateral_accel[2]]);
         yaw_long.push([t, contrib.longitudinal_accel[2]]);
-        p00.push([t, sample.p_diag[0]]);
-        p11.push([t, sample.p_diag[1]]);
-        p22.push([t, sample.p_diag[2]]);
+        p00.push([t, sample.p_diag[0].sqrt().to_degrees()]);
+        p11.push([t, sample.p_diag[1].sqrt().to_degrees()]);
+        p22.push([t, sample.p_diag[2].sqrt().to_degrees()]);
     }
     let final_align_q = replay.samples.last().map(|s| s.q_align);
     let final_esf_q = final_alg_q;
@@ -565,15 +565,15 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
         ],
         cov: vec![
             Trace {
-                name: "P(0,0)".to_string(),
+                name: "sigma roll [deg]".to_string(),
                 points: p00,
             },
             Trace {
-                name: "P(1,1)".to_string(),
+                name: "sigma pitch [deg]".to_string(),
                 points: p11,
             },
             Trace {
-                name: "P(2,2)".to_string(),
+                name: "sigma yaw [deg]".to_string(),
                 points: p22,
             },
         ],
