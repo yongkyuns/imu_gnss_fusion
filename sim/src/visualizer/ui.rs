@@ -495,6 +495,13 @@ impl eframe::App for App {
                     );
                     draw_plot(
                         ui,
+                        "Unified Startup Full Angles (Final ESF-ALG)",
+                        &self.data.align_startup_esf_full_angles,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
                         "Align Window Diagnostics",
                         &self.data.align_res_vel,
                         true,

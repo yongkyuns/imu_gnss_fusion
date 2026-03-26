@@ -38,6 +38,7 @@ pub struct PlotData {
     pub align_startup: Vec<Trace>,
     pub align_startup_angles: Vec<Trace>,
     pub align_startup_full_angles: Vec<Trace>,
+    pub align_startup_esf_full_angles: Vec<Trace>,
     pub align_pca_vectors: Vec<Trace>,
     pub align_nhc_cmp_att: Vec<Trace>,
     pub align_nhc_diag: Vec<Trace>,

@@ -21,6 +21,7 @@ pub struct AlignCompareData {
     pub startup: Vec<Trace>,
     pub startup_angles: Vec<Trace>,
     pub startup_full_angles: Vec<Trace>,
+    pub startup_esf_full_angles: Vec<Trace>,
     pub pca_vectors: Vec<Trace>,
     pub roll_contrib: Vec<Trace>,
     pub pitch_contrib: Vec<Trace>,
@@ -38,6 +39,7 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
             startup: Vec::new(),
             startup_angles: Vec::new(),
             startup_full_angles: Vec::new(),
+            startup_esf_full_angles: Vec::new(),
             pca_vectors: Vec::new(),
             roll_contrib: Vec::new(),
             pitch_contrib: Vec::new(),
@@ -84,6 +86,9 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
     let mut startup_full_rot_imu_ang = Vec::<[f64; 2]>::new();
     let mut startup_full_final_align_rot_imu_ang = Vec::<[f64; 2]>::new();
     let mut startup_full_speed = Vec::<[f64; 2]>::new();
+    let mut startup_esf_full_gnss_ang = Vec::<[f64; 2]>::new();
+    let mut startup_esf_full_rot_imu_ang = Vec::<[f64; 2]>::new();
+    let mut startup_esf_full_speed = Vec::<[f64; 2]>::new();
     let mut startup_gate = Vec::<[f64; 2]>::new();
     let mut startup_accept = Vec::<[f64; 2]>::new();
     let mut startup_accepted_samples = Vec::<(f64, f64, f64, f64, f64)>::new();
@@ -264,6 +269,7 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
         p22.push([t, sample.p_diag[2]]);
     }
     let final_align_q = replay.samples.last().map(|s| s.q_align);
+    let final_esf_q = final_alg_q;
     let startup_theta = replay
         .samples
         .iter()
@@ -320,6 +326,21 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
                     t,
                     wrap_signed_deg(accel_v_final[1].atan2(accel_v_final[0]).to_degrees()),
                 ]);
+            }
+            if let Some(q_esf_final) = final_esf_q {
+                let accel_v_esf_final = quat_rotate(
+                    [q_esf_final[0], -q_esf_final[1], -q_esf_final[2], -q_esf_final[3]],
+                    sample.horiz_accel_b,
+                );
+                startup_esf_full_gnss_ang.push([
+                    t,
+                    wrap_signed_deg(g_lat.atan2(g_long).to_degrees()),
+                ]);
+                startup_esf_full_rot_imu_ang.push([
+                    t,
+                    wrap_signed_deg(accel_v_esf_final[1].atan2(accel_v_esf_final[0]).to_degrees()),
+                ]);
+                startup_esf_full_speed.push([t, sample.speed_mps * 3.6]);
             }
         }
     }
@@ -453,6 +474,20 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
             Trace {
                 name: "speed [km/h]".to_string(),
                 points: startup_full_speed,
+            },
+        ],
+        startup_esf_full_angles: vec![
+            Trace {
+                name: "GNSS accel angle [deg]".to_string(),
+                points: startup_esf_full_gnss_ang,
+            },
+            Trace {
+                name: "Final ESF-ALG rotated IMU accel angle [deg]".to_string(),
+                points: startup_esf_full_rot_imu_ang,
+            },
+            Trace {
+                name: "speed [km/h]".to_string(),
+                points: startup_esf_full_speed,
             },
         ],
         pca_vectors: pca_vector_traces(&imu_pca_points, &gnss_pca_points),
