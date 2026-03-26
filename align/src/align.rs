@@ -8,7 +8,7 @@ use crate::horizontal_heading::{
 };
 use crate::stationary_mount::bootstrap_vehicle_to_body_from_stationary;
 use crate::yaw_pca::{YawPcaConfig, YawPcaInitializer, YawPcaSample};
-use crate::yaw_startup::{YawStartupConfig, YawStartupInitializer, YawStartupSample};
+use crate::yaw_startup::{YawStartupConfig, YawStartupInitializer, YawStartupSample, YawStartupTrace};
 use nalgebra::{SMatrix, SVector};
 
 pub const ALIGN_N_STATES: usize = 3;
@@ -140,6 +140,7 @@ pub struct AlignWindowSummary {
 pub struct AlignUpdateTrace {
     pub q_start: [f32; 4],
     pub pca_input_xy: Option<[f32; 2]>,
+    pub startup_trace: Option<YawStartupTrace>,
     pub after_pca_yaw_seed: Option<[f32; 4]>,
     pub after_gravity: Option<[f32; 4]>,
     pub after_turn_gyro: Option<[f32; 4]>,
@@ -477,7 +478,7 @@ impl Align {
             let pca_horiz_xy = leveled_horiz_accel_xy(self.gravity_lp_b, horiz_accel_b)
                 .unwrap_or([horiz_accel_b[0], horiz_accel_b[1]]);
             trace.pca_input_xy = Some(pca_horiz_xy);
-            if let Some(dpsi) = self.yaw_startup.update(
+            let (startup_theta, startup_trace) = self.yaw_startup.update_with_trace(
                 startup_cfg,
                 YawStartupSample {
                     speed_mps: speed_mid,
@@ -485,19 +486,10 @@ impl Align {
                     gnss_long_mps2: a_long,
                     gnss_lat_mps2: a_lat,
                 },
-            ) {
-                Self::set_vehicle_heading_in_level_frame(
-                    &mut self.q_vb,
-                    self.gravity_lp_b,
-                    dpsi,
-                );
-                self.P[2][2] = self.cfg.pca_yaw_seed_std_rad.powi(2);
-                self.P[0][2] = 0.0;
-                self.P[2][0] = 0.0;
-                self.P[1][2] = 0.0;
-                self.P[2][1] = 0.0;
-                self.long_filter.reset();
-                self.yaw_dual = None;
+            );
+            trace.startup_trace = Some(startup_trace);
+            if let Some(dpsi) = startup_theta {
+                self.seed_yaw_dual_from_startup(dpsi);
                 self.yaw_pca.reset(false);
                 self.turn_consistency.reset();
                 trace.after_pca_yaw_seed = Some(self.q_vb);
@@ -878,6 +870,35 @@ impl Align {
             self.yaw_pca.reset(false);
             self.turn_consistency.reset();
         }
+    }
+
+    fn seed_yaw_dual_from_startup(&mut self, heading_target: f32) {
+        let mut primary_q = self.q_vb;
+        let mut alt_q = self.q_vb;
+        Self::set_vehicle_heading_in_level_frame(&mut primary_q, self.gravity_lp_b, heading_target);
+        Self::set_vehicle_heading_in_level_frame(
+            &mut alt_q,
+            self.gravity_lp_b,
+            wrap_angle_rad(heading_target + core::f32::consts::PI),
+        );
+
+        self.q_vb = primary_q;
+        self.P[2][2] = self.cfg.pca_yaw_seed_std_rad.powi(2);
+        self.P[0][2] = 0.0;
+        self.P[2][0] = 0.0;
+        self.P[1][2] = 0.0;
+        self.P[2][1] = 0.0;
+        self.long_filter.reset();
+
+        self.yaw_dual = Some(YawDualHypothesis {
+            q_vb: alt_q,
+            p: self.P,
+            long_filter: HorizontalHeadingCueFilter::new(),
+            primary_forward_score: 0.0,
+            alt_forward_score: 0.0,
+            forward_windows: 0,
+        });
+        self.yaw_startup.reset(false);
     }
 
     fn update_yaw_dual_forward_resolver(

@@ -20,6 +20,7 @@ pub struct AlignCompareData {
     pub motion: Vec<Trace>,
     pub startup: Vec<Trace>,
     pub startup_angles: Vec<Trace>,
+    pub startup_full_angles: Vec<Trace>,
     pub pca_vectors: Vec<Trace>,
     pub roll_contrib: Vec<Trace>,
     pub pitch_contrib: Vec<Trace>,
@@ -36,6 +37,7 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
             motion: Vec::new(),
             startup: Vec::new(),
             startup_angles: Vec::new(),
+            startup_full_angles: Vec::new(),
             pca_vectors: Vec::new(),
             roll_contrib: Vec::new(),
             pitch_contrib: Vec::new(),
@@ -76,9 +78,15 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
     let mut startup_imu_lat = Vec::<[f64; 2]>::new();
     let mut startup_gnss_ang = Vec::<[f64; 2]>::new();
     let mut startup_imu_ang = Vec::<[f64; 2]>::new();
-    let mut startup_ang_err = Vec::<[f64; 2]>::new();
+    let mut startup_rot_imu_ang = Vec::<[f64; 2]>::new();
+    let mut startup_rot_imu_alt_ang = Vec::<[f64; 2]>::new();
+    let mut startup_full_gnss_ang = Vec::<[f64; 2]>::new();
+    let mut startup_full_rot_imu_ang = Vec::<[f64; 2]>::new();
+    let mut startup_full_final_align_rot_imu_ang = Vec::<[f64; 2]>::new();
+    let mut startup_full_speed = Vec::<[f64; 2]>::new();
     let mut startup_gate = Vec::<[f64; 2]>::new();
     let mut startup_accept = Vec::<[f64; 2]>::new();
+    let mut startup_accepted_samples = Vec::<(f64, f64, f64, f64, f64)>::new();
     let mut imu_pca_points = Vec::<[f64; 2]>::new();
     let mut gnss_pca_points = Vec::<[f64; 2]>::new();
     let mut roll_turn_gyro = Vec::<[f64; 2]>::new();
@@ -134,11 +142,7 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
             startup_gnss_lat.push([t, g_lat]);
             startup_imu_long.push([t, i_long]);
             startup_imu_lat.push([t, i_lat]);
-            let g_ang = wrap_signed_deg(g_lat.atan2(g_long).to_degrees());
-            let i_ang = wrap_signed_deg(i_lat.atan2(i_long).to_degrees());
-            startup_gnss_ang.push([t, g_ang]);
-            startup_imu_ang.push([t, i_ang]);
-            startup_ang_err.push([t, wrap_signed_deg(i_ang - g_ang)]);
+            startup_accepted_samples.push((t, g_long, g_lat, i_long, i_lat));
         }
         if let Some(yaw_deg) = final_alg_heading_deg {
             final_alg_heading.push([t, yaw_deg]);
@@ -259,6 +263,66 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
         p11.push([t, sample.p_diag[1]]);
         p22.push([t, sample.p_diag[2]]);
     }
+    let final_align_q = replay.samples.last().map(|s| s.q_align);
+    let startup_theta = replay
+        .samples
+        .iter()
+        .find_map(|s| s.startup_trace.emitted_theta_rad);
+    if let Some(theta) = startup_theta {
+        let theta_cos = theta.cos();
+        let theta_sin = theta.sin();
+        let theta_alt = theta + std::f64::consts::PI;
+        let theta_alt_cos = theta_alt.cos();
+        let theta_alt_sin = theta_alt.sin();
+        for (t, g_long, g_lat, i_long, i_lat) in &startup_accepted_samples {
+            let g_ang = wrap_signed_deg((*g_lat).atan2(*g_long).to_degrees());
+            let i_ang = wrap_signed_deg((*i_lat).atan2(*i_long).to_degrees());
+            let ri_long = theta_cos * *i_long - theta_sin * *i_lat;
+            let ri_lat = theta_sin * *i_long + theta_cos * *i_lat;
+            let ri_alt_long = theta_alt_cos * *i_long - theta_alt_sin * *i_lat;
+            let ri_alt_lat = theta_alt_sin * *i_long + theta_alt_cos * *i_lat;
+            startup_gnss_ang.push([*t, g_ang]);
+            startup_imu_ang.push([*t, i_ang]);
+            startup_rot_imu_ang.push([*t, wrap_signed_deg(ri_lat.atan2(ri_long).to_degrees())]);
+            startup_rot_imu_alt_ang.push([
+                *t,
+                wrap_signed_deg(ri_alt_lat.atan2(ri_alt_long).to_degrees()),
+            ]);
+        }
+    }
+    if let Some(theta) = startup_theta {
+        let theta_cos = theta.cos();
+        let theta_sin = theta.sin();
+        for sample in &replay.samples {
+            let t = sample.t_s;
+            let g_long = sample.a_long_mps2;
+            let g_lat = sample.a_lat_mps2;
+            let i_long = sample.pca_input_long_mps2;
+            let i_lat = sample.pca_input_lat_mps2;
+            startup_full_speed.push([t, sample.speed_mps * 3.6]);
+            if g_long.is_finite() && g_lat.is_finite() {
+                startup_full_gnss_ang.push([t, wrap_signed_deg(g_lat.atan2(g_long).to_degrees())]);
+            }
+            if i_long.is_finite() && i_lat.is_finite() {
+                let ri_long = theta_cos * i_long - theta_sin * i_lat;
+                let ri_lat = theta_sin * i_long + theta_cos * i_lat;
+                startup_full_rot_imu_ang.push([
+                    t,
+                    wrap_signed_deg(ri_lat.atan2(ri_long).to_degrees()),
+                ]);
+            }
+            if let Some(q_final) = final_align_q {
+                let accel_v_final = quat_rotate(
+                    [q_final[0], -q_final[1], -q_final[2], -q_final[3]],
+                    sample.horiz_accel_b,
+                );
+                startup_full_final_align_rot_imu_ang.push([
+                    t,
+                    wrap_signed_deg(accel_v_final[1].atan2(accel_v_final[0]).to_degrees()),
+                ]);
+            }
+        }
+    }
 
     AlignCompareData {
         cmp_att: vec![
@@ -365,8 +429,30 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
                 points: startup_imu_ang,
             },
             Trace {
-                name: "IMU-GNSS accel angle err [deg]".to_string(),
-                points: startup_ang_err,
+                name: "Rotated IMU accel angle [deg]".to_string(),
+                points: startup_rot_imu_ang,
+            },
+            Trace {
+                name: "Rotated IMU accel angle +180 [deg]".to_string(),
+                points: startup_rot_imu_alt_ang,
+            },
+        ],
+        startup_full_angles: vec![
+            Trace {
+                name: "GNSS accel angle [deg]".to_string(),
+                points: startup_full_gnss_ang,
+            },
+            Trace {
+                name: "Rotated IMU accel angle [deg]".to_string(),
+                points: startup_full_rot_imu_ang,
+            },
+            Trace {
+                name: "Final Align rotated IMU accel angle [deg]".to_string(),
+                points: startup_full_final_align_rot_imu_ang,
+            },
+            Trace {
+                name: "speed [km/h]".to_string(),
+                points: startup_full_speed,
             },
         ],
         pca_vectors: pca_vector_traces(&imu_pca_points, &gnss_pca_points),

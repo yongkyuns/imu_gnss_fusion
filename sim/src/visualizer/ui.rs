@@ -488,6 +488,13 @@ impl eframe::App for App {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     draw_plot(
                         ui,
+                        "Unified Startup Full Angles",
+                        &self.data.align_startup_full_angles,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
                         "Align Window Diagnostics",
                         &self.data.align_res_vel,
                         true,

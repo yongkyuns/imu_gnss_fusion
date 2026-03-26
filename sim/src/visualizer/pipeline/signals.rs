@@ -299,6 +299,7 @@ pub fn build_signal_traces(
     out.align_motion = align_data.motion;
     out.align_startup = align_data.startup;
     out.align_startup_angles = align_data.startup_angles;
+    out.align_startup_full_angles = align_data.startup_full_angles;
     out.align_pca_vectors = align_data.pca_vectors;
     out.align_nhc_cmp_att = align_nhc_data.cmp_att;
     out.align_nhc_diag = align_nhc_data.diag;
@@ -363,6 +364,7 @@ pub fn build_signal_traces(
         &mut out.align_motion,
         &mut out.align_startup,
         &mut out.align_startup_angles,
+        &mut out.align_startup_full_angles,
         &mut out.align_nhc_cmp_att,
         &mut out.align_nhc_diag,
         &mut out.align_nhc_axis_err,

@@ -30,6 +30,7 @@ pub struct YawStartupTrace {
     pub sample_count: usize,
     pub alignment_score: f32,
     pub emitted: bool,
+    pub emitted_theta_rad: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -148,7 +149,9 @@ impl YawStartupInitializer {
         self.active = false;
         self.resolved = true;
         trace.emitted = true;
-        (Some(wrap_pi(theta)), trace)
+        let theta = wrap_pi(theta);
+        trace.emitted_theta_rad = Some(theta);
+        (Some(theta), trace)
     }
 
     pub fn timed_out(&self, cfg: YawStartupConfig) -> bool {
