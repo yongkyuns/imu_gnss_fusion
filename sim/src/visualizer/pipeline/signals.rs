@@ -320,10 +320,18 @@ pub fn build_signal_traces(
         for p in trace.points.iter().copied() {
             let t = p[0];
             let y = p[1];
-            if !t.is_finite() || !y.is_finite() {
+            if !t.is_finite() {
                 continue;
             }
             if t < -1e-6 || t > max_rel_s + 1.0 {
+                continue;
+            }
+            if !y.is_finite() {
+                if t + 1e-9 < last_t {
+                    continue;
+                }
+                cleaned.push([t, f64::NAN]);
+                last_t = t;
                 continue;
             }
             if t + 1e-9 < last_t {

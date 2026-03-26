@@ -270,6 +270,7 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
     }
     let final_align_q = replay.samples.last().map(|s| s.q_align);
     let final_esf_q = final_alg_q;
+    let startup_esf_min_accel_mps2 = 0.15 * 9.80665_f64;
     let startup_theta = replay
         .samples
         .iter()
@@ -296,13 +297,14 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
             ]);
         }
     }
-    if let Some(theta) = startup_theta {
-        let theta_cos = theta.cos();
-        let theta_sin = theta.sin();
-        for sample in &replay.samples {
-            let t = sample.t_s;
-            let g_long = sample.a_long_mps2;
-            let g_lat = sample.a_lat_mps2;
+    for sample in &replay.samples {
+        let t = sample.t_s;
+        let g_long = sample.a_long_mps2;
+        let g_lat = sample.a_lat_mps2;
+
+        if let Some(theta) = startup_theta {
+            let theta_cos = theta.cos();
+            let theta_sin = theta.sin();
             let i_long = sample.pca_input_long_mps2;
             let i_lat = sample.pca_input_lat_mps2;
             startup_full_speed.push([t, sample.speed_mps * 3.6]);
@@ -327,20 +329,36 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
                     wrap_signed_deg(accel_v_final[1].atan2(accel_v_final[0]).to_degrees()),
                 ]);
             }
-            if let Some(q_esf_final) = final_esf_q {
-                let accel_v_esf_final = quat_rotate(
-                    [q_esf_final[0], -q_esf_final[1], -q_esf_final[2], -q_esf_final[3]],
-                    sample.horiz_accel_b,
-                );
+        }
+
+        if let Some(q_esf_final) = final_esf_q {
+            let accel_v_esf_final = quat_rotate(
+                [q_esf_final[0], -q_esf_final[1], -q_esf_final[2], -q_esf_final[3]],
+                sample.horiz_accel_b,
+            );
+            let gnss_norm = (g_long * g_long + g_lat * g_lat).sqrt();
+            let imu_norm =
+                (accel_v_esf_final[0] * accel_v_esf_final[0]
+                    + accel_v_esf_final[1] * accel_v_esf_final[1])
+                    .sqrt();
+            if gnss_norm >= startup_esf_min_accel_mps2
+                || imu_norm >= startup_esf_min_accel_mps2
+            {
                 startup_esf_full_gnss_ang.push([
                     t,
                     wrap_signed_deg(g_lat.atan2(g_long).to_degrees()),
                 ]);
                 startup_esf_full_rot_imu_ang.push([
                     t,
-                    wrap_signed_deg(accel_v_esf_final[1].atan2(accel_v_esf_final[0]).to_degrees()),
+                    wrap_signed_deg(
+                        accel_v_esf_final[1].atan2(accel_v_esf_final[0]).to_degrees(),
+                    ),
                 ]);
                 startup_esf_full_speed.push([t, sample.speed_mps * 3.6]);
+            } else {
+                startup_esf_full_gnss_ang.push([t, f64::NAN]);
+                startup_esf_full_rot_imu_ang.push([t, f64::NAN]);
+                startup_esf_full_speed.push([t, f64::NAN]);
             }
         }
     }

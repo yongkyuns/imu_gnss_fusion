@@ -633,6 +633,80 @@ fn draw_plot(
         xmax: f64,
         max_points: usize,
     ) -> Vec<[f64; 2]> {
+        fn decimate_finite_slice(slice: &[[f64; 2]], max_points: usize) -> Vec<[f64; 2]> {
+            if slice.len() <= max_points || max_points == 0 {
+                return slice.to_vec();
+            }
+
+            let buckets = (max_points / 2).max(1);
+            let x0 = slice.first().map(|p| p[0]).unwrap_or(0.0);
+            let x1 = slice.last().map(|p| p[0]).unwrap_or(0.0);
+            let span = (x1 - x0).abs();
+            if span <= f64::EPSILON {
+                let step = ((slice.len() as f64) / (max_points as f64)).ceil() as usize;
+                return slice.iter().step_by(step.max(1)).copied().collect();
+            }
+
+            let mut min_b: Vec<Option<(usize, f64)>> = vec![None; buckets];
+            let mut max_b: Vec<Option<(usize, f64)>> = vec![None; buckets];
+            for (i, p) in slice.iter().enumerate() {
+                let mut b = (((p[0] - x0) / span) * buckets as f64).floor() as usize;
+                if b >= buckets {
+                    b = buckets - 1;
+                }
+                match min_b[b] {
+                    Some((_, y)) if p[1] >= y => {}
+                    _ => min_b[b] = Some((i, p[1])),
+                }
+                match max_b[b] {
+                    Some((_, y)) if p[1] <= y => {}
+                    _ => max_b[b] = Some((i, p[1])),
+                }
+            }
+
+            let mut out = Vec::with_capacity(max_points);
+            let mut last_idx: Option<usize> = None;
+            for b in 0..buckets {
+                let a = min_b[b].map(|(i, _)| i);
+                let c = max_b[b].map(|(i, _)| i);
+                match (a, c) {
+                    (Some(i0), Some(i1)) if i0 == i1 => {
+                        if last_idx != Some(i0) {
+                            out.push(slice[i0]);
+                            last_idx = Some(i0);
+                        }
+                    }
+                    (Some(i0), Some(i1)) => {
+                        let (first, second) = if i0 < i1 { (i0, i1) } else { (i1, i0) };
+                        if last_idx != Some(first) {
+                            out.push(slice[first]);
+                            last_idx = Some(first);
+                        }
+                        if out.len() < max_points && last_idx != Some(second) {
+                            out.push(slice[second]);
+                            last_idx = Some(second);
+                        }
+                    }
+                    (Some(i0), None) | (None, Some(i0)) => {
+                        if last_idx != Some(i0) {
+                            out.push(slice[i0]);
+                            last_idx = Some(i0);
+                        }
+                    }
+                    (None, None) => {}
+                }
+                if out.len() >= max_points {
+                    break;
+                }
+            }
+
+            if out.is_empty() {
+                let step = ((slice.len() as f64) / (max_points as f64)).ceil() as usize;
+                return slice.iter().step_by(step.max(1)).copied().collect();
+            }
+            out
+        }
+
         if points.is_empty() {
             return Vec::new();
         }
@@ -645,75 +719,30 @@ fn draw_plot(
             points.len()
         };
         let slice = &points[start..end];
-        if slice.len() <= max_points || max_points == 0 {
-            return slice.to_vec();
-        }
-
-        let buckets = (max_points / 2).max(1);
-        let x0 = slice.first().map(|p| p[0]).unwrap_or(xmin);
-        let x1 = slice.last().map(|p| p[0]).unwrap_or(xmax);
-        let span = (x1 - x0).abs();
-        if span <= f64::EPSILON {
-            let step = ((slice.len() as f64) / (max_points as f64)).ceil() as usize;
-            return slice.iter().step_by(step.max(1)).copied().collect();
-        }
-
-        let mut min_b: Vec<Option<(usize, f64)>> = vec![None; buckets];
-        let mut max_b: Vec<Option<(usize, f64)>> = vec![None; buckets];
-        for (i, p) in slice.iter().enumerate() {
-            let mut b = (((p[0] - x0) / span) * buckets as f64).floor() as usize;
-            if b >= buckets {
-                b = buckets - 1;
+        let mut out = Vec::new();
+        let mut seg_start = 0usize;
+        while seg_start < slice.len() {
+            while seg_start < slice.len()
+                && (!slice[seg_start][0].is_finite() || !slice[seg_start][1].is_finite())
+            {
+                out.push(slice[seg_start]);
+                seg_start += 1;
             }
-            match min_b[b] {
-                Some((_, y)) if p[1] >= y => {}
-                _ => min_b[b] = Some((i, p[1])),
-            }
-            match max_b[b] {
-                Some((_, y)) if p[1] <= y => {}
-                _ => max_b[b] = Some((i, p[1])),
-            }
-        }
-
-        let mut out = Vec::with_capacity(max_points);
-        let mut last_idx: Option<usize> = None;
-        for b in 0..buckets {
-            let a = min_b[b].map(|(i, _)| i);
-            let c = max_b[b].map(|(i, _)| i);
-            match (a, c) {
-                (Some(i0), Some(i1)) if i0 == i1 => {
-                    if last_idx != Some(i0) {
-                        out.push(slice[i0]);
-                        last_idx = Some(i0);
-                    }
-                }
-                (Some(i0), Some(i1)) => {
-                    let (first, second) = if i0 < i1 { (i0, i1) } else { (i1, i0) };
-                    if last_idx != Some(first) {
-                        out.push(slice[first]);
-                        last_idx = Some(first);
-                    }
-                    if out.len() < max_points && last_idx != Some(second) {
-                        out.push(slice[second]);
-                        last_idx = Some(second);
-                    }
-                }
-                (Some(i0), None) | (None, Some(i0)) => {
-                    if last_idx != Some(i0) {
-                        out.push(slice[i0]);
-                        last_idx = Some(i0);
-                    }
-                }
-                (None, None) => {}
-            }
-            if out.len() >= max_points {
+            if seg_start >= slice.len() {
                 break;
             }
-        }
-
-        if out.is_empty() {
-            let step = ((slice.len() as f64) / (max_points as f64)).ceil() as usize;
-            return slice.iter().step_by(step.max(1)).copied().collect();
+            let mut seg_end = seg_start;
+            while seg_end < slice.len()
+                && slice[seg_end][0].is_finite()
+                && slice[seg_end][1].is_finite()
+            {
+                seg_end += 1;
+            }
+            out.extend(decimate_finite_slice(&slice[seg_start..seg_end], max_points));
+            if seg_end < slice.len() {
+                out.push(slice[seg_end]);
+            }
+            seg_start = seg_end + 1;
         }
         out
     }

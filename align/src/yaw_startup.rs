@@ -4,6 +4,10 @@ pub struct YawStartupConfig {
     pub alpha: f32,
     pub min_speed_mps: f32,
     pub min_horiz_acc_mps2: f32,
+    pub min_long_mps2: f32,
+    pub max_lat_to_long_ratio: f32,
+    pub min_abs_lat_guard_mps2: f32,
+    pub max_course_rate_radps: f32,
     pub min_stable_windows: usize,
     pub min_windows: usize,
     pub max_windows: usize,
@@ -13,6 +17,7 @@ pub struct YawStartupConfig {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct YawStartupSample {
     pub speed_mps: f32,
+    pub course_rate_radps: f32,
     pub horiz_accel_xy: [f32; 2],
     pub gnss_long_mps2: f32,
     pub gnss_lat_mps2: f32,
@@ -44,6 +49,7 @@ pub struct YawStartupInitializer {
     active: bool,
     resolved: bool,
     samples: Vec<StoredSample>,
+    total_windows: usize,
     gnss_long_lp: Option<f32>,
     gnss_lat_lp: Option<f32>,
     imu_x_lp: Option<f32>,
@@ -63,6 +69,7 @@ impl YawStartupInitializer {
             active: false,
             resolved: false,
             samples: Vec::new(),
+            total_windows: 0,
             gnss_long_lp: None,
             gnss_lat_lp: None,
             imu_x_lp: None,
@@ -75,6 +82,7 @@ impl YawStartupInitializer {
         self.active = enabled;
         self.resolved = false;
         self.samples.clear();
+        self.total_windows = 0;
         self.gnss_long_lp = None;
         self.gnss_lat_lp = None;
         self.imu_x_lp = None;
@@ -99,6 +107,7 @@ impl YawStartupInitializer {
         if !cfg.enabled || !self.is_active() {
             return (None, trace);
         }
+        self.total_windows += 1;
 
         let alpha = cfg.alpha.clamp(0.0, 1.0);
         let gnss_long_lp = lpf_step(&mut self.gnss_long_lp, sample.gnss_long_mps2, alpha);
@@ -111,9 +120,19 @@ impl YawStartupInitializer {
         trace.imu_lat_lp_mps2 = imu_y_lp;
 
         if sample.speed_mps < cfg.min_speed_mps
+            || sample.course_rate_radps.abs() > cfg.max_course_rate_radps
             || vec2_norm([imu_x_lp, imu_y_lp]) < cfg.min_horiz_acc_mps2
             || vec2_norm([gnss_long_lp, gnss_lat_lp]) < cfg.min_horiz_acc_mps2
+            || gnss_long_lp.abs() < cfg.min_long_mps2
         {
+            self.stable_windows = 0;
+            self.samples.clear();
+            return (None, trace);
+        }
+        let max_lat_abs = cfg
+            .min_abs_lat_guard_mps2
+            .max(cfg.max_lat_to_long_ratio * gnss_long_lp.abs());
+        if gnss_lat_lp.abs() > max_lat_abs {
             self.stable_windows = 0;
             self.samples.clear();
             return (None, trace);
@@ -155,7 +174,7 @@ impl YawStartupInitializer {
     }
 
     pub fn timed_out(&self, cfg: YawStartupConfig) -> bool {
-        self.is_active() && self.samples.len() >= cfg.max_windows
+        self.is_active() && self.total_windows >= cfg.max_windows
     }
 }
 
@@ -213,6 +232,10 @@ mod tests {
             alpha: 1.0,
             min_speed_mps: 2.0,
             min_horiz_acc_mps2: 0.1,
+            min_long_mps2: 0.1,
+            max_lat_to_long_ratio: 0.6,
+            min_abs_lat_guard_mps2: 0.3,
+            max_course_rate_radps: 10.0_f32.to_radians(),
             min_stable_windows: 1,
             min_windows: 4,
             max_windows: 8,
@@ -233,6 +256,7 @@ mod tests {
                 cfg,
                 YawStartupSample {
                     speed_mps: 8.0,
+                    course_rate_radps: 0.0,
                     horiz_accel_xy: [m * imu_axis[0], m * imu_axis[1]],
                     gnss_long_mps2: gnss[0],
                     gnss_lat_mps2: gnss[1],
@@ -250,6 +274,10 @@ mod tests {
             alpha: 1.0,
             min_speed_mps: 2.0,
             min_horiz_acc_mps2: 0.1,
+            min_long_mps2: 0.1,
+            max_lat_to_long_ratio: 0.6,
+            min_abs_lat_guard_mps2: 0.3,
+            max_course_rate_radps: 10.0_f32.to_radians(),
             min_stable_windows: 1,
             min_windows: 4,
             max_windows: 8,
@@ -263,6 +291,7 @@ mod tests {
                 cfg,
                 YawStartupSample {
                     speed_mps: 8.0,
+                    course_rate_radps: 0.0,
                     horiz_accel_xy: [1.0, 0.0],
                     gnss_long_mps2: g[0],
                     gnss_lat_mps2: g[1],
