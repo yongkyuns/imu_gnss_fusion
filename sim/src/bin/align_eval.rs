@@ -989,7 +989,7 @@ fn evaluate_nhc(
                         scan_idx + 1,
                         &imu_packets,
                         *cfg,
-                        cfg.pca_max_windows.saturating_mul(3),
+                        cfg.startup_max_windows.saturating_mul(3),
                     );
                     if nhc
                         .initialize_from_stationary_with_mount_seed(

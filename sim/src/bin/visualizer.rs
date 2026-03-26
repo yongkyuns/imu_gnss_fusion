@@ -83,7 +83,6 @@ fn main() -> Result<()> {
         group_stats("align_axis_err", &data.align_axis_err),
         group_stats("align_motion", &data.align_motion),
         group_stats("align_startup", &data.align_startup),
-        group_stats("align_pca_vectors", &data.align_pca_vectors),
         group_stats("align_nhc_cmp_att", &data.align_nhc_cmp_att),
         group_stats("align_nhc_diag", &data.align_nhc_diag),
         group_stats("align_nhc_axis_err", &data.align_nhc_axis_err),

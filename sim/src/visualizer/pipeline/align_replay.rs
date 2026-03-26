@@ -99,8 +99,8 @@ pub struct AlignReplaySample {
     pub p_diag: [f64; 3],
     pub long_trace: LongTraceSample,
     pub startup_trace: StartupTraceSample,
-    pub pca_input_long_mps2: f64,
-    pub pca_input_lat_mps2: f64,
+    pub startup_input_long_mps2: f64,
+    pub startup_input_lat_mps2: f64,
 }
 
 pub struct AlignReplayData {
@@ -378,7 +378,7 @@ pub fn build_align_replay(
                 } else {
                     mean_accel_b
                 };
-                let pca_horiz_xy = trace.pca_input_xy.unwrap_or_else(|| {
+                let startup_horiz_xy = trace.startup_input_xy.unwrap_or_else(|| {
                     leveled_horiz_accel_xy(align.gravity_lp_b, horiz_accel_b)
                         .unwrap_or([horiz_accel_b[0], horiz_accel_b[1]])
                 });
@@ -421,7 +421,7 @@ pub fn build_align_replay(
                     upd_course: cfg.use_course_rate && turn_valid,
                     upd_lat: cfg.use_lateral_accel && turn_valid,
                     upd_long: cfg.use_longitudinal_accel && long_valid,
-                    yaw_initialized: trace.after_pca_yaw_seed.is_some(),
+                    yaw_initialized: trace.after_yaw_seed.is_some(),
                     contrib: align_update_contrib_deg(trace),
                     p_diag: [
                         align.P[0][0] as f64,
@@ -430,8 +430,8 @@ pub fn build_align_replay(
                     ],
                     long_trace,
                     startup_trace,
-                    pca_input_long_mps2: pca_horiz_xy[0] as f64,
-                    pca_input_lat_mps2: pca_horiz_xy[1] as f64,
+                    startup_input_long_mps2: startup_horiz_xy[0] as f64,
+                    startup_input_lat_mps2: startup_horiz_xy[1] as f64,
                 });
             }
         }

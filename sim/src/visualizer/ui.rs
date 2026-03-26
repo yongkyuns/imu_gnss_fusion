@@ -180,7 +180,6 @@ impl eframe::App for App {
                 ui.selectable_value(&mut self.page, Page::AlignCompare, "Align Compare");
                 ui.selectable_value(&mut self.page, Page::AlignStartup, "Align Startup");
                 ui.selectable_value(&mut self.page, Page::AlignNhcCompare, "Align NHC");
-                ui.selectable_value(&mut self.page, Page::AlignPcaVectors, "PCA Vectors");
                 ui.selectable_value(&mut self.page, Page::MapDark, "Map (Dark)");
             });
         });
@@ -513,15 +512,6 @@ impl eframe::App for App {
                         &self.data.align_axis_err,
                         true,
                         self.max_points_per_trace,
-                    );
-                });
-            }
-            Page::AlignPcaVectors => {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    draw_scatter_plot(
-                        ui,
-                        "PCA Input Accel Vectors (x=lateral, y=longitudinal)",
-                        &self.data.align_pca_vectors,
                     );
                 });
             }

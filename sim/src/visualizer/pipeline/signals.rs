@@ -301,7 +301,6 @@ pub fn build_signal_traces(
     out.align_startup_angles = align_data.startup_angles;
     out.align_startup_full_angles = align_data.startup_full_angles;
     out.align_startup_esf_full_angles = align_data.startup_esf_full_angles;
-    out.align_pca_vectors = align_data.pca_vectors;
     out.align_nhc_cmp_att = align_nhc_data.cmp_att;
     out.align_nhc_diag = align_nhc_data.diag;
     out.align_nhc_axis_err = align_nhc_data.axis_err;
@@ -395,9 +394,5 @@ pub fn build_signal_traces(
     for tr in &mut out.ekf_map {
         tr.points.retain(|p| p[0].is_finite() && p[1].is_finite());
     }
-    for tr in &mut out.align_pca_vectors {
-        tr.points.retain(|p| p[0].is_finite() && p[1].is_finite());
-    }
-
     out
 }

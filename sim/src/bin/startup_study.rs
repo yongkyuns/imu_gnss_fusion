@@ -120,17 +120,27 @@ final_fwd_err_align_deg,final_down_err_align_deg"
             let g_lat = sample.a_lat_mps2;
             let gnss_angle_deg = wrap_signed_deg(g_lat.atan2(g_long).to_degrees());
             let gnss_accel_norm = (g_long * g_long + g_lat * g_lat).sqrt();
-            let imu_leveled_angle_deg =
-                wrap_signed_deg(sample.pca_input_lat_mps2.atan2(sample.pca_input_long_mps2).to_degrees());
+            let imu_leveled_angle_deg = wrap_signed_deg(
+                sample
+                    .startup_input_lat_mps2
+                    .atan2(sample.startup_input_long_mps2)
+                    .to_degrees(),
+            );
 
             let imu_startup_theta_angle_deg = startup_theta
-                .map(|theta| rotate_angle(sample.pca_input_long_mps2, sample.pca_input_lat_mps2, theta))
+                .map(|theta| {
+                    rotate_angle(
+                        sample.startup_input_long_mps2,
+                        sample.startup_input_lat_mps2,
+                        theta,
+                    )
+                })
                 .unwrap_or(f64::NAN);
             let imu_startup_theta_alt_angle_deg = startup_theta
                 .map(|theta| {
                     rotate_angle(
-                        sample.pca_input_long_mps2,
-                        sample.pca_input_lat_mps2,
+                        sample.startup_input_long_mps2,
+                        sample.startup_input_lat_mps2,
                         theta + std::f64::consts::PI,
                     )
                 })

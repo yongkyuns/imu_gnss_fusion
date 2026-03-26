@@ -32,7 +32,6 @@ pub fn trace_stats(data: &PlotData) -> (usize, usize) {
         &data.align_axis_err,
         &data.align_motion,
         &data.align_startup,
-        &data.align_pca_vectors,
         &data.align_nhc_cmp_att,
         &data.align_nhc_diag,
         &data.align_nhc_axis_err,

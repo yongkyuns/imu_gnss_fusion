@@ -7,7 +7,6 @@ use crate::horizontal_heading::{
     HorizontalHeadingTrace,
 };
 use crate::stationary_mount::bootstrap_vehicle_to_body_from_stationary;
-use crate::yaw_pca::{YawPcaConfig, YawPcaInitializer, YawPcaSample};
 use crate::yaw_startup::{
     YawStartupConfig, YawStartupInitializer, YawStartupSample, YawStartupTrace,
 };
@@ -52,16 +51,7 @@ pub struct AlignConfig {
     pub startup_max_windows: usize,
     pub startup_min_vector_concentration: f32,
     pub startup_min_sign_agreement: f32,
-    pub use_pca_yaw_seed: bool,
-    pub pca_min_speed_mps: f32,
-    pub pca_min_horiz_acc_mps2: f32,
-    pub pca_min_long_mps2: f32,
-    pub pca_max_lat_to_long_ratio: f32,
-    pub pca_min_abs_lat_guard_mps2: f32,
-    pub pca_yaw_seed_std_rad: f32,
-    pub pca_min_windows: usize,
-    pub pca_max_windows: usize,
-    pub pca_min_anisotropy_ratio: f32,
+    pub yaw_seed_std_rad: f32,
     pub max_stationary_gyro_radps: f32,
     pub max_stationary_accel_norm_err_mps2: f32,
     pub use_gravity: bool,
@@ -112,16 +102,7 @@ impl Default for AlignConfig {
             startup_max_windows: 48,
             startup_min_vector_concentration: 0.8,
             startup_min_sign_agreement: 0.8,
-            use_pca_yaw_seed: true,
-            pca_min_speed_mps: 10.0 / 3.6,
-            pca_min_horiz_acc_mps2: 0.15,
-            pca_min_long_mps2: 0.18,
-            pca_max_lat_to_long_ratio: 0.6,
-            pca_min_abs_lat_guard_mps2: 0.35,
-            pca_yaw_seed_std_rad: 0.01_f32.to_radians(),
-            pca_min_windows: 100,
-            pca_max_windows: 200,
-            pca_min_anisotropy_ratio: 1.3,
+            yaw_seed_std_rad: 0.01_f32.to_radians(),
             max_stationary_gyro_radps: 0.8_f32.to_radians(),
             max_stationary_accel_norm_err_mps2: 0.2,
             use_gravity: true,
@@ -145,9 +126,9 @@ pub struct AlignWindowSummary {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AlignUpdateTrace {
     pub q_start: [f32; 4],
-    pub pca_input_xy: Option<[f32; 2]>,
+    pub startup_input_xy: Option<[f32; 2]>,
     pub startup_trace: Option<YawStartupTrace>,
-    pub after_pca_yaw_seed: Option<[f32; 4]>,
+    pub after_yaw_seed: Option<[f32; 4]>,
     pub after_gravity: Option<[f32; 4]>,
     pub after_turn_gyro: Option<[f32; 4]>,
     pub after_course_rate: Option<[f32; 4]>,
@@ -164,7 +145,6 @@ pub struct Align {
     long_filter: HorizontalHeadingCueFilter,
     yaw_dual: Option<YawDualHypothesis>,
     yaw_startup: YawStartupInitializer,
-    yaw_pca: YawPcaInitializer,
     turn_consistency: TurnConsistencyGate,
     pub cfg: AlignConfig,
 }
@@ -198,7 +178,6 @@ impl Align {
             long_filter: HorizontalHeadingCueFilter::new(),
             yaw_dual: None,
             yaw_startup: YawStartupInitializer::new(),
-            yaw_pca: YawPcaInitializer::new(),
             turn_consistency: TurnConsistencyGate::new(),
             cfg,
         }
@@ -227,8 +206,6 @@ impl Align {
             forward_windows: 0,
         });
         self.yaw_startup.reset(self.cfg.use_unified_yaw_startup);
-        self.yaw_pca
-            .reset(self.cfg.use_pca_yaw_seed && !self.cfg.use_unified_yaw_startup);
         self.turn_consistency.reset();
         Ok(())
     }
@@ -323,61 +300,7 @@ impl Align {
             max_windows: self.cfg.startup_max_windows,
             min_alignment_score: self.cfg.startup_min_vector_concentration,
         };
-        let heading_updates_enabled = if self.yaw_startup.is_active() || self.yaw_dual.is_some() {
-            false
-        } else if self.yaw_pca.is_active() {
-            let pca_cfg = YawPcaConfig {
-                enabled: self.cfg.use_pca_yaw_seed,
-                min_speed_mps: self.cfg.pca_min_speed_mps,
-                min_horiz_acc_mps2: self.cfg.pca_min_horiz_acc_mps2,
-                min_long_mps2: self.cfg.pca_min_long_mps2,
-                max_lat_to_long_ratio: self.cfg.pca_max_lat_to_long_ratio,
-                min_abs_lat_guard_mps2: self.cfg.pca_min_abs_lat_guard_mps2,
-                min_windows: self.cfg.pca_min_windows,
-                max_windows: self.cfg.pca_max_windows,
-                min_anisotropy_ratio: self.cfg.pca_min_anisotropy_ratio,
-            };
-            let pca_horiz_xy = leveled_horiz_accel_xy(self.gravity_lp_b, horiz_accel_b)
-                .unwrap_or([horiz_accel_b[0], horiz_accel_b[1]]);
-            trace.pca_input_xy = Some(pca_horiz_xy);
-            if let Some(dpsi) = self.yaw_pca.update(
-                pca_cfg,
-                YawPcaSample {
-                    speed_mps: speed_mid,
-                    horiz_accel_xy: pca_horiz_xy,
-                    gnss_long_mps2: a_long,
-                    gnss_lat_mps2: a_lat,
-                },
-            ) {
-                Self::set_vehicle_heading_in_level_frame(&mut self.q_vb, self.gravity_lp_b, dpsi);
-                self.P[2][2] = self.cfg.pca_yaw_seed_std_rad.powi(2);
-                self.P[0][2] = 0.0;
-                self.P[2][0] = 0.0;
-                self.P[1][2] = 0.0;
-                self.P[2][1] = 0.0;
-                self.long_filter.reset();
-                if let Some(alt) = &mut self.yaw_dual {
-                    Self::set_vehicle_heading_in_level_frame(
-                        &mut alt.q_vb,
-                        self.gravity_lp_b,
-                        dpsi,
-                    );
-                    alt.p[2][2] = self.cfg.pca_yaw_seed_std_rad.powi(2);
-                    alt.p[0][2] = 0.0;
-                    alt.p[2][0] = 0.0;
-                    alt.p[1][2] = 0.0;
-                    alt.p[2][1] = 0.0;
-                    alt.long_filter.reset();
-                } else {
-                    self.yaw_dual = None;
-                }
-                self.turn_consistency.reset();
-                trace.after_pca_yaw_seed = Some(self.q_vb);
-            }
-            !self.yaw_pca.is_active()
-        } else {
-            true
-        };
+        let heading_updates_enabled = !self.yaw_startup.is_active() && self.yaw_dual.is_none();
 
         if stationary {
             let alpha = self.cfg.gravity_lpf_alpha;
@@ -488,15 +411,15 @@ impl Align {
         }
 
         if self.yaw_startup.is_active() {
-            let pca_horiz_xy = leveled_horiz_accel_xy(self.gravity_lp_b, horiz_accel_b)
+            let startup_horiz_xy = leveled_horiz_accel_xy(self.gravity_lp_b, horiz_accel_b)
                 .unwrap_or([horiz_accel_b[0], horiz_accel_b[1]]);
-            trace.pca_input_xy = Some(pca_horiz_xy);
+            trace.startup_input_xy = Some(startup_horiz_xy);
             let (startup_theta, startup_trace) = self.yaw_startup.update_with_trace(
                 startup_cfg,
                 YawStartupSample {
                     speed_mps: speed_mid,
                     course_rate_radps: course_rate,
-                    horiz_accel_xy: pca_horiz_xy,
+                    horiz_accel_xy: startup_horiz_xy,
                     gnss_long_mps2: a_long,
                     gnss_lat_mps2: a_lat,
                 },
@@ -504,12 +427,10 @@ impl Align {
             trace.startup_trace = Some(startup_trace);
             if let Some(dpsi) = startup_theta {
                 self.seed_yaw_dual_from_startup(dpsi);
-                self.yaw_pca.reset(false);
                 self.turn_consistency.reset();
-                trace.after_pca_yaw_seed = Some(self.q_vb);
+                trace.after_yaw_seed = Some(self.q_vb);
             } else if self.yaw_startup.timed_out(startup_cfg) {
                 self.yaw_startup.reset(false);
-                self.yaw_pca.reset(self.cfg.use_pca_yaw_seed);
             }
         }
 
@@ -923,12 +844,11 @@ impl Align {
                 self.P = alt.p;
                 self.long_filter = alt.long_filter;
             }
-            self.P[2][2] = self.cfg.pca_yaw_seed_std_rad.powi(2);
+            self.P[2][2] = self.cfg.yaw_seed_std_rad.powi(2);
             self.P[0][2] = 0.0;
             self.P[2][0] = 0.0;
             self.P[1][2] = 0.0;
             self.P[2][1] = 0.0;
-            self.yaw_pca.reset(false);
             self.turn_consistency.reset();
         }
     }
@@ -944,7 +864,7 @@ impl Align {
         );
 
         self.q_vb = primary_q;
-        self.P[2][2] = self.cfg.pca_yaw_seed_std_rad.powi(2);
+        self.P[2][2] = self.cfg.yaw_seed_std_rad.powi(2);
         self.P[0][2] = 0.0;
         self.P[2][0] = 0.0;
         self.P[1][2] = 0.0;

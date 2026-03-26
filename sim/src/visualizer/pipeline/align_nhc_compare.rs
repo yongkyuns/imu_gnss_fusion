@@ -163,7 +163,7 @@ pub fn build_align_nhc_compare_traces(
                         scan_idx + 1,
                         &imu_packets,
                         align_cfg,
-                        align_cfg.pca_max_windows.saturating_mul(3),
+                        align_cfg.startup_max_windows.saturating_mul(3),
                     );
                     if nhc
                         .initialize_from_stationary_with_mount_seed(

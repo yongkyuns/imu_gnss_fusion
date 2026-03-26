@@ -84,7 +84,7 @@ pub fn resolve_align_nhc_bootstrap_q_vb_seed(
                 };
                 let (_, trace) = align.update_window_with_trace(&window);
 
-                let heading_update = trace.after_pca_yaw_seed.is_some()
+                let heading_update = trace.after_yaw_seed.is_some()
                     || trace.after_course_rate.is_some()
                     || trace.after_lateral_accel.is_some()
                     || trace.after_longitudinal_accel.is_some();
