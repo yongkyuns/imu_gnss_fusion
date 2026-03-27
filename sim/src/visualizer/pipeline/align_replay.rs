@@ -421,7 +421,8 @@ pub fn build_align_replay(
                     upd_course: cfg.use_course_rate && turn_valid,
                     upd_lat: cfg.use_lateral_accel && turn_valid,
                     upd_long: cfg.use_longitudinal_accel && long_valid,
-                    yaw_initialized: trace.after_yaw_seed.is_some(),
+                    yaw_initialized: trace.after_yaw_seed.is_some()
+                        || trace.after_branch_resolve.is_some(),
                     contrib: align_update_contrib_deg(trace),
                     p_diag: [
                         align.P[0][0] as f64,

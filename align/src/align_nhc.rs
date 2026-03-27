@@ -136,6 +136,23 @@ impl AlignNhc {
         yaw_seed_rad: f32,
         q_vb_seed: [f32; 4],
     ) -> Result<(), &'static str> {
+        self.initialize_from_stationary_with_mount_seed_and_sigma(
+            accel_samples_b,
+            gyro_samples_b,
+            yaw_seed_rad,
+            q_vb_seed,
+            [10.0_f32.to_radians(); 3],
+        )
+    }
+
+    pub fn initialize_from_stationary_with_mount_seed_and_sigma(
+        &mut self,
+        accel_samples_b: &[[f32; 3]],
+        gyro_samples_b: &[[f32; 3]],
+        yaw_seed_rad: f32,
+        q_vb_seed: [f32; 4],
+        mount_sigma_rad: [f32; 3],
+    ) -> Result<(), &'static str> {
         if accel_samples_b.is_empty() || gyro_samples_b.is_empty() {
             return Err("stationary initialization requires accel and gyro samples");
         }
@@ -159,7 +176,7 @@ impl AlignNhc {
         for i in 0..3 {
             self.P[i][i] = 1.0_f32.to_radians().powi(2);
             self.P[3 + i][3 + i] = 1.0_f32.powi(2);
-            self.P[6 + i][6 + i] = 10.0_f32.to_radians().powi(2);
+            self.P[6 + i][6 + i] = mount_sigma_rad[i].powi(2);
             self.P[9 + i][9 + i] = 0.2_f32.to_radians().powi(2);
             self.P[12 + i][12 + i] = 0.2_f32.powi(2);
         }
@@ -298,6 +315,25 @@ impl AlignNhc {
         self.P[6][8] = 0.0;
         self.P[7][8] = 0.0;
         self.P[8][6] = 0.0;
+        self.P[8][7] = 0.0;
+    }
+
+    pub fn seed_mount_from_body_to_vehicle(
+        &mut self,
+        q_b_v: [f32; 4],
+        mount_sigma_rad: [f32; 3],
+    ) {
+        let c_b_v = quat_to_rotmat(quat_normalize(q_b_v));
+        let c_v_b = transpose3x3(c_b_v);
+        self.q_vb = quat_from_rotmat(c_v_b);
+        for i in 0..3 {
+            self.P[6 + i][6 + i] = mount_sigma_rad[i].powi(2);
+        }
+        self.P[6][7] = 0.0;
+        self.P[7][6] = 0.0;
+        self.P[6][8] = 0.0;
+        self.P[8][6] = 0.0;
+        self.P[7][8] = 0.0;
         self.P[8][7] = 0.0;
     }
 

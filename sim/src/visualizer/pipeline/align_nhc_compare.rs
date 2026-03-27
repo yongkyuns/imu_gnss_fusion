@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use align_rs::align::AlignConfig;
+use align_rs::align::{Align, AlignConfig, AlignWindowSummary};
 use align_rs::{AlignNhc, AlignNhcConfig};
 
 use crate::ubxlog::{
@@ -98,9 +98,13 @@ pub fn build_align_nhc_compare_traces(
     let mut bootstrap = BootstrapDetector::new(bootstrap_cfg);
     let mut initialized = false;
     let mut nav_yaw_seeded = false;
+    let mut mount_branch_committed = false;
     let mut scan_idx = 0usize;
     let mut interval_start_idx = 0usize;
     let mut prev_nav: Option<(f64, NavPvtObs)> = None;
+    let align_cfg = AlignConfig::default();
+    let mut align_mount = Align::new(align_cfg);
+    let mut align_mount_initialized = false;
 
     let mut out_roll = Vec::<[f64; 2]>::new();
     let mut out_pitch = Vec::<[f64; 2]>::new();
@@ -141,7 +145,6 @@ pub fn build_align_nhc_compare_traces(
         ref_yaw.push([t, *yaw]);
     }
 
-    let align_cfg = AlignConfig::default();
     for (nav_idx, (tn, nav)) in nav_events.iter().enumerate() {
         while scan_idx < imu_packets.len() && imu_packets[scan_idx].t_ms <= *tn {
             let pkt = &imu_packets[scan_idx];
@@ -154,7 +157,7 @@ pub fn build_align_nhc_compare_traces(
             if !initialized {
                 let speed_mps = speed_for_bootstrap(prev_nav, (*tn, *nav), pkt.t_ms) as f32;
                 if bootstrap.update(accel_b, gyro_radps, speed_mps) {
-                    let q_vb_seed = resolve_align_nhc_bootstrap_q_vb_seed(
+                    let seed = resolve_align_nhc_bootstrap_q_vb_seed(
                         &bootstrap.stationary_accel,
                         prev_nav,
                         &nav_events,
@@ -166,15 +169,22 @@ pub fn build_align_nhc_compare_traces(
                         align_cfg.startup_max_windows.saturating_mul(3),
                     );
                     if nhc
-                        .initialize_from_stationary_with_mount_seed(
+                        .initialize_from_stationary_with_mount_seed_and_sigma(
                             &bootstrap.stationary_accel,
                             &bootstrap.stationary_gyro,
                             0.0,
-                            q_vb_seed,
+                            seed.q_vb,
+                            seed.sigma_rad,
                         )
                         .is_ok()
                     {
                         initialized = true;
+                        if align_mount
+                            .initialize_from_stationary(&bootstrap.stationary_accel, 0.0)
+                            .is_ok()
+                        {
+                            align_mount_initialized = true;
+                        }
                     }
                 }
             }
@@ -195,8 +205,16 @@ pub fn build_align_nhc_compare_traces(
         if let Some((t_prev, nav_prev)) = prev_nav {
             let interval_packets = &imu_packets[interval_start_idx..scan_idx];
             if initialized && !interval_packets.is_empty() {
+                let mut gyro_sum = [0.0_f32; 3];
+                let mut accel_sum = [0.0_f32; 3];
                 let mut last_t = t_prev;
                 for pkt in interval_packets {
+                    gyro_sum[0] += pkt.gx_dps.to_radians() as f32;
+                    gyro_sum[1] += pkt.gy_dps.to_radians() as f32;
+                    gyro_sum[2] += pkt.gz_dps.to_radians() as f32;
+                    accel_sum[0] += pkt.ax_mps2 as f32;
+                    accel_sum[1] += pkt.ay_mps2 as f32;
+                    accel_sum[2] += pkt.az_mps2 as f32;
                     let dt = ((pkt.t_ms - last_t) * 1.0e-3).max(1.0e-3) as f32;
                     nhc.predict_imu(
                         dt,
@@ -233,6 +251,44 @@ pub fn build_align_nhc_compare_traces(
                 let speed_prev = (v_prev[0] * v_prev[0] + v_prev[1] * v_prev[1]).sqrt() as f32;
                 let speed_curr = (v_curr[0] * v_curr[0] + v_curr[1] * v_curr[1]).sqrt() as f32;
                 let speed_mid = 0.5_f32 * (speed_prev + speed_curr);
+                let inv_n = 1.0 / interval_packets.len() as f32;
+                if align_mount_initialized {
+                    let window = AlignWindowSummary {
+                        dt: dt_nav as f32,
+                        mean_gyro_b: [
+                            gyro_sum[0] * inv_n,
+                            gyro_sum[1] * inv_n,
+                            gyro_sum[2] * inv_n,
+                        ],
+                        mean_accel_b: [
+                            accel_sum[0] * inv_n,
+                            accel_sum[1] * inv_n,
+                            accel_sum[2] * inv_n,
+                        ],
+                        gnss_vel_prev_n: [
+                            nav_prev.vel_n_mps as f32,
+                            nav_prev.vel_e_mps as f32,
+                            nav_prev.vel_d_mps as f32,
+                        ],
+                        gnss_vel_curr_n: [
+                            nav.vel_n_mps as f32,
+                            nav.vel_e_mps as f32,
+                            nav.vel_d_mps as f32,
+                        ],
+                    };
+                    let (_, align_trace) = align_mount.update_window_with_trace(&window);
+                    if !mount_branch_committed && align_trace.after_branch_resolve.is_some() {
+                        nhc.seed_mount_from_body_to_vehicle(
+                            align_mount.q_vb,
+                            [
+                                align_mount.P[0][0].sqrt().clamp(0.5_f32.to_radians(), 3.0_f32.to_radians()),
+                                align_mount.P[1][1].sqrt().clamp(0.5_f32.to_radians(), 3.0_f32.to_radians()),
+                                align_mount.P[2][2].sqrt().clamp(1.0_f32.to_radians(), 5.0_f32.to_radians()),
+                            ],
+                        );
+                        mount_branch_committed = true;
+                    }
+                }
                 let turn_valid = speed_mid > nhc_cfg.min_planar_speed_mps
                     && course_rate_dps.abs()
                         > nhc_cfg.min_planar_yaw_rate_radps.to_degrees() as f64;
@@ -255,7 +311,7 @@ pub fn build_align_nhc_compare_traces(
                     ],
                     omega_last_b,
                     speed_mid > nhc_cfg.min_nhc_speed_mps,
-                    turn_valid,
+                    mount_branch_committed && turn_valid,
                 );
 
                 let t = (*tn - tl.t0_master_ms) * 1.0e-3;

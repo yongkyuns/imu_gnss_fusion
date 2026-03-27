@@ -3,6 +3,12 @@ use align_rs::align::{Align, AlignConfig, AlignWindowSummary};
 use crate::ubxlog::NavPvtObs;
 use crate::visualizer::model::ImuPacket;
 
+#[derive(Clone, Copy, Debug)]
+pub struct AlignNhcBootstrapSeed {
+    pub q_vb: [f32; 4],
+    pub sigma_rad: [f32; 3],
+}
+
 pub fn resolve_align_nhc_bootstrap_q_vb_seed(
     stationary_accel: &[[f32; 3]],
     prev_nav: Option<(f64, NavPvtObs)>,
@@ -13,17 +19,23 @@ pub fn resolve_align_nhc_bootstrap_q_vb_seed(
     imu_packets: &[ImuPacket],
     align_cfg: AlignConfig,
     lookahead_windows: usize,
-) -> [f32; 4] {
+) -> AlignNhcBootstrapSeed {
     let mut align = Align::new(align_cfg);
     if align
         .initialize_from_stationary(stationary_accel, 0.0)
         .is_err()
     {
-        return [1.0, 0.0, 0.0, 0.0];
+        return AlignNhcBootstrapSeed {
+            q_vb: [1.0, 0.0, 0.0, 0.0],
+            sigma_rad: [10.0_f32.to_radians(); 3],
+        };
     }
 
     let Some(prev_nav) = prev_nav else {
-        return align.q_vb;
+        return AlignNhcBootstrapSeed {
+            q_vb: align.q_vb,
+            sigma_rad: clipped_mount_sigma_rad(align.P),
+        };
     };
 
     let end_nav_idx = (current_nav_idx + lookahead_windows).min(nav_events.len());
@@ -34,6 +46,7 @@ pub fn resolve_align_nhc_bootstrap_q_vb_seed(
     let mut heading_evidence_seen = false;
     let mut stable_count = 0usize;
     let mut best_q = align.q_vb;
+    let mut best_sigma_rad = clipped_mount_sigma_rad(align.P);
     let mut best_cost = f32::INFINITY;
 
     for nav_idx in current_nav_idx..end_nav_idx {
@@ -85,6 +98,7 @@ pub fn resolve_align_nhc_bootstrap_q_vb_seed(
                 let (_, trace) = align.update_window_with_trace(&window);
 
                 let heading_update = trace.after_yaw_seed.is_some()
+                    || trace.after_branch_resolve.is_some()
                     || trace.after_course_rate.is_some()
                     || trace.after_lateral_accel.is_some()
                     || trace.after_longitudinal_accel.is_some();
@@ -102,6 +116,7 @@ pub fn resolve_align_nhc_bootstrap_q_vb_seed(
                     if cost < best_cost {
                         best_cost = cost;
                         best_q = align.q_vb;
+                        best_sigma_rad = clipped_mount_sigma_rad(align.P);
                     }
 
                     let stable = sigma_roll_deg <= 1.0
@@ -110,7 +125,10 @@ pub fn resolve_align_nhc_bootstrap_q_vb_seed(
                         && delta_deg <= 1.0;
                     stable_count = if stable { stable_count + 1 } else { 0 };
                     if stable_count >= 20 {
-                        return align.q_vb;
+                        return AlignNhcBootstrapSeed {
+                            q_vb: align.q_vb,
+                            sigma_rad: clipped_mount_sigma_rad(align.P),
+                        };
                     }
                 }
             }
@@ -121,10 +139,24 @@ pub fn resolve_align_nhc_bootstrap_q_vb_seed(
     }
 
     if best_cost.is_finite() {
-        best_q
+        AlignNhcBootstrapSeed {
+            q_vb: best_q,
+            sigma_rad: best_sigma_rad,
+        }
     } else {
-        align.q_vb
+        AlignNhcBootstrapSeed {
+            q_vb: align.q_vb,
+            sigma_rad: clipped_mount_sigma_rad(align.P),
+        }
     }
+}
+
+fn clipped_mount_sigma_rad(p: [[f32; 3]; 3]) -> [f32; 3] {
+    [
+        p[0][0].sqrt().clamp(0.5_f32.to_radians(), 3.0_f32.to_radians()),
+        p[1][1].sqrt().clamp(0.5_f32.to_radians(), 3.0_f32.to_radians()),
+        p[2][2].sqrt().clamp(1.0_f32.to_radians(), 5.0_f32.to_radians()),
+    ]
 }
 
 fn quat_angle_deg(a: [f32; 4], b: [f32; 4]) -> f32 {

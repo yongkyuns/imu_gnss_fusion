@@ -4,7 +4,7 @@ use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
-use align_rs::align::{AlignConfig, GRAVITY_MPS2};
+use align_rs::align::{Align, AlignConfig, GRAVITY_MPS2};
 use align_rs::{AlignMisalign, AlignMisalignConfig, AlignNhc, AlignNhcConfig};
 use anyhow::{Context, Result, bail};
 use clap::Parser;
@@ -68,6 +68,8 @@ struct Args {
     #[arg(long)]
     r_gravity_std_mps2: Option<f32>,
     #[arg(long)]
+    r_horiz_heading_std_deg: Option<f32>,
+    #[arg(long)]
     r_turn_gyro_std_dps: Option<f32>,
     #[arg(long)]
     turn_gyro_yaw_scale: Option<f32>,
@@ -98,6 +100,8 @@ struct Args {
 
     #[arg(long, action = clap::ArgAction::Set)]
     use_gravity: Option<bool>,
+    #[arg(long, action = clap::ArgAction::Set)]
+    use_horiz_accel_vector_update: Option<bool>,
     #[arg(long, action = clap::ArgAction::Set)]
     use_turn_gyro: Option<bool>,
     #[arg(long, action = clap::ArgAction::Set)]
@@ -539,6 +543,9 @@ fn config_from_args(args: &Args) -> AlignConfig {
     if let Some(v) = args.r_gravity_std_mps2 {
         cfg.r_gravity_std_mps2 = v;
     }
+    if let Some(v) = args.r_horiz_heading_std_deg {
+        cfg.r_horiz_heading_std_rad = v.to_radians();
+    }
     if let Some(v) = args.r_turn_gyro_std_dps {
         cfg.r_turn_gyro_std_radps = v.to_radians();
     }
@@ -583,6 +590,9 @@ fn config_from_args(args: &Args) -> AlignConfig {
     }
     if let Some(v) = args.use_gravity {
         cfg.use_gravity = v;
+    }
+    if let Some(v) = args.use_horiz_accel_vector_update {
+        cfg.use_horiz_accel_vector_update = v;
     }
     if let Some(v) = args.use_turn_gyro {
         cfg.use_turn_gyro = v;
@@ -961,8 +971,11 @@ fn evaluate_nhc(
     let mut bootstrap = BootstrapDetector::new(*bootstrap_cfg);
     let mut initialized = false;
     let mut nav_yaw_seeded = false;
+    let mut mount_branch_committed = false;
     let mut init_time_s = f64::NAN;
     let mut samples = Vec::<ResidualSample>::new();
+    let mut align_mount = Align::new(*cfg);
+    let mut align_mount_initialized = false;
 
     let mut scan_idx = 0usize;
     let mut interval_start_idx = 0usize;
@@ -980,7 +993,7 @@ fn evaluate_nhc(
             if !initialized {
                 let speed_mps = speed_for_bootstrap(prev_nav, (*tn, *nav), pkt.t_ms) as f32;
                 if bootstrap.update(accel_b, gyro_radps, speed_mps) {
-                    let q_vb_seed = resolve_align_nhc_bootstrap_q_vb_seed(
+                    let seed = resolve_align_nhc_bootstrap_q_vb_seed(
                         &bootstrap.stationary_accel,
                         prev_nav,
                         &nav_events,
@@ -992,16 +1005,23 @@ fn evaluate_nhc(
                         cfg.startup_max_windows.saturating_mul(3),
                     );
                     if nhc
-                        .initialize_from_stationary_with_mount_seed(
+                        .initialize_from_stationary_with_mount_seed_and_sigma(
                             &bootstrap.stationary_accel,
                             &bootstrap.stationary_gyro,
                             0.0,
-                            q_vb_seed,
+                            seed.q_vb,
+                            seed.sigma_rad,
                         )
                         .is_ok()
                     {
                         initialized = true;
                         init_time_s = (pkt.t_ms - dataset.timeline.t0_master_ms) * 1.0e-3;
+                        if align_mount
+                            .initialize_from_stationary(&bootstrap.stationary_accel, 0.0)
+                            .is_ok()
+                        {
+                            align_mount_initialized = true;
+                        }
                     }
                 }
             }
@@ -1022,8 +1042,16 @@ fn evaluate_nhc(
         if let Some((t_prev, nav_prev)) = prev_nav {
             let interval_packets = &imu_packets[interval_start_idx..scan_idx];
             if initialized && !interval_packets.is_empty() {
+                let mut gyro_sum = [0.0_f32; 3];
+                let mut accel_sum = [0.0_f32; 3];
                 let mut last_t = t_prev;
                 for pkt in interval_packets {
+                    gyro_sum[0] += pkt.gx_dps.to_radians() as f32;
+                    gyro_sum[1] += pkt.gy_dps.to_radians() as f32;
+                    gyro_sum[2] += pkt.gz_dps.to_radians() as f32;
+                    accel_sum[0] += pkt.ax_mps2 as f32;
+                    accel_sum[1] += pkt.ay_mps2 as f32;
+                    accel_sum[2] += pkt.az_mps2 as f32;
                     let dt = ((pkt.t_ms - last_t) * 1.0e-3).max(1.0e-3) as f32;
                     nhc.predict_imu(
                         dt,
@@ -1061,6 +1089,44 @@ fn evaluate_nhc(
                 let speed_prev = (v_prev[0] * v_prev[0] + v_prev[1] * v_prev[1]).sqrt() as f32;
                 let speed_curr = (v_curr[0] * v_curr[0] + v_curr[1] * v_curr[1]).sqrt() as f32;
                 let speed_mid = 0.5_f32 * (speed_prev + speed_curr);
+                let inv_n = 1.0 / interval_packets.len() as f32;
+                if align_mount_initialized {
+                    let window = align_rs::align::AlignWindowSummary {
+                        dt: dt_nav as f32,
+                        mean_gyro_b: [
+                            gyro_sum[0] * inv_n,
+                            gyro_sum[1] * inv_n,
+                            gyro_sum[2] * inv_n,
+                        ],
+                        mean_accel_b: [
+                            accel_sum[0] * inv_n,
+                            accel_sum[1] * inv_n,
+                            accel_sum[2] * inv_n,
+                        ],
+                        gnss_vel_prev_n: [
+                            nav_prev.vel_n_mps as f32,
+                            nav_prev.vel_e_mps as f32,
+                            nav_prev.vel_d_mps as f32,
+                        ],
+                        gnss_vel_curr_n: [
+                            nav.vel_n_mps as f32,
+                            nav.vel_e_mps as f32,
+                            nav.vel_d_mps as f32,
+                        ],
+                    };
+                    let (_, align_trace) = align_mount.update_window_with_trace(&window);
+                    if !mount_branch_committed && align_trace.after_branch_resolve.is_some() {
+                        nhc.seed_mount_from_body_to_vehicle(
+                            align_mount.q_vb,
+                            [
+                                align_mount.P[0][0].sqrt().clamp(0.5_f32.to_radians(), 3.0_f32.to_radians()),
+                                align_mount.P[1][1].sqrt().clamp(0.5_f32.to_radians(), 3.0_f32.to_radians()),
+                                align_mount.P[2][2].sqrt().clamp(1.0_f32.to_radians(), 5.0_f32.to_radians()),
+                            ],
+                        );
+                        mount_branch_committed = true;
+                    }
+                }
                 let turn_valid = speed_mid > cfg.min_speed_mps
                     && course_rate_dps.abs() > cfg.min_turn_rate_radps.to_degrees() as f64
                     && a_lat.abs() > cfg.min_lat_acc_mps2 as f64;
@@ -1084,7 +1150,7 @@ fn evaluate_nhc(
                     ],
                     omega_last_b,
                     speed_mid > cfg.min_speed_mps,
-                    turn_valid && cfg.use_turn_gyro,
+                    mount_branch_committed && turn_valid && cfg.use_turn_gyro,
                 );
 
                 let q_align_bv = [
@@ -1817,11 +1883,12 @@ fn print_metrics(label: &str, metrics: &EvalMetrics) {
 
 fn print_config(cfg: &AlignConfig, bootstrap_cfg: &BootstrapConfig) {
     eprintln!(
-        "[config] q_std_deg=[{:.4}, {:.4}, {:.4}] r_gravity={:.3} r_turn_dps={:.3} turn_gyro_yaw_scale={:.3} r_course_dps={:.3} r_lat={:.3} r_long={:.3}",
+        "[config] q_std_deg=[{:.4}, {:.4}, {:.4}] r_gravity={:.3} r_horiz_heading_deg={:.3} r_turn_dps={:.3} turn_gyro_yaw_scale={:.3} r_course_dps={:.3} r_lat={:.3} r_long={:.3}",
         cfg.q_mount_std_rad[0].to_degrees(),
         cfg.q_mount_std_rad[1].to_degrees(),
         cfg.q_mount_std_rad[2].to_degrees(),
         cfg.r_gravity_std_mps2,
+        cfg.r_horiz_heading_std_rad.to_degrees(),
         cfg.r_turn_gyro_std_radps.to_degrees(),
         cfg.turn_gyro_yaw_scale,
         cfg.r_course_rate_std_radps.to_degrees(),
@@ -1847,8 +1914,9 @@ fn print_config(cfg: &AlignConfig, bootstrap_cfg: &BootstrapConfig) {
         bootstrap_cfg.ema_alpha, bootstrap_cfg.max_speed_mps, bootstrap_cfg.stationary_samples
     );
     eprintln!(
-        "[config] use_gravity={} use_turn_gyro={} use_course_rate={} use_lateral_accel={} use_longitudinal_accel={}",
+        "[config] use_gravity={} use_horiz_accel_vector_update={} use_turn_gyro={} use_course_rate={} use_lateral_accel={} use_longitudinal_accel={}",
         cfg.use_gravity,
+        cfg.use_horiz_accel_vector_update,
         cfg.use_turn_gyro,
         cfg.use_course_rate,
         cfg.use_lateral_accel,

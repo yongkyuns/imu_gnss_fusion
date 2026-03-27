@@ -79,6 +79,7 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
     let mut startup_rot_imu_alt_ang = Vec::<[f64; 2]>::new();
     let mut startup_full_gnss_ang = Vec::<[f64; 2]>::new();
     let mut startup_full_rot_imu_ang = Vec::<[f64; 2]>::new();
+    let mut startup_full_current_align_rot_imu_ang = Vec::<[f64; 2]>::new();
     let mut startup_full_final_align_rot_imu_ang = Vec::<[f64; 2]>::new();
     let mut startup_full_speed = Vec::<[f64; 2]>::new();
     let mut startup_esf_full_gnss_ang = Vec::<[f64; 2]>::new();
@@ -215,16 +216,30 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
         let t = sample.t_s;
         let g_long = sample.a_long_mps2;
         let g_lat = sample.a_lat_mps2;
+        startup_full_speed.push([t, sample.speed_mps * 3.6]);
+        if g_long.is_finite() && g_lat.is_finite() {
+            startup_full_gnss_ang.push([t, wrap_signed_deg(g_lat.atan2(g_long).to_degrees())]);
+        }
+
+        let accel_v_align = quat_rotate(
+            [
+                sample.q_align[0],
+                -sample.q_align[1],
+                -sample.q_align[2],
+                -sample.q_align[3],
+            ],
+            sample.horiz_accel_b,
+        );
+        startup_full_current_align_rot_imu_ang.push([
+            t,
+            wrap_signed_deg(accel_v_align[1].atan2(accel_v_align[0]).to_degrees()),
+        ]);
 
         if let Some(theta) = startup_theta {
             let theta_cos = theta.cos();
             let theta_sin = theta.sin();
             let i_long = sample.startup_input_long_mps2;
             let i_lat = sample.startup_input_lat_mps2;
-            startup_full_speed.push([t, sample.speed_mps * 3.6]);
-            if g_long.is_finite() && g_lat.is_finite() {
-                startup_full_gnss_ang.push([t, wrap_signed_deg(g_lat.atan2(g_long).to_degrees())]);
-            }
             if i_long.is_finite() && i_lat.is_finite() {
                 let ri_long = theta_cos * i_long - theta_sin * i_lat;
                 let ri_lat = theta_sin * i_long + theta_cos * i_lat;
@@ -386,6 +401,10 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
             Trace {
                 name: "GNSS accel angle [deg]".to_string(),
                 points: startup_full_gnss_ang,
+            },
+            Trace {
+                name: "Current Align rotated IMU accel angle [deg]".to_string(),
+                points: startup_full_current_align_rot_imu_ang,
             },
             Trace {
                 name: "Rotated IMU accel angle [deg]".to_string(),
