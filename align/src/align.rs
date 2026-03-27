@@ -55,6 +55,7 @@ pub struct AlignConfig {
     pub startup_min_vector_concentration: f32,
     pub startup_min_sign_agreement: f32,
     pub yaw_seed_std_rad: f32,
+    pub yaw_branch_only_std_rad: f32,
     pub max_stationary_gyro_radps: f32,
     pub max_stationary_accel_norm_err_mps2: f32,
     pub use_gravity: bool,
@@ -109,7 +110,8 @@ impl Default for AlignConfig {
             startup_max_windows: 48,
             startup_min_vector_concentration: 0.8,
             startup_min_sign_agreement: 0.8,
-            yaw_seed_std_rad: 0.01_f32.to_radians(),
+            yaw_seed_std_rad: 0.1_f32.to_radians(),
+            yaw_branch_only_std_rad: 20.0_f32.to_radians(),
             max_stationary_gyro_radps: 0.8_f32.to_radians(),
             max_stationary_accel_norm_err_mps2: 0.2,
             use_gravity: true,
@@ -166,6 +168,7 @@ struct YawDualHypothesis {
     p: [[f32; ALIGN_N_STATES]; ALIGN_N_STATES],
     long_filter: HorizontalHeadingCueFilter,
     turn_filter: HorizontalHeadingCueFilter,
+    seeded_from_startup: bool,
     primary_forward_score: f32,
     alt_forward_score: f32,
     forward_windows: usize,
@@ -219,6 +222,7 @@ impl Align {
             p: self.P,
             long_filter: HorizontalHeadingCueFilter::new(),
             turn_filter: HorizontalHeadingCueFilter::new(),
+            seeded_from_startup: false,
             primary_forward_score: 0.0,
             alt_forward_score: 0.0,
             forward_windows: 0,
@@ -540,7 +544,7 @@ impl Align {
                         &long_trace,
                         &alt_long_trace,
                     ) {
-                        self.resolve_yaw_dual(choose_alt);
+                        self.resolve_yaw_dual(choose_alt, self.cfg.yaw_seed_std_rad);
                         score += self.apply_vehicle_yaw_angle(
                             if choose_alt {
                                 cue_alt.angle_err_rad
@@ -595,7 +599,12 @@ impl Align {
                             &turn_trace,
                             &alt_turn_trace,
                         ) {
-                            self.resolve_yaw_dual(choose_alt);
+                            let yaw_sigma = if alt.seeded_from_startup {
+                                self.cfg.yaw_seed_std_rad
+                            } else {
+                                self.cfg.yaw_branch_only_std_rad
+                            };
+                            self.resolve_yaw_dual(choose_alt, yaw_sigma);
                             score += self.apply_vehicle_yaw_angle(
                                 if choose_alt {
                                     cue_alt.angle_err_rad
@@ -954,7 +963,7 @@ impl Align {
         p[2][2] += cfg.q_mount_std_rad[2].powi(2) * dt;
     }
 
-    fn resolve_yaw_dual(&mut self, choose_alt: bool) {
+    fn resolve_yaw_dual(&mut self, choose_alt: bool, yaw_sigma_rad: f32) {
         if let Some(alt) = self.yaw_dual.take() {
             if choose_alt {
                 self.q_vb = alt.q_vb;
@@ -962,7 +971,7 @@ impl Align {
                 self.long_filter = alt.long_filter;
                 self.turn_filter = alt.turn_filter;
             }
-            self.P[2][2] = self.cfg.yaw_seed_std_rad.powi(2);
+            self.P[2][2] = yaw_sigma_rad.powi(2);
             self.P[0][2] = 0.0;
             self.P[2][0] = 0.0;
             self.P[1][2] = 0.0;
@@ -995,6 +1004,7 @@ impl Align {
             p: self.P,
             long_filter: HorizontalHeadingCueFilter::new(),
             turn_filter: HorizontalHeadingCueFilter::new(),
+            seeded_from_startup: true,
             primary_forward_score: 0.0,
             alt_forward_score: 0.0,
             forward_windows: 0,
