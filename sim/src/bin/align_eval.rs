@@ -76,7 +76,7 @@ struct Args {
     #[arg(long)]
     r_course_rate_std_dps: Option<f32>,
     #[arg(long)]
-    r_lat_std_mps2: Option<f32>,
+    r_turn_heading_std_deg: Option<f32>,
     #[arg(long)]
     r_long_std_mps2: Option<f32>,
     #[arg(long)]
@@ -103,13 +103,9 @@ struct Args {
     #[arg(long, action = clap::ArgAction::Set)]
     use_gravity: Option<bool>,
     #[arg(long, action = clap::ArgAction::Set)]
-    use_horiz_accel_vector_update: Option<bool>,
-    #[arg(long, action = clap::ArgAction::Set)]
     use_turn_gyro: Option<bool>,
     #[arg(long, action = clap::ArgAction::Set)]
     use_course_rate: Option<bool>,
-    #[arg(long, action = clap::ArgAction::Set)]
-    use_lateral_accel: Option<bool>,
     #[arg(long, action = clap::ArgAction::Set)]
     use_longitudinal_accel: Option<bool>,
 }
@@ -385,7 +381,6 @@ enum TuneParam {
     RGravityStdMps2,
     RTurnGyroStdDps,
     RCourseRateStdDps,
-    RLatStdMps2,
     RLongStdMps2,
     GravityLpfAlpha,
     MinSpeedMps,
@@ -404,7 +399,6 @@ impl TuneParam {
             Self::RGravityStdMps2 => "r_gravity_std_mps2",
             Self::RTurnGyroStdDps => "r_turn_gyro_std_dps",
             Self::RCourseRateStdDps => "r_course_rate_std_dps",
-            Self::RLatStdMps2 => "r_lat_std_mps2",
             Self::RLongStdMps2 => "r_long_std_mps2",
             Self::GravityLpfAlpha => "gravity_lpf_alpha",
             Self::MinSpeedMps => "min_speed_mps",
@@ -423,7 +417,6 @@ impl TuneParam {
             Self::RGravityStdMps2 => &[0.05, 0.08, 0.12, 0.18],
             Self::RTurnGyroStdDps => &[0.08, 0.15, 0.20, 0.30, 0.50],
             Self::RCourseRateStdDps => &[0.15, 0.25, 0.35, 0.50, 0.80],
-            Self::RLatStdMps2 => &[0.05, 0.08, 0.10, 0.15, 0.20],
             Self::RLongStdMps2 => &[0.05, 0.08, 0.10, 0.15, 0.20, 0.30],
             Self::GravityLpfAlpha => &[0.03, 0.05, 0.08, 0.12, 0.18],
             Self::MinSpeedMps => &[2.5, 3.5, 4.0, 4.5, 5.5],
@@ -443,7 +436,6 @@ impl TuneParam {
             Self::RGravityStdMps2 => cfg.r_gravity_std_mps2,
             Self::RTurnGyroStdDps => cfg.r_turn_gyro_std_radps.to_degrees(),
             Self::RCourseRateStdDps => cfg.r_course_rate_std_radps.to_degrees(),
-            Self::RLatStdMps2 => cfg.r_lat_std_mps2,
             Self::RLongStdMps2 => cfg.r_long_std_mps2,
             Self::GravityLpfAlpha => cfg.gravity_lpf_alpha,
             Self::MinSpeedMps => cfg.min_speed_mps,
@@ -463,7 +455,6 @@ impl TuneParam {
             Self::RGravityStdMps2 => cfg.r_gravity_std_mps2 = value,
             Self::RTurnGyroStdDps => cfg.r_turn_gyro_std_radps = value.to_radians(),
             Self::RCourseRateStdDps => cfg.r_course_rate_std_radps = value.to_radians(),
-            Self::RLatStdMps2 => cfg.r_lat_std_mps2 = value,
             Self::RLongStdMps2 => cfg.r_long_std_mps2 = value,
             Self::GravityLpfAlpha => cfg.gravity_lpf_alpha = value,
             Self::MinSpeedMps => cfg.min_speed_mps = value,
@@ -557,8 +548,8 @@ fn config_from_args(args: &Args) -> AlignConfig {
     if let Some(v) = args.r_course_rate_std_dps {
         cfg.r_course_rate_std_radps = v.to_radians();
     }
-    if let Some(v) = args.r_lat_std_mps2 {
-        cfg.r_lat_std_mps2 = v;
+    if let Some(v) = args.r_turn_heading_std_deg {
+        cfg.r_turn_heading_std_rad = v.to_radians();
     }
     if let Some(v) = args.r_long_std_mps2 {
         cfg.r_long_std_mps2 = v;
@@ -596,17 +587,11 @@ fn config_from_args(args: &Args) -> AlignConfig {
     if let Some(v) = args.use_gravity {
         cfg.use_gravity = v;
     }
-    if let Some(v) = args.use_horiz_accel_vector_update {
-        cfg.use_horiz_accel_vector_update = v;
-    }
     if let Some(v) = args.use_turn_gyro {
         cfg.use_turn_gyro = v;
     }
     if let Some(v) = args.use_course_rate {
         cfg.use_course_rate = v;
-    }
-    if let Some(v) = args.use_lateral_accel {
-        cfg.use_lateral_accel = v;
     }
     if let Some(v) = args.use_longitudinal_accel {
         cfg.use_longitudinal_accel = v;
@@ -1651,7 +1636,6 @@ fn tune_config(
         TuneParam::MaxStationaryAccelNormErrMps2,
         TuneParam::RTurnGyroStdDps,
         TuneParam::RCourseRateStdDps,
-        TuneParam::RLatStdMps2,
         TuneParam::MinSpeedMps,
         TuneParam::MinTurnRateDps,
         TuneParam::MinLatAccMps2,
@@ -1721,30 +1705,27 @@ fn tune_config(
         (
             best.cfg.use_turn_gyro,
             best.cfg.use_course_rate,
-            best.cfg.use_lateral_accel,
             best.cfg.use_longitudinal_accel,
         ),
-        (true, true, true, false),
-        (true, true, false, true),
-        (true, true, false, false),
-        (false, true, true, false),
-        (false, true, true, true),
+        (true, true, false),
+        (true, false, true),
+        (true, false, false),
+        (false, true, false),
+        (false, true, true),
     ];
-    for (use_turn_gyro, use_course_rate, use_lateral_accel, use_longitudinal_accel) in feature_sets
+    for (use_turn_gyro, use_course_rate, use_longitudinal_accel) in feature_sets
     {
         let mut cfg = best.cfg;
         let bootstrap_cfg = best.bootstrap_cfg;
         cfg.use_turn_gyro = use_turn_gyro;
         cfg.use_course_rate = use_course_rate;
-        cfg.use_lateral_accel = use_lateral_accel;
         cfg.use_longitudinal_accel = use_longitudinal_accel;
         let eval = evaluate_config(dataset, &cfg, &bootstrap_cfg)?;
         if eval.metrics.score + 1.0e-6 < best.metrics.score {
             eprintln!(
-                "[tune features] turn={} course={} lat={} long={} score {:.3} -> {:.3}",
+                "[tune features] turn={} course={} long={} score {:.3} -> {:.3}",
                 use_turn_gyro,
                 use_course_rate,
-                use_lateral_accel,
                 use_longitudinal_accel,
                 best.metrics.score,
                 eval.metrics.score
@@ -1888,7 +1869,7 @@ fn print_metrics(label: &str, metrics: &EvalMetrics) {
 
 fn print_config(cfg: &AlignConfig, bootstrap_cfg: &BootstrapConfig) {
     eprintln!(
-        "[config] q_std_deg=[{:.4}, {:.4}, {:.4}] r_gravity={:.3} r_horiz_heading_deg={:.3} r_turn_dps={:.3} turn_gyro_yaw_scale={:.3} r_course_dps={:.3} r_lat={:.3} r_long={:.3} long_yaw_scale={:.3}",
+        "[config] q_std_deg=[{:.4}, {:.4}, {:.4}] r_gravity={:.3} r_horiz_heading_deg={:.3} r_turn_dps={:.3} turn_gyro_yaw_scale={:.3} r_course_dps={:.3} r_turn_heading_deg={:.3} r_long={:.3} long_yaw_scale={:.3}",
         cfg.q_mount_std_rad[0].to_degrees(),
         cfg.q_mount_std_rad[1].to_degrees(),
         cfg.q_mount_std_rad[2].to_degrees(),
@@ -1897,7 +1878,7 @@ fn print_config(cfg: &AlignConfig, bootstrap_cfg: &BootstrapConfig) {
         cfg.r_turn_gyro_std_radps.to_degrees(),
         cfg.turn_gyro_yaw_scale,
         cfg.r_course_rate_std_radps.to_degrees(),
-        cfg.r_lat_std_mps2,
+        cfg.r_turn_heading_std_rad.to_degrees(),
         cfg.r_long_std_mps2,
         cfg.long_yaw_scale
     );
@@ -1920,12 +1901,10 @@ fn print_config(cfg: &AlignConfig, bootstrap_cfg: &BootstrapConfig) {
         bootstrap_cfg.ema_alpha, bootstrap_cfg.max_speed_mps, bootstrap_cfg.stationary_samples
     );
     eprintln!(
-        "[config] use_gravity={} use_horiz_accel_vector_update={} use_turn_gyro={} use_course_rate={} use_lateral_accel={} use_longitudinal_accel={}",
+        "[config] use_gravity={} use_turn_gyro={} use_course_rate={} use_longitudinal_accel={}",
         cfg.use_gravity,
-        cfg.use_horiz_accel_vector_update,
         cfg.use_turn_gyro,
         cfg.use_course_rate,
-        cfg.use_lateral_accel,
         cfg.use_longitudinal_accel
     );
 }

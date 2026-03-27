@@ -15,21 +15,18 @@ impl PyAlign {
         use_gravity = true,
         use_turn_gyro = true,
         use_course_rate = true,
-        use_lateral_accel = true,
         use_longitudinal_accel = true,
     ))]
     fn new(
         use_gravity: bool,
         use_turn_gyro: bool,
         use_course_rate: bool,
-        use_lateral_accel: bool,
         use_longitudinal_accel: bool,
     ) -> Self {
         let mut cfg = AlignConfig::default();
         cfg.use_gravity = use_gravity;
         cfg.use_turn_gyro = use_turn_gyro;
         cfg.use_course_rate = use_course_rate;
-        cfg.use_lateral_accel = use_lateral_accel;
         cfg.use_longitudinal_accel = use_longitudinal_accel;
         Self {
             inner: Align::new(cfg),

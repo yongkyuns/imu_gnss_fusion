@@ -420,7 +420,7 @@ pub fn build_align_replay(
                     upd_gravity: cfg.use_gravity && stationary,
                     upd_turn_gyro: cfg.use_turn_gyro && turn_valid,
                     upd_course: cfg.use_course_rate && turn_valid,
-                    upd_lat: cfg.use_lateral_accel && turn_valid,
+                    upd_lat: false,
                     upd_long: cfg.use_longitudinal_accel && long_valid,
                     yaw_initialized: trace.after_yaw_seed.is_some()
                         || trace.after_branch_resolve.is_some(),
@@ -704,10 +704,6 @@ fn align_update_contrib_deg(trace: AlignUpdateTrace) -> AlignEulerContrib {
     }
     if let Some(q) = trace.after_course_rate {
         out.course_rate = local_rotation_delta_deg(prev_q, q);
-        prev_q = q;
-    }
-    if let Some(q) = trace.after_lateral_accel {
-        out.lateral_accel = local_rotation_delta_deg(prev_q, q);
         prev_q = q;
     }
     if let Some(q) = trace.after_longitudinal_accel {
