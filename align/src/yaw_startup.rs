@@ -42,6 +42,7 @@ pub struct YawStartupTrace {
 struct StoredSample {
     imu_horiz_xy: [f32; 2],
     gnss_horiz_xy: [f32; 2],
+    course_rate_radps: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -149,6 +150,7 @@ impl YawStartupInitializer {
         self.samples.push(StoredSample {
             imu_horiz_xy: [imu_x_lp, imu_y_lp],
             gnss_horiz_xy: [gnss_long_lp, gnss_lat_lp],
+            course_rate_radps: sample.course_rate_radps,
         });
         trace.accepted = true;
         trace.sample_count = self.samples.len();
@@ -179,6 +181,71 @@ impl YawStartupInitializer {
 }
 
 fn best_rotation_angle(samples: &[StoredSample]) -> Option<(f32, f32)> {
+    if samples.is_empty() {
+        return None;
+    }
+    let turn_subset = select_turn_episode_subset(samples);
+    if turn_subset.len() >= 4 {
+        if let Some(fit) = robust_rotation_angle(&turn_subset) {
+            return Some(fit);
+        }
+    }
+    let all: Vec<&StoredSample> = samples.iter().collect();
+    robust_rotation_angle(&all)
+}
+
+fn select_turn_episode_subset<'a>(samples: &'a [StoredSample]) -> Vec<&'a StoredSample> {
+    let turn_min_rate = 10.0_f32.to_radians();
+    let mut pos = Vec::new();
+    let mut neg = Vec::new();
+    for s in samples {
+        let g_long = s.gnss_horiz_xy[0].abs();
+        let g_lat = s.gnss_horiz_xy[1].abs();
+        if s.course_rate_radps.abs() < turn_min_rate || g_lat < 0.7 || g_lat <= 1.5 * g_long.max(0.2)
+        {
+            continue;
+        }
+        if s.course_rate_radps >= 0.0 {
+            pos.push(s);
+        } else {
+            neg.push(s);
+        }
+    }
+    if pos.len() >= neg.len() {
+        pos
+    } else {
+        neg
+    }
+}
+
+fn robust_rotation_angle(samples: &[&StoredSample]) -> Option<(f32, f32)> {
+    if samples.is_empty() {
+        return None;
+    }
+    let (theta0, _) = raw_rotation_angle(samples)?;
+    let inlier_limit = 25.0_f32.to_radians();
+    let mut inliers = Vec::new();
+    for s in samples {
+        let theta_i = sample_rotation_angle(s);
+        if wrap_pi(theta_i - theta0).abs() <= inlier_limit {
+            inliers.push(*s);
+        }
+    }
+    let fit_set = if inliers.len() >= 4 && inliers.len() * 2 >= samples.len() {
+        &inliers
+    } else {
+        samples
+    };
+    raw_rotation_angle(fit_set)
+}
+
+fn sample_rotation_angle(sample: &StoredSample) -> f32 {
+    let h = sample.imu_horiz_xy;
+    let g = sample.gnss_horiz_xy;
+    (h[0] * g[1] - h[1] * g[0]).atan2(h[0] * g[0] + h[1] * g[1])
+}
+
+fn raw_rotation_angle(samples: &[&StoredSample]) -> Option<(f32, f32)> {
     if samples.is_empty() {
         return None;
     }
@@ -300,5 +367,58 @@ mod tests {
         }
         assert!(out.is_none());
         assert!(init.is_active());
+    }
+
+    #[test]
+    fn turn_episode_fit_rejects_outlier_sample() {
+        let cfg = YawStartupConfig {
+            enabled: true,
+            alpha: 1.0,
+            min_speed_mps: 2.0,
+            min_horiz_acc_mps2: 0.1,
+            min_long_mps2: 0.0,
+            max_lat_to_long_ratio: 1.0e6,
+            min_abs_lat_guard_mps2: 1.0e6,
+            max_course_rate_radps: 180.0_f32.to_radians(),
+            min_stable_windows: 1,
+            min_windows: 6,
+            max_windows: 12,
+            min_alignment_score: 0.8,
+        };
+        let theta = (-20.0_f32).to_radians();
+        let mut init = YawStartupInitializer::new();
+        init.reset(true);
+
+        let good = [
+            (-25.0_f32, -40.0_f32),
+            (-80.0_f32, -35.0_f32),
+            (-90.0_f32, -45.0_f32),
+            (-85.0_f32, -38.0_f32),
+            (-92.0_f32, -42.0_f32),
+        ];
+        let bad = (30.0_f32, 8.0_f32);
+
+        let mut out = None;
+        for (g_ang_deg, cr_deg) in good.into_iter().chain([bad]) {
+            let g_ang = g_ang_deg.to_radians();
+            let gnss = [g_ang.cos(), g_ang.sin()];
+            let imu = [
+                theta.cos() * gnss[0] + theta.sin() * gnss[1],
+                -theta.sin() * gnss[0] + theta.cos() * gnss[1],
+            ];
+            out = init.update(
+                cfg,
+                YawStartupSample {
+                    speed_mps: 8.0,
+                    course_rate_radps: cr_deg.to_radians(),
+                    horiz_accel_xy: imu,
+                    gnss_long_mps2: gnss[0],
+                    gnss_lat_mps2: gnss[1],
+                },
+            );
+        }
+
+        let theta_hat = out.expect("startup should resolve");
+        assert!((wrap_pi(theta_hat - theta)).abs() < 5.0_f32.to_radians());
     }
 }

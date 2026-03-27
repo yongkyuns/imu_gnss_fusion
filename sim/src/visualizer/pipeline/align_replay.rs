@@ -40,6 +40,7 @@ pub struct AlgEvent {
 
 #[derive(Clone, Copy, Default)]
 pub struct AlignEulerContrib {
+    pub horiz_accel: [f64; 3],
     pub turn_gyro: [f64; 3],
     pub course_rate: [f64; 3],
     pub lateral_accel: [f64; 3],
@@ -691,6 +692,10 @@ fn align_update_contrib_deg(trace: AlignUpdateTrace) -> AlignEulerContrib {
     let mut out = AlignEulerContrib::default();
     let mut prev_q = trace.q_start;
     if let Some(q) = trace.after_gravity {
+        prev_q = q;
+    }
+    if let Some(q) = trace.after_horiz_accel {
+        out.horiz_accel = local_rotation_delta_deg(prev_q, q);
         prev_q = q;
     }
     if let Some(q) = trace.after_turn_gyro {

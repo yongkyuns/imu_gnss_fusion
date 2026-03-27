@@ -25,6 +25,7 @@ pub struct AlignConfig {
     pub r_course_rate_std_radps: f32,
     pub r_lat_std_mps2: f32,
     pub r_long_std_mps2: f32,
+    pub long_yaw_scale: f32,
     pub gravity_lpf_alpha: f32,
     pub long_lpf_alpha: f32,
     pub min_speed_mps: f32,
@@ -75,12 +76,13 @@ impl Default for AlignConfig {
                 0.003_f32.to_radians(),
             ],
             r_gravity_std_mps2: 1.28,
-            r_horiz_heading_std_rad: 01.0_f32.to_radians(),
+            r_horiz_heading_std_rad: 101.0_f32.to_radians(),
             r_turn_gyro_std_radps: 0.1_f32.to_radians(),
-            turn_gyro_yaw_scale: 1.0,
+            turn_gyro_yaw_scale: 0.0,
             r_course_rate_std_radps: 1.10_f32.to_radians(),
             r_lat_std_mps2: 0.01,
             r_long_std_mps2: 0.3,
+            long_yaw_scale: 0.0,
             gravity_lpf_alpha: 0.08,
             long_lpf_alpha: 0.05,
             min_speed_mps: 3.0 / 3.6,
@@ -110,7 +112,7 @@ impl Default for AlignConfig {
             startup_max_windows: 48,
             startup_min_vector_concentration: 0.8,
             startup_min_sign_agreement: 0.8,
-            yaw_seed_std_rad: 5.1_f32.to_radians(),
+            yaw_seed_std_rad: 0.5_f32.to_radians(),
             yaw_branch_only_std_rad: 20.0_f32.to_radians(),
             max_stationary_gyro_radps: 0.8_f32.to_radians(),
             max_stationary_accel_norm_err_mps2: 0.2,
@@ -546,11 +548,12 @@ impl Align {
                     ) {
                         self.resolve_yaw_dual(choose_alt, self.cfg.yaw_seed_std_rad);
                         score += self.apply_vehicle_yaw_angle(
-                            if choose_alt {
-                                cue_alt.angle_err_rad
-                            } else {
-                                cue_primary.angle_err_rad
-                            },
+                            self.cfg.long_yaw_scale
+                                * if choose_alt {
+                                    cue_alt.angle_err_rad
+                                } else {
+                                    cue_primary.angle_err_rad
+                                },
                             self.cfg.r_long_std_mps2.powi(2),
                         );
                         trace.after_longitudinal_accel = Some(self.q_vb);
@@ -635,8 +638,10 @@ impl Align {
             );
             trace.longitudinal_trace = Some(long_trace);
             if let Some(cue) = cue {
-                score += self
-                    .apply_vehicle_yaw_angle(cue.angle_err_rad, self.cfg.r_long_std_mps2.powi(2));
+                score += self.apply_vehicle_yaw_angle(
+                    self.cfg.long_yaw_scale * cue.angle_err_rad,
+                    self.cfg.r_long_std_mps2.powi(2),
+                );
                 trace.after_longitudinal_accel = Some(self.q_vb);
             }
         }

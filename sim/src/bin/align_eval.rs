@@ -80,6 +80,8 @@ struct Args {
     #[arg(long)]
     r_long_std_mps2: Option<f32>,
     #[arg(long)]
+    long_yaw_scale: Option<f32>,
+    #[arg(long)]
     gravity_lpf_alpha: Option<f32>,
     #[arg(long)]
     long_lpf_alpha: Option<f32>,
@@ -560,6 +562,9 @@ fn config_from_args(args: &Args) -> AlignConfig {
     }
     if let Some(v) = args.r_long_std_mps2 {
         cfg.r_long_std_mps2 = v;
+    }
+    if let Some(v) = args.long_yaw_scale {
+        cfg.long_yaw_scale = v;
     }
     if let Some(v) = args.gravity_lpf_alpha {
         cfg.gravity_lpf_alpha = v;
@@ -1883,7 +1888,7 @@ fn print_metrics(label: &str, metrics: &EvalMetrics) {
 
 fn print_config(cfg: &AlignConfig, bootstrap_cfg: &BootstrapConfig) {
     eprintln!(
-        "[config] q_std_deg=[{:.4}, {:.4}, {:.4}] r_gravity={:.3} r_horiz_heading_deg={:.3} r_turn_dps={:.3} turn_gyro_yaw_scale={:.3} r_course_dps={:.3} r_lat={:.3} r_long={:.3}",
+        "[config] q_std_deg=[{:.4}, {:.4}, {:.4}] r_gravity={:.3} r_horiz_heading_deg={:.3} r_turn_dps={:.3} turn_gyro_yaw_scale={:.3} r_course_dps={:.3} r_lat={:.3} r_long={:.3} long_yaw_scale={:.3}",
         cfg.q_mount_std_rad[0].to_degrees(),
         cfg.q_mount_std_rad[1].to_degrees(),
         cfg.q_mount_std_rad[2].to_degrees(),
@@ -1893,7 +1898,8 @@ fn print_config(cfg: &AlignConfig, bootstrap_cfg: &BootstrapConfig) {
         cfg.turn_gyro_yaw_scale,
         cfg.r_course_rate_std_radps.to_degrees(),
         cfg.r_lat_std_mps2,
-        cfg.r_long_std_mps2
+        cfg.r_long_std_mps2,
+        cfg.long_yaw_scale
     );
     eprintln!(
         "[config] gravity_alpha={:.3} min_speed={:.3} min_turn_dps={:.3} min_lat={:.3} min_long={:.3} max_stat_gyro_dps={:.3} max_stat_acc_err={:.3}",

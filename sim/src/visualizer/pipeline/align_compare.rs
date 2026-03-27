@@ -88,14 +88,17 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
     let mut startup_gate = Vec::<[f64; 2]>::new();
     let mut startup_accept = Vec::<[f64; 2]>::new();
     let mut startup_accepted_samples = Vec::<(f64, f64, f64, f64, f64)>::new();
+    let mut roll_horiz = Vec::<[f64; 2]>::new();
     let mut roll_turn_gyro = Vec::<[f64; 2]>::new();
     let mut roll_course = Vec::<[f64; 2]>::new();
     let mut roll_lat = Vec::<[f64; 2]>::new();
     let mut roll_long = Vec::<[f64; 2]>::new();
+    let mut pitch_horiz = Vec::<[f64; 2]>::new();
     let mut pitch_turn_gyro = Vec::<[f64; 2]>::new();
     let mut pitch_course = Vec::<[f64; 2]>::new();
     let mut pitch_lat = Vec::<[f64; 2]>::new();
     let mut pitch_long = Vec::<[f64; 2]>::new();
+    let mut yaw_horiz = Vec::<[f64; 2]>::new();
     let mut yaw_turn_gyro = Vec::<[f64; 2]>::new();
     let mut yaw_course = Vec::<[f64; 2]>::new();
     let mut yaw_lat = Vec::<[f64; 2]>::new();
@@ -167,14 +170,17 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
             }
         }
         let contrib = sample.contrib;
+        roll_horiz.push([t, contrib.horiz_accel[0]]);
         roll_turn_gyro.push([t, contrib.turn_gyro[0]]);
         roll_course.push([t, contrib.course_rate[0]]);
         roll_lat.push([t, contrib.lateral_accel[0]]);
         roll_long.push([t, contrib.longitudinal_accel[0]]);
+        pitch_horiz.push([t, contrib.horiz_accel[1]]);
         pitch_turn_gyro.push([t, contrib.turn_gyro[1]]);
         pitch_course.push([t, contrib.course_rate[1]]);
         pitch_lat.push([t, contrib.lateral_accel[1]]);
         pitch_long.push([t, contrib.longitudinal_accel[1]]);
+        yaw_horiz.push([t, contrib.horiz_accel[2]]);
         yaw_turn_gyro.push([t, contrib.turn_gyro[2]]);
         yaw_course.push([t, contrib.course_rate[2]]);
         yaw_lat.push([t, contrib.lateral_accel[2]]);
@@ -435,6 +441,10 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
         ],
         roll_contrib: vec![
             Trace {
+                name: "horiz accel".to_string(),
+                points: roll_horiz,
+            },
+            Trace {
                 name: "turn gyro".to_string(),
                 points: roll_turn_gyro,
             },
@@ -453,6 +463,10 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
         ],
         pitch_contrib: vec![
             Trace {
+                name: "horiz accel".to_string(),
+                points: pitch_horiz,
+            },
+            Trace {
                 name: "turn gyro".to_string(),
                 points: pitch_turn_gyro,
             },
@@ -470,6 +484,10 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
             },
         ],
         yaw_contrib: vec![
+            Trace {
+                name: "horiz accel".to_string(),
+                points: yaw_horiz,
+            },
             Trace {
                 name: "turn gyro".to_string(),
                 points: yaw_turn_gyro,
