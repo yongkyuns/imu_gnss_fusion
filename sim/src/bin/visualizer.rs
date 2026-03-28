@@ -4,7 +4,7 @@ use std::{fs::File, io::Read, path::PathBuf};
 use anyhow::{Context, Result};
 use clap::Parser;
 use sim::visualizer::model::EkfImuSource;
-use sim::visualizer::pipeline::build_plot_data;
+use sim::visualizer::pipeline::{AlignNhcVisualizerConfig, build_plot_data};
 use sim::visualizer::stats::{
     group_stats, max_gap_sec, max_gap_trace, max_step_abs, trace_stats, trace_time_bounds,
     trace_value_bounds,
@@ -26,6 +26,12 @@ struct Args {
     dump_align_axis_time_s: Option<f64>,
     #[arg(long, default_value_t = 3.0)]
     dump_window_s: f64,
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
+    align_nhc_init_mount_from_final_alg: bool,
+    #[arg(long)]
+    align_nhc_init_mount_sigma_deg: Option<f32>,
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
+    align_nhc_freeze_mount_from_final_alg: bool,
 }
 
 fn main() -> Result<()> {
@@ -38,7 +44,13 @@ fn main() -> Result<()> {
         .context("failed to read log")?;
     let t_read = Instant::now();
 
-    let (data, has_itow) = build_plot_data(&bytes, args.max_records, args.ekf_imu_source);
+    let align_nhc_cfg = AlignNhcVisualizerConfig {
+        init_mount_from_final_alg: args.align_nhc_init_mount_from_final_alg,
+        init_mount_sigma_deg: args.align_nhc_init_mount_sigma_deg,
+        freeze_mount_from_final_alg: args.align_nhc_freeze_mount_from_final_alg,
+    };
+    let (data, has_itow) =
+        build_plot_data(&bytes, args.max_records, args.ekf_imu_source, align_nhc_cfg);
     let t_build = Instant::now();
     let (n_traces, n_points) = trace_stats(&data);
     let (tmin, tmax) = trace_time_bounds(&data).unwrap_or((f64::NAN, f64::NAN));
@@ -72,18 +84,15 @@ fn main() -> Result<()> {
         group_stats("ekf_cov_bias", &data.ekf_cov_bias),
         group_stats("ekf_cov_nonbias", &data.ekf_cov_nonbias),
         group_stats("ekf_map", &data.ekf_map),
-        group_stats("misalign_cmp_att", &data.misalign_cmp_att),
-        group_stats("misalign_diag", &data.misalign_diag),
-        group_stats("misalign_axis_err", &data.misalign_axis_err),
-        group_stats("misalign_residuals", &data.misalign_residuals),
-        group_stats("misalign_gates", &data.misalign_gates),
-        group_stats("misalign_cov", &data.misalign_cov),
         group_stats("align_cmp_att", &data.align_cmp_att),
         group_stats("align_res_vel", &data.align_res_vel),
         group_stats("align_axis_err", &data.align_axis_err),
         group_stats("align_motion", &data.align_motion),
         group_stats("align_startup", &data.align_startup),
         group_stats("align_nhc_cmp_att", &data.align_nhc_cmp_att),
+        group_stats("align_nhc_yaws", &data.align_nhc_yaws),
+        group_stats("align_nhc_states", &data.align_nhc_states),
+        group_stats("align_nhc_biases", &data.align_nhc_biases),
         group_stats("align_nhc_diag", &data.align_nhc_diag),
         group_stats("align_nhc_axis_err", &data.align_nhc_axis_err),
         group_stats("align_nhc_residuals", &data.align_nhc_residuals),
@@ -108,18 +117,15 @@ fn main() -> Result<()> {
         ("imu_raw_accel", &data.imu_raw_accel),
         ("imu_cal_gyro", &data.imu_cal_gyro),
         ("imu_cal_accel", &data.imu_cal_accel),
-        ("misalign_cmp_att", &data.misalign_cmp_att),
-        ("misalign_diag", &data.misalign_diag),
-        ("misalign_axis_err", &data.misalign_axis_err),
-        ("misalign_residuals", &data.misalign_residuals),
-        ("misalign_gates", &data.misalign_gates),
-        ("misalign_cov", &data.misalign_cov),
         ("align_cmp_att", &data.align_cmp_att),
         ("align_res_vel", &data.align_res_vel),
         ("align_axis_err", &data.align_axis_err),
         ("align_motion", &data.align_motion),
         ("align_startup", &data.align_startup),
         ("align_nhc_cmp_att", &data.align_nhc_cmp_att),
+        ("align_nhc_yaws", &data.align_nhc_yaws),
+        ("align_nhc_states", &data.align_nhc_states),
+        ("align_nhc_biases", &data.align_nhc_biases),
         ("align_nhc_diag", &data.align_nhc_diag),
         ("align_nhc_axis_err", &data.align_nhc_axis_err),
         ("align_nhc_residuals", &data.align_nhc_residuals),

@@ -8,18 +8,32 @@ use crate::ubxlog::{
     sensor_meta,
 };
 
-use super::super::math::normalize_heading_deg;
+use super::super::math::{ecef_to_ned, lla_to_ecef, normalize_heading_deg, quat_rpy_deg};
 use super::super::model::{ImuPacket, Trace};
 use super::align_nhc_bootstrap::resolve_align_nhc_bootstrap_q_vb_seed;
 use super::align_replay::{
     esf_alg_flu_to_frd_mount_quat, frd_mount_quat_to_esf_alg_flu_quat, interpolate_alg_quat,
     quat_rotate, quat_rpy_alg_deg, signed_projected_axis_angle_deg,
 };
+use super::AlignNhcVisualizerConfig;
 use super::tag_time::fit_tag_ms_map;
 use super::timebase::MasterTimeline;
 
+fn freeze_nhc_mount(nhc: &mut AlignNhc, q_vb_fixed: [f32; 4]) {
+    nhc.q_vb = q_vb_fixed;
+    for i in 6..9 {
+        for j in 0..nhc.P.len() {
+            nhc.P[i][j] = 0.0;
+            nhc.P[j][i] = 0.0;
+        }
+    }
+}
+
 pub struct AlignNhcCompareData {
     pub cmp_att: Vec<Trace>,
+    pub yaws: Vec<Trace>,
+    pub states: Vec<Trace>,
+    pub biases: Vec<Trace>,
     pub diag: Vec<Trace>,
     pub axis_err: Vec<Trace>,
     pub residuals: Vec<Trace>,
@@ -48,10 +62,14 @@ struct BootstrapDetector {
 pub fn build_align_nhc_compare_traces(
     frames: &[UbxFrame],
     tl: &MasterTimeline,
+    viz_cfg: AlignNhcVisualizerConfig,
 ) -> AlignNhcCompareData {
     if tl.masters.is_empty() {
         return AlignNhcCompareData {
             cmp_att: Vec::new(),
+            yaws: Vec::new(),
+            states: Vec::new(),
+            biases: Vec::new(),
             diag: Vec::new(),
             axis_err: Vec::new(),
             residuals: Vec::new(),
@@ -71,6 +89,7 @@ pub fn build_align_nhc_compare_traces(
 
     let mut alg_events = Vec::<(f64, [f64; 4])>::new();
     let mut alg_raw_events = Vec::<(f64, f64, f64, f64)>::new();
+    let mut nav_att_events = Vec::<(f64, f64, f64, f64)>::new();
     let mut nav_events = Vec::<(f64, NavPvtObs)>::new();
     for f in frames {
         if let Some((_, roll, pitch, yaw)) = extract_esf_alg(f)
@@ -86,11 +105,23 @@ pub fn build_align_nhc_compare_traces(
         {
             nav_events.push((t_ms, obs));
         }
+        if let Some((_, roll, pitch, heading)) = crate::ubxlog::extract_nav_att(f)
+            && let Some(t_ms) = nearest_master_ms(f.seq, &tl.masters)
+        {
+            nav_att_events.push((t_ms, roll, pitch, normalize_heading_deg(heading)));
+        }
     }
     alg_events.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
     alg_raw_events.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+    nav_att_events.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
     nav_events.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
     let final_alg_q = alg_events.last().map(|ev| ev.1);
+    let fixed_mount_q_vb = if viz_cfg.freeze_mount_from_final_alg {
+        final_alg_q
+            .map(|q_alg| [q_alg[0] as f32, -q_alg[1] as f32, -q_alg[2] as f32, -q_alg[3] as f32])
+    } else {
+        None
+    };
 
     let imu_packets = build_imu_packets(frames, tl);
 
@@ -102,6 +133,8 @@ pub fn build_align_nhc_compare_traces(
     let mut scan_idx = 0usize;
     let mut interval_start_idx = 0usize;
     let mut prev_nav: Option<(f64, NavPvtObs)> = None;
+    let mut latest_pseudo_vel_n: Option<[f32; 3]> = None;
+    let mut latest_pseudo_turn_valid = false;
     let align_cfg = AlignConfig::default();
     let mut align_mount = Align::new(align_cfg);
     let mut align_mount_initialized = false;
@@ -109,6 +142,21 @@ pub fn build_align_nhc_compare_traces(
     let mut out_roll = Vec::<[f64; 2]>::new();
     let mut out_pitch = Vec::<[f64; 2]>::new();
     let mut out_yaw = Vec::<[f64; 2]>::new();
+    let mut nav_yaw = Vec::<[f64; 2]>::new();
+    let mut vehicle_yaw = Vec::<[f64; 2]>::new();
+    let mut gnss_course_yaw = Vec::<[f64; 2]>::new();
+    let mut vel_n_est = Vec::<[f64; 2]>::new();
+    let mut vel_e_est = Vec::<[f64; 2]>::new();
+    let mut vel_d_est = Vec::<[f64; 2]>::new();
+    let mut pos_n_est = Vec::<[f64; 2]>::new();
+    let mut pos_e_est = Vec::<[f64; 2]>::new();
+    let mut pos_d_est = Vec::<[f64; 2]>::new();
+    let mut vel_n_gnss = Vec::<[f64; 2]>::new();
+    let mut vel_e_gnss = Vec::<[f64; 2]>::new();
+    let mut vel_d_gnss = Vec::<[f64; 2]>::new();
+    let mut pos_n_gnss = Vec::<[f64; 2]>::new();
+    let mut pos_e_gnss = Vec::<[f64; 2]>::new();
+    let mut pos_d_gnss = Vec::<[f64; 2]>::new();
     let mut ref_roll = Vec::<[f64; 2]>::new();
     let mut ref_pitch = Vec::<[f64; 2]>::new();
     let mut ref_yaw = Vec::<[f64; 2]>::new();
@@ -119,14 +167,24 @@ pub fn build_align_nhc_compare_traces(
 
     let mut fwd_err = Vec::<[f64; 2]>::new();
     let mut down_err = Vec::<[f64; 2]>::new();
+    let mut gyro_bias_x_dps = Vec::<[f64; 2]>::new();
+    let mut gyro_bias_y_dps = Vec::<[f64; 2]>::new();
+    let mut gyro_bias_z_dps = Vec::<[f64; 2]>::new();
+    let mut accel_bias_x_mps2 = Vec::<[f64; 2]>::new();
+    let mut accel_bias_y_mps2 = Vec::<[f64; 2]>::new();
+    let mut accel_bias_z_mps2 = Vec::<[f64; 2]>::new();
 
     let mut nhc_vy = Vec::<[f64; 2]>::new();
     let mut nhc_vz = Vec::<[f64; 2]>::new();
     let mut planar_wx = Vec::<[f64; 2]>::new();
     let mut planar_wy = Vec::<[f64; 2]>::new();
 
-    let mut nhc_valid = Vec::<[f64; 2]>::new();
-    let mut planar_valid = Vec::<[f64; 2]>::new();
+    let mut veh_att_roll = Vec::<[f64; 2]>::new();
+    let mut veh_att_pitch = Vec::<[f64; 2]>::new();
+    let mut veh_att_yaw = Vec::<[f64; 2]>::new();
+    let mut nav_att_roll = Vec::<[f64; 2]>::new();
+    let mut nav_att_pitch = Vec::<[f64; 2]>::new();
+    let mut nav_att_yaw = Vec::<[f64; 2]>::new();
 
     let mut sigma_mount_r = Vec::<[f64; 2]>::new();
     let mut sigma_mount_p = Vec::<[f64; 2]>::new();
@@ -137,12 +195,25 @@ pub fn build_align_nhc_compare_traces(
     let mut sigma_vn = Vec::<[f64; 2]>::new();
     let mut sigma_ve = Vec::<[f64; 2]>::new();
     let mut sigma_vd = Vec::<[f64; 2]>::new();
+    let mut sigma_pn = Vec::<[f64; 2]>::new();
+    let mut sigma_pe = Vec::<[f64; 2]>::new();
+    let mut sigma_pd = Vec::<[f64; 2]>::new();
+    let mut origin_set = false;
+    let mut ref_lat = 0.0_f64;
+    let mut ref_lon = 0.0_f64;
+    let mut ref_ecef = [0.0_f64; 3];
 
     for (t_ms, roll, pitch, yaw) in &alg_raw_events {
         let t = (*t_ms - tl.t0_master_ms) * 1.0e-3;
         ref_roll.push([t, *roll]);
         ref_pitch.push([t, *pitch]);
         ref_yaw.push([t, *yaw]);
+    }
+    for (t_ms, roll, pitch, heading) in &nav_att_events {
+        let t = (*t_ms - tl.t0_master_ms) * 1.0e-3;
+        nav_att_roll.push([t, *roll]);
+        nav_att_pitch.push([t, *pitch]);
+        nav_att_yaw.push([t, *heading]);
     }
 
     for (nav_idx, (tn, nav)) in nav_events.iter().enumerate() {
@@ -157,7 +228,7 @@ pub fn build_align_nhc_compare_traces(
             if !initialized {
                 let speed_mps = speed_for_bootstrap(prev_nav, (*tn, *nav), pkt.t_ms) as f32;
                 if bootstrap.update(accel_b, gyro_radps, speed_mps) {
-                    let seed = resolve_align_nhc_bootstrap_q_vb_seed(
+                    let mut seed = resolve_align_nhc_bootstrap_q_vb_seed(
                         &bootstrap.stationary_accel,
                         prev_nav,
                         &nav_events,
@@ -168,6 +239,20 @@ pub fn build_align_nhc_compare_traces(
                         align_cfg,
                         align_cfg.startup_max_windows.saturating_mul(3),
                     );
+                    if viz_cfg.init_mount_from_final_alg || viz_cfg.freeze_mount_from_final_alg {
+                        if let Some(q_alg) = final_alg_q {
+                            seed.q_vb = [
+                                q_alg[0] as f32,
+                                -q_alg[1] as f32,
+                                -q_alg[2] as f32,
+                                -q_alg[3] as f32,
+                            ];
+                            if let Some(sigma_deg) = viz_cfg.init_mount_sigma_deg {
+                                let sigma_rad = sigma_deg.to_radians();
+                                seed.sigma_rad = [sigma_rad; 3];
+                            }
+                        }
+                    }
                     if nhc
                         .initialize_from_stationary_with_mount_seed_and_sigma(
                             &bootstrap.stationary_accel,
@@ -184,6 +269,12 @@ pub fn build_align_nhc_compare_traces(
                             .is_ok()
                         {
                             align_mount_initialized = true;
+                        }
+                        if viz_cfg.init_mount_from_final_alg || viz_cfg.freeze_mount_from_final_alg {
+                            mount_branch_committed = true;
+                        }
+                        if let Some(q_vb_fixed) = fixed_mount_q_vb {
+                            freeze_nhc_mount(&mut nhc, q_vb_fixed);
                         }
                     }
                 }
@@ -202,8 +293,24 @@ pub fn build_align_nhc_compare_traces(
             }
         }
 
+        if !origin_set {
+            ref_lat = nav.lat_deg;
+            ref_lon = nav.lon_deg;
+            ref_ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
+            origin_set = true;
+        }
+        let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
+        let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
+        let z_p_n = [ned[0] as f32, ned[1] as f32, ned[2] as f32];
+        let r_p_var_n = [
+            (nav.h_acc_m.max(0.5) as f32).powi(2),
+            (nav.h_acc_m.max(0.5) as f32).powi(2),
+            (nav.v_acc_m.max(0.5) as f32).powi(2),
+        ];
+
         if let Some((t_prev, nav_prev)) = prev_nav {
             let interval_packets = &imu_packets[interval_start_idx..scan_idx];
+            let mut tr = align_rs::AlignNhcTrace::default();
             if initialized && !interval_packets.is_empty() {
                 let mut gyro_sum = [0.0_f32; 3];
                 let mut accel_sum = [0.0_f32; 3];
@@ -225,6 +332,25 @@ pub fn build_align_nhc_compare_traces(
                             pkt.gz_dps.to_radians() as f32,
                         ],
                     );
+                    if let Some(z_v_n) = latest_pseudo_vel_n {
+                        if let Some(q_vb_fixed) = fixed_mount_q_vb {
+                            freeze_nhc_mount(&mut nhc, q_vb_fixed);
+                        }
+                        let (_, motion_tr) = nhc.update_pseudo_measurements(
+                            z_v_n,
+                            [
+                                pkt.gx_dps.to_radians() as f32,
+                                pkt.gy_dps.to_radians() as f32,
+                                pkt.gz_dps.to_radians() as f32,
+                            ],
+                            nav_yaw_seeded,
+                            mount_branch_committed && latest_pseudo_turn_valid,
+                        );
+                        tr = motion_tr;
+                        if let Some(q_vb_fixed) = fixed_mount_q_vb {
+                            freeze_nhc_mount(&mut nhc, q_vb_fixed);
+                        }
+                    }
                     last_t = pkt.t_ms;
                 }
 
@@ -286,6 +412,10 @@ pub fn build_align_nhc_compare_traces(
                                 align_mount.P[2][2].sqrt().clamp(1.0_f32.to_radians(), 5.0_f32.to_radians()),
                             ],
                         );
+                        nhc.seed_nav_yaw_from_course(
+                            nav.vel_e_mps.atan2(nav.vel_n_mps) as f32,
+                            5.0_f32.to_radians(),
+                        );
                         mount_branch_committed = true;
                     }
                 }
@@ -293,26 +423,27 @@ pub fn build_align_nhc_compare_traces(
                     && course_rate_dps.abs()
                         > nhc_cfg.min_planar_yaw_rate_radps.to_degrees() as f64;
 
-                let omega_last_b = interval_packets
-                    .last()
-                    .map(|pkt| {
-                        [
-                            pkt.gx_dps.to_radians() as f32,
-                            pkt.gy_dps.to_radians() as f32,
-                            pkt.gz_dps.to_radians() as f32,
-                        ]
-                    })
-                    .unwrap_or([0.0, 0.0, 0.0]);
-                let (_, tr) = nhc.update_all(
+                if let Some(q_vb_fixed) = fixed_mount_q_vb {
+                    freeze_nhc_mount(&mut nhc, q_vb_fixed);
+                }
+                let _ = nhc.update_gnss(
+                    z_p_n,
+                    r_p_var_n,
                     [
                         nav.vel_n_mps as f32,
                         nav.vel_e_mps as f32,
                         nav.vel_d_mps as f32,
                     ],
-                    omega_last_b,
-                    speed_mid > nhc_cfg.min_nhc_speed_mps,
-                    mount_branch_committed && turn_valid,
                 );
+                if let Some(q_vb_fixed) = fixed_mount_q_vb {
+                    freeze_nhc_mount(&mut nhc, q_vb_fixed);
+                }
+                latest_pseudo_vel_n = Some([
+                    nav.vel_n_mps as f32,
+                    nav.vel_e_mps as f32,
+                    nav.vel_d_mps as f32,
+                ]);
+                latest_pseudo_turn_valid = turn_valid;
 
                 let t = (*tn - tl.t0_master_ms) * 1.0e-3;
                 let q_align_bv = [
@@ -321,7 +452,14 @@ pub fn build_align_nhc_compare_traces(
                     nhc.q_vb[2] as f64,
                     nhc.q_vb[3] as f64,
                 ];
+                let q_nav = [
+                    nhc.q_nb[0] as f64,
+                    nhc.q_nb[1] as f64,
+                    nhc.q_nb[2] as f64,
+                    nhc.q_nb[3] as f64,
+                ];
                 let q_align = quat_conj_f64(q_align_bv);
+                let q_vehicle = quat_mul_f64(q_nav, q_align);
                 let q_align_flu = frd_mount_quat_to_esf_alg_flu_quat(q_align);
                 let (r, p, y) = quat_rpy_alg_deg(
                     q_align_flu[0],
@@ -332,6 +470,30 @@ pub fn build_align_nhc_compare_traces(
                 out_roll.push([t, r]);
                 out_pitch.push([t, p]);
                 out_yaw.push([t, y]);
+                let (veh_r, veh_p, veh_y) = quat_rpy_deg(
+                    q_vehicle[0] as f32,
+                    q_vehicle[1] as f32,
+                    q_vehicle[2] as f32,
+                    q_vehicle[3] as f32,
+                );
+                veh_att_roll.push([t, veh_r]);
+                veh_att_pitch.push([t, veh_p]);
+                veh_att_yaw.push([t, veh_y]);
+                nav_yaw.push([t, quat_rpy_alg_deg(q_nav[0], q_nav[1], q_nav[2], q_nav[3]).2]);
+                vehicle_yaw.push([t, quat_rpy_alg_deg(q_vehicle[0], q_vehicle[1], q_vehicle[2], q_vehicle[3]).2]);
+                gnss_course_yaw.push([t, normalize_heading_deg(v_curr[1].atan2(v_curr[0]).to_degrees())]);
+                vel_n_est.push([t, nhc.v_n[0] as f64]);
+                vel_e_est.push([t, nhc.v_n[1] as f64]);
+                vel_d_est.push([t, nhc.v_n[2] as f64]);
+                pos_n_est.push([t, nhc.p_n[0] as f64]);
+                pos_e_est.push([t, nhc.p_n[1] as f64]);
+                pos_d_est.push([t, nhc.p_n[2] as f64]);
+                vel_n_gnss.push([t, nav.vel_n_mps]);
+                vel_e_gnss.push([t, nav.vel_e_mps]);
+                vel_d_gnss.push([t, nav.vel_d_mps]);
+                pos_n_gnss.push([t, ned[0]]);
+                pos_e_gnss.push([t, ned[1]]);
+                pos_d_gnss.push([t, ned[2]]);
                 course_rate.push([t, course_rate_dps]);
                 a_lat.push([t, a_lat_s]);
                 a_long.push([t, a_long_s]);
@@ -339,8 +501,6 @@ pub fn build_align_nhc_compare_traces(
                 nhc_vz.push([t, tr.nhc_residual_vz_mps as f64]);
                 planar_wx.push([t, tr.planar_gyro_residual_x_radps.to_degrees() as f64]);
                 planar_wy.push([t, tr.planar_gyro_residual_y_radps.to_degrees() as f64]);
-                nhc_valid.push([t, if tr.nhc_valid { 1.0 } else { 0.0 }]);
-                planar_valid.push([t, if tr.planar_gyro_valid { 1.0 } else { 0.0 }]);
 
                 sigma_nav_r.push([t, nhc.P[0][0].sqrt().to_degrees() as f64]);
                 sigma_nav_p.push([t, nhc.P[1][1].sqrt().to_degrees() as f64]);
@@ -348,9 +508,18 @@ pub fn build_align_nhc_compare_traces(
                 sigma_vn.push([t, nhc.P[3][3].sqrt() as f64]);
                 sigma_ve.push([t, nhc.P[4][4].sqrt() as f64]);
                 sigma_vd.push([t, nhc.P[5][5].sqrt() as f64]);
+                sigma_pn.push([t, nhc.P[15][15].sqrt() as f64]);
+                sigma_pe.push([t, nhc.P[16][16].sqrt() as f64]);
+                sigma_pd.push([t, nhc.P[17][17].sqrt() as f64]);
                 sigma_mount_r.push([t, nhc.P[6][6].sqrt().to_degrees() as f64]);
                 sigma_mount_p.push([t, nhc.P[7][7].sqrt().to_degrees() as f64]);
                 sigma_mount_y.push([t, nhc.P[8][8].sqrt().to_degrees() as f64]);
+                gyro_bias_x_dps.push([t, nhc.b_g[0].to_degrees() as f64]);
+                gyro_bias_y_dps.push([t, nhc.b_g[1].to_degrees() as f64]);
+                gyro_bias_z_dps.push([t, nhc.b_g[2].to_degrees() as f64]);
+                accel_bias_x_mps2.push([t, nhc.b_a[0] as f64]);
+                accel_bias_y_mps2.push([t, nhc.b_a[1] as f64]);
+                accel_bias_z_mps2.push([t, nhc.b_a[2] as f64]);
 
                 if let Some(q_alg) = interpolate_alg_quat(
                     &alg_events
@@ -397,7 +566,7 @@ pub fn build_align_nhc_compare_traces(
             },
             Trace {
                 name: "AlignNhc (FLU) yaw [deg]".to_string(),
-                points: out_yaw,
+                points: out_yaw.clone(),
             },
             Trace {
                 name: "ESF-ALG roll [deg]".to_string(),
@@ -407,9 +576,103 @@ pub fn build_align_nhc_compare_traces(
                 name: "ESF-ALG pitch [deg]".to_string(),
                 points: ref_pitch,
             },
+        ],
+        yaws: vec![
+            Trace {
+                name: "AlignNhc mount yaw [deg]".to_string(),
+                points: out_yaw,
+            },
+            Trace {
+                name: "AlignNhc vehicle yaw [deg]".to_string(),
+                points: vehicle_yaw,
+            },
+            Trace {
+                name: "GNSS course yaw [deg]".to_string(),
+                points: gnss_course_yaw,
+            },
             Trace {
                 name: "ESF-ALG yaw [deg]".to_string(),
                 points: ref_yaw,
+            },
+        ],
+        states: vec![
+            Trace {
+                name: "AlignNhc nav yaw [deg]".to_string(),
+                points: nav_yaw,
+            },
+            Trace {
+                name: "AlignNhc vel N [m/s]".to_string(),
+                points: vel_n_est,
+            },
+            Trace {
+                name: "GNSS vel N [m/s]".to_string(),
+                points: vel_n_gnss,
+            },
+            Trace {
+                name: "AlignNhc vel E [m/s]".to_string(),
+                points: vel_e_est,
+            },
+            Trace {
+                name: "GNSS vel E [m/s]".to_string(),
+                points: vel_e_gnss,
+            },
+            Trace {
+                name: "AlignNhc vel D [m/s]".to_string(),
+                points: vel_d_est,
+            },
+            Trace {
+                name: "GNSS vel D [m/s]".to_string(),
+                points: vel_d_gnss,
+            },
+            Trace {
+                name: "AlignNhc pos N [m]".to_string(),
+                points: pos_n_est,
+            },
+            Trace {
+                name: "GNSS pos N [m]".to_string(),
+                points: pos_n_gnss,
+            },
+            Trace {
+                name: "AlignNhc pos E [m]".to_string(),
+                points: pos_e_est,
+            },
+            Trace {
+                name: "GNSS pos E [m]".to_string(),
+                points: pos_e_gnss,
+            },
+            Trace {
+                name: "AlignNhc pos D [m]".to_string(),
+                points: pos_d_est,
+            },
+            Trace {
+                name: "GNSS pos D [m]".to_string(),
+                points: pos_d_gnss,
+            },
+        ],
+        biases: vec![
+            Trace {
+                name: "gyro bias x [deg/s]".to_string(),
+                points: gyro_bias_x_dps,
+            },
+            Trace {
+                name: "gyro bias y [deg/s]".to_string(),
+                points: gyro_bias_y_dps,
+            },
+            Trace {
+                name: "gyro bias z [deg/s]".to_string(),
+                points: gyro_bias_z_dps.clone(),
+            },
+            Trace {
+                name: "accel bias x [m/s^2]".to_string(),
+                points: accel_bias_x_mps2,
+            },
+            Trace {
+                name: "accel bias y [m/s^2]".to_string(),
+                points: accel_bias_y_mps2,
+            },
+            Trace {
+                name: "accel bias z [m/s^2]".to_string(),
+                points: accel_bias_z_mps2,
             },
         ],
         diag: vec![
@@ -435,6 +698,10 @@ pub fn build_align_nhc_compare_traces(
                 name: "down-axis error signed [deg]".to_string(),
                 points: down_err,
             },
+            Trace {
+                name: "gyro bias z [deg/s]".to_string(),
+                points: gyro_bias_z_dps,
+            },
         ],
         residuals: vec![
             Trace {
@@ -456,12 +723,28 @@ pub fn build_align_nhc_compare_traces(
         ],
         gates: vec![
             Trace {
-                name: "NHC valid".to_string(),
-                points: nhc_valid,
+                name: "AlignNhc vehicle roll [deg]".to_string(),
+                points: veh_att_roll,
             },
             Trace {
-                name: "planar gyro valid".to_string(),
-                points: planar_valid,
+                name: "NAV-ATT roll [deg]".to_string(),
+                points: nav_att_roll,
+            },
+            Trace {
+                name: "AlignNhc vehicle pitch [deg]".to_string(),
+                points: veh_att_pitch,
+            },
+            Trace {
+                name: "NAV-ATT pitch [deg]".to_string(),
+                points: nav_att_pitch,
+            },
+            Trace {
+                name: "AlignNhc vehicle heading [deg]".to_string(),
+                points: veh_att_yaw,
+            },
+            Trace {
+                name: "NAV-ATT heading [deg]".to_string(),
+                points: nav_att_yaw,
             },
         ],
         cov: vec![
@@ -490,6 +773,18 @@ pub fn build_align_nhc_compare_traces(
                 points: sigma_vd,
             },
             Trace {
+                name: "sigma pos N [m]".to_string(),
+                points: sigma_pn,
+            },
+            Trace {
+                name: "sigma pos E [m]".to_string(),
+                points: sigma_pe,
+            },
+            Trace {
+                name: "sigma pos D [m]".to_string(),
+                points: sigma_pd,
+            },
+            Trace {
                 name: "sigma mount roll [deg]".to_string(),
                 points: sigma_mount_r,
             },
@@ -507,6 +802,15 @@ pub fn build_align_nhc_compare_traces(
 
 fn quat_conj_f64(q: [f64; 4]) -> [f64; 4] {
     [q[0], -q[1], -q[2], -q[3]]
+}
+
+fn quat_mul_f64(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
+    [
+        a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
+        a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
+        a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
+        a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0],
+    ]
 }
 
 impl BootstrapDetector {

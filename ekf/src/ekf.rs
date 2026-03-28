@@ -4,8 +4,8 @@ pub const N_STATES: usize = 16;
 pub const GRAVITY_MSS: f32 = 9.80665;
 const DEFAULT_P_INIT: f32 = 1.0;
 const DEFAULT_BIAS_DT_S: f32 = 0.01;
-const DEFAULT_GYRO_BIAS_SIGMA_DPS: f32 = 0.06;
-const DEFAULT_ACCEL_BIAS_SIGMA_MPS2: f32 = 0.03;
+const DEFAULT_GYRO_BIAS_SIGMA_DPS: f32 = 0.125;
+const DEFAULT_ACCEL_BIAS_SIGMA_MPS2: f32 = 0.075;
 const PI_F32: f32 = 3.141_592_7;
 
 #[repr(C)]
@@ -126,7 +126,7 @@ impl Default for PredictNoise {
     fn default() -> Self {
         Self {
             // Defaults aligned with visualize_pygpsdata_log's prior tuning.
-            gyro_var: 0.01,  // [rad^2/s^2]
+            gyro_var: 0.001, // [rad^2/s^2]
             accel_var: 12.0, // [(m/s^2)^2]
             gyro_bias_rw_var: 0.1e-9,
             accel_bias_rw_var: 1.0e-8,

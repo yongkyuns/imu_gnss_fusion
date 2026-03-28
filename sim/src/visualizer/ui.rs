@@ -176,7 +176,6 @@ impl eframe::App for App {
                 ui.label("Page:");
                 ui.selectable_value(&mut self.page, Page::Signals, "Signals");
                 ui.selectable_value(&mut self.page, Page::EkfCompare, "EKF Compare");
-                ui.selectable_value(&mut self.page, Page::MisalignCompare, "Misalign Compare");
                 ui.selectable_value(&mut self.page, Page::AlignCompare, "Align Compare");
                 ui.selectable_value(&mut self.page, Page::AlignStartup, "Align Startup");
                 ui.selectable_value(&mut self.page, Page::AlignNhcCompare, "Align NHC");
@@ -342,59 +341,6 @@ impl eframe::App for App {
                     );
                 });
             }
-            Page::MisalignCompare => {
-                let half_width = (ctx.content_rect().width() * 0.5).max(260.0);
-                egui::SidePanel::left("misalign_compare_left")
-                    .resizable(false)
-                    .exact_width(half_width)
-                    .show(ctx, |ui| {
-                        draw_plot(
-                            ui,
-                            "Euler Angles: Misalign vs ESF-ALG",
-                            &self.data.misalign_cmp_att,
-                            true,
-                            self.max_points_per_trace,
-                        );
-                        draw_plot(
-                            ui,
-                            "Misalign Diagnostics",
-                            &self.data.misalign_diag,
-                            true,
-                            self.max_points_per_trace,
-                        );
-                        draw_plot(
-                            ui,
-                            "Misalign Axis Error vs ESF-ALG",
-                            &self.data.misalign_axis_err,
-                            true,
-                            self.max_points_per_trace,
-                        );
-                        draw_plot(
-                            ui,
-                            "Misalign Residuals",
-                            &self.data.misalign_residuals,
-                            true,
-                            self.max_points_per_trace,
-                        );
-                    });
-
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    draw_plot(
-                        ui,
-                        "Misalign Gates",
-                        &self.data.misalign_gates,
-                        true,
-                        self.max_points_per_trace,
-                    );
-                    draw_plot(
-                        ui,
-                        "Misalign Covariance Diagonal",
-                        &self.data.misalign_cov,
-                        true,
-                        self.max_points_per_trace,
-                    );
-                });
-            }
             Page::AlignCompare => {
                 let half_width = (ctx.content_rect().width() * 0.5).max(260.0);
                 egui::SidePanel::left("align_compare_left")
@@ -530,6 +476,20 @@ impl eframe::App for App {
                         );
                         draw_plot(
                             ui,
+                            "AlignNhc Yaws",
+                            &self.data.align_nhc_yaws,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "AlignNhc State Tracking",
+                            &self.data.align_nhc_states,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
                             "AlignNhc Window Diagnostics",
                             &self.data.align_nhc_diag,
                             true,
@@ -547,6 +507,13 @@ impl eframe::App for App {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     draw_plot(
                         ui,
+                        "AlignNhc Biases",
+                        &self.data.align_nhc_biases,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
                         "AlignNhc Residuals",
                         &self.data.align_nhc_residuals,
                         true,
@@ -554,7 +521,7 @@ impl eframe::App for App {
                     );
                     draw_plot(
                         ui,
-                        "AlignNhc Gates",
+                        "Euler Angles: AlignNhc Vehicle vs NAV-ATT",
                         &self.data.align_nhc_gates,
                         true,
                         self.max_points_per_trace,

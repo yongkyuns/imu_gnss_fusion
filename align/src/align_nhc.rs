@@ -7,7 +7,13 @@ use crate::stationary_mount::{
 use nalgebra::SMatrix;
 
 pub const GRAVITY_MPS2: f32 = 9.80665;
-pub const ALIGN_NHC_ERR_STATES: usize = 15;
+pub const ALIGN_NHC_ERR_STATES: usize = 18;
+const IDX_ATT: usize = 0;
+const IDX_VEL: usize = 3;
+const IDX_MOUNT: usize = 6;
+const IDX_BG: usize = 9;
+const IDX_BA: usize = 12;
+const IDX_POS: usize = 15;
 
 #[derive(Debug, Clone, Copy)]
 pub struct AlignNhcConfig {
@@ -32,8 +38,8 @@ impl Default for AlignNhcConfig {
             q_att_std_rad: 0.01_f32.to_radians(),
             q_vel_std_mps: 0.25,
             q_mount_std_rad: 0.001_f32.to_radians(),
-            q_bg_std_radps: 0.002_f32.to_radians(),
-            q_ba_std_mps2: 0.05,
+            q_bg_std_radps: 0.00005_f32.to_radians(),
+            q_ba_std_mps2: 0.002,
             r_gnss_vel_std_mps: 0.3,
             r_nhc_std_mps: 0.15,
             r_planar_gyro_std_radps: 0.3_f32.to_radians(),
@@ -41,13 +47,14 @@ impl Default for AlignNhcConfig {
             min_planar_speed_mps: 3.0 / 3.6,
             min_planar_yaw_rate_radps: 2.0_f32.to_radians(),
             max_planar_transverse_ratio: 0.25,
-            nhc_straight_mount_yaw_scale: 0.1,
+            nhc_straight_mount_yaw_scale: 0.0,
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AlignNhcTrace {
+    pub after_gnss_pos: Option<AlignNhcSnapshot>,
     pub after_gnss_vel: Option<AlignNhcSnapshot>,
     pub after_nhc: Option<AlignNhcSnapshot>,
     pub after_planar_gyro: Option<AlignNhcSnapshot>,
@@ -63,6 +70,7 @@ pub struct AlignNhcTrace {
 pub struct AlignNhcSnapshot {
     pub q_nb: [f32; 4],
     pub v_n: [f32; 3],
+    pub p_n: [f32; 3],
     pub q_vb: [f32; 4],
     pub b_g: [f32; 3],
     pub b_a: [f32; 3],
@@ -72,6 +80,7 @@ pub struct AlignNhcSnapshot {
 pub struct AlignNhc {
     pub q_nb: [f32; 4],
     pub v_n: [f32; 3],
+    pub p_n: [f32; 3],
     pub q_vb: [f32; 4],
     pub b_g: [f32; 3],
     pub b_a: [f32; 3],
@@ -89,15 +98,17 @@ impl AlignNhc {
     pub fn new(cfg: AlignNhcConfig) -> Self {
         let mut P = [[0.0_f32; ALIGN_NHC_ERR_STATES]; ALIGN_NHC_ERR_STATES];
         for i in 0..3 {
-            P[i][i] = 5.0_f32.to_radians().powi(2);
-            P[3 + i][3 + i] = 4.0_f32.powi(2);
-            P[6 + i][6 + i] = 5.0_f32.to_radians().powi(2);
-            P[9 + i][9 + i] = 0.5_f32.to_radians().powi(2);
-            P[12 + i][12 + i] = 0.5_f32.powi(2);
+            P[IDX_ATT + i][IDX_ATT + i] = 5.0_f32.to_radians().powi(2);
+            P[IDX_VEL + i][IDX_VEL + i] = 4.0_f32.powi(2);
+            P[IDX_MOUNT + i][IDX_MOUNT + i] = 5.0_f32.to_radians().powi(2);
+            P[IDX_BG + i][IDX_BG + i] = 0.5_f32.to_radians().powi(2);
+            P[IDX_BA + i][IDX_BA + i] = 0.5_f32.powi(2);
+            P[IDX_POS + i][IDX_POS + i] = 10.0_f32.powi(2);
         }
         Self {
             q_nb: [1.0, 0.0, 0.0, 0.0],
             v_n: [0.0, 0.0, 0.0],
+            p_n: [0.0, 0.0, 0.0],
             q_vb: [1.0, 0.0, 0.0, 0.0],
             b_g: [0.0, 0.0, 0.0],
             b_a: [0.0, 0.0, 0.0],
@@ -110,6 +121,7 @@ impl AlignNhc {
         AlignNhcSnapshot {
             q_nb: self.q_nb,
             v_n: self.v_n,
+            p_n: self.p_n,
             q_vb: self.q_vb,
             b_g: self.b_g,
             b_a: self.b_a,
@@ -167,6 +179,7 @@ impl AlignNhc {
 
         self.q_nb = quat_from_rotmat(c_n_b);
         self.v_n = [0.0, 0.0, 0.0];
+        self.p_n = [0.0, 0.0, 0.0];
         self.q_vb = quat_from_rotmat(c_v_b);
         self.b_g = w_mean;
         let g_b = mat3_vec(transpose3x3(c_n_b), [0.0, 0.0, GRAVITY_MPS2]);
@@ -174,11 +187,12 @@ impl AlignNhc {
 
         self.P = [[0.0_f32; ALIGN_NHC_ERR_STATES]; ALIGN_NHC_ERR_STATES];
         for i in 0..3 {
-            self.P[i][i] = 1.0_f32.to_radians().powi(2);
-            self.P[3 + i][3 + i] = 1.0_f32.powi(2);
-            self.P[6 + i][6 + i] = mount_sigma_rad[i].powi(2);
-            self.P[9 + i][9 + i] = 0.2_f32.to_radians().powi(2);
-            self.P[12 + i][12 + i] = 0.2_f32.powi(2);
+            self.P[IDX_ATT + i][IDX_ATT + i] = 1.0_f32.to_radians().powi(2);
+            self.P[IDX_VEL + i][IDX_VEL + i] = 1.0_f32.powi(2);
+            self.P[IDX_MOUNT + i][IDX_MOUNT + i] = mount_sigma_rad[i].powi(2);
+            self.P[IDX_BG + i][IDX_BG + i] = 0.02_f32.to_radians().powi(2);
+            self.P[IDX_BA + i][IDX_BA + i] = 0.05_f32.powi(2);
+            self.P[IDX_POS + i][IDX_POS + i] = 10.0_f32.powi(2);
         }
         Ok(())
     }
@@ -222,6 +236,7 @@ impl AlignNhc {
 
         self.q_nb = quat_from_rotmat(c_n_b);
         self.v_n = [0.0, 0.0, 0.0];
+        self.p_n = [0.0, 0.0, 0.0];
         self.q_vb = quat_from_rotmat(c_v_b);
         self.b_g = w_mean;
         let g_b = mat3_vec(transpose3x3(c_n_b), [0.0, 0.0, GRAVITY_MPS2]);
@@ -229,11 +244,12 @@ impl AlignNhc {
 
         self.P = [[0.0_f32; ALIGN_NHC_ERR_STATES]; ALIGN_NHC_ERR_STATES];
         for i in 0..3 {
-            self.P[i][i] = 1.0_f32.to_radians().powi(2);
-            self.P[3 + i][3 + i] = 1.0_f32.powi(2);
-            self.P[6 + i][6 + i] = 10.0_f32.to_radians().powi(2);
-            self.P[9 + i][9 + i] = 0.2_f32.to_radians().powi(2);
-            self.P[12 + i][12 + i] = 0.2_f32.powi(2);
+            self.P[IDX_ATT + i][IDX_ATT + i] = 1.0_f32.to_radians().powi(2);
+            self.P[IDX_VEL + i][IDX_VEL + i] = 1.0_f32.powi(2);
+            self.P[IDX_MOUNT + i][IDX_MOUNT + i] = 10.0_f32.to_radians().powi(2);
+            self.P[IDX_BG + i][IDX_BG + i] = 0.02_f32.to_radians().powi(2);
+            self.P[IDX_BA + i][IDX_BA + i] = 0.05_f32.powi(2);
+            self.P[IDX_POS + i][IDX_POS + i] = 10.0_f32.powi(2);
         }
         Ok(())
     }
@@ -249,6 +265,10 @@ impl AlignNhc {
         let f_b = vec3_sub(f_m_b, self.b_a);
         let c_n_b = quat_to_rotmat(self.q_nb);
         let a_n = vec3_add(mat3_vec(c_n_b, f_b), [0.0, 0.0, GRAVITY_MPS2]);
+        self.p_n = vec3_add(
+            self.p_n,
+            vec3_add(vec3_scale(self.v_n, dt), vec3_scale(a_n, 0.5 * dt * dt)),
+        );
         self.v_n = vec3_add(self.v_n, vec3_scale(a_n, dt));
 
         let mut f = SMatrix::<f32, ALIGN_NHC_ERR_STATES, ALIGN_NHC_ERR_STATES>::zeros();
@@ -256,32 +276,34 @@ impl AlignNhc {
         let a_n_x = skew_smatrix3(a_n);
         let c_n_b_m = mat3_to_smatrix(c_n_b);
 
-        f.fixed_view_mut::<3, 3>(0, 0).copy_from(&(-omega_x));
-        f.fixed_view_mut::<3, 3>(0, 9)
+        f.fixed_view_mut::<3, 3>(IDX_ATT, IDX_ATT).copy_from(&(-omega_x));
+        f.fixed_view_mut::<3, 3>(IDX_ATT, IDX_BG)
             .copy_from(&(-SMatrix::<f32, 3, 3>::identity()));
-        f.fixed_view_mut::<3, 3>(3, 0).copy_from(&(-a_n_x));
-        f.fixed_view_mut::<3, 3>(3, 12).copy_from(&(-c_n_b_m));
+        f.fixed_view_mut::<3, 3>(IDX_VEL, IDX_ATT).copy_from(&(-a_n_x));
+        f.fixed_view_mut::<3, 3>(IDX_VEL, IDX_BA).copy_from(&(-c_n_b_m));
+        f.fixed_view_mut::<3, 3>(IDX_POS, IDX_VEL)
+            .copy_from(&SMatrix::<f32, 3, 3>::identity());
 
         let phi = SMatrix::<f32, ALIGN_NHC_ERR_STATES, ALIGN_NHC_ERR_STATES>::identity() + f * dt;
 
         let mut g = SMatrix::<f32, ALIGN_NHC_ERR_STATES, ALIGN_NHC_ERR_STATES>::zeros();
-        g.fixed_view_mut::<3, 3>(0, 0)
+        g.fixed_view_mut::<3, 3>(IDX_ATT, 0)
             .copy_from(&(-SMatrix::<f32, 3, 3>::identity()));
-        g.fixed_view_mut::<3, 3>(3, 3).copy_from(&(-c_n_b_m));
-        g.fixed_view_mut::<3, 3>(6, 6)
+        g.fixed_view_mut::<3, 3>(IDX_VEL, 3).copy_from(&(-c_n_b_m));
+        g.fixed_view_mut::<3, 3>(IDX_MOUNT, 6)
             .copy_from(&SMatrix::<f32, 3, 3>::identity());
-        g.fixed_view_mut::<3, 3>(9, 9)
+        g.fixed_view_mut::<3, 3>(IDX_BG, 9)
             .copy_from(&SMatrix::<f32, 3, 3>::identity());
-        g.fixed_view_mut::<3, 3>(12, 12)
+        g.fixed_view_mut::<3, 3>(IDX_BA, 12)
             .copy_from(&SMatrix::<f32, 3, 3>::identity());
 
         let mut qc = SMatrix::<f32, ALIGN_NHC_ERR_STATES, ALIGN_NHC_ERR_STATES>::zeros();
         for i in 0..3 {
-            qc[(i, i)] = self.cfg.q_att_std_rad.powi(2);
-            qc[(3 + i, 3 + i)] = self.cfg.q_vel_std_mps.powi(2);
-            qc[(6 + i, 6 + i)] = self.cfg.q_mount_std_rad.powi(2);
-            qc[(9 + i, 9 + i)] = self.cfg.q_bg_std_radps.powi(2);
-            qc[(12 + i, 12 + i)] = self.cfg.q_ba_std_mps2.powi(2);
+            qc[(IDX_ATT + i, IDX_ATT + i)] = self.cfg.q_att_std_rad.powi(2);
+            qc[(IDX_VEL + i, IDX_VEL + i)] = self.cfg.q_vel_std_mps.powi(2);
+            qc[(IDX_MOUNT + i, IDX_MOUNT + i)] = self.cfg.q_mount_std_rad.powi(2);
+            qc[(IDX_BG + i, IDX_BG + i)] = self.cfg.q_bg_std_radps.powi(2);
+            qc[(IDX_BA + i, IDX_BA + i)] = self.cfg.q_ba_std_mps2.powi(2);
         }
         let qd = g * qc * g.transpose() * dt;
 
@@ -296,11 +318,14 @@ impl AlignNhc {
         let c_n_v = [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]];
         let c_n_b = mat3_mul(c_n_v, c_v_b);
         self.q_nb = quat_from_rotmat(c_n_b);
-        self.P[2][2] = yaw_std_rad.powi(2);
-        self.P[0][2] = 0.0;
-        self.P[1][2] = 0.0;
-        self.P[2][0] = 0.0;
-        self.P[2][1] = 0.0;
+        let nav_sigma = [
+            self.P[IDX_ATT][IDX_ATT].sqrt().max(0.5_f32.to_radians()),
+            self.P[IDX_ATT + 1][IDX_ATT + 1]
+                .sqrt()
+                .max(0.5_f32.to_radians()),
+            yaw_std_rad,
+        ];
+        self.reset_cov_block(IDX_ATT, nav_sigma);
     }
 
     pub fn seed_mount_yaw_from_course(&mut self, course_rad: f32, yaw_std_rad: f32) {
@@ -310,31 +335,43 @@ impl AlignNhc {
         let c_v_n = transpose3x3(c_n_v);
         let c_v_b_target = mat3_mul(c_v_n, c_n_b);
         self.q_vb = quat_from_rotmat(c_v_b_target);
-
-        self.P[8][8] = yaw_std_rad.powi(2);
-        self.P[6][8] = 0.0;
-        self.P[7][8] = 0.0;
-        self.P[8][6] = 0.0;
-        self.P[8][7] = 0.0;
+        let mount_sigma = [
+            self.P[IDX_MOUNT][IDX_MOUNT].sqrt().max(0.5_f32.to_radians()),
+            self.P[IDX_MOUNT + 1][IDX_MOUNT + 1]
+                .sqrt()
+                .max(0.5_f32.to_radians()),
+            yaw_std_rad,
+        ];
+        self.reset_cov_block(IDX_MOUNT, mount_sigma);
     }
 
-    pub fn seed_mount_from_body_to_vehicle(
-        &mut self,
-        q_b_v: [f32; 4],
-        mount_sigma_rad: [f32; 3],
-    ) {
+    pub fn seed_mount_from_body_to_vehicle(&mut self, q_b_v: [f32; 4], mount_sigma_rad: [f32; 3]) {
         let c_b_v = quat_to_rotmat(quat_normalize(q_b_v));
         let c_v_b = transpose3x3(c_b_v);
         self.q_vb = quat_from_rotmat(c_v_b);
-        for i in 0..3 {
-            self.P[6 + i][6 + i] = mount_sigma_rad[i].powi(2);
+        self.reset_cov_block(IDX_MOUNT, mount_sigma_rad);
+    }
+
+    fn reset_cov_block(&mut self, start: usize, sigma_rad: [f32; 3]) {
+        for i in start..start + 3 {
+            for j in 0..ALIGN_NHC_ERR_STATES {
+                self.P[i][j] = 0.0;
+                self.P[j][i] = 0.0;
+            }
         }
-        self.P[6][7] = 0.0;
-        self.P[7][6] = 0.0;
-        self.P[6][8] = 0.0;
-        self.P[8][6] = 0.0;
-        self.P[7][8] = 0.0;
-        self.P[8][7] = 0.0;
+        for i in 0..3 {
+            self.P[start + i][start + i] = sigma_rad[i].powi(2);
+        }
+    }
+
+    pub fn update_gnss_position(&mut self, z_p_n: [f32; 3], r_p_var_n: [f32; 3]) -> f32 {
+        let mut score = 0.0_f32;
+        for axis in 0..3 {
+            let innovation = z_p_n[axis] - self.gnss_position_prediction()[axis];
+            let h = self.gnss_position_jacobian_row(axis);
+            score += self.apply_measurement1(innovation, &h, r_p_var_n[axis].max(1.0e-4));
+        }
+        score
     }
 
     pub fn update_gnss_velocity(&mut self, z_v_n: [f32; 3]) -> f32 {
@@ -345,6 +382,21 @@ impl AlignNhc {
             score += self.apply_measurement1(innovation, &h, self.cfg.r_gnss_vel_std_mps.powi(2));
         }
         score
+    }
+
+    pub fn update_gnss(
+        &mut self,
+        z_p_n: [f32; 3],
+        r_p_var_n: [f32; 3],
+        z_v_n: [f32; 3],
+    ) -> (f32, AlignNhcTrace) {
+        let mut score = 0.0_f32;
+        let mut trace = AlignNhcTrace::default();
+        score += self.update_gnss_position(z_p_n, r_p_var_n);
+        trace.after_gnss_pos = Some(self.snapshot());
+        score += self.update_gnss_velocity(z_v_n);
+        trace.after_gnss_vel = Some(self.snapshot());
+        (score, trace)
     }
 
     pub fn update_nhc(&mut self, allow_mount_yaw: bool) -> f32 {
@@ -368,7 +420,7 @@ impl AlignNhc {
         score
     }
 
-    pub fn update_all(
+    pub fn update_pseudo_measurements(
         &mut self,
         z_v_n: [f32; 3],
         omega_m_b: [f32; 3],
@@ -378,8 +430,6 @@ impl AlignNhc {
         let mut score = 0.0_f32;
         let mut trace = AlignNhcTrace::default();
 
-        score += self.update_gnss_velocity(z_v_n);
-        trace.after_gnss_vel = Some(self.snapshot());
         let nhc_valid = use_nhc && self.nhc_gate(z_v_n);
         let planar_gyro_valid = use_planar_gyro && self.planar_gyro_gate(z_v_n, omega_m_b);
         trace.nhc_valid = nhc_valid;
@@ -401,8 +451,36 @@ impl AlignNhc {
         (score, trace)
     }
 
+    pub fn update_all(
+        &mut self,
+        z_p_n: [f32; 3],
+        r_p_var_n: [f32; 3],
+        z_v_n: [f32; 3],
+        omega_m_b: [f32; 3],
+        use_nhc: bool,
+        use_planar_gyro: bool,
+    ) -> (f32, AlignNhcTrace) {
+        let (mut score, mut trace) = self.update_gnss(z_p_n, r_p_var_n, z_v_n);
+        let (motion_score, motion_trace) =
+            self.update_pseudo_measurements(z_v_n, omega_m_b, use_nhc, use_planar_gyro);
+        score += motion_score;
+        trace.nhc_valid = motion_trace.nhc_valid;
+        trace.planar_gyro_valid = motion_trace.planar_gyro_valid;
+        trace.nhc_residual_vy_mps = motion_trace.nhc_residual_vy_mps;
+        trace.nhc_residual_vz_mps = motion_trace.nhc_residual_vz_mps;
+        trace.planar_gyro_residual_x_radps = motion_trace.planar_gyro_residual_x_radps;
+        trace.planar_gyro_residual_y_radps = motion_trace.planar_gyro_residual_y_radps;
+        trace.after_nhc = motion_trace.after_nhc;
+        trace.after_planar_gyro = motion_trace.after_planar_gyro;
+        (score, trace)
+    }
+
     pub fn gnss_velocity_prediction(&self) -> [f32; 3] {
         self.v_n
+    }
+
+    pub fn gnss_position_prediction(&self) -> [f32; 3] {
+        self.p_n
     }
 
     pub fn nhc_prediction(&self) -> [f32; 2] {
@@ -443,7 +521,13 @@ impl AlignNhc {
 
     fn gnss_velocity_jacobian_row(&self, axis: usize) -> [f32; ALIGN_NHC_ERR_STATES] {
         let mut h = [0.0_f32; ALIGN_NHC_ERR_STATES];
-        h[3 + axis] = 1.0;
+        h[IDX_VEL + axis] = 1.0;
+        h
+    }
+
+    fn gnss_position_jacobian_row(&self, axis: usize) -> [f32; ALIGN_NHC_ERR_STATES] {
+        let mut h = [0.0_f32; ALIGN_NHC_ERR_STATES];
+        h[IDX_POS + axis] = 1.0;
         h
     }
 
@@ -458,12 +542,12 @@ impl AlignNhc {
         let h_theta_vb = mat2x3_mul3x3(s_yz, mat3_mul(c_v_b, negate3(skew3(v_b))));
         let mut h = [0.0_f32; ALIGN_NHC_ERR_STATES];
         for c in 0..3 {
-            h[c] = h_theta_nb[axis][c];
-            h[3 + c] = h_vn[axis][c];
-            h[6 + c] = h_theta_vb[axis][c];
+            h[IDX_ATT + c] = h_theta_nb[axis][c];
+            h[IDX_VEL + c] = h_vn[axis][c];
+            h[IDX_MOUNT + c] = h_theta_vb[axis][c];
         }
         if !allow_mount_yaw {
-            h[8] *= self.cfg.nhc_straight_mount_yaw_scale;
+            h[IDX_MOUNT + 2] *= self.cfg.nhc_straight_mount_yaw_scale;
         }
         h
     }
@@ -480,8 +564,8 @@ impl AlignNhc {
         let h_theta_vb = mat2x3_mul3x3(s_xy, mat3_mul(c_v_b, negate3(skew3(omega_b))));
         let mut h = [0.0_f32; ALIGN_NHC_ERR_STATES];
         for c in 0..3 {
-            h[6 + c] = h_theta_vb[axis][c];
-            h[9 + c] = h_bg[axis][c];
+            h[IDX_MOUNT + c] = h_theta_vb[axis][c];
+            h[IDX_BG + c] = h_bg[axis][c];
         }
         h
     }
@@ -537,15 +621,20 @@ impl AlignNhc {
     fn inject_error(&mut self, dx: [f32; ALIGN_NHC_ERR_STATES]) {
         self.q_nb = quat_normalize(quat_mul(
             self.q_nb,
-            quat_from_small_angle([dx[0], dx[1], dx[2]]),
+            quat_from_small_angle([dx[IDX_ATT], dx[IDX_ATT + 1], dx[IDX_ATT + 2]]),
         ));
-        self.v_n = vec3_add(self.v_n, [dx[3], dx[4], dx[5]]);
+        self.v_n = vec3_add(self.v_n, [dx[IDX_VEL], dx[IDX_VEL + 1], dx[IDX_VEL + 2]]);
         self.q_vb = quat_normalize(quat_mul(
             self.q_vb,
-            quat_from_small_angle([dx[6], dx[7], dx[8]]),
+            quat_from_small_angle([
+                dx[IDX_MOUNT],
+                dx[IDX_MOUNT + 1],
+                dx[IDX_MOUNT + 2],
+            ]),
         ));
-        self.b_g = vec3_add(self.b_g, [dx[9], dx[10], dx[11]]);
-        self.b_a = vec3_add(self.b_a, [dx[12], dx[13], dx[14]]);
+        self.b_g = vec3_add(self.b_g, [dx[IDX_BG], dx[IDX_BG + 1], dx[IDX_BG + 2]]);
+        self.b_a = vec3_add(self.b_a, [dx[IDX_BA], dx[IDX_BA + 1], dx[IDX_BA + 2]]);
+        self.p_n = vec3_add(self.p_n, [dx[IDX_POS], dx[IDX_POS + 1], dx[IDX_POS + 2]]);
     }
 }
 

@@ -70,15 +70,15 @@ impl Default for AlignConfig {
         Self {
             q_mount_std_rad: [
                 0.001_f32.to_radians(),
-                0.003_f32.to_radians(),
-                0.003_f32.to_radians(),
+                0.001_f32.to_radians(),
+                0.0001_f32.to_radians(),
             ],
             r_gravity_std_mps2: 1.28,
             r_horiz_heading_std_rad: 101.0_f32.to_radians(),
             r_turn_gyro_std_radps: 0.1_f32.to_radians(),
             turn_gyro_yaw_scale: 0.0,
             r_course_rate_std_radps: 1.10_f32.to_radians(),
-            r_turn_heading_std_rad: 5.0_f32.to_radians(),
+            r_turn_heading_std_rad: 0.1_f32.to_radians(),
             r_long_std_mps2: 0.3,
             long_yaw_scale: 0.0,
             gravity_lpf_alpha: 0.08,
@@ -140,6 +140,17 @@ pub struct AlignUpdateTrace {
     pub after_branch_resolve: Option<[f32; 4]>,
     pub after_gravity: Option<[f32; 4]>,
     pub after_horiz_accel: Option<[f32; 4]>,
+    pub horiz_angle_err_rad: Option<f32>,
+    pub horiz_effective_std_rad: Option<f32>,
+    pub horiz_gnss_norm_mps2: Option<f32>,
+    pub horiz_imu_norm_mps2: Option<f32>,
+    pub horiz_speed_q: Option<f32>,
+    pub horiz_accel_q: Option<f32>,
+    pub horiz_straight_q: Option<f32>,
+    pub horiz_turn_q: Option<f32>,
+    pub horiz_dominance_q: Option<f32>,
+    pub horiz_turn_core_valid: bool,
+    pub horiz_straight_core_valid: bool,
     pub after_turn_gyro: Option<[f32; 4]>,
     pub after_course_rate: Option<[f32; 4]>,
     pub after_longitudinal_accel: Option<[f32; 4]>,
@@ -386,6 +397,8 @@ impl Align {
             && speed_mid > (10.0 / 3.6)
             && a_lat.abs() > self.cfg.min_lat_acc_mps2.max(0.7)
             && a_lat.abs() > 1.5 * a_long.abs().max(0.2);
+        trace.horiz_straight_core_valid = straight_core_valid;
+        trace.horiz_turn_core_valid = turn_core_valid;
         let horiz_vector_valid = heading_updates_enabled
             && speed_mid > self.cfg.min_speed_mps
             && horiz_gnss_norm > self.cfg.min_long_acc_mps2
@@ -394,6 +407,10 @@ impl Align {
         if horiz_vector_valid {
             let speed_q = ((speed_mid - (10.0 / 3.6)) / (20.0 / 3.6 - 10.0 / 3.6)).clamp(0.0, 1.0);
             let accel_q = ((horiz_gnss_norm.min(horiz_imu_norm) - 0.5) / 1.0).clamp(0.0, 1.0);
+            trace.horiz_gnss_norm_mps2 = Some(horiz_gnss_norm);
+            trace.horiz_imu_norm_mps2 = Some(horiz_imu_norm);
+            trace.horiz_speed_q = Some(speed_q);
+            trace.horiz_accel_q = Some(accel_q);
             let effective_std = if turn_core_valid {
                 let dominance = ((a_lat.abs() / (a_long.abs() + 0.2)) - 1.5) / 1.5;
                 let lat_q =
@@ -401,17 +418,22 @@ impl Align {
                 let turn_q =
                     (0.35 + 0.65 * (speed_q * accel_q * lat_q * dominance.clamp(0.0, 1.0)))
                         .clamp(0.35, 1.0);
+                trace.horiz_dominance_q = Some(dominance.clamp(0.0, 1.0));
+                trace.horiz_turn_q = Some(turn_q);
                 self.cfg.r_turn_heading_std_rad / turn_q
             } else {
                 let lat_ratio = a_lat.abs() / (0.5 + 0.6 * a_long.abs());
                 let long_q = ((a_long.abs() - self.cfg.min_long_acc_mps2) / 0.8).clamp(0.0, 1.0);
                 let straight_q =
                     (speed_q * accel_q * long_q * (1.0 - lat_ratio.clamp(0.0, 1.0))).clamp(0.2, 1.0);
+                trace.horiz_straight_q = Some(straight_q);
                 self.cfg.r_horiz_heading_std_rad / straight_q
             };
             let cross = horiz_obs[3] * a_lat - horiz_obs[4] * a_long;
             let dot = horiz_obs[3] * a_long + horiz_obs[4] * a_lat;
             let angle_err = cross.atan2(dot);
+            trace.horiz_angle_err_rad = Some(angle_err);
+            trace.horiz_effective_std_rad = Some(effective_std);
             score += self.apply_vehicle_yaw_angle(angle_err, effective_std.powi(2));
             trace.after_horiz_accel = Some(self.q_vb);
         }

@@ -50,6 +50,8 @@ pub fn build_ekf_compare_traces(
 ) -> EkfCompareData {
     const R_BODY_VEL: f32 = 1.0;
     const YAW_INIT_SPEED_MPS: f64 = 20.0 / 3.6;
+    const GNSS_POS_R_SCALE: f64 = 10.0;
+    const GNSS_VEL_R_SCALE: f64 = 20.0;
 
     if tl.masters.is_empty() {
         return EkfCompareData {
@@ -419,9 +421,9 @@ pub fn build_ekf_compare_traces(
                 set_quat_yaw_only(&mut ekf.state, yaw_from_vel);
                 yaw_initialized_from_vel = true;
             }
-            let h_acc2 = (nav.h_acc_m * nav.h_acc_m).max(0.05) * 80.0;
-            let v_acc2 = (nav.v_acc_m * nav.v_acc_m).max(0.05) * 80.0;
-            let s_acc2 = (nav.s_acc_mps * nav.s_acc_mps).max(0.02) * 80.0;
+            let h_acc2 = (nav.h_acc_m * nav.h_acc_m).max(0.05) * GNSS_POS_R_SCALE;
+            let v_acc2 = (nav.v_acc_m * nav.v_acc_m).max(0.05) * GNSS_POS_R_SCALE;
+            let s_acc2 = (nav.s_acc_mps * nav.s_acc_mps).max(0.02) * GNSS_VEL_R_SCALE;
             let gps = GpsData {
                 pos_n: ned[0] as f32,
                 pos_e: ned[1] as f32,

@@ -1,20 +1,17 @@
 use std::cmp::Ordering;
-use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
 use align_rs::align::{Align, AlignConfig, GRAVITY_MPS2};
-use align_rs::{AlignMisalign, AlignMisalignConfig, AlignNhc, AlignNhcConfig};
+use align_rs::{AlignNhc, AlignNhcConfig};
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use ekf_rs::ekf::{Ekf, GpsData, ImuSample, ekf_fuse_gps, ekf_fuse_vehicle_vel, ekf_predict};
-use nalgebra::{Matrix3, SymmetricEigen};
 use sim::ubxlog::{
     NavPvtObs, UbxFrame, extract_esf_raw_samples, extract_nav2_pvt_obs, fit_linear_map,
     parse_ubx_frames, sensor_meta, unwrap_counter,
 };
-use sim::visualizer::math::{clamp_ekf_biases, ecef_to_ned, lla_to_ecef, nearest_master_ms};
+use sim::visualizer::math::{ecef_to_ned, lla_to_ecef, nearest_master_ms};
 use sim::visualizer::model::ImuPacket;
 use sim::visualizer::pipeline::align_nhc_bootstrap::resolve_align_nhc_bootstrap_q_vb_seed;
 use sim::visualizer::pipeline::align_replay::{
@@ -108,6 +105,15 @@ struct Args {
     use_course_rate: Option<bool>,
     #[arg(long, action = clap::ArgAction::Set)]
     use_longitudinal_accel: Option<bool>,
+
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
+    nhc_init_mount_from_final_alg: bool,
+
+    #[arg(long)]
+    nhc_init_mount_sigma_deg: Option<f32>,
+
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
+    nhc_freeze_mount_from_final_alg: bool,
 }
 
 #[derive(Clone)]
@@ -159,171 +165,24 @@ struct ResidualSample {
     long_imu_lat_lp_mps2: f64,
     long_angle_err_deg: f64,
     long_angle_err_signed_deg: f64,
+    horiz_angle_err_deg: f64,
+    horiz_effective_std_deg: f64,
+    horiz_gnss_norm_mps2: f64,
+    horiz_imu_norm_mps2: f64,
+    horiz_speed_q: f64,
+    horiz_accel_q: f64,
+    horiz_straight_q: f64,
+    horiz_turn_q: f64,
+    horiz_dominance_q: f64,
+    horiz_turn_core_valid: bool,
+    horiz_straight_core_valid: bool,
+    horiz_applied: bool,
     nhc_valid: bool,
     nhc_residual_vy_mps: f64,
     nhc_residual_vz_mps: f64,
     planar_gyro_valid: bool,
-    misalign_speed_h_mps: f64,
-    misalign_omega_v_yaw_abs_dps: f64,
-    misalign_omega_v_transverse_dps: f64,
-    misalign_omega_v_transverse_ratio: f64,
     planar_gyro_residual_x_dps: f64,
     planar_gyro_residual_y_dps: f64,
-    obs_rows: usize,
-    obs_sigma_max: f64,
-    obs_sigma_mid: f64,
-    obs_sigma_min: f64,
-    obs_cond: f64,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct ObsRow {
-    t_s: f64,
-    h: [f32; 3],
-}
-
-#[derive(Debug)]
-struct MisalignObservabilityWindow {
-    horizon_s: f64,
-    rows: VecDeque<ObsRow>,
-    gram: [[f32; 3]; 3],
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct ObservabilitySummary {
-    rows: usize,
-    sigma_max: f64,
-    sigma_mid: f64,
-    sigma_min: f64,
-    cond: f64,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct MisalignYawSeedSample {
-    q_nb: [f32; 4],
-    v_n: [f32; 3],
-    omega_b_corr: [f32; 3],
-}
-
-impl MisalignObservabilityWindow {
-    fn new(horizon_s: f64) -> Self {
-        Self {
-            horizon_s,
-            rows: VecDeque::new(),
-            gram: [[0.0; 3]; 3],
-        }
-    }
-
-    fn push_row(&mut self, t_s: f64, h: [f32; 3]) {
-        self.rows.push_back(ObsRow { t_s, h });
-        accum_gram(&mut self.gram, h, 1.0);
-        self.prune(t_s);
-    }
-
-    fn prune(&mut self, t_s: f64) {
-        while let Some(front) = self.rows.front() {
-            if t_s - front.t_s <= self.horizon_s {
-                break;
-            }
-            let front = self.rows.pop_front().unwrap();
-            accum_gram(&mut self.gram, front.h, -1.0);
-        }
-    }
-
-    fn summary(&self) -> ObservabilitySummary {
-        if self.rows.len() < 3 {
-            return ObservabilitySummary {
-                rows: self.rows.len(),
-                sigma_max: f64::NAN,
-                sigma_mid: f64::NAN,
-                sigma_min: f64::NAN,
-                cond: f64::NAN,
-            };
-        }
-        let g = Matrix3::<f64>::new(
-            self.gram[0][0] as f64,
-            self.gram[0][1] as f64,
-            self.gram[0][2] as f64,
-            self.gram[1][0] as f64,
-            self.gram[1][1] as f64,
-            self.gram[1][2] as f64,
-            self.gram[2][0] as f64,
-            self.gram[2][1] as f64,
-            self.gram[2][2] as f64,
-        );
-        let eig = SymmetricEigen::new(g);
-        let mut vals = [
-            eig.eigenvalues[0].max(0.0).sqrt(),
-            eig.eigenvalues[1].max(0.0).sqrt(),
-            eig.eigenvalues[2].max(0.0).sqrt(),
-        ];
-        vals.sort_by(|a, b| b.partial_cmp(a).unwrap_or(Ordering::Equal));
-        let cond = if vals[2] > 1.0e-9 {
-            vals[0] / vals[2]
-        } else {
-            f64::INFINITY
-        };
-        ObservabilitySummary {
-            rows: self.rows.len(),
-            sigma_max: vals[0],
-            sigma_mid: vals[1],
-            sigma_min: vals[2],
-            cond,
-        }
-    }
-}
-
-fn resolve_misalign_yaw_seed(
-    base: &AlignMisalign,
-    samples: &[MisalignYawSeedSample],
-    yaw_step_deg: f32,
-) -> Option<f32> {
-    if samples.is_empty() || yaw_step_deg <= 0.0 {
-        return None;
-    }
-    let mut best_cost = f32::INFINITY;
-    let mut best_yaw = None;
-    let (_, _, center_yaw_deg) = quat_rpy_alg_deg(
-        base.q_vb[0] as f64,
-        base.q_vb[1] as f64,
-        base.q_vb[2] as f64,
-        base.q_vb[3] as f64,
-    );
-    let search_half_span_deg = 120.0_f32;
-    let steps = ((2.0 * search_half_span_deg) / yaw_step_deg).round() as i32;
-    for k in 0..=steps {
-        let yaw_deg = center_yaw_deg as f32 - search_half_span_deg + k as f32 * yaw_step_deg;
-        let mut cand = base.clone();
-        cand.set_mount_yaw(
-            wrap_rad_pi(yaw_deg.to_radians() as f64) as f32,
-            5.0_f32.to_radians(),
-        );
-        let mut cost = 0.0_f32;
-        let mut n_terms = 0usize;
-        for s in samples {
-            if cand.nhc_gate(s.v_n) {
-                let pred = cand.nhc_prediction(s.q_nb, s.v_n);
-                let sigma = cand.cfg.r_nhc_std_mps.max(1.0e-6);
-                cost += (pred[0] / sigma).powi(2) + (pred[1] / sigma).powi(2);
-                n_terms += 2;
-            }
-            if cand.planar_gyro_gate(s.v_n, s.omega_b_corr) {
-                let pred = cand.planar_gyro_prediction(s.omega_b_corr);
-                let sigma = cand.cfg.r_planar_gyro_std_radps.max(1.0e-6);
-                cost += (pred[0] / sigma).powi(2) + (pred[1] / sigma).powi(2);
-                n_terms += 2;
-            }
-        }
-        if n_terms == 0 {
-            continue;
-        }
-        let mean_cost = cost / n_terms as f32;
-        if mean_cost < best_cost {
-            best_cost = mean_cost;
-            best_yaw = Some(yaw_deg.to_radians());
-        }
-    }
-    best_yaw
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -479,7 +338,7 @@ fn main() -> Result<()> {
         eprintln!("wrote bootstrap debug CSV: {}", path.display());
     }
 
-    let base = evaluate_dispatch(filter_mode, &dataset, &cfg, &bootstrap_cfg)?;
+    let base = evaluate_dispatch(filter_mode, &dataset, &cfg, &bootstrap_cfg, &args)?;
     print_metrics("baseline", &base.metrics);
 
     let mut best = base;
@@ -507,18 +366,13 @@ fn main() -> Result<()> {
 enum FilterMode {
     Align,
     Nhc,
-    Misalign,
 }
 
 fn parse_filter_mode(s: &str) -> Result<FilterMode> {
     match s {
         "align" => Ok(FilterMode::Align),
         "nhc" => Ok(FilterMode::Nhc),
-        "misalign" => Ok(FilterMode::Misalign),
-        _ => bail!(
-            "unknown --filter-mode {}, expected align, nhc, or misalign",
-            s
-        ),
+        _ => bail!("unknown --filter-mode {}, expected align or nhc", s),
     }
 }
 
@@ -902,21 +756,24 @@ fn evaluate_config(
                 long_imu_lat_lp_mps2: sample.long_trace.imu_lat_lp_mps2,
                 long_angle_err_deg: sample.long_trace.angle_err_deg.abs(),
                 long_angle_err_signed_deg: sample.long_trace.angle_err_deg,
+                horiz_angle_err_deg: sample.horiz_trace.angle_err_deg,
+                horiz_effective_std_deg: sample.horiz_trace.effective_std_deg,
+                horiz_gnss_norm_mps2: sample.horiz_trace.gnss_norm_mps2,
+                horiz_imu_norm_mps2: sample.horiz_trace.imu_norm_mps2,
+                horiz_speed_q: sample.horiz_trace.speed_q,
+                horiz_accel_q: sample.horiz_trace.accel_q,
+                horiz_straight_q: sample.horiz_trace.straight_q,
+                horiz_turn_q: sample.horiz_trace.turn_q,
+                horiz_dominance_q: sample.horiz_trace.dominance_q,
+                horiz_turn_core_valid: sample.horiz_trace.turn_core_valid,
+                horiz_straight_core_valid: sample.horiz_trace.straight_core_valid,
+                horiz_applied: sample.horiz_trace.applied,
                 nhc_valid: false,
                 nhc_residual_vy_mps: f64::NAN,
                 nhc_residual_vz_mps: f64::NAN,
                 planar_gyro_valid: false,
-                misalign_speed_h_mps: f64::NAN,
-                misalign_omega_v_yaw_abs_dps: f64::NAN,
-                misalign_omega_v_transverse_dps: f64::NAN,
-                misalign_omega_v_transverse_ratio: f64::NAN,
                 planar_gyro_residual_x_dps: f64::NAN,
                 planar_gyro_residual_y_dps: f64::NAN,
-                obs_rows: 0,
-                obs_sigma_max: f64::NAN,
-                obs_sigma_mid: f64::NAN,
-                obs_sigma_min: f64::NAN,
-                obs_cond: f64::NAN,
             });
         }
     }
@@ -935,11 +792,11 @@ fn evaluate_dispatch(
     dataset: &AlignDataset,
     cfg: &AlignConfig,
     bootstrap_cfg: &BootstrapConfig,
+    args: &Args,
 ) -> Result<EvalResult> {
     match mode {
         FilterMode::Align => evaluate_config(dataset, cfg, bootstrap_cfg),
-        FilterMode::Nhc => evaluate_nhc(dataset, cfg, bootstrap_cfg),
-        FilterMode::Misalign => evaluate_misalign(dataset, cfg, bootstrap_cfg),
+        FilterMode::Nhc => evaluate_nhc(dataset, cfg, bootstrap_cfg, args),
     }
 }
 
@@ -947,6 +804,7 @@ fn evaluate_nhc(
     dataset: &AlignDataset,
     cfg: &AlignConfig,
     bootstrap_cfg: &BootstrapConfig,
+    args: &Args,
 ) -> Result<EvalResult> {
     let imu_packets = build_imu_packets(&dataset.frames, &dataset.timeline)?;
     let nav_events = collect_nav_events(&dataset.frames, &dataset.timeline);
@@ -956,6 +814,15 @@ fn evaluate_nhc(
 
     let replay_ref = build_align_replay(&dataset.frames, &dataset.timeline, *cfg, *bootstrap_cfg);
     let final_alg_q = replay_ref.final_alg_q;
+    let fixed_mount_q_vb = if args.nhc_freeze_mount_from_final_alg {
+        Some(if let Some(q_alg) = final_alg_q {
+            [q_alg[0] as f32, -q_alg[1] as f32, -q_alg[2] as f32, -q_alg[3] as f32]
+        } else {
+            bail!("--nhc-freeze-mount-from-final-alg requested but final ESF-ALG mount is unavailable");
+        })
+    } else {
+        None
+    };
 
     let mut nhc = AlignNhc::new(AlignNhcConfig::default());
     let mut bootstrap = BootstrapDetector::new(*bootstrap_cfg);
@@ -970,6 +837,12 @@ fn evaluate_nhc(
     let mut scan_idx = 0usize;
     let mut interval_start_idx = 0usize;
     let mut prev_nav: Option<(f64, NavPvtObs)> = None;
+    let mut latest_pseudo_vel_n: Option<[f32; 3]> = None;
+    let mut latest_pseudo_turn_valid = false;
+    let mut origin_set = false;
+    let mut ref_lat = 0.0_f64;
+    let mut ref_lon = 0.0_f64;
+    let mut ref_ecef = [0.0_f64; 3];
 
     for (nav_idx, (tn, nav)) in nav_events.iter().enumerate() {
         while scan_idx < imu_packets.len() && imu_packets[scan_idx].t_ms <= *tn {
@@ -983,7 +856,7 @@ fn evaluate_nhc(
             if !initialized {
                 let speed_mps = speed_for_bootstrap(prev_nav, (*tn, *nav), pkt.t_ms) as f32;
                 if bootstrap.update(accel_b, gyro_radps, speed_mps) {
-                    let seed = resolve_align_nhc_bootstrap_q_vb_seed(
+                    let mut seed = resolve_align_nhc_bootstrap_q_vb_seed(
                         &bootstrap.stationary_accel,
                         prev_nav,
                         &nav_events,
@@ -994,6 +867,22 @@ fn evaluate_nhc(
                         *cfg,
                         cfg.startup_max_windows.saturating_mul(3),
                     );
+                    if args.nhc_init_mount_from_final_alg || args.nhc_freeze_mount_from_final_alg {
+                        if let Some(q_alg) = final_alg_q {
+                            seed.q_vb = [
+                                q_alg[0] as f32,
+                                -q_alg[1] as f32,
+                                -q_alg[2] as f32,
+                                -q_alg[3] as f32,
+                            ];
+                            if let Some(sigma_deg) = args.nhc_init_mount_sigma_deg {
+                                let sigma_rad = sigma_deg.to_radians();
+                                seed.sigma_rad = [sigma_rad; 3];
+                            }
+                        } else {
+                            bail!("--nhc-init-mount-from-final-alg/--nhc-freeze-mount-from-final-alg requested but final ESF-ALG mount is unavailable");
+                        }
+                    }
                     if nhc
                         .initialize_from_stationary_with_mount_seed_and_sigma(
                             &bootstrap.stationary_accel,
@@ -1012,6 +901,12 @@ fn evaluate_nhc(
                         {
                             align_mount_initialized = true;
                         }
+                        if args.nhc_init_mount_from_final_alg || args.nhc_freeze_mount_from_final_alg {
+                            mount_branch_committed = true;
+                        }
+                        if let Some(q_vb_fixed) = fixed_mount_q_vb {
+                            freeze_nhc_mount(&mut nhc, q_vb_fixed);
+                        }
                     }
                 }
             }
@@ -1029,8 +924,24 @@ fn evaluate_nhc(
             }
         }
 
+        if !origin_set {
+            ref_lat = nav.lat_deg;
+            ref_lon = nav.lon_deg;
+            ref_ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
+            origin_set = true;
+        }
+        let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
+        let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
+        let z_p_n = [ned[0] as f32, ned[1] as f32, ned[2] as f32];
+        let r_p_var_n = [
+            (nav.h_acc_m.max(0.5) as f32).powi(2),
+            (nav.h_acc_m.max(0.5) as f32).powi(2),
+            (nav.v_acc_m.max(0.5) as f32).powi(2),
+        ];
+
         if let Some((t_prev, nav_prev)) = prev_nav {
             let interval_packets = &imu_packets[interval_start_idx..scan_idx];
+            let mut nhc_trace = align_rs::AlignNhcTrace::default();
             if initialized && !interval_packets.is_empty() {
                 let mut gyro_sum = [0.0_f32; 3];
                 let mut accel_sum = [0.0_f32; 3];
@@ -1052,6 +963,25 @@ fn evaluate_nhc(
                             pkt.gz_dps.to_radians() as f32,
                         ],
                     );
+                    if let Some(z_v_n) = latest_pseudo_vel_n {
+                        if let Some(q_vb_fixed) = fixed_mount_q_vb {
+                            freeze_nhc_mount(&mut nhc, q_vb_fixed);
+                        }
+                        let (_, tr) = nhc.update_pseudo_measurements(
+                            z_v_n,
+                            [
+                                pkt.gx_dps.to_radians() as f32,
+                                pkt.gy_dps.to_radians() as f32,
+                                pkt.gz_dps.to_radians() as f32,
+                            ],
+                            nav_yaw_seeded,
+                            mount_branch_committed && latest_pseudo_turn_valid && cfg.use_turn_gyro,
+                        );
+                        nhc_trace = tr;
+                        if let Some(q_vb_fixed) = fixed_mount_q_vb {
+                            freeze_nhc_mount(&mut nhc, q_vb_fixed);
+                        }
+                    }
                     last_t = pkt.t_ms;
                 }
 
@@ -1114,6 +1044,10 @@ fn evaluate_nhc(
                                 align_mount.P[2][2].sqrt().clamp(1.0_f32.to_radians(), 5.0_f32.to_radians()),
                             ],
                         );
+                        nhc.seed_nav_yaw_from_course(
+                            nav.vel_e_mps.atan2(nav.vel_n_mps) as f32,
+                            5.0_f32.to_radians(),
+                        );
                         mount_branch_committed = true;
                     }
                 }
@@ -1121,27 +1055,27 @@ fn evaluate_nhc(
                     && course_rate_dps.abs() > cfg.min_turn_rate_radps.to_degrees() as f64
                     && a_lat.abs() > cfg.min_lat_acc_mps2 as f64;
 
-                let omega_last_b = interval_packets
-                    .last()
-                    .map(|pkt| {
-                        [
-                            pkt.gx_dps.to_radians() as f32,
-                            pkt.gy_dps.to_radians() as f32,
-                            pkt.gz_dps.to_radians() as f32,
-                        ]
-                    })
-                    .unwrap_or([0.0, 0.0, 0.0]);
-
-                let (_, nhc_trace) = nhc.update_all(
+                if let Some(q_vb_fixed) = fixed_mount_q_vb {
+                    freeze_nhc_mount(&mut nhc, q_vb_fixed);
+                }
+                let _ = nhc.update_gnss(
+                    z_p_n,
+                    r_p_var_n,
                     [
                         nav.vel_n_mps as f32,
                         nav.vel_e_mps as f32,
                         nav.vel_d_mps as f32,
                     ],
-                    omega_last_b,
-                    speed_mid > cfg.min_speed_mps,
-                    mount_branch_committed && turn_valid && cfg.use_turn_gyro,
                 );
+                if let Some(q_vb_fixed) = fixed_mount_q_vb {
+                    freeze_nhc_mount(&mut nhc, q_vb_fixed);
+                }
+                latest_pseudo_vel_n = Some([
+                    nav.vel_n_mps as f32,
+                    nav.vel_e_mps as f32,
+                    nav.vel_d_mps as f32,
+                ]);
+                latest_pseudo_turn_valid = turn_valid;
 
                 let q_align_bv = [
                     nhc.q_vb[0] as f64,
@@ -1210,14 +1144,22 @@ fn evaluate_nhc(
                         long_imu_lat_lp_mps2: f64::NAN,
                         long_angle_err_deg: f64::NAN,
                         long_angle_err_signed_deg: f64::NAN,
+                        horiz_angle_err_deg: f64::NAN,
+                        horiz_effective_std_deg: f64::NAN,
+                        horiz_gnss_norm_mps2: f64::NAN,
+                        horiz_imu_norm_mps2: f64::NAN,
+                        horiz_speed_q: f64::NAN,
+                        horiz_accel_q: f64::NAN,
+                        horiz_straight_q: f64::NAN,
+                        horiz_turn_q: f64::NAN,
+                        horiz_dominance_q: f64::NAN,
+                        horiz_turn_core_valid: false,
+                        horiz_straight_core_valid: false,
+                        horiz_applied: false,
                         nhc_valid: nhc_trace.nhc_valid,
                         nhc_residual_vy_mps: nhc_trace.nhc_residual_vy_mps as f64,
                         nhc_residual_vz_mps: nhc_trace.nhc_residual_vz_mps as f64,
                         planar_gyro_valid: nhc_trace.planar_gyro_valid,
-                        misalign_speed_h_mps: f64::NAN,
-                        misalign_omega_v_yaw_abs_dps: f64::NAN,
-                        misalign_omega_v_transverse_dps: f64::NAN,
-                        misalign_omega_v_transverse_ratio: f64::NAN,
                         planar_gyro_residual_x_dps: nhc_trace
                             .planar_gyro_residual_x_radps
                             .to_degrees()
@@ -1226,389 +1168,12 @@ fn evaluate_nhc(
                             .planar_gyro_residual_y_radps
                             .to_degrees()
                             as f64,
-                        obs_rows: 0,
-                        obs_sigma_max: f64::NAN,
-                        obs_sigma_mid: f64::NAN,
-                        obs_sigma_min: f64::NAN,
-                        obs_cond: f64::NAN,
                     });
                 }
             }
         }
         prev_nav = Some((*tn, *nav));
         interval_start_idx = scan_idx;
-    }
-
-    let metrics = score_samples(&samples, dataset.total_nav_events, init_time_s);
-    Ok(EvalResult {
-        cfg: *cfg,
-        bootstrap_cfg: *bootstrap_cfg,
-        metrics,
-        samples,
-    })
-}
-
-fn evaluate_misalign(
-    dataset: &AlignDataset,
-    cfg: &AlignConfig,
-    bootstrap_cfg: &BootstrapConfig,
-) -> Result<EvalResult> {
-    const OBS_HORIZON_S: f64 = 20.0;
-    const MISALIGN_NAV_VEHICLE_VEL_R: f32 = 100.0;
-    const MISALIGN_YAW_SEED_WINDOW_S: f64 = 1.5;
-    const MISALIGN_YAW_SEED_MIN_SPEED_MPS: f32 = 5.0 / 3.6;
-    const MISALIGN_YAW_SEED_MIN_SAMPLES: usize = 10;
-    const MISALIGN_YAW_SEED_STEP_DEG: f32 = 5.0;
-
-    let imu_packets = build_imu_packets(&dataset.frames, &dataset.timeline)?;
-    let nav_events = collect_nav_events(&dataset.frames, &dataset.timeline);
-    if nav_events.len() < 2 {
-        bail!("need at least two NAV2-PVT observations");
-    }
-
-    let replay_ref = build_align_replay(&dataset.frames, &dataset.timeline, *cfg, *bootstrap_cfg);
-    let final_alg_q = replay_ref.final_alg_q;
-
-    let mut misalign = AlignMisalign::new(AlignMisalignConfig::default());
-    let mut obs_window = MisalignObservabilityWindow::new(OBS_HORIZON_S);
-    let mut bootstrap = BootstrapDetector::new(*bootstrap_cfg);
-    let mut initialized = false;
-    let mut nav_yaw_seeded = false;
-    let mut mount_yaw_seeded = false;
-    let mut yaw_seed_samples = Vec::<MisalignYawSeedSample>::new();
-    let mut init_time_s = f64::NAN;
-    let mut samples = Vec::<ResidualSample>::new();
-
-    let mut ekf = Ekf::default();
-    let mut origin_set = false;
-    let mut ref_lat = 0.0_f64;
-    let mut ref_lon = 0.0_f64;
-    let mut ref_ecef = [0.0_f64; 3];
-    let mut nav_idx = 0usize;
-    let mut next_gps_update_ms = f64::NAN;
-    let gps_period_ms = 1000.0 / 20.0;
-    let mut prev_nav: Option<(f64, NavPvtObs)> = None;
-    let mut prev_imu_t_ms: Option<f64> = None;
-
-    for pkt in &imu_packets {
-        let dt = if let Some(t_prev_ms) = prev_imu_t_ms {
-            ((pkt.t_ms - t_prev_ms) * 1.0e-3).max(1.0e-3)
-        } else {
-            0.01
-        };
-        prev_imu_t_ms = Some(pkt.t_ms);
-        let gyro_radps = [
-            pkt.gx_dps.to_radians() as f32,
-            pkt.gy_dps.to_radians() as f32,
-            pkt.gz_dps.to_radians() as f32,
-        ];
-        let accel_b = [pkt.ax_mps2 as f32, pkt.ay_mps2 as f32, pkt.az_mps2 as f32];
-
-        if !initialized {
-            let speed_mps = nav_events
-                .get(nav_idx)
-                .copied()
-                .or(prev_nav)
-                .map(|next_nav| speed_for_bootstrap(prev_nav, next_nav, pkt.t_ms) as f32)
-                .unwrap_or(0.0);
-            if bootstrap.update(accel_b, gyro_radps, speed_mps) {
-                if misalign
-                    .initialize_from_stationary_with_x_ref(
-                        &bootstrap.stationary_accel,
-                        0.0,
-                        [1.0, 0.0, 0.0],
-                    )
-                    .is_ok()
-                {
-                    initialized = true;
-                    init_time_s = (pkt.t_ms - dataset.timeline.t0_master_ms) * 1.0e-3;
-                }
-            }
-        }
-
-        let imu = ImuSample {
-            dax: (gyro_radps[0] as f64 * dt) as f32,
-            day: (gyro_radps[1] as f64 * dt) as f32,
-            daz: (gyro_radps[2] as f64 * dt) as f32,
-            dvx: (accel_b[0] as f64 * dt) as f32,
-            dvy: (accel_b[1] as f64 * dt) as f32,
-            dvz: (accel_b[2] as f64 * dt) as f32,
-            dt: dt as f32,
-        };
-        ekf_predict(&mut ekf, &imu, None);
-        clamp_ekf_biases(&mut ekf, dt);
-        if initialized {
-            ekf_fuse_vehicle_vel(&mut ekf, misalign.q_vb, MISALIGN_NAV_VEHICLE_VEL_R);
-            clamp_ekf_biases(&mut ekf, dt);
-        }
-
-        while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
-            let (t_ms, nav) = nav_events[nav_idx];
-            nav_idx += 1;
-            if !next_gps_update_ms.is_finite() {
-                next_gps_update_ms = t_ms;
-            }
-            if t_ms + 1e-6 < next_gps_update_ms {
-                continue;
-            }
-            next_gps_update_ms += gps_period_ms;
-
-            if !origin_set {
-                ref_lat = nav.lat_deg;
-                ref_lon = nav.lon_deg;
-                ref_ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
-                origin_set = true;
-            }
-            let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
-            let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
-            let h_acc2 = (nav.h_acc_m * nav.h_acc_m).max(0.05) * 80.0;
-            let v_acc2 = (nav.v_acc_m * nav.v_acc_m).max(0.05) * 80.0;
-            let s_acc2 = (nav.s_acc_mps * nav.s_acc_mps).max(0.02) * 80.0;
-            let gps = GpsData {
-                pos_n: ned[0] as f32,
-                pos_e: ned[1] as f32,
-                pos_d: ned[2] as f32,
-                vel_n: nav.vel_n_mps as f32,
-                vel_e: nav.vel_e_mps as f32,
-                vel_d: nav.vel_d_mps as f32,
-                R_POS_N: h_acc2 as f32,
-                R_POS_E: h_acc2 as f32,
-                R_POS_D: v_acc2 as f32,
-                R_VEL_N: s_acc2 as f32,
-                R_VEL_E: s_acc2 as f32,
-                R_VEL_D: s_acc2 as f32,
-            };
-            ekf_fuse_gps(&mut ekf, &gps);
-            clamp_ekf_biases(&mut ekf, dt);
-
-            if initialized {
-                if !nav_yaw_seeded {
-                    let speed_h =
-                        (nav.vel_n_mps * nav.vel_n_mps + nav.vel_e_mps * nav.vel_e_mps).sqrt();
-                    if speed_h >= 5.0 / 3.6 {
-                        let course_rad = (nav.vel_e_mps as f32).atan2(nav.vel_n_mps as f32);
-                        seed_ekf_yaw_from_course(&mut ekf, course_rad);
-                        let q_nb_seed = [ekf.state.q0, ekf.state.q1, ekf.state.q2, ekf.state.q3];
-                        let mut nav_seed = misalign.clone();
-                        nav_seed.seed_mount_from_nav_course_full(
-                            q_nb_seed,
-                            course_rad,
-                            2.0_f32.to_radians(),
-                            10.0_f32.to_radians(),
-                        );
-                        let down_curr = quat_rotate(
-                            [
-                                misalign.q_vb[0] as f64,
-                                misalign.q_vb[1] as f64,
-                                misalign.q_vb[2] as f64,
-                                misalign.q_vb[3] as f64,
-                            ],
-                            [0.0, 0.0, 1.0],
-                        );
-                        let down_seed = quat_rotate(
-                            [
-                                nav_seed.q_vb[0] as f64,
-                                nav_seed.q_vb[1] as f64,
-                                nav_seed.q_vb[2] as f64,
-                                nav_seed.q_vb[3] as f64,
-                            ],
-                            [0.0, 0.0, 1.0],
-                        );
-                        if angle_between_unit_deg(down_curr, down_seed) <= 10.0 {
-                            misalign = nav_seed;
-                        }
-                        nav_yaw_seeded = true;
-                    }
-                }
-                let t_s = (t_ms - dataset.timeline.t0_master_ms) * 1.0e-3;
-                let q_nb = [ekf.state.q0, ekf.state.q1, ekf.state.q2, ekf.state.q3];
-                let v_n = [ekf.state.vn, ekf.state.ve, ekf.state.vd];
-                let dt_update = if let Some((t_prev, _)) = prev_nav {
-                    ((t_ms - t_prev) * 1.0e-3).max(1.0e-3) as f32
-                } else {
-                    0.05
-                };
-                let dt_safe = dt.max(1.0e-3) as f32;
-                let omega_b_corr = [
-                    gyro_radps[0] - ekf.state.dax_b / dt_safe,
-                    gyro_radps[1] - ekf.state.day_b / dt_safe,
-                    gyro_radps[2] - ekf.state.daz_b / dt_safe,
-                ];
-                let accel_b_corr = [
-                    accel_b[0] - ekf.state.dvx_b / dt_safe,
-                    accel_b[1] - ekf.state.dvy_b / dt_safe,
-                    accel_b[2] - ekf.state.dvz_b / dt_safe,
-                ];
-                if nav_yaw_seeded && !mount_yaw_seeded {
-                    if misalign.horizontal_speed_mps(v_n) >= MISALIGN_YAW_SEED_MIN_SPEED_MPS {
-                        yaw_seed_samples.push(MisalignYawSeedSample {
-                            q_nb,
-                            v_n,
-                            omega_b_corr,
-                        });
-                    }
-                    if t_s - init_time_s >= MISALIGN_YAW_SEED_WINDOW_S
-                        && yaw_seed_samples.len() >= MISALIGN_YAW_SEED_MIN_SAMPLES
-                    {
-                        if let Some(yaw_seed_rad) = resolve_misalign_yaw_seed(
-                            &misalign,
-                            &yaw_seed_samples,
-                            MISALIGN_YAW_SEED_STEP_DEG,
-                        ) {
-                            misalign.set_mount_yaw(yaw_seed_rad, 5.0_f32.to_radians());
-                            mount_yaw_seeded = true;
-                        }
-                    }
-                }
-                if !mount_yaw_seeded {
-                    prev_nav = Some((t_ms, nav));
-                    continue;
-                }
-                let nhc_valid = misalign.nhc_gate(v_n);
-                if nhc_valid {
-                    let h = misalign.nhc_mount_jacobian(q_nb, v_n);
-                    let sigma = misalign.cfg.r_nhc_std_mps.max(1.0e-6);
-                    obs_window.push_row(t_s, [h[0][0] / sigma, h[0][1] / sigma, h[0][2] / sigma]);
-                    obs_window.push_row(t_s, [h[1][0] / sigma, h[1][1] / sigma, h[1][2] / sigma]);
-                }
-                let planar_valid = misalign.planar_gyro_gate(v_n, omega_b_corr);
-                if planar_valid {
-                    let h = misalign.planar_gyro_mount_jacobian(omega_b_corr);
-                    let sigma = misalign.cfg.r_planar_gyro_std_radps.max(1.0e-6);
-                    obs_window.push_row(t_s, [h[0][0] / sigma, h[0][1] / sigma, h[0][2] / sigma]);
-                    obs_window.push_row(t_s, [h[1][0] / sigma, h[1][1] / sigma, h[1][2] / sigma]);
-                }
-                let (_, tr) = misalign.update_all(dt_update, q_nb, v_n, omega_b_corr, accel_b_corr);
-                obs_window.prune(t_s);
-                let obs = obs_window.summary();
-
-                let q_align = [
-                    misalign.q_vb[0] as f64,
-                    misalign.q_vb[1] as f64,
-                    misalign.q_vb[2] as f64,
-                    misalign.q_vb[3] as f64,
-                ];
-                let align_rpy_deg = {
-                    let (r, p, y) =
-                        quat_rpy_alg_deg(q_align[0], q_align[1], q_align[2], q_align[3]);
-                    [r, p, y]
-                };
-                let alg_q = interpolate_alg_quat(&replay_ref.alg_events, t_ms);
-                let alg_rpy_deg = alg_q.map(|q| {
-                    let (r, p, y) = quat_rpy_alg_deg(q[0], q[1], q[2], q[3]);
-                    [r, p, y]
-                });
-                if let (Some(q_alg), Some(alg_rpy)) = (alg_q, alg_rpy_deg) {
-                    let q_ref_axis = final_alg_q.unwrap_or(q_alg);
-                    let err_roll_deg = wrap_deg180(align_rpy_deg[0] - alg_rpy[0]);
-                    let err_pitch_deg = align_rpy_deg[1] - alg_rpy[1];
-                    let err_yaw_deg = wrap_deg180(align_rpy_deg[2] - alg_rpy[2]);
-                    let a_long = if let Some((_, nav_prev)) = prev_nav {
-                        let dt_nav = ((t_ms - prev_nav.unwrap().0) * 1.0e-3).max(1.0e-3);
-                        let a_n = [
-                            (nav.vel_n_mps - nav_prev.vel_n_mps) / dt_nav,
-                            (nav.vel_e_mps - nav_prev.vel_e_mps) / dt_nav,
-                        ];
-                        let v_mid = [
-                            0.5 * (nav_prev.vel_n_mps + nav.vel_n_mps),
-                            0.5 * (nav_prev.vel_e_mps + nav.vel_e_mps),
-                        ];
-                        if let Some(t_hat) = normalize2(v_mid) {
-                            t_hat[0] * a_n[0] + t_hat[1] * a_n[1]
-                        } else {
-                            0.0
-                        }
-                    } else {
-                        0.0
-                    };
-                    let a_lat = if let Some((_, nav_prev)) = prev_nav {
-                        let dt_nav = ((t_ms - prev_nav.unwrap().0) * 1.0e-3).max(1.0e-3);
-                        let a_n = [
-                            (nav.vel_n_mps - nav_prev.vel_n_mps) / dt_nav,
-                            (nav.vel_e_mps - nav_prev.vel_e_mps) / dt_nav,
-                        ];
-                        let v_mid = [
-                            0.5 * (nav_prev.vel_n_mps + nav.vel_n_mps),
-                            0.5 * (nav_prev.vel_e_mps + nav.vel_e_mps),
-                        ];
-                        if let Some(t_hat) = normalize2(v_mid) {
-                            let lat_hat = [-t_hat[1], t_hat[0]];
-                            lat_hat[0] * a_n[0] + lat_hat[1] * a_n[1]
-                        } else {
-                            0.0
-                        }
-                    } else {
-                        0.0
-                    };
-                    samples.push(ResidualSample {
-                        t_s,
-                        align_roll_deg: align_rpy_deg[0],
-                        align_pitch_deg: align_rpy_deg[1],
-                        align_yaw_deg: align_rpy_deg[2],
-                        alg_roll_deg: alg_rpy[0],
-                        alg_pitch_deg: alg_rpy[1],
-                        alg_yaw_deg: alg_rpy[2],
-                        err_roll_deg,
-                        err_pitch_deg,
-                        err_yaw_deg,
-                        sigma_roll_deg: misalign.P[0][0].sqrt().to_degrees() as f64,
-                        sigma_pitch_deg: misalign.P[1][1].sqrt().to_degrees() as f64,
-                        sigma_yaw_deg: misalign.P[2][2].sqrt().to_degrees() as f64,
-                        course_rate_dps: 0.0,
-                        a_lat_mps2: a_lat,
-                        a_long_mps2: a_long,
-                        rot_err_deg: quat_angle_deg(q_align, q_alg),
-                        fwd_err_deg: axis_angle_deg(
-                            quat_rotate(q_align, [1.0, 0.0, 0.0]),
-                            quat_rotate(q_ref_axis, [1.0, 0.0, 0.0]),
-                        ),
-                        down_err_deg: axis_angle_deg(
-                            quat_rotate(q_align, [0.0, 0.0, 1.0]),
-                            quat_rotate(q_ref_axis, [0.0, 0.0, 1.0]),
-                        ),
-                        fwd_err_signed_deg: signed_projected_axis_angle_deg(
-                            quat_rotate(q_align, [1.0, 0.0, 0.0]),
-                            quat_rotate(q_ref_axis, [1.0, 0.0, 0.0]),
-                            quat_rotate(q_ref_axis, [0.0, 0.0, 1.0]),
-                        ),
-                        down_err_signed_deg: signed_projected_axis_angle_deg(
-                            quat_rotate(q_align, [0.0, 0.0, 1.0]),
-                            quat_rotate(q_ref_axis, [0.0, 0.0, 1.0]),
-                            quat_rotate(q_ref_axis, [0.0, 1.0, 0.0]),
-                        ),
-                        long_base_valid: false,
-                        long_emitted: false,
-                        long_stable_windows: 0,
-                        long_gnss_long_lp_mps2: f64::NAN,
-                        long_gnss_lat_lp_mps2: f64::NAN,
-                        long_imu_long_lp_mps2: f64::NAN,
-                        long_imu_lat_lp_mps2: f64::NAN,
-                        long_angle_err_deg: f64::NAN,
-                        long_angle_err_signed_deg: f64::NAN,
-                        nhc_valid: tr.nhc_valid,
-                        nhc_residual_vy_mps: tr.nhc_residual_vy_mps as f64,
-                        nhc_residual_vz_mps: tr.nhc_residual_vz_mps as f64,
-                        planar_gyro_valid: tr.planar_gyro_valid,
-                        misalign_speed_h_mps: tr.speed_h_mps as f64,
-                        misalign_omega_v_yaw_abs_dps: tr.omega_v_yaw_abs_radps.to_degrees() as f64,
-                        misalign_omega_v_transverse_dps: tr.omega_v_transverse_radps.to_degrees()
-                            as f64,
-                        misalign_omega_v_transverse_ratio: tr.omega_v_transverse_ratio as f64,
-                        planar_gyro_residual_x_dps: tr.planar_gyro_residual_x_radps.to_degrees()
-                            as f64,
-                        planar_gyro_residual_y_dps: tr.planar_gyro_residual_y_radps.to_degrees()
-                            as f64,
-                        obs_rows: obs.rows,
-                        obs_sigma_max: obs.sigma_max,
-                        obs_sigma_mid: obs.sigma_mid,
-                        obs_sigma_min: obs.sigma_min,
-                        obs_cond: obs.cond,
-                    });
-                }
-            }
-
-            prev_nav = Some((t_ms, nav));
-        }
     }
 
     let metrics = score_samples(&samples, dataset.total_nav_events, init_time_s);
@@ -1909,26 +1474,18 @@ fn print_config(cfg: &AlignConfig, bootstrap_cfg: &BootstrapConfig) {
     );
 }
 
-fn accum_gram(gram: &mut [[f32; 3]; 3], h: [f32; 3], scale: f32) {
-    for i in 0..3 {
-        for j in 0..3 {
-            gram[i][j] += scale * h[i] * h[j];
-        }
-    }
-}
-
 fn write_residual_csv(path: &PathBuf, samples: &[ResidualSample]) -> Result<()> {
     let file =
         File::create(path).with_context(|| format!("failed to create {}", path.display()))?;
     let mut w = BufWriter::new(file);
     writeln!(
         w,
-        "t_s,align_roll_deg,align_pitch_deg,align_yaw_deg,alg_roll_deg,alg_pitch_deg,alg_yaw_deg,err_roll_deg,err_pitch_deg,err_yaw_deg,sigma_roll_deg,sigma_pitch_deg,sigma_yaw_deg,course_rate_dps,a_lat_mps2,a_long_mps2,rot_err_deg,fwd_err_deg,down_err_deg,fwd_err_signed_deg,down_err_signed_deg,long_base_valid,long_emitted,long_stable_windows,long_gnss_long_lp_mps2,long_gnss_lat_lp_mps2,long_imu_long_lp_mps2,long_imu_lat_lp_mps2,long_angle_err_deg,long_angle_err_signed_deg,nhc_valid,nhc_residual_vy_mps,nhc_residual_vz_mps,planar_gyro_valid,misalign_speed_h_mps,misalign_omega_v_yaw_abs_dps,misalign_omega_v_transverse_dps,misalign_omega_v_transverse_ratio,planar_gyro_residual_x_dps,planar_gyro_residual_y_dps,obs_rows,obs_sigma_max,obs_sigma_mid,obs_sigma_min,obs_cond"
+        "t_s,align_roll_deg,align_pitch_deg,align_yaw_deg,alg_roll_deg,alg_pitch_deg,alg_yaw_deg,err_roll_deg,err_pitch_deg,err_yaw_deg,sigma_roll_deg,sigma_pitch_deg,sigma_yaw_deg,course_rate_dps,a_lat_mps2,a_long_mps2,rot_err_deg,fwd_err_deg,down_err_deg,fwd_err_signed_deg,down_err_signed_deg,long_base_valid,long_emitted,long_stable_windows,long_gnss_long_lp_mps2,long_gnss_lat_lp_mps2,long_imu_long_lp_mps2,long_imu_lat_lp_mps2,long_angle_err_deg,long_angle_err_signed_deg,horiz_angle_err_deg,horiz_effective_std_deg,horiz_gnss_norm_mps2,horiz_imu_norm_mps2,horiz_speed_q,horiz_accel_q,horiz_straight_q,horiz_turn_q,horiz_dominance_q,horiz_turn_core_valid,horiz_straight_core_valid,horiz_applied,nhc_valid,nhc_residual_vy_mps,nhc_residual_vz_mps,planar_gyro_valid,planar_gyro_residual_x_dps,planar_gyro_residual_y_dps"
     )?;
     for s in samples {
         writeln!(
             w,
-            "{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{:.6},{:.6},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{:.6},{:.6},{:.6},{:.6}",
+            "{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6}",
             s.t_s,
             s.align_roll_deg,
             s.align_pitch_deg,
@@ -1959,21 +1516,24 @@ fn write_residual_csv(path: &PathBuf, samples: &[ResidualSample]) -> Result<()> 
             s.long_imu_lat_lp_mps2,
             s.long_angle_err_deg,
             s.long_angle_err_signed_deg,
+            s.horiz_angle_err_deg,
+            s.horiz_effective_std_deg,
+            s.horiz_gnss_norm_mps2,
+            s.horiz_imu_norm_mps2,
+            s.horiz_speed_q,
+            s.horiz_accel_q,
+            s.horiz_straight_q,
+            s.horiz_turn_q,
+            s.horiz_dominance_q,
+            s.horiz_turn_core_valid as u8,
+            s.horiz_straight_core_valid as u8,
+            s.horiz_applied as u8,
             s.nhc_valid as u8,
             s.nhc_residual_vy_mps,
             s.nhc_residual_vz_mps,
             s.planar_gyro_valid as u8,
-            s.misalign_speed_h_mps,
-            s.misalign_omega_v_yaw_abs_dps,
-            s.misalign_omega_v_transverse_dps,
-            s.misalign_omega_v_transverse_ratio,
             s.planar_gyro_residual_x_dps,
             s.planar_gyro_residual_y_dps,
-            s.obs_rows,
-            s.obs_sigma_max,
-            s.obs_sigma_mid,
-            s.obs_sigma_min,
-            s.obs_cond
         )?;
     }
     Ok(())
@@ -2031,6 +1591,16 @@ fn speed_for_bootstrap(
     speed_prev + alpha * (speed_curr - speed_prev)
 }
 
+fn freeze_nhc_mount(nhc: &mut AlignNhc, q_vb_fixed: [f32; 4]) {
+    nhc.q_vb = q_vb_fixed;
+    for i in 6..9 {
+        for j in 0..nhc.P.len() {
+            nhc.P[i][j] = 0.0;
+            nhc.P[j][i] = 0.0;
+        }
+    }
+}
+
 fn horizontal_speed(nav: NavPvtObs) -> f64 {
     (nav.vel_n_mps * nav.vel_n_mps + nav.vel_e_mps * nav.vel_e_mps).sqrt()
 }
@@ -2074,36 +1644,6 @@ fn norm_quat(q: [f64; 4]) -> [f64; 4] {
     } else {
         [q[0] / n, q[1] / n, q[2] / n, q[3] / n]
     }
-}
-
-fn quat_from_rpy_rad_local(roll: f64, pitch: f64, yaw: f64) -> [f64; 4] {
-    let (sr, cr) = (0.5 * roll).sin_cos();
-    let (sp, cp) = (0.5 * pitch).sin_cos();
-    let (sy, cy) = (0.5 * yaw).sin_cos();
-    norm_quat([
-        cr * cp * cy + sr * sp * sy,
-        sr * cp * cy - cr * sp * sy,
-        cr * sp * cy + sr * cp * sy,
-        cr * cp * sy - sr * sp * cy,
-    ])
-}
-
-fn seed_ekf_yaw_from_course(ekf: &mut Ekf, course_rad: f32) {
-    let (roll_deg, pitch_deg, _) = quat_rpy_alg_deg(
-        ekf.state.q0 as f64,
-        ekf.state.q1 as f64,
-        ekf.state.q2 as f64,
-        ekf.state.q3 as f64,
-    );
-    let q = quat_from_rpy_rad_local(
-        roll_deg.to_radians(),
-        pitch_deg.to_radians(),
-        course_rad as f64,
-    );
-    ekf.state.q0 = q[0] as f32;
-    ekf.state.q1 = q[1] as f32;
-    ekf.state.q2 = q[2] as f32;
-    ekf.state.q3 = q[3] as f32;
 }
 
 fn quat_mul_local(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {

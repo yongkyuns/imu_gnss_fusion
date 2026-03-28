@@ -60,6 +60,22 @@ pub struct LongTraceSample {
 }
 
 #[derive(Clone, Copy, Default)]
+pub struct HorizTraceSample {
+    pub angle_err_deg: f64,
+    pub effective_std_deg: f64,
+    pub gnss_norm_mps2: f64,
+    pub imu_norm_mps2: f64,
+    pub speed_q: f64,
+    pub accel_q: f64,
+    pub straight_q: f64,
+    pub turn_q: f64,
+    pub dominance_q: f64,
+    pub turn_core_valid: bool,
+    pub straight_core_valid: bool,
+    pub applied: bool,
+}
+
+#[derive(Clone, Copy, Default)]
 pub struct StartupTraceSample {
     pub gnss_long_lp_mps2: f64,
     pub gnss_lat_lp_mps2: f64,
@@ -99,6 +115,7 @@ pub struct AlignReplaySample {
     pub contrib: AlignEulerContrib,
     pub p_diag: [f64; 3],
     pub long_trace: LongTraceSample,
+    pub horiz_trace: HorizTraceSample,
     pub startup_trace: StartupTraceSample,
     pub startup_input_long_mps2: f64,
     pub startup_input_lat_mps2: f64,
@@ -358,6 +375,26 @@ pub fn build_align_replay(
                     imu_lat_lp_mps2: long_trace.imu_lat_lp_mps2 as f64,
                     angle_err_deg: (long_trace.angle_err_rad as f64).to_degrees(),
                 };
+                let horiz_trace = HorizTraceSample {
+                    angle_err_deg: trace
+                        .horiz_angle_err_rad
+                        .map(|v| (v as f64).to_degrees())
+                        .unwrap_or(f64::NAN),
+                    effective_std_deg: trace
+                        .horiz_effective_std_rad
+                        .map(|v| (v as f64).to_degrees())
+                        .unwrap_or(f64::NAN),
+                    gnss_norm_mps2: trace.horiz_gnss_norm_mps2.unwrap_or(f32::NAN) as f64,
+                    imu_norm_mps2: trace.horiz_imu_norm_mps2.unwrap_or(f32::NAN) as f64,
+                    speed_q: trace.horiz_speed_q.unwrap_or(f32::NAN) as f64,
+                    accel_q: trace.horiz_accel_q.unwrap_or(f32::NAN) as f64,
+                    straight_q: trace.horiz_straight_q.unwrap_or(f32::NAN) as f64,
+                    turn_q: trace.horiz_turn_q.unwrap_or(f32::NAN) as f64,
+                    dominance_q: trace.horiz_dominance_q.unwrap_or(f32::NAN) as f64,
+                    turn_core_valid: trace.horiz_turn_core_valid,
+                    straight_core_valid: trace.horiz_straight_core_valid,
+                    applied: trace.after_horiz_accel.is_some(),
+                };
                 let g_norm = (align.gravity_lp_b[0] * align.gravity_lp_b[0]
                     + align.gravity_lp_b[1] * align.gravity_lp_b[1]
                     + align.gravity_lp_b[2] * align.gravity_lp_b[2])
@@ -431,6 +468,7 @@ pub fn build_align_replay(
                         align.P[2][2] as f64,
                     ],
                     long_trace,
+                    horiz_trace,
                     startup_trace,
                     startup_input_long_mps2: startup_horiz_xy[0] as f64,
                     startup_input_lat_mps2: startup_horiz_xy[1] as f64,
