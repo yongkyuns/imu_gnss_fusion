@@ -136,6 +136,7 @@ pub struct AlignUpdateTrace {
     pub q_start: [f32; 4],
     pub startup_input_xy: Option<[f32; 2]>,
     pub startup_trace: Option<YawStartupTrace>,
+    pub coarse_alignment_ready: bool,
     pub after_yaw_seed: Option<[f32; 4]>,
     pub after_branch_resolve: Option<[f32; 4]>,
     pub after_gravity: Option<[f32; 4]>,
@@ -162,6 +163,7 @@ pub struct Align {
     pub q_vb: [f32; 4],
     pub P: [[f32; ALIGN_N_STATES]; ALIGN_N_STATES],
     pub gravity_lp_b: [f32; 3],
+    coarse_aligned: bool,
     long_filter: HorizontalHeadingCueFilter,
     turn_filter: HorizontalHeadingCueFilter,
     yaw_dual: Option<YawDualHypothesis>,
@@ -201,6 +203,7 @@ impl Align {
                 60.0_f32.to_radians().powi(2),
             ]),
             gravity_lp_b: [0.0, 0.0, -GRAVITY_MPS2],
+            coarse_aligned: false,
             long_filter: HorizontalHeadingCueFilter::new(),
             turn_filter: HorizontalHeadingCueFilter::new(),
             yaw_dual: None,
@@ -223,6 +226,7 @@ impl Align {
             0.5_f32.to_radians().powi(2),
         ]);
         self.gravity_lp_b = init.mean_accel_b;
+        self.coarse_aligned = false;
         self.long_filter.reset();
         self.turn_filter.reset();
         self.yaw_dual = Some(YawDualHypothesis {
@@ -399,8 +403,7 @@ impl Align {
             && a_lat.abs() > 1.5 * a_long.abs().max(0.2);
         trace.horiz_straight_core_valid = straight_core_valid;
         trace.horiz_turn_core_valid = turn_core_valid;
-        let horiz_vector_valid = heading_updates_enabled
-            && speed_mid > self.cfg.min_speed_mps
+        let horiz_vector_valid = speed_mid > self.cfg.min_speed_mps
             && horiz_gnss_norm > self.cfg.min_long_acc_mps2
             && horiz_imu_norm > self.cfg.min_long_acc_mps2
             && (straight_core_valid || turn_core_valid);
@@ -435,6 +438,18 @@ impl Align {
             trace.horiz_angle_err_rad = Some(angle_err);
             trace.horiz_effective_std_rad = Some(effective_std);
             score += self.apply_vehicle_yaw_angle(angle_err, effective_std.powi(2));
+            if let Some(alt) = &mut self.yaw_dual {
+                let alt_horiz_obs = align_obs(alt.q_vb, window.mean_gyro_b, horiz_accel_b);
+                let alt_cross = alt_horiz_obs[3] * a_lat - alt_horiz_obs[4] * a_long;
+                let alt_dot = alt_horiz_obs[3] * a_long + alt_horiz_obs[4] * a_lat;
+                let alt_angle_err = alt_cross.atan2(alt_dot);
+                score += Self::apply_vehicle_yaw_angle_state(
+                    &mut alt.q_vb,
+                    &mut alt.p,
+                    alt_angle_err,
+                    effective_std.powi(2),
+                );
+            }
             trace.after_horiz_accel = Some(self.q_vb);
         }
 
@@ -497,9 +512,17 @@ impl Align {
             );
             trace.startup_trace = Some(startup_trace);
             if let Some(dpsi) = startup_theta {
-                self.seed_yaw_dual_from_startup(dpsi);
-                self.turn_consistency.reset();
-                trace.after_yaw_seed = Some(self.q_vb);
+                self.coarse_aligned = true;
+                if self.startup_seed_improves_pair(
+                    dpsi,
+                    window.mean_gyro_b,
+                    horiz_accel_b,
+                    [a_long, a_lat],
+                ) {
+                    self.seed_yaw_dual_from_startup(dpsi);
+                    self.turn_consistency.reset();
+                    trace.after_yaw_seed = Some(self.q_vb);
+                }
             } else if self.yaw_startup.timed_out(startup_cfg) {
                 self.yaw_startup.reset(false);
             }
@@ -650,6 +673,7 @@ impl Align {
             }
         }
 
+        trace.coarse_alignment_ready = self.coarse_aligned;
         (score, trace)
     }
 
@@ -660,6 +684,10 @@ impl Align {
     pub fn mount_angles_deg(&self) -> [f32; 3] {
         let r = self.mount_angles_rad();
         [r[0].to_degrees(), r[1].to_degrees(), r[2].to_degrees()]
+    }
+
+    pub fn coarse_alignment_ready(&self) -> bool {
+        self.coarse_aligned
     }
 
     pub fn sigma_deg(&self) -> [f32; 3] {
@@ -986,6 +1014,7 @@ impl Align {
             self.P[1][2] = 0.0;
             self.P[2][1] = 0.0;
             self.turn_consistency.reset();
+            self.coarse_aligned = true;
         }
     }
 
@@ -1022,6 +1051,74 @@ impl Align {
             turn_windows: 0,
         });
         self.yaw_startup.reset(false);
+        self.coarse_aligned = true;
+    }
+
+    fn startup_seed_improves_pair(
+        &self,
+        heading_target: f32,
+        gyro_b: [f32; 3],
+        accel_b: [f32; 3],
+        gnss_horiz_xy: [f32; 2],
+    ) -> bool {
+        let Some(current_alt) = &self.yaw_dual else {
+            return true;
+        };
+        let current_best = Self::pair_best_horiz_angle_error(
+            self.q_vb,
+            current_alt.q_vb,
+            gyro_b,
+            accel_b,
+            gnss_horiz_xy,
+        );
+
+        let mut seeded_primary = self.q_vb;
+        let mut seeded_alt = self.q_vb;
+        Self::set_vehicle_heading_in_level_frame(
+            &mut seeded_primary,
+            self.gravity_lp_b,
+            heading_target,
+        );
+        Self::set_vehicle_heading_in_level_frame(
+            &mut seeded_alt,
+            self.gravity_lp_b,
+            wrap_angle_rad(heading_target + core::f32::consts::PI),
+        );
+        let seeded_best = Self::pair_best_horiz_angle_error(
+            seeded_primary,
+            seeded_alt,
+            gyro_b,
+            accel_b,
+            gnss_horiz_xy,
+        );
+
+        let improve_margin = 2.0_f32.to_radians();
+        seeded_best + improve_margin < current_best
+    }
+
+    fn pair_best_horiz_angle_error(
+        primary_q: [f32; 4],
+        alt_q: [f32; 4],
+        gyro_b: [f32; 3],
+        accel_b: [f32; 3],
+        gnss_horiz_xy: [f32; 2],
+    ) -> f32 {
+        let primary_err =
+            Self::horiz_angle_error(primary_q, gyro_b, accel_b, gnss_horiz_xy).abs();
+        let alt_err = Self::horiz_angle_error(alt_q, gyro_b, accel_b, gnss_horiz_xy).abs();
+        primary_err.min(alt_err)
+    }
+
+    fn horiz_angle_error(
+        q_vb: [f32; 4],
+        gyro_b: [f32; 3],
+        accel_b: [f32; 3],
+        gnss_horiz_xy: [f32; 2],
+    ) -> f32 {
+        let horiz_obs = align_obs(q_vb, gyro_b, accel_b);
+        let cross = horiz_obs[3] * gnss_horiz_xy[1] - horiz_obs[4] * gnss_horiz_xy[0];
+        let dot = horiz_obs[3] * gnss_horiz_xy[0] + horiz_obs[4] * gnss_horiz_xy[1];
+        cross.atan2(dot)
     }
 
     fn update_yaw_dual_forward_resolver(

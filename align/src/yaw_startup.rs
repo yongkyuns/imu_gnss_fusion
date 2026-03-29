@@ -50,7 +50,7 @@ pub struct YawStartupInitializer {
     active: bool,
     resolved: bool,
     samples: Vec<StoredSample>,
-    total_windows: usize,
+    informative_windows: usize,
     gnss_long_lp: Option<f32>,
     gnss_lat_lp: Option<f32>,
     imu_x_lp: Option<f32>,
@@ -70,7 +70,7 @@ impl YawStartupInitializer {
             active: false,
             resolved: false,
             samples: Vec::new(),
-            total_windows: 0,
+            informative_windows: 0,
             gnss_long_lp: None,
             gnss_lat_lp: None,
             imu_x_lp: None,
@@ -83,7 +83,7 @@ impl YawStartupInitializer {
         self.active = enabled;
         self.resolved = false;
         self.samples.clear();
-        self.total_windows = 0;
+        self.informative_windows = 0;
         self.gnss_long_lp = None;
         self.gnss_lat_lp = None;
         self.imu_x_lp = None;
@@ -108,7 +108,6 @@ impl YawStartupInitializer {
         if !cfg.enabled || !self.is_active() {
             return (None, trace);
         }
-        self.total_windows += 1;
 
         let alpha = cfg.alpha.clamp(0.0, 1.0);
         let gnss_long_lp = lpf_step(&mut self.gnss_long_lp, sample.gnss_long_mps2, alpha);
@@ -139,6 +138,7 @@ impl YawStartupInitializer {
             return (None, trace);
         }
         trace.gate_valid = true;
+        self.informative_windows += 1;
 
         self.stable_windows += 1;
         trace.stable_windows = self.stable_windows;
@@ -176,7 +176,7 @@ impl YawStartupInitializer {
     }
 
     pub fn timed_out(&self, cfg: YawStartupConfig) -> bool {
-        self.is_active() && self.total_windows >= cfg.max_windows
+        self.is_active() && self.informative_windows >= cfg.max_windows
     }
 }
 

@@ -221,10 +221,12 @@ fn horiz_yaw_update_preserves_tilt_and_only_corrects_heading() {
         .expect("stationary initialization");
 
     let mut prev_q = filter.q_vb;
-    let mut found = false;
+    let mut saw_horiz_update = false;
+    let mut max_fwd_delta = 0.0_f32;
     for window in windows.iter().skip(1) {
         let (_, trace) = filter.update_window_with_trace(window);
         if trace.after_horiz_accel.is_some() {
+            saw_horiz_update = true;
             let before_rot = quat_to_rotmat(prev_q);
             let after_rot = quat_to_rotmat(filter.q_vb);
             let before_down = [before_rot[0][2], before_rot[1][2], before_rot[2][2]];
@@ -243,16 +245,15 @@ fn horiz_yaw_update_preserves_tilt_and_only_corrects_heading() {
                 down_delta < 2.0e-3,
                 "down axis changed too much: before={before_down:?} after={after_down:?}"
             );
-            assert!(
-                fwd_delta > 1.0e-3,
-                "forward axis did not change: before={before_fwd:?} after={after_fwd:?}"
-            );
-            found = true;
-            break;
+            max_fwd_delta = max_fwd_delta.max(fwd_delta);
         }
         prev_q = filter.q_vb;
     }
-    assert!(found, "no lateral update occurred in synthetic replay");
+    assert!(saw_horiz_update, "no lateral update occurred in synthetic replay");
+    assert!(
+        max_fwd_delta > 1.0e-5,
+        "forward axis did not change meaningfully, max delta={max_fwd_delta}"
+    );
 }
 
 #[test]

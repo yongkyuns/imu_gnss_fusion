@@ -2,7 +2,7 @@ mod align_compare;
 pub mod align_nhc_bootstrap;
 mod align_nhc_compare;
 pub mod align_replay;
-mod ekf_compare;
+pub mod ekf_compare;
 mod signals;
 mod tag_time;
 pub mod timebase;

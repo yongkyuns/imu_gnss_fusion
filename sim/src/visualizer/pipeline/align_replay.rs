@@ -238,6 +238,7 @@ pub fn build_align_replay(
     let mut align = Align::new(cfg);
     let mut bootstrap = BootstrapDetector::new(bootstrap_cfg);
     let mut align_initialized = false;
+    let mut prev_coarse_alignment_ready = false;
     let mut scan_idx = 0usize;
     let mut interval_start_idx = 0usize;
     let mut prev_nav: Option<(f64, NavPvtObs)> = None;
@@ -354,6 +355,9 @@ pub fn build_align_replay(
                     align.q_vb[2] as f64,
                     align.q_vb[3] as f64,
                 ];
+                let yaw_initialized_now =
+                    trace.coarse_alignment_ready && !prev_coarse_alignment_ready;
+                prev_coarse_alignment_ready = trace.coarse_alignment_ready;
                 let align_rpy_deg = {
                     let (r, p, y) =
                         quat_rpy_alg_deg(q_align[0], q_align[1], q_align[2], q_align[3]);
@@ -459,8 +463,7 @@ pub fn build_align_replay(
                     upd_course: cfg.use_course_rate && turn_valid,
                     upd_lat: false,
                     upd_long: cfg.use_longitudinal_accel && long_valid,
-                    yaw_initialized: trace.after_yaw_seed.is_some()
-                        || trace.after_branch_resolve.is_some(),
+                    yaw_initialized: yaw_initialized_now,
                     contrib: align_update_contrib_deg(trace),
                     p_diag: [
                         align.P[0][0] as f64,

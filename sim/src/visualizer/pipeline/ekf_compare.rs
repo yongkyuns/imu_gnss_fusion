@@ -49,9 +49,9 @@ pub fn build_ekf_compare_traces(
     ekf_imu_source: EkfImuSource,
 ) -> EkfCompareData {
     const R_BODY_VEL: f32 = 1.0;
-    const YAW_INIT_SPEED_MPS: f64 = 20.0 / 3.6;
-    const GNSS_POS_R_SCALE: f64 = 10.0;
-    const GNSS_VEL_R_SCALE: f64 = 20.0;
+    const YAW_INIT_SPEED_MPS: f64 = 0.0 / 3.6;
+    const GNSS_POS_R_SCALE: f64 = 1.0;
+    const GNSS_VEL_R_SCALE: f64 = 1.0;
 
     if tl.masters.is_empty() {
         return EkfCompareData {
@@ -310,6 +310,7 @@ pub fn build_ekf_compare_traces(
     let mut next_gps_update_ms = f64::NEG_INFINITY;
     let gps_period_ms = 500.0_f64;
     let mut yaw_initialized_from_vel = false;
+    let mut ekf_initialized = ekf_imu_source == EkfImuSource::EsfAlg;
     for pkt in &imu_packets {
         while alg_idx < alg_events.len() && alg_events[alg_idx].t_ms <= pkt.t_ms {
             cur_alg = Some(alg_events[alg_idx]);
@@ -378,6 +379,41 @@ pub fn build_ekf_compare_traces(
                 }
             }
         }
+        if ekf_imu_source == EkfImuSource::Align && !ekf_initialized {
+            let mut initialized_this_pkt = false;
+            while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
+                let (t_ms, nav) = nav_events[nav_idx];
+                nav_idx += 1;
+                if !use_nav2_for_ekf {
+                    if !next_gps_update_ms.is_finite() {
+                        next_gps_update_ms = t_ms;
+                    }
+                    if t_ms + 1e-6 < next_gps_update_ms {
+                        continue;
+                    }
+                    next_gps_update_ms += gps_period_ms;
+                }
+
+                if !origin_set {
+                    ref_lat = nav.lat_deg;
+                    ref_lon = nav.lon_deg;
+                    ref_h = nav.height_m;
+                    ref_ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
+                    origin_set = true;
+                }
+                let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
+                let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
+                initialize_ekf_from_gnss(&mut ekf, nav, ned);
+                ekf_initialized = true;
+                yaw_initialized_from_vel = true;
+                initialized_this_pkt = true;
+                break;
+            }
+            if initialized_this_pkt {
+                continue;
+            }
+        }
+
         let imu = ImuSample {
             dax: (deg2rad(gyro[0]) * dt) as f32,
             day: (deg2rad(gyro[1]) * dt) as f32,
@@ -387,6 +423,13 @@ pub fn build_ekf_compare_traces(
             dvz: (accel[2] * dt) as f32,
             dt: dt as f32,
         };
+        if !ekf_initialized {
+            while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
+                nav_idx += 1;
+            }
+            continue;
+        }
+
         ekf_predict(&mut ekf, &imu, None);
         clamp_ekf_biases(&mut ekf, dt);
 
@@ -743,7 +786,7 @@ fn build_align_mount_events(
     let mut bootstrap = BootstrapDetector::new(bootstrap_cfg);
     let mut out = Vec::<(f64, [f32; 4])>::new();
     let mut align_initialized = false;
-    let mut branch_resolved = false;
+    let mut coarse_alignment_ready = false;
     let mut scan_idx = 0usize;
     let mut interval_start_idx = 0usize;
     let mut prev_nav: Option<(f64, NavPvtObs)> = None;
@@ -809,10 +852,10 @@ fn build_align_mount_events(
                     ],
                 };
                 let (_, trace) = align.update_window_with_trace(&window);
-                if trace.after_branch_resolve.is_some() {
-                    branch_resolved = true;
+                if trace.coarse_alignment_ready {
+                    coarse_alignment_ready = true;
                 }
-                if branch_resolved {
+                if coarse_alignment_ready {
                     out.push((*tn, align.q_vb));
                 }
             }
@@ -823,6 +866,45 @@ fn build_align_mount_events(
     }
 
     out
+}
+
+fn initialize_ekf_from_gnss(ekf: &mut Ekf, nav: NavPvtObs, ned: [f64; 3]) {
+    *ekf = Ekf::default();
+    ekf.state.pn = ned[0] as f32;
+    ekf.state.pe = ned[1] as f32;
+    ekf.state.pd = ned[2] as f32;
+    ekf.state.vn = nav.vel_n_mps as f32;
+    ekf.state.ve = nav.vel_e_mps as f32;
+    ekf.state.vd = nav.vel_d_mps as f32;
+
+    let speed_h = nav.vel_n_mps.hypot(nav.vel_e_mps);
+    let yaw_from_gnss = if nav.head_veh_valid {
+        deg2rad(nav.heading_vehicle_deg)
+    } else if speed_h >= 1.0 {
+        nav.vel_e_mps.atan2(nav.vel_n_mps)
+    } else {
+        deg2rad(nav.heading_motion_deg)
+    };
+    set_quat_yaw_only(&mut ekf.state, yaw_from_gnss);
+
+    // Startup should trust the seeded attitude enough that short-term NHC updates
+    // cannot drag the filter into the opposite heading basin before the next GNSS fix.
+    let att_sigma_rad = 2.0_f32.to_radians();
+    let quat_var = 0.25 * att_sigma_rad * att_sigma_rad;
+    for i in 0..4 {
+        ekf.p[i][i] = quat_var;
+    }
+
+    let vel_var = (nav.s_acc_mps.max(0.2) as f32).powi(2);
+    ekf.p[4][4] = vel_var;
+    ekf.p[5][5] = vel_var;
+    ekf.p[6][6] = vel_var;
+
+    let pos_h_var = (nav.h_acc_m.max(0.5) as f32).powi(2);
+    let pos_d_var = (nav.v_acc_m.max(0.5) as f32).powi(2);
+    ekf.p[7][7] = pos_h_var;
+    ekf.p[8][8] = pos_h_var;
+    ekf.p[9][9] = pos_d_var;
 }
 
 fn ema_update(prev: Option<f32>, sample: f32, alpha: f32) -> f32 {

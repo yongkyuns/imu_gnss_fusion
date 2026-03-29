@@ -403,7 +403,7 @@ pub fn build_align_nhc_compare_traces(
                         ],
                     };
                     let (_, align_trace) = align_mount.update_window_with_trace(&window);
-                    if !mount_branch_committed && align_trace.after_branch_resolve.is_some() {
+                    if !mount_branch_committed && align_trace.coarse_alignment_ready {
                         nhc.seed_mount_from_body_to_vehicle(
                             align_mount.q_vb,
                             [
