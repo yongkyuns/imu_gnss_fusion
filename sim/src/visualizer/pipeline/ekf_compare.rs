@@ -743,6 +743,7 @@ fn build_align_mount_events(
     let mut bootstrap = BootstrapDetector::new(bootstrap_cfg);
     let mut out = Vec::<(f64, [f32; 4])>::new();
     let mut align_initialized = false;
+    let mut branch_resolved = false;
     let mut scan_idx = 0usize;
     let mut interval_start_idx = 0usize;
     let mut prev_nav: Option<(f64, NavPvtObs)> = None;
@@ -764,7 +765,6 @@ fn build_align_mount_events(
                         .is_ok()
                 {
                     align_initialized = true;
-                    out.push((pkt.t_ms, align.q_vb));
                 }
             }
             scan_idx += 1;
@@ -808,8 +808,13 @@ fn build_align_mount_events(
                         nav.vel_d_mps as f32,
                     ],
                 };
-                align.update_window(&window);
-                out.push((*tn, align.q_vb));
+                let (_, trace) = align.update_window_with_trace(&window);
+                if trace.after_branch_resolve.is_some() {
+                    branch_resolved = true;
+                }
+                if branch_resolved {
+                    out.push((*tn, align.q_vb));
+                }
             }
         }
 
