@@ -48,7 +48,7 @@ pub fn build_ekf_compare_traces(
     tl: &MasterTimeline,
     ekf_imu_source: EkfImuSource,
 ) -> EkfCompareData {
-    const R_BODY_VEL: f32 = 1.0;
+    const R_BODY_VEL: f32 = 5.0;
     const YAW_INIT_SPEED_MPS: f64 = 0.0 / 3.6;
     const GNSS_POS_R_SCALE: f64 = 1.0;
     const GNSS_VEL_R_SCALE: f64 = 1.0;

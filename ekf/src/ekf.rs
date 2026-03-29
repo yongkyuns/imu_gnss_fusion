@@ -126,10 +126,10 @@ impl Default for PredictNoise {
     fn default() -> Self {
         Self {
             // Defaults aligned with visualize_pygpsdata_log's prior tuning.
-            gyro_var: 0.001, // [rad^2/s^2]
-            accel_var: 12.0, // [(m/s^2)^2]
-            gyro_bias_rw_var: 0.1e-9,
-            accel_bias_rw_var: 1.0e-8,
+            gyro_var: 0.0001, // [rad^2/s^2]
+            accel_var: 12.0,  // [(m/s^2)^2]
+            gyro_bias_rw_var: 0.002e-9,
+            accel_bias_rw_var: 0.2e-9,
         }
     }
 }
