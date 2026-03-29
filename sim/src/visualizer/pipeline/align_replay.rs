@@ -1,6 +1,9 @@
 use std::cmp::Ordering;
 
-use align_rs::align::{Align, AlignConfig, AlignUpdateTrace, AlignWindowSummary, GRAVITY_MPS2};
+use align_rs::align::{
+    Align, AlignConfig, AlignUpdateTrace, AlignWindowSummary, GRAVITY_MPS2,
+    leveled_horiz_accel_xy,
+};
 
 use crate::ubxlog::{
     NavPvtObs, UbxFrame, extract_esf_alg, extract_esf_raw_samples, extract_nav2_pvt_obs,
@@ -37,6 +40,7 @@ pub struct AlgEvent {
 
 #[derive(Clone, Copy, Default)]
 pub struct AlignEulerContrib {
+    pub horiz_accel: [f64; 3],
     pub turn_gyro: [f64; 3],
     pub course_rate: [f64; 3],
     pub lateral_accel: [f64; 3],
@@ -55,11 +59,44 @@ pub struct LongTraceSample {
     pub angle_err_deg: f64,
 }
 
+#[derive(Clone, Copy, Default)]
+pub struct HorizTraceSample {
+    pub angle_err_deg: f64,
+    pub effective_std_deg: f64,
+    pub gnss_norm_mps2: f64,
+    pub imu_norm_mps2: f64,
+    pub speed_q: f64,
+    pub accel_q: f64,
+    pub straight_q: f64,
+    pub turn_q: f64,
+    pub dominance_q: f64,
+    pub turn_core_valid: bool,
+    pub straight_core_valid: bool,
+    pub applied: bool,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct StartupTraceSample {
+    pub gnss_long_lp_mps2: f64,
+    pub gnss_lat_lp_mps2: f64,
+    pub imu_long_lp_mps2: f64,
+    pub imu_lat_lp_mps2: f64,
+    pub gate_valid: bool,
+    pub accepted: bool,
+    pub stable_windows: usize,
+    pub sample_count: usize,
+    pub alignment_score: f64,
+    pub emitted: bool,
+    pub emitted_theta_rad: Option<f64>,
+}
+
 #[derive(Clone, Copy)]
 pub struct AlignReplaySample {
     pub t_ms: f64,
     pub t_s: f64,
+    pub speed_mps: f64,
     pub q_align: [f64; 4],
+    pub horiz_accel_b: [f64; 3],
     pub align_rpy_deg: [f64; 3],
     pub alg_q: Option<[f64; 4]>,
     pub alg_rpy_deg: Option<[f64; 3]>,
@@ -78,6 +115,10 @@ pub struct AlignReplaySample {
     pub contrib: AlignEulerContrib,
     pub p_diag: [f64; 3],
     pub long_trace: LongTraceSample,
+    pub horiz_trace: HorizTraceSample,
+    pub startup_trace: StartupTraceSample,
+    pub startup_input_long_mps2: f64,
+    pub startup_input_lat_mps2: f64,
 }
 
 pub struct AlignReplayData {
@@ -239,8 +280,16 @@ pub fn build_align_replay(
                     accel_sum[2] += pkt.az_mps2 as f32;
                 }
                 let inv_n = 1.0 / (interval_packets.len() as f32);
-                let mean_gyro_b = [gyro_sum[0] * inv_n, gyro_sum[1] * inv_n, gyro_sum[2] * inv_n];
-                let mean_accel_b = [accel_sum[0] * inv_n, accel_sum[1] * inv_n, accel_sum[2] * inv_n];
+                let mean_gyro_b = [
+                    gyro_sum[0] * inv_n,
+                    gyro_sum[1] * inv_n,
+                    gyro_sum[2] * inv_n,
+                ];
+                let mean_accel_b = [
+                    accel_sum[0] * inv_n,
+                    accel_sum[1] * inv_n,
+                    accel_sum[2] * inv_n,
+                ];
                 let window = AlignWindowSummary {
                     dt,
                     mean_gyro_b,
@@ -279,10 +328,14 @@ pub fn build_align_replay(
                     (0.0, 0.0)
                 };
 
-                let gyro_norm =
-                    (mean_gyro_b[0] * mean_gyro_b[0] + mean_gyro_b[1] * mean_gyro_b[1] + mean_gyro_b[2] * mean_gyro_b[2]).sqrt();
-                let accel_norm =
-                    (mean_accel_b[0] * mean_accel_b[0] + mean_accel_b[1] * mean_accel_b[1] + mean_accel_b[2] * mean_accel_b[2]).sqrt();
+                let gyro_norm = (mean_gyro_b[0] * mean_gyro_b[0]
+                    + mean_gyro_b[1] * mean_gyro_b[1]
+                    + mean_gyro_b[2] * mean_gyro_b[2])
+                    .sqrt();
+                let accel_norm = (mean_accel_b[0] * mean_accel_b[0]
+                    + mean_accel_b[1] * mean_accel_b[1]
+                    + mean_accel_b[2] * mean_accel_b[2])
+                    .sqrt();
                 let speed_prev = (v_prev[0] * v_prev[0] + v_prev[1] * v_prev[1]).sqrt() as f32;
                 let speed_curr = (v_curr[0] * v_curr[0] + v_curr[1] * v_curr[1]).sqrt() as f32;
                 let speed_mid = 0.5_f32 * (speed_prev + speed_curr);
@@ -292,12 +345,18 @@ pub fn build_align_replay(
                 let turn_valid = speed_mid > cfg.min_speed_mps
                     && course_rate_dps.abs() > cfg.min_turn_rate_radps.to_degrees() as f64
                     && a_lat.abs() > cfg.min_lat_acc_mps2 as f64;
-                let long_valid =
-                    speed_mid > cfg.min_speed_mps && (a_long * a_long + a_lat * a_lat).sqrt() > cfg.min_long_acc_mps2 as f64;
+                let long_valid = speed_mid > cfg.min_speed_mps
+                    && (a_long * a_long + a_lat * a_lat).sqrt() > cfg.min_long_acc_mps2 as f64;
 
-                let q_align = [align.q_vb[0] as f64, align.q_vb[1] as f64, align.q_vb[2] as f64, align.q_vb[3] as f64];
+                let q_align = [
+                    align.q_vb[0] as f64,
+                    align.q_vb[1] as f64,
+                    align.q_vb[2] as f64,
+                    align.q_vb[3] as f64,
+                ];
                 let align_rpy_deg = {
-                    let (r, p, y) = quat_rpy_alg_deg(q_align[0], q_align[1], q_align[2], q_align[3]);
+                    let (r, p, y) =
+                        quat_rpy_alg_deg(q_align[0], q_align[1], q_align[2], q_align[3]);
                     [r, p, y]
                 };
                 let alg_q = interpolate_alg_quat(&alg_events, *tn);
@@ -316,11 +375,76 @@ pub fn build_align_replay(
                     imu_lat_lp_mps2: long_trace.imu_lat_lp_mps2 as f64,
                     angle_err_deg: (long_trace.angle_err_rad as f64).to_degrees(),
                 };
+                let horiz_trace = HorizTraceSample {
+                    angle_err_deg: trace
+                        .horiz_angle_err_rad
+                        .map(|v| (v as f64).to_degrees())
+                        .unwrap_or(f64::NAN),
+                    effective_std_deg: trace
+                        .horiz_effective_std_rad
+                        .map(|v| (v as f64).to_degrees())
+                        .unwrap_or(f64::NAN),
+                    gnss_norm_mps2: trace.horiz_gnss_norm_mps2.unwrap_or(f32::NAN) as f64,
+                    imu_norm_mps2: trace.horiz_imu_norm_mps2.unwrap_or(f32::NAN) as f64,
+                    speed_q: trace.horiz_speed_q.unwrap_or(f32::NAN) as f64,
+                    accel_q: trace.horiz_accel_q.unwrap_or(f32::NAN) as f64,
+                    straight_q: trace.horiz_straight_q.unwrap_or(f32::NAN) as f64,
+                    turn_q: trace.horiz_turn_q.unwrap_or(f32::NAN) as f64,
+                    dominance_q: trace.horiz_dominance_q.unwrap_or(f32::NAN) as f64,
+                    turn_core_valid: trace.horiz_turn_core_valid,
+                    straight_core_valid: trace.horiz_straight_core_valid,
+                    applied: trace.after_horiz_accel.is_some(),
+                };
+                let g_norm = (align.gravity_lp_b[0] * align.gravity_lp_b[0]
+                    + align.gravity_lp_b[1] * align.gravity_lp_b[1]
+                    + align.gravity_lp_b[2] * align.gravity_lp_b[2])
+                    .sqrt();
+                let horiz_accel_b = if g_norm > 1.0e-6 {
+                    let g_hat_b = [
+                        align.gravity_lp_b[0] / g_norm,
+                        align.gravity_lp_b[1] / g_norm,
+                        align.gravity_lp_b[2] / g_norm,
+                    ];
+                    let accel_proj = mean_accel_b[0] * g_hat_b[0]
+                        + mean_accel_b[1] * g_hat_b[1]
+                        + mean_accel_b[2] * g_hat_b[2];
+                    [
+                        mean_accel_b[0] - g_hat_b[0] * accel_proj,
+                        mean_accel_b[1] - g_hat_b[1] * accel_proj,
+                        mean_accel_b[2] - g_hat_b[2] * accel_proj,
+                    ]
+                } else {
+                    mean_accel_b
+                };
+                let startup_horiz_xy = trace.startup_input_xy.unwrap_or_else(|| {
+                    leveled_horiz_accel_xy(align.gravity_lp_b, horiz_accel_b)
+                        .unwrap_or([horiz_accel_b[0], horiz_accel_b[1]])
+                });
+                let startup_trace = trace.startup_trace.unwrap_or_default();
+                let startup_trace = StartupTraceSample {
+                    gnss_long_lp_mps2: startup_trace.gnss_long_lp_mps2 as f64,
+                    gnss_lat_lp_mps2: startup_trace.gnss_lat_lp_mps2 as f64,
+                    imu_long_lp_mps2: startup_trace.imu_long_lp_mps2 as f64,
+                    imu_lat_lp_mps2: startup_trace.imu_lat_lp_mps2 as f64,
+                    gate_valid: startup_trace.gate_valid,
+                    accepted: startup_trace.accepted,
+                    stable_windows: startup_trace.stable_windows,
+                    sample_count: startup_trace.sample_count,
+                    alignment_score: startup_trace.alignment_score as f64,
+                    emitted: startup_trace.emitted,
+                    emitted_theta_rad: startup_trace.emitted_theta_rad.map(|v| v as f64),
+                };
 
                 samples.push(AlignReplaySample {
                     t_ms: *tn,
                     t_s: (*tn - tl.t0_master_ms) * 1.0e-3,
+                    speed_mps: speed_mid as f64,
                     q_align,
+                    horiz_accel_b: [
+                        horiz_accel_b[0] as f64,
+                        horiz_accel_b[1] as f64,
+                        horiz_accel_b[2] as f64,
+                    ],
                     align_rpy_deg,
                     alg_q,
                     alg_rpy_deg,
@@ -333,12 +457,21 @@ pub fn build_align_replay(
                     upd_gravity: cfg.use_gravity && stationary,
                     upd_turn_gyro: cfg.use_turn_gyro && turn_valid,
                     upd_course: cfg.use_course_rate && turn_valid,
-                    upd_lat: cfg.use_lateral_accel && turn_valid,
+                    upd_lat: false,
                     upd_long: cfg.use_longitudinal_accel && long_valid,
-                    yaw_initialized: trace.after_pca_yaw_seed.is_some(),
+                    yaw_initialized: trace.after_yaw_seed.is_some()
+                        || trace.after_branch_resolve.is_some(),
                     contrib: align_update_contrib_deg(trace),
-                    p_diag: [align.P[0][0] as f64, align.P[1][1] as f64, align.P[2][2] as f64],
+                    p_diag: [
+                        align.P[0][0] as f64,
+                        align.P[1][1] as f64,
+                        align.P[2][2] as f64,
+                    ],
                     long_trace,
+                    horiz_trace,
+                    startup_trace,
+                    startup_input_long_mps2: startup_horiz_xy[0] as f64,
+                    startup_input_lat_mps2: startup_horiz_xy[1] as f64,
                 });
             }
         }
@@ -369,7 +502,11 @@ impl BootstrapDetector {
         let gyro_norm = norm3(gyro_radps);
         let accel_err = (norm3(accel_b) - GRAVITY_MPS2).abs();
         self.gyro_ema = Some(ema_update(self.gyro_ema, gyro_norm, self.cfg.ema_alpha));
-        self.accel_err_ema = Some(ema_update(self.accel_err_ema, accel_err, self.cfg.ema_alpha));
+        self.accel_err_ema = Some(ema_update(
+            self.accel_err_ema,
+            accel_err,
+            self.cfg.ema_alpha,
+        ));
         self.speed_ema = Some(ema_update(self.speed_ema, speed_mps, self.cfg.ema_alpha));
 
         let stationary = self.speed_ema.unwrap_or(speed_mps) <= self.cfg.max_speed_mps
@@ -393,7 +530,11 @@ fn ema_update(prev: Option<f32>, sample: f32, alpha: f32) -> f32 {
     }
 }
 
-fn speed_for_bootstrap(prev_nav: Option<(f64, NavPvtObs)>, curr_nav: (f64, NavPvtObs), t_ms: f64) -> f64 {
+fn speed_for_bootstrap(
+    prev_nav: Option<(f64, NavPvtObs)>,
+    curr_nav: (f64, NavPvtObs),
+    t_ms: f64,
+) -> f64 {
     let speed_curr = horizontal_speed(curr_nav.1);
     let Some((t_prev, nav_prev)) = prev_nav else {
         return speed_curr;
@@ -417,9 +558,18 @@ pub fn esf_alg_flu_to_frd_mount_quat(roll_deg: f64, pitch_deg: f64, yaw_deg: f64
     quat_normalize(quat_mul(quat_conj(q_flu), q_x_180))
 }
 
+pub fn frd_mount_quat_to_esf_alg_flu_quat(q_frd: [f64; 4]) -> [f64; 4] {
+    let q_x_180 = [0.0, 1.0, 0.0, 0.0];
+    quat_normalize(quat_mul(q_x_180, quat_conj(q_frd)))
+}
+
 fn quat_nlerp_shortest(a: [f64; 4], b: [f64; 4], alpha: f64) -> [f64; 4] {
     let dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
-    let bb = if dot < 0.0 { [-b[0], -b[1], -b[2], -b[3]] } else { b };
+    let bb = if dot < 0.0 {
+        [-b[0], -b[1], -b[2], -b[3]]
+    } else {
+        b
+    };
     quat_normalize([
         a[0] + alpha * (bb[0] - a[0]),
         a[1] + alpha * (bb[1] - a[1]),
@@ -464,7 +614,11 @@ pub fn quat_rpy_alg_deg(q0: f64, q1: f64, q2: f64, q3: f64) -> (f64, f64, f64) {
     let pitch = (-r20).clamp(-1.0, 1.0).asin();
     let roll = r21.atan2(r22);
     let yaw = r10.atan2(r00);
-    (roll.to_degrees(), pitch.to_degrees(), normalize_heading_deg(yaw.to_degrees()))
+    (
+        roll.to_degrees(),
+        pitch.to_degrees(),
+        normalize_heading_deg(yaw.to_degrees()),
+    )
 }
 
 fn quat_from_rpy_alg_deg(roll_deg: f64, pitch_deg: f64, yaw_deg: f64) -> [f64; 4] {
@@ -481,7 +635,11 @@ fn quat_from_rpy_alg_deg(roll_deg: f64, pitch_deg: f64, yaw_deg: f64) -> [f64; 4
 
 fn quat_normalize(q: [f64; 4]) -> [f64; 4] {
     let n = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
-    if n <= 1.0e-12 { [1.0, 0.0, 0.0, 0.0] } else { [q[0] / n, q[1] / n, q[2] / n, q[3] / n] }
+    if n <= 1.0e-12 {
+        [1.0, 0.0, 0.0, 0.0]
+    } else {
+        [q[0] / n, q[1] / n, q[2] / n, q[3] / n]
+    }
 }
 
 fn quat_mul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
@@ -540,13 +698,31 @@ fn wrap_deg180(x: f64) -> f64 {
     (x + 180.0).rem_euclid(360.0) - 180.0
 }
 
-fn rpy_delta_deg(before_q: [f32; 4], after_q: [f32; 4]) -> [f64; 3] {
-    let before = quat_to_rpy_alg_deg(before_q);
-    let after = quat_to_rpy_alg_deg(after_q);
+fn local_rotation_delta_deg(before_q: [f32; 4], after_q: [f32; 4]) -> [f64; 3] {
+    let before = [
+        before_q[0] as f64,
+        before_q[1] as f64,
+        before_q[2] as f64,
+        before_q[3] as f64,
+    ];
+    let after = [
+        after_q[0] as f64,
+        after_q[1] as f64,
+        after_q[2] as f64,
+        after_q[3] as f64,
+    ];
+    let dq = quat_normalize(quat_mul(after, quat_conj(before)));
+    let v = [dq[1], dq[2], dq[3]];
+    let s = norm3_f64(v);
+    if s <= 1.0e-12 {
+        return [0.0, 0.0, 0.0];
+    }
+    let angle = 2.0 * s.atan2(dq[0]);
+    let scale = angle / s;
     [
-        wrap_deg180(after[0] - before[0]),
-        wrap_deg180(after[1] - before[1]),
-        wrap_deg180(after[2] - before[2]),
+        (v[0] * scale).to_degrees(),
+        (v[1] * scale).to_degrees(),
+        (v[2] * scale).to_degrees(),
     ]
 }
 
@@ -556,20 +732,20 @@ fn align_update_contrib_deg(trace: AlignUpdateTrace) -> AlignEulerContrib {
     if let Some(q) = trace.after_gravity {
         prev_q = q;
     }
+    if let Some(q) = trace.after_horiz_accel {
+        out.horiz_accel = local_rotation_delta_deg(prev_q, q);
+        prev_q = q;
+    }
     if let Some(q) = trace.after_turn_gyro {
-        out.turn_gyro = rpy_delta_deg(prev_q, q);
+        out.turn_gyro = local_rotation_delta_deg(prev_q, q);
         prev_q = q;
     }
     if let Some(q) = trace.after_course_rate {
-        out.course_rate = rpy_delta_deg(prev_q, q);
-        prev_q = q;
-    }
-    if let Some(q) = trace.after_lateral_accel {
-        out.lateral_accel = rpy_delta_deg(prev_q, q);
+        out.course_rate = local_rotation_delta_deg(prev_q, q);
         prev_q = q;
     }
     if let Some(q) = trace.after_longitudinal_accel {
-        out.longitudinal_accel = rpy_delta_deg(prev_q, q);
+        out.longitudinal_accel = local_rotation_delta_deg(prev_q, q);
     }
     out
 }
@@ -593,11 +769,7 @@ fn normalize3_f64(v: [f64; 3]) -> [f64; 3] {
 
 fn project_orth_f64(v: [f64; 3], axis: [f64; 3]) -> [f64; 3] {
     let d = dot3_f64(v, axis);
-    [
-        v[0] - d * axis[0],
-        v[1] - d * axis[1],
-        v[2] - d * axis[2],
-    ]
+    [v[0] - d * axis[0], v[1] - d * axis[1], v[2] - d * axis[2]]
 }
 
 fn dot3_f64(a: [f64; 3], b: [f64; 3]) -> f64 {

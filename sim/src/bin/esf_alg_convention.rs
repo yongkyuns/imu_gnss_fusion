@@ -520,7 +520,11 @@ fn mean_imu(packets: &[ImuPacket]) -> ([f32; 3], [f32; 3]) {
         accel[2] += pkt.az_mps2;
     }
     (
-        [(gyro[0] / n) as f32, (gyro[1] / n) as f32, (gyro[2] / n) as f32],
+        [
+            (gyro[0] / n) as f32,
+            (gyro[1] / n) as f32,
+            (gyro[2] / n) as f32,
+        ],
         [
             (accel[0] / n) as f32,
             (accel[1] / n) as f32,
@@ -570,7 +574,12 @@ fn build_master_timeline(frames: &[UbxFrame]) -> MasterTimeline {
     }
 }
 
-fn fit_tag_ms_map(raw_seq: &[u64], raw_tag: &[u64], masters: &[(u64, f64)], wrap: u64) -> (Vec<u64>, f64, f64) {
+fn fit_tag_ms_map(
+    raw_seq: &[u64],
+    raw_tag: &[u64],
+    masters: &[(u64, f64)],
+    wrap: u64,
+) -> (Vec<u64>, f64, f64) {
     let _ = raw_seq;
     let raw_tag_u64 = unwrap_counter(raw_tag, wrap);
     let mut xs = Vec::<f64>::new();

@@ -4484,6 +4484,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "logger"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "rerun",
+ "serialport",
+ "ublox",
+ "uuid",
+]
+
+[[package]]
 name = "lru"
 version = "0.16.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9592,19 +9605,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "logger"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "rerun",
- "serialport",
- "ublox",
- "uuid",
 ]
 
 [[package]]

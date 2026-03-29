@@ -176,7 +176,9 @@ impl eframe::App for App {
                 ui.label("Page:");
                 ui.selectable_value(&mut self.page, Page::Signals, "Signals");
                 ui.selectable_value(&mut self.page, Page::EkfCompare, "EKF Compare");
-                ui.selectable_value(&mut self.page, Page::AlignCompare, "Misalign Compare");
+                ui.selectable_value(&mut self.page, Page::AlignCompare, "Align Compare");
+                ui.selectable_value(&mut self.page, Page::AlignStartup, "Align Startup");
+                ui.selectable_value(&mut self.page, Page::AlignNhcCompare, "Align NHC");
                 ui.selectable_value(&mut self.page, Page::MapDark, "Map (Dark)");
             });
         });
@@ -368,7 +370,7 @@ impl eframe::App for App {
                         );
                         draw_plot(
                             ui,
-                            "Align Motion Classification / Updates",
+                            "Final ESF-ALG vs PCA Heading",
                             &self.data.align_motion,
                             true,
                             self.max_points_per_trace,
@@ -401,6 +403,133 @@ impl eframe::App for App {
                         ui,
                         "Align Covariance Diagonal",
                         &self.data.align_cov,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                });
+            }
+            Page::AlignStartup => {
+                let half_width = (ctx.content_rect().width() * 0.5).max(260.0);
+                egui::SidePanel::left("align_startup_left")
+                    .resizable(false)
+                    .exact_width(half_width)
+                    .show(ctx, |ui| {
+                        draw_plot(
+                            ui,
+                            "Unified Startup Components",
+                            &self.data.align_startup,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "Unified Startup Angles",
+                            &self.data.align_startup_angles,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                    });
+
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    draw_plot(
+                        ui,
+                        "Unified Startup Full Angles",
+                        &self.data.align_startup_full_angles,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "Unified Startup Full Angles (Final ESF-ALG)",
+                        &self.data.align_startup_esf_full_angles,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "Align Window Diagnostics",
+                        &self.data.align_res_vel,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "Align Axis Error vs ESF-ALG",
+                        &self.data.align_axis_err,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                });
+            }
+            Page::AlignNhcCompare => {
+                let half_width = (ctx.content_rect().width() * 0.5).max(260.0);
+                egui::SidePanel::left("align_nhc_compare_left")
+                    .resizable(false)
+                    .exact_width(half_width)
+                    .show(ctx, |ui| {
+                        draw_plot(
+                            ui,
+                            "Euler Angles: AlignNhc vs ESF-ALG",
+                            &self.data.align_nhc_cmp_att,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "AlignNhc Yaws",
+                            &self.data.align_nhc_yaws,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "AlignNhc State Tracking",
+                            &self.data.align_nhc_states,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "AlignNhc Window Diagnostics",
+                            &self.data.align_nhc_diag,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "AlignNhc Axis Error vs ESF-ALG",
+                            &self.data.align_nhc_axis_err,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                    });
+
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    draw_plot(
+                        ui,
+                        "AlignNhc Biases",
+                        &self.data.align_nhc_biases,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "AlignNhc Residuals",
+                        &self.data.align_nhc_residuals,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "Euler Angles: AlignNhc Vehicle vs NAV-ATT",
+                        &self.data.align_nhc_gates,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "AlignNhc Covariance Diagonal",
+                        &self.data.align_nhc_cov,
                         true,
                         self.max_points_per_trace,
                     );
@@ -461,6 +590,80 @@ fn draw_plot(
         xmax: f64,
         max_points: usize,
     ) -> Vec<[f64; 2]> {
+        fn decimate_finite_slice(slice: &[[f64; 2]], max_points: usize) -> Vec<[f64; 2]> {
+            if slice.len() <= max_points || max_points == 0 {
+                return slice.to_vec();
+            }
+
+            let buckets = (max_points / 2).max(1);
+            let x0 = slice.first().map(|p| p[0]).unwrap_or(0.0);
+            let x1 = slice.last().map(|p| p[0]).unwrap_or(0.0);
+            let span = (x1 - x0).abs();
+            if span <= f64::EPSILON {
+                let step = ((slice.len() as f64) / (max_points as f64)).ceil() as usize;
+                return slice.iter().step_by(step.max(1)).copied().collect();
+            }
+
+            let mut min_b: Vec<Option<(usize, f64)>> = vec![None; buckets];
+            let mut max_b: Vec<Option<(usize, f64)>> = vec![None; buckets];
+            for (i, p) in slice.iter().enumerate() {
+                let mut b = (((p[0] - x0) / span) * buckets as f64).floor() as usize;
+                if b >= buckets {
+                    b = buckets - 1;
+                }
+                match min_b[b] {
+                    Some((_, y)) if p[1] >= y => {}
+                    _ => min_b[b] = Some((i, p[1])),
+                }
+                match max_b[b] {
+                    Some((_, y)) if p[1] <= y => {}
+                    _ => max_b[b] = Some((i, p[1])),
+                }
+            }
+
+            let mut out = Vec::with_capacity(max_points);
+            let mut last_idx: Option<usize> = None;
+            for b in 0..buckets {
+                let a = min_b[b].map(|(i, _)| i);
+                let c = max_b[b].map(|(i, _)| i);
+                match (a, c) {
+                    (Some(i0), Some(i1)) if i0 == i1 => {
+                        if last_idx != Some(i0) {
+                            out.push(slice[i0]);
+                            last_idx = Some(i0);
+                        }
+                    }
+                    (Some(i0), Some(i1)) => {
+                        let (first, second) = if i0 < i1 { (i0, i1) } else { (i1, i0) };
+                        if last_idx != Some(first) {
+                            out.push(slice[first]);
+                            last_idx = Some(first);
+                        }
+                        if out.len() < max_points && last_idx != Some(second) {
+                            out.push(slice[second]);
+                            last_idx = Some(second);
+                        }
+                    }
+                    (Some(i0), None) | (None, Some(i0)) => {
+                        if last_idx != Some(i0) {
+                            out.push(slice[i0]);
+                            last_idx = Some(i0);
+                        }
+                    }
+                    (None, None) => {}
+                }
+                if out.len() >= max_points {
+                    break;
+                }
+            }
+
+            if out.is_empty() {
+                let step = ((slice.len() as f64) / (max_points as f64)).ceil() as usize;
+                return slice.iter().step_by(step.max(1)).copied().collect();
+            }
+            out
+        }
+
         if points.is_empty() {
             return Vec::new();
         }
@@ -473,75 +676,30 @@ fn draw_plot(
             points.len()
         };
         let slice = &points[start..end];
-        if slice.len() <= max_points || max_points == 0 {
-            return slice.to_vec();
-        }
-
-        let buckets = (max_points / 2).max(1);
-        let x0 = slice.first().map(|p| p[0]).unwrap_or(xmin);
-        let x1 = slice.last().map(|p| p[0]).unwrap_or(xmax);
-        let span = (x1 - x0).abs();
-        if span <= f64::EPSILON {
-            let step = ((slice.len() as f64) / (max_points as f64)).ceil() as usize;
-            return slice.iter().step_by(step.max(1)).copied().collect();
-        }
-
-        let mut min_b: Vec<Option<(usize, f64)>> = vec![None; buckets];
-        let mut max_b: Vec<Option<(usize, f64)>> = vec![None; buckets];
-        for (i, p) in slice.iter().enumerate() {
-            let mut b = (((p[0] - x0) / span) * buckets as f64).floor() as usize;
-            if b >= buckets {
-                b = buckets - 1;
+        let mut out = Vec::new();
+        let mut seg_start = 0usize;
+        while seg_start < slice.len() {
+            while seg_start < slice.len()
+                && (!slice[seg_start][0].is_finite() || !slice[seg_start][1].is_finite())
+            {
+                out.push(slice[seg_start]);
+                seg_start += 1;
             }
-            match min_b[b] {
-                Some((_, y)) if p[1] >= y => {}
-                _ => min_b[b] = Some((i, p[1])),
-            }
-            match max_b[b] {
-                Some((_, y)) if p[1] <= y => {}
-                _ => max_b[b] = Some((i, p[1])),
-            }
-        }
-
-        let mut out = Vec::with_capacity(max_points);
-        let mut last_idx: Option<usize> = None;
-        for b in 0..buckets {
-            let a = min_b[b].map(|(i, _)| i);
-            let c = max_b[b].map(|(i, _)| i);
-            match (a, c) {
-                (Some(i0), Some(i1)) if i0 == i1 => {
-                    if last_idx != Some(i0) {
-                        out.push(slice[i0]);
-                        last_idx = Some(i0);
-                    }
-                }
-                (Some(i0), Some(i1)) => {
-                    let (first, second) = if i0 < i1 { (i0, i1) } else { (i1, i0) };
-                    if last_idx != Some(first) {
-                        out.push(slice[first]);
-                        last_idx = Some(first);
-                    }
-                    if out.len() < max_points && last_idx != Some(second) {
-                        out.push(slice[second]);
-                        last_idx = Some(second);
-                    }
-                }
-                (Some(i0), None) | (None, Some(i0)) => {
-                    if last_idx != Some(i0) {
-                        out.push(slice[i0]);
-                        last_idx = Some(i0);
-                    }
-                }
-                (None, None) => {}
-            }
-            if out.len() >= max_points {
+            if seg_start >= slice.len() {
                 break;
             }
-        }
-
-        if out.is_empty() {
-            let step = ((slice.len() as f64) / (max_points as f64)).ceil() as usize;
-            return slice.iter().step_by(step.max(1)).copied().collect();
+            let mut seg_end = seg_start;
+            while seg_end < slice.len()
+                && slice[seg_end][0].is_finite()
+                && slice[seg_end][1].is_finite()
+            {
+                seg_end += 1;
+            }
+            out.extend(decimate_finite_slice(&slice[seg_start..seg_end], max_points));
+            if seg_end < slice.len() {
+                out.push(slice[seg_end]);
+            }
+            seg_start = seg_end + 1;
         }
         out
     }
@@ -580,6 +738,35 @@ fn draw_plot(
                 }
             }
         });
+    });
+}
+
+fn draw_scatter_plot(ui: &mut egui::Ui, title: &str, traces: &[Trace]) {
+    ui.vertical(|ui| {
+        ui.label(title);
+        Plot::new(title)
+            .height(520.0)
+            .data_aspect(1.0)
+            .allow_drag(true)
+            .allow_zoom(true)
+            .allow_scroll(true)
+            .allow_boxed_zoom(true)
+            .allow_axis_zoom_drag(true)
+            .legend(Legend::default())
+            .show(ui, |plot_ui| {
+                for t in traces {
+                    if t.points.is_empty() {
+                        continue;
+                    }
+                    let points: PlotPoints<'_> = t.points.clone().into();
+                    if t.name.ends_with("points") {
+                        let radius = if t.name.starts_with("IMU") { 1.8 } else { 2.2 };
+                        plot_ui.points(Points::new(t.name.clone(), points).radius(radius));
+                    } else {
+                        plot_ui.line(Line::new(t.name.clone(), points));
+                    }
+                }
+            });
     });
 }
 

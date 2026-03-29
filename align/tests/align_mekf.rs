@@ -208,13 +208,12 @@ fn wrap_deg180(mut v: f32) -> f32 {
 }
 
 #[test]
-fn lateral_update_preserves_tilt_and_only_corrects_heading() {
+fn horiz_yaw_update_preserves_tilt_and_only_corrects_heading() {
     let truth = [25.0_f32, -20.0_f32, 120.0_f32];
     let (stationary_accel, windows) = simulate_windows(truth, 4);
     assert!(stationary_accel.len() >= 100);
 
     let mut cfg = AlignConfig::default();
-    cfg.use_lateral_accel = true;
     cfg.use_longitudinal_accel = false;
     let mut filter = Align::new(cfg);
     filter
@@ -225,7 +224,7 @@ fn lateral_update_preserves_tilt_and_only_corrects_heading() {
     let mut found = false;
     for window in windows.iter().skip(1) {
         let (_, trace) = filter.update_window_with_trace(window);
-        if trace.after_lateral_accel.is_some() {
+        if trace.after_horiz_accel.is_some() {
             let before_rot = quat_to_rotmat(prev_q);
             let after_rot = quat_to_rotmat(filter.q_vb);
             let before_down = [before_rot[0][2], before_rot[1][2], before_rot[2][2]];
@@ -286,6 +285,9 @@ fn stationary_yaw_seed_preserves_gravity_down_axis() {
             + (got[1] - expected_down_b[1]).powi(2)
             + (got[2] - expected_down_b[2]).powi(2))
         .sqrt();
-        assert!(err < 1.0e-3, "{name} down-axis mismatch: {got:?} vs {expected_down_b:?}");
+        assert!(
+            err < 1.0e-3,
+            "{name} down-axis mismatch: {got:?} vs {expected_down_b:?}"
+        );
     }
 }

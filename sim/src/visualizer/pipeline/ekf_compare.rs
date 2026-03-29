@@ -50,6 +50,8 @@ pub fn build_ekf_compare_traces(
 ) -> EkfCompareData {
     const R_BODY_VEL: f32 = 1.0;
     const YAW_INIT_SPEED_MPS: f64 = 20.0 / 3.6;
+    const GNSS_POS_R_SCALE: f64 = 10.0;
+    const GNSS_VEL_R_SCALE: f64 = 20.0;
 
     if tl.masters.is_empty() {
         return EkfCompareData {
@@ -419,9 +421,9 @@ pub fn build_ekf_compare_traces(
                 set_quat_yaw_only(&mut ekf.state, yaw_from_vel);
                 yaw_initialized_from_vel = true;
             }
-            let h_acc2 = (nav.h_acc_m * nav.h_acc_m).max(0.05) * 80.0;
-            let v_acc2 = (nav.v_acc_m * nav.v_acc_m).max(0.05) * 80.0;
-            let s_acc2 = (nav.s_acc_mps * nav.s_acc_mps).max(0.02) * 80.0;
+            let h_acc2 = (nav.h_acc_m * nav.h_acc_m).max(0.05) * GNSS_POS_R_SCALE;
+            let v_acc2 = (nav.v_acc_m * nav.v_acc_m).max(0.05) * GNSS_POS_R_SCALE;
+            let s_acc2 = (nav.s_acc_mps * nav.s_acc_mps).max(0.02) * GNSS_VEL_R_SCALE;
             let gps = GpsData {
                 pos_n: ned[0] as f32,
                 pos_e: ned[1] as f32,
@@ -700,7 +702,11 @@ impl BootstrapDetector {
         let gyro_norm = norm3(gyro_radps);
         let accel_err = (norm3(accel_b) - GRAVITY_MPS2).abs();
         self.gyro_ema = Some(ema_update(self.gyro_ema, gyro_norm, self.cfg.ema_alpha));
-        self.accel_err_ema = Some(ema_update(self.accel_err_ema, accel_err, self.cfg.ema_alpha));
+        self.accel_err_ema = Some(ema_update(
+            self.accel_err_ema,
+            accel_err,
+            self.cfg.ema_alpha,
+        ));
         self.speed_ema = Some(ema_update(self.speed_ema, speed_mps, self.cfg.ema_alpha));
 
         let stationary = self.speed_ema.unwrap_or(speed_mps) <= self.cfg.max_speed_mps
@@ -737,6 +743,7 @@ fn build_align_mount_events(
     let mut bootstrap = BootstrapDetector::new(bootstrap_cfg);
     let mut out = Vec::<(f64, [f32; 4])>::new();
     let mut align_initialized = false;
+    let mut branch_resolved = false;
     let mut scan_idx = 0usize;
     let mut interval_start_idx = 0usize;
     let mut prev_nav: Option<(f64, NavPvtObs)> = None;
@@ -758,7 +765,6 @@ fn build_align_mount_events(
                         .is_ok()
                 {
                     align_initialized = true;
-                    out.push((pkt.t_ms, align.q_vb));
                 }
             }
             scan_idx += 1;
@@ -781,7 +787,11 @@ fn build_align_mount_events(
                 let inv_n = 1.0 / (interval_packets.len() as f32);
                 let window = AlignWindowSummary {
                     dt,
-                    mean_gyro_b: [gyro_sum[0] * inv_n, gyro_sum[1] * inv_n, gyro_sum[2] * inv_n],
+                    mean_gyro_b: [
+                        gyro_sum[0] * inv_n,
+                        gyro_sum[1] * inv_n,
+                        gyro_sum[2] * inv_n,
+                    ],
                     mean_accel_b: [
                         accel_sum[0] * inv_n,
                         accel_sum[1] * inv_n,
@@ -798,8 +808,13 @@ fn build_align_mount_events(
                         nav.vel_d_mps as f32,
                     ],
                 };
-                align.update_window(&window);
-                out.push((*tn, align.q_vb));
+                let (_, trace) = align.update_window_with_trace(&window);
+                if trace.after_branch_resolve.is_some() {
+                    branch_resolved = true;
+                }
+                if branch_resolved {
+                    out.push((*tn, align.q_vb));
+                }
             }
         }
 

@@ -160,9 +160,7 @@ fn signed_region(x: f32, deadband: f32) -> i8 {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        LongitudinalCueConfig, LongitudinalCueFilter, LongitudinalCueSample,
-    };
+    use super::{LongitudinalCueConfig, LongitudinalCueFilter, LongitudinalCueSample};
 
     #[test]
     fn requires_sign_persistence_before_emitting() {

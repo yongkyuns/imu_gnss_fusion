@@ -9,6 +9,7 @@ use crate::ubxlog::{
 use super::super::math::normalize_heading_deg;
 use super::super::model::{PlotData, Trace};
 use super::align_compare::AlignCompareData;
+use super::align_nhc_compare::AlignNhcCompareData;
 use super::ekf_compare::EkfCompareData;
 use super::tag_time::fit_tag_ms_map;
 use super::timebase::MasterTimeline;
@@ -18,6 +19,7 @@ pub fn build_signal_traces(
     tl: &MasterTimeline,
     ekf: EkfCompareData,
     align_data: AlignCompareData,
+    align_nhc_data: AlignNhcCompareData,
 ) -> PlotData {
     let mut speed_g = Vec::<[f64; 2]>::new();
     let mut speed_n = Vec::<[f64; 2]>::new();
@@ -287,6 +289,19 @@ pub fn build_signal_traces(
     out.align_res_vel = align_data.res_vel;
     out.align_axis_err = align_data.axis_err;
     out.align_motion = align_data.motion;
+    out.align_startup = align_data.startup;
+    out.align_startup_angles = align_data.startup_angles;
+    out.align_startup_full_angles = align_data.startup_full_angles;
+    out.align_startup_esf_full_angles = align_data.startup_esf_full_angles;
+    out.align_nhc_cmp_att = align_nhc_data.cmp_att;
+    out.align_nhc_yaws = align_nhc_data.yaws;
+    out.align_nhc_states = align_nhc_data.states;
+    out.align_nhc_biases = align_nhc_data.biases;
+    out.align_nhc_diag = align_nhc_data.diag;
+    out.align_nhc_axis_err = align_nhc_data.axis_err;
+    out.align_nhc_residuals = align_nhc_data.residuals;
+    out.align_nhc_gates = align_nhc_data.gates;
+    out.align_nhc_cov = align_nhc_data.cov;
     out.align_roll_contrib = align_data.roll_contrib;
     out.align_pitch_contrib = align_data.pitch_contrib;
     out.align_yaw_contrib = align_data.yaw_contrib;
@@ -299,10 +314,18 @@ pub fn build_signal_traces(
         for p in trace.points.iter().copied() {
             let t = p[0];
             let y = p[1];
-            if !t.is_finite() || !y.is_finite() {
+            if !t.is_finite() {
                 continue;
             }
             if t < -1e-6 || t > max_rel_s + 1.0 {
+                continue;
+            }
+            if !y.is_finite() {
+                if t + 1e-9 < last_t {
+                    continue;
+                }
+                cleaned.push([t, f64::NAN]);
+                last_t = t;
                 continue;
             }
             if t + 1e-9 < last_t {
@@ -336,6 +359,19 @@ pub fn build_signal_traces(
         &mut out.align_res_vel,
         &mut out.align_axis_err,
         &mut out.align_motion,
+        &mut out.align_startup,
+        &mut out.align_startup_angles,
+        &mut out.align_startup_full_angles,
+        &mut out.align_startup_esf_full_angles,
+        &mut out.align_nhc_cmp_att,
+        &mut out.align_nhc_yaws,
+        &mut out.align_nhc_states,
+        &mut out.align_nhc_biases,
+        &mut out.align_nhc_diag,
+        &mut out.align_nhc_axis_err,
+        &mut out.align_nhc_residuals,
+        &mut out.align_nhc_gates,
+        &mut out.align_nhc_cov,
         &mut out.align_roll_contrib,
         &mut out.align_pitch_contrib,
         &mut out.align_yaw_contrib,
@@ -350,6 +386,5 @@ pub fn build_signal_traces(
     for tr in &mut out.ekf_map {
         tr.points.retain(|p| p[0].is_finite() && p[1].is_finite());
     }
-
     out
 }

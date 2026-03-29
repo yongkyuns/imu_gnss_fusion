@@ -1,0 +1,760 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{hyperref}
+\usepackage{enumitem}
+
+\title{Mathematical Formulation of the Current AlignNhc Filter}
+\author{Derived from the implementation in \texttt{align/src/align\_nhc.rs}}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\tableofcontents
+\newpage
+
+\section{Purpose}
+
+This document describes the mathematical formulation implemented by the current
+\texttt{AlignNhc} filter in this repository. The goal of the filter is to estimate
+vehicle attitude, vehicle velocity, IMU-to-vehicle mounting attitude, and IMU
+biases using:
+
+\begin{itemize}[leftmargin=1.5em]
+\item IMU specific force and angular rate,
+\item GNSS velocity in navigation coordinates,
+\item a non-holonomic constraint (NHC),
+\item a planar-motion gyro constraint.
+\end{itemize}
+
+This write-up follows the code as implemented today. It is therefore a
+description of the actual estimator, not an idealized estimator.
+
+\section{Frames and Conventions}
+
+The filter uses three frames:
+
+\begin{itemize}[leftmargin=1.5em]
+\item \(n\): navigation frame,
+\item \(v\): vehicle frame,
+\item \(b\): IMU body frame.
+\end{itemize}
+
+The two principal attitudes are:
+
+\begin{align}
+\mathbf{C}_{n}^{b} &= \text{rotation from body to navigation}, \\
+\mathbf{C}_{v}^{b} &= \text{rotation from body to vehicle}.
+\end{align}
+
+In the code, these are stored as quaternions:
+
+\begin{align}
+\mathbf{q}_{nb} &\leftrightarrow \mathbf{C}_{n}^{b}, \\
+\mathbf{q}_{vb} &\leftrightarrow \mathbf{C}_{v}^{b}.
+\end{align}
+
+The code uses the convention that \(\mathbf{C}_{a}^{b}\mathbf{x}^{a}\) expresses a vector
+from frame \(a\) in frame \(b\). This can be verified from:
+
+\begin{align}
+\mathbf{v}^{b} = \mathbf{C}_{n}^{b^\top}\mathbf{v}^{n},
+\qquad
+\mathbf{v}^{v} = \mathbf{C}_{v}^{b}\mathbf{v}^{b},
+\end{align}
+
+which matches the implementation of the NHC prediction.
+
+\section{State Definition}
+
+The nominal state is
+\begin{align}
+\mathbf{x} =
+\begin{bmatrix}
+\mathbf{q}_{nb} \\
+\mathbf{v}^{n} \\
+\mathbf{q}_{vb} \\
+\mathbf{b}_{g} \\
+\mathbf{b}_{a}
+\end{bmatrix},
+\end{align}
+where:
+
+\begin{itemize}[leftmargin=1.5em]
+\item \(\mathbf{q}_{nb}\in \mathbb{H}\): navigation-to-body attitude,
+\item \(\mathbf{v}^{n}\in \mathbb{R}^{3}\): vehicle velocity in navigation frame,
+\item \(\mathbf{q}_{vb}\in \mathbb{H}\): vehicle-to-body mount attitude,
+\item \(\mathbf{b}_{g}\in \mathbb{R}^{3}\): gyro bias in body frame,
+\item \(\mathbf{b}_{a}\in \mathbb{R}^{3}\): accelerometer bias in body frame.
+\end{itemize}
+
+The linearized error state is 15-dimensional:
+\begin{align}
+\delta \mathbf{x} =
+\begin{bmatrix}
+\delta \bm{\theta}_{nb} \\
+\delta \mathbf{v}^{n} \\
+\delta \bm{\theta}_{vb} \\
+\delta \mathbf{b}_{g} \\
+\delta \mathbf{b}_{a}
+\end{bmatrix}
+\in \mathbb{R}^{15}.
+\end{align}
+
+The covariance is
+\begin{align}
+\mathbf{P}\in \mathbb{R}^{15\times 15}.
+\end{align}
+
+\section{Initialization}
+
+\subsection{Stationary Initialization Inputs}
+
+The filter initializes from stationary IMU samples:
+
+\begin{align}
+\{\mathbf{f}_{m,b}^{(k)}\}_{k=1}^{N}, \qquad
+\{\bm{\omega}_{m,b}^{(k)}\}_{k=1}^{N},
+\end{align}
+
+and optionally a yaw seed and a reference direction \(\mathbf{x}_{\text{ref}}\).
+
+Define the sample means:
+\begin{align}
+\bar{\mathbf{f}}_{b} &= \frac{1}{N}\sum_{k=1}^{N}\mathbf{f}_{m,b}^{(k)}, \\
+\bar{\bm{\omega}}_{b} &= \frac{1}{N}\sum_{k=1}^{N}\bm{\omega}_{m,b}^{(k)}.
+\end{align}
+
+\subsection{Vehicle Down Axis from Gravity}
+
+Under stationarity, the measured specific force is approximately opposite
+gravity in body coordinates. The code therefore sets:
+\begin{align}
+\hat{\mathbf{z}}_{v}^{\,b} = - \frac{\bar{\mathbf{f}}_{b}}{\|\bar{\mathbf{f}}_{b}\|}.
+\end{align}
+
+This means the vehicle down axis, expressed in body coordinates, is aligned
+with the negative normalized accelerometer mean.
+
+\subsection{Vehicle Forward Axis from a Reference Direction}
+
+Because gravity does not determine yaw, the initialization projects an external
+reference direction \(\mathbf{x}_{\text{ref}}\) into the plane orthogonal to
+\(\hat{\mathbf{z}}_{v}^{\,b}\):
+\begin{align}
+\tilde{\mathbf{x}}_{v}^{\,b}
+=
+\mathbf{x}_{\text{ref}}
+-
+\hat{\mathbf{z}}_{v}^{\,b}
+\left(\hat{\mathbf{z}}_{v}^{\,b}\right)^{\top}
+\mathbf{x}_{\text{ref}}.
+\end{align}
+
+Then it normalizes this vector and constructs:
+\begin{align}
+\hat{\mathbf{y}}_{v}^{\,b} &=
+\frac{\hat{\mathbf{z}}_{v}^{\,b} \times \hat{\mathbf{x}}_{v}^{\,b}}
+{\|\hat{\mathbf{z}}_{v}^{\,b} \times \hat{\mathbf{x}}_{v}^{\,b}\|}, \\
+\hat{\mathbf{x}}_{v}^{\,b} &=
+\frac{\hat{\mathbf{y}}_{v}^{\,b} \times \hat{\mathbf{z}}_{v}^{\,b}}
+{\|\hat{\mathbf{y}}_{v}^{\,b} \times \hat{\mathbf{z}}_{v}^{\,b}\|}.
+\end{align}
+
+These three body-expressed vehicle axes form the rows of the tilt-only body to
+vehicle rotation:
+\begin{align}
+\mathbf{C}_{v}^{b,\text{tilt}} =
+\begin{bmatrix}
+\left(\hat{\mathbf{x}}_{v}^{\,b}\right)^{\top} \\
+\left(\hat{\mathbf{y}}_{v}^{\,b}\right)^{\top} \\
+\left(\hat{\mathbf{z}}_{v}^{\,b}\right)^{\top}
+\end{bmatrix}.
+\end{align}
+
+\subsection{Mount-Yaw Preservation}
+
+The code preserves the yaw of an initial mount seed \(\mathbf{q}_{vb,\text{seed}}\).
+Let \(\mathbf{C}_{v}^{b,\text{seed}}\) be the corresponding rotation matrix, and
+let its yaw be
+\begin{align}
+\psi_{vb,\text{seed}} = \text{atan2}\left(
+\mathbf{C}_{v}^{b,\text{seed}}(2,1),
+\mathbf{C}_{v}^{b,\text{seed}}(1,1)
+\right).
+\end{align}
+
+It then forms a pure vehicle-frame yaw rotation
+\begin{align}
+\mathbf{C}_{\Delta,vb}
+=
+\begin{bmatrix}
+\cos \psi_{vb,\text{seed}} & -\sin \psi_{vb,\text{seed}} & 0 \\
+\sin \psi_{vb,\text{seed}} &  \cos \psi_{vb,\text{seed}} & 0 \\
+0 & 0 & 1
+\end{bmatrix},
+\end{align}
+and defines the initialized mount matrix as
+\begin{align}
+\mathbf{C}_{v}^{b}
+=
+\mathbf{C}_{v}^{b,\text{tilt}}
+\mathbf{C}_{\Delta,vb}.
+\end{align}
+
+\subsection{Navigation Attitude from Vehicle Yaw Seed}
+
+The stationary vehicle is assumed level, so the navigation-to-vehicle attitude
+is initialized as yaw-only:
+\begin{align}
+\mathbf{C}_{n}^{v}
+=
+\begin{bmatrix}
+\cos \psi_{nv} & -\sin \psi_{nv} & 0 \\
+\sin \psi_{nv} &  \cos \psi_{nv} & 0 \\
+0 & 0 & 1
+\end{bmatrix},
+\end{align}
+where \(\psi_{nv}\) is the supplied initial yaw seed.
+
+The navigation-to-body attitude is then
+\begin{align}
+\mathbf{C}_{n}^{b} = \mathbf{C}_{n}^{v}\mathbf{C}_{v}^{b}.
+\end{align}
+
+\subsection{Initial Biases}
+
+The initial gyro bias is set from the stationary gyro average:
+\begin{align}
+\mathbf{b}_{g,0} = \bar{\bm{\omega}}_{b}.
+\end{align}
+
+The initial accelerometer bias is
+\begin{align}
+\mathbf{b}_{a,0}
+=
+\bar{\mathbf{f}}_{b}
++
+\left(\mathbf{C}_{n}^{b}\right)^{\top}
+\begin{bmatrix}
+0 \\ 0 \\ g
+\end{bmatrix},
+\end{align}
+where \(g = 9.80665\ \text{m/s}^2\).
+
+\section{Continuous-Time Mechanization}
+
+\subsection{Bias-Corrected IMU Signals}
+
+The code forms:
+\begin{align}
+\bm{\omega}_{b} &= \bm{\omega}_{m,b} - \mathbf{b}_{g}, \\
+\mathbf{f}_{b} &= \mathbf{f}_{m,b} - \mathbf{b}_{a}.
+\end{align}
+
+\subsection{Attitude Propagation}
+
+The navigation-to-body quaternion is propagated using a small-angle increment:
+\begin{align}
+\delta \mathbf{q}(\Delta t)
+\approx
+\begin{bmatrix}
+1 \\
+\frac{1}{2}\bm{\omega}_{b}\Delta t
+\end{bmatrix},
+\end{align}
+and the nominal attitude update is
+\begin{align}
+\mathbf{q}_{nb}^{+}
+=
+\text{norm}\left(
+\mathbf{q}_{nb}\otimes \delta \mathbf{q}(\Delta t)
+\right).
+\end{align}
+
+\subsection{Velocity Propagation}
+
+The corrected specific force is rotated into the navigation frame:
+\begin{align}
+\mathbf{a}^{n}
+=
+\mathbf{C}_{n}^{b}\mathbf{f}_{b}
++
+\begin{bmatrix}
+0 \\ 0 \\ g
+\end{bmatrix}.
+\end{align}
+
+Velocity is integrated as
+\begin{align}
+\mathbf{v}^{n+}
+=
+\mathbf{v}^{n}
++
+\mathbf{a}^{n}\Delta t.
+\end{align}
+
+\subsection{Mount Attitude and Bias Propagation}
+
+The nominal mount attitude and the biases are modeled as constants during
+prediction:
+\begin{align}
+\mathbf{q}_{vb}^{+} &= \mathbf{q}_{vb}, \\
+\mathbf{b}_{g}^{+} &= \mathbf{b}_{g}, \\
+\mathbf{b}_{a}^{+} &= \mathbf{b}_{a}.
+\end{align}
+
+\section{Linearized Error-State Dynamics}
+
+The filter uses a first-order linearized error-state model
+\begin{align}
+\delta \dot{\mathbf{x}} = \mathbf{F}\delta \mathbf{x} + \mathbf{G}\mathbf{w},
+\end{align}
+discretized as
+\begin{align}
+\bm{\Phi} \approx \mathbf{I} + \mathbf{F}\Delta t.
+\end{align}
+
+\subsection{State Transition Matrix}
+
+Let \([\cdot]_{\times}\) denote the skew-symmetric matrix. Using the current
+nominal trajectory, the implemented \(\mathbf{F}\) is:
+\begin{align}
+\mathbf{F}
+=
+\begin{bmatrix}
+-[\bm{\omega}_{b}]_{\times} & \mathbf{0} & \mathbf{0} & -\mathbf{I} & \mathbf{0} \\
+-[\mathbf{a}^{n}]_{\times} & \mathbf{0} & \mathbf{0} & \mathbf{0} & -\mathbf{C}_{n}^{b} \\
+\mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} \\
+\mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} \\
+\mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0}
+\end{bmatrix}.
+\end{align}
+
+Notably:
+
+\begin{itemize}[leftmargin=1.5em]
+\item there is no deterministic coupling in the mount-attitude rows,
+\item there is no deterministic bias-dynamics model beyond random walk.
+\end{itemize}
+
+\subsection{Process Noise Injection}
+
+The code uses a block-diagonal continuous noise covariance:
+\begin{align}
+\mathbf{Q}_{c}
+=
+\text{diag}\left(
+\sigma_{q,att}^{2}\mathbf{I}_{3},
+\sigma_{q,v}^{2}\mathbf{I}_{3},
+\sigma_{q,mount}^{2}\mathbf{I}_{3},
+\sigma_{q,bg}^{2}\mathbf{I}_{3},
+\sigma_{q,ba}^{2}\mathbf{I}_{3}
+\right).
+\end{align}
+
+The noise input matrix is
+\begin{align}
+\mathbf{G}
+=
+\begin{bmatrix}
+-\mathbf{I} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} \\
+\mathbf{0} & -\mathbf{C}_{n}^{b} & \mathbf{0} & \mathbf{0} & \mathbf{0} \\
+\mathbf{0} & \mathbf{0} & \mathbf{I} & \mathbf{0} & \mathbf{0} \\
+\mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{I} & \mathbf{0} \\
+\mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{0} & \mathbf{I}
+\end{bmatrix}.
+\end{align}
+
+Then the discrete process covariance is
+\begin{align}
+\mathbf{Q}_{d} = \mathbf{G}\mathbf{Q}_{c}\mathbf{G}^{\top}\Delta t,
+\end{align}
+and the covariance propagation is
+\begin{align}
+\mathbf{P}^{+} = \bm{\Phi}\mathbf{P}\bm{\Phi}^{\top} + \mathbf{Q}_{d}.
+\end{align}
+
+\section{Measurement Models}
+
+\subsection{GNSS Velocity}
+
+The measurement is GNSS velocity in navigation coordinates:
+\begin{align}
+\mathbf{z}_{v}^{n} =
+\begin{bmatrix}
+v_{N} \\ v_{E} \\ v_{D}
+\end{bmatrix}.
+\end{align}
+
+The prediction is simply the state velocity:
+\begin{align}
+\hat{\mathbf{z}}_{v}^{n} = \mathbf{v}^{n}.
+\end{align}
+
+The Jacobian of each scalar component is
+\begin{align}
+\mathbf{H}_{v,i}
+=
+\begin{bmatrix}
+\mathbf{0}_{1\times 3} &
+\mathbf{e}_{i}^{\top} &
+\mathbf{0}_{1\times 9}
+\end{bmatrix},
+\end{align}
+with variance
+\begin{align}
+R_{v} = \sigma_{gnss}^{2}.
+\end{align}
+
+\subsection{Non-Holonomic Constraint}
+
+\subsubsection{Prediction}
+
+The NHC assumes the vehicle has negligible lateral and vertical velocity in the
+vehicle frame. First rotate navigation velocity into the body frame:
+\begin{align}
+\mathbf{v}^{b} = \mathbf{C}_{n}^{b^\top}\mathbf{v}^{n},
+\end{align}
+then into the vehicle frame:
+\begin{align}
+\mathbf{v}^{v} = \mathbf{C}_{v}^{b}\mathbf{v}^{b}.
+\end{align}
+
+The predicted constrained channels are
+\begin{align}
+\hat{\mathbf{h}}_{nhc}
+=
+\begin{bmatrix}
+v_{y}^{v} \\
+v_{z}^{v}
+\end{bmatrix}.
+\end{align}
+
+The measurement is implicitly zero:
+\begin{align}
+\mathbf{z}_{nhc} =
+\begin{bmatrix}
+0 \\ 0
+\end{bmatrix}.
+\end{align}
+
+\subsubsection{Jacobian}
+
+Let
+\begin{align}
+\mathbf{S}_{yz}
+=
+\begin{bmatrix}
+0 & 1 & 0 \\
+0 & 0 & 1
+\end{bmatrix}.
+\end{align}
+
+Then the implemented Jacobian blocks are:
+\begin{align}
+\mathbf{H}_{\theta nb}
+&=
+\mathbf{S}_{yz}\mathbf{C}_{v}^{b}[\mathbf{v}^{b}]_{\times}, \\
+\mathbf{H}_{v}
+&=
+\mathbf{S}_{yz}\mathbf{C}_{v}^{b}\mathbf{C}_{n}^{b^\top}, \\
+\mathbf{H}_{\theta vb}
+&=
+\mathbf{S}_{yz}\mathbf{C}_{v}^{b}\left(-[\mathbf{v}^{b}]_{\times}\right).
+\end{align}
+
+Therefore the full row Jacobian is
+\begin{align}
+\mathbf{H}_{nhc}
+=
+\begin{bmatrix}
+\mathbf{H}_{\theta nb} &
+\mathbf{H}_{v} &
+\mathbf{H}_{\theta vb} &
+\mathbf{0}_{2\times 3} &
+\mathbf{0}_{2\times 3}
+\end{bmatrix}.
+\end{align}
+
+\paragraph{Mount yaw scaling in straight motion.}
+When the planar-gyro update is not active, the code scales the mount-yaw
+column of the NHC Jacobian:
+\begin{align}
+H_{nhc}(:, 9) \leftarrow \alpha_{straight}\, H_{nhc}(:, 9),
+\end{align}
+where
+\begin{align}
+\alpha_{straight} = \texttt{nhc\_straight\_mount\_yaw\_scale}.
+\end{align}
+
+In the current default implementation, \(\alpha_{straight}=0.1\), so straight
+segments still update mount yaw, but with reduced sensitivity.
+
+\subsection{Planar Gyro Constraint}
+
+\subsubsection{Prediction}
+
+Bias-correct the measured angular rate:
+\begin{align}
+\bm{\omega}^{b} = \bm{\omega}_{m,b} - \mathbf{b}_{g}.
+\end{align}
+
+Rotate into the vehicle frame:
+\begin{align}
+\bm{\omega}^{v} = \mathbf{C}_{v}^{b}\bm{\omega}^{b}.
+\end{align}
+
+Under the planar-motion assumption, roll and pitch rates in the vehicle frame
+should be near zero. Thus the predicted constrained channels are
+\begin{align}
+\hat{\mathbf{h}}_{pg}
+=
+\begin{bmatrix}
+\omega_{x}^{v} \\
+\omega_{y}^{v}
+\end{bmatrix},
+\qquad
+\mathbf{z}_{pg} =
+\begin{bmatrix}
+0 \\ 0
+\end{bmatrix}.
+\end{align}
+
+\subsubsection{Jacobian}
+
+Let
+\begin{align}
+\mathbf{S}_{xy}
+=
+\begin{bmatrix}
+1 & 0 & 0 \\
+0 & 1 & 0
+\end{bmatrix}.
+\end{align}
+
+Then the implemented Jacobian blocks are:
+\begin{align}
+\mathbf{H}_{bg}
+&=
+\mathbf{S}_{xy}\left(-\mathbf{C}_{v}^{b}\right), \\
+\mathbf{H}_{\theta vb}
+&=
+\mathbf{S}_{xy}\mathbf{C}_{v}^{b}\left(-[\bm{\omega}^{b}]_{\times}\right).
+\end{align}
+
+Thus
+\begin{align}
+\mathbf{H}_{pg}
+=
+\begin{bmatrix}
+\mathbf{0}_{2\times 3} &
+\mathbf{0}_{2\times 3} &
+\mathbf{H}_{\theta vb} &
+\mathbf{H}_{bg} &
+\mathbf{0}_{2\times 3}
+\end{bmatrix}.
+\end{align}
+
+This is important: there is no direct navigation-attitude term in the planar
+gyro update, and no direct accelerometer-bias term either.
+
+\section{Measurement Gating}
+
+\subsection{NHC Gate}
+
+The NHC update is enabled if horizontal speed exceeds a threshold:
+\begin{align}
+\sqrt{v_{N}^{2}+v_{E}^{2}} \ge v_{min,nhc}.
+\end{align}
+
+\subsection{Planar Gyro Gate}
+
+The planar gyro update is enabled if all of the following hold:
+\begin{align}
+\sqrt{v_{N}^{2}+v_{E}^{2}} &\ge v_{min,pg}, \\
+|\omega_{z}^{v}| &\ge \omega_{min,pg}, \\
+\sqrt{(\omega_{x}^{v})^{2}+(\omega_{y}^{v})^{2}}
+&\le
+\rho_{max}\, |\omega_{z}^{v}|.
+\end{align}
+
+So the planar gyro update is only active during sufficiently planar turns.
+
+\section{Kalman Update}
+
+Each scalar measurement is processed sequentially.
+
+Given innovation \(r\), row Jacobian \(\mathbf{h}\), and variance \(R\),
+the code computes:
+\begin{align}
+\mathbf{p}_{h} &= \mathbf{P}\mathbf{h}^{\top}, \\
+S &= R + \mathbf{h}\mathbf{P}\mathbf{h}^{\top}, \\
+\mathbf{K} &= \mathbf{p}_{h}/S, \\
+\delta \mathbf{x} &= \mathbf{K}r.
+\end{align}
+
+The nominal state is corrected by:
+\begin{align}
+\mathbf{q}_{nb}^{+}
+&=
+\text{norm}\left(
+\mathbf{q}_{nb}\otimes
+\delta \mathbf{q}(\delta \bm{\theta}_{nb})
+\right), \\
+\mathbf{v}^{n+} &= \mathbf{v}^{n} + \delta \mathbf{v}^{n}, \\
+\mathbf{q}_{vb}^{+}
+&=
+\text{norm}\left(
+\mathbf{q}_{vb}\otimes
+\delta \mathbf{q}(\delta \bm{\theta}_{vb})
+\right), \\
+\mathbf{b}_{g}^{+} &= \mathbf{b}_{g} + \delta \mathbf{b}_{g}, \\
+\mathbf{b}_{a}^{+} &= \mathbf{b}_{a} + \delta \mathbf{b}_{a}.
+\end{align}
+
+The covariance update is:
+\begin{align}
+\mathbf{P}^{+}
+=
+\mathbf{P} - \mathbf{K}\mathbf{h}\mathbf{P},
+\end{align}
+followed by explicit symmetrization:
+\begin{align}
+\mathbf{P}^{+} \leftarrow \frac{1}{2}\left(\mathbf{P}^{+} + \mathbf{P}^{+\top}\right).
+\end{align}
+
+\section{Update Sequence}
+
+For each GNSS epoch, the implemented update order is:
+
+\begin{enumerate}[leftmargin=1.8em]
+\item integrate all IMU packets since the previous GNSS epoch,
+\item apply GNSS velocity update,
+\item apply NHC update if the NHC gate passes,
+\item apply planar-gyro update if the planar-turn gate passes.
+\end{enumerate}
+
+This is exactly how \texttt{update\_all()} is structured.
+
+\section{Yaw Seeding}
+
+After initialization, once horizontal speed exceeds \(5/3.6\ \text{m/s}\), the
+filter seeds navigation yaw from GNSS course:
+\begin{align}
+\psi_{course} = \text{atan2}(v_{E}, v_{N}).
+\end{align}
+
+The code sets:
+\begin{align}
+\mathbf{C}_{n}^{b}
+=
+\mathbf{C}_{n}^{v}(\psi_{course})\, \mathbf{C}_{v}^{b},
+\end{align}
+and assigns a yaw variance of \((5^{\circ})^{2}\) to the navigation attitude.
+
+There is also a method to seed mount yaw from course, but it is not used in the
+main replay path analyzed here.
+
+\section{Default Tuning}
+
+The current defaults are:
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+Parameter & Default \\
+\midrule
+\(\sigma_{q,att}\) & \(0.01^\circ\) \\
+\(\sigma_{q,v}\) & \(0.25\ \text{m/s}\) \\
+\(\sigma_{q,mount}\) & \(0.001^\circ\) \\
+\(\sigma_{q,bg}\) & \(0.002^\circ/\text{s}\) \\
+\(\sigma_{q,ba}\) & \(0.05\ \text{m/s}^{2}\) \\
+\(\sigma_{gnss}\) & \(0.3\ \text{m/s}\) \\
+\(\sigma_{nhc}\) & \(0.15\ \text{m/s}\) \\
+\(\sigma_{pg}\) & \(0.3^\circ/\text{s}\) \\
+\(v_{min,nhc}\) & \(3/3.6\ \text{m/s}\) \\
+\(v_{min,pg}\) & \(3/3.6\ \text{m/s}\) \\
+\(\omega_{min,pg}\) & \(2^\circ/\text{s}\) \\
+\(\rho_{max}\) & \(0.25\) \\
+\(\alpha_{straight}\) & \(0.1\) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Interpretation and Observability}
+
+\subsection{What the Filter Is Actually Estimating}
+
+This is not a mount-only filter. It jointly estimates:
+
+\begin{align}
+\mathbf{q}_{nb}, \quad \mathbf{v}^{n}, \quad \mathbf{q}_{vb}, \quad \mathbf{b}_{g}, \quad \mathbf{b}_{a}.
+\end{align}
+
+As a result, some residual that one might hope would correct mount attitude can
+instead be absorbed by navigation attitude or biases.
+
+\subsection{Where Mount Yaw Comes From}
+
+Mount yaw is only weakly observed in the current formulation.
+
+\begin{itemize}[leftmargin=1.5em]
+\item The planar gyro update does \emph{not} directly constrain mount yaw.
+It constrains only \(\omega_{x}^{v}\) and \(\omega_{y}^{v}\).
+\item Mount yaw is mainly corrected through the NHC velocity measurement.
+\item The NHC sensitivity to yaw scales with the body-frame velocity magnitude.
+At low speed, yaw observability is weak even in turns.
+\item Navigation yaw and mount yaw appear in the NHC Jacobian with opposite-sign
+structure, so the two can compete to explain the same residual.
+\end{itemize}
+
+\subsection{Covariance Collapse}
+
+Because the mount process noise is very small and because mount yaw is still
+updated, though downweighted, during straight motion, the mount covariance can
+shrink substantially before late informative maneuvers occur. Once this happens,
+later turns may produce residuals but only small state corrections.
+
+\section{Known Limitations of the Current Formulation}
+
+The following properties are direct consequences of the current implementation:
+
+\begin{enumerate}[leftmargin=1.8em]
+\item Mount yaw has no direct planar-turn measurement.
+\item Straight segments still update mount yaw through the NHC model unless
+\(\alpha_{straight}\) is set to zero.
+\item Navigation yaw and mount yaw are jointly estimated and not strongly
+separated.
+\item The same mount process noise is used for roll, pitch, and yaw.
+\item The Joseph stabilized covariance form is not used; the implementation uses
+\(\mathbf{P}^{+} = \mathbf{P} - \mathbf{K}\mathbf{H}\mathbf{P}\) followed by symmetrization.
+\end{enumerate}
+
+\section{Summary}
+
+The implemented \texttt{AlignNhc} filter is a 15-state error-state EKF-like
+estimator with:
+
+\begin{itemize}[leftmargin=1.5em]
+\item nominal states \((\mathbf{q}_{nb}, \mathbf{v}^{n}, \mathbf{q}_{vb}, \mathbf{b}_{g}, \mathbf{b}_{a})\),
+\item GNSS velocity updates,
+\item non-holonomic velocity constraints in the vehicle frame,
+\item planar-motion gyro constraints in the vehicle frame,
+\item stationary gravity-based initialization of mount roll and pitch,
+\item GNSS-course-based seeding of navigation yaw.
+\end{itemize}
+
+Its strongest practical behaviors are:
+
+\begin{itemize}[leftmargin=1.5em]
+\item mount roll and pitch are fairly directly constrained by gravity and NHC,
+\item mount yaw is only indirectly and weakly constrained,
+\item late yaw corrections depend on sufficiently informative turns and on the
+filter not having already become overconfident.
+\end{itemize}
+
+\end{document}
