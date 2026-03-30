@@ -3,20 +3,18 @@ use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
-use align_rs::align::{Align, AlignConfig, GRAVITY_MPS2};
-use align_rs::{AlignNhc, AlignNhcConfig};
+use align_rs::align::{AlignConfig, GRAVITY_MPS2};
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use sim::ubxlog::{
     NavPvtObs, UbxFrame, extract_esf_raw_samples, extract_nav2_pvt_obs, fit_linear_map,
     parse_ubx_frames, sensor_meta, unwrap_counter,
 };
-use sim::visualizer::math::{ecef_to_ned, lla_to_ecef, nearest_master_ms};
+use sim::visualizer::math::nearest_master_ms;
 use sim::visualizer::model::ImuPacket;
-use sim::visualizer::pipeline::align_nhc_bootstrap::resolve_align_nhc_bootstrap_q_vb_seed;
 use sim::visualizer::pipeline::align_replay::{
-    BootstrapConfig, axis_angle_deg, build_align_replay, interpolate_alg_quat, quat_rotate,
-    quat_rpy_alg_deg, signed_projected_axis_angle_deg,
+    BootstrapConfig, axis_angle_deg, build_align_replay, quat_rotate,
+    signed_projected_axis_angle_deg,
 };
 use sim::visualizer::pipeline::timebase::{MasterTimeline, build_master_timeline};
 
@@ -105,15 +103,6 @@ struct Args {
     use_course_rate: Option<bool>,
     #[arg(long, action = clap::ArgAction::Set)]
     use_longitudinal_accel: Option<bool>,
-
-    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
-    nhc_init_mount_from_final_alg: bool,
-
-    #[arg(long)]
-    nhc_init_mount_sigma_deg: Option<f32>,
-
-    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
-    nhc_freeze_mount_from_final_alg: bool,
 }
 
 #[derive(Clone)]
@@ -177,9 +166,6 @@ struct ResidualSample {
     horiz_turn_core_valid: bool,
     horiz_straight_core_valid: bool,
     horiz_applied: bool,
-    nhc_valid: bool,
-    nhc_residual_vy_mps: f64,
-    nhc_residual_vz_mps: f64,
     planar_gyro_valid: bool,
     planar_gyro_residual_x_dps: f64,
     planar_gyro_residual_y_dps: f64,
@@ -365,14 +351,12 @@ fn main() -> Result<()> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FilterMode {
     Align,
-    Nhc,
 }
 
 fn parse_filter_mode(s: &str) -> Result<FilterMode> {
     match s {
         "align" => Ok(FilterMode::Align),
-        "nhc" => Ok(FilterMode::Nhc),
-        _ => bail!("unknown --filter-mode {}, expected align or nhc", s),
+        _ => bail!("unknown --filter-mode {}, expected align", s),
     }
 }
 
@@ -768,9 +752,6 @@ fn evaluate_config(
                 horiz_turn_core_valid: sample.horiz_trace.turn_core_valid,
                 horiz_straight_core_valid: sample.horiz_trace.straight_core_valid,
                 horiz_applied: sample.horiz_trace.applied,
-                nhc_valid: false,
-                nhc_residual_vy_mps: f64::NAN,
-                nhc_residual_vz_mps: f64::NAN,
                 planar_gyro_valid: false,
                 planar_gyro_residual_x_dps: f64::NAN,
                 planar_gyro_residual_y_dps: f64::NAN,
@@ -792,397 +773,11 @@ fn evaluate_dispatch(
     dataset: &AlignDataset,
     cfg: &AlignConfig,
     bootstrap_cfg: &BootstrapConfig,
-    args: &Args,
+    _args: &Args,
 ) -> Result<EvalResult> {
     match mode {
         FilterMode::Align => evaluate_config(dataset, cfg, bootstrap_cfg),
-        FilterMode::Nhc => evaluate_nhc(dataset, cfg, bootstrap_cfg, args),
     }
-}
-
-fn evaluate_nhc(
-    dataset: &AlignDataset,
-    cfg: &AlignConfig,
-    bootstrap_cfg: &BootstrapConfig,
-    args: &Args,
-) -> Result<EvalResult> {
-    let imu_packets = build_imu_packets(&dataset.frames, &dataset.timeline)?;
-    let nav_events = collect_nav_events(&dataset.frames, &dataset.timeline);
-    if nav_events.len() < 2 {
-        bail!("need at least two NAV2-PVT observations");
-    }
-
-    let replay_ref = build_align_replay(&dataset.frames, &dataset.timeline, *cfg, *bootstrap_cfg);
-    let final_alg_q = replay_ref.final_alg_q;
-    let fixed_mount_q_vb = if args.nhc_freeze_mount_from_final_alg {
-        Some(if let Some(q_alg) = final_alg_q {
-            [q_alg[0] as f32, -q_alg[1] as f32, -q_alg[2] as f32, -q_alg[3] as f32]
-        } else {
-            bail!("--nhc-freeze-mount-from-final-alg requested but final ESF-ALG mount is unavailable");
-        })
-    } else {
-        None
-    };
-
-    let mut nhc = AlignNhc::new(AlignNhcConfig::default());
-    let mut bootstrap = BootstrapDetector::new(*bootstrap_cfg);
-    let mut initialized = false;
-    let mut nav_yaw_seeded = false;
-    let mut mount_branch_committed = false;
-    let mut init_time_s = f64::NAN;
-    let mut samples = Vec::<ResidualSample>::new();
-    let mut align_mount = Align::new(*cfg);
-    let mut align_mount_initialized = false;
-
-    let mut scan_idx = 0usize;
-    let mut interval_start_idx = 0usize;
-    let mut prev_nav: Option<(f64, NavPvtObs)> = None;
-    let mut latest_pseudo_vel_n: Option<[f32; 3]> = None;
-    let mut latest_pseudo_turn_valid = false;
-    let mut origin_set = false;
-    let mut ref_lat = 0.0_f64;
-    let mut ref_lon = 0.0_f64;
-    let mut ref_ecef = [0.0_f64; 3];
-
-    for (nav_idx, (tn, nav)) in nav_events.iter().enumerate() {
-        while scan_idx < imu_packets.len() && imu_packets[scan_idx].t_ms <= *tn {
-            let pkt = &imu_packets[scan_idx];
-            let gyro_radps = [
-                pkt.gx_dps.to_radians() as f32,
-                pkt.gy_dps.to_radians() as f32,
-                pkt.gz_dps.to_radians() as f32,
-            ];
-            let accel_b = [pkt.ax_mps2 as f32, pkt.ay_mps2 as f32, pkt.az_mps2 as f32];
-            if !initialized {
-                let speed_mps = speed_for_bootstrap(prev_nav, (*tn, *nav), pkt.t_ms) as f32;
-                if bootstrap.update(accel_b, gyro_radps, speed_mps) {
-                    let mut seed = resolve_align_nhc_bootstrap_q_vb_seed(
-                        &bootstrap.stationary_accel,
-                        prev_nav,
-                        &nav_events,
-                        nav_idx,
-                        interval_start_idx,
-                        scan_idx + 1,
-                        &imu_packets,
-                        *cfg,
-                        cfg.startup_max_windows.saturating_mul(3),
-                    );
-                    if args.nhc_init_mount_from_final_alg || args.nhc_freeze_mount_from_final_alg {
-                        if let Some(q_alg) = final_alg_q {
-                            seed.q_vb = [
-                                q_alg[0] as f32,
-                                -q_alg[1] as f32,
-                                -q_alg[2] as f32,
-                                -q_alg[3] as f32,
-                            ];
-                            if let Some(sigma_deg) = args.nhc_init_mount_sigma_deg {
-                                let sigma_rad = sigma_deg.to_radians();
-                                seed.sigma_rad = [sigma_rad; 3];
-                            }
-                        } else {
-                            bail!("--nhc-init-mount-from-final-alg/--nhc-freeze-mount-from-final-alg requested but final ESF-ALG mount is unavailable");
-                        }
-                    }
-                    if nhc
-                        .initialize_from_stationary_with_mount_seed_and_sigma(
-                            &bootstrap.stationary_accel,
-                            &bootstrap.stationary_gyro,
-                            0.0,
-                            seed.q_vb,
-                            seed.sigma_rad,
-                        )
-                        .is_ok()
-                    {
-                        initialized = true;
-                        init_time_s = (pkt.t_ms - dataset.timeline.t0_master_ms) * 1.0e-3;
-                        if align_mount
-                            .initialize_from_stationary(&bootstrap.stationary_accel, 0.0)
-                            .is_ok()
-                        {
-                            align_mount_initialized = true;
-                        }
-                        if args.nhc_init_mount_from_final_alg || args.nhc_freeze_mount_from_final_alg {
-                            mount_branch_committed = true;
-                        }
-                        if let Some(q_vb_fixed) = fixed_mount_q_vb {
-                            freeze_nhc_mount(&mut nhc, q_vb_fixed);
-                        }
-                    }
-                }
-            }
-            scan_idx += 1;
-        }
-
-        if initialized && !nav_yaw_seeded {
-            let speed_h = (nav.vel_n_mps * nav.vel_n_mps + nav.vel_e_mps * nav.vel_e_mps).sqrt();
-            if speed_h >= 5.0 / 3.6 {
-                nhc.seed_nav_yaw_from_course(
-                    nav.vel_e_mps.atan2(nav.vel_n_mps) as f32,
-                    5.0_f32.to_radians(),
-                );
-                nav_yaw_seeded = true;
-            }
-        }
-
-        if !origin_set {
-            ref_lat = nav.lat_deg;
-            ref_lon = nav.lon_deg;
-            ref_ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
-            origin_set = true;
-        }
-        let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
-        let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
-        let z_p_n = [ned[0] as f32, ned[1] as f32, ned[2] as f32];
-        let r_p_var_n = [
-            (nav.h_acc_m.max(0.5) as f32).powi(2),
-            (nav.h_acc_m.max(0.5) as f32).powi(2),
-            (nav.v_acc_m.max(0.5) as f32).powi(2),
-        ];
-
-        if let Some((t_prev, nav_prev)) = prev_nav {
-            let interval_packets = &imu_packets[interval_start_idx..scan_idx];
-            let mut nhc_trace = align_rs::AlignNhcTrace::default();
-            if initialized && !interval_packets.is_empty() {
-                let mut gyro_sum = [0.0_f32; 3];
-                let mut accel_sum = [0.0_f32; 3];
-                let mut last_t = t_prev;
-                for pkt in interval_packets {
-                    gyro_sum[0] += pkt.gx_dps.to_radians() as f32;
-                    gyro_sum[1] += pkt.gy_dps.to_radians() as f32;
-                    gyro_sum[2] += pkt.gz_dps.to_radians() as f32;
-                    accel_sum[0] += pkt.ax_mps2 as f32;
-                    accel_sum[1] += pkt.ay_mps2 as f32;
-                    accel_sum[2] += pkt.az_mps2 as f32;
-                    let dt = ((pkt.t_ms - last_t) * 1.0e-3).max(1.0e-3) as f32;
-                    nhc.predict_imu(
-                        dt,
-                        [pkt.ax_mps2 as f32, pkt.ay_mps2 as f32, pkt.az_mps2 as f32],
-                        [
-                            pkt.gx_dps.to_radians() as f32,
-                            pkt.gy_dps.to_radians() as f32,
-                            pkt.gz_dps.to_radians() as f32,
-                        ],
-                    );
-                    if let Some(z_v_n) = latest_pseudo_vel_n {
-                        if let Some(q_vb_fixed) = fixed_mount_q_vb {
-                            freeze_nhc_mount(&mut nhc, q_vb_fixed);
-                        }
-                        let (_, tr) = nhc.update_pseudo_measurements(
-                            z_v_n,
-                            [
-                                pkt.gx_dps.to_radians() as f32,
-                                pkt.gy_dps.to_radians() as f32,
-                                pkt.gz_dps.to_radians() as f32,
-                            ],
-                            nav_yaw_seeded,
-                            mount_branch_committed && latest_pseudo_turn_valid && cfg.use_turn_gyro,
-                        );
-                        nhc_trace = tr;
-                        if let Some(q_vb_fixed) = fixed_mount_q_vb {
-                            freeze_nhc_mount(&mut nhc, q_vb_fixed);
-                        }
-                    }
-                    last_t = pkt.t_ms;
-                }
-
-                let v_prev = [nav_prev.vel_n_mps, nav_prev.vel_e_mps];
-                let v_curr = [nav.vel_n_mps, nav.vel_e_mps];
-                let dt_nav = ((*tn - t_prev) * 1.0e-3).max(1.0e-3);
-                let course_prev = v_prev[1].atan2(v_prev[0]);
-                let course_curr = v_curr[1].atan2(v_curr[0]);
-                let course_rate_dps = wrap_rad_pi(course_curr - course_prev).to_degrees() / dt_nav;
-                let a_n = [
-                    (nav.vel_n_mps - nav_prev.vel_n_mps) / dt_nav,
-                    (nav.vel_e_mps - nav_prev.vel_e_mps) / dt_nav,
-                ];
-                let v_mid = [0.5 * (v_prev[0] + v_curr[0]), 0.5 * (v_prev[1] + v_curr[1])];
-                let (a_long, a_lat) = if let Some(t_hat) = normalize2(v_mid) {
-                    let lat_hat = [-t_hat[1], t_hat[0]];
-                    (
-                        t_hat[0] * a_n[0] + t_hat[1] * a_n[1],
-                        lat_hat[0] * a_n[0] + lat_hat[1] * a_n[1],
-                    )
-                } else {
-                    (0.0, 0.0)
-                };
-
-                let speed_prev = (v_prev[0] * v_prev[0] + v_prev[1] * v_prev[1]).sqrt() as f32;
-                let speed_curr = (v_curr[0] * v_curr[0] + v_curr[1] * v_curr[1]).sqrt() as f32;
-                let speed_mid = 0.5_f32 * (speed_prev + speed_curr);
-                let inv_n = 1.0 / interval_packets.len() as f32;
-                if align_mount_initialized {
-                    let window = align_rs::align::AlignWindowSummary {
-                        dt: dt_nav as f32,
-                        mean_gyro_b: [
-                            gyro_sum[0] * inv_n,
-                            gyro_sum[1] * inv_n,
-                            gyro_sum[2] * inv_n,
-                        ],
-                        mean_accel_b: [
-                            accel_sum[0] * inv_n,
-                            accel_sum[1] * inv_n,
-                            accel_sum[2] * inv_n,
-                        ],
-                        gnss_vel_prev_n: [
-                            nav_prev.vel_n_mps as f32,
-                            nav_prev.vel_e_mps as f32,
-                            nav_prev.vel_d_mps as f32,
-                        ],
-                        gnss_vel_curr_n: [
-                            nav.vel_n_mps as f32,
-                            nav.vel_e_mps as f32,
-                            nav.vel_d_mps as f32,
-                        ],
-                    };
-                    let (_, align_trace) = align_mount.update_window_with_trace(&window);
-                    if !mount_branch_committed && align_trace.coarse_alignment_ready {
-                        nhc.seed_mount_from_body_to_vehicle(
-                            align_mount.q_vb,
-                            [
-                                align_mount.P[0][0].sqrt().clamp(0.5_f32.to_radians(), 3.0_f32.to_radians()),
-                                align_mount.P[1][1].sqrt().clamp(0.5_f32.to_radians(), 3.0_f32.to_radians()),
-                                align_mount.P[2][2].sqrt().clamp(1.0_f32.to_radians(), 5.0_f32.to_radians()),
-                            ],
-                        );
-                        nhc.seed_nav_yaw_from_course(
-                            nav.vel_e_mps.atan2(nav.vel_n_mps) as f32,
-                            5.0_f32.to_radians(),
-                        );
-                        mount_branch_committed = true;
-                    }
-                }
-                let turn_valid = speed_mid > cfg.min_speed_mps
-                    && course_rate_dps.abs() > cfg.min_turn_rate_radps.to_degrees() as f64
-                    && a_lat.abs() > cfg.min_lat_acc_mps2 as f64;
-
-                if let Some(q_vb_fixed) = fixed_mount_q_vb {
-                    freeze_nhc_mount(&mut nhc, q_vb_fixed);
-                }
-                let _ = nhc.update_gnss(
-                    z_p_n,
-                    r_p_var_n,
-                    [
-                        nav.vel_n_mps as f32,
-                        nav.vel_e_mps as f32,
-                        nav.vel_d_mps as f32,
-                    ],
-                );
-                if let Some(q_vb_fixed) = fixed_mount_q_vb {
-                    freeze_nhc_mount(&mut nhc, q_vb_fixed);
-                }
-                latest_pseudo_vel_n = Some([
-                    nav.vel_n_mps as f32,
-                    nav.vel_e_mps as f32,
-                    nav.vel_d_mps as f32,
-                ]);
-                latest_pseudo_turn_valid = turn_valid;
-
-                let q_align_bv = [
-                    nhc.q_vb[0] as f64,
-                    nhc.q_vb[1] as f64,
-                    nhc.q_vb[2] as f64,
-                    nhc.q_vb[3] as f64,
-                ];
-                let q_align = quat_conj_local(q_align_bv);
-                let align_rpy_deg = {
-                    let (r, p, y) =
-                        quat_rpy_alg_deg(q_align[0], q_align[1], q_align[2], q_align[3]);
-                    [r, p, y]
-                };
-                let alg_q = interpolate_alg_quat(&replay_ref.alg_events, *tn);
-                let alg_rpy_deg = alg_q.map(|q| {
-                    let (r, p, y) = quat_rpy_alg_deg(q[0], q[1], q[2], q[3]);
-                    [r, p, y]
-                });
-                if let (Some(q_alg), Some(alg_rpy_deg)) = (alg_q, alg_rpy_deg) {
-                    let q_ref_axis = final_alg_q.unwrap_or(q_alg);
-                    let err_roll_deg = wrap_deg180(align_rpy_deg[0] - alg_rpy_deg[0]);
-                    let err_pitch_deg = align_rpy_deg[1] - alg_rpy_deg[1];
-                    let err_yaw_deg = wrap_deg180(align_rpy_deg[2] - alg_rpy_deg[2]);
-                    samples.push(ResidualSample {
-                        t_s: (*tn - dataset.timeline.t0_master_ms) * 1.0e-3,
-                        align_roll_deg: align_rpy_deg[0],
-                        align_pitch_deg: align_rpy_deg[1],
-                        align_yaw_deg: align_rpy_deg[2],
-                        alg_roll_deg: alg_rpy_deg[0],
-                        alg_pitch_deg: alg_rpy_deg[1],
-                        alg_yaw_deg: alg_rpy_deg[2],
-                        err_roll_deg,
-                        err_pitch_deg,
-                        err_yaw_deg,
-                        sigma_roll_deg: nhc.P[6][6].sqrt().to_degrees() as f64,
-                        sigma_pitch_deg: nhc.P[7][7].sqrt().to_degrees() as f64,
-                        sigma_yaw_deg: nhc.P[8][8].sqrt().to_degrees() as f64,
-                        course_rate_dps,
-                        a_lat_mps2: a_lat,
-                        a_long_mps2: a_long,
-                        rot_err_deg: quat_angle_deg(q_align, q_alg),
-                        fwd_err_deg: axis_angle_deg(
-                            quat_rotate(q_align, [1.0, 0.0, 0.0]),
-                            quat_rotate(q_ref_axis, [1.0, 0.0, 0.0]),
-                        ),
-                        down_err_deg: axis_angle_deg(
-                            quat_rotate(q_align, [0.0, 0.0, 1.0]),
-                            quat_rotate(q_ref_axis, [0.0, 0.0, 1.0]),
-                        ),
-                        fwd_err_signed_deg: signed_projected_axis_angle_deg(
-                            quat_rotate(q_align, [1.0, 0.0, 0.0]),
-                            quat_rotate(q_ref_axis, [1.0, 0.0, 0.0]),
-                            quat_rotate(q_ref_axis, [0.0, 0.0, 1.0]),
-                        ),
-                        down_err_signed_deg: signed_projected_axis_angle_deg(
-                            quat_rotate(q_align, [0.0, 0.0, 1.0]),
-                            quat_rotate(q_ref_axis, [0.0, 0.0, 1.0]),
-                            quat_rotate(q_ref_axis, [0.0, 1.0, 0.0]),
-                        ),
-                        long_base_valid: false,
-                        long_emitted: false,
-                        long_stable_windows: 0,
-                        long_gnss_long_lp_mps2: f64::NAN,
-                        long_gnss_lat_lp_mps2: f64::NAN,
-                        long_imu_long_lp_mps2: f64::NAN,
-                        long_imu_lat_lp_mps2: f64::NAN,
-                        long_angle_err_deg: f64::NAN,
-                        long_angle_err_signed_deg: f64::NAN,
-                        horiz_angle_err_deg: f64::NAN,
-                        horiz_effective_std_deg: f64::NAN,
-                        horiz_gnss_norm_mps2: f64::NAN,
-                        horiz_imu_norm_mps2: f64::NAN,
-                        horiz_speed_q: f64::NAN,
-                        horiz_accel_q: f64::NAN,
-                        horiz_straight_q: f64::NAN,
-                        horiz_turn_q: f64::NAN,
-                        horiz_dominance_q: f64::NAN,
-                        horiz_turn_core_valid: false,
-                        horiz_straight_core_valid: false,
-                        horiz_applied: false,
-                        nhc_valid: nhc_trace.nhc_valid,
-                        nhc_residual_vy_mps: nhc_trace.nhc_residual_vy_mps as f64,
-                        nhc_residual_vz_mps: nhc_trace.nhc_residual_vz_mps as f64,
-                        planar_gyro_valid: nhc_trace.planar_gyro_valid,
-                        planar_gyro_residual_x_dps: nhc_trace
-                            .planar_gyro_residual_x_radps
-                            .to_degrees()
-                            as f64,
-                        planar_gyro_residual_y_dps: nhc_trace
-                            .planar_gyro_residual_y_radps
-                            .to_degrees()
-                            as f64,
-                    });
-                }
-            }
-        }
-        prev_nav = Some((*tn, *nav));
-        interval_start_idx = scan_idx;
-    }
-
-    let metrics = score_samples(&samples, dataset.total_nav_events, init_time_s);
-    Ok(EvalResult {
-        cfg: *cfg,
-        bootstrap_cfg: *bootstrap_cfg,
-        metrics,
-        samples,
-    })
 }
 
 fn tune_config(
@@ -1480,12 +1075,12 @@ fn write_residual_csv(path: &PathBuf, samples: &[ResidualSample]) -> Result<()> 
     let mut w = BufWriter::new(file);
     writeln!(
         w,
-        "t_s,align_roll_deg,align_pitch_deg,align_yaw_deg,alg_roll_deg,alg_pitch_deg,alg_yaw_deg,err_roll_deg,err_pitch_deg,err_yaw_deg,sigma_roll_deg,sigma_pitch_deg,sigma_yaw_deg,course_rate_dps,a_lat_mps2,a_long_mps2,rot_err_deg,fwd_err_deg,down_err_deg,fwd_err_signed_deg,down_err_signed_deg,long_base_valid,long_emitted,long_stable_windows,long_gnss_long_lp_mps2,long_gnss_lat_lp_mps2,long_imu_long_lp_mps2,long_imu_lat_lp_mps2,long_angle_err_deg,long_angle_err_signed_deg,horiz_angle_err_deg,horiz_effective_std_deg,horiz_gnss_norm_mps2,horiz_imu_norm_mps2,horiz_speed_q,horiz_accel_q,horiz_straight_q,horiz_turn_q,horiz_dominance_q,horiz_turn_core_valid,horiz_straight_core_valid,horiz_applied,nhc_valid,nhc_residual_vy_mps,nhc_residual_vz_mps,planar_gyro_valid,planar_gyro_residual_x_dps,planar_gyro_residual_y_dps"
+        "t_s,align_roll_deg,align_pitch_deg,align_yaw_deg,alg_roll_deg,alg_pitch_deg,alg_yaw_deg,err_roll_deg,err_pitch_deg,err_yaw_deg,sigma_roll_deg,sigma_pitch_deg,sigma_yaw_deg,course_rate_dps,a_lat_mps2,a_long_mps2,rot_err_deg,fwd_err_deg,down_err_deg,fwd_err_signed_deg,down_err_signed_deg,long_base_valid,long_emitted,long_stable_windows,long_gnss_long_lp_mps2,long_gnss_lat_lp_mps2,long_imu_long_lp_mps2,long_imu_lat_lp_mps2,long_angle_err_deg,long_angle_err_signed_deg,horiz_angle_err_deg,horiz_effective_std_deg,horiz_gnss_norm_mps2,horiz_imu_norm_mps2,horiz_speed_q,horiz_accel_q,horiz_straight_q,horiz_turn_q,horiz_dominance_q,horiz_turn_core_valid,horiz_straight_core_valid,horiz_applied,planar_gyro_valid,planar_gyro_residual_x_dps,planar_gyro_residual_y_dps"
     )?;
     for s in samples {
         writeln!(
             w,
-            "{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{},{:.6},{:.6},{},{:.6},{:.6}",
+            "{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{},{:.6},{:.6}",
             s.t_s,
             s.align_roll_deg,
             s.align_pitch_deg,
@@ -1528,9 +1123,6 @@ fn write_residual_csv(path: &PathBuf, samples: &[ResidualSample]) -> Result<()> 
             s.horiz_turn_core_valid as u8,
             s.horiz_straight_core_valid as u8,
             s.horiz_applied as u8,
-            s.nhc_valid as u8,
-            s.nhc_residual_vy_mps,
-            s.nhc_residual_vz_mps,
             s.planar_gyro_valid as u8,
             s.planar_gyro_residual_x_dps,
             s.planar_gyro_residual_y_dps,
@@ -1591,31 +1183,8 @@ fn speed_for_bootstrap(
     speed_prev + alpha * (speed_curr - speed_prev)
 }
 
-fn freeze_nhc_mount(nhc: &mut AlignNhc, q_vb_fixed: [f32; 4]) {
-    nhc.q_vb = q_vb_fixed;
-    for i in 6..9 {
-        for j in 0..nhc.P.len() {
-            nhc.P[i][j] = 0.0;
-            nhc.P[j][i] = 0.0;
-        }
-    }
-}
-
 fn horizontal_speed(nav: NavPvtObs) -> f64 {
     (nav.vel_n_mps * nav.vel_n_mps + nav.vel_e_mps * nav.vel_e_mps).sqrt()
-}
-
-fn normalize2(v: [f64; 2]) -> Option<[f64; 2]> {
-    let n = (v[0] * v[0] + v[1] * v[1]).sqrt();
-    if n <= 1.0e-12 {
-        None
-    } else {
-        Some([v[0] / n, v[1] / n])
-    }
-}
-
-fn wrap_rad_pi(x: f64) -> f64 {
-    (x + std::f64::consts::PI).rem_euclid(2.0 * std::f64::consts::PI) - std::f64::consts::PI
 }
 
 fn norm3(v: [f32; 3]) -> f32 {

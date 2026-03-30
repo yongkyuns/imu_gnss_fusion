@@ -4,7 +4,7 @@ use std::{fs::File, io::Read, path::PathBuf};
 use anyhow::{Context, Result};
 use clap::Parser;
 use sim::visualizer::model::EkfImuSource;
-use sim::visualizer::pipeline::{AlignNhcVisualizerConfig, build_plot_data};
+use sim::visualizer::pipeline::build_plot_data;
 use sim::visualizer::stats::{
     group_stats, max_gap_sec, max_gap_trace, max_step_abs, trace_stats, trace_time_bounds,
     trace_value_bounds,
@@ -26,12 +26,6 @@ struct Args {
     dump_align_axis_time_s: Option<f64>,
     #[arg(long, default_value_t = 3.0)]
     dump_window_s: f64,
-    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
-    align_nhc_init_mount_from_final_alg: bool,
-    #[arg(long)]
-    align_nhc_init_mount_sigma_deg: Option<f32>,
-    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
-    align_nhc_freeze_mount_from_final_alg: bool,
 }
 
 fn main() -> Result<()> {
@@ -44,13 +38,7 @@ fn main() -> Result<()> {
         .context("failed to read log")?;
     let t_read = Instant::now();
 
-    let align_nhc_cfg = AlignNhcVisualizerConfig {
-        init_mount_from_final_alg: args.align_nhc_init_mount_from_final_alg,
-        init_mount_sigma_deg: args.align_nhc_init_mount_sigma_deg,
-        freeze_mount_from_final_alg: args.align_nhc_freeze_mount_from_final_alg,
-    };
-    let (data, has_itow) =
-        build_plot_data(&bytes, args.max_records, args.ekf_imu_source, align_nhc_cfg);
+    let (data, has_itow) = build_plot_data(&bytes, args.max_records, args.ekf_imu_source);
     let t_build = Instant::now();
     let (n_traces, n_points) = trace_stats(&data);
     let (tmin, tmax) = trace_time_bounds(&data).unwrap_or((f64::NAN, f64::NAN));
@@ -89,15 +77,6 @@ fn main() -> Result<()> {
         group_stats("align_axis_err", &data.align_axis_err),
         group_stats("align_motion", &data.align_motion),
         group_stats("align_startup", &data.align_startup),
-        group_stats("align_nhc_cmp_att", &data.align_nhc_cmp_att),
-        group_stats("align_nhc_yaws", &data.align_nhc_yaws),
-        group_stats("align_nhc_states", &data.align_nhc_states),
-        group_stats("align_nhc_biases", &data.align_nhc_biases),
-        group_stats("align_nhc_diag", &data.align_nhc_diag),
-        group_stats("align_nhc_axis_err", &data.align_nhc_axis_err),
-        group_stats("align_nhc_residuals", &data.align_nhc_residuals),
-        group_stats("align_nhc_gates", &data.align_nhc_gates),
-        group_stats("align_nhc_cov", &data.align_nhc_cov),
         group_stats("align_roll_contrib", &data.align_roll_contrib),
         group_stats("align_pitch_contrib", &data.align_pitch_contrib),
         group_stats("align_yaw_contrib", &data.align_yaw_contrib),
@@ -122,15 +101,6 @@ fn main() -> Result<()> {
         ("align_axis_err", &data.align_axis_err),
         ("align_motion", &data.align_motion),
         ("align_startup", &data.align_startup),
-        ("align_nhc_cmp_att", &data.align_nhc_cmp_att),
-        ("align_nhc_yaws", &data.align_nhc_yaws),
-        ("align_nhc_states", &data.align_nhc_states),
-        ("align_nhc_biases", &data.align_nhc_biases),
-        ("align_nhc_diag", &data.align_nhc_diag),
-        ("align_nhc_axis_err", &data.align_nhc_axis_err),
-        ("align_nhc_residuals", &data.align_nhc_residuals),
-        ("align_nhc_gates", &data.align_nhc_gates),
-        ("align_nhc_cov", &data.align_nhc_cov),
         ("align_roll_contrib", &data.align_roll_contrib),
         ("align_pitch_contrib", &data.align_pitch_contrib),
         ("align_yaw_contrib", &data.align_yaw_contrib),
