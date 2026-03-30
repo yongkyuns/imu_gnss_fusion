@@ -25,7 +25,6 @@ struct Row {
     startup_gate_valid: bool,
     startup_accepted: bool,
     startup_emitted: bool,
-    long_emitted: bool,
     err_startup_theta_deg: f64,
     err_startup_theta_alt_deg: f64,
     err_final_esf_deg: f64,
@@ -73,7 +72,6 @@ fn main() -> Result<()> {
     print_subset_summary("all", rows.iter());
     print_subset_summary("startup_gate_valid", rows.iter().filter(|r| r.startup_gate_valid));
     print_subset_summary("startup_accepted", rows.iter().filter(|r| r.startup_accepted));
-    print_subset_summary("long_emitted", rows.iter().filter(|r| r.long_emitted));
     println!();
 
     println!("Per-log startup emission summary");
@@ -167,7 +165,6 @@ fn load_rows(path: &PathBuf) -> Result<Vec<Row>> {
     let gate_i = idx("startup_gate_valid")?;
     let accept_i = idx("startup_accepted")?;
     let emit_i = idx("startup_emitted")?;
-    let long_emit_i = idx("long_emitted")?;
     let err_theta_i = idx("err_startup_theta_deg")?;
     let err_theta_alt_i = idx("err_startup_theta_alt_deg")?;
     let err_final_esf_i = idx("err_final_esf_deg")?;
@@ -192,7 +189,6 @@ fn load_rows(path: &PathBuf) -> Result<Vec<Row>> {
             startup_gate_valid: parse_bool01(fields[gate_i])?,
             startup_accepted: parse_bool01(fields[accept_i])?,
             startup_emitted: parse_bool01(fields[emit_i])?,
-            long_emitted: parse_bool01(fields[long_emit_i])?,
             err_startup_theta_deg: parse_f64(fields[err_theta_i])?,
             err_startup_theta_alt_deg: parse_f64(fields[err_theta_alt_i])?,
             err_final_esf_deg: parse_f64(fields[err_final_esf_i])?,

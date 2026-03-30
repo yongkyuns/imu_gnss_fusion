@@ -2,10 +2,6 @@
 
 use std::collections::VecDeque;
 
-use crate::horizontal_heading::{
-    HorizontalHeadingCueConfig, HorizontalHeadingCueFilter, HorizontalHeadingCueSample,
-    HorizontalHeadingTrace,
-};
 use crate::stationary_mount::bootstrap_vehicle_to_body_from_stationary;
 use crate::yaw_startup::{
     YawStartupConfig, YawStartupInitializer, YawStartupSample, YawStartupTrace,
@@ -22,12 +18,8 @@ pub struct AlignConfig {
     pub r_horiz_heading_std_rad: f32,
     pub r_turn_gyro_std_radps: f32,
     pub turn_gyro_yaw_scale: f32,
-    pub r_course_rate_std_radps: f32,
     pub r_turn_heading_std_rad: f32,
-    pub r_long_std_mps2: f32,
-    pub long_yaw_scale: f32,
     pub gravity_lpf_alpha: f32,
-    pub long_lpf_alpha: f32,
     pub min_speed_mps: f32,
     pub min_turn_rate_radps: f32,
     pub min_lat_acc_mps2: f32,
@@ -42,7 +34,6 @@ pub struct AlignConfig {
     pub turn_consistency_min_fraction: f32,
     pub turn_consistency_max_abs_lat_err_mps2: f32,
     pub turn_consistency_max_rel_lat_err: f32,
-    pub min_long_sign_stable_windows: usize,
     pub use_unified_yaw_startup: bool,
     pub startup_min_speed_mps: f32,
     pub startup_min_horiz_acc_mps2: f32,
@@ -61,8 +52,6 @@ pub struct AlignConfig {
     pub max_stationary_accel_norm_err_mps2: f32,
     pub use_gravity: bool,
     pub use_turn_gyro: bool,
-    pub use_course_rate: bool,
-    pub use_longitudinal_accel: bool,
 }
 
 impl Default for AlignConfig {
@@ -74,15 +63,11 @@ impl Default for AlignConfig {
                 0.0001_f32.to_radians(),
             ],
             r_gravity_std_mps2: 1.28,
-            r_horiz_heading_std_rad: 101.0_f32.to_radians(),
+            r_horiz_heading_std_rad: 1.0_f32.to_radians(), // Main longitudinal
+            r_turn_heading_std_rad: 0.1_f32.to_radians(),  // Main lateral
             r_turn_gyro_std_radps: 0.1_f32.to_radians(),
             turn_gyro_yaw_scale: 0.0,
-            r_course_rate_std_radps: 1.10_f32.to_radians(),
-            r_turn_heading_std_rad: 0.1_f32.to_radians(),
-            r_long_std_mps2: 0.3,
-            long_yaw_scale: 0.0,
             gravity_lpf_alpha: 0.08,
-            long_lpf_alpha: 0.05,
             min_speed_mps: 3.0 / 3.6,
             min_turn_rate_radps: 2.0_f32.to_radians(),
             min_lat_acc_mps2: 0.10,
@@ -97,7 +82,6 @@ impl Default for AlignConfig {
             turn_consistency_min_fraction: 0.8,
             turn_consistency_max_abs_lat_err_mps2: 0.35,
             turn_consistency_max_rel_lat_err: 0.6,
-            min_long_sign_stable_windows: 2,
             use_unified_yaw_startup: true,
             startup_min_speed_mps: 10.0 / 3.6,
             startup_min_horiz_acc_mps2: 0.15,
@@ -116,8 +100,6 @@ impl Default for AlignConfig {
             max_stationary_accel_norm_err_mps2: 0.2,
             use_gravity: true,
             use_turn_gyro: true,
-            use_course_rate: true,
-            use_longitudinal_accel: true,
         }
     }
 }
@@ -153,9 +135,6 @@ pub struct AlignUpdateTrace {
     pub horiz_turn_core_valid: bool,
     pub horiz_straight_core_valid: bool,
     pub after_turn_gyro: Option<[f32; 4]>,
-    pub after_course_rate: Option<[f32; 4]>,
-    pub after_longitudinal_accel: Option<[f32; 4]>,
-    pub longitudinal_trace: Option<HorizontalHeadingTrace>,
 }
 
 #[derive(Debug, Clone)]
@@ -164,8 +143,6 @@ pub struct Align {
     pub P: [[f32; ALIGN_N_STATES]; ALIGN_N_STATES],
     pub gravity_lp_b: [f32; 3],
     coarse_aligned: bool,
-    long_filter: HorizontalHeadingCueFilter,
-    turn_filter: HorizontalHeadingCueFilter,
     yaw_dual: Option<YawDualHypothesis>,
     yaw_startup: YawStartupInitializer,
     turn_consistency: TurnConsistencyGate,
@@ -176,15 +153,11 @@ pub struct Align {
 struct YawDualHypothesis {
     q_vb: [f32; 4],
     p: [[f32; ALIGN_N_STATES]; ALIGN_N_STATES],
-    long_filter: HorizontalHeadingCueFilter,
-    turn_filter: HorizontalHeadingCueFilter,
     seeded_from_startup: bool,
-    primary_forward_score: f32,
-    alt_forward_score: f32,
-    forward_windows: usize,
-    primary_turn_score: f32,
-    alt_turn_score: f32,
-    turn_windows: usize,
+    primary_vector_cost: f32,
+    alt_vector_cost: f32,
+    vector_weight: f32,
+    vector_windows: usize,
 }
 
 impl Default for Align {
@@ -204,8 +177,6 @@ impl Align {
             ]),
             gravity_lp_b: [0.0, 0.0, -GRAVITY_MPS2],
             coarse_aligned: false,
-            long_filter: HorizontalHeadingCueFilter::new(),
-            turn_filter: HorizontalHeadingCueFilter::new(),
             yaw_dual: None,
             yaw_startup: YawStartupInitializer::new(),
             turn_consistency: TurnConsistencyGate::new(),
@@ -227,20 +198,14 @@ impl Align {
         ]);
         self.gravity_lp_b = init.mean_accel_b;
         self.coarse_aligned = false;
-        self.long_filter.reset();
-        self.turn_filter.reset();
         self.yaw_dual = Some(YawDualHypothesis {
             q_vb: quat_normalize(quat_mul(self.q_vb, quat_yaw_pi())),
             p: self.P,
-            long_filter: HorizontalHeadingCueFilter::new(),
-            turn_filter: HorizontalHeadingCueFilter::new(),
             seeded_from_startup: false,
-            primary_forward_score: 0.0,
-            alt_forward_score: 0.0,
-            forward_windows: 0,
-            primary_turn_score: 0.0,
-            alt_turn_score: 0.0,
-            turn_windows: 0,
+            primary_vector_cost: 0.0,
+            alt_vector_cost: 0.0,
+            vector_weight: 0.0,
+            vector_windows: 0,
         });
         self.yaw_startup.reset(self.cfg.use_unified_yaw_startup);
         self.turn_consistency.reset();
@@ -325,7 +290,7 @@ impl Align {
             && horiz_gnss_norm > self.cfg.min_long_acc_mps2;
         let startup_cfg = YawStartupConfig {
             enabled: self.cfg.use_unified_yaw_startup,
-            alpha: self.cfg.long_lpf_alpha,
+            alpha: 0.05,
             min_speed_mps: self.cfg.startup_min_speed_mps,
             min_horiz_acc_mps2: self.cfg.startup_min_horiz_acc_mps2,
             min_long_mps2: self.cfg.startup_min_long_mps2,
@@ -336,6 +301,7 @@ impl Align {
             min_windows: self.cfg.startup_min_windows,
             max_windows: self.cfg.startup_max_windows,
             min_alignment_score: self.cfg.startup_min_vector_concentration,
+            min_sign_agreement: self.cfg.startup_min_sign_agreement,
         };
         let heading_updates_enabled = !self.yaw_startup.is_active() && self.yaw_dual.is_none();
 
@@ -418,17 +384,17 @@ impl Align {
                 let dominance = ((a_lat.abs() / (a_long.abs() + 0.2)) - 1.5) / 1.5;
                 let lat_q =
                     ((a_lat.abs() - self.cfg.min_lat_acc_mps2.max(0.7)) / 1.0).clamp(0.0, 1.0);
-                let turn_q =
-                    (0.35 + 0.65 * (speed_q * accel_q * lat_q * dominance.clamp(0.0, 1.0)))
-                        .clamp(0.35, 1.0);
+                let turn_q = (0.35
+                    + 0.65 * (speed_q * accel_q * lat_q * dominance.clamp(0.0, 1.0)))
+                .clamp(0.35, 1.0);
                 trace.horiz_dominance_q = Some(dominance.clamp(0.0, 1.0));
                 trace.horiz_turn_q = Some(turn_q);
                 self.cfg.r_turn_heading_std_rad / turn_q
             } else {
                 let lat_ratio = a_lat.abs() / (0.5 + 0.6 * a_long.abs());
                 let long_q = ((a_long.abs() - self.cfg.min_long_acc_mps2) / 0.8).clamp(0.0, 1.0);
-                let straight_q =
-                    (speed_q * accel_q * long_q * (1.0 - lat_ratio.clamp(0.0, 1.0))).clamp(0.2, 1.0);
+                let straight_q = (speed_q * accel_q * long_q * (1.0 - lat_ratio.clamp(0.0, 1.0)))
+                    .clamp(0.2, 1.0);
                 trace.horiz_straight_q = Some(straight_q);
                 self.cfg.r_horiz_heading_std_rad / straight_q
             };
@@ -484,16 +450,6 @@ impl Align {
                 }
                 trace.after_turn_gyro = Some(self.q_vb);
             }
-            if heading_updates_enabled && turn_heading_valid && self.cfg.use_course_rate {
-                score += self.apply_update1(
-                    course_rate,
-                    2,
-                    window.mean_accel_b,
-                    window.mean_gyro_b,
-                    self.cfg.r_course_rate_std_radps.powi(2),
-                );
-                trace.after_course_rate = Some(self.q_vb);
-            }
         }
 
         if self.yaw_startup.is_active() {
@@ -512,163 +468,60 @@ impl Align {
             );
             trace.startup_trace = Some(startup_trace);
             if let Some(dpsi) = startup_theta {
-                if self.startup_seed_improves_pair(
+                self.seed_yaw_dual_from_startup(
                     dpsi,
                     window.mean_gyro_b,
                     horiz_accel_b,
                     [a_long, a_lat],
-                ) {
-                    self.seed_yaw_dual_from_startup(dpsi);
-                    self.turn_consistency.reset();
-                    trace.after_yaw_seed = Some(self.q_vb);
-                }
+                    startup_trace,
+                );
+                self.turn_consistency.reset();
+                trace.after_yaw_seed = Some(self.q_vb);
             } else if self.yaw_startup.timed_out(startup_cfg) {
                 self.yaw_startup.reset(false);
             }
         }
 
-        if self.yaw_dual.is_some()
-            && !self.yaw_startup.is_active()
-            && self.cfg.use_longitudinal_accel
-        {
-            let (cue, long_trace) = self.long_filter.update_with_trace(
-                HorizontalHeadingCueConfig {
-                    alpha: self.cfg.long_lpf_alpha,
-                    min_abs_horiz_mps2: self.cfg.min_long_acc_mps2,
-                    min_stable_windows: self.cfg.min_long_sign_stable_windows,
-                    max_lat_to_long_ratio: 0.8,
-                    min_abs_lat_guard_mps2: 0.35,
-                },
-                HorizontalHeadingCueSample {
-                    gnss_horiz_mps2: [a_long, a_lat],
-                    imu_horiz_mps2: [horiz_obs[3], horiz_obs[4]],
-                    base_valid: long_valid,
-                },
-            );
-            trace.longitudinal_trace = Some(long_trace);
-            if let Some(alt) = &mut self.yaw_dual {
-                let alt_horiz_obs = align_obs(alt.q_vb, window.mean_gyro_b, horiz_accel_b);
-                let (cue_alt, alt_long_trace) = alt.long_filter.update_with_trace(
-                    HorizontalHeadingCueConfig {
-                        alpha: self.cfg.long_lpf_alpha,
-                        min_abs_horiz_mps2: self.cfg.min_long_acc_mps2,
-                        min_stable_windows: self.cfg.min_long_sign_stable_windows,
-                        max_lat_to_long_ratio: 0.8,
-                        min_abs_lat_guard_mps2: 0.35,
-                    },
-                    HorizontalHeadingCueSample {
-                        gnss_horiz_mps2: [a_long, a_lat],
-                        imu_horiz_mps2: [alt_horiz_obs[3], alt_horiz_obs[4]],
-                        base_valid: long_valid,
-                    },
-                );
-                if let (Some(cue_primary), Some(cue_alt)) = (cue, cue_alt) {
-                    if let Some(choose_alt) = Self::update_yaw_dual_forward_resolver(
+        if self.yaw_dual.is_some() && !self.yaw_startup.is_active() {
+            if self.yaw_dual.is_some() && horiz_vector_valid {
+                let primary_horiz_xy = [horiz_obs[3], horiz_obs[4]];
+                let primary_yaw_rate = horiz_obs[2];
+                let gnss_horiz_xy = [a_long, a_lat];
+                let (alt_horiz_xy, alt_yaw_rate) = if let Some(alt) = &self.yaw_dual {
+                    let alt_horiz_obs = align_obs(alt.q_vb, window.mean_gyro_b, horiz_accel_b);
+                    ([alt_horiz_obs[3], alt_horiz_obs[4]], alt_horiz_obs[2])
+                } else {
+                    ([0.0, 0.0], 0.0)
+                };
+                let choose_alt = if let Some(alt) = &mut self.yaw_dual {
+                    Self::update_yaw_dual_vector_resolver(
                         &self.cfg,
                         alt,
                         speed_mid,
-                        a_long,
-                        a_lat,
-                        &long_trace,
-                        &alt_long_trace,
-                    ) {
-                        self.resolve_yaw_dual(choose_alt, self.cfg.yaw_seed_std_rad);
-                        score += self.apply_vehicle_yaw_angle(
-                            self.cfg.long_yaw_scale
-                                * if choose_alt {
-                                    cue_alt.angle_err_rad
-                                } else {
-                                    cue_primary.angle_err_rad
-                                },
-                            self.cfg.r_long_std_mps2.powi(2),
-                        );
-                        trace.after_longitudinal_accel = Some(self.q_vb);
-                        trace.after_branch_resolve = Some(self.q_vb);
-                    }
+                        primary_horiz_xy,
+                        primary_yaw_rate,
+                        alt_horiz_xy,
+                        alt_yaw_rate,
+                        gnss_horiz_xy,
+                        course_rate,
+                    )
+                } else {
+                    None
+                };
+                if let Some(choose_alt) = choose_alt {
+                    let yaw_sigma = if self
+                        .yaw_dual
+                        .as_ref()
+                        .map(|alt| alt.seeded_from_startup)
+                        .unwrap_or(false)
+                    {
+                        self.cfg.yaw_seed_std_rad
+                    } else {
+                        self.cfg.yaw_branch_only_std_rad
+                    };
+                    self.resolve_yaw_dual(choose_alt, yaw_sigma);
+                    trace.after_branch_resolve = Some(self.q_vb);
                 }
-            }
-            if self.yaw_dual.is_some() {
-                let (turn_cue, turn_trace) = self.turn_filter.update_with_trace(
-                    HorizontalHeadingCueConfig {
-                        alpha: self.cfg.long_lpf_alpha,
-                        min_abs_horiz_mps2: self.cfg.yaw_dual_resolve_min_lat_acc_mps2,
-                        min_stable_windows: self.cfg.min_long_sign_stable_windows,
-                        max_lat_to_long_ratio: self.cfg.yaw_dual_resolve_max_long_to_lat_ratio,
-                        min_abs_lat_guard_mps2: self.cfg.yaw_dual_resolve_min_long_acc_mps2,
-                    },
-                    HorizontalHeadingCueSample {
-                        gnss_horiz_mps2: [a_lat, a_long],
-                        imu_horiz_mps2: [horiz_obs[4], horiz_obs[3]],
-                        base_valid: turn_valid,
-                    },
-                );
-                if let Some(alt) = &mut self.yaw_dual {
-                    let alt_horiz_obs = align_obs(alt.q_vb, window.mean_gyro_b, horiz_accel_b);
-                    let (turn_cue_alt, alt_turn_trace) = alt.turn_filter.update_with_trace(
-                        HorizontalHeadingCueConfig {
-                            alpha: self.cfg.long_lpf_alpha,
-                            min_abs_horiz_mps2: self.cfg.yaw_dual_resolve_min_lat_acc_mps2,
-                            min_stable_windows: self.cfg.min_long_sign_stable_windows,
-                            max_lat_to_long_ratio: self.cfg.yaw_dual_resolve_max_long_to_lat_ratio,
-                            min_abs_lat_guard_mps2: self.cfg.yaw_dual_resolve_min_long_acc_mps2,
-                        },
-                        HorizontalHeadingCueSample {
-                            gnss_horiz_mps2: [a_lat, a_long],
-                            imu_horiz_mps2: [alt_horiz_obs[4], alt_horiz_obs[3]],
-                            base_valid: turn_valid,
-                        },
-                    );
-                    if let (Some(cue_primary), Some(cue_alt)) = (turn_cue, turn_cue_alt) {
-                        if let Some(choose_alt) = Self::update_yaw_dual_turn_resolver(
-                            &self.cfg,
-                            alt,
-                            speed_mid,
-                            a_long,
-                            a_lat,
-                            &turn_trace,
-                            &alt_turn_trace,
-                        ) {
-                            let yaw_sigma = if alt.seeded_from_startup {
-                                self.cfg.yaw_seed_std_rad
-                            } else {
-                                self.cfg.yaw_branch_only_std_rad
-                            };
-                            self.resolve_yaw_dual(choose_alt, yaw_sigma);
-                            score += self.apply_vehicle_yaw_angle(
-                                if choose_alt {
-                                    cue_alt.angle_err_rad
-                                } else {
-                                    cue_primary.angle_err_rad
-                                },
-                                self.cfg.r_turn_heading_std_rad.powi(2),
-                            );
-                            trace.after_branch_resolve = Some(self.q_vb);
-                        }
-                    }
-                }
-            }
-        } else if heading_updates_enabled && self.cfg.use_longitudinal_accel {
-            let (cue, long_trace) = self.long_filter.update_with_trace(
-                HorizontalHeadingCueConfig {
-                    alpha: self.cfg.long_lpf_alpha,
-                    min_abs_horiz_mps2: self.cfg.min_long_acc_mps2,
-                    min_stable_windows: self.cfg.min_long_sign_stable_windows,
-                    max_lat_to_long_ratio: 0.8,
-                    min_abs_lat_guard_mps2: 0.35,
-                },
-                HorizontalHeadingCueSample {
-                    gnss_horiz_mps2: [a_long, a_lat],
-                    imu_horiz_mps2: [horiz_obs[3], horiz_obs[4]],
-                    base_valid: long_valid,
-                },
-            );
-            trace.longitudinal_trace = Some(long_trace);
-            if let Some(cue) = cue {
-                score += self.apply_vehicle_yaw_angle(
-                    self.cfg.long_yaw_scale * cue.angle_err_rad,
-                    self.cfg.r_long_std_mps2.powi(2),
-                );
-                trace.after_longitudinal_accel = Some(self.q_vb);
             }
         }
 
@@ -1004,8 +857,6 @@ impl Align {
             if choose_alt {
                 self.q_vb = alt.q_vb;
                 self.P = alt.p;
-                self.long_filter = alt.long_filter;
-                self.turn_filter = alt.turn_filter;
             }
             self.P[2][2] = yaw_sigma_rad.powi(2);
             self.P[0][2] = 0.0;
@@ -1017,7 +868,14 @@ impl Align {
         }
     }
 
-    fn seed_yaw_dual_from_startup(&mut self, heading_target: f32) {
+    fn seed_yaw_dual_from_startup(
+        &mut self,
+        heading_target: f32,
+        _gyro_b: [f32; 3],
+        _accel_b: [f32; 3],
+        _gnss_horiz_xy: [f32; 2],
+        startup_trace: YawStartupTrace,
+    ) {
         let mut primary_q = self.q_vb;
         let mut alt_q = self.q_vb;
         Self::set_vehicle_heading_in_level_frame(&mut primary_q, self.gravity_lp_b, heading_target);
@@ -1033,174 +891,129 @@ impl Align {
         self.P[2][0] = 0.0;
         self.P[1][2] = 0.0;
         self.P[2][1] = 0.0;
-        self.long_filter.reset();
-        self.turn_filter.reset();
+        let _ = startup_trace;
 
         self.yaw_dual = Some(YawDualHypothesis {
             q_vb: alt_q,
             p: self.P,
-            long_filter: HorizontalHeadingCueFilter::new(),
-            turn_filter: HorizontalHeadingCueFilter::new(),
             seeded_from_startup: true,
-            primary_forward_score: 0.0,
-            alt_forward_score: 0.0,
-            forward_windows: 0,
-            primary_turn_score: 0.0,
-            alt_turn_score: 0.0,
-            turn_windows: 0,
+            primary_vector_cost: 0.0,
+            alt_vector_cost: 0.0,
+            vector_weight: 0.0,
+            vector_windows: 0,
         });
         self.yaw_startup.reset(false);
     }
 
-    fn startup_seed_improves_pair(
-        &self,
-        heading_target: f32,
-        gyro_b: [f32; 3],
-        accel_b: [f32; 3],
-        gnss_horiz_xy: [f32; 2],
-    ) -> bool {
-        let Some(current_alt) = &self.yaw_dual else {
-            return true;
-        };
-        let current_best = Self::pair_best_horiz_angle_error(
-            self.q_vb,
-            current_alt.q_vb,
-            gyro_b,
-            accel_b,
-            gnss_horiz_xy,
-        );
-
-        let mut seeded_primary = self.q_vb;
-        let mut seeded_alt = self.q_vb;
-        Self::set_vehicle_heading_in_level_frame(
-            &mut seeded_primary,
-            self.gravity_lp_b,
-            heading_target,
-        );
-        Self::set_vehicle_heading_in_level_frame(
-            &mut seeded_alt,
-            self.gravity_lp_b,
-            wrap_angle_rad(heading_target + core::f32::consts::PI),
-        );
-        let seeded_best = Self::pair_best_horiz_angle_error(
-            seeded_primary,
-            seeded_alt,
-            gyro_b,
-            accel_b,
-            gnss_horiz_xy,
-        );
-
-        let improve_margin = 2.0_f32.to_radians();
-        seeded_best + improve_margin < current_best
-    }
-
-    fn pair_best_horiz_angle_error(
-        primary_q: [f32; 4],
-        alt_q: [f32; 4],
-        gyro_b: [f32; 3],
-        accel_b: [f32; 3],
-        gnss_horiz_xy: [f32; 2],
-    ) -> f32 {
-        let primary_err =
-            Self::horiz_angle_error(primary_q, gyro_b, accel_b, gnss_horiz_xy).abs();
-        let alt_err = Self::horiz_angle_error(alt_q, gyro_b, accel_b, gnss_horiz_xy).abs();
-        primary_err.min(alt_err)
-    }
-
-    fn horiz_angle_error(
-        q_vb: [f32; 4],
-        gyro_b: [f32; 3],
-        accel_b: [f32; 3],
-        gnss_horiz_xy: [f32; 2],
-    ) -> f32 {
+    fn horiz_vector_prediction(q_vb: [f32; 4], gyro_b: [f32; 3], accel_b: [f32; 3]) -> [f32; 2] {
         let horiz_obs = align_obs(q_vb, gyro_b, accel_b);
-        let cross = horiz_obs[3] * gnss_horiz_xy[1] - horiz_obs[4] * gnss_horiz_xy[0];
-        let dot = horiz_obs[3] * gnss_horiz_xy[0] + horiz_obs[4] * gnss_horiz_xy[1];
-        cross.atan2(dot)
+        [horiz_obs[3], horiz_obs[4]]
     }
 
-    fn update_yaw_dual_forward_resolver(
+    fn update_yaw_dual_vector_resolver(
         cfg: &AlignConfig,
         dual: &mut YawDualHypothesis,
         speed_mid: f32,
-        a_long: f32,
-        a_lat: f32,
-        primary_trace: &HorizontalHeadingTrace,
-        alt_trace: &HorizontalHeadingTrace,
+        primary_horiz_xy: [f32; 2],
+        primary_yaw_rate: f32,
+        alt_horiz_xy: [f32; 2],
+        alt_yaw_rate: f32,
+        gnss_horiz_xy: [f32; 2],
+        course_rate: f32,
     ) -> Option<bool> {
+        let min_horiz = cfg
+            .yaw_dual_resolve_min_long_acc_mps2
+            .min(cfg.yaw_dual_resolve_min_lat_acc_mps2);
+        let gnss_norm =
+            (gnss_horiz_xy[0] * gnss_horiz_xy[0] + gnss_horiz_xy[1] * gnss_horiz_xy[1]).sqrt();
+        let primary_norm = (primary_horiz_xy[0] * primary_horiz_xy[0]
+            + primary_horiz_xy[1] * primary_horiz_xy[1])
+            .sqrt();
+        let alt_norm =
+            (alt_horiz_xy[0] * alt_horiz_xy[0] + alt_horiz_xy[1] * alt_horiz_xy[1]).sqrt();
         if speed_mid < cfg.yaw_dual_resolve_min_speed_mps
-            || a_long.abs() < cfg.yaw_dual_resolve_min_long_acc_mps2
-            || a_lat.abs() > cfg.yaw_dual_resolve_max_lat_to_long_ratio * a_long.abs()
+            || gnss_norm < min_horiz
+            || primary_norm < min_horiz
+            || alt_norm < min_horiz
         {
             return None;
         }
 
-        let gnss_long = primary_trace.gnss_long_lp_mps2;
-        let primary_long = primary_trace.imu_long_lp_mps2;
-        let alt_long = alt_trace.imu_long_lp_mps2;
-        if gnss_long.abs() < cfg.yaw_dual_resolve_min_long_acc_mps2
-            || primary_long.abs() < cfg.yaw_dual_resolve_min_long_acc_mps2
-            || alt_long.abs() < cfg.yaw_dual_resolve_min_long_acc_mps2
-        {
+        let weight = ((gnss_norm.min(primary_norm).min(alt_norm) - min_horiz) / 0.8)
+            .clamp(0.0, 1.0)
+            * ((speed_mid - cfg.yaw_dual_resolve_min_speed_mps) / (20.0 / 3.6)).clamp(0.2, 1.0);
+        let primary_cost = Self::yaw_hypothesis_cost(
+            primary_horiz_xy,
+            primary_yaw_rate,
+            gnss_horiz_xy,
+            course_rate,
+            speed_mid,
+        );
+        let alt_cost = Self::yaw_hypothesis_cost(
+            alt_horiz_xy,
+            alt_yaw_rate,
+            gnss_horiz_xy,
+            course_rate,
+            speed_mid,
+        );
+        dual.primary_vector_cost += weight * primary_cost;
+        dual.alt_vector_cost += weight * alt_cost;
+        dual.vector_weight += weight;
+        dual.vector_windows += 1;
+
+        if dual.vector_windows < cfg.yaw_dual_resolve_min_windows || dual.vector_weight <= 1.0e-6 {
             return None;
         }
 
-        dual.primary_forward_score += (gnss_long * primary_long).signum();
-        dual.alt_forward_score += (gnss_long * alt_long).signum();
-        dual.forward_windows += 1;
-
-        if dual.forward_windows < cfg.yaw_dual_resolve_min_windows {
+        let mean_gap = (dual.alt_vector_cost - dual.primary_vector_cost) / dual.vector_weight;
+        let decision_margin = 0.015;
+        if mean_gap.abs() < decision_margin {
             return None;
         }
 
-        let score_gap = dual.alt_forward_score - dual.primary_forward_score;
-        if score_gap.abs() < 1.0 {
-            return None;
-        }
-
-        Some(score_gap > 0.0)
+        Some(mean_gap < 0.0)
     }
 
-    fn update_yaw_dual_turn_resolver(
-        cfg: &AlignConfig,
-        dual: &mut YawDualHypothesis,
+    fn yaw_hypothesis_cost(
+        imu_horiz_xy: [f32; 2],
+        imu_yaw_rate: f32,
+        gnss_horiz_xy: [f32; 2],
+        course_rate: f32,
         speed_mid: f32,
-        a_long: f32,
-        a_lat: f32,
-        primary_trace: &HorizontalHeadingTrace,
-        alt_trace: &HorizontalHeadingTrace,
-    ) -> Option<bool> {
-        if speed_mid < cfg.yaw_dual_resolve_min_speed_mps
-            || a_lat.abs() < cfg.yaw_dual_resolve_min_lat_acc_mps2
-            || a_long.abs() > cfg.yaw_dual_resolve_max_long_to_lat_ratio * a_lat.abs()
-        {
-            return None;
+    ) -> f32 {
+        let mut cost = Self::normalized_horiz_vector_cost(imu_horiz_xy, gnss_horiz_xy);
+        let turn_strength = (speed_mid * course_rate.abs()).max(gnss_horiz_xy[1].abs());
+        if turn_strength > 0.25 {
+            cost += 0.2 * Self::signed_mismatch_cost(imu_horiz_xy[1], course_rate, 0.15, 0.02);
+            cost += 0.15 * Self::signed_mismatch_cost(imu_yaw_rate, course_rate, 0.02, 0.01);
+            let a_lat_model = speed_mid * imu_yaw_rate;
+            let denom = turn_strength.max(a_lat_model.abs()).max(0.5);
+            cost += 0.15 * ((imu_horiz_xy[1] - a_lat_model).abs() / denom).min(2.0);
         }
-
-        let gnss_lat = primary_trace.gnss_long_lp_mps2;
-        let primary_lat = primary_trace.imu_long_lp_mps2;
-        let alt_lat = alt_trace.imu_long_lp_mps2;
-        if gnss_lat.abs() < cfg.yaw_dual_resolve_min_lat_acc_mps2
-            || primary_lat.abs() < cfg.yaw_dual_resolve_min_lat_acc_mps2
-            || alt_lat.abs() < cfg.yaw_dual_resolve_min_lat_acc_mps2
-        {
-            return None;
+        if gnss_horiz_xy[0].abs() > 0.2 {
+            cost += 0.1 * Self::signed_mismatch_cost(imu_horiz_xy[0], gnss_horiz_xy[0], 0.2, 0.2);
         }
+        cost
+    }
 
-        dual.primary_turn_score += (gnss_lat * primary_lat).signum();
-        dual.alt_turn_score += (gnss_lat * alt_lat).signum();
-        dual.turn_windows += 1;
-
-        if dual.turn_windows < cfg.yaw_dual_resolve_min_windows {
-            return None;
+    fn signed_mismatch_cost(a: f32, b: f32, a_guard: f32, b_guard: f32) -> f32 {
+        if a.abs() < a_guard || b.abs() < b_guard {
+            0.0
+        } else if a.signum() == b.signum() {
+            0.0
+        } else {
+            1.0
         }
+    }
 
-        let score_gap = dual.alt_turn_score - dual.primary_turn_score;
-        if score_gap.abs() < 1.0 {
-            return None;
+    fn normalized_horiz_vector_cost(imu_xy: [f32; 2], gnss_xy: [f32; 2]) -> f32 {
+        let imu_norm = (imu_xy[0] * imu_xy[0] + imu_xy[1] * imu_xy[1]).sqrt();
+        let gnss_norm = (gnss_xy[0] * gnss_xy[0] + gnss_xy[1] * gnss_xy[1]).sqrt();
+        if imu_norm <= 1.0e-6 || gnss_norm <= 1.0e-6 {
+            return 4.0;
         }
-
-        Some(score_gap > 0.0)
+        let dot = (imu_xy[0] * gnss_xy[0] + imu_xy[1] * gnss_xy[1]) / (imu_norm * gnss_norm);
+        1.0 - dot.clamp(-1.0, 1.0)
     }
 }
 

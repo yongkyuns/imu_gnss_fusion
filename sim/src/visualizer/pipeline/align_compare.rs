@@ -1,3 +1,5 @@
+use std::env;
+
 use align_rs::align::AlignConfig;
 
 use crate::ubxlog::{UbxFrame, extract_esf_alg};
@@ -45,7 +47,10 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
         };
     }
     let rel_s = |master_ms: f64| (master_ms - tl.t0_master_ms) * 1e-3;
-    let cfg = AlignConfig::default();
+    let mut cfg = AlignConfig::default();
+    if env_flag("ALIGN_DISABLE_STARTUP") {
+        cfg.use_unified_yaw_startup = false;
+    }
     let bootstrap_cfg = ReplayBootstrapConfig {
         ema_alpha: 0.05,
         max_speed_mps: 0.35,
@@ -90,19 +95,13 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
     let mut startup_accepted_samples = Vec::<(f64, f64, f64, f64, f64)>::new();
     let mut roll_horiz = Vec::<[f64; 2]>::new();
     let mut roll_turn_gyro = Vec::<[f64; 2]>::new();
-    let mut roll_course = Vec::<[f64; 2]>::new();
     let mut roll_lat = Vec::<[f64; 2]>::new();
-    let mut roll_long = Vec::<[f64; 2]>::new();
     let mut pitch_horiz = Vec::<[f64; 2]>::new();
     let mut pitch_turn_gyro = Vec::<[f64; 2]>::new();
-    let mut pitch_course = Vec::<[f64; 2]>::new();
     let mut pitch_lat = Vec::<[f64; 2]>::new();
-    let mut pitch_long = Vec::<[f64; 2]>::new();
     let mut yaw_horiz = Vec::<[f64; 2]>::new();
     let mut yaw_turn_gyro = Vec::<[f64; 2]>::new();
-    let mut yaw_course = Vec::<[f64; 2]>::new();
     let mut yaw_lat = Vec::<[f64; 2]>::new();
-    let mut yaw_long = Vec::<[f64; 2]>::new();
     let mut p00 = Vec::<[f64; 2]>::new();
     let mut p11 = Vec::<[f64; 2]>::new();
     let mut p22 = Vec::<[f64; 2]>::new();
@@ -172,19 +171,13 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
         let contrib = sample.contrib;
         roll_horiz.push([t, contrib.horiz_accel[0]]);
         roll_turn_gyro.push([t, contrib.turn_gyro[0]]);
-        roll_course.push([t, contrib.course_rate[0]]);
         roll_lat.push([t, contrib.lateral_accel[0]]);
-        roll_long.push([t, contrib.longitudinal_accel[0]]);
         pitch_horiz.push([t, contrib.horiz_accel[1]]);
         pitch_turn_gyro.push([t, contrib.turn_gyro[1]]);
-        pitch_course.push([t, contrib.course_rate[1]]);
         pitch_lat.push([t, contrib.lateral_accel[1]]);
-        pitch_long.push([t, contrib.longitudinal_accel[1]]);
         yaw_horiz.push([t, contrib.horiz_accel[2]]);
         yaw_turn_gyro.push([t, contrib.turn_gyro[2]]);
-        yaw_course.push([t, contrib.course_rate[2]]);
         yaw_lat.push([t, contrib.lateral_accel[2]]);
-        yaw_long.push([t, contrib.longitudinal_accel[2]]);
         p00.push([t, sample.p_diag[0].sqrt().to_degrees()]);
         p11.push([t, sample.p_diag[1].sqrt().to_degrees()]);
         p22.push([t, sample.p_diag[2].sqrt().to_degrees()]);
@@ -449,16 +442,8 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
                 points: roll_turn_gyro,
             },
             Trace {
-                name: "course rate".to_string(),
-                points: roll_course,
-            },
-            Trace {
                 name: "lateral accel".to_string(),
                 points: roll_lat,
-            },
-            Trace {
-                name: "longitudinal accel".to_string(),
-                points: roll_long,
             },
         ],
         pitch_contrib: vec![
@@ -471,16 +456,8 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
                 points: pitch_turn_gyro,
             },
             Trace {
-                name: "course rate".to_string(),
-                points: pitch_course,
-            },
-            Trace {
                 name: "lateral accel".to_string(),
                 points: pitch_lat,
-            },
-            Trace {
-                name: "longitudinal accel".to_string(),
-                points: pitch_long,
             },
         ],
         yaw_contrib: vec![
@@ -493,16 +470,8 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
                 points: yaw_turn_gyro,
             },
             Trace {
-                name: "course rate".to_string(),
-                points: yaw_course,
-            },
-            Trace {
                 name: "lateral accel".to_string(),
                 points: yaw_lat,
-            },
-            Trace {
-                name: "longitudinal accel".to_string(),
-                points: yaw_long,
             },
         ],
         cov: vec![
@@ -520,6 +489,12 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
             },
         ],
     }
+}
+
+fn env_flag(name: &str) -> bool {
+    env::var(name)
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false)
 }
 
 fn wrap_signed_deg(x: f64) -> f64 {

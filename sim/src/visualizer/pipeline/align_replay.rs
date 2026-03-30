@@ -42,21 +42,7 @@ pub struct AlgEvent {
 pub struct AlignEulerContrib {
     pub horiz_accel: [f64; 3],
     pub turn_gyro: [f64; 3],
-    pub course_rate: [f64; 3],
     pub lateral_accel: [f64; 3],
-    pub longitudinal_accel: [f64; 3],
-}
-
-#[derive(Clone, Copy, Default)]
-pub struct LongTraceSample {
-    pub base_valid: bool,
-    pub emitted: bool,
-    pub stable_windows: usize,
-    pub gnss_long_lp_mps2: f64,
-    pub gnss_lat_lp_mps2: f64,
-    pub imu_long_lp_mps2: f64,
-    pub imu_lat_lp_mps2: f64,
-    pub angle_err_deg: f64,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -108,13 +94,10 @@ pub struct AlignReplaySample {
     pub long_valid: bool,
     pub upd_gravity: bool,
     pub upd_turn_gyro: bool,
-    pub upd_course: bool,
     pub upd_lat: bool,
-    pub upd_long: bool,
     pub yaw_initialized: bool,
     pub contrib: AlignEulerContrib,
     pub p_diag: [f64; 3],
-    pub long_trace: LongTraceSample,
     pub horiz_trace: HorizTraceSample,
     pub startup_trace: StartupTraceSample,
     pub startup_input_long_mps2: f64,
@@ -368,17 +351,6 @@ pub fn build_align_replay(
                     let (r, p, y) = quat_rpy_alg_deg(q[0], q[1], q[2], q[3]);
                     [r, p, y]
                 });
-                let long_trace = trace.longitudinal_trace.unwrap_or_default();
-                let long_trace = LongTraceSample {
-                    base_valid: long_trace.base_valid,
-                    emitted: long_trace.emitted,
-                    stable_windows: long_trace.stable_windows,
-                    gnss_long_lp_mps2: long_trace.gnss_long_lp_mps2 as f64,
-                    gnss_lat_lp_mps2: long_trace.gnss_lat_lp_mps2 as f64,
-                    imu_long_lp_mps2: long_trace.imu_long_lp_mps2 as f64,
-                    imu_lat_lp_mps2: long_trace.imu_lat_lp_mps2 as f64,
-                    angle_err_deg: (long_trace.angle_err_rad as f64).to_degrees(),
-                };
                 let horiz_trace = HorizTraceSample {
                     angle_err_deg: trace
                         .horiz_angle_err_rad
@@ -460,9 +432,7 @@ pub fn build_align_replay(
                     long_valid,
                     upd_gravity: cfg.use_gravity && stationary,
                     upd_turn_gyro: cfg.use_turn_gyro && turn_valid,
-                    upd_course: cfg.use_course_rate && turn_valid,
                     upd_lat: false,
-                    upd_long: cfg.use_longitudinal_accel && long_valid,
                     yaw_initialized: yaw_initialized_now,
                     contrib: align_update_contrib_deg(trace),
                     p_diag: [
@@ -470,7 +440,6 @@ pub fn build_align_replay(
                         align.P[1][1] as f64,
                         align.P[2][2] as f64,
                     ],
-                    long_trace,
                     horiz_trace,
                     startup_trace,
                     startup_input_long_mps2: startup_horiz_xy[0] as f64,
@@ -742,13 +711,6 @@ fn align_update_contrib_deg(trace: AlignUpdateTrace) -> AlignEulerContrib {
     if let Some(q) = trace.after_turn_gyro {
         out.turn_gyro = local_rotation_delta_deg(prev_q, q);
         prev_q = q;
-    }
-    if let Some(q) = trace.after_course_rate {
-        out.course_rate = local_rotation_delta_deg(prev_q, q);
-        prev_q = q;
-    }
-    if let Some(q) = trace.after_longitudinal_accel {
-        out.longitudinal_accel = local_rotation_delta_deg(prev_q, q);
     }
     out
 }

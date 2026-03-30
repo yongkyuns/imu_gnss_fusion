@@ -57,7 +57,7 @@ fn main() -> Result<()> {
         w,
         "logfile,t_s,speed_kmh,course_rate_dps,a_long_mps2,a_lat_mps2,gnss_accel_norm_mps2,gnss_accel_angle_deg,\
 imu_leveled_angle_deg,startup_gate_valid,startup_accepted,startup_alignment_score,startup_emitted,startup_theta_deg,startup_theta_alt_deg,\
-long_emitted,long_angle_err_deg,yaw_initialized,\
+yaw_initialized,\
 imu_startup_theta_angle_deg,imu_startup_theta_alt_angle_deg,imu_final_align_angle_deg,imu_final_esf_angle_deg,\
 err_startup_theta_deg,err_startup_theta_alt_deg,err_final_align_deg,err_final_esf_deg,\
 final_fwd_err_align_deg,final_down_err_align_deg"
@@ -175,7 +175,7 @@ final_fwd_err_align_deg,final_down_err_align_deg"
 
             writeln!(
                 w,
-                "{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{:.6},{},{:.6},{:.6},{},{:.6},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
+                "{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{:.6},{},{:.6},{:.6},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
                 file,
                 sample.t_s,
                 sample.speed_mps * 3.6,
@@ -193,8 +193,6 @@ final_fwd_err_align_deg,final_down_err_align_deg"
                 startup_theta
                     .map(|v| wrap_signed_deg((v + std::f64::consts::PI).to_degrees()))
                     .unwrap_or(f64::NAN),
-                bool01(sample.long_trace.emitted),
-                sample.long_trace.angle_err_deg,
                 bool01(sample.yaw_initialized),
                 imu_startup_theta_angle_deg,
                 imu_startup_theta_alt_angle_deg,
