@@ -1,5 +1,3 @@
-use std::env;
-
 use align_rs::align::AlignConfig;
 
 use crate::ubxlog::{UbxFrame, extract_esf_alg};
@@ -19,10 +17,6 @@ pub struct AlignCompareData {
     pub res_vel: Vec<Trace>,
     pub axis_err: Vec<Trace>,
     pub motion: Vec<Trace>,
-    pub startup: Vec<Trace>,
-    pub startup_angles: Vec<Trace>,
-    pub startup_full_angles: Vec<Trace>,
-    pub startup_esf_full_angles: Vec<Trace>,
     pub roll_contrib: Vec<Trace>,
     pub pitch_contrib: Vec<Trace>,
     pub yaw_contrib: Vec<Trace>,
@@ -36,10 +30,6 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
             res_vel: Vec::new(),
             axis_err: Vec::new(),
             motion: Vec::new(),
-            startup: Vec::new(),
-            startup_angles: Vec::new(),
-            startup_full_angles: Vec::new(),
-            startup_esf_full_angles: Vec::new(),
             roll_contrib: Vec::new(),
             pitch_contrib: Vec::new(),
             yaw_contrib: Vec::new(),
@@ -47,10 +37,7 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
         };
     }
     let rel_s = |master_ms: f64| (master_ms - tl.t0_master_ms) * 1e-3;
-    let mut cfg = AlignConfig::default();
-    if env_flag("ALIGN_DISABLE_STARTUP") {
-        cfg.use_unified_yaw_startup = false;
-    }
+    let cfg = AlignConfig::default();
     let bootstrap_cfg = ReplayBootstrapConfig {
         ema_alpha: 0.05,
         max_speed_mps: 0.35,
@@ -74,25 +61,6 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
     let mut down_err = Vec::<[f64; 2]>::new();
     let mut yaw_init = Vec::<[f64; 2]>::new();
     let mut final_alg_heading = Vec::<[f64; 2]>::new();
-    let mut startup_gnss_long = Vec::<[f64; 2]>::new();
-    let mut startup_gnss_lat = Vec::<[f64; 2]>::new();
-    let mut startup_imu_long = Vec::<[f64; 2]>::new();
-    let mut startup_imu_lat = Vec::<[f64; 2]>::new();
-    let mut startup_gnss_ang = Vec::<[f64; 2]>::new();
-    let mut startup_imu_ang = Vec::<[f64; 2]>::new();
-    let mut startup_rot_imu_ang = Vec::<[f64; 2]>::new();
-    let mut startup_rot_imu_alt_ang = Vec::<[f64; 2]>::new();
-    let mut startup_full_gnss_ang = Vec::<[f64; 2]>::new();
-    let mut startup_full_rot_imu_ang = Vec::<[f64; 2]>::new();
-    let mut startup_full_current_align_rot_imu_ang = Vec::<[f64; 2]>::new();
-    let mut startup_full_final_align_rot_imu_ang = Vec::<[f64; 2]>::new();
-    let mut startup_full_speed = Vec::<[f64; 2]>::new();
-    let mut startup_esf_full_gnss_ang = Vec::<[f64; 2]>::new();
-    let mut startup_esf_full_rot_imu_ang = Vec::<[f64; 2]>::new();
-    let mut startup_esf_full_speed = Vec::<[f64; 2]>::new();
-    let mut startup_gate = Vec::<[f64; 2]>::new();
-    let mut startup_accept = Vec::<[f64; 2]>::new();
-    let mut startup_accepted_samples = Vec::<(f64, f64, f64, f64, f64)>::new();
     let mut roll_horiz = Vec::<[f64; 2]>::new();
     let mut roll_turn_gyro = Vec::<[f64; 2]>::new();
     let mut roll_lat = Vec::<[f64; 2]>::new();
@@ -121,21 +89,6 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
         diag_course.push([t, sample.course_rate_dps]);
         diag_lat.push([t, sample.a_lat_mps2]);
         diag_long.push([t, sample.a_long_mps2]);
-        if sample.startup_trace.gate_valid {
-            startup_gate.push([t, 1.0]);
-        }
-        if sample.startup_trace.accepted {
-            startup_accept.push([t, 1.0]);
-            let g_long = sample.startup_trace.gnss_long_lp_mps2;
-            let g_lat = sample.startup_trace.gnss_lat_lp_mps2;
-            let i_long = sample.startup_trace.imu_long_lp_mps2;
-            let i_lat = sample.startup_trace.imu_lat_lp_mps2;
-            startup_gnss_long.push([t, g_long]);
-            startup_gnss_lat.push([t, g_lat]);
-            startup_imu_long.push([t, i_long]);
-            startup_imu_lat.push([t, i_lat]);
-            startup_accepted_samples.push((t, g_long, g_lat, i_long, i_lat));
-        }
         if let Some(yaw_deg) = final_alg_heading_deg {
             final_alg_heading.push([t, yaw_deg]);
         }
@@ -182,115 +135,6 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
         p11.push([t, sample.p_diag[1].sqrt().to_degrees()]);
         p22.push([t, sample.p_diag[2].sqrt().to_degrees()]);
     }
-    let final_align_q = replay.samples.last().map(|s| s.q_align);
-    let final_esf_q = final_alg_q;
-    let startup_esf_min_accel_mps2 = 0.15 * 9.80665_f64;
-    let startup_theta = replay
-        .samples
-        .iter()
-        .find_map(|s| s.startup_trace.emitted_theta_rad);
-    if let Some(theta) = startup_theta {
-        let theta_cos = theta.cos();
-        let theta_sin = theta.sin();
-        let theta_alt = theta + std::f64::consts::PI;
-        let theta_alt_cos = theta_alt.cos();
-        let theta_alt_sin = theta_alt.sin();
-        for (t, g_long, g_lat, i_long, i_lat) in &startup_accepted_samples {
-            let g_ang = wrap_signed_deg((*g_lat).atan2(*g_long).to_degrees());
-            let i_ang = wrap_signed_deg((*i_lat).atan2(*i_long).to_degrees());
-            let ri_long = theta_cos * *i_long - theta_sin * *i_lat;
-            let ri_lat = theta_sin * *i_long + theta_cos * *i_lat;
-            let ri_alt_long = theta_alt_cos * *i_long - theta_alt_sin * *i_lat;
-            let ri_alt_lat = theta_alt_sin * *i_long + theta_alt_cos * *i_lat;
-            startup_gnss_ang.push([*t, g_ang]);
-            startup_imu_ang.push([*t, i_ang]);
-            startup_rot_imu_ang.push([*t, wrap_signed_deg(ri_lat.atan2(ri_long).to_degrees())]);
-            startup_rot_imu_alt_ang.push([
-                *t,
-                wrap_signed_deg(ri_alt_lat.atan2(ri_alt_long).to_degrees()),
-            ]);
-        }
-    }
-    for sample in &replay.samples {
-        let t = sample.t_s;
-        let g_long = sample.a_long_mps2;
-        let g_lat = sample.a_lat_mps2;
-        startup_full_speed.push([t, sample.speed_mps * 3.6]);
-        if g_long.is_finite() && g_lat.is_finite() {
-            startup_full_gnss_ang.push([t, wrap_signed_deg(g_lat.atan2(g_long).to_degrees())]);
-        }
-
-        let accel_v_align = quat_rotate(
-            [
-                sample.q_align[0],
-                -sample.q_align[1],
-                -sample.q_align[2],
-                -sample.q_align[3],
-            ],
-            sample.horiz_accel_b,
-        );
-        startup_full_current_align_rot_imu_ang.push([
-            t,
-            wrap_signed_deg(accel_v_align[1].atan2(accel_v_align[0]).to_degrees()),
-        ]);
-
-        if let Some(theta) = startup_theta {
-            let theta_cos = theta.cos();
-            let theta_sin = theta.sin();
-            let i_long = sample.startup_input_long_mps2;
-            let i_lat = sample.startup_input_lat_mps2;
-            if i_long.is_finite() && i_lat.is_finite() {
-                let ri_long = theta_cos * i_long - theta_sin * i_lat;
-                let ri_lat = theta_sin * i_long + theta_cos * i_lat;
-                startup_full_rot_imu_ang.push([
-                    t,
-                    wrap_signed_deg(ri_lat.atan2(ri_long).to_degrees()),
-                ]);
-            }
-            if let Some(q_final) = final_align_q {
-                let accel_v_final = quat_rotate(
-                    [q_final[0], -q_final[1], -q_final[2], -q_final[3]],
-                    sample.horiz_accel_b,
-                );
-                startup_full_final_align_rot_imu_ang.push([
-                    t,
-                    wrap_signed_deg(accel_v_final[1].atan2(accel_v_final[0]).to_degrees()),
-                ]);
-            }
-        }
-
-        if let Some(q_esf_final) = final_esf_q {
-            let accel_v_esf_final = quat_rotate(
-                [q_esf_final[0], -q_esf_final[1], -q_esf_final[2], -q_esf_final[3]],
-                sample.horiz_accel_b,
-            );
-            let gnss_norm = (g_long * g_long + g_lat * g_lat).sqrt();
-            let imu_norm =
-                (accel_v_esf_final[0] * accel_v_esf_final[0]
-                    + accel_v_esf_final[1] * accel_v_esf_final[1])
-                    .sqrt();
-            if gnss_norm >= startup_esf_min_accel_mps2
-                || imu_norm >= startup_esf_min_accel_mps2
-            {
-                startup_esf_full_gnss_ang.push([
-                    t,
-                    wrap_signed_deg(g_lat.atan2(g_long).to_degrees()),
-                ]);
-                startup_esf_full_rot_imu_ang.push([
-                    t,
-                    wrap_signed_deg(
-                        accel_v_esf_final[1].atan2(accel_v_esf_final[0]).to_degrees(),
-                    ),
-                ]);
-                startup_esf_full_speed.push([t, sample.speed_mps * 3.6]);
-            } else {
-                startup_esf_full_gnss_ang.push([t, f64::NAN]);
-                startup_esf_full_rot_imu_ang.push([t, f64::NAN]);
-                startup_esf_full_speed.push([t, f64::NAN]);
-            }
-        }
-    }
-
     AlignCompareData {
         cmp_att: vec![
             Trace {
@@ -352,86 +196,6 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
                 points: final_alg_heading,
             },
         ],
-        startup: vec![
-            Trace {
-                name: "GNSS long LP [m/s^2]".to_string(),
-                points: startup_gnss_long,
-            },
-            Trace {
-                name: "GNSS lat LP [m/s^2]".to_string(),
-                points: startup_gnss_lat,
-            },
-            Trace {
-                name: "IMU long LP [m/s^2]".to_string(),
-                points: startup_imu_long,
-            },
-            Trace {
-                name: "IMU lat LP [m/s^2]".to_string(),
-                points: startup_imu_lat,
-            },
-            Trace {
-                name: "startup gate valid".to_string(),
-                points: startup_gate,
-            },
-            Trace {
-                name: "startup accepted".to_string(),
-                points: startup_accept,
-            },
-        ],
-        startup_angles: vec![
-            Trace {
-                name: "GNSS accel angle [deg]".to_string(),
-                points: startup_gnss_ang,
-            },
-            Trace {
-                name: "IMU accel angle [deg]".to_string(),
-                points: startup_imu_ang,
-            },
-            Trace {
-                name: "Rotated IMU accel angle [deg]".to_string(),
-                points: startup_rot_imu_ang,
-            },
-            Trace {
-                name: "Rotated IMU accel angle +180 [deg]".to_string(),
-                points: startup_rot_imu_alt_ang,
-            },
-        ],
-        startup_full_angles: vec![
-            Trace {
-                name: "GNSS accel angle [deg]".to_string(),
-                points: startup_full_gnss_ang,
-            },
-            Trace {
-                name: "Current Align rotated IMU accel angle [deg]".to_string(),
-                points: startup_full_current_align_rot_imu_ang,
-            },
-            Trace {
-                name: "Rotated IMU accel angle [deg]".to_string(),
-                points: startup_full_rot_imu_ang,
-            },
-            Trace {
-                name: "Final Align rotated IMU accel angle [deg]".to_string(),
-                points: startup_full_final_align_rot_imu_ang,
-            },
-            Trace {
-                name: "speed [km/h]".to_string(),
-                points: startup_full_speed,
-            },
-        ],
-        startup_esf_full_angles: vec![
-            Trace {
-                name: "GNSS accel angle [deg]".to_string(),
-                points: startup_esf_full_gnss_ang,
-            },
-            Trace {
-                name: "Final ESF-ALG rotated IMU accel angle [deg]".to_string(),
-                points: startup_esf_full_rot_imu_ang,
-            },
-            Trace {
-                name: "speed [km/h]".to_string(),
-                points: startup_esf_full_speed,
-            },
-        ],
         roll_contrib: vec![
             Trace {
                 name: "horiz accel".to_string(),
@@ -489,14 +253,4 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
             },
         ],
     }
-}
-
-fn env_flag(name: &str) -> bool {
-    env::var(name)
-        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
-        .unwrap_or(false)
-}
-
-fn wrap_signed_deg(x: f64) -> f64 {
-    (x + 180.0).rem_euclid(360.0) - 180.0
 }

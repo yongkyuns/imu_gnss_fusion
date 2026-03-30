@@ -287,10 +287,6 @@ pub fn build_signal_traces(
     out.align_res_vel = align_data.res_vel;
     out.align_axis_err = align_data.axis_err;
     out.align_motion = align_data.motion;
-    out.align_startup = align_data.startup;
-    out.align_startup_angles = align_data.startup_angles;
-    out.align_startup_full_angles = align_data.startup_full_angles;
-    out.align_startup_esf_full_angles = align_data.startup_esf_full_angles;
     out.align_roll_contrib = align_data.roll_contrib;
     out.align_pitch_contrib = align_data.pitch_contrib;
     out.align_yaw_contrib = align_data.yaw_contrib;
@@ -348,10 +344,6 @@ pub fn build_signal_traces(
         &mut out.align_res_vel,
         &mut out.align_axis_err,
         &mut out.align_motion,
-        &mut out.align_startup,
-        &mut out.align_startup_angles,
-        &mut out.align_startup_full_angles,
-        &mut out.align_startup_esf_full_angles,
         &mut out.align_roll_contrib,
         &mut out.align_pitch_contrib,
         &mut out.align_yaw_contrib,

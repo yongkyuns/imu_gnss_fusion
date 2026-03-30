@@ -2,7 +2,6 @@ use std::cmp::Ordering;
 
 use align_rs::align::{
     Align, AlignConfig, AlignUpdateTrace, AlignWindowSummary, GRAVITY_MPS2,
-    leveled_horiz_accel_xy,
 };
 
 use crate::ubxlog::{
@@ -61,21 +60,6 @@ pub struct HorizTraceSample {
     pub applied: bool,
 }
 
-#[derive(Clone, Copy, Default)]
-pub struct StartupTraceSample {
-    pub gnss_long_lp_mps2: f64,
-    pub gnss_lat_lp_mps2: f64,
-    pub imu_long_lp_mps2: f64,
-    pub imu_lat_lp_mps2: f64,
-    pub gate_valid: bool,
-    pub accepted: bool,
-    pub stable_windows: usize,
-    pub sample_count: usize,
-    pub alignment_score: f64,
-    pub emitted: bool,
-    pub emitted_theta_rad: Option<f64>,
-}
-
 #[derive(Clone, Copy)]
 pub struct AlignReplaySample {
     pub t_ms: f64,
@@ -99,9 +83,6 @@ pub struct AlignReplaySample {
     pub contrib: AlignEulerContrib,
     pub p_diag: [f64; 3],
     pub horiz_trace: HorizTraceSample,
-    pub startup_trace: StartupTraceSample,
-    pub startup_input_long_mps2: f64,
-    pub startup_input_lat_mps2: f64,
 }
 
 pub struct AlignReplayData {
@@ -392,25 +373,6 @@ pub fn build_align_replay(
                 } else {
                     mean_accel_b
                 };
-                let startup_horiz_xy = trace.startup_input_xy.unwrap_or_else(|| {
-                    leveled_horiz_accel_xy(align.gravity_lp_b, horiz_accel_b)
-                        .unwrap_or([horiz_accel_b[0], horiz_accel_b[1]])
-                });
-                let startup_trace = trace.startup_trace.unwrap_or_default();
-                let startup_trace = StartupTraceSample {
-                    gnss_long_lp_mps2: startup_trace.gnss_long_lp_mps2 as f64,
-                    gnss_lat_lp_mps2: startup_trace.gnss_lat_lp_mps2 as f64,
-                    imu_long_lp_mps2: startup_trace.imu_long_lp_mps2 as f64,
-                    imu_lat_lp_mps2: startup_trace.imu_lat_lp_mps2 as f64,
-                    gate_valid: startup_trace.gate_valid,
-                    accepted: startup_trace.accepted,
-                    stable_windows: startup_trace.stable_windows,
-                    sample_count: startup_trace.sample_count,
-                    alignment_score: startup_trace.alignment_score as f64,
-                    emitted: startup_trace.emitted,
-                    emitted_theta_rad: startup_trace.emitted_theta_rad.map(|v| v as f64),
-                };
-
                 samples.push(AlignReplaySample {
                     t_ms: *tn,
                     t_s: (*tn - tl.t0_master_ms) * 1.0e-3,
@@ -441,9 +403,6 @@ pub fn build_align_replay(
                         align.P[2][2] as f64,
                     ],
                     horiz_trace,
-                    startup_trace,
-                    startup_input_long_mps2: startup_horiz_xy[0] as f64,
-                    startup_input_lat_mps2: startup_horiz_xy[1] as f64,
                 });
             }
         }
@@ -661,15 +620,6 @@ pub fn signed_projected_axis_angle_deg(a: [f64; 3], b: [f64; 3], axis: [f64; 3])
     dot3_f64(axis, cross).atan2(dot).to_degrees()
 }
 
-fn quat_to_rpy_alg_deg(q: [f32; 4]) -> [f64; 3] {
-    let (r, p, y) = quat_rpy_alg_deg(q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64);
-    [r, p, y]
-}
-
-fn wrap_deg180(x: f64) -> f64 {
-    (x + 180.0).rem_euclid(360.0) - 180.0
-}
-
 fn local_rotation_delta_deg(before_q: [f32; 4], after_q: [f32; 4]) -> [f64; 3] {
     let before = [
         before_q[0] as f64,
@@ -710,7 +660,6 @@ fn align_update_contrib_deg(trace: AlignUpdateTrace) -> AlignEulerContrib {
     }
     if let Some(q) = trace.after_turn_gyro {
         out.turn_gyro = local_rotation_delta_deg(prev_q, q);
-        prev_q = q;
     }
     out
 }

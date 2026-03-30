@@ -1102,11 +1102,6 @@ fn wrap_deg180(mut deg: f64) -> f64 {
     deg
 }
 
-fn angle_between_unit_deg(a: [f64; 3], b: [f64; 3]) -> f64 {
-    let dot = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]).clamp(-1.0, 1.0);
-    dot.acos().to_degrees()
-}
-
 fn norm_quat(q: [f64; 4]) -> [f64; 4] {
     let n = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
     if n <= 1.0e-12 {

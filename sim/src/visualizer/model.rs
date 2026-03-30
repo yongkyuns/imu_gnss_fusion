@@ -29,10 +29,6 @@ pub struct PlotData {
     pub align_res_vel: Vec<Trace>,
     pub align_axis_err: Vec<Trace>,
     pub align_motion: Vec<Trace>,
-    pub align_startup: Vec<Trace>,
-    pub align_startup_angles: Vec<Trace>,
-    pub align_startup_full_angles: Vec<Trace>,
-    pub align_startup_esf_full_angles: Vec<Trace>,
     pub align_roll_contrib: Vec<Trace>,
     pub align_pitch_contrib: Vec<Trace>,
     pub align_yaw_contrib: Vec<Trace>,
@@ -86,6 +82,5 @@ pub enum Page {
     Signals,
     EkfCompare,
     AlignCompare,
-    AlignStartup,
     MapDark,
 }

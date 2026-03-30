@@ -3,13 +3,11 @@
 use std::collections::VecDeque;
 
 use crate::stationary_mount::bootstrap_vehicle_to_body_from_stationary;
-use crate::yaw_startup::{
-    YawStartupConfig, YawStartupInitializer, YawStartupSample, YawStartupTrace,
-};
 use nalgebra::{SMatrix, SVector};
 
 pub const ALIGN_N_STATES: usize = 3;
 pub const GRAVITY_MPS2: f32 = 9.80665;
+const COARSE_ALIGNMENT_SIGMA_READY_DEG: f32 = 0.15;
 
 #[derive(Debug, Clone, Copy)]
 pub struct AlignConfig {
@@ -24,30 +22,10 @@ pub struct AlignConfig {
     pub min_turn_rate_radps: f32,
     pub min_lat_acc_mps2: f32,
     pub min_long_acc_mps2: f32,
-    pub yaw_dual_resolve_min_speed_mps: f32,
-    pub yaw_dual_resolve_min_long_acc_mps2: f32,
-    pub yaw_dual_resolve_max_lat_to_long_ratio: f32,
-    pub yaw_dual_resolve_min_lat_acc_mps2: f32,
-    pub yaw_dual_resolve_max_long_to_lat_ratio: f32,
-    pub yaw_dual_resolve_min_windows: usize,
     pub turn_consistency_min_windows: usize,
     pub turn_consistency_min_fraction: f32,
     pub turn_consistency_max_abs_lat_err_mps2: f32,
     pub turn_consistency_max_rel_lat_err: f32,
-    pub use_unified_yaw_startup: bool,
-    pub startup_min_speed_mps: f32,
-    pub startup_min_horiz_acc_mps2: f32,
-    pub startup_min_long_mps2: f32,
-    pub startup_max_lat_to_long_ratio: f32,
-    pub startup_min_abs_lat_guard_mps2: f32,
-    pub startup_max_course_rate_radps: f32,
-    pub startup_min_stable_windows: usize,
-    pub startup_min_windows: usize,
-    pub startup_max_windows: usize,
-    pub startup_min_vector_concentration: f32,
-    pub startup_min_sign_agreement: f32,
-    pub yaw_seed_std_rad: f32,
-    pub yaw_branch_only_std_rad: f32,
     pub max_stationary_gyro_radps: f32,
     pub max_stationary_accel_norm_err_mps2: f32,
     pub use_gravity: bool,
@@ -72,30 +50,10 @@ impl Default for AlignConfig {
             min_turn_rate_radps: 2.0_f32.to_radians(),
             min_lat_acc_mps2: 0.10,
             min_long_acc_mps2: 0.18,
-            yaw_dual_resolve_min_speed_mps: 10.0 / 3.6,
-            yaw_dual_resolve_min_long_acc_mps2: 0.3,
-            yaw_dual_resolve_max_lat_to_long_ratio: 0.35,
-            yaw_dual_resolve_min_lat_acc_mps2: 0.5,
-            yaw_dual_resolve_max_long_to_lat_ratio: 0.8,
-            yaw_dual_resolve_min_windows: 3,
             turn_consistency_min_windows: 5,
             turn_consistency_min_fraction: 0.8,
             turn_consistency_max_abs_lat_err_mps2: 0.35,
             turn_consistency_max_rel_lat_err: 0.6,
-            use_unified_yaw_startup: true,
-            startup_min_speed_mps: 10.0 / 3.6,
-            startup_min_horiz_acc_mps2: 0.15,
-            startup_min_long_mps2: 0.0,
-            startup_max_lat_to_long_ratio: 1.0e6,
-            startup_min_abs_lat_guard_mps2: 1.0e6,
-            startup_max_course_rate_radps: 180.0_f32.to_radians(),
-            startup_min_stable_windows: 2,
-            startup_min_windows: 6,
-            startup_max_windows: 48,
-            startup_min_vector_concentration: 0.8,
-            startup_min_sign_agreement: 0.8,
-            yaw_seed_std_rad: 0.5_f32.to_radians(),
-            yaw_branch_only_std_rad: 20.0_f32.to_radians(),
             max_stationary_gyro_radps: 0.8_f32.to_radians(),
             max_stationary_accel_norm_err_mps2: 0.2,
             use_gravity: true,
@@ -116,11 +74,7 @@ pub struct AlignWindowSummary {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AlignUpdateTrace {
     pub q_start: [f32; 4],
-    pub startup_input_xy: Option<[f32; 2]>,
-    pub startup_trace: Option<YawStartupTrace>,
     pub coarse_alignment_ready: bool,
-    pub after_yaw_seed: Option<[f32; 4]>,
-    pub after_branch_resolve: Option<[f32; 4]>,
     pub after_gravity: Option<[f32; 4]>,
     pub after_horiz_accel: Option<[f32; 4]>,
     pub horiz_angle_err_rad: Option<f32>,
@@ -143,21 +97,8 @@ pub struct Align {
     pub P: [[f32; ALIGN_N_STATES]; ALIGN_N_STATES],
     pub gravity_lp_b: [f32; 3],
     coarse_aligned: bool,
-    yaw_dual: Option<YawDualHypothesis>,
-    yaw_startup: YawStartupInitializer,
     turn_consistency: TurnConsistencyGate,
     pub cfg: AlignConfig,
-}
-
-#[derive(Debug, Clone)]
-struct YawDualHypothesis {
-    q_vb: [f32; 4],
-    p: [[f32; ALIGN_N_STATES]; ALIGN_N_STATES],
-    seeded_from_startup: bool,
-    primary_vector_cost: f32,
-    alt_vector_cost: f32,
-    vector_weight: f32,
-    vector_windows: usize,
 }
 
 impl Default for Align {
@@ -177,8 +118,6 @@ impl Align {
             ]),
             gravity_lp_b: [0.0, 0.0, -GRAVITY_MPS2],
             coarse_aligned: false,
-            yaw_dual: None,
-            yaw_startup: YawStartupInitializer::new(),
             turn_consistency: TurnConsistencyGate::new(),
             cfg,
         }
@@ -197,17 +136,7 @@ impl Align {
             0.5_f32.to_radians().powi(2),
         ]);
         self.gravity_lp_b = init.mean_accel_b;
-        self.coarse_aligned = false;
-        self.yaw_dual = Some(YawDualHypothesis {
-            q_vb: quat_normalize(quat_mul(self.q_vb, quat_yaw_pi())),
-            p: self.P,
-            seeded_from_startup: false,
-            primary_vector_cost: 0.0,
-            alt_vector_cost: 0.0,
-            vector_weight: 0.0,
-            vector_windows: 0,
-        });
-        self.yaw_startup.reset(self.cfg.use_unified_yaw_startup);
+        self.coarse_aligned = self.compute_coarse_alignment_ready();
         self.turn_consistency.reset();
         Ok(())
     }
@@ -215,9 +144,6 @@ impl Align {
     pub fn predict(&mut self, dt: f32) {
         let dt = dt.max(1.0e-3);
         Self::predict_covariance(&mut self.P, &self.cfg, dt);
-        if let Some(alt) = &mut self.yaw_dual {
-            Self::predict_covariance(&mut alt.p, &self.cfg, dt);
-        }
     }
 
     pub fn update_window(&mut self, window: &AlignWindowSummary) -> f32 {
@@ -288,22 +214,7 @@ impl Align {
             // heading is not the forward cue we want from this update.
             && a_lat.abs() < (0.5_f32).max(0.6 * a_long.abs())
             && horiz_gnss_norm > self.cfg.min_long_acc_mps2;
-        let startup_cfg = YawStartupConfig {
-            enabled: self.cfg.use_unified_yaw_startup,
-            alpha: 0.05,
-            min_speed_mps: self.cfg.startup_min_speed_mps,
-            min_horiz_acc_mps2: self.cfg.startup_min_horiz_acc_mps2,
-            min_long_mps2: self.cfg.startup_min_long_mps2,
-            max_lat_to_long_ratio: self.cfg.startup_max_lat_to_long_ratio,
-            min_abs_lat_guard_mps2: self.cfg.startup_min_abs_lat_guard_mps2,
-            max_course_rate_radps: self.cfg.startup_max_course_rate_radps,
-            min_stable_windows: self.cfg.startup_min_stable_windows,
-            min_windows: self.cfg.startup_min_windows,
-            max_windows: self.cfg.startup_max_windows,
-            min_alignment_score: self.cfg.startup_min_vector_concentration,
-            min_sign_agreement: self.cfg.startup_min_sign_agreement,
-        };
-        let heading_updates_enabled = !self.yaw_startup.is_active() && self.yaw_dual.is_none();
+        let heading_updates_enabled = true;
 
         if stationary {
             let alpha = self.cfg.gravity_lpf_alpha;
@@ -313,11 +224,7 @@ impl Align {
             );
         }
 
-        let gravity_state_mask = if self.yaw_dual.is_some() {
-            [true, true, false]
-        } else {
-            [true, true, true]
-        };
+        let gravity_state_mask = [true, true, true];
 
         if self.cfg.use_gravity && stationary {
             score += self.apply_update2_masked(
@@ -336,28 +243,6 @@ impl Align {
                 self.cfg.r_gravity_std_mps2.powi(2),
                 gravity_state_mask,
             );
-            if let Some(alt) = &mut self.yaw_dual {
-                score += Self::apply_update2_masked_state(
-                    &mut alt.q_vb,
-                    &mut alt.p,
-                    [0.0, 0.0],
-                    [3, 4],
-                    self.gravity_lp_b,
-                    window.mean_gyro_b,
-                    [self.cfg.r_gravity_std_mps2.powi(2); 2],
-                    gravity_state_mask,
-                );
-                score += Self::apply_update1_masked_state(
-                    &mut alt.q_vb,
-                    &mut alt.p,
-                    -vec3_norm(self.gravity_lp_b),
-                    5,
-                    self.gravity_lp_b,
-                    window.mean_gyro_b,
-                    self.cfg.r_gravity_std_mps2.powi(2),
-                    gravity_state_mask,
-                );
-            }
             trace.after_gravity = Some(self.q_vb);
         }
 
@@ -404,18 +289,6 @@ impl Align {
             trace.horiz_angle_err_rad = Some(angle_err);
             trace.horiz_effective_std_rad = Some(effective_std);
             score += self.apply_vehicle_yaw_angle(angle_err, effective_std.powi(2));
-            if let Some(alt) = &mut self.yaw_dual {
-                let alt_horiz_obs = align_obs(alt.q_vb, window.mean_gyro_b, horiz_accel_b);
-                let alt_cross = alt_horiz_obs[3] * a_lat - alt_horiz_obs[4] * a_long;
-                let alt_dot = alt_horiz_obs[3] * a_long + alt_horiz_obs[4] * a_lat;
-                let alt_angle_err = alt_cross.atan2(alt_dot);
-                score += Self::apply_vehicle_yaw_angle_state(
-                    &mut alt.q_vb,
-                    &mut alt.p,
-                    alt_angle_err,
-                    effective_std.powi(2),
-                );
-            }
             trace.after_horiz_accel = Some(self.q_vb);
         }
 
@@ -435,96 +308,11 @@ impl Align {
                     [true, true, turn_gyro_yaw_scale > 0.0],
                     [1.0, 1.0, turn_gyro_yaw_scale],
                 );
-                if let Some(alt) = &mut self.yaw_dual {
-                    score += Self::apply_update2_scaled_masked_state(
-                        &mut alt.q_vb,
-                        &mut alt.p,
-                        [0.0, 0.0],
-                        [0, 1],
-                        window.mean_accel_b,
-                        window.mean_gyro_b,
-                        [self.cfg.r_turn_gyro_std_radps.powi(2); 2],
-                        [true, true, turn_gyro_yaw_scale > 0.0],
-                        [1.0, 1.0, turn_gyro_yaw_scale],
-                    );
-                }
                 trace.after_turn_gyro = Some(self.q_vb);
             }
         }
 
-        if self.yaw_startup.is_active() {
-            let startup_horiz_xy = leveled_horiz_accel_xy(self.gravity_lp_b, horiz_accel_b)
-                .unwrap_or([horiz_accel_b[0], horiz_accel_b[1]]);
-            trace.startup_input_xy = Some(startup_horiz_xy);
-            let (startup_theta, startup_trace) = self.yaw_startup.update_with_trace(
-                startup_cfg,
-                YawStartupSample {
-                    speed_mps: speed_mid,
-                    course_rate_radps: course_rate,
-                    horiz_accel_xy: startup_horiz_xy,
-                    gnss_long_mps2: a_long,
-                    gnss_lat_mps2: a_lat,
-                },
-            );
-            trace.startup_trace = Some(startup_trace);
-            if let Some(dpsi) = startup_theta {
-                self.seed_yaw_dual_from_startup(
-                    dpsi,
-                    window.mean_gyro_b,
-                    horiz_accel_b,
-                    [a_long, a_lat],
-                    startup_trace,
-                );
-                self.turn_consistency.reset();
-                trace.after_yaw_seed = Some(self.q_vb);
-            } else if self.yaw_startup.timed_out(startup_cfg) {
-                self.yaw_startup.reset(false);
-            }
-        }
-
-        if self.yaw_dual.is_some() && !self.yaw_startup.is_active() {
-            if self.yaw_dual.is_some() && horiz_vector_valid {
-                let primary_horiz_xy = [horiz_obs[3], horiz_obs[4]];
-                let primary_yaw_rate = horiz_obs[2];
-                let gnss_horiz_xy = [a_long, a_lat];
-                let (alt_horiz_xy, alt_yaw_rate) = if let Some(alt) = &self.yaw_dual {
-                    let alt_horiz_obs = align_obs(alt.q_vb, window.mean_gyro_b, horiz_accel_b);
-                    ([alt_horiz_obs[3], alt_horiz_obs[4]], alt_horiz_obs[2])
-                } else {
-                    ([0.0, 0.0], 0.0)
-                };
-                let choose_alt = if let Some(alt) = &mut self.yaw_dual {
-                    Self::update_yaw_dual_vector_resolver(
-                        &self.cfg,
-                        alt,
-                        speed_mid,
-                        primary_horiz_xy,
-                        primary_yaw_rate,
-                        alt_horiz_xy,
-                        alt_yaw_rate,
-                        gnss_horiz_xy,
-                        course_rate,
-                    )
-                } else {
-                    None
-                };
-                if let Some(choose_alt) = choose_alt {
-                    let yaw_sigma = if self
-                        .yaw_dual
-                        .as_ref()
-                        .map(|alt| alt.seeded_from_startup)
-                        .unwrap_or(false)
-                    {
-                        self.cfg.yaw_seed_std_rad
-                    } else {
-                        self.cfg.yaw_branch_only_std_rad
-                    };
-                    self.resolve_yaw_dual(choose_alt, yaw_sigma);
-                    trace.after_branch_resolve = Some(self.q_vb);
-                }
-            }
-        }
-
+        self.coarse_aligned = self.compute_coarse_alignment_ready();
         trace.coarse_alignment_ready = self.coarse_aligned;
         (score, trace)
     }
@@ -539,7 +327,7 @@ impl Align {
     }
 
     pub fn coarse_alignment_ready(&self) -> bool {
-        self.coarse_aligned
+        self.compute_coarse_alignment_ready()
     }
 
     pub fn sigma_deg(&self) -> [f32; 3] {
@@ -550,15 +338,10 @@ impl Align {
         ]
     }
 
-    fn apply_update1(
-        &mut self,
-        z: f32,
-        obs_idx: usize,
-        accel_b: [f32; 3],
-        gyro_b: [f32; 3],
-        r_var: f32,
-    ) -> f32 {
-        self.apply_update1_masked(z, obs_idx, accel_b, gyro_b, r_var, [true, true, true])
+    fn compute_coarse_alignment_ready(&self) -> bool {
+        self.sigma_deg()
+            .into_iter()
+            .all(|sigma_deg| sigma_deg <= COARSE_ALIGNMENT_SIGMA_READY_DEG)
     }
 
     fn apply_update1_masked(
@@ -626,32 +409,6 @@ impl Align {
         (y.transpose() * S_inv * y)[0]
     }
 
-    fn apply_vehicle_yaw_scalar(&mut self, z: f32, h: f32, h_yaw: f32, r_var: f32) -> f32 {
-        Self::apply_vehicle_yaw_scalar_state(&mut self.q_vb, &mut self.P, z, h, h_yaw, r_var)
-    }
-
-    fn apply_vehicle_yaw_scalar_state(
-        q_vb: &mut [f32; 4],
-        p: &mut [[f32; ALIGN_N_STATES]; ALIGN_N_STATES],
-        z: f32,
-        h: f32,
-        h_yaw: f32,
-        r_var: f32,
-    ) -> f32 {
-        let y = z - h;
-        let pzz = p[2][2].max(0.0);
-        let s = h_yaw * h_yaw * pzz + r_var.max(1.0e-9);
-        let k = if s > 1.0e-9 { pzz * h_yaw / s } else { 0.0 };
-        let dpsi = k * y;
-        Self::inject_vehicle_yaw_state(q_vb, dpsi);
-        p[2][2] = ((1.0 - k * h_yaw) * pzz).max(0.0);
-        p[0][2] = 0.0;
-        p[2][0] = 0.0;
-        p[1][2] = 0.0;
-        p[2][1] = 0.0;
-        y * y / s
-    }
-
     fn apply_vehicle_yaw_angle(&mut self, angle_err_rad: f32, r_var: f32) -> f32 {
         Self::apply_vehicle_yaw_angle_state(&mut self.q_vb, &mut self.P, angle_err_rad, r_var)
     }
@@ -673,17 +430,6 @@ impl Align {
         p[1][2] = 0.0;
         p[2][1] = 0.0;
         angle_err_rad * angle_err_rad / s
-    }
-
-    fn apply_update2(
-        &mut self,
-        z: [f32; 2],
-        obs_idx: [usize; 2],
-        accel_b: [f32; 3],
-        gyro_b: [f32; 3],
-        r_var: [f32; 2],
-    ) -> f32 {
-        self.apply_update2_masked(z, obs_idx, accel_b, gyro_b, r_var, [true, true, true])
     }
 
     fn apply_update2_masked(
@@ -815,27 +561,8 @@ impl Align {
         (y.transpose() * S_inv * y)[0]
     }
 
-    fn inject_small_angle(&mut self, dtheta: [f32; 3]) {
-        Self::inject_small_angle_state(&mut self.q_vb, dtheta);
-    }
-
     fn inject_small_angle_state(q_vb: &mut [f32; 4], dtheta: [f32; 3]) {
         *q_vb = quat_normalize(quat_mul(quat_from_small_angle(dtheta), *q_vb));
-    }
-
-    fn inject_vehicle_yaw(&mut self, dpsi: f32) {
-        Self::inject_vehicle_yaw_state(&mut self.q_vb, dpsi);
-    }
-
-    fn set_vehicle_heading_in_level_frame(
-        q_vb: &mut [f32; 4],
-        gravity_b: [f32; 3],
-        heading_target: f32,
-    ) {
-        let current_heading = leveled_forward_heading_xy(*q_vb, gravity_b)
-            .unwrap_or_else(|| rot_to_euler_zyx(quat_to_rotmat(*q_vb))[2]);
-        let dpsi = wrap_angle_rad(heading_target - current_heading);
-        Self::inject_vehicle_yaw_state(q_vb, dpsi);
     }
 
     fn inject_vehicle_yaw_state(q_vb: &mut [f32; 4], dpsi: f32) {
@@ -852,169 +579,6 @@ impl Align {
         p[2][2] += cfg.q_mount_std_rad[2].powi(2) * dt;
     }
 
-    fn resolve_yaw_dual(&mut self, choose_alt: bool, yaw_sigma_rad: f32) {
-        if let Some(alt) = self.yaw_dual.take() {
-            if choose_alt {
-                self.q_vb = alt.q_vb;
-                self.P = alt.p;
-            }
-            self.P[2][2] = yaw_sigma_rad.powi(2);
-            self.P[0][2] = 0.0;
-            self.P[2][0] = 0.0;
-            self.P[1][2] = 0.0;
-            self.P[2][1] = 0.0;
-            self.turn_consistency.reset();
-            self.coarse_aligned = true;
-        }
-    }
-
-    fn seed_yaw_dual_from_startup(
-        &mut self,
-        heading_target: f32,
-        _gyro_b: [f32; 3],
-        _accel_b: [f32; 3],
-        _gnss_horiz_xy: [f32; 2],
-        startup_trace: YawStartupTrace,
-    ) {
-        let mut primary_q = self.q_vb;
-        let mut alt_q = self.q_vb;
-        Self::set_vehicle_heading_in_level_frame(&mut primary_q, self.gravity_lp_b, heading_target);
-        Self::set_vehicle_heading_in_level_frame(
-            &mut alt_q,
-            self.gravity_lp_b,
-            wrap_angle_rad(heading_target + core::f32::consts::PI),
-        );
-
-        self.q_vb = primary_q;
-        self.P[2][2] = self.cfg.yaw_seed_std_rad.powi(2);
-        self.P[0][2] = 0.0;
-        self.P[2][0] = 0.0;
-        self.P[1][2] = 0.0;
-        self.P[2][1] = 0.0;
-        let _ = startup_trace;
-
-        self.yaw_dual = Some(YawDualHypothesis {
-            q_vb: alt_q,
-            p: self.P,
-            seeded_from_startup: true,
-            primary_vector_cost: 0.0,
-            alt_vector_cost: 0.0,
-            vector_weight: 0.0,
-            vector_windows: 0,
-        });
-        self.yaw_startup.reset(false);
-    }
-
-    fn horiz_vector_prediction(q_vb: [f32; 4], gyro_b: [f32; 3], accel_b: [f32; 3]) -> [f32; 2] {
-        let horiz_obs = align_obs(q_vb, gyro_b, accel_b);
-        [horiz_obs[3], horiz_obs[4]]
-    }
-
-    fn update_yaw_dual_vector_resolver(
-        cfg: &AlignConfig,
-        dual: &mut YawDualHypothesis,
-        speed_mid: f32,
-        primary_horiz_xy: [f32; 2],
-        primary_yaw_rate: f32,
-        alt_horiz_xy: [f32; 2],
-        alt_yaw_rate: f32,
-        gnss_horiz_xy: [f32; 2],
-        course_rate: f32,
-    ) -> Option<bool> {
-        let min_horiz = cfg
-            .yaw_dual_resolve_min_long_acc_mps2
-            .min(cfg.yaw_dual_resolve_min_lat_acc_mps2);
-        let gnss_norm =
-            (gnss_horiz_xy[0] * gnss_horiz_xy[0] + gnss_horiz_xy[1] * gnss_horiz_xy[1]).sqrt();
-        let primary_norm = (primary_horiz_xy[0] * primary_horiz_xy[0]
-            + primary_horiz_xy[1] * primary_horiz_xy[1])
-            .sqrt();
-        let alt_norm =
-            (alt_horiz_xy[0] * alt_horiz_xy[0] + alt_horiz_xy[1] * alt_horiz_xy[1]).sqrt();
-        if speed_mid < cfg.yaw_dual_resolve_min_speed_mps
-            || gnss_norm < min_horiz
-            || primary_norm < min_horiz
-            || alt_norm < min_horiz
-        {
-            return None;
-        }
-
-        let weight = ((gnss_norm.min(primary_norm).min(alt_norm) - min_horiz) / 0.8)
-            .clamp(0.0, 1.0)
-            * ((speed_mid - cfg.yaw_dual_resolve_min_speed_mps) / (20.0 / 3.6)).clamp(0.2, 1.0);
-        let primary_cost = Self::yaw_hypothesis_cost(
-            primary_horiz_xy,
-            primary_yaw_rate,
-            gnss_horiz_xy,
-            course_rate,
-            speed_mid,
-        );
-        let alt_cost = Self::yaw_hypothesis_cost(
-            alt_horiz_xy,
-            alt_yaw_rate,
-            gnss_horiz_xy,
-            course_rate,
-            speed_mid,
-        );
-        dual.primary_vector_cost += weight * primary_cost;
-        dual.alt_vector_cost += weight * alt_cost;
-        dual.vector_weight += weight;
-        dual.vector_windows += 1;
-
-        if dual.vector_windows < cfg.yaw_dual_resolve_min_windows || dual.vector_weight <= 1.0e-6 {
-            return None;
-        }
-
-        let mean_gap = (dual.alt_vector_cost - dual.primary_vector_cost) / dual.vector_weight;
-        let decision_margin = 0.015;
-        if mean_gap.abs() < decision_margin {
-            return None;
-        }
-
-        Some(mean_gap < 0.0)
-    }
-
-    fn yaw_hypothesis_cost(
-        imu_horiz_xy: [f32; 2],
-        imu_yaw_rate: f32,
-        gnss_horiz_xy: [f32; 2],
-        course_rate: f32,
-        speed_mid: f32,
-    ) -> f32 {
-        let mut cost = Self::normalized_horiz_vector_cost(imu_horiz_xy, gnss_horiz_xy);
-        let turn_strength = (speed_mid * course_rate.abs()).max(gnss_horiz_xy[1].abs());
-        if turn_strength > 0.25 {
-            cost += 0.2 * Self::signed_mismatch_cost(imu_horiz_xy[1], course_rate, 0.15, 0.02);
-            cost += 0.15 * Self::signed_mismatch_cost(imu_yaw_rate, course_rate, 0.02, 0.01);
-            let a_lat_model = speed_mid * imu_yaw_rate;
-            let denom = turn_strength.max(a_lat_model.abs()).max(0.5);
-            cost += 0.15 * ((imu_horiz_xy[1] - a_lat_model).abs() / denom).min(2.0);
-        }
-        if gnss_horiz_xy[0].abs() > 0.2 {
-            cost += 0.1 * Self::signed_mismatch_cost(imu_horiz_xy[0], gnss_horiz_xy[0], 0.2, 0.2);
-        }
-        cost
-    }
-
-    fn signed_mismatch_cost(a: f32, b: f32, a_guard: f32, b_guard: f32) -> f32 {
-        if a.abs() < a_guard || b.abs() < b_guard {
-            0.0
-        } else if a.signum() == b.signum() {
-            0.0
-        } else {
-            1.0
-        }
-    }
-
-    fn normalized_horiz_vector_cost(imu_xy: [f32; 2], gnss_xy: [f32; 2]) -> f32 {
-        let imu_norm = (imu_xy[0] * imu_xy[0] + imu_xy[1] * imu_xy[1]).sqrt();
-        let gnss_norm = (gnss_xy[0] * gnss_xy[0] + gnss_xy[1] * gnss_xy[1]).sqrt();
-        if imu_norm <= 1.0e-6 || gnss_norm <= 1.0e-6 {
-            return 4.0;
-        }
-        let dot = (imu_xy[0] * gnss_xy[0] + imu_xy[1] * gnss_xy[1]) / (imu_norm * gnss_norm);
-        1.0 - dot.clamp(-1.0, 1.0)
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1106,13 +670,6 @@ pub fn leveled_horiz_accel_xy(gravity_b: [f32; 3], horiz_accel_b: [f32; 3]) -> O
     ])
 }
 
-fn leveled_forward_heading_xy(q_vb: [f32; 4], gravity_b: [f32; 3]) -> Option<f32> {
-    let (x_in_b, y_in_b) = leveled_xy_axes(gravity_b)?;
-    let c_b_v = quat_to_rotmat(q_vb);
-    let x_v_in_b = [c_b_v[0][0], c_b_v[1][0], c_b_v[2][0]];
-    Some(vec3_dot(x_v_in_b, y_in_b).atan2(vec3_dot(x_v_in_b, x_in_b)))
-}
-
 fn leveled_xy_axes(gravity_b: [f32; 3]) -> Option<([f32; 3], [f32; 3])> {
     let z_in_b = vec3_scale(vec3_normalize(gravity_b)?, -1.0);
     let mut x_ref = [1.0, 0.0, 0.0];
@@ -1151,10 +708,6 @@ fn quat_from_small_angle(dtheta: [f32; 3]) -> [f32; 4] {
 fn quat_from_yaw(yaw_rad: f32) -> [f32; 4] {
     let half = 0.5 * yaw_rad;
     [half.cos(), 0.0, 0.0, half.sin()]
-}
-
-fn quat_yaw_pi() -> [f32; 4] {
-    quat_from_yaw(core::f32::consts::PI)
 }
 
 fn quat_to_rotmat(q: [f32; 4]) -> [[f32; 3]; 3] {

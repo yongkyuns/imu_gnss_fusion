@@ -22,6 +22,7 @@ struct Args {
     window_end_s: f64,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 enum TransformMode {
     None,
@@ -35,6 +36,7 @@ enum TransformMode {
     DirectNegZyx,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 enum HeadingMode {
     NavPvtMotion,
@@ -55,7 +57,6 @@ struct Config {
     name: &'static str,
     transform: TransformMode,
     heading: HeadingMode,
-    p_init: f32,
     use_body_vel: bool,
     r_body_vel: f32,
     turn_aware_nhc: bool,
@@ -65,6 +66,7 @@ struct Config {
     frame_post_rot: FramePostRot,
 }
 
+#[allow(dead_code)]
 #[derive(Default, Clone, Copy, Debug)]
 struct Metrics {
     n: usize,
@@ -97,7 +99,6 @@ struct AlgEvent {
 struct NavAttEvent {
     t_ms: f64,
     roll_deg: f64,
-    pitch_deg: f64,
     heading_deg: f64,
 }
 
@@ -673,12 +674,11 @@ fn main() -> Result<()> {
                 });
             }
         }
-        if let Some((_itow, roll, pitch, heading)) = extract_nav_att(f) {
+        if let Some((_itow, roll, _pitch, heading)) = extract_nav_att(f) {
             if let Some(t_ms) = nearest_master_ms(f.seq, &masters) {
                 nav_att_events.push(NavAttEvent {
                     t_ms,
                     roll_deg: roll,
-                    pitch_deg: pitch,
                     heading_deg: normalize_heading_deg(heading),
                 });
             }
@@ -830,7 +830,6 @@ fn main() -> Result<()> {
             name: "xyz_id_r100",
             transform: TransformMode::RotXyz,
             heading: HeadingMode::Disabled,
-            p_init: 1.0,
             use_body_vel: true,
             r_body_vel: 100.0,
             turn_aware_nhc: false,
@@ -843,7 +842,6 @@ fn main() -> Result<()> {
             name: "xyz_rx_r100",
             transform: TransformMode::RotXyz,
             heading: HeadingMode::Disabled,
-            p_init: 1.0,
             use_body_vel: true,
             r_body_vel: 100.0,
             turn_aware_nhc: false,
@@ -856,7 +854,6 @@ fn main() -> Result<()> {
             name: "xyz_ry_r100",
             transform: TransformMode::RotXyz,
             heading: HeadingMode::Disabled,
-            p_init: 1.0,
             use_body_vel: true,
             r_body_vel: 100.0,
             turn_aware_nhc: false,
@@ -869,7 +866,6 @@ fn main() -> Result<()> {
             name: "xyz_rz_r100",
             transform: TransformMode::RotXyz,
             heading: HeadingMode::Disabled,
-            p_init: 1.0,
             use_body_vel: true,
             r_body_vel: 100.0,
             turn_aware_nhc: false,
@@ -882,7 +878,6 @@ fn main() -> Result<()> {
             name: "xyzT_id_r100",
             transform: TransformMode::RotXyzTranspose,
             heading: HeadingMode::Disabled,
-            p_init: 1.0,
             use_body_vel: true,
             r_body_vel: 100.0,
             turn_aware_nhc: false,
@@ -895,7 +890,6 @@ fn main() -> Result<()> {
             name: "xyzT_rx_r100",
             transform: TransformMode::RotXyzTranspose,
             heading: HeadingMode::Disabled,
-            p_init: 1.0,
             use_body_vel: true,
             r_body_vel: 100.0,
             turn_aware_nhc: false,
@@ -908,7 +902,6 @@ fn main() -> Result<()> {
             name: "dzyx_id_r100",
             transform: TransformMode::DirectZyx,
             heading: HeadingMode::Disabled,
-            p_init: 1.0,
             use_body_vel: true,
             r_body_vel: 100.0,
             turn_aware_nhc: false,
@@ -921,7 +914,6 @@ fn main() -> Result<()> {
             name: "dzyx_rx_r100",
             transform: TransformMode::DirectZyx,
             heading: HeadingMode::Disabled,
-            p_init: 1.0,
             use_body_vel: true,
             r_body_vel: 100.0,
             turn_aware_nhc: false,
@@ -934,7 +926,6 @@ fn main() -> Result<()> {
             name: "dzyx_ry_r100",
             transform: TransformMode::DirectZyx,
             heading: HeadingMode::Disabled,
-            p_init: 1.0,
             use_body_vel: true,
             r_body_vel: 100.0,
             turn_aware_nhc: false,
@@ -947,7 +938,6 @@ fn main() -> Result<()> {
             name: "dzyx_rz_r100",
             transform: TransformMode::DirectZyx,
             heading: HeadingMode::Disabled,
-            p_init: 1.0,
             use_body_vel: true,
             r_body_vel: 100.0,
             turn_aware_nhc: false,
@@ -960,7 +950,6 @@ fn main() -> Result<()> {
             name: "tzyx_rx_r100",
             transform: TransformMode::TransposeZyx,
             heading: HeadingMode::Disabled,
-            p_init: 1.0,
             use_body_vel: true,
             r_body_vel: 100.0,
             turn_aware_nhc: false,

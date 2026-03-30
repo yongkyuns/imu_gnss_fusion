@@ -177,7 +177,6 @@ impl eframe::App for App {
                 ui.selectable_value(&mut self.page, Page::Signals, "Signals");
                 ui.selectable_value(&mut self.page, Page::EkfCompare, "EKF Compare");
                 ui.selectable_value(&mut self.page, Page::AlignCompare, "Align Compare");
-                ui.selectable_value(&mut self.page, Page::AlignStartup, "Align Startup");
                 ui.selectable_value(&mut self.page, Page::MapDark, "Map (Dark)");
             });
         });
@@ -407,59 +406,6 @@ impl eframe::App for App {
                     );
                 });
             }
-            Page::AlignStartup => {
-                let half_width = (ctx.content_rect().width() * 0.5).max(260.0);
-                egui::SidePanel::left("align_startup_left")
-                    .resizable(false)
-                    .exact_width(half_width)
-                    .show(ctx, |ui| {
-                        draw_plot(
-                            ui,
-                            "Unified Startup Components",
-                            &self.data.align_startup,
-                            true,
-                            self.max_points_per_trace,
-                        );
-                        draw_plot(
-                            ui,
-                            "Unified Startup Angles",
-                            &self.data.align_startup_angles,
-                            true,
-                            self.max_points_per_trace,
-                        );
-                    });
-
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    draw_plot(
-                        ui,
-                        "Unified Startup Full Angles",
-                        &self.data.align_startup_full_angles,
-                        true,
-                        self.max_points_per_trace,
-                    );
-                    draw_plot(
-                        ui,
-                        "Unified Startup Full Angles (Final ESF-ALG)",
-                        &self.data.align_startup_esf_full_angles,
-                        true,
-                        self.max_points_per_trace,
-                    );
-                    draw_plot(
-                        ui,
-                        "Align Window Diagnostics",
-                        &self.data.align_res_vel,
-                        true,
-                        self.max_points_per_trace,
-                    );
-                    draw_plot(
-                        ui,
-                        "Align Axis Error vs ESF-ALG",
-                        &self.data.align_axis_err,
-                        true,
-                        self.max_points_per_trace,
-                    );
-                });
-            }
             Page::MapDark => {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     ui.horizontal(|ui| {
@@ -666,34 +612,6 @@ fn draw_plot(
     });
 }
 
-fn draw_scatter_plot(ui: &mut egui::Ui, title: &str, traces: &[Trace]) {
-    ui.vertical(|ui| {
-        ui.label(title);
-        Plot::new(title)
-            .height(520.0)
-            .data_aspect(1.0)
-            .allow_drag(true)
-            .allow_zoom(true)
-            .allow_scroll(true)
-            .allow_boxed_zoom(true)
-            .allow_axis_zoom_drag(true)
-            .legend(Legend::default())
-            .show(ui, |plot_ui| {
-                for t in traces {
-                    if t.points.is_empty() {
-                        continue;
-                    }
-                    let points: PlotPoints<'_> = t.points.clone().into();
-                    if t.name.ends_with("points") {
-                        let radius = if t.name.starts_with("IMU") { 1.8 } else { 2.2 };
-                        plot_ui.points(Points::new(t.name.clone(), points).radius(radius));
-                    } else {
-                        plot_ui.line(Line::new(t.name.clone(), points));
-                    }
-                }
-            });
-    });
-}
 
 pub fn run_visualizer(data: PlotData, has_itow: bool) -> Result<()> {
     let native_options = eframe::NativeOptions {

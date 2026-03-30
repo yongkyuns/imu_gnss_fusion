@@ -36,7 +36,6 @@ struct ImuPacket {
 
 #[derive(Clone, Debug)]
 struct Dataset {
-    t0_master_ms: f64,
     nav_events: Vec<(f64, NavPvtObs)>,
     alg_events: Vec<AlgEventRaw>,
     imu_packets: Vec<ImuPacket>,
@@ -207,7 +206,6 @@ fn load_dataset(logfile: &PathBuf) -> Result<Dataset> {
         bail!("no complete ESF-RAW IMU packets found");
     }
     Ok(Dataset {
-        t0_master_ms: timeline.t0_master_ms,
         nav_events,
         alg_events,
         imu_packets,
@@ -537,7 +535,6 @@ fn mean_imu(packets: &[ImuPacket]) -> ([f32; 3], [f32; 3]) {
 struct MasterTimeline {
     masters: Vec<(u64, f64)>,
     has_itow: bool,
-    t0_master_ms: f64,
 }
 
 impl MasterTimeline {
@@ -566,12 +563,7 @@ fn build_master_timeline(frames: &[UbxFrame]) -> MasterTimeline {
         .map(|(&s, &t)| (s, t as f64))
         .collect();
     let has_itow = !masters.is_empty();
-    let t0_master_ms = masters.first().map(|(_, t)| *t).unwrap_or(0.0);
-    MasterTimeline {
-        masters,
-        has_itow,
-        t0_master_ms,
-    }
+    MasterTimeline { masters, has_itow }
 }
 
 fn fit_tag_ms_map(
