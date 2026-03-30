@@ -19,6 +19,8 @@ pub struct PlotData {
     pub ekf_cmp_pos: Vec<Trace>,
     pub ekf_cmp_vel: Vec<Trace>,
     pub ekf_cmp_att: Vec<Trace>,
+    pub ekf_meas_gyro: Vec<Trace>,
+    pub ekf_meas_accel: Vec<Trace>,
     pub ekf_bias_gyro: Vec<Trace>,
     pub ekf_bias_accel: Vec<Trace>,
     pub ekf_cov_bias: Vec<Trace>,

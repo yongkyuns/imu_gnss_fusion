@@ -270,10 +270,10 @@ impl eframe::App for App {
             }
             Page::EkfCompare => {
                 let half_width = (ctx.content_rect().width() * 0.5).max(260.0);
-                let mut esf_raw_gyro = self.data.imu_raw_gyro.clone();
-                esf_raw_gyro.retain(|t| t.name.starts_with("ESF-RAW gyro_"));
-                let mut esf_raw_accel = self.data.imu_raw_accel.clone();
-                esf_raw_accel.retain(|t| t.name.starts_with("ESF-RAW accel_"));
+                let mut vehicle_gyro = self.data.esf_ins_gyro.clone();
+                vehicle_gyro.extend(self.data.ekf_meas_gyro.iter().cloned());
+                let mut vehicle_accel = self.data.esf_ins_accel.clone();
+                vehicle_accel.extend(self.data.ekf_meas_accel.iter().cloned());
                 egui::SidePanel::left("ekf_compare_left")
                     .resizable(false)
                     .exact_width(half_width)
@@ -301,8 +301,8 @@ impl eframe::App for App {
                         );
                         draw_plot(
                             ui,
-                            "ESF-RAW Angular Rate",
-                            &esf_raw_gyro,
+                            "Vehicle Gyro: ESF-INS vs EKF",
+                            &vehicle_gyro,
                             true,
                             self.max_points_per_trace,
                         );
@@ -332,8 +332,8 @@ impl eframe::App for App {
                     );
                     draw_plot(
                         ui,
-                        "ESF-RAW Acceleration",
-                        &esf_raw_accel,
+                        "Vehicle Accel: ESF-INS vs EKF",
+                        &vehicle_accel,
                         true,
                         self.max_points_per_trace,
                     );

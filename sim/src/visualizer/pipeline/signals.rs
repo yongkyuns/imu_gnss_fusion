@@ -277,6 +277,8 @@ pub fn build_signal_traces(
     out.ekf_cmp_pos = ekf.cmp_pos;
     out.ekf_cmp_vel = ekf.cmp_vel;
     out.ekf_cmp_att = ekf.cmp_att;
+    out.ekf_meas_gyro = ekf.meas_gyro;
+    out.ekf_meas_accel = ekf.meas_accel;
     out.ekf_bias_gyro = ekf.bias_gyro;
     out.ekf_bias_accel = ekf.bias_accel;
     out.ekf_cov_bias = ekf.cov_bias;
@@ -336,6 +338,8 @@ pub fn build_signal_traces(
         &mut out.ekf_cmp_pos,
         &mut out.ekf_cmp_vel,
         &mut out.ekf_cmp_att,
+        &mut out.ekf_meas_gyro,
+        &mut out.ekf_meas_accel,
         &mut out.ekf_bias_gyro,
         &mut out.ekf_bias_accel,
         &mut out.ekf_cov_bias,

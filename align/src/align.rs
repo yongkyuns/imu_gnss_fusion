@@ -40,7 +40,7 @@ impl Default for AlignConfig {
                 0.001_f32.to_radians(),
                 0.0001_f32.to_radians(),
             ],
-            r_gravity_std_mps2: 1.28,
+            r_gravity_std_mps2: 0.28,
             r_horiz_heading_std_rad: 1.0_f32.to_radians(), // Main longitudinal
             r_turn_heading_std_rad: 0.1_f32.to_radians(),  // Main lateral
             r_turn_gyro_std_radps: 0.1_f32.to_radians(),
@@ -57,7 +57,7 @@ impl Default for AlignConfig {
             max_stationary_gyro_radps: 0.8_f32.to_radians(),
             max_stationary_accel_norm_err_mps2: 0.2,
             use_gravity: true,
-            use_turn_gyro: true,
+            use_turn_gyro: true, // main tilt
         }
     }
 }
@@ -578,7 +578,6 @@ impl Align {
         p[1][1] += cfg.q_mount_std_rad[1].powi(2) * dt;
         p[2][2] += cfg.q_mount_std_rad[2].powi(2) * dt;
     }
-
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -18,6 +18,8 @@ pub struct EkfCompareData {
     pub cmp_pos: Vec<Trace>,
     pub cmp_vel: Vec<Trace>,
     pub cmp_att: Vec<Trace>,
+    pub meas_gyro: Vec<Trace>,
+    pub meas_accel: Vec<Trace>,
     pub bias_gyro: Vec<Trace>,
     pub bias_accel: Vec<Trace>,
     pub cov_bias: Vec<Trace>,
@@ -58,6 +60,8 @@ pub fn build_ekf_compare_traces(
             cmp_pos: Vec::new(),
             cmp_vel: Vec::new(),
             cmp_att: Vec::new(),
+            meas_gyro: Vec::new(),
+            meas_accel: Vec::new(),
             bias_gyro: Vec::new(),
             bias_accel: Vec::new(),
             cov_bias: Vec::new(),
@@ -244,6 +248,12 @@ pub fn build_ekf_compare_traces(
     let mut cmp_att_roll = Vec::<[f64; 2]>::new();
     let mut cmp_att_pitch = Vec::<[f64; 2]>::new();
     let mut cmp_att_yaw = Vec::<[f64; 2]>::new();
+    let mut meas_gyro_x = Vec::<[f64; 2]>::new();
+    let mut meas_gyro_y = Vec::<[f64; 2]>::new();
+    let mut meas_gyro_z = Vec::<[f64; 2]>::new();
+    let mut meas_accel_x = Vec::<[f64; 2]>::new();
+    let mut meas_accel_y = Vec::<[f64; 2]>::new();
+    let mut meas_accel_z = Vec::<[f64; 2]>::new();
     let mut ubx_att_roll = Vec::<[f64; 2]>::new();
     let mut ubx_att_pitch = Vec::<[f64; 2]>::new();
     let mut ubx_att_yaw = Vec::<[f64; 2]>::new();
@@ -512,6 +522,32 @@ pub fn build_ekf_compare_traces(
         cmp_vel_e.push([t_imu, ekf.state.ve as f64]);
         cmp_vel_d.push([t_imu, ekf.state.vd as f64]);
         let dt_safe = dt.max(1.0e-6);
+        let c_n_b = quat_to_rotmat_f64([
+            ekf.state.q0 as f64,
+            ekf.state.q1 as f64,
+            ekf.state.q2 as f64,
+            ekf.state.q3 as f64,
+        ]);
+        let gravity_b = [
+            c_n_b[2][0] * GRAVITY_MPS2 as f64,
+            c_n_b[2][1] * GRAVITY_MPS2 as f64,
+            c_n_b[2][2] * GRAVITY_MPS2 as f64,
+        ];
+        meas_gyro_x.push([t_imu, gyro[0] - rad2deg((ekf.state.dax_b as f64) / dt_safe)]);
+        meas_gyro_y.push([t_imu, gyro[1] - rad2deg((ekf.state.day_b as f64) / dt_safe)]);
+        meas_gyro_z.push([t_imu, gyro[2] - rad2deg((ekf.state.daz_b as f64) / dt_safe)]);
+        meas_accel_x.push([
+            t_imu,
+            accel[0] - (ekf.state.dvx_b as f64) / dt_safe + gravity_b[0],
+        ]);
+        meas_accel_y.push([
+            t_imu,
+            accel[1] - (ekf.state.dvy_b as f64) / dt_safe + gravity_b[1],
+        ]);
+        meas_accel_z.push([
+            t_imu,
+            accel[2] - (ekf.state.dvz_b as f64) / dt_safe + gravity_b[2],
+        ]);
         bias_gyro_x.push([t_imu, rad2deg((ekf.state.dax_b as f64) / dt_safe)]);
         bias_gyro_y.push([t_imu, rad2deg((ekf.state.day_b as f64) / dt_safe)]);
         bias_gyro_z.push([t_imu, rad2deg((ekf.state.daz_b as f64) / dt_safe)]);
@@ -604,6 +640,34 @@ pub fn build_ekf_compare_traces(
         Trace {
             name: "NAV-ATT heading [deg]".to_string(),
             points: ubx_att_yaw,
+        },
+    ];
+    let meas_gyro = vec![
+        Trace {
+            name: "EKF vehicle gyro x [deg/s]".to_string(),
+            points: meas_gyro_x,
+        },
+        Trace {
+            name: "EKF vehicle gyro y [deg/s]".to_string(),
+            points: meas_gyro_y,
+        },
+        Trace {
+            name: "EKF vehicle gyro z [deg/s]".to_string(),
+            points: meas_gyro_z,
+        },
+    ];
+    let meas_accel = vec![
+        Trace {
+            name: "EKF vehicle accel x [m/s^2]".to_string(),
+            points: meas_accel_x,
+        },
+        Trace {
+            name: "EKF vehicle accel y [m/s^2]".to_string(),
+            points: meas_accel_y,
+        },
+        Trace {
+            name: "EKF vehicle accel z [m/s^2]".to_string(),
+            points: meas_accel_z,
         },
     ];
     let bias_gyro = vec![
@@ -721,6 +785,8 @@ pub fn build_ekf_compare_traces(
         cmp_pos,
         cmp_vel,
         cmp_att,
+        meas_gyro,
+        meas_accel,
         bias_gyro,
         bias_accel,
         cov_bias,
