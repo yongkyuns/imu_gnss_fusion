@@ -512,7 +512,6 @@ impl Align {
             );
             trace.startup_trace = Some(startup_trace);
             if let Some(dpsi) = startup_theta {
-                self.coarse_aligned = true;
                 if self.startup_seed_improves_pair(
                     dpsi,
                     window.mean_gyro_b,
@@ -1051,7 +1050,6 @@ impl Align {
             turn_windows: 0,
         });
         self.yaw_startup.reset(false);
-        self.coarse_aligned = true;
     }
 
     fn startup_seed_improves_pair(
