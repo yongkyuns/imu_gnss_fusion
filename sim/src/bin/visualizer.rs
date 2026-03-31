@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use sim::visualizer::model::EkfImuSource;
 use sim::visualizer::pipeline::build_plot_data;
+use sim::visualizer::pipeline::ekf_compare::{EkfCompareConfig, GnssOutageConfig};
 use sim::visualizer::stats::{
     group_stats, max_gap_sec, max_gap_trace, max_step_abs, trace_stats, trace_time_bounds,
     trace_value_bounds,
@@ -26,6 +27,12 @@ struct Args {
     dump_align_axis_time_s: Option<f64>,
     #[arg(long, default_value_t = 3.0)]
     dump_window_s: f64,
+    #[arg(long, default_value_t = 0)]
+    gnss_outage_count: usize,
+    #[arg(long, default_value_t = 0.0)]
+    gnss_outage_duration_s: f64,
+    #[arg(long, default_value_t = 1)]
+    gnss_outage_seed: u64,
 }
 
 fn main() -> Result<()> {
@@ -38,7 +45,17 @@ fn main() -> Result<()> {
         .context("failed to read log")?;
     let t_read = Instant::now();
 
-    let (data, has_itow) = build_plot_data(&bytes, args.max_records, args.ekf_imu_source);
+    let (data, has_itow) = build_plot_data(
+        &bytes,
+        args.max_records,
+        args.ekf_imu_source,
+        EkfCompareConfig::default(),
+        GnssOutageConfig {
+            count: args.gnss_outage_count,
+            duration_s: args.gnss_outage_duration_s,
+            seed: args.gnss_outage_seed,
+        },
+    );
     let t_build = Instant::now();
     let (n_traces, n_points) = trace_stats(&data);
     let (tmin, tmax) = trace_time_bounds(&data).unwrap_or((f64::NAN, f64::NAN));

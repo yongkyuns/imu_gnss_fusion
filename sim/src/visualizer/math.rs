@@ -154,6 +154,62 @@ pub fn ned_to_lla_approx(
     (lat, lon, h)
 }
 
+pub fn ned_to_lla_exact(
+    n: f64,
+    e: f64,
+    d: f64,
+    ref_lat_deg: f64,
+    ref_lon_deg: f64,
+    ref_h_m: f64,
+) -> (f64, f64, f64) {
+    let ref_ecef = lla_to_ecef(ref_lat_deg, ref_lon_deg, ref_h_m);
+    let ecef = ned_to_ecef(n, e, d, ref_ecef, ref_lat_deg, ref_lon_deg);
+    ecef_to_lla(ecef)
+}
+
+pub fn ned_to_ecef(
+    n: f64,
+    e: f64,
+    d: f64,
+    ref_ecef: [f64; 3],
+    ref_lat_deg: f64,
+    ref_lon_deg: f64,
+) -> [f64; 3] {
+    let lat = deg2rad(ref_lat_deg);
+    let lon = deg2rad(ref_lon_deg);
+    let (slat, clat) = lat.sin_cos();
+    let (slon, clon) = lon.sin_cos();
+    let r_ned_to_ecef = [
+        [-slat * clon, -slon, -clat * clon],
+        [-slat * slon, clon, -clat * slon],
+        [clat, 0.0, -slat],
+    ];
+    [
+        ref_ecef[0] + r_ned_to_ecef[0][0] * n + r_ned_to_ecef[0][1] * e + r_ned_to_ecef[0][2] * d,
+        ref_ecef[1] + r_ned_to_ecef[1][0] * n + r_ned_to_ecef[1][1] * e + r_ned_to_ecef[1][2] * d,
+        ref_ecef[2] + r_ned_to_ecef[2][0] * n + r_ned_to_ecef[2][1] * e + r_ned_to_ecef[2][2] * d,
+    ]
+}
+
+pub fn ecef_to_lla(ecef: [f64; 3]) -> (f64, f64, f64) {
+    let a = 6378137.0_f64;
+    let e2 = 6.69437999014e-3_f64;
+    let b = a * (1.0 - e2).sqrt();
+    let ep2 = (a * a - b * b) / (b * b);
+    let x = ecef[0];
+    let y = ecef[1];
+    let z = ecef[2];
+    let p = x.hypot(y);
+    let theta = (z * a).atan2(p * b);
+    let (st, ct) = theta.sin_cos();
+    let lat = (z + ep2 * b * st * st * st).atan2(p - e2 * a * ct * ct * ct);
+    let lon = y.atan2(x);
+    let sin_lat = lat.sin();
+    let n = a / (1.0 - e2 * sin_lat * sin_lat).sqrt();
+    let h = p / lat.cos().max(1.0e-12) - n;
+    (rad2deg(lat), rad2deg(lon), h)
+}
+
 pub fn heading_endpoint(lat_deg: f64, lon_deg: f64, heading_deg: f64, length_m: f64) -> (f64, f64) {
     let r = 6_378_137.0_f64;
     let h = deg2rad(heading_deg);

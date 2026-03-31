@@ -27,30 +27,41 @@ impl Plugin for TrackOverlay {
         projector: &walkers::Projector,
         _map_memory: &MapMemory,
     ) {
-        let colors = [
-            egui::Color32::from_rgb(0, 255, 255),
-            egui::Color32::from_rgb(255, 196, 0),
-            egui::Color32::from_rgb(60, 200, 120),
-            egui::Color32::from_rgb(255, 100, 100),
-        ];
-        for (idx, tr) in self.traces.iter().enumerate() {
+        for tr in &self.traces {
             if tr.points.len() < 2 {
                 continue;
             }
-            let color = colors[idx % colors.len()];
-            let mut pts = Vec::<egui::Pos2>::with_capacity(tr.points.len());
+            let color = if tr.name == "u-blox path (lon,lat)" {
+                egui::Color32::from_rgb(0, 255, 255)
+            } else if tr.name == "NAV2-PVT path (GNSS-only, lon,lat)" {
+                egui::Color32::from_rgb(255, 196, 0)
+            } else if tr.name == "EKF path (lon,lat)" {
+                egui::Color32::from_rgb(60, 200, 120)
+            } else if tr.name.contains("GNSS outage") {
+                egui::Color32::from_rgb(255, 80, 80)
+            } else {
+                egui::Color32::WHITE
+            };
+            let mut segment = Vec::<egui::Pos2>::with_capacity(tr.points.len());
             for p in &tr.points {
                 let lon = p[0];
                 let lat = p[1];
                 if !lon.is_finite() || !lat.is_finite() {
+                    if segment.len() >= 2 {
+                        ui.painter().add(egui::epaint::PathShape::line(
+                            segment,
+                            egui::Stroke::new(2.2, color),
+                        ));
+                    }
+                    segment = Vec::new();
                     continue;
                 }
                 let v = projector.project(lon_lat(lon, lat));
-                pts.push(egui::pos2(v.x, v.y));
+                segment.push(egui::pos2(v.x, v.y));
             }
-            if pts.len() >= 2 {
+            if segment.len() >= 2 {
                 ui.painter().add(egui::epaint::PathShape::line(
-                    pts,
+                    segment,
                     egui::Stroke::new(2.2, color),
                 ));
             }
@@ -68,7 +79,7 @@ impl Plugin for TrackOverlay {
                 let to = projector.project(lon_lat(tip_lon, tip_lat));
                 ui.painter().line_segment(
                     [egui::pos2(from.x, from.y), egui::pos2(to.x, to.y)],
-                    egui::Stroke::new(1.8, egui::Color32::from_rgb(255, 140, 0)),
+                    egui::Stroke::new(1.8, egui::Color32::from_rgb(255, 255, 255)),
                 );
             }
         }
@@ -118,7 +129,9 @@ pub struct App {
     map_memory: MapMemory,
     map_center: walkers::Position,
     show_heading: bool,
+    show_nav_pvt: bool,
     show_nav2_pvt: bool,
+    show_ekf: bool,
 }
 
 impl eframe::App for App {
@@ -409,16 +422,34 @@ impl eframe::App for App {
             Page::MapDark => {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label("Slippy map overlay: u-blox + EKF");
+                        ui.label("Slippy map overlay: NAV-PVT + NAV2-PVT + EKF");
                         ui.checkbox(&mut self.show_heading, "show heading");
-                        ui.checkbox(&mut self.show_nav2_pvt, "show GNSS-only");
+                        ui.checkbox(&mut self.show_nav_pvt, "show NAV-PVT");
+                        ui.checkbox(&mut self.show_nav2_pvt, "show NAV2-PVT");
+                        ui.checkbox(&mut self.show_ekf, "show EKF");
                         if ui.button("Recenter").clicked() {
                             self.map_memory.follow_my_position();
                         }
                     });
+                    ui.horizontal(|ui| {
+                        ui.colored_label(egui::Color32::from_rgb(0, 255, 255), "NAV-PVT");
+                        ui.colored_label(egui::Color32::from_rgb(255, 196, 0), "NAV2-PVT");
+                        ui.colored_label(egui::Color32::from_rgb(60, 200, 120), "EKF");
+                        ui.colored_label(egui::Color32::from_rgb(255, 80, 80), "EKF during GNSS outage");
+                        ui.colored_label(egui::Color32::from_rgb(255, 255, 255), "EKF heading");
+                    });
                     let mut map_traces = self.data.ekf_map.clone();
+                    if !self.show_nav_pvt {
+                        map_traces.retain(|t| t.name != "u-blox path (lon,lat)");
+                    }
                     if !self.show_nav2_pvt {
                         map_traces.retain(|t| t.name != "NAV2-PVT path (GNSS-only, lon,lat)");
+                    }
+                    if !self.show_ekf {
+                        map_traces.retain(|t| {
+                            t.name != "EKF path (lon,lat)"
+                                && t.name != "EKF path during GNSS outage (lon,lat)"
+                        });
                     }
                     let track = TrackOverlay {
                         traces: map_traces,
@@ -649,7 +680,9 @@ pub fn run_visualizer(data: PlotData, has_itow: bool) -> Result<()> {
                 map_memory,
                 map_center,
                 show_heading: false,
-                show_nav2_pvt: false,
+                show_nav_pvt: true,
+                show_nav2_pvt: true,
+                show_ekf: true,
             }))
         }),
     )
