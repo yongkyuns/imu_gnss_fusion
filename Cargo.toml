@@ -1,4 +1,4 @@
 [workspace]
-members = ["sim", "ekf", "align", "ublox"]
+members = ["sim", "ekf", "ublox"]
 exclude = ["logger"]
 resolver = "2"

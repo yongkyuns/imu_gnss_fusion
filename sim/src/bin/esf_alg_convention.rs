@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::path::PathBuf;
 
-use align_rs::align::{Align, AlignConfig, AlignWindowSummary, GRAVITY_MPS2};
+use ekf_rs::align::{Align, AlignConfig, AlignWindowSummary, GRAVITY_MPS2};
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use sim::ubxlog::{

@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use std::collections::VecDeque;
+use alloc::collections::VecDeque;
 
 use crate::stationary_mount::bootstrap_vehicle_to_body_from_stationary;
 

@@ -429,8 +429,9 @@ extension SensorStore: CLLocationManagerDelegate {
         guard ekfInitialized else { return }
         guard let posN, let posE, let posD, let velN, let velE else { return }
 
-        let posVarH = Float(max(hAcc, 1.0) * max(hAcc, 1.0))
-        let posVarV = Float(max(vAcc, 1.0) * max(vAcc, 1.0))
+        let positionNoiseScale = 0.25
+        let posVarH = Float(max(hAcc, 1.0) * max(hAcc, 1.0) * positionNoiseScale)
+        let posVarV = Float(max(vAcc, 1.0) * max(vAcc, 1.0) * positionNoiseScale)
         let velVarH: Float = 1.5 * 1.5
         let velVarV: Float = 2.5 * 2.5
 

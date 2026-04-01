@@ -3,7 +3,7 @@ use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
-use align_rs::align::{AlignConfig, GRAVITY_MPS2};
+use ekf_rs::align::{AlignConfig, GRAVITY_MPS2};
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use sim::ubxlog::{
