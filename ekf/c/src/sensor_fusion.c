@@ -1,0 +1,587 @@
+#include "sensor_fusion_internal.h"
+
+#include <math.h>
+#include <string.h>
+
+static void sf_initialize_ekf_from_gnss(sf_ekf_t *ekf,
+                                        const sf_gnss_sample_t *gnss,
+                                        float yaw_init_speed_mps);
+static void sf_set_state_yaw_only(sf_ekf_state_t *state, float yaw_rad);
+static void sf_clamp_ekf_biases(sf_ekf_t *ekf, double dt_s);
+static void sf_quat_to_rotmat(const float q[4], float r[3][3]);
+static void sf_transpose3(const float in[3][3], float out[3][3]);
+static void sf_mat3_vec(const float m[3][3], const float v[3], float out[3]);
+static float sf_norm3(const float v[3]);
+static float sf_horizontal_speed(const float v_ned_mps[3]);
+static float sf_interp_speed(const sf_internal_bootstrap_gnss_state_t *prev,
+                             const sf_gnss_sample_t *curr,
+                             double t_s);
+static float sf_ema_update(bool *valid, float *prev, float sample, float alpha);
+static bool sf_bootstrap_update(sf_sensor_fusion_impl_t *impl,
+                                const float accel_b[3],
+                                const float gyro_radps[3],
+                                float speed_mps);
+static bool sf_take_interval_summary(sf_sensor_fusion_impl_t *impl,
+                                     double t0_s,
+                                     double t1_s,
+                                     sf_align_window_summary_t *summary_out);
+static sf_update_t sf_update_from_fusion(const sf_sensor_fusion_impl_t *fusion,
+                                         bool mount_ready_changed,
+                                         bool ekf_initialized_now);
+
+void sf_align_config_default(sf_align_config_t *cfg) {
+  if (cfg == NULL) {
+    return;
+  }
+
+  cfg->q_mount_std_rad[0] = 0.001f * 3.1415927f / 180.0f;
+  cfg->q_mount_std_rad[1] = 0.001f * 3.1415927f / 180.0f;
+  cfg->q_mount_std_rad[2] = 0.0001f * 3.1415927f / 180.0f;
+  cfg->r_gravity_std_mps2 = 0.28f;
+  cfg->r_horiz_heading_std_rad = 1.0f * 3.1415927f / 180.0f;
+  cfg->r_turn_gyro_std_radps = 0.01f * 3.1415927f / 180.0f;
+  cfg->turn_gyro_yaw_scale = 0.0f;
+  cfg->r_turn_heading_std_rad = 0.1f * 3.1415927f / 180.0f;
+  cfg->gravity_lpf_alpha = 0.08f;
+  cfg->min_speed_mps = 3.0f / 3.6f;
+  cfg->min_turn_rate_radps = 2.0f * 3.1415927f / 180.0f;
+  cfg->min_lat_acc_mps2 = 0.10f;
+  cfg->min_long_acc_mps2 = 0.18f;
+  cfg->turn_consistency_min_windows = 5U;
+  cfg->turn_consistency_min_fraction = 0.8f;
+  cfg->turn_consistency_max_abs_lat_err_mps2 = 0.35f;
+  cfg->turn_consistency_max_rel_lat_err = 0.6f;
+  cfg->max_stationary_gyro_radps = 0.8f * 3.1415927f / 180.0f;
+  cfg->max_stationary_accel_norm_err_mps2 = 0.2f;
+  cfg->use_gravity = true;
+  cfg->use_turn_gyro = true;
+}
+
+void sf_bootstrap_config_default(sf_bootstrap_config_t *cfg) {
+  sf_align_config_t align_cfg;
+
+  if (cfg == NULL) {
+    return;
+  }
+
+  sf_align_config_default(&align_cfg);
+  cfg->ema_alpha = 0.05f;
+  cfg->max_speed_mps = 0.35f;
+  cfg->stationary_samples = 100U;
+  cfg->max_gyro_radps = align_cfg.max_stationary_gyro_radps;
+  cfg->max_accel_norm_err_mps2 = align_cfg.max_stationary_accel_norm_err_mps2;
+}
+
+void sf_fusion_config_default(sf_fusion_config_t *cfg) {
+  if (cfg == NULL) {
+    return;
+  }
+  sf_align_config_default(&cfg->align);
+  sf_bootstrap_config_default(&cfg->bootstrap);
+  sf_predict_noise_default(&cfg->predict_noise);
+  cfg->r_body_vel = 5.0f;
+  cfg->yaw_init_speed_mps = 0.0f;
+}
+
+void sf_fusion_init_internal(sf_sensor_fusion_t *fusion,
+                             const sf_fusion_config_t *cfg) {
+  sf_sensor_fusion_impl_t *impl;
+  sf_fusion_config_t cfg_local;
+
+  if (fusion == NULL) {
+    return;
+  }
+  impl = sf_impl(fusion);
+
+  sf_fusion_config_default(&cfg_local);
+  memset(impl, 0, sizeof(*impl));
+  impl->cfg = cfg ? *cfg : cfg_local;
+  impl->internal_align_enabled = true;
+  sf_align_init(&impl->align_rt, &impl->cfg.align);
+  sf_ekf_init(&impl->ekf, NULL, &impl->cfg.predict_noise);
+}
+
+void sf_fusion_init_external(sf_sensor_fusion_t *fusion,
+                             const sf_fusion_config_t *cfg,
+                             const float q_vb[4]) {
+  sf_sensor_fusion_impl_t *impl;
+  sf_fusion_init_internal(fusion, cfg);
+  if (fusion == NULL || q_vb == NULL) {
+    return;
+  }
+  impl = sf_impl(fusion);
+  impl->internal_align_enabled = false;
+  impl->mount_ready = true;
+  impl->mount_q_vb_valid = true;
+  memcpy(impl->mount_q_vb, q_vb, sizeof(impl->mount_q_vb));
+}
+
+void sf_fusion_set_misalignment(sf_sensor_fusion_t *fusion, const float q_vb[4]) {
+  sf_sensor_fusion_impl_t *impl;
+  if (fusion == NULL || q_vb == NULL) {
+    return;
+  }
+  impl = sf_impl(fusion);
+  impl->internal_align_enabled = false;
+  impl->mount_ready = true;
+  impl->mount_q_vb_valid = true;
+  memcpy(impl->mount_q_vb, q_vb, sizeof(impl->mount_q_vb));
+}
+
+sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
+                                  const sf_imu_sample_t *sample) {
+  sf_sensor_fusion_impl_t *impl;
+  float dt_s;
+  float c_bv[3][3];
+  float gyro_vehicle[3];
+  float accel_vehicle[3];
+  sf_ekf_imu_delta_t imu_delta;
+
+  if (fusion == NULL) {
+    sf_update_t empty = {0};
+    return empty;
+  }
+  impl = sf_impl(fusion);
+  if (sample == NULL) {
+    return sf_update_from_fusion(impl, false, false);
+  }
+
+  if (!impl->last_imu_t_valid) {
+    impl->last_imu_t_s = sample->t_s;
+    impl->last_imu_t_valid = true;
+    if (impl->internal_align_enabled && impl->bootstrap_imu_count < 512U) {
+      impl->bootstrap_imu_buffer[impl->bootstrap_imu_count].t_s = sample->t_s;
+      memcpy(impl->bootstrap_imu_buffer[impl->bootstrap_imu_count].gyro_radps,
+             sample->gyro_radps,
+             sizeof(sample->gyro_radps));
+      memcpy(impl->bootstrap_imu_buffer[impl->bootstrap_imu_count].accel_mps2,
+             sample->accel_mps2,
+             sizeof(sample->accel_mps2));
+      impl->bootstrap_imu_count++;
+    }
+    return sf_update_from_fusion(impl, false, false);
+  }
+
+  dt_s = (float)(sample->t_s - impl->last_imu_t_s);
+  impl->last_imu_t_s = sample->t_s;
+
+  impl->interval_imu_sum_gyro[0] += sample->gyro_radps[0];
+  impl->interval_imu_sum_gyro[1] += sample->gyro_radps[1];
+  impl->interval_imu_sum_gyro[2] += sample->gyro_radps[2];
+  impl->interval_imu_sum_accel[0] += sample->accel_mps2[0];
+  impl->interval_imu_sum_accel[1] += sample->accel_mps2[1];
+  impl->interval_imu_sum_accel[2] += sample->accel_mps2[2];
+  impl->interval_imu_count++;
+
+  if (impl->internal_align_enabled && impl->bootstrap_imu_count < 512U) {
+    impl->bootstrap_imu_buffer[impl->bootstrap_imu_count].t_s = sample->t_s;
+    memcpy(impl->bootstrap_imu_buffer[impl->bootstrap_imu_count].gyro_radps,
+           sample->gyro_radps,
+           sizeof(sample->gyro_radps));
+    memcpy(impl->bootstrap_imu_buffer[impl->bootstrap_imu_count].accel_mps2,
+           sample->accel_mps2,
+           sizeof(sample->accel_mps2));
+    impl->bootstrap_imu_count++;
+  }
+
+  if (!impl->ekf_initialized || !impl->mount_ready || !impl->mount_q_vb_valid) {
+    return sf_update_from_fusion(impl, false, false);
+  }
+  if (dt_s < 0.001f || dt_s > 0.05f) {
+    return sf_update_from_fusion(impl, false, false);
+  }
+
+  sf_quat_to_rotmat(impl->mount_q_vb, c_bv);
+  sf_transpose3(c_bv, c_bv);
+  sf_mat3_vec(c_bv, sample->gyro_radps, gyro_vehicle);
+  sf_mat3_vec(c_bv, sample->accel_mps2, accel_vehicle);
+
+  imu_delta.dax = gyro_vehicle[0] * dt_s;
+  imu_delta.day = gyro_vehicle[1] * dt_s;
+  imu_delta.daz = gyro_vehicle[2] * dt_s;
+  imu_delta.dvx = accel_vehicle[0] * dt_s;
+  imu_delta.dvy = accel_vehicle[1] * dt_s;
+  imu_delta.dvz = accel_vehicle[2] * dt_s;
+  imu_delta.dt = dt_s;
+
+  sf_ekf_predict(&impl->ekf, &imu_delta, NULL);
+  sf_clamp_ekf_biases(&impl->ekf, (double)dt_s);
+  sf_ekf_fuse_body_vel(&impl->ekf, impl->cfg.r_body_vel);
+  sf_clamp_ekf_biases(&impl->ekf, (double)dt_s);
+  return sf_update_from_fusion(impl, false, false);
+}
+
+sf_update_t sf_fusion_process_gnss(sf_sensor_fusion_t *fusion,
+                                   const sf_gnss_sample_t *sample) {
+  sf_sensor_fusion_impl_t *impl;
+  bool ekf_initialized_now = false;
+  bool prev_mount_ready;
+  sf_align_window_summary_t summary;
+  bool have_summary = false;
+  sf_align_update_trace_t trace;
+
+  if (fusion == NULL) {
+    sf_update_t empty = {0};
+    return empty;
+  }
+  impl = sf_impl(fusion);
+  if (sample == NULL) {
+    return sf_update_from_fusion(impl, false, false);
+  }
+
+  impl->last_gnss = *sample;
+  impl->last_gnss_valid = true;
+
+  prev_mount_ready = impl->mount_ready;
+
+  if (impl->internal_align_enabled) {
+    if (impl->align_initialized && impl->bootstrap_prev_gnss_valid) {
+      have_summary = sf_take_interval_summary(
+          impl, impl->bootstrap_prev_gnss.t_s, sample->t_s, &summary);
+    }
+
+    if (!impl->align_initialized) {
+      if (impl->bootstrap_prev_gnss_valid) {
+        for (uint32_t i = 0; i < impl->bootstrap_imu_count; ++i) {
+          float speed_mps = sf_interp_speed(&impl->bootstrap_prev_gnss,
+                                            sample,
+                                            impl->bootstrap_imu_buffer[i].t_s);
+          if (sf_bootstrap_update(impl,
+                                  impl->bootstrap_imu_buffer[i].accel_mps2,
+                                  impl->bootstrap_imu_buffer[i].gyro_radps,
+                                  speed_mps) &&
+              sf_align_initialize_from_stationary(&impl->align_rt,
+                                                  &impl->cfg.align,
+                                                  impl->stationary_accel_buffer,
+                                                  impl->bootstrap_stationary_count,
+                                                  0.0f)) {
+            impl->align_initialized = true;
+            impl->mount_q_vb_valid = true;
+            memcpy(impl->mount_q_vb,
+                   impl->align_rt.state.q_vb,
+                   sizeof(impl->mount_q_vb));
+            break;
+          }
+        }
+      }
+      impl->bootstrap_prev_gnss.t_s = sample->t_s;
+      memcpy(impl->bootstrap_prev_gnss.vel_ned_mps,
+             sample->vel_ned_mps,
+             sizeof(sample->vel_ned_mps));
+      impl->bootstrap_prev_gnss_valid = true;
+    }
+
+    if (impl->align_initialized && have_summary) {
+      sf_align_update_window_with_trace(&impl->align_rt, &impl->cfg.align, &summary, &trace);
+      memcpy(impl->mount_q_vb, impl->align_rt.state.q_vb, sizeof(impl->mount_q_vb));
+      impl->mount_q_vb_valid = true;
+      impl->mount_ready = trace.coarse_alignment_ready;
+    }
+
+    impl->bootstrap_prev_gnss.t_s = sample->t_s;
+    memcpy(impl->bootstrap_prev_gnss.vel_ned_mps,
+           sample->vel_ned_mps,
+           sizeof(sample->vel_ned_mps));
+    impl->bootstrap_prev_gnss_valid = true;
+  } else {
+    impl->interval_imu_sum_gyro[0] = 0.0f;
+    impl->interval_imu_sum_gyro[1] = 0.0f;
+    impl->interval_imu_sum_gyro[2] = 0.0f;
+    impl->interval_imu_sum_accel[0] = 0.0f;
+    impl->interval_imu_sum_accel[1] = 0.0f;
+    impl->interval_imu_sum_accel[2] = 0.0f;
+    impl->interval_imu_count = 0U;
+  }
+
+  if (!impl->mount_ready) {
+    impl->bootstrap_imu_count = 0U;
+    return sf_update_from_fusion(impl, prev_mount_ready != impl->mount_ready, false);
+  }
+
+  if (!impl->ekf_initialized) {
+    sf_initialize_ekf_from_gnss(&impl->ekf, sample, impl->cfg.yaw_init_speed_mps);
+    impl->ekf_initialized = true;
+    ekf_initialized_now = true;
+  } else {
+    sf_ekf_fuse_gps(&impl->ekf, sample);
+  }
+
+  impl->bootstrap_imu_count = 0U;
+  return sf_update_from_fusion(impl, prev_mount_ready != impl->mount_ready, ekf_initialized_now);
+}
+
+const sf_ekf_t *sf_fusion_ekf(const sf_sensor_fusion_t *fusion) {
+  return fusion != NULL ? &sf_impl_const(fusion)->ekf : NULL;
+}
+
+const sf_align_t *sf_fusion_align(const sf_sensor_fusion_t *fusion) {
+  return fusion != NULL ? &sf_impl_const(fusion)->align_rt.state : NULL;
+}
+
+bool sf_fusion_mount_ready(const sf_sensor_fusion_t *fusion) {
+  return fusion != NULL && sf_impl_const(fusion)->mount_ready;
+}
+
+bool sf_fusion_mount_q_vb(const sf_sensor_fusion_t *fusion, float out_q_vb[4]) {
+  const sf_sensor_fusion_impl_t *impl;
+
+  if (fusion == NULL || out_q_vb == NULL) {
+    return false;
+  }
+  impl = sf_impl_const(fusion);
+  if (!impl->mount_q_vb_valid) {
+    return false;
+  }
+  memcpy(out_q_vb, impl->mount_q_vb, sizeof(impl->mount_q_vb));
+  return true;
+}
+
+static sf_update_t sf_update_from_fusion(const sf_sensor_fusion_impl_t *fusion,
+                                         bool mount_ready_changed,
+                                         bool ekf_initialized_now) {
+  sf_update_t out;
+  memset(&out, 0, sizeof(out));
+  if (fusion == NULL) {
+    return out;
+  }
+
+  out.mount_ready = fusion->mount_ready;
+  out.mount_ready_changed = mount_ready_changed;
+  out.ekf_initialized = fusion->ekf_initialized;
+  out.ekf_initialized_now = ekf_initialized_now;
+  out.mount_q_vb_valid = fusion->mount_q_vb_valid;
+  if (fusion->mount_q_vb_valid) {
+    memcpy(out.mount_q_vb, fusion->mount_q_vb, sizeof(out.mount_q_vb));
+  }
+  return out;
+}
+
+static void sf_initialize_ekf_from_gnss(sf_ekf_t *ekf,
+                                        const sf_gnss_sample_t *gnss,
+                                        float yaw_init_speed_mps) {
+  float vel_var;
+  float speed_h;
+  float yaw_rad;
+  sf_predict_noise_t noise = ekf->noise;
+
+  sf_ekf_init(ekf, NULL, &noise);
+
+  ekf->state.pn = gnss->pos_ned_m[0];
+  ekf->state.pe = gnss->pos_ned_m[1];
+  ekf->state.pd = gnss->pos_ned_m[2];
+  ekf->state.vn = gnss->vel_ned_mps[0];
+  ekf->state.ve = gnss->vel_ned_mps[1];
+  ekf->state.vd = gnss->vel_ned_mps[2];
+
+  speed_h = sqrtf(gnss->vel_ned_mps[0] * gnss->vel_ned_mps[0] +
+                  gnss->vel_ned_mps[1] * gnss->vel_ned_mps[1]);
+  if (gnss->heading_valid) {
+    yaw_rad = gnss->heading_rad;
+  } else if (speed_h >= (yaw_init_speed_mps > 1.0f ? yaw_init_speed_mps : 1.0f)) {
+    yaw_rad = atan2f(gnss->vel_ned_mps[1], gnss->vel_ned_mps[0]);
+  } else {
+    yaw_rad = 0.0f;
+  }
+  sf_set_state_yaw_only(&ekf->state, yaw_rad);
+
+  {
+    const float att_sigma_rad = 2.0f * 3.1415927f / 180.0f;
+    const float quat_var = 0.25f * att_sigma_rad * att_sigma_rad;
+    for (int i = 0; i < 4; ++i) {
+      ekf->p[i][i] = quat_var;
+    }
+  }
+
+  vel_var = gnss->vel_std_mps[0];
+  if (gnss->vel_std_mps[1] > vel_var) {
+    vel_var = gnss->vel_std_mps[1];
+  }
+  if (gnss->vel_std_mps[2] > vel_var) {
+    vel_var = gnss->vel_std_mps[2];
+  }
+  if (vel_var < 0.2f) {
+    vel_var = 0.2f;
+  }
+  vel_var *= vel_var;
+  ekf->p[4][4] = vel_var;
+  ekf->p[5][5] = vel_var;
+  ekf->p[6][6] = vel_var;
+
+  ekf->p[7][7] = (gnss->pos_std_m[0] > 0.5f ? gnss->pos_std_m[0] : 0.5f);
+  ekf->p[8][8] = (gnss->pos_std_m[1] > 0.5f ? gnss->pos_std_m[1] : 0.5f);
+  ekf->p[9][9] = (gnss->pos_std_m[2] > 0.5f ? gnss->pos_std_m[2] : 0.5f);
+  ekf->p[7][7] *= ekf->p[7][7];
+  ekf->p[8][8] *= ekf->p[8][8];
+  ekf->p[9][9] *= ekf->p[9][9];
+}
+
+static void sf_set_state_yaw_only(sf_ekf_state_t *state, float yaw_rad) {
+  const float half = 0.5f * yaw_rad;
+  state->q0 = cosf(half);
+  state->q1 = 0.0f;
+  state->q2 = 0.0f;
+  state->q3 = sinf(half);
+}
+
+static void sf_clamp_ekf_biases(sf_ekf_t *ekf, double dt_s) {
+  const float dt = (float)(dt_s > 1.0e-3 ? dt_s : 1.0e-3);
+  const float max_gyro_bias_da = (1.5f * 3.1415927f / 180.0f) * dt;
+  const float max_accel_bias_dv = 1.5f * dt;
+
+  if (ekf->state.dax_b > max_gyro_bias_da) ekf->state.dax_b = max_gyro_bias_da;
+  if (ekf->state.dax_b < -max_gyro_bias_da) ekf->state.dax_b = -max_gyro_bias_da;
+  if (ekf->state.day_b > max_gyro_bias_da) ekf->state.day_b = max_gyro_bias_da;
+  if (ekf->state.day_b < -max_gyro_bias_da) ekf->state.day_b = -max_gyro_bias_da;
+  if (ekf->state.daz_b > max_gyro_bias_da) ekf->state.daz_b = max_gyro_bias_da;
+  if (ekf->state.daz_b < -max_gyro_bias_da) ekf->state.daz_b = -max_gyro_bias_da;
+
+  if (ekf->state.dvx_b > max_accel_bias_dv) ekf->state.dvx_b = max_accel_bias_dv;
+  if (ekf->state.dvx_b < -max_accel_bias_dv) ekf->state.dvx_b = -max_accel_bias_dv;
+  if (ekf->state.dvy_b > max_accel_bias_dv) ekf->state.dvy_b = max_accel_bias_dv;
+  if (ekf->state.dvy_b < -max_accel_bias_dv) ekf->state.dvy_b = -max_accel_bias_dv;
+  if (ekf->state.dvz_b > max_accel_bias_dv) ekf->state.dvz_b = max_accel_bias_dv;
+  if (ekf->state.dvz_b < -max_accel_bias_dv) ekf->state.dvz_b = -max_accel_bias_dv;
+}
+
+static void sf_quat_to_rotmat(const float q[4], float r[3][3]) {
+  float n2 = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
+  float inv = n2 > 1.0e-9f ? 1.0f / sqrtf(n2) : 1.0f;
+  float q0 = q[0] * inv;
+  float q1 = q[1] * inv;
+  float q2 = q[2] * inv;
+  float q3 = q[3] * inv;
+
+  r[0][0] = 1.0f - 2.0f * (q2 * q2 + q3 * q3);
+  r[0][1] = 2.0f * (q1 * q2 - q0 * q3);
+  r[0][2] = 2.0f * (q1 * q3 + q0 * q2);
+  r[1][0] = 2.0f * (q1 * q2 + q0 * q3);
+  r[1][1] = 1.0f - 2.0f * (q1 * q1 + q3 * q3);
+  r[1][2] = 2.0f * (q2 * q3 - q0 * q1);
+  r[2][0] = 2.0f * (q1 * q3 - q0 * q2);
+  r[2][1] = 2.0f * (q2 * q3 + q0 * q1);
+  r[2][2] = 1.0f - 2.0f * (q1 * q1 + q2 * q2);
+}
+
+static void sf_transpose3(const float in[3][3], float out[3][3]) {
+  float tmp[3][3];
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j) {
+      tmp[i][j] = in[j][i];
+    }
+  }
+  memcpy(out, tmp, sizeof(tmp));
+}
+
+static void sf_mat3_vec(const float m[3][3], const float v[3], float out[3]) {
+  for (int i = 0; i < 3; ++i) {
+    out[i] = m[i][0] * v[0] + m[i][1] * v[1] + m[i][2] * v[2];
+  }
+}
+
+static float sf_norm3(const float v[3]) {
+  return sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+}
+
+static float sf_horizontal_speed(const float v_ned_mps[3]) {
+  (void)v_ned_mps[2];
+  return sqrtf(v_ned_mps[0] * v_ned_mps[0] + v_ned_mps[1] * v_ned_mps[1]);
+}
+
+static float sf_interp_speed(const sf_internal_bootstrap_gnss_state_t *prev,
+                             const sf_gnss_sample_t *curr,
+                             double t_s) {
+  float speed_prev = sf_horizontal_speed(prev->vel_ned_mps);
+  float speed_curr = sf_horizontal_speed(curr->vel_ned_mps);
+  double dt = curr->t_s - prev->t_s;
+  float alpha;
+  if (dt <= 1.0e-6) {
+    return speed_curr;
+  }
+  alpha = (float)((t_s - prev->t_s) / dt);
+  if (alpha < 0.0f) alpha = 0.0f;
+  if (alpha > 1.0f) alpha = 1.0f;
+  return speed_prev + alpha * (speed_curr - speed_prev);
+}
+
+static float sf_ema_update(bool *valid, float *prev, float sample, float alpha) {
+  if (alpha < 1.0e-4f) alpha = 1.0e-4f;
+  if (alpha > 1.0f) alpha = 1.0f;
+  if (*valid) {
+    *prev = (1.0f - alpha) * (*prev) + alpha * sample;
+  } else {
+    *prev = sample;
+    *valid = true;
+  }
+  return *prev;
+}
+
+static bool sf_bootstrap_update(sf_sensor_fusion_impl_t *impl,
+                                const float accel_b[3],
+                                const float gyro_radps[3],
+                                float speed_mps) {
+  float gyro_norm = sf_norm3(gyro_radps);
+  float accel_err = fabsf(sf_norm3(accel_b) - SF_GRAVITY_MSS);
+  float gyro_ema = sf_ema_update(&impl->bootstrap_gyro_ema_valid,
+                                 &impl->bootstrap_gyro_ema,
+                                 gyro_norm,
+                                 impl->cfg.bootstrap.ema_alpha);
+  float accel_ema = sf_ema_update(&impl->bootstrap_accel_err_ema_valid,
+                                  &impl->bootstrap_accel_err_ema,
+                                  accel_err,
+                                  impl->cfg.bootstrap.ema_alpha);
+  float speed_ema = sf_ema_update(&impl->bootstrap_speed_ema_valid,
+                                  &impl->bootstrap_speed_ema,
+                                  speed_mps,
+                                  impl->cfg.bootstrap.ema_alpha);
+  bool stationary = speed_ema <= impl->cfg.bootstrap.max_speed_mps &&
+                    gyro_ema <= impl->cfg.bootstrap.max_gyro_radps &&
+                    accel_ema <= impl->cfg.bootstrap.max_accel_norm_err_mps2;
+
+  if (stationary) {
+    if (impl->bootstrap_stationary_count < 400U) {
+      memcpy(impl->stationary_accel_buffer[impl->bootstrap_stationary_count],
+             accel_b,
+             sizeof(impl->stationary_accel_buffer[0]));
+      impl->bootstrap_stationary_count++;
+    }
+  } else {
+    impl->bootstrap_stationary_count = 0U;
+  }
+  return impl->bootstrap_stationary_count >= impl->cfg.bootstrap.stationary_samples;
+}
+
+static bool sf_take_interval_summary(sf_sensor_fusion_impl_t *impl,
+                                     double t0_s,
+                                     double t1_s,
+                                     sf_align_window_summary_t *summary_out) {
+  float inv_n;
+  if (impl->interval_imu_count == 0U || summary_out == NULL) {
+    return false;
+  }
+  memset(summary_out, 0, sizeof(*summary_out));
+  summary_out->dt = (float)(t1_s - t0_s);
+  if (summary_out->dt < 1.0e-3f) {
+    summary_out->dt = 1.0e-3f;
+  }
+  inv_n = 1.0f / (float)impl->interval_imu_count;
+  summary_out->mean_gyro_b[0] = impl->interval_imu_sum_gyro[0] * inv_n;
+  summary_out->mean_gyro_b[1] = impl->interval_imu_sum_gyro[1] * inv_n;
+  summary_out->mean_gyro_b[2] = impl->interval_imu_sum_gyro[2] * inv_n;
+  summary_out->mean_accel_b[0] = impl->interval_imu_sum_accel[0] * inv_n;
+  summary_out->mean_accel_b[1] = impl->interval_imu_sum_accel[1] * inv_n;
+  summary_out->mean_accel_b[2] = impl->interval_imu_sum_accel[2] * inv_n;
+  memcpy(summary_out->gnss_vel_prev_n,
+         impl->bootstrap_prev_gnss.vel_ned_mps,
+         sizeof(summary_out->gnss_vel_prev_n));
+  memcpy(summary_out->gnss_vel_curr_n,
+         impl->last_gnss.vel_ned_mps,
+         sizeof(summary_out->gnss_vel_curr_n));
+  impl->interval_imu_sum_gyro[0] = 0.0f;
+  impl->interval_imu_sum_gyro[1] = 0.0f;
+  impl->interval_imu_sum_gyro[2] = 0.0f;
+  impl->interval_imu_sum_accel[0] = 0.0f;
+  impl->interval_imu_sum_accel[1] = 0.0f;
+  impl->interval_imu_sum_accel[2] = 0.0f;
+  impl->interval_imu_count = 0U;
+  return true;
+}

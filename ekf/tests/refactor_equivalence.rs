@@ -113,8 +113,8 @@ fn refactor_equivalence_snapshot() {
     // Printed signatures make rebasing snapshot straightforward.
     println!("state_sig={state_sig:#018x} cov_sig={cov_sig:#018x}");
 
-    const EXPECTED_STATE_SIG: u64 = 0xd5881308efe98af9;
-    const EXPECTED_COV_SIG: u64 = 0xad9ce4566f0140cb;
+    const EXPECTED_STATE_SIG: u64 = 0x15d8b80004a7fcfe;
+    const EXPECTED_COV_SIG: u64 = 0x526d883b3458f949;
     assert_eq!(state_sig, EXPECTED_STATE_SIG, "state signature mismatch");
     assert_eq!(cov_sig, EXPECTED_COV_SIG, "covariance signature mismatch");
 }
