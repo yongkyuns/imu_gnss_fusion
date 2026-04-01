@@ -1,5 +1,5 @@
-use ekf_rs::align::GRAVITY_MPS2;
-use ekf_rs::ekf::{
+use sensor_fusion::align::GRAVITY_MPS2;
+use sensor_fusion::ekf::{
     Ekf, GpsData, ImuSample, PredictNoise, ekf_fuse_body_vel, ekf_fuse_gps, ekf_predict,
     ekf_set_predict_noise,
 };
@@ -943,7 +943,7 @@ fn build_align_mount_events(
         return Vec::new();
     }
 
-    let cfg = ekf_rs::align::AlignConfig::default();
+    let cfg = sensor_fusion::align::AlignConfig::default();
     let bootstrap_cfg = AlignBootstrapConfig {
         ema_alpha: 0.05,
         max_speed_mps: 0.35,

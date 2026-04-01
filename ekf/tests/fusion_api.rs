@@ -1,4 +1,4 @@
-use ekf_rs::fusion::{FusionConfig, FusionGnssSample, FusionImuSample, SensorFusion};
+use sensor_fusion::fusion::{FusionConfig, FusionGnssSample, FusionImuSample, SensorFusion};
 
 fn gnss_sample(t_s: f64) -> FusionGnssSample {
     FusionGnssSample {

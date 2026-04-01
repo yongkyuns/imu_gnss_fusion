@@ -1,4 +1,4 @@
-use ekf_rs::ekf::Ekf;
+use sensor_fusion::ekf::Ekf;
 
 pub fn normalize_heading_deg(mut deg: f64) -> f64 {
     deg %= 360.0;
@@ -88,7 +88,7 @@ pub fn quat_rpy_deg(q0: f32, q1: f32, q2: f32, q3: f32) -> (f64, f64, f64) {
     )
 }
 
-pub fn set_quat_yaw_only(state: &mut ekf_rs::ekf::EkfState, yaw_rad: f64) {
+pub fn set_quat_yaw_only(state: &mut sensor_fusion::ekf::EkfState, yaw_rad: f64) {
     let half = 0.5 * yaw_rad;
     state.q0 = half.cos() as f32;
     state.q1 = 0.0;

@@ -1,11 +1,11 @@
 [package]
-name = "ekf-rs"
+name = "sensor-fusion"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
 
 [lib]
-name = "ekf_rs"
+name = "sensor_fusion"
 path = "src/lib.rs"
 
 [dependencies]

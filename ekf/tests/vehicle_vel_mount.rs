@@ -1,4 +1,4 @@
-use ekf_rs::ekf::{Ekf, ekf_fuse_vehicle_vel};
+use sensor_fusion::ekf::{Ekf, ekf_fuse_vehicle_vel};
 
 fn quat_from_yaw(yaw_rad: f32) -> [f32; 4] {
     let half = 0.5 * yaw_rad;

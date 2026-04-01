@@ -1,4 +1,4 @@
-use ekf_rs::ekf::{
+use sensor_fusion::ekf::{
     Ekf, EkfDebug, EkfState, GpsData, ImuSample, N_STATES, PredictNoise, ekf_fuse_gps, ekf_init,
     ekf_predict,
 };

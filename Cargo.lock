@@ -1663,13 +1663,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 
 [[package]]
-name = "ekf-rs"
-version = "0.1.0"
-dependencies = [
- "libm",
-]
-
-[[package]]
 name = "emath"
 version = "0.33.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5348,6 +5341,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d767eb0aabc880b29956c35734170f26ed551a859dbd361d140cdbeca61ab1e2"
 
 [[package]]
+name = "sensor-fusion"
+version = "0.1.0"
+dependencies = [
+ "libm",
+]
+
+[[package]]
 name = "serde"
 version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5524,10 +5524,10 @@ dependencies = [
  "eframe",
  "egui",
  "egui_plot",
- "ekf-rs",
  "nalgebra 0.33.2",
  "polars",
  "rust_robotics_algo",
+ "sensor-fusion",
  "serde",
  "serde_json",
  "serialport",

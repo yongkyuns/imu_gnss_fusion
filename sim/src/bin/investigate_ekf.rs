@@ -2,7 +2,7 @@ use std::{f64::consts::PI, fs::File, io::Read, path::PathBuf};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use ekf_rs::ekf::{
+use sensor_fusion::ekf::{
     Ekf, GpsData, ImuSample, PredictNoise, ekf_fuse_body_vel, ekf_fuse_gps, ekf_predict,
     ekf_set_predict_noise,
 };

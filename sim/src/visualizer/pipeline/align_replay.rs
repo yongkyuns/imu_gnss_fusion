@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use ekf_rs::align::{
+use sensor_fusion::align::{
     Align, AlignConfig, AlignUpdateTrace, AlignWindowSummary, GRAVITY_MPS2,
 };
 
