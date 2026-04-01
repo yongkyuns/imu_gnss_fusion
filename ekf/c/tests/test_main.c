@@ -179,7 +179,7 @@ static void test_sensor_fusion_external_mode_initializes_and_predicts(void) {
 }
 
 static void test_stationary_bootstrap_identity_mount(void) {
-  float samples[4][3] = {
+  const float samples[4][3] = {
       {0.0f, 0.0f, -9.80665f},
       {0.0f, 0.0f, -9.80665f},
       {0.0f, 0.0f, -9.80665f},
@@ -200,13 +200,16 @@ static void test_stationary_bootstrap_identity_mount(void) {
 static void test_align_initialize_from_stationary_sets_mount(void) {
   sf_align_runtime_t align_rt;
   sf_align_config_t cfg;
-  float samples[8][3];
-
-  for (int i = 0; i < 8; ++i) {
-    samples[i][0] = 0.0f;
-    samples[i][1] = 0.0f;
-    samples[i][2] = -9.80665f;
-  }
+  const float samples[8][3] = {
+      {0.0f, 0.0f, -9.80665f},
+      {0.0f, 0.0f, -9.80665f},
+      {0.0f, 0.0f, -9.80665f},
+      {0.0f, 0.0f, -9.80665f},
+      {0.0f, 0.0f, -9.80665f},
+      {0.0f, 0.0f, -9.80665f},
+      {0.0f, 0.0f, -9.80665f},
+      {0.0f, 0.0f, -9.80665f},
+  };
 
   sf_align_config_default(&cfg);
   sf_align_init(&align_rt, &cfg);
@@ -223,15 +226,18 @@ static void test_align_update_window_reduces_yaw_sigma_on_straight_motion(void) 
   sf_align_config_t cfg;
   sf_align_window_summary_t window = {0};
   sf_align_update_trace_t trace;
-  float samples[8][3];
+  const float samples[8][3] = {
+      {0.0f, 0.0f, -9.80665f},
+      {0.0f, 0.0f, -9.80665f},
+      {0.0f, 0.0f, -9.80665f},
+      {0.0f, 0.0f, -9.80665f},
+      {0.0f, 0.0f, -9.80665f},
+      {0.0f, 0.0f, -9.80665f},
+      {0.0f, 0.0f, -9.80665f},
+      {0.0f, 0.0f, -9.80665f},
+  };
   float yaw_sigma_before;
   float yaw_sigma_after;
-
-  for (int i = 0; i < 8; ++i) {
-    samples[i][0] = 0.0f;
-    samples[i][1] = 0.0f;
-    samples[i][2] = -9.80665f;
-  }
 
   sf_align_config_default(&cfg);
   sf_align_init(&align_rt, &cfg);

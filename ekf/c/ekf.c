@@ -89,7 +89,7 @@ void ekf_predict(ekf_t *ekf, const imu_sample_t *imu, ekf_debug_t *debug_out) {
   normalize_quat((float *)&ekf->state);
 
   float nextP[N_STATES][N_STATES] = {{0}};
-  const float (*P)[N_STATES] = ekf->P;
+  float (*P)[N_STATES] = ekf->P;
 
 #include "generated/covariance_generated.c"
 
@@ -153,7 +153,7 @@ static void fuse_measurement(ekf_t *ekf, float innovation,
 
 static void ekf_fuse_gps_pos_n(ekf_t *ekf, float pos_n, float R_POS_N) {
   const float pn = ekf->state.pn;
-  const float (*P)[N_STATES] = ekf->P;
+  float (*P)[N_STATES] = ekf->P;
 
   const float innovation = pos_n - pn;
 
@@ -166,7 +166,7 @@ static void ekf_fuse_gps_pos_n(ekf_t *ekf, float pos_n, float R_POS_N) {
 
 static void ekf_fuse_gps_pos_e(ekf_t *ekf, float pos_e, float R_POS_E) {
   const float pe = ekf->state.pe;
-  const float (*P)[N_STATES] = ekf->P;
+  float (*P)[N_STATES] = ekf->P;
 
   const float innovation = pos_e - pe;
 
@@ -179,7 +179,7 @@ static void ekf_fuse_gps_pos_e(ekf_t *ekf, float pos_e, float R_POS_E) {
 
 static void ekf_fuse_gps_pos_d(ekf_t *ekf, float pos_d, float R_POS_D) {
   const float pd = ekf->state.pd;
-  const float (*P)[N_STATES] = ekf->P;
+  float (*P)[N_STATES] = ekf->P;
 
   const float innovation = pos_d - pd;
 
@@ -192,7 +192,7 @@ static void ekf_fuse_gps_pos_d(ekf_t *ekf, float pos_d, float R_POS_D) {
 
 static void ekf_fuse_gps_vel_n(ekf_t *ekf, float vel_n, float R_VEL_N) {
   const float vn = ekf->state.vn;
-  const float (*P)[N_STATES] = ekf->P;
+  float (*P)[N_STATES] = ekf->P;
 
   const float innovation = vel_n - vn;
 
@@ -205,7 +205,7 @@ static void ekf_fuse_gps_vel_n(ekf_t *ekf, float vel_n, float R_VEL_N) {
 
 static void ekf_fuse_gps_vel_e(ekf_t *ekf, float vel_e, float R_VEL_E) {
   const float ve = ekf->state.ve;
-  const float (*P)[N_STATES] = ekf->P;
+  float (*P)[N_STATES] = ekf->P;
 
   const float innovation = vel_e - ve;
 
@@ -218,7 +218,7 @@ static void ekf_fuse_gps_vel_e(ekf_t *ekf, float vel_e, float R_VEL_E) {
 
 static void ekf_fuse_gps_vel_d(ekf_t *ekf, float vel_d, float R_VEL_D) {
   const float vd = ekf->state.vd;
-  const float (*P)[N_STATES] = ekf->P;
+  float (*P)[N_STATES] = ekf->P;
 
   const float innovation = vel_d - vd;
 
@@ -233,7 +233,7 @@ static void ekf_fuse_body_vel_y(ekf_t *ekf, const float R_BODY_VEL) {
   const float q0 = ekf->state.q0, q1 = ekf->state.q1, q2 = ekf->state.q2,
               q3 = ekf->state.q3;
   const float vn = ekf->state.vn, ve = ekf->state.ve, vd = ekf->state.vd;
-  const float (*P)[N_STATES] = ekf->P;
+  float (*P)[N_STATES] = ekf->P;
 
   const float R_T_10 = 2.0f * (q1 * q2 - q0 * q3);
   const float R_T_11 = 1.0f - 2.0f * (q1 * q1 + q3 * q3);
@@ -252,7 +252,7 @@ static void ekf_fuse_body_vel_z(ekf_t *ekf, const float R_BODY_VEL) {
   const float q0 = ekf->state.q0, q1 = ekf->state.q1, q2 = ekf->state.q2,
               q3 = ekf->state.q3;
   const float vn = ekf->state.vn, ve = ekf->state.ve, vd = ekf->state.vd;
-  const float (*P)[N_STATES] = ekf->P;
+  float (*P)[N_STATES] = ekf->P;
 
   const float R_T_20 = 2.0f * (q1 * q3 + q0 * q2);
   const float R_T_21 = 2.0f * (q2 * q3 - q0 * q1);
