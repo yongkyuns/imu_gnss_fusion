@@ -25,14 +25,7 @@ pub fn build_plot_data(
     let timeline = build_master_timeline(&frames);
     let ekf_data =
         build_ekf_compare_traces(&frames, &timeline, ekf_imu_source, ekf_cfg, gnss_outages);
-    let align_data = build_align_compare_traces(
-        &frames,
-        &timeline,
-        ImuReplayConfig {
-            lpf_cutoff_hz: ekf_cfg.predict_imu_lpf_cutoff_hz,
-            decimation: ekf_cfg.predict_imu_decimation,
-        },
-    );
+    let align_data = build_align_compare_traces(&frames, &timeline, ImuReplayConfig::default());
     let out = build_signal_traces(&frames, &timeline, ekf_data, align_data);
     (out, timeline.has_itow)
 }

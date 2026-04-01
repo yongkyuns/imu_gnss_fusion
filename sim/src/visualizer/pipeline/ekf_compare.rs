@@ -247,14 +247,7 @@ pub fn build_ekf_compare_traces(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     let align_events = if ekf_imu_source == EkfImuSource::Align {
-        build_align_mount_events(
-            frames,
-            tl,
-            ImuReplayConfig {
-                lpf_cutoff_hz: cfg.predict_imu_lpf_cutoff_hz,
-                decimation: cfg.predict_imu_decimation,
-            },
-        )
+        build_align_mount_events(frames, tl, ImuReplayConfig::default())
     } else {
         Vec::new()
     };
@@ -530,11 +523,12 @@ pub fn build_ekf_compare_traces(
                 predict_accel_sum[1] * inv_block_len,
                 predict_accel_sum[2] * inv_block_len,
             ];
+            let block_len_sq = block_len * block_len;
             let scaled_predict_noise = PredictNoise {
-                gyro_var: base_predict_noise.gyro_var / block_len,
-                accel_var: base_predict_noise.accel_var / block_len,
-                gyro_bias_rw_var: base_predict_noise.gyro_bias_rw_var / block_len,
-                accel_bias_rw_var: base_predict_noise.accel_bias_rw_var / block_len,
+                gyro_var: base_predict_noise.gyro_var / block_len_sq,
+                accel_var: base_predict_noise.accel_var / block_len_sq,
+                gyro_bias_rw_var: base_predict_noise.gyro_bias_rw_var / block_len_sq,
+                accel_bias_rw_var: base_predict_noise.accel_bias_rw_var / block_len_sq,
             };
             ekf_set_predict_noise(&mut ekf, scaled_predict_noise);
             let imu = ImuSample {
@@ -549,7 +543,7 @@ pub fn build_ekf_compare_traces(
             ekf_predict(&mut ekf, &imu, None);
             clamp_ekf_biases(&mut ekf, pred_dt);
 
-            ekf_fuse_body_vel(&mut ekf, cfg.r_body_vel / block_len.max(1.0));
+            ekf_fuse_body_vel(&mut ekf, cfg.r_body_vel / block_len_sq.max(1.0));
             clamp_ekf_biases(&mut ekf, pred_dt);
             ekf_set_predict_noise(&mut ekf, base_predict_noise);
 

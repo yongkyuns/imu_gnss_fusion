@@ -285,11 +285,12 @@ fn run_decimated(
         }
 
         let k = block_count as f32;
+        let k_sq = k * k;
         let scaled_noise = PredictNoise {
-            gyro_var: base_noise.gyro_var / k,
-            accel_var: base_noise.accel_var / k,
-            gyro_bias_rw_var: base_noise.gyro_bias_rw_var / k,
-            accel_bias_rw_var: base_noise.accel_bias_rw_var / k,
+            gyro_var: base_noise.gyro_var / k_sq,
+            accel_var: base_noise.accel_var / k_sq,
+            gyro_bias_rw_var: base_noise.gyro_bias_rw_var / k_sq,
+            accel_bias_rw_var: base_noise.accel_bias_rw_var / k_sq,
         };
         ekf_set_predict_noise(&mut ekf, scaled_noise);
         let imu = ImuSample {
@@ -303,7 +304,7 @@ fn run_decimated(
         };
         ekf_predict(&mut ekf, &imu, None);
         if scenario.use_body_vel {
-            ekf_fuse_body_vel(&mut ekf, r_body_vel / k);
+            ekf_fuse_body_vel(&mut ekf, r_body_vel / k_sq);
         }
         ekf_set_predict_noise(&mut ekf, base_noise);
 

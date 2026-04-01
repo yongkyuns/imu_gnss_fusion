@@ -81,7 +81,7 @@ fn main() -> Result<()> {
         tmax
     );
     eprintln!(
-        "[profile] ekf_predict_imu_decimation={} ekf_predict_imu_lpf_cutoff_hz={}",
+        "[profile] ekf-only predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={}",
         ekf_cfg.predict_imu_decimation,
         ekf_cfg
             .predict_imu_lpf_cutoff_hz
