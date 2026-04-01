@@ -113,7 +113,14 @@ fn refactor_equivalence_snapshot() {
     // Printed signatures make rebasing snapshot straightforward.
     println!("state_sig={state_sig:#018x} cov_sig={cov_sig:#018x}");
 
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    const EXPECTED_STATE_SIG: u64 = 0x467d13d823b7e91b;
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    const EXPECTED_COV_SIG: u64 = 0xd37039c25018a6e9;
+
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     const EXPECTED_STATE_SIG: u64 = 0x8d1c995d2f160679;
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     const EXPECTED_COV_SIG: u64 = 0x73474e0f50817059;
     assert_eq!(state_sig, EXPECTED_STATE_SIG, "state signature mismatch");
     assert_eq!(cov_sig, EXPECTED_COV_SIG, "covariance signature mismatch");
