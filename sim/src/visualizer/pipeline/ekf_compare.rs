@@ -1,4 +1,4 @@
-use align_rs::align::{Align, AlignConfig, AlignWindowSummary, GRAVITY_MPS2};
+use align_rs::align::GRAVITY_MPS2;
 use ekf_rs::ekf::{
     Ekf, GpsData, ImuSample, PredictNoise, ekf_fuse_body_vel, ekf_fuse_gps, ekf_predict,
     ekf_set_predict_noise,
@@ -14,6 +14,7 @@ use super::super::math::{
     normalize_heading_deg, quat_rpy_deg, rad2deg, rot_zyx, set_quat_yaw_only,
 };
 use super::super::model::{AlgEvent, EkfImuSource, HeadingSample, ImuPacket, NavAttEvent, Trace};
+use super::align_replay::{BootstrapConfig as AlignBootstrapConfig, build_align_replay};
 use super::tag_time::fit_tag_ms_map;
 use super::timebase::MasterTimeline;
 
@@ -59,23 +60,6 @@ pub struct GnssOutageConfig {
     pub count: usize,
     pub duration_s: f64,
     pub seed: u64,
-}
-
-#[derive(Clone, Copy)]
-struct BootstrapConfig {
-    ema_alpha: f32,
-    max_speed_mps: f32,
-    stationary_samples: usize,
-    max_gyro_radps: f32,
-    max_accel_norm_err_mps2: f32,
-}
-
-struct BootstrapDetector {
-    cfg: BootstrapConfig,
-    gyro_ema: Option<f32>,
-    accel_err_ema: Option<f32>,
-    speed_ema: Option<f32>,
-    stationary_accel: Vec<[f32; 3]>,
 }
 
 pub fn build_ekf_compare_traces(
@@ -257,7 +241,7 @@ pub fn build_ekf_compare_traces(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     let align_events = if ekf_imu_source == EkfImuSource::Align {
-        build_align_mount_events(&imu_packets, &nav_events)
+        build_align_mount_events(frames, tl)
     } else {
         Vec::new()
     };
@@ -458,6 +442,26 @@ pub fn build_ekf_compare_traces(
                 initialize_ekf_from_gnss(&mut ekf, nav, ned);
                 ekf_initialized = true;
                 yaw_initialized_from_vel = true;
+                append_ekf_sample(
+                    &ekf,
+                    t_ms,
+                    rel_s,
+                    ref_lat,
+                    ref_lon,
+                    ref_h,
+                    &mut cmp_pos_n,
+                    &mut cmp_pos_e,
+                    &mut cmp_pos_d,
+                    &mut cmp_vel_n,
+                    &mut cmp_vel_e,
+                    &mut cmp_vel_d,
+                    &mut cmp_att_roll,
+                    &mut cmp_att_pitch,
+                    &mut cmp_att_yaw,
+                    &mut cov_diag,
+                    &mut map_ekf,
+                    &mut map_heading,
+                );
                 initialized_this_pkt = true;
                 break;
             }
@@ -931,141 +935,41 @@ impl Lcg64 {
     }
 }
 
-impl BootstrapDetector {
-    fn new(cfg: BootstrapConfig) -> Self {
-        Self {
-            cfg,
-            gyro_ema: None,
-            accel_err_ema: None,
-            speed_ema: None,
-            stationary_accel: Vec::new(),
-        }
-    }
-
-    fn update(&mut self, accel_b: [f32; 3], gyro_radps: [f32; 3], speed_mps: f32) -> bool {
-        let gyro_norm = norm3(gyro_radps);
-        let accel_err = (norm3(accel_b) - GRAVITY_MPS2).abs();
-        self.gyro_ema = Some(ema_update(self.gyro_ema, gyro_norm, self.cfg.ema_alpha));
-        self.accel_err_ema = Some(ema_update(
-            self.accel_err_ema,
-            accel_err,
-            self.cfg.ema_alpha,
-        ));
-        self.speed_ema = Some(ema_update(self.speed_ema, speed_mps, self.cfg.ema_alpha));
-
-        let stationary = self.speed_ema.unwrap_or(speed_mps) <= self.cfg.max_speed_mps
-            && self.gyro_ema.unwrap_or(gyro_norm) <= self.cfg.max_gyro_radps
-            && self.accel_err_ema.unwrap_or(accel_err) <= self.cfg.max_accel_norm_err_mps2;
-
-        if stationary {
-            self.stationary_accel.push(accel_b);
-        } else {
-            self.stationary_accel.clear();
-        }
-        self.stationary_accel.len() >= self.cfg.stationary_samples
-    }
-}
-
 fn build_align_mount_events(
-    imu_packets: &[ImuPacket],
-    nav_events: &[(f64, NavPvtObs)],
+    frames: &[UbxFrame],
+    tl: &MasterTimeline,
 ) -> Vec<(f64, [f32; 4])> {
-    if imu_packets.is_empty() || nav_events.len() < 2 {
+    if tl.masters.is_empty() {
         return Vec::new();
     }
 
-    let cfg = AlignConfig::default();
-    let bootstrap_cfg = BootstrapConfig {
+    let cfg = align_rs::align::AlignConfig::default();
+    let bootstrap_cfg = AlignBootstrapConfig {
         ema_alpha: 0.05,
         max_speed_mps: 0.35,
         stationary_samples: 100,
         max_gyro_radps: cfg.max_stationary_gyro_radps,
         max_accel_norm_err_mps2: cfg.max_stationary_accel_norm_err_mps2,
     };
-
-    let mut align = Align::new(cfg);
-    let mut bootstrap = BootstrapDetector::new(bootstrap_cfg);
+    let replay = build_align_replay(frames, tl, cfg, bootstrap_cfg);
     let mut out = Vec::<(f64, [f32; 4])>::new();
-    let mut align_initialized = false;
-    let mut coarse_alignment_ready = false;
-    let mut scan_idx = 0usize;
-    let mut interval_start_idx = 0usize;
-    let mut prev_nav: Option<(f64, NavPvtObs)> = None;
-
-    for (tn, nav) in nav_events {
-        while scan_idx < imu_packets.len() && imu_packets[scan_idx].t_ms <= *tn {
-            let pkt = &imu_packets[scan_idx];
-            if !align_initialized {
-                let gyro_radps = [
-                    pkt.gx_dps.to_radians() as f32,
-                    pkt.gy_dps.to_radians() as f32,
-                    pkt.gz_dps.to_radians() as f32,
-                ];
-                let accel_b = [pkt.ax_mps2 as f32, pkt.ay_mps2 as f32, pkt.az_mps2 as f32];
-                let speed_mps = speed_for_bootstrap(prev_nav, (*tn, *nav), pkt.t_ms) as f32;
-                if bootstrap.update(accel_b, gyro_radps, speed_mps)
-                    && align
-                        .initialize_from_stationary(&bootstrap.stationary_accel, 0.0)
-                        .is_ok()
-                {
-                    align_initialized = true;
-                }
-            }
-            scan_idx += 1;
+    let mut ready = false;
+    for sample in replay.samples {
+        if sample.yaw_initialized {
+            ready = true;
         }
-
-        if let Some((t_prev, nav_prev)) = prev_nav {
-            let dt = ((*tn - t_prev) * 1.0e-3) as f32;
-            let interval_packets = &imu_packets[interval_start_idx..scan_idx];
-            if align_initialized && dt > 0.0 && !interval_packets.is_empty() {
-                let mut gyro_sum = [0.0_f32; 3];
-                let mut accel_sum = [0.0_f32; 3];
-                for pkt in interval_packets {
-                    gyro_sum[0] += pkt.gx_dps.to_radians() as f32;
-                    gyro_sum[1] += pkt.gy_dps.to_radians() as f32;
-                    gyro_sum[2] += pkt.gz_dps.to_radians() as f32;
-                    accel_sum[0] += pkt.ax_mps2 as f32;
-                    accel_sum[1] += pkt.ay_mps2 as f32;
-                    accel_sum[2] += pkt.az_mps2 as f32;
-                }
-                let inv_n = 1.0 / (interval_packets.len() as f32);
-                let window = AlignWindowSummary {
-                    dt,
-                    mean_gyro_b: [
-                        gyro_sum[0] * inv_n,
-                        gyro_sum[1] * inv_n,
-                        gyro_sum[2] * inv_n,
-                    ],
-                    mean_accel_b: [
-                        accel_sum[0] * inv_n,
-                        accel_sum[1] * inv_n,
-                        accel_sum[2] * inv_n,
-                    ],
-                    gnss_vel_prev_n: [
-                        nav_prev.vel_n_mps as f32,
-                        nav_prev.vel_e_mps as f32,
-                        nav_prev.vel_d_mps as f32,
-                    ],
-                    gnss_vel_curr_n: [
-                        nav.vel_n_mps as f32,
-                        nav.vel_e_mps as f32,
-                        nav.vel_d_mps as f32,
-                    ],
-                };
-                let (_, trace) = align.update_window_with_trace(&window);
-                if trace.coarse_alignment_ready {
-                    coarse_alignment_ready = true;
-                }
-                if coarse_alignment_ready {
-                    out.push((*tn, align.q_vb));
-                }
-            }
+        if ready {
+            out.push((
+                sample.t_ms,
+                [
+                    sample.q_align[0] as f32,
+                    sample.q_align[1] as f32,
+                    sample.q_align[2] as f32,
+                    sample.q_align[3] as f32,
+                ],
+            ));
         }
-
-        prev_nav = Some((*tn, *nav));
-        interval_start_idx = scan_idx;
     }
-
     out
 }
 
@@ -1108,39 +1012,59 @@ fn initialize_ekf_from_gnss(ekf: &mut Ekf, nav: NavPvtObs, ned: [f64; 3]) {
     ekf.p[9][9] = pos_d_var;
 }
 
-fn ema_update(prev: Option<f32>, sample: f32, alpha: f32) -> f32 {
-    let alpha = alpha.clamp(1.0e-4, 1.0);
-    match prev {
-        Some(prev) => (1.0 - alpha) * prev + alpha * sample,
-        None => sample,
-    }
-}
-
-fn speed_for_bootstrap(
-    prev_nav: Option<(f64, NavPvtObs)>,
-    curr_nav: (f64, NavPvtObs),
+#[allow(clippy::too_many_arguments)]
+fn append_ekf_sample(
+    ekf: &Ekf,
     t_ms: f64,
-) -> f64 {
-    let speed_curr = horizontal_speed(curr_nav.1);
-    let Some((t_prev, nav_prev)) = prev_nav else {
-        return speed_curr;
-    };
-    let speed_prev = horizontal_speed(nav_prev);
-    let dt = curr_nav.0 - t_prev;
-    if dt <= 1.0e-6 {
-        return speed_curr;
+    rel_s: impl Fn(f64) -> f64,
+    ref_lat: f64,
+    ref_lon: f64,
+    ref_h: f64,
+    cmp_pos_n: &mut Vec<[f64; 2]>,
+    cmp_pos_e: &mut Vec<[f64; 2]>,
+    cmp_pos_d: &mut Vec<[f64; 2]>,
+    cmp_vel_n: &mut Vec<[f64; 2]>,
+    cmp_vel_e: &mut Vec<[f64; 2]>,
+    cmp_vel_d: &mut Vec<[f64; 2]>,
+    cmp_att_roll: &mut Vec<[f64; 2]>,
+    cmp_att_pitch: &mut Vec<[f64; 2]>,
+    cmp_att_yaw: &mut Vec<[f64; 2]>,
+    cov_diag: &mut [Vec<[f64; 2]>; 16],
+    map_ekf: &mut Vec<[f64; 2]>,
+    map_heading: &mut Vec<HeadingSample>,
+) {
+    let t = rel_s(t_ms);
+    cmp_pos_n.push([t, ekf.state.pn as f64]);
+    cmp_pos_e.push([t, ekf.state.pe as f64]);
+    cmp_pos_d.push([t, ekf.state.pd as f64]);
+    cmp_vel_n.push([t, ekf.state.vn as f64]);
+    cmp_vel_e.push([t, ekf.state.ve as f64]);
+    cmp_vel_d.push([t, ekf.state.vd as f64]);
+    for (i, tr) in cov_diag.iter_mut().enumerate() {
+        tr.push([t, ekf.p[i][i] as f64]);
     }
-    let alpha = ((t_ms - t_prev) / dt).clamp(0.0, 1.0);
-    speed_prev + alpha * (speed_curr - speed_prev)
+    let (ekf_roll, ekf_pitch, ekf_yaw) =
+        quat_rpy_deg(ekf.state.q0, ekf.state.q1, ekf.state.q2, ekf.state.q3);
+    cmp_att_roll.push([t, ekf_roll]);
+    cmp_att_pitch.push([t, ekf_pitch]);
+    cmp_att_yaw.push([t, ekf_yaw]);
+    let (ekf_lat, ekf_lon, _ekf_h) = ned_to_lla_exact(
+        ekf.state.pn as f64,
+        ekf.state.pe as f64,
+        ekf.state.pd as f64,
+        ref_lat,
+        ref_lon,
+        ref_h,
+    );
+    map_ekf.push([ekf_lon, ekf_lat]);
+    map_heading.push(HeadingSample {
+        t_s: t,
+        lon_deg: ekf_lon,
+        lat_deg: ekf_lat,
+        yaw_deg: ekf_yaw,
+    });
 }
 
-fn horizontal_speed(nav: NavPvtObs) -> f64 {
-    (nav.vel_n_mps * nav.vel_n_mps + nav.vel_e_mps * nav.vel_e_mps).sqrt()
-}
-
-fn norm3(v: [f32; 3]) -> f32 {
-    (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
-}
 
 fn quat_to_rotmat_f64(q: [f64; 4]) -> [[f64; 3]; 3] {
     let n = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();

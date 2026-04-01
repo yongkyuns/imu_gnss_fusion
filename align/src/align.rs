@@ -3,7 +3,6 @@
 use std::collections::VecDeque;
 
 use crate::stationary_mount::bootstrap_vehicle_to_body_from_stationary;
-use nalgebra::{SMatrix, SVector};
 
 pub const ALIGN_N_STATES: usize = 3;
 pub const GRAVITY_MPS2: f32 = 9.80665;
@@ -43,7 +42,7 @@ impl Default for AlignConfig {
             r_gravity_std_mps2: 0.28,
             r_horiz_heading_std_rad: 1.0_f32.to_radians(), // Main longitudinal
             r_turn_heading_std_rad: 0.1_f32.to_radians(),  // Main lateral
-            r_turn_gyro_std_radps: 0.1_f32.to_radians(),
+            r_turn_gyro_std_radps: 0.01_f32.to_radians(),
             turn_gyro_yaw_scale: 0.0,
             gravity_lpf_alpha: 0.08,
             min_speed_mps: 3.0 / 3.6,
@@ -377,7 +376,7 @@ impl Align {
     ) -> f32 {
         let obs = align_obs(*q_vb, gyro_b, accel_b);
         let H_full = align_obs_jacobian(*q_vb, gyro_b, accel_b);
-        let H = SMatrix::<f32, 1, 3>::from_row_slice(&[
+        let h = [
             if state_mask[0] {
                 H_full[obs_idx][0]
             } else {
@@ -393,20 +392,33 @@ impl Align {
             } else {
                 0.0
             },
-        ]);
-        let y = SVector::<f32, 1>::from_row_slice(&[z - obs[obs_idx]]);
-        let P = mat3_to_smatrix(*p);
-        let S = H * P * H.transpose() + SMatrix::<f32, 1, 1>::from_diagonal_element(r_var);
-        let S_inv = S
-            .try_inverse()
-            .unwrap_or_else(SMatrix::<f32, 1, 1>::identity);
-        let K = P * H.transpose() * S_inv;
-        let dtheta = K * y;
-        Self::inject_small_angle_state(q_vb, [dtheta[0], dtheta[1], dtheta[2]]);
-        let I = SMatrix::<f32, 3, 3>::identity();
-        let P_new = (I - K * H) * P;
-        *p = smatrix_to_mat3(symmetrize3(P_new));
-        (y.transpose() * S_inv * y)[0]
+        ];
+        let y = z - obs[obs_idx];
+        let p64 = mat3_f32_to_f64(*p);
+        let h64 = [h[0] as f64, h[1] as f64, h[2] as f64];
+        let y64 = y as f64;
+        let ph = mat3_vec_f64(p64, h64);
+        let s = dot3_f64(h64, ph) + r_var as f64;
+        let s_inv = if s.abs() > 1.0e-20 { 1.0 / s } else { 1.0 };
+        let k = [ph[0] * s_inv, ph[1] * s_inv, ph[2] * s_inv];
+        let dtheta = [
+            (k[0] * y64) as f32,
+            (k[1] * y64) as f32,
+            (k[2] * y64) as f32,
+        ];
+        Self::inject_small_angle_state(q_vb, dtheta);
+
+        let mut i_minus_kh = [[0.0_f64; 3]; 3];
+        for i in 0..ALIGN_N_STATES {
+            for j in 0..ALIGN_N_STATES {
+                i_minus_kh[i][j] = -k[i] * h64[j];
+            }
+            i_minus_kh[i][i] += 1.0;
+        }
+        let mut p_new = mat3_mul_f64(i_minus_kh, p64);
+        symmetrize3_f64_in_place(&mut p_new);
+        *p = mat3_f64_to_f32(p_new);
+        (y64 * y64 * s_inv) as f32
     }
 
     fn apply_vehicle_yaw_angle(&mut self, angle_err_rad: f32, r_var: f32) -> f32 {
@@ -512,7 +524,7 @@ impl Align {
     ) -> f32 {
         let obs = align_obs(*q_vb, gyro_b, accel_b);
         let H_full = align_obs_jacobian(*q_vb, gyro_b, accel_b);
-        let H = SMatrix::<f32, 2, 3>::from_row_slice(&[
+        let h0 = [
             if state_mask[0] {
                 state_scale[0] * H_full[obs_idx[0]][0]
             } else {
@@ -528,6 +540,8 @@ impl Align {
             } else {
                 0.0
             },
+        ];
+        let h1 = [
             if state_mask[0] {
                 state_scale[0] * H_full[obs_idx[1]][0]
             } else {
@@ -543,22 +557,60 @@ impl Align {
             } else {
                 0.0
             },
-        ]);
-        let y =
-            SVector::<f32, 2>::from_row_slice(&[z[0] - obs[obs_idx[0]], z[1] - obs[obs_idx[1]]]);
-        let P = mat3_to_smatrix(*p);
-        let R = SMatrix::<f32, 2, 2>::from_diagonal(&SVector::<f32, 2>::from_row_slice(&r_var));
-        let S = H * P * H.transpose() + R;
-        let S_inv = S
-            .try_inverse()
-            .unwrap_or_else(SMatrix::<f32, 2, 2>::identity);
-        let K = P * H.transpose() * S_inv;
-        let dtheta = K * y;
-        Self::inject_small_angle_state(q_vb, [dtheta[0], dtheta[1], dtheta[2]]);
-        let I = SMatrix::<f32, 3, 3>::identity();
-        let P_new = (I - K * H) * P;
-        *p = smatrix_to_mat3(symmetrize3(P_new));
-        (y.transpose() * S_inv * y)[0]
+        ];
+        let y = [z[0] - obs[obs_idx[0]], z[1] - obs[obs_idx[1]]];
+        let p64 = mat3_f32_to_f64(*p);
+        let h0_64 = [h0[0] as f64, h0[1] as f64, h0[2] as f64];
+        let h1_64 = [h1[0] as f64, h1[1] as f64, h1[2] as f64];
+        let y64 = [y[0] as f64, y[1] as f64];
+        let ph0 = mat3_vec_f64(p64, h0_64);
+        let ph1 = mat3_vec_f64(p64, h1_64);
+        let s00 = dot3_f64(h0_64, ph0) + r_var[0] as f64;
+        let s01 = dot3_f64(h0_64, ph1);
+        let s10 = dot3_f64(h1_64, ph0);
+        let s11 = dot3_f64(h1_64, ph1) + r_var[1] as f64;
+        let det = s00 * s11 - s01 * s10;
+        let (s_inv00, s_inv01, s_inv10, s_inv11) = if det.abs() > 1.0e-20 {
+            let inv_det = 1.0 / det;
+            (s11 * inv_det, -s01 * inv_det, -s10 * inv_det, s00 * inv_det)
+        } else {
+            (1.0, 0.0, 0.0, 1.0)
+        };
+
+        let k = [
+            [
+                ph0[0] * s_inv00 + ph1[0] * s_inv10,
+                ph0[0] * s_inv01 + ph1[0] * s_inv11,
+            ],
+            [
+                ph0[1] * s_inv00 + ph1[1] * s_inv10,
+                ph0[1] * s_inv01 + ph1[1] * s_inv11,
+            ],
+            [
+                ph0[2] * s_inv00 + ph1[2] * s_inv10,
+                ph0[2] * s_inv01 + ph1[2] * s_inv11,
+            ],
+        ];
+        let dtheta = [
+            (k[0][0] * y64[0] + k[0][1] * y64[1]) as f32,
+            (k[1][0] * y64[0] + k[1][1] * y64[1]) as f32,
+            (k[2][0] * y64[0] + k[2][1] * y64[1]) as f32,
+        ];
+        Self::inject_small_angle_state(q_vb, dtheta);
+
+        let mut i_minus_kh = [[0.0_f64; 3]; 3];
+        for i in 0..ALIGN_N_STATES {
+            for j in 0..ALIGN_N_STATES {
+                i_minus_kh[i][j] = -(k[i][0] * h0_64[j] + k[i][1] * h1_64[j]);
+            }
+            i_minus_kh[i][i] += 1.0;
+        }
+        let mut p_new = mat3_mul_f64(i_minus_kh, p64);
+        symmetrize3_f64_in_place(&mut p_new);
+        *p = mat3_f64_to_f32(p_new);
+
+        (y64[0] * (s_inv00 * y64[0] + s_inv01 * y64[1])
+            + y64[1] * (s_inv10 * y64[0] + s_inv11 * y64[1])) as f32
     }
 
     fn inject_small_angle_state(q_vb: &mut [f32; 4], dtheta: [f32; 3]) {
@@ -863,20 +915,50 @@ fn mat3_vec(a: [[f32; 3]; 3], x: [f32; 3]) -> [f32; 3] {
     ]
 }
 
-fn mat3_to_smatrix(a: [[f32; 3]; 3]) -> SMatrix<f32, 3, 3> {
-    SMatrix::<f32, 3, 3>::from_row_slice(&[
-        a[0][0], a[0][1], a[0][2], a[1][0], a[1][1], a[1][2], a[2][0], a[2][1], a[2][2],
-    ])
-}
-
-fn smatrix_to_mat3(a: SMatrix<f32, 3, 3>) -> [[f32; 3]; 3] {
+fn mat3_f32_to_f64(a: [[f32; 3]; 3]) -> [[f64; 3]; 3] {
     [
-        [a[(0, 0)], a[(0, 1)], a[(0, 2)]],
-        [a[(1, 0)], a[(1, 1)], a[(1, 2)]],
-        [a[(2, 0)], a[(2, 1)], a[(2, 2)]],
+        [a[0][0] as f64, a[0][1] as f64, a[0][2] as f64],
+        [a[1][0] as f64, a[1][1] as f64, a[1][2] as f64],
+        [a[2][0] as f64, a[2][1] as f64, a[2][2] as f64],
     ]
 }
 
-fn symmetrize3(a: SMatrix<f32, 3, 3>) -> SMatrix<f32, 3, 3> {
-    0.5 * (a + a.transpose())
+fn mat3_f64_to_f32(a: [[f64; 3]; 3]) -> [[f32; 3]; 3] {
+    [
+        [a[0][0] as f32, a[0][1] as f32, a[0][2] as f32],
+        [a[1][0] as f32, a[1][1] as f32, a[1][2] as f32],
+        [a[2][0] as f32, a[2][1] as f32, a[2][2] as f32],
+    ]
+}
+
+fn mat3_mul_f64(a: [[f64; 3]; 3], b: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let mut c = [[0.0_f64; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            c[i][j] = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j];
+        }
+    }
+    c
+}
+
+fn mat3_vec_f64(a: [[f64; 3]; 3], x: [f64; 3]) -> [f64; 3] {
+    [
+        a[0][0] * x[0] + a[0][1] * x[1] + a[0][2] * x[2],
+        a[1][0] * x[0] + a[1][1] * x[1] + a[1][2] * x[2],
+        a[2][0] * x[0] + a[2][1] * x[1] + a[2][2] * x[2],
+    ]
+}
+
+fn dot3_f64(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn symmetrize3_f64_in_place(a: &mut [[f64; 3]; 3]) {
+    for i in 0..3 {
+        for j in (i + 1)..3 {
+            let avg = 0.5 * (a[i][j] + a[j][i]);
+            a[i][j] = avg;
+            a[j][i] = avg;
+        }
+    }
 }

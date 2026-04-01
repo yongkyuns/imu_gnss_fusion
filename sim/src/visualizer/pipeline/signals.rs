@@ -360,7 +360,17 @@ pub fn build_signal_traces(
         }
     }
     for tr in &mut out.ekf_map {
-        tr.points.retain(|p| p[0].is_finite() && p[1].is_finite());
+        let mut cleaned = Vec::with_capacity(tr.points.len());
+        for p in tr.points.iter().copied() {
+            let lon = p[0];
+            let lat = p[1];
+            if lon.is_finite() && lat.is_finite() {
+                cleaned.push(p);
+            } else if !lon.is_finite() && !lat.is_finite() {
+                cleaned.push([f64::NAN, f64::NAN]);
+            }
+        }
+        tr.points = cleaned;
     }
     out
 }
