@@ -11,7 +11,7 @@ fn fnv1a64_extend(mut h: u64, x: u64) -> u64 {
 
 fn quantized_bits(v: f32) -> u64 {
     // Quantize to 1e-9 to absorb tiny float round-off while still being strict.
-    let q = ((v as f64) * 1.0e9_f64).round() as i64;
+    let q = (v * 1.0e9_f32).round() as i64;
     q as u64
 }
 
@@ -113,8 +113,8 @@ fn refactor_equivalence_snapshot() {
     // Printed signatures make rebasing snapshot straightforward.
     println!("state_sig={state_sig:#018x} cov_sig={cov_sig:#018x}");
 
-    const EXPECTED_STATE_SIG: u64 = 0x15d8b80004a7fcfe;
-    const EXPECTED_COV_SIG: u64 = 0x526d883b3458f949;
+    const EXPECTED_STATE_SIG: u64 = 0x8d1c995d2f160679;
+    const EXPECTED_COV_SIG: u64 = 0x73474e0f50817059;
     assert_eq!(state_sig, EXPECTED_STATE_SIG, "state signature mismatch");
     assert_eq!(cov_sig, EXPECTED_COV_SIG, "covariance signature mismatch");
 }

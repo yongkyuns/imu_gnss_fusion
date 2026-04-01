@@ -47,14 +47,14 @@ impl Default for FusionConfig {
 
 #[derive(Clone, Copy, Debug)]
 pub struct FusionImuSample {
-    pub t_s: f64,
+    pub t_s: f32,
     pub gyro_radps: [f32; 3],
     pub accel_mps2: [f32; 3],
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct FusionGnssSample {
-    pub t_s: f64,
+    pub t_s: f32,
     pub pos_ned_m: [f32; 3],
     pub vel_ned_mps: [f32; 3],
     pub pos_std_m: [f32; 3],

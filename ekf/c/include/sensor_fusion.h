@@ -118,13 +118,13 @@ typedef struct {
 } sf_fusion_config_t;
 
 typedef struct {
-  double t_s;
+  float t_s;
   float gyro_radps[3];
   float accel_mps2[3];
 } sf_imu_sample_t;
 
 typedef struct {
-  double t_s;
+  float t_s;
   float pos_ned_m[3];
   float vel_ned_mps[3];
   float pos_std_m[3];

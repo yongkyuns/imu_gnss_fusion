@@ -301,7 +301,7 @@ static void test_sensor_fusion_internal_mode_bootstraps_align_state(void) {
 
   for (int i = 0; i < 4; ++i) {
     sf_imu_sample_t imu = {
-        .t_s = 0.10 + 0.10 * (double)i,
+        .t_s = 0.10f + 0.10f * (float)i,
         .gyro_radps = {0.0f, 0.0f, 0.0f},
         .accel_mps2 = {0.0f, 0.0f, -9.80665f},
     };

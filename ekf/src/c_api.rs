@@ -76,7 +76,7 @@ pub struct CFusionConfig {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CImuSample {
-    pub t_s: f64,
+    pub t_s: f32,
     pub gyro_radps: [f32; 3],
     pub accel_mps2: [f32; 3],
 }
@@ -84,7 +84,7 @@ pub struct CImuSample {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CGnssSample {
-    pub t_s: f64,
+    pub t_s: f32,
     pub pos_ned_m: [f32; 3],
     pub vel_ned_mps: [f32; 3],
     pub pos_std_m: [f32; 3],

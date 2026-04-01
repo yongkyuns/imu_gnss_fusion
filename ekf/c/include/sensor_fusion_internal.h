@@ -8,12 +8,12 @@ extern "C" {
 #endif
 
 typedef struct {
-  double t_s;
+  float t_s;
   float vel_ned_mps[3];
 } sf_internal_bootstrap_gnss_state_t;
 
 typedef struct {
-  double t_s;
+  float t_s;
   float gyro_radps[3];
   float accel_mps2[3];
 } sf_internal_bootstrap_imu_sample_t;
@@ -92,7 +92,7 @@ typedef struct {
   bool ekf_initialized;
   bool mount_q_vb_valid;
   float mount_q_vb[4];
-  double last_imu_t_s;
+  float last_imu_t_s;
   bool last_imu_t_valid;
   sf_gnss_sample_t last_gnss;
   bool last_gnss_valid;

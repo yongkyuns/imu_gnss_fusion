@@ -408,7 +408,7 @@ fn compare_fusion_pair(
         while scan_idx < imu_packets.len() && imu_packets[scan_idx].t_ms <= *tn {
             let pkt = &imu_packets[scan_idx];
             let sample = FusionImuSample {
-                t_s: (pkt.t_ms - tl.t0_master_ms) * 1.0e-3,
+                t_s: ((pkt.t_ms - tl.t0_master_ms) * 1.0e-3) as f32,
                 gyro_radps: [
                     pkt.gx_dps.to_radians() as f32,
                     pkt.gy_dps.to_radians() as f32,
@@ -419,16 +419,16 @@ fn compare_fusion_pair(
             let ru = rust.process_imu(sample);
             let cu = c.process_imu(sample);
             if ru.mount_ready_changed && ru.mount_ready && rust_metrics.mount_ready_t_s.is_none() {
-                rust_metrics.mount_ready_t_s = Some(sample.t_s);
+                rust_metrics.mount_ready_t_s = Some(sample.t_s as f64);
             }
             if cu.mount_ready_changed && cu.mount_ready && c_metrics.mount_ready_t_s.is_none() {
-                c_metrics.mount_ready_t_s = Some(sample.t_s);
+                c_metrics.mount_ready_t_s = Some(sample.t_s as f64);
             }
             if ru.ekf_initialized_now && rust_metrics.ekf_init_t_s.is_none() {
-                rust_metrics.ekf_init_t_s = Some(sample.t_s);
+                rust_metrics.ekf_init_t_s = Some(sample.t_s as f64);
             }
             if cu.ekf_initialized_now && c_metrics.ekf_init_t_s.is_none() {
-                c_metrics.ekf_init_t_s = Some(sample.t_s);
+                c_metrics.ekf_init_t_s = Some(sample.t_s as f64);
             }
             scan_idx += 1;
         }
@@ -440,7 +440,7 @@ fn compare_fusion_pair(
             Some(nav.heading_motion_deg.to_radians() as f32)
         };
         let gnss = FusionGnssSample {
-            t_s,
+            t_s: t_s as f32,
             pos_ned_m: nav_to_ned(*nav, ref_nav),
             vel_ned_mps: [nav.vel_n_mps as f32, nav.vel_e_mps as f32, nav.vel_d_mps as f32],
             pos_std_m: [nav.h_acc_m as f32, nav.h_acc_m as f32, nav.v_acc_m as f32],

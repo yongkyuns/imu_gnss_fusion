@@ -16,21 +16,17 @@ static bool sf_vec3_normalize(const float v[3], float out[3]);
 static float sf_vec2_norm(const float v[2]);
 static bool sf_vec2_normalize(const float v[2], float out[2]);
 static void sf_skew3(const float v[3], float out[3][3]);
-static void sf_mat3_mul(const float a[3][3], const float b[3][3], float out[3][3]);
-static void sf_mat3_vec(const float a[3][3], const float x[3], float out[3]);
-static void sf_mat3_f32_to_f64(const float a[3][3], double out[3][3]);
-static void sf_mat3_f64_to_f32(const double a[3][3], float out[3][3]);
-static void sf_mat3_mul_f64(const double a[3][3], const double b[3][3], double out[3][3]);
-static void sf_mat3_vec_f64(const double a[3][3], const double x[3], double out[3]);
-static double sf_dot3_f64(const double a[3], const double b[3]);
-static void sf_symmetrize3_f64(double a[3][3]);
+static void sf_mat3_mul(float (*a)[3], float (*b)[3], float (*out)[3]);
+static void sf_mat3_vec(float (*a)[3], const float x[3], float out[3]);
+static float sf_dot3(const float a[3], const float b[3]);
+static void sf_symmetrize3(float a[3][3]);
 static void sf_quat_mul(const float a[4], const float b[4], float out[4]);
 static void sf_quat_normalize(float q[4]);
 static void sf_quat_from_small_angle(const float dtheta[3], float out[4]);
 static void sf_quat_from_yaw(float yaw_rad, float out[4]);
 static void sf_quat_to_rotmat(const float q[4], float out[3][3]);
-static void sf_quat_from_rotmat(const float c[3][3], float out[4]);
-static void sf_transpose3x3(const float a[3][3], float out[3][3]);
+static void sf_quat_from_rotmat(float (*c)[3], float out[4]);
+static void sf_transpose3x3(float (*a)[3], float (*out)[3]);
 static void sf_align_obs(const float q_vb[4],
                          const float gyro_b[3],
                          const float accel_b[3],
@@ -431,42 +427,38 @@ static float sf_apply_update1_masked(float q_vb[4],
   float H_full[6][3];
   float h[3];
   float y;
-  double p64[3][3];
-  double h64[3];
-  double ph[3];
-  double s;
-  double s_inv;
-  double k[3];
+  float ph[3];
+  float s;
+  float s_inv;
+  float k[3];
   float dtheta[3];
-  double i_minus_kh[3][3];
-  double p_new[3][3];
+  float i_minus_kh[3][3];
+  float p_new[3][3];
 
   sf_align_obs(q_vb, gyro_b, accel_b, obs);
   sf_align_obs_jacobian(q_vb, gyro_b, accel_b, H_full);
   for (int i = 0; i < 3; ++i) {
     h[i] = state_mask[i] ? H_full[obs_idx][i] : 0.0f;
-    h64[i] = (double)h[i];
   }
   y = z - obs[obs_idx];
-  sf_mat3_f32_to_f64(p, p64);
-  sf_mat3_vec_f64(p64, h64, ph);
-  s = sf_dot3_f64(h64, ph) + (double)r_var;
-  s_inv = fabs(s) > 1.0e-20 ? 1.0 / s : 1.0;
+  sf_mat3_vec(p, h, ph);
+  s = sf_dot3(h, ph) + r_var;
+  s_inv = fabsf(s) > 1.0e-20f ? 1.0f / s : 1.0f;
   for (int i = 0; i < 3; ++i) {
     k[i] = ph[i] * s_inv;
-    dtheta[i] = (float)(k[i] * (double)y);
+    dtheta[i] = k[i] * y;
   }
   sf_align_inject_small_angle(q_vb, dtheta);
   for (int i = 0; i < 3; ++i) {
     for (int j = 0; j < 3; ++j) {
-      i_minus_kh[i][j] = -k[i] * h64[j];
+      i_minus_kh[i][j] = -k[i] * h[j];
     }
-    i_minus_kh[i][i] += 1.0;
+    i_minus_kh[i][i] += 1.0f;
   }
-  sf_mat3_mul_f64(i_minus_kh, p64, p_new);
-  sf_symmetrize3_f64(p_new);
-  sf_mat3_f64_to_f32(p_new, p);
-  return (float)(((double)y * (double)y) * s_inv);
+  sf_mat3_mul(i_minus_kh, p, p_new);
+  sf_symmetrize3(p_new);
+  memcpy(p, p_new, sizeof(p_new));
+  return y * y * s_inv;
 }
 
 static float sf_apply_update2_scaled_masked(float q_vb[4],
@@ -483,73 +475,67 @@ static float sf_apply_update2_scaled_masked(float q_vb[4],
   float h0[3];
   float h1[3];
   float y[2];
-  double p64[3][3];
-  double h0_64[3];
-  double h1_64[3];
-  double ph0[3];
-  double ph1[3];
-  double s00;
-  double s01;
-  double s10;
-  double s11;
-  double det;
-  double s_inv00;
-  double s_inv01;
-  double s_inv10;
-  double s_inv11;
-  double k[3][2];
+  float ph0[3];
+  float ph1[3];
+  float s00;
+  float s01;
+  float s10;
+  float s11;
+  float det;
+  float s_inv00;
+  float s_inv01;
+  float s_inv10;
+  float s_inv11;
+  float k[3][2];
   float dtheta[3];
-  double i_minus_kh[3][3];
-  double p_new[3][3];
+  float i_minus_kh[3][3];
+  float p_new[3][3];
 
   sf_align_obs(q_vb, gyro_b, accel_b, obs);
   sf_align_obs_jacobian(q_vb, gyro_b, accel_b, H_full);
   for (int i = 0; i < 3; ++i) {
     h0[i] = state_mask[i] ? state_scale[i] * H_full[obs_idx[0]][i] : 0.0f;
     h1[i] = state_mask[i] ? state_scale[i] * H_full[obs_idx[1]][i] : 0.0f;
-    h0_64[i] = (double)h0[i];
-    h1_64[i] = (double)h1[i];
   }
   y[0] = z[0] - obs[obs_idx[0]];
   y[1] = z[1] - obs[obs_idx[1]];
-  sf_mat3_f32_to_f64(p, p64);
-  sf_mat3_vec_f64(p64, h0_64, ph0);
-  sf_mat3_vec_f64(p64, h1_64, ph1);
-  s00 = sf_dot3_f64(h0_64, ph0) + (double)r_var[0];
-  s01 = sf_dot3_f64(h0_64, ph1);
-  s10 = sf_dot3_f64(h1_64, ph0);
-  s11 = sf_dot3_f64(h1_64, ph1) + (double)r_var[1];
+  sf_mat3_vec(p, h0, ph0);
+  sf_mat3_vec(p, h1, ph1);
+  s00 = sf_dot3(h0, ph0) + r_var[0];
+  s01 = sf_dot3(h0, ph1);
+  s10 = sf_dot3(h1, ph0);
+  s11 = sf_dot3(h1, ph1) + r_var[1];
   det = s00 * s11 - s01 * s10;
-  if (fabs(det) > 1.0e-20) {
-    double inv_det = 1.0 / det;
+  if (fabsf(det) > 1.0e-20f) {
+    float inv_det = 1.0f / det;
     s_inv00 = s11 * inv_det;
     s_inv01 = -s01 * inv_det;
     s_inv10 = -s10 * inv_det;
     s_inv11 = s00 * inv_det;
   } else {
-    s_inv00 = 1.0;
-    s_inv01 = 0.0;
-    s_inv10 = 0.0;
-    s_inv11 = 1.0;
+    s_inv00 = 1.0f;
+    s_inv01 = 0.0f;
+    s_inv10 = 0.0f;
+    s_inv11 = 1.0f;
   }
   for (int i = 0; i < 3; ++i) {
     k[i][0] = ph0[i] * s_inv00 + ph1[i] * s_inv10;
     k[i][1] = ph0[i] * s_inv01 + ph1[i] * s_inv11;
-    dtheta[i] = (float)(k[i][0] * (double)y[0] + k[i][1] * (double)y[1]);
+    dtheta[i] = k[i][0] * y[0] + k[i][1] * y[1];
   }
   sf_align_inject_small_angle(q_vb, dtheta);
   for (int i = 0; i < 3; ++i) {
     for (int j = 0; j < 3; ++j) {
-      i_minus_kh[i][j] = -(k[i][0] * h0_64[j] + k[i][1] * h1_64[j]);
+      i_minus_kh[i][j] = -(k[i][0] * h0[j] + k[i][1] * h1[j]);
     }
-    i_minus_kh[i][i] += 1.0;
+    i_minus_kh[i][i] += 1.0f;
   }
-  sf_mat3_mul_f64(i_minus_kh, p64, p_new);
-  sf_symmetrize3_f64(p_new);
-  sf_mat3_f64_to_f32(p_new, p);
+  sf_mat3_mul(i_minus_kh, p, p_new);
+  sf_symmetrize3(p_new);
+  memcpy(p, p_new, sizeof(p_new));
 
-  return (float)((double)y[0] * (s_inv00 * (double)y[0] + s_inv01 * (double)y[1]) +
-                 (double)y[1] * (s_inv10 * (double)y[0] + s_inv11 * (double)y[1]));
+  return y[0] * (s_inv00 * y[0] + s_inv01 * y[1]) +
+         y[1] * (s_inv10 * y[0] + s_inv11 * y[1]);
 }
 
 static float sf_apply_vehicle_yaw_angle(float q_vb[4],
@@ -708,7 +694,7 @@ static void sf_skew3(const float v[3], float out[3][3]) {
   out[2][2] = 0.0f;
 }
 
-static void sf_mat3_mul(const float a[3][3], const float b[3][3], float out[3][3]) {
+static void sf_mat3_mul(float (*a)[3], float (*b)[3], float (*out)[3]) {
   for (int i = 0; i < 3; ++i) {
     for (int j = 0; j < 3; ++j) {
       out[i][j] = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j];
@@ -716,50 +702,20 @@ static void sf_mat3_mul(const float a[3][3], const float b[3][3], float out[3][3
   }
 }
 
-static void sf_mat3_vec(const float a[3][3], const float x[3], float out[3]) {
+static void sf_mat3_vec(float (*a)[3], const float x[3], float out[3]) {
   out[0] = a[0][0] * x[0] + a[0][1] * x[1] + a[0][2] * x[2];
   out[1] = a[1][0] * x[0] + a[1][1] * x[1] + a[1][2] * x[2];
   out[2] = a[2][0] * x[0] + a[2][1] * x[1] + a[2][2] * x[2];
 }
 
-static void sf_mat3_f32_to_f64(const float a[3][3], double out[3][3]) {
-  for (int i = 0; i < 3; ++i) {
-    for (int j = 0; j < 3; ++j) {
-      out[i][j] = (double)a[i][j];
-    }
-  }
-}
-
-static void sf_mat3_f64_to_f32(const double a[3][3], float out[3][3]) {
-  for (int i = 0; i < 3; ++i) {
-    for (int j = 0; j < 3; ++j) {
-      out[i][j] = (float)a[i][j];
-    }
-  }
-}
-
-static void sf_mat3_mul_f64(const double a[3][3], const double b[3][3], double out[3][3]) {
-  for (int i = 0; i < 3; ++i) {
-    for (int j = 0; j < 3; ++j) {
-      out[i][j] = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j];
-    }
-  }
-}
-
-static void sf_mat3_vec_f64(const double a[3][3], const double x[3], double out[3]) {
-  out[0] = a[0][0] * x[0] + a[0][1] * x[1] + a[0][2] * x[2];
-  out[1] = a[1][0] * x[0] + a[1][1] * x[1] + a[1][2] * x[2];
-  out[2] = a[2][0] * x[0] + a[2][1] * x[1] + a[2][2] * x[2];
-}
-
-static double sf_dot3_f64(const double a[3], const double b[3]) {
+static float sf_dot3(const float a[3], const float b[3]) {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
-static void sf_symmetrize3_f64(double a[3][3]) {
+static void sf_symmetrize3(float a[3][3]) {
   for (int i = 0; i < 3; ++i) {
     for (int j = i + 1; j < 3; ++j) {
-      double avg = 0.5 * (a[i][j] + a[j][i]);
+      float avg = 0.5f * (a[i][j] + a[j][i]);
       a[i][j] = avg;
       a[j][i] = avg;
     }
@@ -826,7 +782,7 @@ static void sf_quat_to_rotmat(const float q_in[4], float out[3][3]) {
   out[2][2] = 1.0f - 2.0f * (x * x + y * y);
 }
 
-static void sf_quat_from_rotmat(const float c[3][3], float out[4]) {
+static void sf_quat_from_rotmat(float (*c)[3], float out[4]) {
   float trace = c[0][0] + c[1][1] + c[2][2];
   if (trace > 0.0f) {
     float s = sqrtf(trace + 1.0f) * 2.0f;
@@ -856,7 +812,7 @@ static void sf_quat_from_rotmat(const float c[3][3], float out[4]) {
   sf_quat_normalize(out);
 }
 
-static void sf_transpose3x3(const float a[3][3], float out[3][3]) {
+static void sf_transpose3x3(float (*a)[3], float (*out)[3]) {
   out[0][0] = a[0][0];
   out[0][1] = a[1][0];
   out[0][2] = a[2][0];

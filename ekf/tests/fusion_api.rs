@@ -1,6 +1,6 @@
 use sensor_fusion::fusion::{FusionConfig, FusionGnssSample, FusionImuSample, SensorFusion};
 
-fn gnss_sample(t_s: f64) -> FusionGnssSample {
+fn gnss_sample(t_s: f32) -> FusionGnssSample {
     FusionGnssSample {
         t_s,
         pos_ned_m: [0.0, 0.0, 0.0],
@@ -11,7 +11,7 @@ fn gnss_sample(t_s: f64) -> FusionGnssSample {
     }
 }
 
-fn stationary_gnss_sample(t_s: f64) -> FusionGnssSample {
+fn stationary_gnss_sample(t_s: f32) -> FusionGnssSample {
     FusionGnssSample {
         vel_ned_mps: [0.0, 0.0, 0.0],
         heading_rad: None,
@@ -34,7 +34,7 @@ fn internal_alignment_bootstraps_mount_estimate() {
     let mut system = SensorFusion::new(FusionConfig::default());
     let _ = system.process_gnss(stationary_gnss_sample(0.0));
     for i in 0..120 {
-        let t_s = 0.01 * i as f64;
+        let t_s = 0.01 * i as f32;
         let _ = system.process_imu(FusionImuSample {
             t_s,
             gyro_radps: [0.0, 0.0, 0.0],

@@ -114,7 +114,7 @@ impl Default for PredictNoise {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 struct CEkfGpsData {
-    t_s: f64,
+    t_s: f32,
     pos_ned_m: [f32; 3],
     vel_ned_mps: [f32; 3],
     pos_std_m: [f32; 3],

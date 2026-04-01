@@ -7,7 +7,7 @@ static void sf_initialize_ekf_from_gnss(sf_ekf_t *ekf,
                                         const sf_gnss_sample_t *gnss,
                                         float yaw_init_speed_mps);
 static void sf_set_state_yaw_only(sf_ekf_state_t *state, float yaw_rad);
-static void sf_clamp_ekf_biases(sf_ekf_t *ekf, double dt_s);
+static void sf_clamp_ekf_biases(sf_ekf_t *ekf, float dt_s);
 static void sf_quat_to_rotmat(const float q[4], float r[3][3]);
 static void sf_transpose3(const float in[3][3], float out[3][3]);
 static void sf_mat3_vec(const float m[3][3], const float v[3], float out[3]);
@@ -15,15 +15,15 @@ static float sf_norm3(const float v[3]);
 static float sf_horizontal_speed(const float v_ned_mps[3]);
 static float sf_interp_speed(const sf_internal_bootstrap_gnss_state_t *prev,
                              const sf_gnss_sample_t *curr,
-                             double t_s);
+                             float t_s);
 static float sf_ema_update(bool *valid, float *prev, float sample, float alpha);
 static bool sf_bootstrap_update(sf_sensor_fusion_impl_t *impl,
                                 const float accel_b[3],
                                 const float gyro_radps[3],
                                 float speed_mps);
 static bool sf_take_interval_summary(sf_sensor_fusion_impl_t *impl,
-                                     double t0_s,
-                                     double t1_s,
+                                     float t0_s,
+                                     float t1_s,
                                      sf_align_window_summary_t *summary_out);
 static sf_update_t sf_update_from_fusion(const sf_sensor_fusion_impl_t *fusion,
                                          bool mount_ready_changed,
@@ -133,6 +133,7 @@ sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
   sf_sensor_fusion_impl_t *impl;
   float dt_s;
   float c_bv[3][3];
+  float c_vb[3][3];
   float gyro_vehicle[3];
   float accel_vehicle[3];
   sf_ekf_imu_delta_t imu_delta;
@@ -162,7 +163,7 @@ sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
     return sf_update_from_fusion(impl, false, false);
   }
 
-  dt_s = (float)(sample->t_s - impl->last_imu_t_s);
+  dt_s = sample->t_s - impl->last_imu_t_s;
   impl->last_imu_t_s = sample->t_s;
 
   impl->interval_imu_sum_gyro[0] += sample->gyro_radps[0];
@@ -192,9 +193,9 @@ sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
   }
 
   sf_quat_to_rotmat(impl->mount_q_vb, c_bv);
-  sf_transpose3(c_bv, c_bv);
-  sf_mat3_vec(c_bv, sample->gyro_radps, gyro_vehicle);
-  sf_mat3_vec(c_bv, sample->accel_mps2, accel_vehicle);
+  sf_transpose3((const float (*)[3])c_bv, c_vb);
+  sf_mat3_vec((const float (*)[3])c_vb, sample->gyro_radps, gyro_vehicle);
+  sf_mat3_vec((const float (*)[3])c_vb, sample->accel_mps2, accel_vehicle);
 
   imu_delta.dax = gyro_vehicle[0] * dt_s;
   imu_delta.day = gyro_vehicle[1] * dt_s;
@@ -205,9 +206,9 @@ sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
   imu_delta.dt = dt_s;
 
   sf_ekf_predict(&impl->ekf, &imu_delta, NULL);
-  sf_clamp_ekf_biases(&impl->ekf, (double)dt_s);
+  sf_clamp_ekf_biases(&impl->ekf, dt_s);
   sf_ekf_fuse_body_vel(&impl->ekf, impl->cfg.r_body_vel);
-  sf_clamp_ekf_biases(&impl->ekf, (double)dt_s);
+  sf_clamp_ekf_biases(&impl->ekf, dt_s);
   return sf_update_from_fusion(impl, false, false);
 }
 
@@ -252,7 +253,7 @@ sf_update_t sf_fusion_process_gnss(sf_sensor_fusion_t *fusion,
                                   speed_mps) &&
               sf_align_initialize_from_stationary(&impl->align_rt,
                                                   &impl->cfg.align,
-                                                  impl->stationary_accel_buffer,
+                                                  (const float (*)[3])impl->stationary_accel_buffer,
                                                   impl->bootstrap_stationary_count,
                                                   0.0f)) {
             impl->align_initialized = true;
@@ -423,8 +424,8 @@ static void sf_set_state_yaw_only(sf_ekf_state_t *state, float yaw_rad) {
   state->q3 = sinf(half);
 }
 
-static void sf_clamp_ekf_biases(sf_ekf_t *ekf, double dt_s) {
-  const float dt = (float)(dt_s > 1.0e-3 ? dt_s : 1.0e-3);
+static void sf_clamp_ekf_biases(sf_ekf_t *ekf, float dt_s) {
+  const float dt = dt_s > 1.0e-3f ? dt_s : 1.0e-3f;
   const float max_gyro_bias_da = (1.5f * 3.1415927f / 180.0f) * dt;
   const float max_accel_bias_dv = 1.5f * dt;
 
@@ -489,15 +490,15 @@ static float sf_horizontal_speed(const float v_ned_mps[3]) {
 
 static float sf_interp_speed(const sf_internal_bootstrap_gnss_state_t *prev,
                              const sf_gnss_sample_t *curr,
-                             double t_s) {
+                             float t_s) {
   float speed_prev = sf_horizontal_speed(prev->vel_ned_mps);
   float speed_curr = sf_horizontal_speed(curr->vel_ned_mps);
-  double dt = curr->t_s - prev->t_s;
+  float dt = curr->t_s - prev->t_s;
   float alpha;
-  if (dt <= 1.0e-6) {
+  if (dt <= 1.0e-6f) {
     return speed_curr;
   }
-  alpha = (float)((t_s - prev->t_s) / dt);
+  alpha = (t_s - prev->t_s) / dt;
   if (alpha < 0.0f) alpha = 0.0f;
   if (alpha > 1.0f) alpha = 1.0f;
   return speed_prev + alpha * (speed_curr - speed_prev);
@@ -551,15 +552,15 @@ static bool sf_bootstrap_update(sf_sensor_fusion_impl_t *impl,
 }
 
 static bool sf_take_interval_summary(sf_sensor_fusion_impl_t *impl,
-                                     double t0_s,
-                                     double t1_s,
+                                     float t0_s,
+                                     float t1_s,
                                      sf_align_window_summary_t *summary_out) {
   float inv_n;
   if (impl->interval_imu_count == 0U || summary_out == NULL) {
     return false;
   }
   memset(summary_out, 0, sizeof(*summary_out));
-  summary_out->dt = (float)(t1_s - t0_s);
+  summary_out->dt = t1_s - t0_s;
   if (summary_out->dt < 1.0e-3f) {
     summary_out->dt = 1.0e-3f;
   }

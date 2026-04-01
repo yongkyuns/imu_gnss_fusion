@@ -3,7 +3,7 @@
 #include <math.h>
 
 static float sf_wrap_angle_rad(float x);
-static void sf_rot_to_euler_zyx(const float c[3][3], float rpy[3]);
+static void sf_rot_to_euler_zyx(float (*c)[3], float rpy[3]);
 static void sf_vec3_add_inplace(float a[3], const float b[3]);
 static void sf_vec3_scale(const float v[3], float s, float out[3]);
 static void sf_vec3_sub(const float a[3], const float b[3], float out[3]);
@@ -11,7 +11,7 @@ static float sf_vec3_dot(const float a[3], const float b[3]);
 static void sf_vec3_cross(const float a[3], const float b[3], float out[3]);
 static float sf_vec3_norm(const float v[3]);
 static bool sf_vec3_normalize(const float v[3], float out[3]);
-static void sf_mat3_mul(const float a[3][3], const float b[3][3], float out[3][3]);
+static void sf_mat3_mul(float (*a)[3], float (*b)[3], float (*out)[3]);
 
 bool sf_bootstrap_vehicle_to_body_from_stationary(
     const float (*accel_samples_b)[3],
@@ -112,7 +112,7 @@ static float sf_wrap_angle_rad(float x) {
   return atan2f(sinf(x), cosf(x));
 }
 
-static void sf_rot_to_euler_zyx(const float c[3][3], float rpy[3]) {
+static void sf_rot_to_euler_zyx(float (*c)[3], float rpy[3]) {
   float pitch = asinf(-c[2][0]);
   float roll = atan2f(c[2][1], c[2][2]);
   float yaw = sf_wrap_angle_rad(atan2f(c[1][0], c[0][0]));
@@ -162,7 +162,7 @@ static bool sf_vec3_normalize(const float v[3], float out[3]) {
   return true;
 }
 
-static void sf_mat3_mul(const float a[3][3], const float b[3][3], float out[3][3]) {
+static void sf_mat3_mul(float (*a)[3], float (*b)[3], float (*out)[3]) {
   for (int i = 0; i < 3; ++i) {
     for (int j = 0; j < 3; ++j) {
       out[i][j] = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j];
