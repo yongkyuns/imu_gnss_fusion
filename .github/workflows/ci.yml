@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: CI (${{ matrix.os_name }})
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os_name: macOS
+            runs_on: macos-latest
+          - os_name: Linux
+            runs_on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Restore logger data cache
+        id: cache-logger-data
+        uses: actions/cache@v4
+        with:
+          path: logger/data
+          key: ${{ runner.os }}-logger-data-${{ hashFiles('.github/datasets/logger-data.version') }}
+
+      - name: Download logger data dataset
+        if: steps.cache-logger-data.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          DATASET_TAG="$(cat .github/datasets/logger-data.version)"
+          mkdir -p /tmp/logger-data-release logger
+          gh release download "$DATASET_TAG" \
+            --repo "${{ github.repository }}" \
+            --pattern "logger-data.tar.gz" \
+            --dir /tmp/logger-data-release
+          tar -xzf /tmp/logger-data-release/logger-data.tar.gz -C logger
+
+      - name: Build workspace
+        run: cargo build --workspace --all-targets --locked
+
+      - name: Test workspace
+        run: cargo test --workspace --all-targets --locked
+
+      - name: Test standalone C library
+        run: make -C ekf/c test
+
+      - name: Baseline parity and convergence check
+        run: |
+          cargo run -q -p sim --bin compare_rust_c_baseline -- \
+            --file-list test_files.txt \
+            --section Baseline \
+            --data-dir logger/data \
+            --fail-on-mismatch
+
+      - name: Clean standalone C build
+        if: always()
+        run: make -C ekf/c clean
