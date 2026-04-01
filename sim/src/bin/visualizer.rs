@@ -33,6 +33,10 @@ struct Args {
     gnss_outage_duration_s: f64,
     #[arg(long, default_value_t = 1)]
     gnss_outage_seed: u64,
+    #[arg(long, default_value_t = 1)]
+    ekf_predict_imu_decimation: usize,
+    #[arg(long)]
+    ekf_predict_imu_lpf_cutoff_hz: Option<f64>,
 }
 
 fn main() -> Result<()> {
@@ -45,11 +49,17 @@ fn main() -> Result<()> {
         .context("failed to read log")?;
     let t_read = Instant::now();
 
+    let ekf_cfg = EkfCompareConfig {
+        predict_imu_decimation: args.ekf_predict_imu_decimation.max(1),
+        predict_imu_lpf_cutoff_hz: args.ekf_predict_imu_lpf_cutoff_hz,
+        ..EkfCompareConfig::default()
+    };
+
     let (data, has_itow) = build_plot_data(
         &bytes,
         args.max_records,
         args.ekf_imu_source,
-        EkfCompareConfig::default(),
+        ekf_cfg,
         GnssOutageConfig {
             count: args.gnss_outage_count,
             duration_s: args.gnss_outage_duration_s,
@@ -69,6 +79,14 @@ fn main() -> Result<()> {
         n_points,
         tmin,
         tmax
+    );
+    eprintln!(
+        "[profile] ekf_predict_imu_decimation={} ekf_predict_imu_lpf_cutoff_hz={}",
+        ekf_cfg.predict_imu_decimation,
+        ekf_cfg
+            .predict_imu_lpf_cutoff_hz
+            .map(|v| format!("{v:.3}"))
+            .unwrap_or_else(|| "off".to_string())
     );
     for (name, nt, np) in [
         group_stats("speed", &data.speed),

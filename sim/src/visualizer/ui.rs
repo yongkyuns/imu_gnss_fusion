@@ -435,7 +435,10 @@ impl eframe::App for App {
                         ui.colored_label(egui::Color32::from_rgb(0, 255, 255), "NAV-PVT");
                         ui.colored_label(egui::Color32::from_rgb(255, 196, 0), "NAV2-PVT");
                         ui.colored_label(egui::Color32::from_rgb(60, 200, 120), "EKF");
-                        ui.colored_label(egui::Color32::from_rgb(255, 80, 80), "EKF during GNSS outage");
+                        ui.colored_label(
+                            egui::Color32::from_rgb(255, 80, 80),
+                            "EKF during GNSS outage",
+                        );
                         ui.colored_label(egui::Color32::from_rgb(255, 255, 255), "EKF heading");
                     });
                     let mut map_traces = self.data.ekf_map.clone();
@@ -597,7 +600,10 @@ fn draw_plot(
             {
                 seg_end += 1;
             }
-            out.extend(decimate_finite_slice(&slice[seg_start..seg_end], max_points));
+            out.extend(decimate_finite_slice(
+                &slice[seg_start..seg_end],
+                max_points,
+            ));
             if seg_end < slice.len() {
                 out.push(slice[seg_end]);
             }
@@ -642,7 +648,6 @@ fn draw_plot(
         });
     });
 }
-
 
 pub fn run_visualizer(data: PlotData, has_itow: bool) -> Result<()> {
     let native_options = eframe::NativeOptions {

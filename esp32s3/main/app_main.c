@@ -11,6 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "sensor_fusion.h"
+#include "sensor_fusion_internal.h"
 #include "driver/usb_serial_jtag.h"
 
 static const char *TAG = "sf_usb";
@@ -46,6 +47,8 @@ static void sf_handle_imu(sf_app_t *app, const sf_usb_imu_payload_t *payload);
 static void sf_handle_gnss(sf_app_t *app, const sf_usb_gnss_payload_t *payload);
 static void sf_send_status(sf_app_t *app, float t_s, sf_update_t update, bool end_ack);
 static float sf_diag_sigma(const float p[SF_ALIGN_N_STATES][SF_ALIGN_N_STATES], int idx);
+static uint32_t sf_now_us(void *ctx);
+static float sf_avg_us(uint64_t total_us, uint32_t count);
 
 void app_main(void) {
   memset(&g_app, 0, sizeof(g_app));
@@ -72,6 +75,7 @@ static void sf_app_reset(sf_app_t *app) {
   } else {
     sf_fusion_init_internal(&app->fusion, &app->cfg);
   }
+  sf_fusion_set_profile_now_us(&app->fusion, sf_now_us, NULL);
 }
 
 static void sf_usb_init(void) {
@@ -166,8 +170,12 @@ static void sf_handle_config(sf_app_t *app, const sf_usb_config_payload_t *paylo
   if (app == NULL || payload == NULL) {
     return;
   }
+  sf_fusion_config_default(&app->cfg);
   app->external_mode = payload->mode == SF_USB_MODE_EXTERNAL_QVB;
   memcpy(app->q_vb, payload->q_vb, sizeof(app->q_vb));
+  if (isfinite(payload->r_body_vel) && payload->r_body_vel >= 0.0f) {
+    app->cfg.r_body_vel = payload->r_body_vel;
+  }
   sf_app_reset(app);
 }
 
@@ -232,6 +240,7 @@ static void sf_send_status(sf_app_t *app, float t_s, sf_update_t update, bool en
   sf_usb_status_payload_t payload;
   const sf_ekf_t *ekf;
   const sf_align_t *align;
+  const sf_profile_counters_t *prof;
 
   int written;
 
@@ -263,6 +272,7 @@ static void sf_send_status(sf_app_t *app, float t_s, sf_update_t update, bool en
 
   ekf = sf_fusion_ekf(&app->fusion);
   align = sf_fusion_align(&app->fusion);
+  prof = sf_fusion_profile(&app->fusion);
   if (ekf != NULL) {
     payload.ekf_q_bn[0] = ekf->state.q0;
     payload.ekf_q_bn[1] = ekf->state.q1;
@@ -290,6 +300,29 @@ static void sf_send_status(sf_app_t *app, float t_s, sf_update_t update, bool en
                             ? 0.0f
                             : (float)app->profile.gnss_total_us / (float)app->profile.gnss_count;
   payload.gnss_max_us = (float)app->profile.gnss_max_us;
+  if (prof != NULL) {
+    payload.imu_rotate_count = prof->imu_rotate_count;
+    payload.imu_rotate_avg_us = sf_avg_us(prof->imu_rotate_total_us, prof->imu_rotate_count);
+    payload.imu_rotate_max_us = (float)prof->imu_rotate_max_us;
+    payload.imu_predict_count = prof->imu_predict_count;
+    payload.imu_predict_avg_us = sf_avg_us(prof->imu_predict_total_us, prof->imu_predict_count);
+    payload.imu_predict_max_us = (float)prof->imu_predict_max_us;
+    payload.imu_clamp_count = prof->imu_clamp_count;
+    payload.imu_clamp_avg_us = sf_avg_us(prof->imu_clamp_total_us, prof->imu_clamp_count);
+    payload.imu_clamp_max_us = (float)prof->imu_clamp_max_us;
+    payload.imu_body_vel_count = prof->imu_body_vel_count;
+    payload.imu_body_vel_avg_us = sf_avg_us(prof->imu_body_vel_total_us, prof->imu_body_vel_count);
+    payload.imu_body_vel_max_us = (float)prof->imu_body_vel_max_us;
+    payload.gnss_align_count = prof->gnss_align_count;
+    payload.gnss_align_avg_us = sf_avg_us(prof->gnss_align_total_us, prof->gnss_align_count);
+    payload.gnss_align_max_us = (float)prof->gnss_align_max_us;
+    payload.gnss_init_count = prof->gnss_init_count;
+    payload.gnss_init_avg_us = sf_avg_us(prof->gnss_init_total_us, prof->gnss_init_count);
+    payload.gnss_init_max_us = (float)prof->gnss_init_max_us;
+    payload.gnss_fuse_count = prof->gnss_fuse_count;
+    payload.gnss_fuse_avg_us = sf_avg_us(prof->gnss_fuse_total_us, prof->gnss_fuse_count);
+    payload.gnss_fuse_max_us = (float)prof->gnss_fuse_max_us;
+  }
 
   hdr.magic_le = SF_USB_MAGIC;
   hdr.version = SF_USB_VERSION;
@@ -309,4 +342,13 @@ static float sf_diag_sigma(const float p[SF_ALIGN_N_STATES][SF_ALIGN_N_STATES], 
   }
   v = p[idx][idx];
   return v > 0.0f ? sqrtf(v) : 0.0f;
+}
+
+static uint32_t sf_now_us(void *ctx) {
+  (void)ctx;
+  return (uint32_t)esp_timer_get_time();
+}
+
+static float sf_avg_us(uint64_t total_us, uint32_t count) {
+  return count == 0u ? 0.0f : (float)total_us / (float)count;
 }

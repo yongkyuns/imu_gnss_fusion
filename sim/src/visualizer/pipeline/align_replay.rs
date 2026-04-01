@@ -23,6 +23,12 @@ pub struct BootstrapConfig {
     pub max_accel_norm_err_mps2: f32,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ImuReplayConfig {
+    pub lpf_cutoff_hz: Option<f64>,
+    pub decimation: usize,
+}
+
 struct BootstrapDetector {
     cfg: BootstrapConfig,
     gyro_ema: Option<f32>,
@@ -96,6 +102,7 @@ pub fn build_align_replay(
     tl: &MasterTimeline,
     cfg: AlignConfig,
     bootstrap_cfg: BootstrapConfig,
+    imu_cfg: ImuReplayConfig,
 ) -> AlignReplayData {
     let mut alg_events = Vec::<AlgEvent>::new();
     let mut nav_events = Vec::<(f64, NavPvtObs)>::new();
@@ -198,6 +205,7 @@ pub fn build_align_replay(
         });
     }
     imu_packets.sort_by(|a, b| a.t_ms.partial_cmp(&b.t_ms).unwrap_or(Ordering::Equal));
+    let imu_packets = preprocess_imu_packets(&imu_packets, imu_cfg);
 
     let mut align = Align::new(cfg);
     let mut bootstrap = BootstrapDetector::new(bootstrap_cfg);
@@ -416,6 +424,75 @@ pub fn build_align_replay(
         final_alg_q,
         samples,
     }
+}
+
+fn preprocess_imu_packets(packets: &[ImuPacket], cfg: ImuReplayConfig) -> Vec<ImuPacket> {
+    if packets.is_empty() {
+        return Vec::new();
+    }
+    let decimation = cfg.decimation.max(1);
+    if decimation == 1 && cfg.lpf_cutoff_hz.is_none() {
+        return packets.to_vec();
+    }
+
+    let mut out = Vec::with_capacity((packets.len() / decimation).max(1));
+    let mut filt_gyro: Option<[f64; 3]> = None;
+    let mut filt_accel: Option<[f64; 3]> = None;
+    let mut prev_t_ms: Option<f64> = None;
+    let mut count = 0usize;
+
+    for pkt in packets {
+        let dt_s = prev_t_ms
+            .map(|t_prev| ((pkt.t_ms - t_prev) * 1.0e-3).clamp(1.0e-6, 0.05))
+            .unwrap_or(0.01);
+        prev_t_ms = Some(pkt.t_ms);
+
+        let mut gyro = [pkt.gx_dps, pkt.gy_dps, pkt.gz_dps];
+        let mut accel = [pkt.ax_mps2, pkt.ay_mps2, pkt.az_mps2];
+        if let Some(cutoff_hz) = cfg.lpf_cutoff_hz {
+            let alpha = lpf_alpha(dt_s, cutoff_hz);
+            gyro = lpf_vec3(&mut filt_gyro, gyro, alpha);
+            accel = lpf_vec3(&mut filt_accel, accel, alpha);
+        }
+
+        count += 1;
+        if count < decimation {
+            continue;
+        }
+        count = 0;
+        out.push(ImuPacket {
+            t_ms: pkt.t_ms,
+            gx_dps: gyro[0],
+            gy_dps: gyro[1],
+            gz_dps: gyro[2],
+            ax_mps2: accel[0],
+            ay_mps2: accel[1],
+            az_mps2: accel[2],
+        });
+    }
+
+    if out.is_empty() {
+        out.push(packets[packets.len() - 1]);
+    }
+    out
+}
+
+fn lpf_alpha(dt_s: f64, cutoff_hz: f64) -> f64 {
+    let tau = 1.0 / (2.0 * std::f64::consts::PI * cutoff_hz.max(1.0e-6));
+    (dt_s / (tau + dt_s)).clamp(0.0, 1.0)
+}
+
+fn lpf_vec3(state: &mut Option<[f64; 3]>, sample: [f64; 3], alpha: f64) -> [f64; 3] {
+    let out = match state {
+        Some(prev) => [
+            prev[0] + alpha * (sample[0] - prev[0]),
+            prev[1] + alpha * (sample[1] - prev[1]),
+            prev[2] + alpha * (sample[2] - prev[2]),
+        ],
+        None => sample,
+    };
+    *state = Some(out);
+    out
 }
 
 impl BootstrapDetector {

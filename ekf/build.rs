@@ -38,7 +38,11 @@ fn build_archive(out_dir: &PathBuf, lib_name: &str, sources: &[PathBuf], include
         }
         cmd.arg("-c").arg(src).arg("-o").arg(&obj);
         let status = cmd.status().expect("failed to run C compiler");
-        assert!(status.success(), "C compilation failed for {}", src.display());
+        assert!(
+            status.success(),
+            "C compilation failed for {}",
+            src.display()
+        );
         objs.push(obj);
     }
 
@@ -49,5 +53,9 @@ fn build_archive(out_dir: &PathBuf, lib_name: &str, sources: &[PathBuf], include
         ar.arg(obj);
     }
     let status = ar.status().expect("failed to run ar");
-    assert!(status.success(), "archive creation failed for {}", lib.display());
+    assert!(
+        status.success(),
+        "archive creation failed for {}",
+        lib.display()
+    );
 }

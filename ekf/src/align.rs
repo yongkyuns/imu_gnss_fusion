@@ -197,8 +197,12 @@ fn convert_trace(trace: CAlignUpdateTrace) -> AlignUpdateTrace {
         q_start: trace.q_start,
         coarse_alignment_ready: trace.coarse_alignment_ready,
         after_gravity: trace.after_gravity_valid.then_some(trace.after_gravity),
-        after_horiz_accel: trace.after_horiz_accel_valid.then_some(trace.after_horiz_accel),
-        horiz_angle_err_rad: trace.horiz_angle_err_rad_valid.then_some(trace.horiz_angle_err_rad),
+        after_horiz_accel: trace
+            .after_horiz_accel_valid
+            .then_some(trace.after_horiz_accel),
+        horiz_angle_err_rad: trace
+            .horiz_angle_err_rad_valid
+            .then_some(trace.horiz_angle_err_rad),
         horiz_effective_std_rad: trace
             .horiz_effective_std_rad_valid
             .then_some(trace.horiz_effective_std_rad),

@@ -148,7 +148,13 @@ fn default_p_diag() -> [f32; N_STATES] {
 }
 
 pub fn ekf_init(ekf: &mut Ekf, p_diag: [f32; N_STATES], noise: PredictNoise) {
-    unsafe { sf_ekf_init(ekf as *mut Ekf, p_diag.as_ptr(), &noise as *const PredictNoise) };
+    unsafe {
+        sf_ekf_init(
+            ekf as *mut Ekf,
+            p_diag.as_ptr(),
+            &noise as *const PredictNoise,
+        )
+    };
 }
 
 pub fn ekf_set_predict_noise(ekf: &mut Ekf, noise: PredictNoise) {

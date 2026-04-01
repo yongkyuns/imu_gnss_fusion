@@ -1,9 +1,9 @@
 use std::cmp::Ordering;
 use std::path::PathBuf;
 
-use sensor_fusion::align::{Align, AlignConfig, AlignWindowSummary, GRAVITY_MPS2};
 use anyhow::{Context, Result, bail};
 use clap::Parser;
+use sensor_fusion::align::{Align, AlignConfig, AlignWindowSummary, GRAVITY_MPS2};
 use sim::ubxlog::{
     NavPvtObs, UbxFrame, extract_esf_alg, extract_esf_raw_samples, extract_nav2_pvt_obs,
     fit_linear_map, parse_ubx_frames, sensor_meta, unwrap_counter,

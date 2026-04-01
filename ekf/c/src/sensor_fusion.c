@@ -28,6 +28,11 @@ static bool sf_take_interval_summary(sf_sensor_fusion_impl_t *impl,
 static sf_update_t sf_update_from_fusion(const sf_sensor_fusion_impl_t *fusion,
                                          bool mount_ready_changed,
                                          bool ekf_initialized_now);
+static uint32_t sf_profile_stamp(const sf_sensor_fusion_impl_t *impl);
+static void sf_profile_accumulate(uint32_t *count,
+                                  uint64_t *total_us,
+                                  uint32_t *max_us,
+                                  uint32_t elapsed_us);
 
 void sf_align_config_default(sf_align_config_t *cfg) {
   if (cfg == NULL) {
@@ -128,6 +133,23 @@ void sf_fusion_set_misalignment(sf_sensor_fusion_t *fusion, const float q_vb[4])
   memcpy(impl->mount_q_vb, q_vb, sizeof(impl->mount_q_vb));
 }
 
+void sf_fusion_set_profile_now_us(sf_sensor_fusion_t *fusion,
+                                  sf_profile_now_us_fn now_us,
+                                  void *ctx) {
+  sf_sensor_fusion_impl_t *impl;
+  if (fusion == NULL) {
+    return;
+  }
+  impl = sf_impl(fusion);
+  impl->profile_now_us = now_us;
+  impl->profile_ctx = ctx;
+  memset(&impl->profile, 0, sizeof(impl->profile));
+}
+
+const sf_profile_counters_t *sf_fusion_profile(const sf_sensor_fusion_t *fusion) {
+  return fusion != NULL ? &sf_impl_const(fusion)->profile : NULL;
+}
+
 sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
                                   const sf_imu_sample_t *sample) {
   sf_sensor_fusion_impl_t *impl;
@@ -137,6 +159,8 @@ sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
   float gyro_vehicle[3];
   float accel_vehicle[3];
   sf_ekf_imu_delta_t imu_delta;
+  uint32_t t0_us;
+  uint32_t elapsed_us;
 
   if (fusion == NULL) {
     sf_update_t empty = {0};
@@ -192,10 +216,18 @@ sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
     return sf_update_from_fusion(impl, false, false);
   }
 
+  t0_us = sf_profile_stamp(impl);
   sf_quat_to_rotmat(impl->mount_q_vb, c_bv);
   sf_transpose3((const float (*)[3])c_bv, c_vb);
   sf_mat3_vec((const float (*)[3])c_vb, sample->gyro_radps, gyro_vehicle);
   sf_mat3_vec((const float (*)[3])c_vb, sample->accel_mps2, accel_vehicle);
+  if (impl->profile_now_us != NULL) {
+    elapsed_us = sf_profile_stamp(impl) - t0_us;
+    sf_profile_accumulate(&impl->profile.imu_rotate_count,
+                          &impl->profile.imu_rotate_total_us,
+                          &impl->profile.imu_rotate_max_us,
+                          elapsed_us);
+  }
 
   imu_delta.dax = gyro_vehicle[0] * dt_s;
   imu_delta.day = gyro_vehicle[1] * dt_s;
@@ -205,10 +237,44 @@ sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
   imu_delta.dvz = accel_vehicle[2] * dt_s;
   imu_delta.dt = dt_s;
 
+  t0_us = sf_profile_stamp(impl);
   sf_ekf_predict(&impl->ekf, &imu_delta, NULL);
+  if (impl->profile_now_us != NULL) {
+    elapsed_us = sf_profile_stamp(impl) - t0_us;
+    sf_profile_accumulate(&impl->profile.imu_predict_count,
+                          &impl->profile.imu_predict_total_us,
+                          &impl->profile.imu_predict_max_us,
+                          elapsed_us);
+  }
+  t0_us = sf_profile_stamp(impl);
   sf_clamp_ekf_biases(&impl->ekf, dt_s);
-  sf_ekf_fuse_body_vel(&impl->ekf, impl->cfg.r_body_vel);
-  sf_clamp_ekf_biases(&impl->ekf, dt_s);
+  if (impl->profile_now_us != NULL) {
+    elapsed_us = sf_profile_stamp(impl) - t0_us;
+    sf_profile_accumulate(&impl->profile.imu_clamp_count,
+                          &impl->profile.imu_clamp_total_us,
+                          &impl->profile.imu_clamp_max_us,
+                          elapsed_us);
+  }
+  if (impl->cfg.r_body_vel > 0.0f) {
+    t0_us = sf_profile_stamp(impl);
+    sf_ekf_fuse_body_vel(&impl->ekf, impl->cfg.r_body_vel);
+    if (impl->profile_now_us != NULL) {
+      elapsed_us = sf_profile_stamp(impl) - t0_us;
+      sf_profile_accumulate(&impl->profile.imu_body_vel_count,
+                            &impl->profile.imu_body_vel_total_us,
+                            &impl->profile.imu_body_vel_max_us,
+                            elapsed_us);
+    }
+    t0_us = sf_profile_stamp(impl);
+    sf_clamp_ekf_biases(&impl->ekf, dt_s);
+    if (impl->profile_now_us != NULL) {
+      elapsed_us = sf_profile_stamp(impl) - t0_us;
+      sf_profile_accumulate(&impl->profile.imu_clamp_count,
+                            &impl->profile.imu_clamp_total_us,
+                            &impl->profile.imu_clamp_max_us,
+                            elapsed_us);
+    }
+  }
   return sf_update_from_fusion(impl, false, false);
 }
 
@@ -220,6 +286,8 @@ sf_update_t sf_fusion_process_gnss(sf_sensor_fusion_t *fusion,
   sf_align_window_summary_t summary;
   bool have_summary = false;
   sf_align_update_trace_t trace;
+  uint32_t t0_us;
+  uint32_t elapsed_us;
 
   if (fusion == NULL) {
     sf_update_t empty = {0};
@@ -273,7 +341,15 @@ sf_update_t sf_fusion_process_gnss(sf_sensor_fusion_t *fusion,
     }
 
     if (impl->align_initialized && have_summary) {
+      t0_us = sf_profile_stamp(impl);
       sf_align_update_window_with_trace(&impl->align_rt, &impl->cfg.align, &summary, &trace);
+      if (impl->profile_now_us != NULL) {
+        elapsed_us = sf_profile_stamp(impl) - t0_us;
+        sf_profile_accumulate(&impl->profile.gnss_align_count,
+                              &impl->profile.gnss_align_total_us,
+                              &impl->profile.gnss_align_max_us,
+                              elapsed_us);
+      }
       memcpy(impl->mount_q_vb, impl->align_rt.state.q_vb, sizeof(impl->mount_q_vb));
       impl->mount_q_vb_valid = true;
       impl->mount_ready = trace.coarse_alignment_ready;
@@ -300,11 +376,27 @@ sf_update_t sf_fusion_process_gnss(sf_sensor_fusion_t *fusion,
   }
 
   if (!impl->ekf_initialized) {
+    t0_us = sf_profile_stamp(impl);
     sf_initialize_ekf_from_gnss(&impl->ekf, sample, impl->cfg.yaw_init_speed_mps);
+    if (impl->profile_now_us != NULL) {
+      elapsed_us = sf_profile_stamp(impl) - t0_us;
+      sf_profile_accumulate(&impl->profile.gnss_init_count,
+                            &impl->profile.gnss_init_total_us,
+                            &impl->profile.gnss_init_max_us,
+                            elapsed_us);
+    }
     impl->ekf_initialized = true;
     ekf_initialized_now = true;
   } else {
+    t0_us = sf_profile_stamp(impl);
     sf_ekf_fuse_gps(&impl->ekf, sample);
+    if (impl->profile_now_us != NULL) {
+      elapsed_us = sf_profile_stamp(impl) - t0_us;
+      sf_profile_accumulate(&impl->profile.gnss_fuse_count,
+                            &impl->profile.gnss_fuse_total_us,
+                            &impl->profile.gnss_fuse_max_us,
+                            elapsed_us);
+    }
   }
 
   impl->bootstrap_imu_count = 0U;
@@ -486,6 +578,27 @@ static float sf_norm3(const float v[3]) {
 static float sf_horizontal_speed(const float v_ned_mps[3]) {
   (void)v_ned_mps[2];
   return sqrtf(v_ned_mps[0] * v_ned_mps[0] + v_ned_mps[1] * v_ned_mps[1]);
+}
+
+static uint32_t sf_profile_stamp(const sf_sensor_fusion_impl_t *impl) {
+  if (impl == NULL || impl->profile_now_us == NULL) {
+    return 0u;
+  }
+  return impl->profile_now_us(impl->profile_ctx);
+}
+
+static void sf_profile_accumulate(uint32_t *count,
+                                  uint64_t *total_us,
+                                  uint32_t *max_us,
+                                  uint32_t elapsed_us) {
+  if (count == NULL || total_us == NULL || max_us == NULL) {
+    return;
+  }
+  *count += 1u;
+  *total_us += (uint64_t)elapsed_us;
+  if (elapsed_us > *max_us) {
+    *max_us = elapsed_us;
+  }
 }
 
 static float sf_interp_speed(const sf_internal_bootstrap_gnss_state_t *prev,

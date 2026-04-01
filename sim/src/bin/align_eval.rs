@@ -3,9 +3,9 @@ use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
-use sensor_fusion::align::{AlignConfig, GRAVITY_MPS2};
 use anyhow::{Context, Result, bail};
 use clap::Parser;
+use sensor_fusion::align::{AlignConfig, GRAVITY_MPS2};
 use sim::ubxlog::{
     NavPvtObs, UbxFrame, extract_esf_raw_samples, extract_nav2_pvt_obs, fit_linear_map,
     parse_ubx_frames, sensor_meta, unwrap_counter,
@@ -13,7 +13,7 @@ use sim::ubxlog::{
 use sim::visualizer::math::nearest_master_ms;
 use sim::visualizer::model::ImuPacket;
 use sim::visualizer::pipeline::align_replay::{
-    BootstrapConfig, axis_angle_deg, build_align_replay, quat_rotate,
+    BootstrapConfig, ImuReplayConfig, axis_angle_deg, build_align_replay, quat_rotate,
     signed_projected_axis_angle_deg,
 };
 use sim::visualizer::pipeline::timebase::{MasterTimeline, build_master_timeline};
@@ -631,7 +631,13 @@ fn evaluate_config(
     bootstrap_cfg: &BootstrapConfig,
 ) -> Result<EvalResult> {
     let mut samples = Vec::<ResidualSample>::new();
-    let replay = build_align_replay(&dataset.frames, &dataset.timeline, *cfg, *bootstrap_cfg);
+    let replay = build_align_replay(
+        &dataset.frames,
+        &dataset.timeline,
+        *cfg,
+        *bootstrap_cfg,
+        ImuReplayConfig::default(),
+    );
     let init_time_s = replay.samples.first().map(|s| s.t_s).unwrap_or(f64::NAN);
     let final_alg_q = replay.final_alg_q;
 
@@ -805,9 +811,7 @@ fn tune_config(
         if eval.metrics.score + 1.0e-6 < best.metrics.score {
             eprintln!(
                 "[tune features] turn={} score {:.3} -> {:.3}",
-                use_turn_gyro,
-                best.metrics.score,
-                eval.metrics.score
+                use_turn_gyro, best.metrics.score, eval.metrics.score
             );
             best = eval;
         }
@@ -974,8 +978,7 @@ fn print_config(cfg: &AlignConfig, bootstrap_cfg: &BootstrapConfig) {
     );
     eprintln!(
         "[config] use_gravity={} use_turn_gyro={}",
-        cfg.use_gravity,
-        cfg.use_turn_gyro
+        cfg.use_gravity, cfg.use_turn_gyro
     );
 }
 

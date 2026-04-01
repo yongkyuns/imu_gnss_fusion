@@ -14,7 +14,9 @@ use super::super::math::{
     normalize_heading_deg, quat_rpy_deg, rad2deg, rot_zyx, set_quat_yaw_only,
 };
 use super::super::model::{AlgEvent, EkfImuSource, HeadingSample, ImuPacket, NavAttEvent, Trace};
-use super::align_replay::{BootstrapConfig as AlignBootstrapConfig, build_align_replay};
+use super::align_replay::{
+    BootstrapConfig as AlignBootstrapConfig, ImuReplayConfig, build_align_replay,
+};
 use super::tag_time::fit_tag_ms_map;
 use super::timebase::MasterTimeline;
 
@@ -36,6 +38,8 @@ pub struct EkfCompareData {
 pub struct EkfCompareConfig {
     pub r_body_vel: f32,
     pub vehicle_meas_lpf_cutoff_hz: f64,
+    pub predict_imu_lpf_cutoff_hz: Option<f64>,
+    pub predict_imu_decimation: usize,
     pub yaw_init_speed_mps: f64,
     pub gnss_pos_r_scale: f64,
     pub gnss_vel_r_scale: f64,
@@ -47,6 +51,8 @@ impl Default for EkfCompareConfig {
         Self {
             r_body_vel: 5.0,
             vehicle_meas_lpf_cutoff_hz: 5.0,
+            predict_imu_lpf_cutoff_hz: None,
+            predict_imu_decimation: 1,
             yaw_init_speed_mps: 0.0 / 3.6,
             gnss_pos_r_scale: 1.0,
             gnss_vel_r_scale: 1.0,
@@ -241,7 +247,14 @@ pub fn build_ekf_compare_traces(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     let align_events = if ekf_imu_source == EkfImuSource::Align {
-        build_align_mount_events(frames, tl)
+        build_align_mount_events(
+            frames,
+            tl,
+            ImuReplayConfig {
+                lpf_cutoff_hz: cfg.predict_imu_lpf_cutoff_hz,
+                decimation: cfg.predict_imu_decimation,
+            },
+        )
     } else {
         Vec::new()
     };
@@ -286,9 +299,8 @@ pub fn build_ekf_compare_traces(
     let mut map_heading = Vec::<HeadingSample>::new();
 
     let mut ekf = Ekf::default();
-    if let Some(noise) = cfg.predict_noise {
-        ekf_set_predict_noise(&mut ekf, noise);
-    }
+    let base_predict_noise = cfg.predict_noise.unwrap_or(ekf.noise);
+    ekf_set_predict_noise(&mut ekf, base_predict_noise);
     let mut prev_imu_t: Option<f64> = None;
     let mut alg_idx = 0usize;
     let mut alg_status_idx = 0usize;
@@ -305,6 +317,12 @@ pub fn build_ekf_compare_traces(
     let mut ref_h = 0.0_f64;
     let mut filt_meas_gyro: Option<[f64; 3]> = None;
     let mut filt_meas_accel: Option<[f64; 3]> = None;
+    let mut filt_predict_gyro: Option<[f64; 3]> = None;
+    let mut filt_predict_accel: Option<[f64; 3]> = None;
+    let mut predict_gyro_sum = [0.0_f64; 3];
+    let mut predict_accel_sum = [0.0_f64; 3];
+    let mut predict_dt_accum = 0.0_f64;
+    let mut predict_decim_count = 0usize;
     let mut prev_outage_active = false;
 
     if let Some((_, first_nav)) = nav_events.first().copied() {
@@ -470,15 +488,6 @@ pub fn build_ekf_compare_traces(
             }
         }
 
-        let imu = ImuSample {
-            dax: (deg2rad(gyro[0]) * dt) as f32,
-            day: (deg2rad(gyro[1]) * dt) as f32,
-            daz: (deg2rad(gyro[2]) * dt) as f32,
-            dvx: (accel[0] * dt) as f32,
-            dvy: (accel[1] * dt) as f32,
-            dvz: (accel[2] * dt) as f32,
-            dt: dt as f32,
-        };
         if !ekf_initialized {
             while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
                 nav_idx += 1;
@@ -486,80 +495,138 @@ pub fn build_ekf_compare_traces(
             continue;
         }
 
-        ekf_predict(&mut ekf, &imu, None);
-        clamp_ekf_biases(&mut ekf, dt);
+        let predict_gyro = if let Some(cutoff_hz) = cfg.predict_imu_lpf_cutoff_hz {
+            let alpha_pred = lpf_alpha(dt, cutoff_hz);
+            lpf_vec3(&mut filt_predict_gyro, gyro, alpha_pred)
+        } else {
+            gyro
+        };
+        let predict_accel = if let Some(cutoff_hz) = cfg.predict_imu_lpf_cutoff_hz {
+            let alpha_pred = lpf_alpha(dt, cutoff_hz);
+            lpf_vec3(&mut filt_predict_accel, accel, alpha_pred)
+        } else {
+            accel
+        };
+        predict_dt_accum += dt;
+        predict_decim_count += 1;
+        predict_gyro_sum[0] += predict_gyro[0];
+        predict_gyro_sum[1] += predict_gyro[1];
+        predict_gyro_sum[2] += predict_gyro[2];
+        predict_accel_sum[0] += predict_accel[0];
+        predict_accel_sum[1] += predict_accel[1];
+        predict_accel_sum[2] += predict_accel[2];
+        let predict_decimation = cfg.predict_imu_decimation.max(1);
+        if predict_decim_count >= predict_decimation {
+            let pred_dt = predict_dt_accum.max(1.0e-6);
+            let block_len = predict_decim_count.max(1) as f32;
+            let inv_block_len = 1.0 / (predict_decim_count.max(1) as f64);
+            let avg_predict_gyro = [
+                predict_gyro_sum[0] * inv_block_len,
+                predict_gyro_sum[1] * inv_block_len,
+                predict_gyro_sum[2] * inv_block_len,
+            ];
+            let avg_predict_accel = [
+                predict_accel_sum[0] * inv_block_len,
+                predict_accel_sum[1] * inv_block_len,
+                predict_accel_sum[2] * inv_block_len,
+            ];
+            let scaled_predict_noise = PredictNoise {
+                gyro_var: base_predict_noise.gyro_var / block_len,
+                accel_var: base_predict_noise.accel_var / block_len,
+                gyro_bias_rw_var: base_predict_noise.gyro_bias_rw_var / block_len,
+                accel_bias_rw_var: base_predict_noise.accel_bias_rw_var / block_len,
+            };
+            ekf_set_predict_noise(&mut ekf, scaled_predict_noise);
+            let imu = ImuSample {
+                dax: (deg2rad(avg_predict_gyro[0]) * pred_dt) as f32,
+                day: (deg2rad(avg_predict_gyro[1]) * pred_dt) as f32,
+                daz: (deg2rad(avg_predict_gyro[2]) * pred_dt) as f32,
+                dvx: (avg_predict_accel[0] * pred_dt) as f32,
+                dvy: (avg_predict_accel[1] * pred_dt) as f32,
+                dvz: (avg_predict_accel[2] * pred_dt) as f32,
+                dt: pred_dt as f32,
+            };
+            ekf_predict(&mut ekf, &imu, None);
+            clamp_ekf_biases(&mut ekf, pred_dt);
 
-        ekf_fuse_body_vel(&mut ekf, cfg.r_body_vel);
-        clamp_ekf_biases(&mut ekf, dt);
+            ekf_fuse_body_vel(&mut ekf, cfg.r_body_vel / block_len.max(1.0));
+            clamp_ekf_biases(&mut ekf, pred_dt);
+            ekf_set_predict_noise(&mut ekf, base_predict_noise);
 
-        while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
-            let (t_ms, nav) = nav_events[nav_idx];
-            nav_idx += 1;
-            if in_gnss_outage(t_ms, &outage_windows_ms) {
-                continue;
-            }
-            if !use_nav2_for_ekf {
-                if !next_gps_update_ms.is_finite() {
-                    next_gps_update_ms = t_ms;
-                }
-                if t_ms + 1e-6 < next_gps_update_ms {
+            while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
+                let (t_ms, nav) = nav_events[nav_idx];
+                nav_idx += 1;
+                if in_gnss_outage(t_ms, &outage_windows_ms) {
                     continue;
                 }
-                next_gps_update_ms += gps_period_ms;
+                if !use_nav2_for_ekf {
+                    if !next_gps_update_ms.is_finite() {
+                        next_gps_update_ms = t_ms;
+                    }
+                    if t_ms + 1e-6 < next_gps_update_ms {
+                        continue;
+                    }
+                    next_gps_update_ms += gps_period_ms;
+                }
+
+                if !origin_set {
+                    ref_lat = nav.lat_deg;
+                    ref_lon = nav.lon_deg;
+                    ref_h = nav.height_m;
+                    ref_ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
+                    origin_set = true;
+                }
+                let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
+                let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
+                let speed_h = nav.vel_n_mps.hypot(nav.vel_e_mps);
+                if !yaw_initialized_from_vel && speed_h >= cfg.yaw_init_speed_mps {
+                    let yaw_from_vel = nav.vel_e_mps.atan2(nav.vel_n_mps);
+                    set_quat_yaw_only(&mut ekf.state, yaw_from_vel);
+                    yaw_initialized_from_vel = true;
+                }
+                let h_acc2 = (nav.h_acc_m * nav.h_acc_m).max(0.05) * cfg.gnss_pos_r_scale;
+                let v_acc2 = (nav.v_acc_m * nav.v_acc_m).max(0.05) * cfg.gnss_pos_r_scale;
+                let s_acc2 = (nav.s_acc_mps * nav.s_acc_mps).max(0.02) * cfg.gnss_vel_r_scale;
+                let gps = GpsData {
+                    pos_n: ned[0] as f32,
+                    pos_e: ned[1] as f32,
+                    pos_d: ned[2] as f32,
+                    vel_n: nav.vel_n_mps as f32,
+                    vel_e: nav.vel_e_mps as f32,
+                    vel_d: nav.vel_d_mps as f32,
+                    R_POS_N: h_acc2 as f32,
+                    R_POS_E: h_acc2 as f32,
+                    R_POS_D: v_acc2 as f32,
+                    R_VEL_N: s_acc2 as f32,
+                    R_VEL_E: s_acc2 as f32,
+                    R_VEL_D: s_acc2 as f32,
+                };
+                ekf_fuse_gps(&mut ekf, &gps);
+                clamp_ekf_biases(&mut ekf, pred_dt);
+
+                let t = rel_s(t_ms);
+                let (_, _, ekf_yaw) =
+                    quat_rpy_deg(ekf.state.q0, ekf.state.q1, ekf.state.q2, ekf.state.q3);
+                let (ekf_lat, ekf_lon, _ekf_h) = ned_to_lla_exact(
+                    ekf.state.pn as f64,
+                    ekf.state.pe as f64,
+                    ekf.state.pd as f64,
+                    ref_lat,
+                    ref_lon,
+                    ref_h,
+                );
+                map_heading.push(HeadingSample {
+                    t_s: t,
+                    lon_deg: ekf_lon,
+                    lat_deg: ekf_lat,
+                    yaw_deg: ekf_yaw,
+                });
             }
 
-            if !origin_set {
-                ref_lat = nav.lat_deg;
-                ref_lon = nav.lon_deg;
-                ref_h = nav.height_m;
-                ref_ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
-                origin_set = true;
-            }
-            let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
-            let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
-            let speed_h = nav.vel_n_mps.hypot(nav.vel_e_mps);
-            if !yaw_initialized_from_vel && speed_h >= cfg.yaw_init_speed_mps {
-                let yaw_from_vel = nav.vel_e_mps.atan2(nav.vel_n_mps);
-                set_quat_yaw_only(&mut ekf.state, yaw_from_vel);
-                yaw_initialized_from_vel = true;
-            }
-            let h_acc2 = (nav.h_acc_m * nav.h_acc_m).max(0.05) * cfg.gnss_pos_r_scale;
-            let v_acc2 = (nav.v_acc_m * nav.v_acc_m).max(0.05) * cfg.gnss_pos_r_scale;
-            let s_acc2 = (nav.s_acc_mps * nav.s_acc_mps).max(0.02) * cfg.gnss_vel_r_scale;
-            let gps = GpsData {
-                pos_n: ned[0] as f32,
-                pos_e: ned[1] as f32,
-                pos_d: ned[2] as f32,
-                vel_n: nav.vel_n_mps as f32,
-                vel_e: nav.vel_e_mps as f32,
-                vel_d: nav.vel_d_mps as f32,
-                R_POS_N: h_acc2 as f32,
-                R_POS_E: h_acc2 as f32,
-                R_POS_D: v_acc2 as f32,
-                R_VEL_N: s_acc2 as f32,
-                R_VEL_E: s_acc2 as f32,
-                R_VEL_D: s_acc2 as f32,
-            };
-            ekf_fuse_gps(&mut ekf, &gps);
-            clamp_ekf_biases(&mut ekf, dt);
-
-            let t = rel_s(t_ms);
-            let (_, _, ekf_yaw) =
-                quat_rpy_deg(ekf.state.q0, ekf.state.q1, ekf.state.q2, ekf.state.q3);
-            let (ekf_lat, ekf_lon, _ekf_h) = ned_to_lla_exact(
-                ekf.state.pn as f64,
-                ekf.state.pe as f64,
-                ekf.state.pd as f64,
-                ref_lat,
-                ref_lon,
-                ref_h,
-            );
-            map_heading.push(HeadingSample {
-                t_s: t,
-                lon_deg: ekf_lon,
-                lat_deg: ekf_lat,
-                yaw_deg: ekf_yaw,
-            });
+            predict_gyro_sum = [0.0; 3];
+            predict_accel_sum = [0.0; 3];
+            predict_dt_accum = 0.0;
+            predict_decim_count = 0;
         }
 
         if origin_set {
@@ -938,6 +1005,7 @@ impl Lcg64 {
 fn build_align_mount_events(
     frames: &[UbxFrame],
     tl: &MasterTimeline,
+    imu_cfg: ImuReplayConfig,
 ) -> Vec<(f64, [f32; 4])> {
     if tl.masters.is_empty() {
         return Vec::new();
@@ -951,7 +1019,7 @@ fn build_align_mount_events(
         max_gyro_radps: cfg.max_stationary_gyro_radps,
         max_accel_norm_err_mps2: cfg.max_stationary_accel_norm_err_mps2,
     };
-    let replay = build_align_replay(frames, tl, cfg, bootstrap_cfg);
+    let replay = build_align_replay(frames, tl, cfg, bootstrap_cfg, imu_cfg);
     let mut out = Vec::<(f64, [f32; 4])>::new();
     let mut ready = false;
     for sample in replay.samples {
@@ -1064,7 +1132,6 @@ fn append_ekf_sample(
         yaw_deg: ekf_yaw,
     });
 }
-
 
 fn quat_to_rotmat_f64(q: [f64; 4]) -> [[f64; 3]; 3] {
     let n = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();

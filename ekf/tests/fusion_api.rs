@@ -21,8 +21,7 @@ fn stationary_gnss_sample(t_s: f32) -> FusionGnssSample {
 
 #[test]
 fn external_misalignment_initializes_ekf_from_gnss() {
-    let mut system =
-        SensorFusion::with_misalignment(FusionConfig::default(), [1.0, 0.0, 0.0, 0.0]);
+    let mut system = SensorFusion::with_misalignment(FusionConfig::default(), [1.0, 0.0, 0.0, 0.0]);
     let upd = system.process_gnss(gnss_sample(1.0));
     assert!(upd.mount_ready);
     assert!(upd.ekf_initialized_now);

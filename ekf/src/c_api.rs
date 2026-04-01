@@ -280,7 +280,12 @@ impl CAlign {
         let c_cfg = c_align_config_from_rust(cfg);
         let mut raw = CAlignRuntime::default();
         // SAFETY: raw/cfg are valid stack objects and C does not retain pointers.
-        unsafe { sf_align_init(&mut raw as *mut CAlignRuntime, &c_cfg as *const CAlignConfig) };
+        unsafe {
+            sf_align_init(
+                &mut raw as *mut CAlignRuntime,
+                &c_cfg as *const CAlignConfig,
+            )
+        };
         Self { raw, cfg: c_cfg }
     }
 
@@ -362,7 +367,12 @@ impl CSensorFusionWrapper {
         let mut raw = CSensorFusion::default();
         let c_cfg = c_fusion_config_from_rust(cfg);
         // SAFETY: valid pointers, C does not retain cfg pointer.
-        unsafe { sf_fusion_init_internal(&mut raw as *mut CSensorFusion, &c_cfg as *const CFusionConfig) };
+        unsafe {
+            sf_fusion_init_internal(
+                &mut raw as *mut CSensorFusion,
+                &c_cfg as *const CFusionConfig,
+            )
+        };
         Self { raw }
     }
 
@@ -393,7 +403,10 @@ impl CSensorFusionWrapper {
         };
         // SAFETY: valid pointers, C returns by value.
         let update = unsafe {
-            sf_fusion_process_imu(&mut self.raw as *mut CSensorFusion, &c_sample as *const CImuSample)
+            sf_fusion_process_imu(
+                &mut self.raw as *mut CSensorFusion,
+                &c_sample as *const CImuSample,
+            )
         };
         c_update_to_rust(update)
     }
@@ -421,7 +434,11 @@ impl CSensorFusionWrapper {
     pub fn ekf(&self) -> Option<&Ekf> {
         // SAFETY: C returns null or pointer to internal state owned by self.
         let p = unsafe { sf_fusion_ekf(&self.raw as *const CSensorFusion) };
-        if p.is_null() { None } else { Some(unsafe { &*p }) }
+        if p.is_null() {
+            None
+        } else {
+            Some(unsafe { &*p })
+        }
     }
 
     pub fn ekf_mut(&mut self) -> Option<&mut Ekf> {
@@ -436,7 +453,11 @@ impl CSensorFusionWrapper {
     pub fn align_state(&self) -> Option<&CAlignState> {
         // SAFETY: C returns null or pointer to internal state owned by self.
         let p = unsafe { sf_fusion_align(&self.raw as *const CSensorFusion) };
-        if p.is_null() { None } else { Some(unsafe { &*p }) }
+        if p.is_null() {
+            None
+        } else {
+            Some(unsafe { &*p })
+        }
     }
 
     pub fn mount_ready(&self) -> bool {
@@ -447,9 +468,8 @@ impl CSensorFusionWrapper {
     pub fn mount_q_vb(&self) -> Option<[f32; 4]> {
         let mut out = [0.0f32; 4];
         // SAFETY: valid pointers, C writes exactly 4 floats on success.
-        let ok = unsafe {
-            sf_fusion_mount_q_vb(&self.raw as *const CSensorFusion, out.as_mut_ptr())
-        };
+        let ok =
+            unsafe { sf_fusion_mount_q_vb(&self.raw as *const CSensorFusion, out.as_mut_ptr()) };
         ok.then_some(out)
     }
 }

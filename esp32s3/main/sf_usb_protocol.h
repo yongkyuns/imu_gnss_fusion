@@ -43,6 +43,7 @@ typedef struct __attribute__((packed)) {
   uint8_t reserved1;
   uint8_t reserved2;
   float q_vb[4];
+  float r_body_vel;
 } sf_usb_config_payload_t;
 
 typedef struct __attribute__((packed)) {
@@ -78,6 +79,27 @@ typedef struct __attribute__((packed)) {
   float imu_max_us;
   float gnss_avg_us;
   float gnss_max_us;
+  uint32_t imu_rotate_count;
+  float imu_rotate_avg_us;
+  float imu_rotate_max_us;
+  uint32_t imu_predict_count;
+  float imu_predict_avg_us;
+  float imu_predict_max_us;
+  uint32_t imu_clamp_count;
+  float imu_clamp_avg_us;
+  float imu_clamp_max_us;
+  uint32_t imu_body_vel_count;
+  float imu_body_vel_avg_us;
+  float imu_body_vel_max_us;
+  uint32_t gnss_align_count;
+  float gnss_align_avg_us;
+  float gnss_align_max_us;
+  uint32_t gnss_init_count;
+  float gnss_init_avg_us;
+  float gnss_init_max_us;
+  uint32_t gnss_fuse_count;
+  float gnss_fuse_avg_us;
+  float gnss_fuse_max_us;
 } sf_usb_status_payload_t;
 
 #endif

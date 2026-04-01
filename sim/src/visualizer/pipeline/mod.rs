@@ -8,6 +8,7 @@ pub mod timebase;
 use crate::ubxlog::parse_ubx_frames;
 
 use super::model::{EkfImuSource, PlotData};
+use crate::visualizer::pipeline::align_replay::ImuReplayConfig;
 use align_compare::build_align_compare_traces;
 use ekf_compare::{EkfCompareConfig, GnssOutageConfig, build_ekf_compare_traces};
 use signals::build_signal_traces;
@@ -24,7 +25,14 @@ pub fn build_plot_data(
     let timeline = build_master_timeline(&frames);
     let ekf_data =
         build_ekf_compare_traces(&frames, &timeline, ekf_imu_source, ekf_cfg, gnss_outages);
-    let align_data = build_align_compare_traces(&frames, &timeline);
+    let align_data = build_align_compare_traces(
+        &frames,
+        &timeline,
+        ImuReplayConfig {
+            lpf_cutoff_hz: ekf_cfg.predict_imu_lpf_cutoff_hz,
+            decimation: ekf_cfg.predict_imu_decimation,
+        },
+    );
     let out = build_signal_traces(&frames, &timeline, ekf_data, align_data);
     (out, timeline.has_itow)
 }

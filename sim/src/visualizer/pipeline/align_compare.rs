@@ -3,7 +3,7 @@ use sensor_fusion::align::AlignConfig;
 use crate::ubxlog::{UbxFrame, extract_esf_alg};
 
 use super::align_replay::{
-    BootstrapConfig as ReplayBootstrapConfig, build_align_replay,
+    BootstrapConfig as ReplayBootstrapConfig, ImuReplayConfig, build_align_replay,
     frd_mount_quat_to_esf_alg_flu_quat, quat_rotate, quat_rpy_alg_deg,
     signed_projected_axis_angle_deg,
 };
@@ -23,7 +23,11 @@ pub struct AlignCompareData {
     pub cov: Vec<Trace>,
 }
 
-pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> AlignCompareData {
+pub fn build_align_compare_traces(
+    frames: &[UbxFrame],
+    tl: &MasterTimeline,
+    imu_cfg: ImuReplayConfig,
+) -> AlignCompareData {
     if tl.masters.is_empty() {
         return AlignCompareData {
             cmp_att: Vec::new(),
@@ -45,7 +49,7 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
         max_gyro_radps: cfg.max_stationary_gyro_radps,
         max_accel_norm_err_mps2: cfg.max_stationary_accel_norm_err_mps2,
     };
-    let replay = build_align_replay(frames, tl, cfg, bootstrap_cfg);
+    let replay = build_align_replay(frames, tl, cfg, bootstrap_cfg, imu_cfg);
     let final_alg_q = replay.final_alg_q;
 
     let mut out_roll = Vec::<[f64; 2]>::new();
@@ -190,12 +194,10 @@ pub fn build_align_compare_traces(frames: &[UbxFrame], tl: &MasterTimeline) -> A
                 points: yaw_init,
             },
         ],
-        motion: vec![
-            Trace {
-                name: "final ESF-ALG heading [deg]".to_string(),
-                points: final_alg_heading,
-            },
-        ],
+        motion: vec![Trace {
+            name: "final ESF-ALG heading [deg]".to_string(),
+            points: final_alg_heading,
+        }],
         roll_contrib: vec![
             Trace {
                 name: "horiz accel".to_string(),

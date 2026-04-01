@@ -11,11 +11,11 @@ use sim::ubxlog::{
     NavPvtObs, UbxFrame, extract_esf_alg, extract_esf_raw_samples, extract_nav2_pvt_obs,
     fit_linear_map, parse_ubx_frames, sensor_meta, unwrap_counter,
 };
-use sim::visualizer::model::ImuPacket;
 use sim::visualizer::math::{ecef_to_ned, lla_to_ecef, nearest_master_ms};
+use sim::visualizer::model::ImuPacket;
 use sim::visualizer::pipeline::align_replay::{
-    BootstrapConfig, build_align_replay, esf_alg_flu_to_frd_mount_quat, quat_rotate,
-    signed_projected_axis_angle_deg,
+    BootstrapConfig, ImuReplayConfig, build_align_replay, esf_alg_flu_to_frd_mount_quat,
+    quat_rotate, signed_projected_axis_angle_deg,
 };
 use sim::visualizer::pipeline::timebase::{MasterTimeline, build_master_timeline};
 
@@ -110,7 +110,13 @@ fn main() -> Result<()> {
         let frames = parse_ubx_frames(&data, None);
         let tl = build_master_timeline(&frames);
 
-        let rust_replay = build_align_replay(&frames, &tl, align_cfg, bootstrap_cfg);
+        let rust_replay = build_align_replay(
+            &frames,
+            &tl,
+            align_cfg,
+            bootstrap_cfg,
+            ImuReplayConfig::default(),
+        );
         let rust_align = align_metrics_from_replay(&rust_replay)
             .with_context(|| format!("missing ESF-ALG reference for {file}"))?;
         let c_align = run_c_align_replay(&frames, &tl, align_cfg, bootstrap_cfg)
@@ -168,8 +174,7 @@ fn print_summary(results: &[FileComparison]) {
     let mut fusion_large_diffs = 0usize;
 
     for r in results {
-        if opt_abs_diff(r.rust_align.ready_t_s, r.c_align.ready_t_s)
-            .is_some_and(|dt| dt > 1.0e-6)
+        if opt_abs_diff(r.rust_align.ready_t_s, r.c_align.ready_t_s).is_some_and(|dt| dt > 1.0e-6)
             || r.rust_align.ready_t_s.is_some() != r.c_align.ready_t_s.is_some()
         {
             ready_time_mismatches += 1;
@@ -205,8 +210,7 @@ fn print_summary(results: &[FileComparison]) {
 
 fn fail_on_mismatch(results: &[FileComparison]) -> Result<()> {
     for r in results {
-        if opt_abs_diff(r.rust_align.ready_t_s, r.c_align.ready_t_s)
-            .is_some_and(|dt| dt > 1.0e-6)
+        if opt_abs_diff(r.rust_align.ready_t_s, r.c_align.ready_t_s).is_some_and(|dt| dt > 1.0e-6)
             || r.rust_align.ready_t_s.is_some() != r.c_align.ready_t_s.is_some()
         {
             bail!("coarse-ready mismatch on {}", r.file);
@@ -233,7 +237,9 @@ fn fail_on_mismatch(results: &[FileComparison]) -> Result<()> {
     Ok(())
 }
 
-fn align_metrics_from_replay(replay: &sim::visualizer::pipeline::align_replay::AlignReplayData) -> Result<AlignMetrics> {
+fn align_metrics_from_replay(
+    replay: &sim::visualizer::pipeline::align_replay::AlignReplayData,
+) -> Result<AlignMetrics> {
     let final_alg_q = replay.final_alg_q.context("missing final ESF-ALG")?;
     let ref_fwd = quat_rotate(final_alg_q, [1.0, 0.0, 0.0]);
     let ref_down = quat_rotate(final_alg_q, [0.0, 0.0, 1.0]);
@@ -359,8 +365,9 @@ fn run_c_align_replay(
                     ready_t_s = Some((*tn - tl.t0_master_ms) * 1.0e-3);
                     ready_fwd_err_deg =
                         Some(signed_projected_axis_angle_deg(align_fwd, ref_fwd, ref_down).abs());
-                    ready_down_err_deg =
-                        Some(signed_projected_axis_angle_deg(align_down, ref_down, ref_right).abs());
+                    ready_down_err_deg = Some(
+                        signed_projected_axis_angle_deg(align_down, ref_down, ref_right).abs(),
+                    );
                 }
                 prev_ready = trace.coarse_alignment_ready;
             }
@@ -379,12 +386,8 @@ fn run_c_align_replay(
         ready_down_err_deg,
         final_fwd_err_deg: signed_projected_axis_angle_deg(final_align_fwd, ref_fwd, ref_down)
             .abs(),
-        final_down_err_deg: signed_projected_axis_angle_deg(
-            final_align_down,
-            ref_down,
-            ref_right,
-        )
-        .abs(),
+        final_down_err_deg: signed_projected_axis_angle_deg(final_align_down, ref_down, ref_right)
+            .abs(),
     })
 }
 
@@ -442,9 +445,17 @@ fn compare_fusion_pair(
         let gnss = FusionGnssSample {
             t_s: t_s as f32,
             pos_ned_m: nav_to_ned(*nav, ref_nav),
-            vel_ned_mps: [nav.vel_n_mps as f32, nav.vel_e_mps as f32, nav.vel_d_mps as f32],
+            vel_ned_mps: [
+                nav.vel_n_mps as f32,
+                nav.vel_e_mps as f32,
+                nav.vel_d_mps as f32,
+            ],
             pos_std_m: [nav.h_acc_m as f32, nav.h_acc_m as f32, nav.v_acc_m as f32],
-            vel_std_mps: [nav.s_acc_mps as f32, nav.s_acc_mps as f32, nav.s_acc_mps as f32],
+            vel_std_mps: [
+                nav.s_acc_mps as f32,
+                nav.s_acc_mps as f32,
+                nav.s_acc_mps as f32,
+            ],
             heading_rad,
         };
         let ru = rust.process_gnss(gnss);
@@ -484,17 +495,29 @@ fn summarize_fusion_metrics(
 ) {
     if let Some(rekf) = rust.ekf() {
         rust_metrics.sample_count = diffs.len();
-        rust_metrics.final_pos_m =
-            norm3_f64([rekf.state.pn as f64, rekf.state.pe as f64, rekf.state.pd as f64]);
-        rust_metrics.final_vel_mps =
-            norm3_f64([rekf.state.vn as f64, rekf.state.ve as f64, rekf.state.vd as f64]);
+        rust_metrics.final_pos_m = norm3_f64([
+            rekf.state.pn as f64,
+            rekf.state.pe as f64,
+            rekf.state.pd as f64,
+        ]);
+        rust_metrics.final_vel_mps = norm3_f64([
+            rekf.state.vn as f64,
+            rekf.state.ve as f64,
+            rekf.state.vd as f64,
+        ]);
     }
     if let Some(cekf) = c.ekf() {
         c_metrics.sample_count = diffs.len();
-        c_metrics.final_pos_m =
-            norm3_f64([cekf.state.pn as f64, cekf.state.pe as f64, cekf.state.pd as f64]);
-        c_metrics.final_vel_mps =
-            norm3_f64([cekf.state.vn as f64, cekf.state.ve as f64, cekf.state.vd as f64]);
+        c_metrics.final_pos_m = norm3_f64([
+            cekf.state.pn as f64,
+            cekf.state.pe as f64,
+            cekf.state.pd as f64,
+        ]);
+        c_metrics.final_vel_mps = norm3_f64([
+            cekf.state.vn as f64,
+            cekf.state.ve as f64,
+            cekf.state.vd as f64,
+        ]);
     }
     let diff_summary = summarize_diff(diffs);
     *rust_metrics = FusionParityMetrics {
@@ -816,8 +839,8 @@ fn f32_quat_to_f64(q: [f32; 4]) -> [f64; 4] {
 }
 
 fn parse_section_files(path: &Path, wanted: &str) -> Result<Vec<String>> {
-    let text = fs::read_to_string(path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+    let text =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
     let mut current = String::new();
     let mut out = Vec::new();
     for raw in text.lines() {

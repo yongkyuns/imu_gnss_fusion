@@ -82,6 +82,32 @@ typedef struct {
   uint32_t count;
 } sf_align_runtime_t;
 
+typedef uint32_t (*sf_profile_now_us_fn)(void *ctx);
+
+typedef struct {
+  uint32_t imu_rotate_count;
+  uint64_t imu_rotate_total_us;
+  uint32_t imu_rotate_max_us;
+  uint32_t imu_predict_count;
+  uint64_t imu_predict_total_us;
+  uint32_t imu_predict_max_us;
+  uint32_t imu_clamp_count;
+  uint64_t imu_clamp_total_us;
+  uint32_t imu_clamp_max_us;
+  uint32_t imu_body_vel_count;
+  uint64_t imu_body_vel_total_us;
+  uint32_t imu_body_vel_max_us;
+  uint32_t gnss_align_count;
+  uint64_t gnss_align_total_us;
+  uint32_t gnss_align_max_us;
+  uint32_t gnss_init_count;
+  uint64_t gnss_init_total_us;
+  uint32_t gnss_init_max_us;
+  uint32_t gnss_fuse_count;
+  uint64_t gnss_fuse_total_us;
+  uint32_t gnss_fuse_max_us;
+} sf_profile_counters_t;
+
 typedef struct {
   sf_fusion_config_t cfg;
   sf_ekf_t ekf;
@@ -111,6 +137,9 @@ typedef struct {
   float stationary_accel_buffer[400][3];
   sf_internal_bootstrap_imu_sample_t bootstrap_imu_buffer[512];
   uint32_t bootstrap_imu_count;
+  sf_profile_now_us_fn profile_now_us;
+  void *profile_ctx;
+  sf_profile_counters_t profile;
 } sf_sensor_fusion_impl_t;
 
 _Static_assert(sizeof(sf_sensor_fusion_impl_t) <= SF_SENSOR_FUSION_STORAGE_BYTES,
@@ -142,6 +171,11 @@ float sf_align_update_window_with_trace(sf_align_runtime_t *align_rt,
                                         const sf_align_window_summary_t *window,
                                         sf_align_update_trace_t *trace_out);
 bool sf_align_coarse_alignment_ready(const sf_align_runtime_t *align_rt);
+
+void sf_fusion_set_profile_now_us(sf_sensor_fusion_t *fusion,
+                                  sf_profile_now_us_fn now_us,
+                                  void *ctx);
+const sf_profile_counters_t *sf_fusion_profile(const sf_sensor_fusion_t *fusion);
 
 #ifdef __cplusplus
 }

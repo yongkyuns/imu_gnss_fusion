@@ -2,13 +2,13 @@ use std::{fs::File, io::Read, path::PathBuf};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use sim::ubxlog::{extract_nav2_pvt_obs, extract_nav_pvt_obs, parse_ubx_frames};
+use sim::ubxlog::{extract_nav_pvt_obs, extract_nav2_pvt_obs, parse_ubx_frames};
+use sim::visualizer::math::{ecef_to_ned, lla_to_ecef, nearest_master_ms};
 use sim::visualizer::model::EkfImuSource;
 use sim::visualizer::pipeline::ekf_compare::{
     EkfCompareConfig, GnssOutageConfig, build_ekf_compare_traces,
 };
 use sim::visualizer::pipeline::timebase::build_master_timeline;
-use sim::visualizer::math::{ecef_to_ned, lla_to_ecef, nearest_master_ms};
 
 #[derive(Parser, Debug)]
 #[command(name = "analyze_ekf_position_window")]
@@ -73,7 +73,14 @@ fn main() -> Result<()> {
         args.window_end_s,
     )?;
     print_case("baseline", &baseline.0, &baseline.1);
-    print_nav_alignment(&frames, &tl, args.ekf_imu_source, base_cfg, args.window_start_s, args.window_end_s)?;
+    print_nav_alignment(
+        &frames,
+        &tl,
+        args.ekf_imu_source,
+        base_cfg,
+        args.window_start_s,
+        args.window_end_s,
+    )?;
 
     if !args.no_sweep {
         println!();
@@ -107,24 +114,12 @@ fn print_nav_alignment(
             && obs.fix_ok
             && !obs.invalid_llh
         {
-            nav2_pvt.push([
-                t_s,
-                obs.lat_deg,
-                obs.lon_deg,
-                obs.vel_n_mps,
-                obs.vel_e_mps,
-            ]);
+            nav2_pvt.push([t_s, obs.lat_deg, obs.lon_deg, obs.vel_n_mps, obs.vel_e_mps]);
         } else if let Some(obs) = extract_nav_pvt_obs(f)
             && obs.fix_ok
             && !obs.invalid_llh
         {
-            nav_pvt.push([
-                t_s,
-                obs.lat_deg,
-                obs.lon_deg,
-                obs.vel_n_mps,
-                obs.vel_e_mps,
-            ]);
+            nav_pvt.push([t_s, obs.lat_deg, obs.lon_deg, obs.vel_n_mps, obs.vel_e_mps]);
         }
     }
     if nav_pvt.is_empty() || nav2_pvt.is_empty() {
@@ -176,7 +171,8 @@ fn print_nav_alignment(
         );
     }
 
-    let ekf_data = build_ekf_compare_traces(frames, tl, imu_source, ekf_cfg, GnssOutageConfig::default());
+    let ekf_data =
+        build_ekf_compare_traces(frames, tl, imu_source, ekf_cfg, GnssOutageConfig::default());
     let ekf_n = find_trace(&ekf_data.cmp_pos, "EKF posN [m]")?;
     let ekf_e = find_trace(&ekf_data.cmp_pos, "EKF posE [m]")?;
     if let Some(m) = compute_window_metrics(ekf_n, ekf_e, &n1, &e1, &vn2, &ve2, t0_s, t1_s) {
@@ -196,27 +192,13 @@ fn print_nav_alignment(
         );
     }
 
-    if let Some(poly) = compute_polyline_metrics(
-        ekf_n,
-        ekf_e,
-        &n2,
-        &e2,
-        t0_s,
-        t1_s,
-    ) {
+    if let Some(poly) = compute_polyline_metrics(ekf_n, ekf_e, &n2, &e2, t0_s, t1_s) {
         println!(
             "EKF -> NAV2 polyline   n={:4}  mean={:6.2} m  rms={:6.2} m  max={:6.2} m",
             poly.n, poly.mean_nearest_m, poly.rms_nearest_m, poly.max_nearest_m
         );
     }
-    if let Some(poly) = compute_polyline_metrics(
-        ekf_n,
-        ekf_e,
-        &n1,
-        &e1,
-        t0_s,
-        t1_s,
-    ) {
+    if let Some(poly) = compute_polyline_metrics(ekf_n, ekf_e, &n1, &e1, t0_s, t1_s) {
         println!(
             "EKF -> NAV-PVT polyline n={:4}  mean={:6.2} m  rms={:6.2} m  max={:6.2} m",
             poly.n, poly.mean_nearest_m, poly.rms_nearest_m, poly.max_nearest_m
@@ -235,7 +217,8 @@ fn print_map_space_alignment(
     t0_s: f64,
     t1_s: f64,
 ) -> Result<()> {
-    let data = build_ekf_compare_traces(frames, tl, imu_source, ekf_cfg, GnssOutageConfig::default());
+    let data =
+        build_ekf_compare_traces(frames, tl, imu_source, ekf_cfg, GnssOutageConfig::default());
     let _ekf_map = data
         .map
         .iter()
@@ -298,7 +281,8 @@ fn compute_exact_map_alignment(
     t0_s: f64,
     t1_s: f64,
 ) -> Result<Option<PolylineMetrics>> {
-    let data = build_ekf_compare_traces(frames, tl, imu_source, ekf_cfg, GnssOutageConfig::default());
+    let data =
+        build_ekf_compare_traces(frames, tl, imu_source, ekf_cfg, GnssOutageConfig::default());
     let ekf_n = find_trace(&data.cmp_pos, "EKF posN [m]")?;
     let ekf_e = find_trace(&data.cmp_pos, "EKF posE [m]")?;
     let ekf_d = find_trace(&data.cmp_pos, "EKF posD [m]")?;
@@ -430,7 +414,10 @@ fn points_in_window_from_heading(
         .collect()
 }
 
-fn compute_lonlat_polyline_metrics(src: &[[f64; 2]], reference: &[[f64; 2]]) -> Option<PolylineMetrics> {
+fn compute_lonlat_polyline_metrics(
+    src: &[[f64; 2]],
+    reference: &[[f64; 2]],
+) -> Option<PolylineMetrics> {
     if src.is_empty() || reference.len() < 2 {
         return None;
     }
@@ -561,7 +548,15 @@ fn sweep_r_body_vel(
     println!("R_BODY_VEL");
     for value in [1.0_f32, 2.0, 5.0, 10.0, 20.0] {
         cfg.r_body_vel = value;
-        let (m, lag) = run_case("r_body_vel", frames, tl, args.ekf_imu_source, cfg, args.window_start_s, args.window_end_s)?;
+        let (m, lag) = run_case(
+            "r_body_vel",
+            frames,
+            tl,
+            args.ekf_imu_source,
+            cfg,
+            args.window_start_s,
+            args.window_end_s,
+        )?;
         print_case(&format!("  {:>5.1}", value), &m, &lag);
     }
     Ok(())
@@ -576,7 +571,15 @@ fn sweep_pos_scale(
     println!("GNSS_POS_R_SCALE");
     for value in [1.0_f64, 0.3, 0.1, 0.03, 0.01] {
         cfg.gnss_pos_r_scale = value;
-        let (m, lag) = run_case("gnss_pos", frames, tl, args.ekf_imu_source, cfg, args.window_start_s, args.window_end_s)?;
+        let (m, lag) = run_case(
+            "gnss_pos",
+            frames,
+            tl,
+            args.ekf_imu_source,
+            cfg,
+            args.window_start_s,
+            args.window_end_s,
+        )?;
         print_case(&format!("  {:>5.2}", value), &m, &lag);
     }
     Ok(())
@@ -591,7 +594,15 @@ fn sweep_vel_scale(
     println!("GNSS_VEL_R_SCALE");
     for value in [1.0_f64, 0.3, 0.1, 0.03, 0.01] {
         cfg.gnss_vel_r_scale = value;
-        let (m, lag) = run_case("gnss_vel", frames, tl, args.ekf_imu_source, cfg, args.window_start_s, args.window_end_s)?;
+        let (m, lag) = run_case(
+            "gnss_vel",
+            frames,
+            tl,
+            args.ekf_imu_source,
+            cfg,
+            args.window_start_s,
+            args.window_end_s,
+        )?;
         print_case(&format!("  {:>5.2}", value), &m, &lag);
     }
     Ok(())
@@ -608,7 +619,15 @@ fn sweep_accel_var(
         let mut noise = cfg.predict_noise.unwrap_or_default();
         noise.accel_var = value;
         cfg.predict_noise = Some(noise);
-        let (m, lag) = run_case("accel_var", frames, tl, args.ekf_imu_source, cfg, args.window_start_s, args.window_end_s)?;
+        let (m, lag) = run_case(
+            "accel_var",
+            frames,
+            tl,
+            args.ekf_imu_source,
+            cfg,
+            args.window_start_s,
+            args.window_end_s,
+        )?;
         print_case(&format!("  {:>5.1}", value), &m, &lag);
     }
     Ok(())
@@ -625,7 +644,15 @@ fn sweep_gyro_var(
         let mut noise = cfg.predict_noise.unwrap_or_default();
         noise.gyro_var = value;
         cfg.predict_noise = Some(noise);
-        let (m, lag) = run_case("gyro_var", frames, tl, args.ekf_imu_source, cfg, args.window_start_s, args.window_end_s)?;
+        let (m, lag) = run_case(
+            "gyro_var",
+            frames,
+            tl,
+            args.ekf_imu_source,
+            cfg,
+            args.window_start_s,
+            args.window_end_s,
+        )?;
         print_case(&format!("  {:>8.1e}", value), &m, &lag);
     }
     Ok(())
@@ -832,7 +859,12 @@ fn compute_polyline_metrics(
     })
 }
 
-fn collect_ne_points(n_trace: &[[f64; 2]], e_trace: &[[f64; 2]], t0_s: f64, t1_s: f64) -> Vec<[f64; 2]> {
+fn collect_ne_points(
+    n_trace: &[[f64; 2]],
+    e_trace: &[[f64; 2]],
+    t0_s: f64,
+    t1_s: f64,
+) -> Vec<[f64; 2]> {
     n_trace
         .iter()
         .filter(|p| p[0] >= t0_s && p[0] <= t1_s)
@@ -857,7 +889,10 @@ fn point_segment_distance(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
     ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt()
 }
 
-fn find_trace<'a>(traces: &'a [sim::visualizer::model::Trace], name: &str) -> Result<&'a [[f64; 2]]> {
+fn find_trace<'a>(
+    traces: &'a [sim::visualizer::model::Trace],
+    name: &str,
+) -> Result<&'a [[f64; 2]]> {
     traces
         .iter()
         .find(|tr| tr.name == name)
