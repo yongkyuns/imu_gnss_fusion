@@ -52,6 +52,7 @@ void sf_eskf_predict(sf_eskf_t *eskf, const sf_eskf_imu_delta_t *imu);
 void sf_eskf_predict_nominal(sf_eskf_t *eskf, const sf_eskf_imu_delta_t *imu);
 void sf_eskf_fuse_gps(sf_eskf_t *eskf, const sf_gnss_sample_t *gps);
 void sf_eskf_fuse_body_vel(sf_eskf_t *eskf, float r_body_vel);
+void sf_eskf_fuse_zero_vel(sf_eskf_t *eskf, float r_zero_vel);
 
 void sf_eskf_compute_error_transition(float f_out[SF_ESKF_ERROR_STATES][SF_ESKF_ERROR_STATES],
                                       float g_out[SF_ESKF_ERROR_STATES][SF_ESKF_NOISE_STATES],

@@ -613,6 +613,33 @@ pub fn build_ekf_compare_traces(
             clamp_ekf_biases(&mut ekf, pred_dt);
             if let Some(eskf_ref) = eskf.as_mut() {
                 eskf_ref.fuse_body_vel(cfg.r_body_vel / block_len_sq.max(1.0));
+                let n = eskf_ref.nominal();
+                let c_n_b = quat_to_rotmat_f64([n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64]);
+                let gravity_b = [
+                    c_n_b[2][0] * GRAVITY_MPS2 as f64,
+                    c_n_b[2][1] * GRAVITY_MPS2 as f64,
+                    c_n_b[2][2] * GRAVITY_MPS2 as f64,
+                ];
+                let accel_resid = [
+                    avg_predict_accel[0] - n.bax as f64 + gravity_b[0],
+                    avg_predict_accel[1] - n.bay as f64 + gravity_b[1],
+                    avg_predict_accel[2] - n.baz as f64 + gravity_b[2],
+                ];
+                let accel_h =
+                    (accel_resid[0] * accel_resid[0] + accel_resid[1] * accel_resid[1]).sqrt();
+                let gyro_resid = [
+                    deg2rad(avg_predict_gyro[0]) - n.bgx as f64,
+                    deg2rad(avg_predict_gyro[1]) - n.bgy as f64,
+                    deg2rad(avg_predict_gyro[2]) - n.bgz as f64,
+                ];
+                let gyro_norm = (gyro_resid[0] * gyro_resid[0]
+                    + gyro_resid[1] * gyro_resid[1]
+                    + gyro_resid[2] * gyro_resid[2])
+                    .sqrt();
+                let speed_h = (n.vn as f64).hypot(n.ve as f64);
+                if speed_h < 0.35 && gyro_norm < deg2rad(0.25) && accel_h < 0.08 {
+                    eskf_ref.fuse_zero_vel(0.01);
+                }
             }
             ekf_set_predict_noise(&mut ekf, base_predict_noise);
 

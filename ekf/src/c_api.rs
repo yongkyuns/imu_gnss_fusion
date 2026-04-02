@@ -273,6 +273,7 @@ unsafe extern "C" {
     fn sf_eskf_predict(eskf: *mut CEskf, imu: *const CEskfImuDelta);
     fn sf_eskf_fuse_gps(eskf: *mut CEskf, gps: *const CGnssSample);
     fn sf_eskf_fuse_body_vel(eskf: *mut CEskf, r_body_vel: f32);
+    fn sf_eskf_fuse_zero_vel(eskf: *mut CEskf, r_zero_vel: f32);
 }
 
 pub fn c_align_config_from_rust(cfg: AlignConfig) -> CAlignConfig {
@@ -538,7 +539,13 @@ impl CSensorFusionWrapper {
 impl CEskfWrapper {
     pub fn new(noise: PredictNoise) -> Self {
         let mut raw = CEskf::default();
-        unsafe { sf_eskf_init(&mut raw as *mut CEskf, core::ptr::null(), &noise as *const _) };
+        unsafe {
+            sf_eskf_init(
+                &mut raw as *mut CEskf,
+                core::ptr::null(),
+                &noise as *const _,
+            )
+        };
         Self { raw }
     }
 
@@ -588,8 +595,7 @@ impl CEskfWrapper {
         self.raw.p[7][7] = pos_e * pos_e;
         self.raw.p[8][8] = pos_d * pos_d;
 
-        let gyro_bias_sigma_radps =
-            DEFAULT_GYRO_BIAS_SIGMA_DPS * core::f32::consts::PI / 180.0;
+        let gyro_bias_sigma_radps = DEFAULT_GYRO_BIAS_SIGMA_DPS * core::f32::consts::PI / 180.0;
         let accel_bias_sigma_mps2 = DEFAULT_ACCEL_BIAS_SIGMA_MPS2;
         self.raw.p[9][9] = gyro_bias_sigma_radps * gyro_bias_sigma_radps;
         self.raw.p[10][10] = gyro_bias_sigma_radps * gyro_bias_sigma_radps;
@@ -618,5 +624,9 @@ impl CEskfWrapper {
 
     pub fn fuse_body_vel(&mut self, r_body_vel: f32) {
         unsafe { sf_eskf_fuse_body_vel(&mut self.raw as *mut CEskf, r_body_vel) };
+    }
+
+    pub fn fuse_zero_vel(&mut self, r_zero_vel: f32) {
+        unsafe { sf_eskf_fuse_zero_vel(&mut self.raw as *mut CEskf, r_zero_vel) };
     }
 }

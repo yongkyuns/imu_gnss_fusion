@@ -432,6 +432,22 @@ static void test_eskf_body_vel_y_reduces_small_yaw_error_on_forward_motion(void)
   TEST_ASSERT_TRUE(fabsf(yaw_after) < fabsf(yaw_before));
 }
 
+static void test_eskf_zero_vel_reduces_forward_velocity_when_stopped(void) {
+  sf_eskf_t eskf;
+  float px_before;
+
+  sf_eskf_init(&eskf, NULL, NULL);
+  eskf.nominal.vn = 0.3f;
+  eskf.nominal.ve = 0.0f;
+  eskf.nominal.vd = 0.0f;
+  px_before = eskf.p[3][3];
+
+  sf_eskf_fuse_zero_vel(&eskf, 0.01f);
+
+  TEST_ASSERT_TRUE(fabsf(eskf.nominal.vn) < 0.3f);
+  TEST_ASSERT_TRUE(eskf.p[3][3] < px_before);
+}
+
 static void test_sensor_fusion_internal_mode_bootstraps_align_state(void) {
   sf_sensor_fusion_t fusion;
   sf_sensor_fusion_impl_t *impl = sf_impl(&fusion);
@@ -508,6 +524,7 @@ int main(void) {
   RUN_TEST(test_eskf_fuse_gps_moves_nominal_state_toward_measurement);
   RUN_TEST(test_eskf_fuse_body_vel_reduces_lateral_and_vertical_velocity);
   RUN_TEST(test_eskf_body_vel_y_reduces_small_yaw_error_on_forward_motion);
+  RUN_TEST(test_eskf_zero_vel_reduces_forward_velocity_when_stopped);
   RUN_TEST(test_sensor_fusion_internal_mode_bootstraps_align_state);
   return UNITY_END();
 }

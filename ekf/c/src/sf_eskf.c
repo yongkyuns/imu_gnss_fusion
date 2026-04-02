@@ -20,6 +20,7 @@ static void sf_eskf_fuse_gps_pos_d(sf_eskf_t *eskf, float pos_d, float r_pos_d);
 static void sf_eskf_fuse_gps_vel_n(sf_eskf_t *eskf, float vel_n, float r_vel_n);
 static void sf_eskf_fuse_gps_vel_e(sf_eskf_t *eskf, float vel_e, float r_vel_e);
 static void sf_eskf_fuse_gps_vel_d(sf_eskf_t *eskf, float vel_d, float r_vel_d);
+static void sf_eskf_fuse_body_vel_x(sf_eskf_t *eskf, float r_body_vel);
 static void sf_eskf_fuse_body_vel_y(sf_eskf_t *eskf, float r_body_vel);
 static void sf_eskf_fuse_body_vel_z(sf_eskf_t *eskf, float r_body_vel);
 static void sf_eskf_predict_noise_default(sf_predict_noise_t *cfg);
@@ -226,6 +227,15 @@ void sf_eskf_fuse_body_vel(sf_eskf_t *eskf, float r_body_vel) {
   }
   sf_eskf_fuse_body_vel_y(eskf, r_body_vel);
   sf_eskf_fuse_body_vel_z(eskf, r_body_vel);
+}
+
+void sf_eskf_fuse_zero_vel(sf_eskf_t *eskf, float r_zero_vel) {
+  if (eskf == NULL) {
+    return;
+  }
+  sf_eskf_fuse_body_vel_x(eskf, r_zero_vel);
+  sf_eskf_fuse_body_vel_y(eskf, r_zero_vel);
+  sf_eskf_fuse_body_vel_z(eskf, r_zero_vel);
 }
 
 void sf_eskf_compute_error_transition(float f_out[SF_ESKF_ERROR_STATES][SF_ESKF_ERROR_STATES],
@@ -525,6 +535,30 @@ static void sf_eskf_fuse_body_vel_y(sf_eskf_t *eskf, float r_body_vel) {
   float dx[SF_ESKF_ERROR_STATES];
 #define R_BODY_VEL r_body_vel
 #include "../generated_eskf/body_vel_y_generated.c"
+#undef R_BODY_VEL
+  for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
+    dx[i] = K[i] * innovation;
+  }
+  sf_eskf_fuse_measurement(eskf, innovation, H, K, dx);
+}
+
+static void sf_eskf_fuse_body_vel_x(sf_eskf_t *eskf, float r_body_vel) {
+  const float q0 = eskf->nominal.q0;
+  const float q1 = eskf->nominal.q1;
+  const float q2 = eskf->nominal.q2;
+  const float q3 = eskf->nominal.q3;
+  const float vn = eskf->nominal.vn;
+  const float ve = eskf->nominal.ve;
+  const float vd = eskf->nominal.vd;
+  float (*P)[SF_ESKF_ERROR_STATES] = eskf->p;
+  const float innovation = -((1.0f - 2.0f * q2 * q2 - 2.0f * q3 * q3) * vn +
+                             2.0f * (q1 * q2 + q0 * q3) * ve +
+                             2.0f * (q1 * q3 - q0 * q2) * vd);
+  float H[SF_ESKF_ERROR_STATES];
+  float K[SF_ESKF_ERROR_STATES];
+  float dx[SF_ESKF_ERROR_STATES];
+#define R_BODY_VEL r_body_vel
+#include "../generated_eskf/body_vel_x_generated.c"
 #undef R_BODY_VEL
   for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
     dx[i] = K[i] * innovation;
