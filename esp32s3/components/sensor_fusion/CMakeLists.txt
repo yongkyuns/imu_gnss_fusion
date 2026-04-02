@@ -4,7 +4,7 @@ idf_component_register(
     SRCS
         "${SF_ROOT}/src/sensor_fusion.c"
         "${SF_ROOT}/src/sf_align.c"
-        "${SF_ROOT}/src/sf_ekf.c"
+        "${SF_ROOT}/src/sf_eskf.c"
         "${SF_ROOT}/src/sf_stationary_mount.c"
     INCLUDE_DIRS
         "${SF_ROOT}"

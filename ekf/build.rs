@@ -17,7 +17,6 @@ fn main() {
             PathBuf::from("c/src/sensor_fusion.c"),
             PathBuf::from("c/src/sf_align.c"),
             PathBuf::from("c/src/sf_stationary_mount.c"),
-            PathBuf::from("c/src/sf_ekf.c"),
             PathBuf::from("c/src/sf_eskf.c"),
         ],
         &["-Ic", "-Ic/include"],

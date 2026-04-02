@@ -1,5 +1,3 @@
-use sensor_fusion::ekf::Ekf;
-
 pub fn normalize_heading_deg(mut deg: f64) -> f64 {
     deg %= 360.0;
     if deg < 0.0 {
@@ -86,14 +84,6 @@ pub fn quat_rpy_deg(q0: f32, q1: f32, q2: f32, q3: f32) -> (f64, f64, f64) {
         rad2deg(pitch),
         normalize_heading_deg(rad2deg(yaw)),
     )
-}
-
-pub fn set_quat_yaw_only(state: &mut sensor_fusion::ekf::EkfState, yaw_rad: f64) {
-    let half = 0.5 * yaw_rad;
-    state.q0 = half.cos() as f32;
-    state.q1 = 0.0;
-    state.q2 = 0.0;
-    state.q3 = half.sin() as f32;
 }
 
 pub fn lla_to_ecef(lat_deg: f64, lon_deg: f64, h_m: f64) -> [f64; 3] {
@@ -218,18 +208,6 @@ pub fn heading_endpoint(lat_deg: f64, lon_deg: f64, heading_deg: f64, length_m: 
     let d_lat = d_n / r;
     let d_lon = d_e / (r * deg2rad(lat_deg).cos().max(1e-6));
     (lat_deg + rad2deg(d_lat), lon_deg + rad2deg(d_lon))
-}
-
-pub fn clamp_ekf_biases(ekf: &mut Ekf, dt_s: f64) {
-    let dt = dt_s.max(1.0e-3);
-    let max_gyro_bias_da = (deg2rad(1.5) * dt) as f32;
-    let max_accel_bias_dv = (1.5 * dt) as f32;
-    ekf.state.dax_b = ekf.state.dax_b.clamp(-max_gyro_bias_da, max_gyro_bias_da);
-    ekf.state.day_b = ekf.state.day_b.clamp(-max_gyro_bias_da, max_gyro_bias_da);
-    ekf.state.daz_b = ekf.state.daz_b.clamp(-max_gyro_bias_da, max_gyro_bias_da);
-    ekf.state.dvx_b = ekf.state.dvx_b.clamp(-max_accel_bias_dv, max_accel_bias_dv);
-    ekf.state.dvy_b = ekf.state.dvy_b.clamp(-max_accel_bias_dv, max_accel_bias_dv);
-    ekf.state.dvz_b = ekf.state.dvz_b.clamp(-max_accel_bias_dv, max_accel_bias_dv);
 }
 
 pub fn unwrap_i64_counter(values: &[i64], modulus: i64) -> Vec<i64> {

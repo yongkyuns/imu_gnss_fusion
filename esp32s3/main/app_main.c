@@ -12,6 +12,7 @@
 #include "freertos/task.h"
 #include "sensor_fusion.h"
 #include "sensor_fusion_internal.h"
+#include "sf_eskf.h"
 #include "driver/usb_serial_jtag.h"
 
 static const char *TAG = "sf_usb";
@@ -238,7 +239,7 @@ static void sf_handle_gnss(sf_app_t *app, const sf_usb_gnss_payload_t *payload) 
 static void sf_send_status(sf_app_t *app, float t_s, sf_update_t update, bool end_ack) {
   sf_usb_frame_header_t hdr;
   sf_usb_status_payload_t payload;
-  const sf_ekf_t *ekf;
+  const sf_eskf_t *eskf;
   const sf_align_t *align;
   const sf_profile_counters_t *prof;
 
@@ -270,20 +271,20 @@ static void sf_send_status(sf_app_t *app, float t_s, sf_update_t update, bool en
     payload.flags |= SF_USB_FLAG_END_ACK;
   }
 
-  ekf = sf_fusion_ekf(&app->fusion);
+  eskf = sf_fusion_eskf(&app->fusion);
   align = sf_fusion_align(&app->fusion);
   prof = sf_fusion_profile(&app->fusion);
-  if (ekf != NULL) {
-    payload.ekf_q_bn[0] = ekf->state.q0;
-    payload.ekf_q_bn[1] = ekf->state.q1;
-    payload.ekf_q_bn[2] = ekf->state.q2;
-    payload.ekf_q_bn[3] = ekf->state.q3;
-    payload.ekf_vel_ned_mps[0] = ekf->state.vn;
-    payload.ekf_vel_ned_mps[1] = ekf->state.ve;
-    payload.ekf_vel_ned_mps[2] = ekf->state.vd;
-    payload.ekf_pos_ned_m[0] = ekf->state.pn;
-    payload.ekf_pos_ned_m[1] = ekf->state.pe;
-    payload.ekf_pos_ned_m[2] = ekf->state.pd;
+  if (eskf != NULL) {
+    payload.ekf_q_bn[0] = eskf->nominal.q0;
+    payload.ekf_q_bn[1] = eskf->nominal.q1;
+    payload.ekf_q_bn[2] = eskf->nominal.q2;
+    payload.ekf_q_bn[3] = eskf->nominal.q3;
+    payload.ekf_vel_ned_mps[0] = eskf->nominal.vn;
+    payload.ekf_vel_ned_mps[1] = eskf->nominal.ve;
+    payload.ekf_vel_ned_mps[2] = eskf->nominal.vd;
+    payload.ekf_pos_ned_m[0] = eskf->nominal.pn;
+    payload.ekf_pos_ned_m[1] = eskf->nominal.pe;
+    payload.ekf_pos_ned_m[2] = eskf->nominal.pd;
   }
   if (align != NULL) {
     payload.align_sigma_rad[0] = sf_diag_sigma(align->p, 0);

@@ -61,7 +61,6 @@ CORE_SRCS := \
 	$(SRC_DIR)/sensor_fusion.c \
 	$(SRC_DIR)/sf_align.c \
 	$(SRC_DIR)/sf_stationary_mount.c \
-	$(SRC_DIR)/sf_ekf.c \
 	$(SRC_DIR)/sf_eskf.c
 
 SRCS := $(CORE_SRCS)
@@ -73,7 +72,7 @@ QEMU_M7_OBJS := $(patsubst %.c,$(QEMU_M7_BUILD_DIR)/%.o,$(SRCS))
 
 UNITY_SRC := $(UNITY_DIR)/unity.c
 TEST_SRCS := $(TEST_DIR)/test_main.c
-TEST_SUPPORT_SRCS := ekf.c
+TEST_SUPPORT_SRCS :=
 TEST_BIN := $(BUILD_DIR)/test_sensor_fusion
 QEMU_LD_SCRIPT := $(TEST_DIR)/embedded.ld
 QEMU_M7_LD_SCRIPT := $(TEST_DIR)/embedded_m7.ld

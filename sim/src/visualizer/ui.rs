@@ -34,10 +34,10 @@ impl Plugin for TrackOverlay<'_> {
                 egui::Color32::from_rgb(0, 255, 255)
             } else if tr.name == "NAV2-PVT path (GNSS-only, lon,lat)" {
                 egui::Color32::from_rgb(255, 196, 0)
-            } else if tr.name == "EKF path (lon,lat)" {
-                egui::Color32::from_rgb(60, 200, 120)
-            } else if tr.name.contains("GNSS outage") {
-                egui::Color32::from_rgb(255, 80, 80)
+            } else if tr.name == "ESKF path (lon,lat)" {
+                egui::Color32::from_rgb(120, 170, 255)
+            } else if tr.name == "ESKF path during GNSS outage (lon,lat)" {
+                egui::Color32::from_rgb(255, 140, 220)
             } else {
                 egui::Color32::WHITE
             };
@@ -130,7 +130,6 @@ pub struct App {
     show_heading: bool,
     show_nav_pvt: bool,
     show_nav2_pvt: bool,
-    show_ekf: bool,
     show_eskf: bool,
 }
 
@@ -190,7 +189,6 @@ impl eframe::App for App {
             ui.horizontal(|ui| {
                 ui.label("Page:");
                 ui.selectable_value(&mut self.page, Page::Signals, "Signals");
-                ui.selectable_value(&mut self.page, Page::EkfCompare, "EKF Compare");
                 ui.selectable_value(&mut self.page, Page::EskfCompare, "ESKF Compare");
                 ui.selectable_value(&mut self.page, Page::AlignCompare, "Align Compare");
                 ui.selectable_value(&mut self.page, Page::MapDark, "Map (Dark)");
@@ -278,83 +276,6 @@ impl eframe::App for App {
                         ui,
                         "Other Signals",
                         self.data.other.iter(),
-                        true,
-                        self.max_points_per_trace,
-                    );
-                });
-            }
-            Page::EkfCompare => {
-                let half_width = (ctx.content_rect().width() * 0.5).max(260.0);
-                let mut vehicle_gyro: Vec<&Trace> = Vec::with_capacity(
-                    self.data.esf_ins_gyro.len() + self.data.ekf_meas_gyro.len(),
-                );
-                vehicle_gyro.extend(self.data.esf_ins_gyro.iter());
-                vehicle_gyro.extend(self.data.ekf_meas_gyro.iter());
-                let mut vehicle_accel: Vec<&Trace> = Vec::with_capacity(
-                    self.data.esf_ins_accel.len() + self.data.ekf_meas_accel.len(),
-                );
-                vehicle_accel.extend(self.data.esf_ins_accel.iter());
-                vehicle_accel.extend(self.data.ekf_meas_accel.iter());
-                egui::SidePanel::left("ekf_compare_left")
-                    .resizable(false)
-                    .exact_width(half_width)
-                    .show(ctx, |ui| {
-                        draw_plot(
-                            ui,
-                            "Velocity: EKF vs u-blox",
-                            self.data.ekf_cmp_vel.iter(),
-                            true,
-                            self.max_points_per_trace,
-                        );
-                        draw_plot(
-                            ui,
-                            "Euler Angles: EKF Quaternion vs NAV-ATT",
-                            self.data.ekf_cmp_att.iter(),
-                            true,
-                            self.max_points_per_trace,
-                        );
-                        draw_plot(
-                            ui,
-                            "EKF Gyro Bias Estimates",
-                            self.data.ekf_bias_gyro.iter(),
-                            true,
-                            self.max_points_per_trace,
-                        );
-                        draw_plot(
-                            ui,
-                            "Vehicle Gyro: ESF-INS vs EKF",
-                            vehicle_gyro.iter().copied(),
-                            true,
-                            self.max_points_per_trace,
-                        );
-                    });
-
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    draw_plot(
-                        ui,
-                        "EKF Accel Bias Estimates",
-                        self.data.ekf_bias_accel.iter(),
-                        true,
-                        self.max_points_per_trace,
-                    );
-                    draw_plot(
-                        ui,
-                        "EKF Bias Covariance Diagonal",
-                        self.data.ekf_cov_bias.iter(),
-                        true,
-                        self.max_points_per_trace,
-                    );
-                    draw_plot(
-                        ui,
-                        "EKF Covariance Diagonal (Non-bias States)",
-                        self.data.ekf_cov_nonbias.iter(),
-                        true,
-                        self.max_points_per_trace,
-                    );
-                    draw_plot(
-                        ui,
-                        "Vehicle Accel: ESF-INS vs EKF",
-                        vehicle_accel.iter().copied(),
                         true,
                         self.max_points_per_trace,
                     );
@@ -507,11 +428,10 @@ impl eframe::App for App {
             Page::MapDark => {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label("Slippy map overlay: NAV-PVT + NAV2-PVT + EKF");
+                        ui.label("Slippy map overlay: NAV-PVT + NAV2-PVT + ESKF");
                         ui.checkbox(&mut self.show_heading, "show heading");
                         ui.checkbox(&mut self.show_nav_pvt, "show NAV-PVT");
                         ui.checkbox(&mut self.show_nav2_pvt, "show NAV2-PVT");
-                        ui.checkbox(&mut self.show_ekf, "show EKF");
                         ui.checkbox(&mut self.show_eskf, "show ESKF");
                         if ui.button("Recenter").clicked() {
                             self.map_memory.follow_my_position();
@@ -520,39 +440,27 @@ impl eframe::App for App {
                     ui.horizontal(|ui| {
                         ui.colored_label(egui::Color32::from_rgb(0, 255, 255), "NAV-PVT");
                         ui.colored_label(egui::Color32::from_rgb(255, 196, 0), "NAV2-PVT");
-                        ui.colored_label(egui::Color32::from_rgb(60, 200, 120), "EKF");
-                        ui.colored_label(
-                            egui::Color32::from_rgb(255, 80, 80),
-                            "EKF during GNSS outage",
-                        );
                         ui.colored_label(egui::Color32::from_rgb(120, 170, 255), "ESKF");
                         ui.colored_label(
                             egui::Color32::from_rgb(255, 140, 220),
                             "ESKF during GNSS outage",
                         );
-                        ui.colored_label(egui::Color32::from_rgb(255, 255, 255), "EKF heading");
+                        ui.colored_label(egui::Color32::from_rgb(255, 255, 255), "ESKF heading");
                     });
-                    let mut map_traces: Vec<&Trace> = self.data.ekf_map.iter().collect();
+                    let mut map_traces: Vec<&Trace> = self.data.eskf_map.iter().collect();
                     if !self.show_nav_pvt {
                         map_traces.retain(|t| t.name != "u-blox path (lon,lat)");
                     }
                     if !self.show_nav2_pvt {
                         map_traces.retain(|t| t.name != "NAV2-PVT path (GNSS-only, lon,lat)");
                     }
-                    if !self.show_ekf {
+                    if !self.show_eskf {
                         map_traces.retain(|t| {
-                            t.name != "EKF path (lon,lat)"
-                                && t.name != "EKF path during GNSS outage (lon,lat)"
+                            t.name != "ESKF path (lon,lat)"
+                                && t.name != "ESKF path during GNSS outage (lon,lat)"
                         });
                     }
-                    if self.show_eskf {
-                        map_traces.extend(self.data.eskf_map.iter());
-                    }
-                    let mut headings: Vec<&HeadingSample> =
-                        self.data.ekf_map_heading.iter().collect();
-                    if self.show_eskf {
-                        headings.extend(self.data.eskf_map_heading.iter());
-                    }
+                    let headings: Vec<&HeadingSample> = self.data.eskf_map_heading.iter().collect();
                     let track = TrackOverlay {
                         traces: map_traces,
                         headings,
@@ -759,7 +667,7 @@ pub fn run_visualizer(data: PlotData, has_itow: bool) -> Result<()> {
         "visualizer",
         native_options,
         Box::new(move |cc| {
-            let map_center = map_center_from_traces(&data.ekf_map);
+            let map_center = map_center_from_traces(&data.eskf_map);
             let map_tiles = if MAPBOX_ACCESS_TOKEN.is_empty() {
                 HttpTiles::new(OpenStreetMap, cc.egui_ctx.clone())
             } else {
@@ -788,7 +696,6 @@ pub fn run_visualizer(data: PlotData, has_itow: bool) -> Result<()> {
                 show_heading: false,
                 show_nav_pvt: true,
                 show_nav2_pvt: true,
-                show_ekf: true,
                 show_eskf: true,
             }))
         }),

@@ -12,8 +12,8 @@ status frames back to the host for parity and timing checks.
 - uses the repo's standalone C implementation in [`../ekf/c`](../ekf/c)
 - receives compact IMU and GNSS samples over USB
 - runs either:
-  - internal align + EKF, or
-  - external misalignment + EKF
+  - internal align + ESKF, or
+  - external misalignment + ESKF
 - returns compact status snapshots back to the host
 
 The host-side replay tool is:
@@ -50,6 +50,7 @@ On Freenove boards that expose both:
 From this directory:
 
 ```bash
+source "$IDF_PATH/export.sh"
 idf.py set-target esp32s3
 idf.py build
 ```
@@ -59,6 +60,51 @@ Flash and monitor:
 ```bash
 idf.py -p /dev/cu.usbmodemXXXX flash monitor
 ```
+
+## Known-Good Workflow
+
+Use this path for repeatable ESP32 flash and timing runs without extra
+troubleshooting.
+
+Assumptions:
+
+- use the native USB/OTG port, not the UART bridge
+- keep the checked-in [`sdkconfig`](./sdkconfig)
+  - it currently uses performance optimization
+  - it currently uses a larger main task stack required by the ESKF path
+
+Build and flash:
+
+```bash
+cd esp32s3
+source "$IDF_PATH/export.sh"
+idf.py build flash -p /dev/cu.usbmodemXXXX
+```
+
+For ESKF timing measurement, use external misalignment mode to bypass the
+internal-align path and force the actual ESKF replay path:
+
+```bash
+cd ..
+cargo run -q -p sim --bin esp32_usb_replay -- \
+  --port /dev/cu.usbmodemXXXX \
+  --baud 921600 \
+  --serial-timeout-ms 500 \
+  --settle-ms 1500 \
+  --max-time-s 40 \
+  --summary-only \
+  --replay-speedup 1.0 \
+  --external-q-vb 1,0,0,0 \
+  --input logger/data/ubx_raw_20260312_170548.bin
+```
+
+Notes:
+
+- `--serial-timeout-ms 500` avoids false host-side timeouts under replay load
+- `--settle-ms 1500` gives the board time to reboot after flashing/reset
+- `--external-q-vb 1,0,0,0` is the current known-good timing path
+- `--summary-only` is the fastest way to get stage timing numbers
+- if the device path changes, list it with `ls /dev/cu.usbmodem*`
 
 ## Host replay
 

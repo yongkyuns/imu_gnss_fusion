@@ -1,6 +1,6 @@
 use crate::align::{Align, AlignConfig};
-use crate::c_api::CSensorFusionWrapper;
-use crate::ekf::{Ekf, PredictNoise};
+use crate::c_api::{CEskf, CSensorFusionWrapper};
+use crate::ekf::PredictNoise;
 
 #[derive(Clone, Copy, Debug)]
 pub struct FusionBootstrapConfig {
@@ -124,12 +124,8 @@ impl SensorFusion {
         update
     }
 
-    pub fn ekf(&self) -> Option<&Ekf> {
-        self.raw.ekf()
-    }
-
-    pub fn ekf_mut(&mut self) -> Option<&mut Ekf> {
-        self.raw.ekf_mut()
+    pub fn eskf(&self) -> Option<&CEskf> {
+        self.raw.eskf()
     }
 
     pub fn mount_q_vb(&self) -> Option<[f32; 4]> {

@@ -4,6 +4,7 @@
 #include <string.h>
 
 static void sf_eskf_normalize_quat(float q[4]);
+static void sf_eskf_normalize_nominal_quat(sf_eskf_t *eskf);
 static void sf_eskf_symmetrize_p(float p[SF_ESKF_ERROR_STATES][SF_ESKF_ERROR_STATES]);
 static void sf_eskf_quat_multiply(const float p[4], const float q[4], float out[4]);
 static void sf_eskf_inject_error_state(sf_eskf_t *eskf, const float dx[SF_ESKF_ERROR_STATES]);
@@ -11,8 +12,7 @@ static void sf_eskf_apply_reset(float p[SF_ESKF_ERROR_STATES][SF_ESKF_ERROR_STAT
                                 const float dtheta[3]);
 static void sf_eskf_floor_attitude_covariance(sf_eskf_t *eskf, float sigma_rad);
 static void sf_eskf_fuse_measurement(sf_eskf_t *eskf,
-                                     float innovation,
-                                     const float h[SF_ESKF_ERROR_STATES],
+                                     float innovation_var,
                                      const float k[SF_ESKF_ERROR_STATES],
                                      const float dx_injected[SF_ESKF_ERROR_STATES]);
 static void sf_eskf_fuse_gps_pos_n(sf_eskf_t *eskf, float pos_n, float r_pos_n);
@@ -38,6 +38,20 @@ static void sf_eskf_predict_noise_default(sf_predict_noise_t *cfg) {
   sf_predict_noise_default(cfg);
   cfg->gyro_var = 2.2873113e-7f;
   cfg->accel_var = 2.4504214e-5f;
+}
+
+static void sf_eskf_normalize_nominal_quat(sf_eskf_t *eskf) {
+  float q[4] = {
+      eskf->nominal.q0,
+      eskf->nominal.q1,
+      eskf->nominal.q2,
+      eskf->nominal.q3,
+  };
+  sf_eskf_normalize_quat(q);
+  eskf->nominal.q0 = q[0];
+  eskf->nominal.q1 = q[1];
+  eskf->nominal.q2 = q[2];
+  eskf->nominal.q3 = q[3];
 }
 
 static void sf_eskf_predict_covariance_sparse(
@@ -174,7 +188,7 @@ void sf_eskf_predict_nominal(sf_eskf_t *eskf, const sf_eskf_imu_delta_t *imu) {
   const float g = SF_GRAVITY_MSS;
 
 #include "../generated_eskf/nominal_prediction_generated.c"
-  sf_eskf_normalize_quat(&eskf->nominal.q0);
+  sf_eskf_normalize_nominal_quat(eskf);
 }
 
 void sf_eskf_predict(sf_eskf_t *eskf, const sf_eskf_imu_delta_t *imu) {
@@ -349,7 +363,7 @@ static void sf_eskf_inject_error_state(sf_eskf_t *eskf, const float dx[SF_ESKF_E
 
   sf_eskf_quat_multiply(q_old, dq, q_new);
   memcpy(&eskf->nominal.q0, q_new, sizeof(q_new));
-  sf_eskf_normalize_quat(&eskf->nominal.q0);
+  sf_eskf_normalize_nominal_quat(eskf);
 
   eskf->nominal.vn += dx[3];
   eskf->nominal.ve += dx[4];
@@ -367,43 +381,51 @@ static void sf_eskf_inject_error_state(sf_eskf_t *eskf, const float dx[SF_ESKF_E
 
 static void sf_eskf_apply_reset(float p[SF_ESKF_ERROR_STATES][SF_ESKF_ERROR_STATES],
                                 const float dtheta[3]) {
-  float g_reset[SF_ESKF_ERROR_STATES][SF_ESKF_ERROR_STATES] = {{0}};
-  float gp[SF_ESKF_ERROR_STATES][SF_ESKF_ERROR_STATES] = {{0}};
-  float next_p[SF_ESKF_ERROR_STATES][SF_ESKF_ERROR_STATES] = {{0}};
   const float dtheta_x = dtheta[0];
   const float dtheta_y = dtheta[1];
   const float dtheta_z = dtheta[2];
   float G_reset_theta[3][3];
-
-  for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
-    g_reset[i][i] = 1.0f;
-  }
+  float p_aa[3][3];
+  float p_ab[3][SF_ESKF_ERROR_STATES - 3];
+  float next_aa[3][3] = {{0}};
 
 #include "../generated_eskf/attitude_reset_jacobian_generated.c"
 
   for (int i = 0; i < 3; ++i) {
     for (int j = 0; j < 3; ++j) {
-      g_reset[i][j] = G_reset_theta[i][j];
+      p_aa[i][j] = p[i][j];
+    }
+    for (int j = 3; j < SF_ESKF_ERROR_STATES; ++j) {
+      p_ab[i][j - 3] = p[i][j];
     }
   }
 
-  for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
-    for (int j = 0; j < SF_ESKF_ERROR_STATES; ++j) {
-      for (int k = 0; k < SF_ESKF_ERROR_STATES; ++k) {
-        gp[i][j] += g_reset[i][k] * p[k][j];
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j) {
+      for (int k = 0; k < 3; ++k) {
+        next_aa[i][j] += G_reset_theta[i][k] * p_aa[k][j];
       }
     }
   }
 
-  for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
-    for (int j = 0; j < SF_ESKF_ERROR_STATES; ++j) {
-      for (int k = 0; k < SF_ESKF_ERROR_STATES; ++k) {
-        next_p[i][j] += gp[i][k] * g_reset[j][k];
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j) {
+      float accum = 0.0f;
+      for (int k = 0; k < 3; ++k) {
+        accum += next_aa[i][k] * G_reset_theta[j][k];
       }
+      p[i][j] = accum;
+    }
+    for (int j = 3; j < SF_ESKF_ERROR_STATES; ++j) {
+      float accum = 0.0f;
+      for (int k = 0; k < 3; ++k) {
+        accum += G_reset_theta[i][k] * p_ab[k][j - 3];
+      }
+      p[i][j] = accum;
+      p[j][i] = accum;
     }
   }
 
-  memcpy(p, next_p, sizeof(next_p));
   sf_eskf_symmetrize_p(p);
 }
 
@@ -419,31 +441,19 @@ static void sf_eskf_floor_attitude_covariance(sf_eskf_t *eskf, float sigma_rad) 
 }
 
 static void sf_eskf_fuse_measurement(sf_eskf_t *eskf,
-                                     float innovation,
-                                     const float h[SF_ESKF_ERROR_STATES],
+                                     float innovation_var,
                                      const float k[SF_ESKF_ERROR_STATES],
                                      const float dx_injected[SF_ESKF_ERROR_STATES]) {
-  float p_old[SF_ESKF_ERROR_STATES][SF_ESKF_ERROR_STATES];
-  float hp[SF_ESKF_ERROR_STATES] = {0};
-
-  memcpy(p_old, eskf->p, sizeof(p_old));
-  sf_eskf_inject_error_state(eskf, dx_injected);
-
-  for (int j = 0; j < SF_ESKF_ERROR_STATES; ++j) {
-    for (int k_idx = 0; k_idx < SF_ESKF_ERROR_STATES; ++k_idx) {
-      hp[j] += h[k_idx] * p_old[k_idx][j];
-    }
-  }
-
   for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
-    for (int j = 0; j < SF_ESKF_ERROR_STATES; ++j) {
-      eskf->p[i][j] = p_old[i][j] - k[i] * hp[j];
+    for (int j = i; j < SF_ESKF_ERROR_STATES; ++j) {
+      const float updated = eskf->p[i][j] - innovation_var * k[i] * k[j];
+      eskf->p[i][j] = updated;
+      eskf->p[j][i] = updated;
     }
   }
 
-  sf_eskf_symmetrize_p(eskf->p);
+  sf_eskf_inject_error_state(eskf, dx_injected);
   sf_eskf_apply_reset(eskf->p, dx_injected);
-  (void)innovation;
 }
 
 static void sf_eskf_fuse_gps_pos_n(sf_eskf_t *eskf, float pos_n, float r_pos_n) {
@@ -452,14 +462,16 @@ static void sf_eskf_fuse_gps_pos_n(sf_eskf_t *eskf, float pos_n, float r_pos_n) 
   const float innovation = pos_n - pn;
   float H[SF_ESKF_ERROR_STATES];
   float K[SF_ESKF_ERROR_STATES];
+  float S;
   float dx[SF_ESKF_ERROR_STATES];
 #define R_POS_N r_pos_n
 #include "../generated_eskf/gps_pos_n_generated.c"
 #undef R_POS_N
+  (void)H;
   for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
     dx[i] = K[i] * innovation;
   }
-  sf_eskf_fuse_measurement(eskf, innovation, H, K, dx);
+  sf_eskf_fuse_measurement(eskf, S, K, dx);
 }
 
 static void sf_eskf_fuse_gps_pos_e(sf_eskf_t *eskf, float pos_e, float r_pos_e) {
@@ -468,14 +480,16 @@ static void sf_eskf_fuse_gps_pos_e(sf_eskf_t *eskf, float pos_e, float r_pos_e) 
   const float innovation = pos_e - pe;
   float H[SF_ESKF_ERROR_STATES];
   float K[SF_ESKF_ERROR_STATES];
+  float S;
   float dx[SF_ESKF_ERROR_STATES];
 #define R_POS_E r_pos_e
 #include "../generated_eskf/gps_pos_e_generated.c"
 #undef R_POS_E
+  (void)H;
   for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
     dx[i] = K[i] * innovation;
   }
-  sf_eskf_fuse_measurement(eskf, innovation, H, K, dx);
+  sf_eskf_fuse_measurement(eskf, S, K, dx);
 }
 
 static void sf_eskf_fuse_gps_pos_d(sf_eskf_t *eskf, float pos_d, float r_pos_d) {
@@ -484,14 +498,16 @@ static void sf_eskf_fuse_gps_pos_d(sf_eskf_t *eskf, float pos_d, float r_pos_d) 
   const float innovation = pos_d - pd;
   float H[SF_ESKF_ERROR_STATES];
   float K[SF_ESKF_ERROR_STATES];
+  float S;
   float dx[SF_ESKF_ERROR_STATES];
 #define R_POS_D r_pos_d
 #include "../generated_eskf/gps_pos_d_generated.c"
 #undef R_POS_D
+  (void)H;
   for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
     dx[i] = K[i] * innovation;
   }
-  sf_eskf_fuse_measurement(eskf, innovation, H, K, dx);
+  sf_eskf_fuse_measurement(eskf, S, K, dx);
 }
 
 static void sf_eskf_fuse_gps_vel_n(sf_eskf_t *eskf, float vel_n, float r_vel_n) {
@@ -500,14 +516,16 @@ static void sf_eskf_fuse_gps_vel_n(sf_eskf_t *eskf, float vel_n, float r_vel_n) 
   const float innovation = vel_n - vn;
   float H[SF_ESKF_ERROR_STATES];
   float K[SF_ESKF_ERROR_STATES];
+  float S;
   float dx[SF_ESKF_ERROR_STATES];
 #define R_VEL_N r_vel_n
 #include "../generated_eskf/gps_vel_n_generated.c"
 #undef R_VEL_N
+  (void)H;
   for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
     dx[i] = K[i] * innovation;
   }
-  sf_eskf_fuse_measurement(eskf, innovation, H, K, dx);
+  sf_eskf_fuse_measurement(eskf, S, K, dx);
 }
 
 static void sf_eskf_fuse_gps_vel_e(sf_eskf_t *eskf, float vel_e, float r_vel_e) {
@@ -516,14 +534,16 @@ static void sf_eskf_fuse_gps_vel_e(sf_eskf_t *eskf, float vel_e, float r_vel_e) 
   const float innovation = vel_e - ve;
   float H[SF_ESKF_ERROR_STATES];
   float K[SF_ESKF_ERROR_STATES];
+  float S;
   float dx[SF_ESKF_ERROR_STATES];
 #define R_VEL_E r_vel_e
 #include "../generated_eskf/gps_vel_e_generated.c"
 #undef R_VEL_E
+  (void)H;
   for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
     dx[i] = K[i] * innovation;
   }
-  sf_eskf_fuse_measurement(eskf, innovation, H, K, dx);
+  sf_eskf_fuse_measurement(eskf, S, K, dx);
 }
 
 static void sf_eskf_fuse_gps_vel_d(sf_eskf_t *eskf, float vel_d, float r_vel_d) {
@@ -532,14 +552,16 @@ static void sf_eskf_fuse_gps_vel_d(sf_eskf_t *eskf, float vel_d, float r_vel_d) 
   const float innovation = vel_d - vd;
   float H[SF_ESKF_ERROR_STATES];
   float K[SF_ESKF_ERROR_STATES];
+  float S;
   float dx[SF_ESKF_ERROR_STATES];
 #define R_VEL_D r_vel_d
 #include "../generated_eskf/gps_vel_d_generated.c"
 #undef R_VEL_D
+  (void)H;
   for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
     dx[i] = K[i] * innovation;
   }
-  sf_eskf_fuse_measurement(eskf, innovation, H, K, dx);
+  sf_eskf_fuse_measurement(eskf, S, K, dx);
 }
 
 static void sf_eskf_fuse_stationary_gravity_x(sf_eskf_t *eskf,
@@ -557,12 +579,14 @@ static void sf_eskf_fuse_stationary_gravity_x(sf_eskf_t *eskf,
   const float innovation = (accel_x - bax) - (-gravity_x);
   float H[SF_ESKF_ERROR_STATES];
   float K[SF_ESKF_ERROR_STATES];
+  float S;
   float dx[SF_ESKF_ERROR_STATES];
 #define R_STATIONARY_ACCEL r_stationary_accel
 #define g g_scalar
 #include "../generated_eskf/stationary_accel_x_generated.c"
 #undef g
 #undef R_STATIONARY_ACCEL
+  (void)H;
   eskf->stationary_diag.innovation_x = innovation;
   eskf->stationary_diag.k_theta_x_from_x = K[0];
   eskf->stationary_diag.k_theta_y_from_x = K[1];
@@ -577,7 +601,7 @@ static void sf_eskf_fuse_stationary_gravity_x(sf_eskf_t *eskf,
   for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
     dx[i] = K[i] * innovation;
   }
-  sf_eskf_fuse_measurement(eskf, innovation, H, K, dx);
+  sf_eskf_fuse_measurement(eskf, S, K, dx);
 }
 
 static void sf_eskf_fuse_stationary_gravity_y(sf_eskf_t *eskf,
@@ -595,12 +619,14 @@ static void sf_eskf_fuse_stationary_gravity_y(sf_eskf_t *eskf,
   const float innovation = (accel_y - bay) - (-gravity_y);
   float H[SF_ESKF_ERROR_STATES];
   float K[SF_ESKF_ERROR_STATES];
+  float S;
   float dx[SF_ESKF_ERROR_STATES];
 #define R_STATIONARY_ACCEL r_stationary_accel
 #define g g_scalar
 #include "../generated_eskf/stationary_accel_y_generated.c"
 #undef g
 #undef R_STATIONARY_ACCEL
+  (void)H;
   eskf->stationary_diag.innovation_y = innovation;
   eskf->stationary_diag.k_theta_x_from_y = K[0];
   eskf->stationary_diag.k_theta_y_from_y = K[1];
@@ -616,7 +642,7 @@ static void sf_eskf_fuse_stationary_gravity_y(sf_eskf_t *eskf,
   for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
     dx[i] = K[i] * innovation;
   }
-  sf_eskf_fuse_measurement(eskf, innovation, H, K, dx);
+  sf_eskf_fuse_measurement(eskf, S, K, dx);
 }
 
 static void sf_eskf_fuse_body_vel_y(sf_eskf_t *eskf, float r_body_vel) {
@@ -633,14 +659,16 @@ static void sf_eskf_fuse_body_vel_y(sf_eskf_t *eskf, float r_body_vel) {
                              2.0f * (q2 * q3 + q0 * q1) * vd);
   float H[SF_ESKF_ERROR_STATES];
   float K[SF_ESKF_ERROR_STATES];
+  float S;
   float dx[SF_ESKF_ERROR_STATES];
 #define R_BODY_VEL r_body_vel
 #include "../generated_eskf/body_vel_y_generated.c"
 #undef R_BODY_VEL
+  (void)H;
   for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
     dx[i] = K[i] * innovation;
   }
-  sf_eskf_fuse_measurement(eskf, innovation, H, K, dx);
+  sf_eskf_fuse_measurement(eskf, S, K, dx);
 }
 
 static void sf_eskf_fuse_body_vel_x(sf_eskf_t *eskf, float r_body_vel) {
@@ -657,14 +685,16 @@ static void sf_eskf_fuse_body_vel_x(sf_eskf_t *eskf, float r_body_vel) {
                              2.0f * (q1 * q3 - q0 * q2) * vd);
   float H[SF_ESKF_ERROR_STATES];
   float K[SF_ESKF_ERROR_STATES];
+  float S;
   float dx[SF_ESKF_ERROR_STATES];
 #define R_BODY_VEL r_body_vel
 #include "../generated_eskf/body_vel_x_generated.c"
 #undef R_BODY_VEL
+  (void)H;
   for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
     dx[i] = K[i] * innovation;
   }
-  sf_eskf_fuse_measurement(eskf, innovation, H, K, dx);
+  sf_eskf_fuse_measurement(eskf, S, K, dx);
 }
 
 static void sf_eskf_fuse_body_vel_z(sf_eskf_t *eskf, float r_body_vel) {
@@ -681,12 +711,14 @@ static void sf_eskf_fuse_body_vel_z(sf_eskf_t *eskf, float r_body_vel) {
                              (1.0f - 2.0f * q1 * q1 - 2.0f * q2 * q2) * vd);
   float H[SF_ESKF_ERROR_STATES];
   float K[SF_ESKF_ERROR_STATES];
+  float S;
   float dx[SF_ESKF_ERROR_STATES];
 #define R_BODY_VEL r_body_vel
 #include "../generated_eskf/body_vel_z_generated.c"
 #undef R_BODY_VEL
+  (void)H;
   for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
     dx[i] = K[i] * innovation;
   }
-  sf_eskf_fuse_measurement(eskf, innovation, H, K, dx);
+  sf_eskf_fuse_measurement(eskf, S, K, dx);
 }

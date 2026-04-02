@@ -43,6 +43,9 @@ struct Args {
     #[arg(long, default_value_t = 921600)]
     baud: u32,
 
+    #[arg(long, default_value_t = 200)]
+    serial_timeout_ms: u64,
+
     #[arg(long)]
     input: PathBuf,
 
@@ -60,6 +63,12 @@ struct Args {
 
     #[arg(long, default_value_t = false)]
     summary_only: bool,
+
+    #[arg(long, default_value_t = 0)]
+    tx_sleep_us: u64,
+
+    #[arg(long)]
+    replay_speedup: Option<f32>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -145,7 +154,7 @@ fn main() -> Result<()> {
     }
 
     let mut port = serialport::new(&args.port, args.baud)
-        .timeout(Duration::from_millis(20))
+        .timeout(Duration::from_millis(args.serial_timeout_ms))
         .open()
         .with_context(|| format!("failed to open serial port {}", args.port))?;
 
@@ -168,7 +177,19 @@ fn main() -> Result<()> {
         );
     }
 
+    let mut prev_t_s: Option<f32> = None;
     for ev in events {
+        let ev_t_s = match ev {
+            ReplayEvent::Imu { t_s, .. } | ReplayEvent::Gnss { t_s, .. } => t_s,
+        };
+        if let (Some(speedup), Some(prev)) = (args.replay_speedup, prev_t_s) {
+            if speedup.is_finite() && speedup > 0.0 {
+                let dt_s = (ev_t_s - prev).max(0.0) / speedup;
+                if dt_s > 0.0 {
+                    std::thread::sleep(Duration::from_secs_f32(dt_s));
+                }
+            }
+        }
         match ev {
             ReplayEvent::Imu {
                 t_s,
@@ -205,6 +226,10 @@ fn main() -> Result<()> {
                 )?;
             }
         }
+        if args.tx_sleep_us > 0 {
+            std::thread::sleep(Duration::from_micros(args.tx_sleep_us));
+        }
+        prev_t_s = Some(ev_t_s);
         drain_status(
             &mut *port,
             &mut rx,
@@ -309,11 +334,16 @@ fn run_host_reference(
             align.P[2][2].max(0.0).sqrt(),
         ]
     });
-    let (ekf_q_bn, ekf_vel_ned_mps, ekf_pos_ned_m) = if let Some(ekf) = fusion.ekf() {
+    let (ekf_q_bn, ekf_vel_ned_mps, ekf_pos_ned_m) = if let Some(eskf) = fusion.eskf() {
         (
-            Some([ekf.state.q0, ekf.state.q1, ekf.state.q2, ekf.state.q3]),
-            Some([ekf.state.vn, ekf.state.ve, ekf.state.vd]),
-            Some([ekf.state.pn, ekf.state.pe, ekf.state.pd]),
+            Some([
+                eskf.nominal.q0,
+                eskf.nominal.q1,
+                eskf.nominal.q2,
+                eskf.nominal.q3,
+            ]),
+            Some([eskf.nominal.vn, eskf.nominal.ve, eskf.nominal.vd]),
+            Some([eskf.nominal.pn, eskf.nominal.pe, eskf.nominal.pd]),
         )
     } else {
         (None, None, None)
@@ -664,11 +694,16 @@ fn drain_status(
     let mut saw_end = false;
     while Instant::now() < deadline {
         let mut buf = [0u8; 256];
-        match port.read(&mut buf) {
-            Ok(n) if n > 0 => rx.extend_from_slice(&buf[..n]),
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
-            Err(e) => return Err(e.into()),
+        let pending = port.bytes_to_read().unwrap_or(0);
+        if pending > 0 {
+            match port.read(&mut buf) {
+                Ok(n) if n > 0 => rx.extend_from_slice(&buf[..n]),
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
+                Err(e) => return Err(e.into()),
+            }
+        } else if wait > Duration::from_millis(0) {
+            std::thread::sleep(Duration::from_millis(1));
         }
         while let Some((status, consumed)) = try_parse_status(rx) {
             if let Some(status) = status {

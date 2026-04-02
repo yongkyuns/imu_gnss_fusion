@@ -1,9 +1,6 @@
 use sensor_fusion::align::GRAVITY_MPS2;
 use sensor_fusion::c_api::{CEskfImuDelta, CEskfWrapper};
-use sensor_fusion::ekf::{
-    Ekf, GpsData, ImuSample, PredictNoise, ekf_fuse_body_vel, ekf_fuse_gps, ekf_predict,
-    ekf_set_predict_noise,
-};
+use sensor_fusion::ekf::PredictNoise;
 
 use crate::ubxlog::{
     NavPvtObs, UbxFrame, extract_esf_alg, extract_esf_alg_status, extract_esf_raw_samples,
@@ -11,8 +8,8 @@ use crate::ubxlog::{
 };
 
 use super::super::math::{
-    clamp_ekf_biases, deg2rad, ecef_to_ned, lla_to_ecef, mat_vec, ned_to_lla_exact,
-    normalize_heading_deg, quat_rpy_deg, rad2deg, rot_zyx, set_quat_yaw_only,
+    deg2rad, ecef_to_ned, lla_to_ecef, mat_vec, ned_to_lla_exact, normalize_heading_deg,
+    quat_rpy_deg, rad2deg, rot_zyx,
 };
 use super::super::model::{AlgEvent, EkfImuSource, HeadingSample, ImuPacket, NavAttEvent, Trace};
 use super::align_replay::{
@@ -22,17 +19,6 @@ use super::tag_time::fit_tag_ms_map;
 use super::timebase::MasterTimeline;
 
 pub struct EkfCompareData {
-    pub cmp_pos: Vec<Trace>,
-    pub cmp_vel: Vec<Trace>,
-    pub cmp_att: Vec<Trace>,
-    pub meas_gyro: Vec<Trace>,
-    pub meas_accel: Vec<Trace>,
-    pub bias_gyro: Vec<Trace>,
-    pub bias_accel: Vec<Trace>,
-    pub cov_bias: Vec<Trace>,
-    pub cov_nonbias: Vec<Trace>,
-    pub map: Vec<Trace>,
-    pub map_heading: Vec<HeadingSample>,
     pub eskf_cmp_pos: Vec<Trace>,
     pub eskf_cmp_vel: Vec<Trace>,
     pub eskf_cmp_att: Vec<Trace>,
@@ -94,17 +80,6 @@ pub fn build_ekf_compare_traces(
 ) -> EkfCompareData {
     if tl.masters.is_empty() {
         return EkfCompareData {
-            cmp_pos: Vec::new(),
-            cmp_vel: Vec::new(),
-            cmp_att: Vec::new(),
-            meas_gyro: Vec::new(),
-            meas_accel: Vec::new(),
-            bias_gyro: Vec::new(),
-            bias_accel: Vec::new(),
-            cov_bias: Vec::new(),
-            cov_nonbias: Vec::new(),
-            map: Vec::new(),
-            map_heading: Vec::new(),
             eskf_cmp_pos: Vec::new(),
             eskf_cmp_vel: Vec::new(),
             eskf_cmp_att: Vec::new(),
@@ -281,44 +256,19 @@ pub fn build_ekf_compare_traces(
         Vec::new()
     };
 
-    let mut cmp_pos_n = Vec::<[f64; 2]>::new();
-    let mut cmp_pos_e = Vec::<[f64; 2]>::new();
-    let mut cmp_pos_d = Vec::<[f64; 2]>::new();
     let mut ubx_pos_n = Vec::<[f64; 2]>::new();
     let mut ubx_pos_e = Vec::<[f64; 2]>::new();
     let mut ubx_pos_d = Vec::<[f64; 2]>::new();
 
-    let mut cmp_vel_n = Vec::<[f64; 2]>::new();
-    let mut cmp_vel_e = Vec::<[f64; 2]>::new();
-    let mut cmp_vel_d = Vec::<[f64; 2]>::new();
     let mut ubx_vel_n = Vec::<[f64; 2]>::new();
     let mut ubx_vel_e = Vec::<[f64; 2]>::new();
     let mut ubx_vel_d = Vec::<[f64; 2]>::new();
 
-    let mut cmp_att_roll = Vec::<[f64; 2]>::new();
-    let mut cmp_att_pitch = Vec::<[f64; 2]>::new();
-    let mut cmp_att_yaw = Vec::<[f64; 2]>::new();
-    let mut meas_gyro_x = Vec::<[f64; 2]>::new();
-    let mut meas_gyro_y = Vec::<[f64; 2]>::new();
-    let mut meas_gyro_z = Vec::<[f64; 2]>::new();
-    let mut meas_accel_x = Vec::<[f64; 2]>::new();
-    let mut meas_accel_y = Vec::<[f64; 2]>::new();
-    let mut meas_accel_z = Vec::<[f64; 2]>::new();
     let mut ubx_att_roll = Vec::<[f64; 2]>::new();
     let mut ubx_att_pitch = Vec::<[f64; 2]>::new();
     let mut ubx_att_yaw = Vec::<[f64; 2]>::new();
-    let mut bias_gyro_x = Vec::<[f64; 2]>::new();
-    let mut bias_gyro_y = Vec::<[f64; 2]>::new();
-    let mut bias_gyro_z = Vec::<[f64; 2]>::new();
-    let mut bias_accel_x = Vec::<[f64; 2]>::new();
-    let mut bias_accel_y = Vec::<[f64; 2]>::new();
-    let mut bias_accel_z = Vec::<[f64; 2]>::new();
-    let mut cov_diag: [Vec<[f64; 2]>; 16] = std::array::from_fn(|_| Vec::new());
     let mut map_ubx = Vec::<[f64; 2]>::new();
     let mut map_nav2 = Vec::<[f64; 2]>::new();
-    let mut map_ekf = Vec::<[f64; 2]>::new();
-    let mut map_ekf_outage = Vec::<[f64; 2]>::new();
-    let mut map_heading = Vec::<HeadingSample>::new();
     let mut eskf_cmp_pos_n = Vec::<[f64; 2]>::new();
     let mut eskf_cmp_pos_e = Vec::<[f64; 2]>::new();
     let mut eskf_cmp_pos_d = Vec::<[f64; 2]>::new();
@@ -359,10 +309,10 @@ pub fn build_ekf_compare_traces(
     let mut map_eskf_outage = Vec::<[f64; 2]>::new();
     let mut map_eskf_heading = Vec::<HeadingSample>::new();
 
-    let mut ekf = Ekf::default();
     let mut eskf: Option<CEskfWrapper> = None;
-    let base_predict_noise = cfg.predict_noise.unwrap_or(ekf.noise);
-    ekf_set_predict_noise(&mut ekf, base_predict_noise);
+    let base_predict_noise = cfg
+        .predict_noise
+        .unwrap_or(PredictNoise::lsm6dso_typical_104hz());
     let mut prev_imu_t: Option<f64> = None;
     let mut alg_idx = 0usize;
     let mut alg_status_idx = 0usize;
@@ -377,8 +327,6 @@ pub fn build_ekf_compare_traces(
     let mut ref_lon = 0.0_f64;
     let mut ref_ecef = [0.0_f64; 3];
     let mut ref_h = 0.0_f64;
-    let mut filt_meas_gyro: Option<[f64; 3]> = None;
-    let mut filt_meas_accel: Option<[f64; 3]> = None;
     let mut filt_eskf_meas_gyro: Option<[f64; 3]> = None;
     let mut filt_eskf_meas_accel: Option<[f64; 3]> = None;
     let mut filt_predict_gyro: Option<[f64; 3]> = None;
@@ -423,7 +371,6 @@ pub fn build_ekf_compare_traces(
 
     let mut next_gps_update_ms = f64::NEG_INFINITY;
     let gps_period_ms = 500.0_f64;
-    let mut yaw_initialized_from_vel = false;
     let mut ekf_initialized = false;
     for pkt in &imu_packets {
         while alg_idx < alg_events.len() && alg_events[alg_idx].t_ms <= pkt.t_ms {
@@ -521,33 +468,42 @@ pub fn build_ekf_compare_traces(
                 }
                 let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
                 let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
-                initialize_ekf_from_gnss(&mut ekf, nav, ned);
-                let eskf_predict_noise = cfg
-                    .predict_noise
-                    .unwrap_or(PredictNoise::lsm6dso_typical_104hz());
-                eskf = Some(initialize_eskf_from_nav(nav, ned, eskf_predict_noise, cfg));
+                eskf = Some(initialize_eskf_from_nav(nav, ned, base_predict_noise, cfg));
                 ekf_initialized = true;
-                yaw_initialized_from_vel = true;
-                append_ekf_sample(
-                    &ekf,
-                    t_ms,
-                    rel_s,
-                    ref_lat,
-                    ref_lon,
-                    ref_h,
-                    &mut cmp_pos_n,
-                    &mut cmp_pos_e,
-                    &mut cmp_pos_d,
-                    &mut cmp_vel_n,
-                    &mut cmp_vel_e,
-                    &mut cmp_vel_d,
-                    &mut cmp_att_roll,
-                    &mut cmp_att_pitch,
-                    &mut cmp_att_yaw,
-                    &mut cov_diag,
-                    &mut map_ekf,
-                    &mut map_heading,
-                );
+                if let Some(eskf_ref) = eskf.as_ref() {
+                    append_eskf_sample(
+                        eskf_ref,
+                        rel_s(t_ms),
+                        gyro,
+                        accel,
+                        dt,
+                        cfg.vehicle_meas_lpf_cutoff_hz,
+                        &mut filt_eskf_meas_gyro,
+                        &mut filt_eskf_meas_accel,
+                        &mut eskf_cmp_pos_n,
+                        &mut eskf_cmp_pos_e,
+                        &mut eskf_cmp_pos_d,
+                        &mut eskf_cmp_vel_n,
+                        &mut eskf_cmp_vel_e,
+                        &mut eskf_cmp_vel_d,
+                        &mut eskf_cmp_att_roll,
+                        &mut eskf_cmp_att_pitch,
+                        &mut eskf_cmp_att_yaw,
+                        &mut eskf_meas_gyro_x,
+                        &mut eskf_meas_gyro_y,
+                        &mut eskf_meas_gyro_z,
+                        &mut eskf_meas_accel_x,
+                        &mut eskf_meas_accel_y,
+                        &mut eskf_meas_accel_z,
+                        &mut eskf_bias_gyro_x,
+                        &mut eskf_bias_gyro_y,
+                        &mut eskf_bias_gyro_z,
+                        &mut eskf_bias_accel_x,
+                        &mut eskf_bias_accel_y,
+                        &mut eskf_bias_accel_z,
+                        &mut eskf_cov_diag,
+                    );
+                }
                 initialized_this_pkt = true;
                 break;
             }
@@ -599,14 +555,7 @@ pub fn build_ekf_compare_traces(
                 predict_accel_sum[2] * inv_block_len,
             ];
             let block_len_sq = block_len * block_len;
-            let scaled_predict_noise = PredictNoise {
-                gyro_var: base_predict_noise.gyro_var / block_len_sq,
-                accel_var: base_predict_noise.accel_var / block_len_sq,
-                gyro_bias_rw_var: base_predict_noise.gyro_bias_rw_var / block_len_sq,
-                accel_bias_rw_var: base_predict_noise.accel_bias_rw_var / block_len_sq,
-            };
-            ekf_set_predict_noise(&mut ekf, scaled_predict_noise);
-            let imu = ImuSample {
+            let imu = CEskfImuDelta {
                 dax: (deg2rad(avg_predict_gyro[0]) * pred_dt) as f32,
                 day: (deg2rad(avg_predict_gyro[1]) * pred_dt) as f32,
                 daz: (deg2rad(avg_predict_gyro[2]) * pred_dt) as f32,
@@ -615,23 +564,8 @@ pub fn build_ekf_compare_traces(
                 dvz: (avg_predict_accel[2] * pred_dt) as f32,
                 dt: pred_dt as f32,
             };
-            ekf_predict(&mut ekf, &imu, None);
-            clamp_ekf_biases(&mut ekf, pred_dt);
             if let Some(eskf_ref) = eskf.as_mut() {
-                eskf_ref.predict(CEskfImuDelta {
-                    dax: imu.dax,
-                    day: imu.day,
-                    daz: imu.daz,
-                    dvx: imu.dvx,
-                    dvy: imu.dvy,
-                    dvz: imu.dvz,
-                    dt: imu.dt,
-                });
-            }
-
-            ekf_fuse_body_vel(&mut ekf, cfg.r_body_vel / block_len_sq.max(1.0));
-            clamp_ekf_biases(&mut ekf, pred_dt);
-            if let Some(eskf_ref) = eskf.as_mut() {
+                eskf_ref.predict(imu);
                 eskf_ref.fuse_body_vel(cfg.r_body_vel / block_len_sq.max(1.0));
                 let n = eskf_ref.nominal();
                 let accel_norm = (avg_predict_accel[0] * avg_predict_accel[0]
@@ -692,7 +626,6 @@ pub fn build_ekf_compare_traces(
                     }
                 }
             }
-            ekf_set_predict_noise(&mut ekf, base_predict_noise);
 
             while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
                 let (t_ms, nav) = nav_events[nav_idx];
@@ -719,52 +652,11 @@ pub fn build_ekf_compare_traces(
                 }
                 let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
                 let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
-                let speed_h = nav.vel_n_mps.hypot(nav.vel_e_mps);
-                if !yaw_initialized_from_vel && speed_h >= cfg.yaw_init_speed_mps {
-                    let yaw_from_vel = nav.vel_e_mps.atan2(nav.vel_n_mps);
-                    set_quat_yaw_only(&mut ekf.state, yaw_from_vel);
-                    yaw_initialized_from_vel = true;
-                }
-                let h_acc2 = (nav.h_acc_m * nav.h_acc_m).max(0.05) * cfg.gnss_pos_r_scale;
-                let v_acc2 = (nav.v_acc_m * nav.v_acc_m).max(0.05) * cfg.gnss_pos_r_scale;
-                let s_acc2 = (nav.s_acc_mps * nav.s_acc_mps).max(0.02) * cfg.gnss_vel_r_scale;
-                let gps = GpsData {
-                    pos_n: ned[0] as f32,
-                    pos_e: ned[1] as f32,
-                    pos_d: ned[2] as f32,
-                    vel_n: nav.vel_n_mps as f32,
-                    vel_e: nav.vel_e_mps as f32,
-                    vel_d: nav.vel_d_mps as f32,
-                    R_POS_N: h_acc2 as f32,
-                    R_POS_E: h_acc2 as f32,
-                    R_POS_D: v_acc2 as f32,
-                    R_VEL_N: s_acc2 as f32,
-                    R_VEL_E: s_acc2 as f32,
-                    R_VEL_D: s_acc2 as f32,
-                };
-                ekf_fuse_gps(&mut ekf, &gps);
-                clamp_ekf_biases(&mut ekf, pred_dt);
                 if let Some(eskf_ref) = eskf.as_mut() {
                     eskf_ref.fuse_gps(fusion_gnss_sample(nav, ned, cfg));
                 }
 
                 let t = rel_s(t_ms);
-                let (_, _, ekf_yaw) =
-                    quat_rpy_deg(ekf.state.q0, ekf.state.q1, ekf.state.q2, ekf.state.q3);
-                let (ekf_lat, ekf_lon, _ekf_h) = ned_to_lla_exact(
-                    ekf.state.pn as f64,
-                    ekf.state.pe as f64,
-                    ekf.state.pd as f64,
-                    ref_lat,
-                    ref_lon,
-                    ref_h,
-                );
-                map_heading.push(HeadingSample {
-                    t_s: t,
-                    lon_deg: ekf_lon,
-                    lat_deg: ekf_lat,
-                    yaw_deg: ekf_yaw,
-                });
                 if let Some(eskf_ref) = eskf.as_ref() {
                     let n = eskf_ref.nominal();
                     let (_, _, eskf_yaw) = quat_rpy_deg(n.q0, n.q1, n.q2, n.q3);
@@ -792,21 +684,6 @@ pub fn build_ekf_compare_traces(
         }
 
         if origin_set {
-            let (ekf_lat, ekf_lon, _ekf_h) = ned_to_lla_exact(
-                ekf.state.pn as f64,
-                ekf.state.pe as f64,
-                ekf.state.pd as f64,
-                ref_lat,
-                ref_lon,
-                ref_h,
-            );
-            map_ekf.push([ekf_lon, ekf_lat]);
-            if outage_active {
-                if !prev_outage_active && !map_ekf_outage.is_empty() {
-                    map_ekf_outage.push([f64::NAN, f64::NAN]);
-                }
-                map_ekf_outage.push([ekf_lon, ekf_lat]);
-            }
             if let Some(eskf_ref) = eskf.as_ref() {
                 let n = eskf_ref.nominal();
                 let (eskf_lat, eskf_lon, _eskf_h) = ned_to_lla_exact(
@@ -829,57 +706,7 @@ pub fn build_ekf_compare_traces(
         prev_outage_active = outage_active;
 
         let t_imu = rel_s(pkt.t_ms);
-        cmp_pos_n.push([t_imu, ekf.state.pn as f64]);
-        cmp_pos_e.push([t_imu, ekf.state.pe as f64]);
-        cmp_pos_d.push([t_imu, ekf.state.pd as f64]);
-        cmp_vel_n.push([t_imu, ekf.state.vn as f64]);
-        cmp_vel_e.push([t_imu, ekf.state.ve as f64]);
-        cmp_vel_d.push([t_imu, ekf.state.vd as f64]);
         let dt_safe = dt.max(1.0e-6);
-        let c_n_b = quat_to_rotmat_f64([
-            ekf.state.q0 as f64,
-            ekf.state.q1 as f64,
-            ekf.state.q2 as f64,
-            ekf.state.q3 as f64,
-        ]);
-        let gravity_b = [
-            c_n_b[2][0] * GRAVITY_MPS2 as f64,
-            c_n_b[2][1] * GRAVITY_MPS2 as f64,
-            c_n_b[2][2] * GRAVITY_MPS2 as f64,
-        ];
-        let raw_meas_gyro = [
-            gyro[0] - rad2deg((ekf.state.dax_b as f64) / dt_safe),
-            gyro[1] - rad2deg((ekf.state.day_b as f64) / dt_safe),
-            gyro[2] - rad2deg((ekf.state.daz_b as f64) / dt_safe),
-        ];
-        let raw_meas_accel = [
-            accel[0] - (ekf.state.dvx_b as f64) / dt_safe + gravity_b[0],
-            accel[1] - (ekf.state.dvy_b as f64) / dt_safe + gravity_b[1],
-            accel[2] - (ekf.state.dvz_b as f64) / dt_safe + gravity_b[2],
-        ];
-        let alpha_meas = lpf_alpha(dt, cfg.vehicle_meas_lpf_cutoff_hz);
-        let filt_gyro = lpf_vec3(&mut filt_meas_gyro, raw_meas_gyro, alpha_meas);
-        let filt_accel = lpf_vec3(&mut filt_meas_accel, raw_meas_accel, alpha_meas);
-        meas_gyro_x.push([t_imu, filt_gyro[0]]);
-        meas_gyro_y.push([t_imu, filt_gyro[1]]);
-        meas_gyro_z.push([t_imu, filt_gyro[2]]);
-        meas_accel_x.push([t_imu, filt_accel[0]]);
-        meas_accel_y.push([t_imu, filt_accel[1]]);
-        meas_accel_z.push([t_imu, filt_accel[2]]);
-        bias_gyro_x.push([t_imu, rad2deg((ekf.state.dax_b as f64) / dt_safe)]);
-        bias_gyro_y.push([t_imu, rad2deg((ekf.state.day_b as f64) / dt_safe)]);
-        bias_gyro_z.push([t_imu, rad2deg((ekf.state.daz_b as f64) / dt_safe)]);
-        bias_accel_x.push([t_imu, (ekf.state.dvx_b as f64) / dt_safe]);
-        bias_accel_y.push([t_imu, (ekf.state.dvy_b as f64) / dt_safe]);
-        bias_accel_z.push([t_imu, (ekf.state.dvz_b as f64) / dt_safe]);
-        for (i, tr) in cov_diag.iter_mut().enumerate() {
-            tr.push([t_imu, ekf.p[i][i] as f64]);
-        }
-        let (ekf_roll, ekf_pitch, ekf_yaw) =
-            quat_rpy_deg(ekf.state.q0, ekf.state.q1, ekf.state.q2, ekf.state.q3);
-        cmp_att_roll.push([t_imu, ekf_roll]);
-        cmp_att_pitch.push([t_imu, ekf_pitch]);
-        cmp_att_yaw.push([t_imu, ekf_yaw]);
         if let Some(eskf_ref) = eskf.as_ref() {
             append_eskf_sample(
                 eskf_ref,
@@ -916,226 +743,6 @@ pub fn build_ekf_compare_traces(
         }
     }
 
-    let cmp_pos = vec![
-        Trace {
-            name: "EKF posN [m]".to_string(),
-            points: cmp_pos_n,
-        },
-        Trace {
-            name: "UBX posN [m]".to_string(),
-            points: ubx_pos_n.clone(),
-        },
-        Trace {
-            name: "EKF posE [m]".to_string(),
-            points: cmp_pos_e,
-        },
-        Trace {
-            name: "UBX posE [m]".to_string(),
-            points: ubx_pos_e.clone(),
-        },
-        Trace {
-            name: "EKF posD [m]".to_string(),
-            points: cmp_pos_d,
-        },
-        Trace {
-            name: "UBX posD [m]".to_string(),
-            points: ubx_pos_d.clone(),
-        },
-    ];
-    let cmp_vel = vec![
-        Trace {
-            name: "EKF velN [m/s]".to_string(),
-            points: cmp_vel_n,
-        },
-        Trace {
-            name: "UBX velN [m/s]".to_string(),
-            points: ubx_vel_n.clone(),
-        },
-        Trace {
-            name: "EKF velE [m/s]".to_string(),
-            points: cmp_vel_e,
-        },
-        Trace {
-            name: "UBX velE [m/s]".to_string(),
-            points: ubx_vel_e.clone(),
-        },
-        Trace {
-            name: "EKF velD [m/s]".to_string(),
-            points: cmp_vel_d,
-        },
-        Trace {
-            name: "UBX velD [m/s]".to_string(),
-            points: ubx_vel_d.clone(),
-        },
-    ];
-    let cmp_att = vec![
-        Trace {
-            name: "EKF roll [deg]".to_string(),
-            points: cmp_att_roll,
-        },
-        Trace {
-            name: "NAV-ATT roll [deg]".to_string(),
-            points: ubx_att_roll.clone(),
-        },
-        Trace {
-            name: "EKF pitch [deg]".to_string(),
-            points: cmp_att_pitch,
-        },
-        Trace {
-            name: "NAV-ATT pitch [deg]".to_string(),
-            points: ubx_att_pitch.clone(),
-        },
-        Trace {
-            name: "EKF yaw [deg]".to_string(),
-            points: cmp_att_yaw,
-        },
-        Trace {
-            name: "NAV-ATT heading [deg]".to_string(),
-            points: ubx_att_yaw.clone(),
-        },
-    ];
-    let meas_gyro = vec![
-        Trace {
-            name: "EKF vehicle gyro x [deg/s]".to_string(),
-            points: meas_gyro_x,
-        },
-        Trace {
-            name: "EKF vehicle gyro y [deg/s]".to_string(),
-            points: meas_gyro_y,
-        },
-        Trace {
-            name: "EKF vehicle gyro z [deg/s]".to_string(),
-            points: meas_gyro_z,
-        },
-    ];
-    let meas_accel = vec![
-        Trace {
-            name: "EKF vehicle accel x [m/s^2]".to_string(),
-            points: meas_accel_x,
-        },
-        Trace {
-            name: "EKF vehicle accel y [m/s^2]".to_string(),
-            points: meas_accel_y,
-        },
-        Trace {
-            name: "EKF vehicle accel z [m/s^2]".to_string(),
-            points: meas_accel_z,
-        },
-    ];
-    let bias_gyro = vec![
-        Trace {
-            name: "EKF gyro bias x [deg/s]".to_string(),
-            points: bias_gyro_x,
-        },
-        Trace {
-            name: "EKF gyro bias y [deg/s]".to_string(),
-            points: bias_gyro_y,
-        },
-        Trace {
-            name: "EKF gyro bias z [deg/s]".to_string(),
-            points: bias_gyro_z,
-        },
-    ];
-    let bias_accel = vec![
-        Trace {
-            name: "EKF accel bias x [m/s^2]".to_string(),
-            points: bias_accel_x,
-        },
-        Trace {
-            name: "EKF accel bias y [m/s^2]".to_string(),
-            points: bias_accel_y,
-        },
-        Trace {
-            name: "EKF accel bias z [m/s^2]".to_string(),
-            points: bias_accel_z,
-        },
-    ];
-    let cov_bias = vec![
-        Trace {
-            name: "acc_x".to_string(),
-            points: cov_diag[13].clone(),
-        },
-        Trace {
-            name: "acc_y".to_string(),
-            points: cov_diag[14].clone(),
-        },
-        Trace {
-            name: "acc_z".to_string(),
-            points: cov_diag[15].clone(),
-        },
-        Trace {
-            name: "gyro_x".to_string(),
-            points: cov_diag[10].clone(),
-        },
-        Trace {
-            name: "gyro_y".to_string(),
-            points: cov_diag[11].clone(),
-        },
-        Trace {
-            name: "gyro_z".to_string(),
-            points: cov_diag[12].clone(),
-        },
-    ];
-    let cov_nonbias = vec![
-        Trace {
-            name: "p_n".to_string(),
-            points: cov_diag[7].clone(),
-        },
-        Trace {
-            name: "p_e".to_string(),
-            points: cov_diag[8].clone(),
-        },
-        Trace {
-            name: "p_d".to_string(),
-            points: cov_diag[9].clone(),
-        },
-        Trace {
-            name: "v_n".to_string(),
-            points: cov_diag[4].clone(),
-        },
-        Trace {
-            name: "v_e".to_string(),
-            points: cov_diag[5].clone(),
-        },
-        Trace {
-            name: "v_d".to_string(),
-            points: cov_diag[6].clone(),
-        },
-        Trace {
-            name: "q1".to_string(),
-            points: cov_diag[1].clone(),
-        },
-        Trace {
-            name: "q2".to_string(),
-            points: cov_diag[2].clone(),
-        },
-        Trace {
-            name: "q3".to_string(),
-            points: cov_diag[3].clone(),
-        },
-        Trace {
-            name: "q0".to_string(),
-            points: cov_diag[0].clone(),
-        },
-    ];
-    let map = vec![
-        Trace {
-            name: "u-blox path (lon,lat)".to_string(),
-            points: map_ubx,
-        },
-        Trace {
-            name: "NAV2-PVT path (GNSS-only, lon,lat)".to_string(),
-            points: map_nav2,
-        },
-        Trace {
-            name: "EKF path (lon,lat)".to_string(),
-            points: map_ekf,
-        },
-        Trace {
-            name: "EKF path during GNSS outage (lon,lat)".to_string(),
-            points: map_ekf_outage,
-        },
-    ];
     let eskf_cmp_pos = vec![
         Trace {
             name: "ESKF posN [m]".to_string(),
@@ -1404,17 +1011,6 @@ pub fn build_ekf_compare_traces(
     ];
 
     EkfCompareData {
-        cmp_pos,
-        cmp_vel,
-        cmp_att,
-        meas_gyro,
-        meas_accel,
-        bias_gyro,
-        bias_accel,
-        cov_bias,
-        cov_nonbias,
-        map,
-        map_heading,
         eskf_cmp_pos,
         eskf_cmp_vel,
         eskf_cmp_att,
@@ -1531,45 +1127,6 @@ fn build_align_mount_events(
         }
     }
     out
-}
-
-fn initialize_ekf_from_gnss(ekf: &mut Ekf, nav: NavPvtObs, ned: [f64; 3]) {
-    *ekf = Ekf::default();
-    ekf.state.pn = ned[0] as f32;
-    ekf.state.pe = ned[1] as f32;
-    ekf.state.pd = ned[2] as f32;
-    ekf.state.vn = nav.vel_n_mps as f32;
-    ekf.state.ve = nav.vel_e_mps as f32;
-    ekf.state.vd = nav.vel_d_mps as f32;
-
-    let speed_h = nav.vel_n_mps.hypot(nav.vel_e_mps);
-    let yaw_from_gnss = if nav.head_veh_valid {
-        deg2rad(nav.heading_vehicle_deg)
-    } else if speed_h >= 1.0 {
-        nav.vel_e_mps.atan2(nav.vel_n_mps)
-    } else {
-        deg2rad(nav.heading_motion_deg)
-    };
-    set_quat_yaw_only(&mut ekf.state, yaw_from_gnss);
-
-    // Startup should trust the seeded attitude enough that short-term NHC updates
-    // cannot drag the filter into the opposite heading basin before the next GNSS fix.
-    let att_sigma_rad = 2.0_f32.to_radians();
-    let quat_var = 0.25 * att_sigma_rad * att_sigma_rad;
-    for i in 0..4 {
-        ekf.p[i][i] = quat_var;
-    }
-
-    let vel_var = (nav.s_acc_mps.max(0.2) as f32).powi(2);
-    ekf.p[4][4] = vel_var;
-    ekf.p[5][5] = vel_var;
-    ekf.p[6][6] = vel_var;
-
-    let pos_h_var = (nav.h_acc_m.max(0.5) as f32).powi(2);
-    let pos_d_var = (nav.v_acc_m.max(0.5) as f32).powi(2);
-    ekf.p[7][7] = pos_h_var;
-    ekf.p[8][8] = pos_h_var;
-    ekf.p[9][9] = pos_d_var;
 }
 
 fn initialize_eskf_from_nav(
@@ -1715,59 +1272,6 @@ fn append_eskf_sample(
     for (i, tr) in cov_diag.iter_mut().enumerate() {
         tr.push([t_imu, p[i][i] as f64]);
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn append_ekf_sample(
-    ekf: &Ekf,
-    t_ms: f64,
-    rel_s: impl Fn(f64) -> f64,
-    ref_lat: f64,
-    ref_lon: f64,
-    ref_h: f64,
-    cmp_pos_n: &mut Vec<[f64; 2]>,
-    cmp_pos_e: &mut Vec<[f64; 2]>,
-    cmp_pos_d: &mut Vec<[f64; 2]>,
-    cmp_vel_n: &mut Vec<[f64; 2]>,
-    cmp_vel_e: &mut Vec<[f64; 2]>,
-    cmp_vel_d: &mut Vec<[f64; 2]>,
-    cmp_att_roll: &mut Vec<[f64; 2]>,
-    cmp_att_pitch: &mut Vec<[f64; 2]>,
-    cmp_att_yaw: &mut Vec<[f64; 2]>,
-    cov_diag: &mut [Vec<[f64; 2]>; 16],
-    map_ekf: &mut Vec<[f64; 2]>,
-    map_heading: &mut Vec<HeadingSample>,
-) {
-    let t = rel_s(t_ms);
-    cmp_pos_n.push([t, ekf.state.pn as f64]);
-    cmp_pos_e.push([t, ekf.state.pe as f64]);
-    cmp_pos_d.push([t, ekf.state.pd as f64]);
-    cmp_vel_n.push([t, ekf.state.vn as f64]);
-    cmp_vel_e.push([t, ekf.state.ve as f64]);
-    cmp_vel_d.push([t, ekf.state.vd as f64]);
-    for (i, tr) in cov_diag.iter_mut().enumerate() {
-        tr.push([t, ekf.p[i][i] as f64]);
-    }
-    let (ekf_roll, ekf_pitch, ekf_yaw) =
-        quat_rpy_deg(ekf.state.q0, ekf.state.q1, ekf.state.q2, ekf.state.q3);
-    cmp_att_roll.push([t, ekf_roll]);
-    cmp_att_pitch.push([t, ekf_pitch]);
-    cmp_att_yaw.push([t, ekf_yaw]);
-    let (ekf_lat, ekf_lon, _ekf_h) = ned_to_lla_exact(
-        ekf.state.pn as f64,
-        ekf.state.pe as f64,
-        ekf.state.pd as f64,
-        ref_lat,
-        ref_lon,
-        ref_h,
-    );
-    map_ekf.push([ekf_lon, ekf_lat]);
-    map_heading.push(HeadingSample {
-        t_s: t,
-        lon_deg: ekf_lon,
-        lat_deg: ekf_lat,
-        yaw_deg: ekf_yaw,
-    });
 }
 
 fn quat_to_rotmat_f64(q: [f64; 4]) -> [[f64; 3]; 3] {

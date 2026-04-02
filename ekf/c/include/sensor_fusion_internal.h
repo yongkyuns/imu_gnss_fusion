@@ -2,6 +2,7 @@
 #define SENSOR_FUSION_INTERNAL_H
 
 #include "sensor_fusion.h"
+#include "sf_eskf.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -110,7 +111,7 @@ typedef struct {
 
 typedef struct {
   sf_fusion_config_t cfg;
-  sf_ekf_t ekf;
+  sf_eskf_t eskf;
   sf_align_runtime_t align_rt;
   bool internal_align_enabled;
   bool align_initialized;

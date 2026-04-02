@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use crate::align::{AlignConfig, AlignWindowSummary};
-use crate::ekf::{Ekf, PredictNoise};
+use crate::ekf::PredictNoise;
 use crate::fusion::{FusionConfig, FusionGnssSample, FusionImuSample, FusionUpdate};
 
 pub const SF_SENSOR_FUSION_STORAGE_BYTES: usize = 32768;
@@ -288,7 +288,7 @@ unsafe extern "C" {
     fn sf_fusion_set_misalignment(fusion: *mut CSensorFusion, q_vb: *const f32);
     fn sf_fusion_process_imu(fusion: *mut CSensorFusion, sample: *const CImuSample) -> CUpdate;
     fn sf_fusion_process_gnss(fusion: *mut CSensorFusion, sample: *const CGnssSample) -> CUpdate;
-    fn sf_fusion_ekf(fusion: *const CSensorFusion) -> *const Ekf;
+    fn sf_fusion_eskf(fusion: *const CSensorFusion) -> *const CEskf;
     fn sf_fusion_align(fusion: *const CSensorFusion) -> *const CAlignState;
     fn sf_fusion_mount_ready(fusion: *const CSensorFusion) -> bool;
     fn sf_fusion_mount_q_vb(fusion: *const CSensorFusion, out_q_vb: *mut f32) -> bool;
@@ -522,22 +522,13 @@ impl CSensorFusionWrapper {
         c_update_to_rust(update)
     }
 
-    pub fn ekf(&self) -> Option<&Ekf> {
+    pub fn eskf(&self) -> Option<&CEskf> {
         // SAFETY: C returns null or pointer to internal state owned by self.
-        let p = unsafe { sf_fusion_ekf(&self.raw as *const CSensorFusion) };
+        let p = unsafe { sf_fusion_eskf(&self.raw as *const CSensorFusion) };
         if p.is_null() {
             None
         } else {
             Some(unsafe { &*p })
-        }
-    }
-
-    pub fn ekf_mut(&mut self) -> Option<&mut Ekf> {
-        let p = unsafe { sf_fusion_ekf(&self.raw as *const CSensorFusion) } as *mut Ekf;
-        if p.is_null() {
-            None
-        } else {
-            Some(unsafe { &mut *p })
         }
     }
 

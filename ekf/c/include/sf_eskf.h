@@ -47,7 +47,7 @@ typedef struct {
   unsigned int updates;
 } sf_eskf_stationary_diag_t;
 
-typedef struct {
+typedef struct sf_eskf {
   sf_eskf_nominal_state_t nominal;
   float p[SF_ESKF_ERROR_STATES][SF_ESKF_ERROR_STATES];
   sf_predict_noise_t noise;

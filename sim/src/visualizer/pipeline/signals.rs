@@ -274,17 +274,6 @@ pub fn build_signal_traces(
             .partial_cmp(&b.name)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    out.ekf_cmp_pos = ekf.cmp_pos;
-    out.ekf_cmp_vel = ekf.cmp_vel;
-    out.ekf_cmp_att = ekf.cmp_att;
-    out.ekf_meas_gyro = ekf.meas_gyro;
-    out.ekf_meas_accel = ekf.meas_accel;
-    out.ekf_bias_gyro = ekf.bias_gyro;
-    out.ekf_bias_accel = ekf.bias_accel;
-    out.ekf_cov_bias = ekf.cov_bias;
-    out.ekf_cov_nonbias = ekf.cov_nonbias;
-    out.ekf_map = ekf.map;
-    out.ekf_map_heading = ekf.map_heading;
     out.eskf_cmp_pos = ekf.eskf_cmp_pos;
     out.eskf_cmp_vel = ekf.eskf_cmp_vel;
     out.eskf_cmp_att = ekf.eskf_cmp_att;
@@ -347,15 +336,6 @@ pub fn build_signal_traces(
         &mut out.esf_ins_accel,
         &mut out.orientation,
         &mut out.other,
-        &mut out.ekf_cmp_pos,
-        &mut out.ekf_cmp_vel,
-        &mut out.ekf_cmp_att,
-        &mut out.ekf_meas_gyro,
-        &mut out.ekf_meas_accel,
-        &mut out.ekf_bias_gyro,
-        &mut out.ekf_bias_accel,
-        &mut out.ekf_cov_bias,
-        &mut out.ekf_cov_nonbias,
         &mut out.eskf_cmp_pos,
         &mut out.eskf_cmp_vel,
         &mut out.eskf_cmp_att,
@@ -380,19 +360,6 @@ pub fn build_signal_traces(
                 .sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap_or(std::cmp::Ordering::Equal));
             sanitize_trace(tr);
         }
-    }
-    for tr in &mut out.ekf_map {
-        let mut cleaned = Vec::with_capacity(tr.points.len());
-        for p in tr.points.iter().copied() {
-            let lon = p[0];
-            let lat = p[1];
-            if lon.is_finite() && lat.is_finite() {
-                cleaned.push(p);
-            } else if !lon.is_finite() && !lat.is_finite() {
-                cleaned.push([f64::NAN, f64::NAN]);
-            }
-        }
-        tr.points = cleaned;
     }
     for tr in &mut out.eskf_map {
         let mut cleaned = Vec::with_capacity(tr.points.len());

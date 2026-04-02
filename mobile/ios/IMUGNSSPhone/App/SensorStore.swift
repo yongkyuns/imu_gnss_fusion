@@ -60,11 +60,6 @@ final class SensorStore: NSObject, ObservableObject {
     private var lastBaroPublishTS: TimeInterval?
     private let motionPublishMinDtSec = 1.0 / 20.0
     private let baroPublishMinDtSec = 1.0 / 10.0
-    private var ekf = ekf_t()
-    private var ekfInitialized = false
-    private var lastImuTimestampSec: TimeInterval?
-    private var lastEkfDtSec: Double = 0.02
-
     override init() {
         super.init()
         locationManager.delegate = self
@@ -98,10 +93,6 @@ final class SensorStore: NSObject, ObservableObject {
         ekfEulerHistory.removeAll(keepingCapacity: true)
         ekfGyroBiasHistory.removeAll(keepingCapacity: true)
         ekfAccelBiasHistory.removeAll(keepingCapacity: true)
-        ekfInitialized = false
-        lastImuTimestampSec = nil
-        lastEkfDtSec = 0.02
-        initializeEkf()
 
         if authorization == .notDetermined {
             locationManager.requestWhenInUseAuthorization()
@@ -231,8 +222,6 @@ final class SensorStore: NSObject, ObservableObject {
         streamStartTime = nil
         lastMotionPublishTS = nil
         lastBaroPublishTS = nil
-        ekfInitialized = false
-        lastImuTimestampSec = nil
     }
 }
 
@@ -359,31 +348,6 @@ extension SensorStore: CLLocationManagerDelegate {
         return (n, e, d)
     }
 
-    private func initializeEkf() {
-        var pDiag = [Float](repeating: 1.0, count: Int(N_STATES))
-        let dt: Float = 0.01
-        let gyroSigmaDa = Float(0.15 * .pi / 180.0) * dt
-        let accelSigmaDv: Float = 0.25 * dt
-        pDiag[10] = gyroSigmaDa * gyroSigmaDa
-        pDiag[11] = pDiag[10]
-        pDiag[12] = pDiag[10]
-        pDiag[13] = accelSigmaDv * accelSigmaDv
-        pDiag[14] = pDiag[13]
-        pDiag[15] = pDiag[13]
-
-        var noise = predict_noise_t(
-            gyro_var: 0.03,
-            accel_var: 12.0,
-            gyro_bias_rw_var: 0.1e-9,
-            accel_bias_rw_var: 1.0e-8
-        )
-
-        pDiag.withUnsafeBufferPointer { ptr in
-            ekf_init(&ekf, ptr.baseAddress, &noise)
-        }
-        ekfInitialized = true
-    }
-
     private func runEkfPredict(
         timestampSec: TimeInterval,
         ax: Double,
@@ -393,26 +357,13 @@ extension SensorStore: CLLocationManagerDelegate {
         gy: Double,
         gz: Double
     ) {
-        guard ekfInitialized else { return }
-        guard let lastTs = lastImuTimestampSec else {
-            lastImuTimestampSec = timestampSec
-            return
-        }
-        let dt = max(0.001, min(0.05, timestampSec - lastTs))
-        lastImuTimestampSec = timestampSec
-        lastEkfDtSec = dt
-
-        var imu = imu_sample_t(
-            dax: Float(gx * dt),
-            day: Float(gy * dt),
-            daz: Float(gz * dt),
-            dvx: Float(ax * dt),
-            dvy: Float(ay * dt),
-            dvz: Float(az * dt),
-            dt: Float(dt)
-        )
-        var debugOut = ekf_debug_t(dvb_x: 0, dvb_y: 0, dvb_z: 0)
-        ekf_predict(&ekf, &imu, &debugOut)
+        _ = timestampSec
+        _ = ax
+        _ = ay
+        _ = az
+        _ = gx
+        _ = gy
+        _ = gz
     }
 
     private func runEkfFuseGps(
@@ -426,105 +377,20 @@ extension SensorStore: CLLocationManagerDelegate {
         vAcc: Double,
         timestampSec: TimeInterval
     ) {
-        guard ekfInitialized else { return }
-        guard let posN, let posE, let posD, let velN, let velE else { return }
-
-        let positionNoiseScale = 0.25
-        let posVarH = Float(max(hAcc, 1.0) * max(hAcc, 1.0) * positionNoiseScale)
-        let posVarV = Float(max(vAcc, 1.0) * max(vAcc, 1.0) * positionNoiseScale)
-        let velVarH: Float = 1.5 * 1.5
-        let velVarV: Float = 2.5 * 2.5
-
-        var gps = gps_data_t(
-            pos_n: Float(posN),
-            pos_e: Float(posE),
-            pos_d: Float(posD),
-            vel_n: Float(velN),
-            vel_e: Float(velE),
-            vel_d: Float(velD ?? 0.0),
-            R_POS_N: posVarH,
-            R_POS_E: posVarH,
-            R_POS_D: posVarV,
-            R_VEL_N: velVarH,
-            R_VEL_E: velVarH,
-            R_VEL_D: velVarV
-        )
-        ekf_fuse_gps(&ekf, &gps)
-
-        let tDate = Date(timeIntervalSince1970: timestampSec)
-        Task { @MainActor in
-            let tSec = self.relativeTimeSeconds(for: tDate)
-            self.appendEkfSamplesFromState(tSec: tSec)
-        }
+        _ = posN
+        _ = posE
+        _ = posD
+        _ = velN
+        _ = velE
+        _ = velD
+        _ = hAcc
+        _ = vAcc
+        _ = timestampSec
     }
 
     @MainActor
     private func appendEkfSamplesFromState(tSec: Double) {
-        let state = ekf.state
-        appendSample(
-            to: &ekfVelocityHistory,
-            sample: TimedVec3Sample(
-                tSec: tSec,
-                x: Double(state.vn),
-                y: Double(state.ve),
-                z: Double(state.vd)
-            ),
-            maxCount: 240
-        )
-
-        let euler = quatToEulerDeg(q0: Double(state.q0), q1: Double(state.q1), q2: Double(state.q2), q3: Double(state.q3))
-        appendSample(
-            to: &ekfEulerHistory,
-            sample: TimedVec3Sample(
-                tSec: tSec,
-                x: euler.rollDeg,
-                y: euler.pitchDeg,
-                z: euler.yawDeg
-            ),
-            maxCount: 240
-        )
-
-        let dt = max(lastEkfDtSec, 1e-3)
-        appendSample(
-            to: &ekfGyroBiasHistory,
-            sample: TimedVec3Sample(
-                tSec: tSec,
-                x: Double(state.dax_b) / dt,
-                y: Double(state.day_b) / dt,
-                z: Double(state.daz_b) / dt
-            ),
-            maxCount: 240
-        )
-        appendSample(
-            to: &ekfAccelBiasHistory,
-            sample: TimedVec3Sample(
-                tSec: tSec,
-                x: Double(state.dvx_b) / dt,
-                y: Double(state.dvy_b) / dt,
-                z: Double(state.dvz_b) / dt
-            ),
-            maxCount: 240
-        )
-    }
-
-    private func quatToEulerDeg(q0: Double, q1: Double, q2: Double, q3: Double) -> (rollDeg: Double, pitchDeg: Double, yawDeg: Double) {
-        let sinr = 2.0 * (q0 * q1 + q2 * q3)
-        let cosr = 1.0 - 2.0 * (q1 * q1 + q2 * q2)
-        let roll = atan2(sinr, cosr)
-
-        let sinp = 2.0 * (q0 * q2 - q3 * q1)
-        let pitch: Double
-        if abs(sinp) >= 1.0 {
-            pitch = copysign(.pi / 2.0, sinp)
-        } else {
-            pitch = asin(sinp)
-        }
-
-        let siny = 2.0 * (q0 * q3 + q1 * q2)
-        let cosy = 1.0 - 2.0 * (q2 * q2 + q3 * q3)
-        let yaw = atan2(siny, cosy)
-
-        return (roll * 180.0 / .pi, pitch * 180.0 / .pi, yaw * 180.0 / .pi)
+        _ = tSec
     }
 
     private func relativeTimeSeconds(for date: Date) -> Double {

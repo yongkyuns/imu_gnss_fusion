@@ -3,11 +3,11 @@
 #include <math.h>
 #include <string.h>
 
-static void sf_initialize_ekf_from_gnss(sf_ekf_t *ekf,
-                                        const sf_gnss_sample_t *gnss,
-                                        float yaw_init_speed_mps);
-static void sf_set_state_yaw_only(sf_ekf_state_t *state, float yaw_rad);
-static void sf_clamp_ekf_biases(sf_ekf_t *ekf, float dt_s);
+static void sf_initialize_eskf_from_gnss(sf_eskf_t *eskf,
+                                         const sf_gnss_sample_t *gnss,
+                                         float yaw_init_speed_mps);
+static void sf_set_nominal_yaw_only(sf_eskf_nominal_state_t *state, float yaw_rad);
+static void sf_clamp_eskf_biases(sf_eskf_t *eskf);
 static void sf_quat_to_rotmat(const float q[4], float r[3][3]);
 static void sf_transpose3(const float in[3][3], float out[3][3]);
 static void sf_mat3_vec(const float m[3][3], const float v[3], float out[3]);
@@ -77,6 +77,16 @@ void sf_bootstrap_config_default(sf_bootstrap_config_t *cfg) {
   cfg->max_accel_norm_err_mps2 = align_cfg.max_stationary_accel_norm_err_mps2;
 }
 
+void sf_predict_noise_default(sf_predict_noise_t *cfg) {
+  if (cfg == NULL) {
+    return;
+  }
+  cfg->gyro_var = 0.0001f;
+  cfg->accel_var = 12.0f;
+  cfg->gyro_bias_rw_var = 0.002e-9f;
+  cfg->accel_bias_rw_var = 0.2e-9f;
+}
+
 void sf_fusion_config_default(sf_fusion_config_t *cfg) {
   if (cfg == NULL) {
     return;
@@ -103,7 +113,7 @@ void sf_fusion_init_internal(sf_sensor_fusion_t *fusion,
   impl->cfg = cfg ? *cfg : cfg_local;
   impl->internal_align_enabled = true;
   sf_align_init(&impl->align_rt, &impl->cfg.align);
-  sf_ekf_init(&impl->ekf, NULL, &impl->cfg.predict_noise);
+  sf_eskf_init(&impl->eskf, NULL, &impl->cfg.predict_noise);
 }
 
 void sf_fusion_init_external(sf_sensor_fusion_t *fusion,
@@ -158,7 +168,7 @@ sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
   float c_vb[3][3];
   float gyro_vehicle[3];
   float accel_vehicle[3];
-  sf_ekf_imu_delta_t imu_delta;
+  sf_eskf_imu_delta_t imu_delta;
   uint32_t t0_us;
   uint32_t elapsed_us;
 
@@ -238,7 +248,7 @@ sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
   imu_delta.dt = dt_s;
 
   t0_us = sf_profile_stamp(impl);
-  sf_ekf_predict(&impl->ekf, &imu_delta, NULL);
+  sf_eskf_predict(&impl->eskf, &imu_delta);
   if (impl->profile_now_us != NULL) {
     elapsed_us = sf_profile_stamp(impl) - t0_us;
     sf_profile_accumulate(&impl->profile.imu_predict_count,
@@ -247,7 +257,7 @@ sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
                           elapsed_us);
   }
   t0_us = sf_profile_stamp(impl);
-  sf_clamp_ekf_biases(&impl->ekf, dt_s);
+  sf_clamp_eskf_biases(&impl->eskf);
   if (impl->profile_now_us != NULL) {
     elapsed_us = sf_profile_stamp(impl) - t0_us;
     sf_profile_accumulate(&impl->profile.imu_clamp_count,
@@ -257,7 +267,7 @@ sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
   }
   if (impl->cfg.r_body_vel > 0.0f) {
     t0_us = sf_profile_stamp(impl);
-    sf_ekf_fuse_body_vel(&impl->ekf, impl->cfg.r_body_vel);
+    sf_eskf_fuse_body_vel(&impl->eskf, impl->cfg.r_body_vel);
     if (impl->profile_now_us != NULL) {
       elapsed_us = sf_profile_stamp(impl) - t0_us;
       sf_profile_accumulate(&impl->profile.imu_body_vel_count,
@@ -266,7 +276,7 @@ sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
                             elapsed_us);
     }
     t0_us = sf_profile_stamp(impl);
-    sf_clamp_ekf_biases(&impl->ekf, dt_s);
+    sf_clamp_eskf_biases(&impl->eskf);
     if (impl->profile_now_us != NULL) {
       elapsed_us = sf_profile_stamp(impl) - t0_us;
       sf_profile_accumulate(&impl->profile.imu_clamp_count,
@@ -377,7 +387,7 @@ sf_update_t sf_fusion_process_gnss(sf_sensor_fusion_t *fusion,
 
   if (!impl->ekf_initialized) {
     t0_us = sf_profile_stamp(impl);
-    sf_initialize_ekf_from_gnss(&impl->ekf, sample, impl->cfg.yaw_init_speed_mps);
+    sf_initialize_eskf_from_gnss(&impl->eskf, sample, impl->cfg.yaw_init_speed_mps);
     if (impl->profile_now_us != NULL) {
       elapsed_us = sf_profile_stamp(impl) - t0_us;
       sf_profile_accumulate(&impl->profile.gnss_init_count,
@@ -389,7 +399,7 @@ sf_update_t sf_fusion_process_gnss(sf_sensor_fusion_t *fusion,
     ekf_initialized_now = true;
   } else {
     t0_us = sf_profile_stamp(impl);
-    sf_ekf_fuse_gps(&impl->ekf, sample);
+    sf_eskf_fuse_gps(&impl->eskf, sample);
     if (impl->profile_now_us != NULL) {
       elapsed_us = sf_profile_stamp(impl) - t0_us;
       sf_profile_accumulate(&impl->profile.gnss_fuse_count,
@@ -403,8 +413,8 @@ sf_update_t sf_fusion_process_gnss(sf_sensor_fusion_t *fusion,
   return sf_update_from_fusion(impl, prev_mount_ready != impl->mount_ready, ekf_initialized_now);
 }
 
-const sf_ekf_t *sf_fusion_ekf(const sf_sensor_fusion_t *fusion) {
-  return fusion != NULL ? &sf_impl_const(fusion)->ekf : NULL;
+const sf_eskf_t *sf_fusion_eskf(const sf_sensor_fusion_t *fusion) {
+  return fusion != NULL ? &sf_impl_const(fusion)->eskf : NULL;
 }
 
 const sf_align_t *sf_fusion_align(const sf_sensor_fusion_t *fusion) {
@@ -449,22 +459,24 @@ static sf_update_t sf_update_from_fusion(const sf_sensor_fusion_impl_t *fusion,
   return out;
 }
 
-static void sf_initialize_ekf_from_gnss(sf_ekf_t *ekf,
-                                        const sf_gnss_sample_t *gnss,
-                                        float yaw_init_speed_mps) {
+static void sf_initialize_eskf_from_gnss(sf_eskf_t *eskf,
+                                         const sf_gnss_sample_t *gnss,
+                                         float yaw_init_speed_mps) {
   float vel_var;
   float speed_h;
   float yaw_rad;
-  sf_predict_noise_t noise = ekf->noise;
+  const float gyro_bias_sigma_radps = 0.125f * 3.1415927f / 180.0f;
+  const float accel_bias_sigma_mps2 = 0.075f;
+  sf_predict_noise_t noise = eskf->noise;
 
-  sf_ekf_init(ekf, NULL, &noise);
+  sf_eskf_init(eskf, NULL, &noise);
 
-  ekf->state.pn = gnss->pos_ned_m[0];
-  ekf->state.pe = gnss->pos_ned_m[1];
-  ekf->state.pd = gnss->pos_ned_m[2];
-  ekf->state.vn = gnss->vel_ned_mps[0];
-  ekf->state.ve = gnss->vel_ned_mps[1];
-  ekf->state.vd = gnss->vel_ned_mps[2];
+  eskf->nominal.pn = gnss->pos_ned_m[0];
+  eskf->nominal.pe = gnss->pos_ned_m[1];
+  eskf->nominal.pd = gnss->pos_ned_m[2];
+  eskf->nominal.vn = gnss->vel_ned_mps[0];
+  eskf->nominal.ve = gnss->vel_ned_mps[1];
+  eskf->nominal.vd = gnss->vel_ned_mps[2];
 
   speed_h = sqrtf(gnss->vel_ned_mps[0] * gnss->vel_ned_mps[0] +
                   gnss->vel_ned_mps[1] * gnss->vel_ned_mps[1]);
@@ -475,14 +487,14 @@ static void sf_initialize_ekf_from_gnss(sf_ekf_t *ekf,
   } else {
     yaw_rad = 0.0f;
   }
-  sf_set_state_yaw_only(&ekf->state, yaw_rad);
+  sf_set_nominal_yaw_only(&eskf->nominal, yaw_rad);
 
   {
     const float att_sigma_rad = 2.0f * 3.1415927f / 180.0f;
-    const float quat_var = 0.25f * att_sigma_rad * att_sigma_rad;
-    for (int i = 0; i < 4; ++i) {
-      ekf->p[i][i] = quat_var;
-    }
+    const float att_var = att_sigma_rad * att_sigma_rad;
+    eskf->p[0][0] = att_var;
+    eskf->p[1][1] = att_var;
+    eskf->p[2][2] = att_var;
   }
 
   vel_var = gnss->vel_std_mps[0];
@@ -496,19 +508,25 @@ static void sf_initialize_ekf_from_gnss(sf_ekf_t *ekf,
     vel_var = 0.2f;
   }
   vel_var *= vel_var;
-  ekf->p[4][4] = vel_var;
-  ekf->p[5][5] = vel_var;
-  ekf->p[6][6] = vel_var;
+  eskf->p[3][3] = vel_var;
+  eskf->p[4][4] = vel_var;
+  eskf->p[5][5] = vel_var;
 
-  ekf->p[7][7] = (gnss->pos_std_m[0] > 0.5f ? gnss->pos_std_m[0] : 0.5f);
-  ekf->p[8][8] = (gnss->pos_std_m[1] > 0.5f ? gnss->pos_std_m[1] : 0.5f);
-  ekf->p[9][9] = (gnss->pos_std_m[2] > 0.5f ? gnss->pos_std_m[2] : 0.5f);
-  ekf->p[7][7] *= ekf->p[7][7];
-  ekf->p[8][8] *= ekf->p[8][8];
-  ekf->p[9][9] *= ekf->p[9][9];
+  eskf->p[6][6] = (gnss->pos_std_m[0] > 0.5f ? gnss->pos_std_m[0] : 0.5f);
+  eskf->p[7][7] = (gnss->pos_std_m[1] > 0.5f ? gnss->pos_std_m[1] : 0.5f);
+  eskf->p[8][8] = (gnss->pos_std_m[2] > 0.5f ? gnss->pos_std_m[2] : 0.5f);
+  eskf->p[6][6] *= eskf->p[6][6];
+  eskf->p[7][7] *= eskf->p[7][7];
+  eskf->p[8][8] *= eskf->p[8][8];
+  eskf->p[9][9] = gyro_bias_sigma_radps * gyro_bias_sigma_radps;
+  eskf->p[10][10] = gyro_bias_sigma_radps * gyro_bias_sigma_radps;
+  eskf->p[11][11] = gyro_bias_sigma_radps * gyro_bias_sigma_radps;
+  eskf->p[12][12] = accel_bias_sigma_mps2 * accel_bias_sigma_mps2;
+  eskf->p[13][13] = accel_bias_sigma_mps2 * accel_bias_sigma_mps2;
+  eskf->p[14][14] = accel_bias_sigma_mps2 * accel_bias_sigma_mps2;
 }
 
-static void sf_set_state_yaw_only(sf_ekf_state_t *state, float yaw_rad) {
+static void sf_set_nominal_yaw_only(sf_eskf_nominal_state_t *state, float yaw_rad) {
   const float half = 0.5f * yaw_rad;
   state->q0 = cosf(half);
   state->q1 = 0.0f;
@@ -516,24 +534,23 @@ static void sf_set_state_yaw_only(sf_ekf_state_t *state, float yaw_rad) {
   state->q3 = sinf(half);
 }
 
-static void sf_clamp_ekf_biases(sf_ekf_t *ekf, float dt_s) {
-  const float dt = dt_s > 1.0e-3f ? dt_s : 1.0e-3f;
-  const float max_gyro_bias_da = (1.5f * 3.1415927f / 180.0f) * dt;
-  const float max_accel_bias_dv = 1.5f * dt;
+static void sf_clamp_eskf_biases(sf_eskf_t *eskf) {
+  const float max_gyro_bias_radps = 1.5f * 3.1415927f / 180.0f;
+  const float max_accel_bias_mps2 = 1.5f;
 
-  if (ekf->state.dax_b > max_gyro_bias_da) ekf->state.dax_b = max_gyro_bias_da;
-  if (ekf->state.dax_b < -max_gyro_bias_da) ekf->state.dax_b = -max_gyro_bias_da;
-  if (ekf->state.day_b > max_gyro_bias_da) ekf->state.day_b = max_gyro_bias_da;
-  if (ekf->state.day_b < -max_gyro_bias_da) ekf->state.day_b = -max_gyro_bias_da;
-  if (ekf->state.daz_b > max_gyro_bias_da) ekf->state.daz_b = max_gyro_bias_da;
-  if (ekf->state.daz_b < -max_gyro_bias_da) ekf->state.daz_b = -max_gyro_bias_da;
+  if (eskf->nominal.bgx > max_gyro_bias_radps) eskf->nominal.bgx = max_gyro_bias_radps;
+  if (eskf->nominal.bgx < -max_gyro_bias_radps) eskf->nominal.bgx = -max_gyro_bias_radps;
+  if (eskf->nominal.bgy > max_gyro_bias_radps) eskf->nominal.bgy = max_gyro_bias_radps;
+  if (eskf->nominal.bgy < -max_gyro_bias_radps) eskf->nominal.bgy = -max_gyro_bias_radps;
+  if (eskf->nominal.bgz > max_gyro_bias_radps) eskf->nominal.bgz = max_gyro_bias_radps;
+  if (eskf->nominal.bgz < -max_gyro_bias_radps) eskf->nominal.bgz = -max_gyro_bias_radps;
 
-  if (ekf->state.dvx_b > max_accel_bias_dv) ekf->state.dvx_b = max_accel_bias_dv;
-  if (ekf->state.dvx_b < -max_accel_bias_dv) ekf->state.dvx_b = -max_accel_bias_dv;
-  if (ekf->state.dvy_b > max_accel_bias_dv) ekf->state.dvy_b = max_accel_bias_dv;
-  if (ekf->state.dvy_b < -max_accel_bias_dv) ekf->state.dvy_b = -max_accel_bias_dv;
-  if (ekf->state.dvz_b > max_accel_bias_dv) ekf->state.dvz_b = max_accel_bias_dv;
-  if (ekf->state.dvz_b < -max_accel_bias_dv) ekf->state.dvz_b = -max_accel_bias_dv;
+  if (eskf->nominal.bax > max_accel_bias_mps2) eskf->nominal.bax = max_accel_bias_mps2;
+  if (eskf->nominal.bax < -max_accel_bias_mps2) eskf->nominal.bax = -max_accel_bias_mps2;
+  if (eskf->nominal.bay > max_accel_bias_mps2) eskf->nominal.bay = max_accel_bias_mps2;
+  if (eskf->nominal.bay < -max_accel_bias_mps2) eskf->nominal.bay = -max_accel_bias_mps2;
+  if (eskf->nominal.baz > max_accel_bias_mps2) eskf->nominal.baz = max_accel_bias_mps2;
+  if (eskf->nominal.baz < -max_accel_bias_mps2) eskf->nominal.baz = -max_accel_bias_mps2;
 }
 
 static void sf_quat_to_rotmat(const float q[4], float r[3][3]) {

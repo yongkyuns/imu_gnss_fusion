@@ -30,7 +30,9 @@ def generate_observation_equations(p_cov, state, observation, variance, varname,
         h = h.subs(linearization_subs)
     innov_var = h * p_cov * h.T + Matrix([variance])
     k = p_cov * h.T / innov_var[0, 0]
-    expr = cse(Matrix([h.transpose(), k]), symbols(f"{varname}0:1000"), optimizations="basic")
+    expr = cse(Matrix.vstack(h.transpose(), k, Matrix([innov_var[0, 0]])),
+               symbols(f"{varname}0:1000"),
+               optimizations="basic")
     return expr
 
 
@@ -38,10 +40,15 @@ def write_observation_equations(path, equations):
     gen = CodeGenerator(str(path))
     gen.print_string("Sub Expressions")
     gen.write_subexpressions(equations[0])
+    values = equations[1]
+    if len(values) == 1 and isinstance(values[0], Matrix):
+        values = values[0]
     gen.print_string("Observation Jacobians")
-    gen.write_matrix(Matrix(equations[1][0][0:15]), "H")
+    gen.write_matrix(Matrix(values[0:15]), "H")
     gen.print_string("Kalman gains")
-    gen.write_matrix(Matrix(equations[1][0][15:]), "K")
+    gen.write_matrix(Matrix(values[15:30]), "K")
+    gen.print_string("Innovation Variance")
+    gen.file.write(f"S = {gen.get_ccode(values[30])};\n")
     gen.close()
 
 
