@@ -3,6 +3,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
+use sensor_fusion::align::AlignConfig;
+use sensor_fusion::ekf::PredictNoise;
+use sim::ubxlog::parse_ubx_frames;
 use sim::visualizer::model::{EkfImuSource, Trace};
 use sim::visualizer::pipeline::align_replay::{
     BootstrapConfig, ImuReplayConfig, build_align_replay,
@@ -11,9 +14,6 @@ use sim::visualizer::pipeline::ekf_compare::{
     EkfCompareConfig, GnssOutageConfig, build_ekf_compare_traces,
 };
 use sim::visualizer::pipeline::timebase::build_master_timeline;
-use sim::ubxlog::parse_ubx_frames;
-use sensor_fusion::align::AlignConfig;
-use sensor_fusion::ekf::PredictNoise;
 
 #[derive(Parser, Debug)]
 #[command(name = "score_ekf_decimation")]
@@ -323,8 +323,10 @@ fn score_log(
     let cand_err = compute_error_metrics(cand)?;
 
     let ready_dt_s = opt_abs_diff(first_yaw_init_t(full_align), first_yaw_init_t(cand_align));
-    let ekf_init_dt_s = opt_abs_diff(first_trace_t(find_trace(&full.cmp_pos, "EKF posN [m]")?),
-                                     first_trace_t(find_trace(&cand.cmp_pos, "EKF posN [m]")?));
+    let ekf_init_dt_s = opt_abs_diff(
+        first_trace_t(find_trace(&full.cmp_pos, "EKF posN [m]")?),
+        first_trace_t(find_trace(&cand.cmp_pos, "EKF posN [m]")?),
+    );
 
     let state_pos = diff_vec3_metrics(
         find_trace(&full.cmp_pos, "EKF posN [m]")?,
@@ -382,8 +384,7 @@ fn score_log(
     let ext_vel_reg_mps = (cand_err.vel_rms_mps - full_err.vel_rms_mps).max(0.0);
     let ext_att_reg_deg = (cand_err.att_rms_deg - full_err.att_rms_deg).max(0.0);
 
-    let score =
-        3.0 * norm(state_att.rms, 1.0)
+    let score = 3.0 * norm(state_att.rms, 1.0)
         + 2.0 * norm(state_att.p95, 2.0)
         + 2.0 * norm(state_pos.rms, 0.5)
         + 1.5 * norm(state_vel.rms, 0.1)
@@ -478,24 +479,60 @@ fn compute_error_metrics(
     let mut sum_att2 = 0.0;
     for p in ekf_pn {
         let t = p[0];
-        let Some(epn) = interp(ekf_pn, t) else { continue };
-        let Some(epe) = interp(ekf_pe, t) else { continue };
-        let Some(epd) = interp(ekf_pd, t) else { continue };
-        let Some(upn) = interp(ubx_pn, t) else { continue };
-        let Some(upe) = interp(ubx_pe, t) else { continue };
-        let Some(upd) = interp(ubx_pd, t) else { continue };
-        let Some(evn) = interp(ekf_vn, t) else { continue };
-        let Some(eve) = interp(ekf_ve, t) else { continue };
-        let Some(evd) = interp(ekf_vd, t) else { continue };
-        let Some(uvn) = interp(ubx_vn, t) else { continue };
-        let Some(uve) = interp(ubx_ve, t) else { continue };
-        let Some(uvd) = interp(ubx_vd, t) else { continue };
-        let Some(er) = interp(ekf_roll, t) else { continue };
-        let Some(ep) = interp(ekf_pitch, t) else { continue };
-        let Some(ey) = interp(ekf_yaw, t) else { continue };
-        let Some(nr) = interp(nav_roll, t) else { continue };
-        let Some(np) = interp(nav_pitch, t) else { continue };
-        let Some(ny) = interp(nav_yaw, t) else { continue };
+        let Some(epn) = interp(ekf_pn, t) else {
+            continue;
+        };
+        let Some(epe) = interp(ekf_pe, t) else {
+            continue;
+        };
+        let Some(epd) = interp(ekf_pd, t) else {
+            continue;
+        };
+        let Some(upn) = interp(ubx_pn, t) else {
+            continue;
+        };
+        let Some(upe) = interp(ubx_pe, t) else {
+            continue;
+        };
+        let Some(upd) = interp(ubx_pd, t) else {
+            continue;
+        };
+        let Some(evn) = interp(ekf_vn, t) else {
+            continue;
+        };
+        let Some(eve) = interp(ekf_ve, t) else {
+            continue;
+        };
+        let Some(evd) = interp(ekf_vd, t) else {
+            continue;
+        };
+        let Some(uvn) = interp(ubx_vn, t) else {
+            continue;
+        };
+        let Some(uve) = interp(ubx_ve, t) else {
+            continue;
+        };
+        let Some(uvd) = interp(ubx_vd, t) else {
+            continue;
+        };
+        let Some(er) = interp(ekf_roll, t) else {
+            continue;
+        };
+        let Some(ep) = interp(ekf_pitch, t) else {
+            continue;
+        };
+        let Some(ey) = interp(ekf_yaw, t) else {
+            continue;
+        };
+        let Some(nr) = interp(nav_roll, t) else {
+            continue;
+        };
+        let Some(np) = interp(nav_pitch, t) else {
+            continue;
+        };
+        let Some(ny) = interp(nav_yaw, t) else {
+            continue;
+        };
         sum_pos2 += (epn - upn).powi(2) + (epe - upe).powi(2) + (epd - upd).powi(2);
         sum_vel2 += (evn - uvn).powi(2) + (eve - uve).powi(2) + (evd - uvd).powi(2);
         sum_att2 += (er - nr).powi(2) + (ep - np).powi(2) + ang_diff_deg(ey, ny).powi(2);
@@ -543,7 +580,9 @@ fn diff_log_cov_metrics(a: &[Trace], b: &[Trace]) -> Result<TraceDiffMetrics> {
         let tb = find_trace(b, &ta.name)?;
         for p in &ta.points {
             let t = p[0];
-            let Some(av) = interp(&ta.points, t) else { continue };
+            let Some(av) = interp(&ta.points, t) else {
+                continue;
+            };
             let Some(bv) = interp(tb, t) else { continue };
             let av = av.max(1.0e-20);
             let bv = bv.max(1.0e-20);
@@ -606,8 +645,14 @@ fn first_trace_t(trace: &[[f64; 2]]) -> Option<f64> {
     trace.first().map(|p| p[0])
 }
 
-fn first_yaw_init_t(replay: &sim::visualizer::pipeline::align_replay::AlignReplayData) -> Option<f64> {
-    replay.samples.iter().find(|s| s.yaw_initialized).map(|s| s.t_s)
+fn first_yaw_init_t(
+    replay: &sim::visualizer::pipeline::align_replay::AlignReplayData,
+) -> Option<f64> {
+    replay
+        .samples
+        .iter()
+        .find(|s| s.yaw_initialized)
+        .map(|s| s.t_s)
 }
 
 fn first_below(trace: &[[f64; 2]], threshold: f64) -> Option<f64> {
@@ -659,11 +704,7 @@ fn parse_section_files(path: &Path, section: &str) -> Result<Vec<String>> {
             continue;
         }
         if in_section {
-            let file = l
-                .split_once(" (")
-                .map(|(head, _)| head)
-                .unwrap_or(l)
-                .trim();
+            let file = l.split_once(" (").map(|(head, _)| head).unwrap_or(l).trim();
             if file.ends_with(".bin") {
                 out.push(file.to_string());
             }

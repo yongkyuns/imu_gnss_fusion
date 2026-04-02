@@ -126,11 +126,34 @@ pub struct CEskfNominalState {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CEskfStationaryDiag {
+    pub innovation_x: f32,
+    pub innovation_y: f32,
+    pub k_theta_x_from_x: f32,
+    pub k_theta_y_from_x: f32,
+    pub k_bax_from_x: f32,
+    pub k_bay_from_x: f32,
+    pub k_theta_x_from_y: f32,
+    pub k_theta_y_from_y: f32,
+    pub k_bax_from_y: f32,
+    pub k_bay_from_y: f32,
+    pub p_theta_x: f32,
+    pub p_theta_y: f32,
+    pub p_bax: f32,
+    pub p_bay: f32,
+    pub p_theta_x_bax: f32,
+    pub p_theta_y_bay: f32,
+    pub updates: u32,
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct CEskf {
     pub nominal: CEskfNominalState,
     pub p: [[f32; 15]; 15],
     pub noise: PredictNoise,
+    pub stationary_diag: CEskfStationaryDiag,
 }
 
 impl Default for CEskf {
@@ -139,6 +162,7 @@ impl Default for CEskf {
             nominal: CEskfNominalState::default(),
             p: [[0.0; 15]; 15],
             noise: PredictNoise::lsm6dso_typical_104hz(),
+            stationary_diag: CEskfStationaryDiag::default(),
         }
     }
 }
@@ -274,6 +298,11 @@ unsafe extern "C" {
     fn sf_eskf_fuse_gps(eskf: *mut CEskf, gps: *const CGnssSample);
     fn sf_eskf_fuse_body_vel(eskf: *mut CEskf, r_body_vel: f32);
     fn sf_eskf_fuse_zero_vel(eskf: *mut CEskf, r_zero_vel: f32);
+    fn sf_eskf_fuse_stationary_gravity(
+        eskf: *mut CEskf,
+        accel_body_mps2: *const f32,
+        r_stationary_accel: f32,
+    );
 }
 
 pub fn c_align_config_from_rust(cfg: AlignConfig) -> CAlignConfig {
@@ -557,6 +586,10 @@ impl CEskfWrapper {
         &self.raw.p
     }
 
+    pub fn stationary_diag(&self) -> &CEskfStationaryDiag {
+        &self.raw.stationary_diag
+    }
+
     pub fn init_nominal_from_gnss(&mut self, q_bn: [f32; 4], gnss: FusionGnssSample) {
         const DEFAULT_GYRO_BIAS_SIGMA_DPS: f32 = 0.125;
         const DEFAULT_ACCEL_BIAS_SIGMA_MPS2: f32 = 0.075;
@@ -628,5 +661,15 @@ impl CEskfWrapper {
 
     pub fn fuse_zero_vel(&mut self, r_zero_vel: f32) {
         unsafe { sf_eskf_fuse_zero_vel(&mut self.raw as *mut CEskf, r_zero_vel) };
+    }
+
+    pub fn fuse_stationary_gravity(&mut self, accel_body_mps2: [f32; 3], r_stationary_accel: f32) {
+        unsafe {
+            sf_eskf_fuse_stationary_gravity(
+                &mut self.raw as *mut CEskf,
+                accel_body_mps2.as_ptr(),
+                r_stationary_accel,
+            )
+        };
     }
 }

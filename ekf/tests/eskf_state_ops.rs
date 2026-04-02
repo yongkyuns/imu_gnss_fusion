@@ -1,6 +1,6 @@
 use sensor_fusion::eskf::{
-    error_reset_jacobian, ErrorState, ImuDelta, NominalState, ERROR_STATE_DIM, IDX_DBA_X,
-    IDX_DBG_X, IDX_DPOS_N, IDX_DTHETA_Z, IDX_DVEL_N,
+    ERROR_STATE_DIM, ErrorState, IDX_DBA_X, IDX_DBG_X, IDX_DPOS_N, IDX_DTHETA_Z, IDX_DVEL_N,
+    ImuDelta, NominalState, error_reset_jacobian,
 };
 
 fn quat_norm(q: [f32; 4]) -> f32 {
@@ -103,11 +103,7 @@ fn reset_jacobian_attitude_block_matches_first_order_small_angle_form() {
     let dtheta = [0.2, -0.4, 0.6];
     let g = error_reset_jacobian(dtheta);
 
-    let expected = [
-        [1.0, 0.3, 0.2],
-        [-0.3, 1.0, 0.1],
-        [-0.2, -0.1, 1.0],
-    ];
+    let expected = [[1.0, 0.3, 0.2], [-0.3, 1.0, 0.1], [-0.2, -0.1, 1.0]];
 
     for r in 0..3 {
         for c in 0..3 {

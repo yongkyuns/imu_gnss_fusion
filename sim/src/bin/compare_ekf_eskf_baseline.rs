@@ -7,7 +7,7 @@ use sensor_fusion::c_api::{CEskfImuDelta, CEskfWrapper};
 use sensor_fusion::ekf::PredictNoise;
 use sensor_fusion::fusion::{FusionConfig, FusionGnssSample, FusionImuSample, SensorFusion};
 use sim::ubxlog::{
-    NavPvtObs, UbxFrame, extract_esf_raw_samples, extract_nav2_pvt_obs, extract_nav_pvt_obs,
+    NavPvtObs, UbxFrame, extract_esf_raw_samples, extract_nav_pvt_obs, extract_nav2_pvt_obs,
     fit_linear_map, parse_ubx_frames, sensor_meta, unwrap_counter,
 };
 use sim::visualizer::math::nearest_master_ms;
@@ -53,7 +53,9 @@ fn main() -> Result<()> {
     if let Some(r_body_vel) = args.r_body_vel {
         cfg.r_body_vel = r_body_vel;
     }
-    println!("file,ekf_init_t_s,samples,rms_pos_m,rms_vel_mps,rms_att_deg,rms_bias_g,rms_bias_a,final_pos_m,final_vel_mps,final_att_deg");
+    println!(
+        "file,ekf_init_t_s,samples,rms_pos_m,rms_vel_mps,rms_att_deg,rms_bias_g,rms_bias_a,final_pos_m,final_vel_mps,final_att_deg"
+    );
     for file in files {
         let path = args.data_dir.join(&file);
         let data = fs::read(&path).with_context(|| format!("failed to read {}", path.display()))?;
@@ -78,7 +80,11 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn compare_file(frames: &[UbxFrame], tl: &MasterTimeline, cfg: FusionConfig) -> (Option<f64>, DiffMetrics) {
+fn compare_file(
+    frames: &[UbxFrame],
+    tl: &MasterTimeline,
+    cfg: FusionConfig,
+) -> (Option<f64>, DiffMetrics) {
     let nav_events = build_nav_events(frames, tl);
     let imu_packets = build_imu_packets(frames, tl);
     let ref_nav = nav_events.first().map(|(_, nav)| *nav);
@@ -126,9 +132,17 @@ fn compare_file(frames: &[UbxFrame], tl: &MasterTimeline, cfg: FusionConfig) -> 
         let gnss = FusionGnssSample {
             t_s: t_s as f32,
             pos_ned_m: nav_to_ned(*nav, ref_nav),
-            vel_ned_mps: [nav.vel_n_mps as f32, nav.vel_e_mps as f32, nav.vel_d_mps as f32],
+            vel_ned_mps: [
+                nav.vel_n_mps as f32,
+                nav.vel_e_mps as f32,
+                nav.vel_d_mps as f32,
+            ],
             pos_std_m: [nav.h_acc_m as f32, nav.h_acc_m as f32, nav.v_acc_m as f32],
-            vel_std_mps: [nav.s_acc_mps as f32, nav.s_acc_mps as f32, nav.s_acc_mps as f32],
+            vel_std_mps: [
+                nav.s_acc_mps as f32,
+                nav.s_acc_mps as f32,
+                nav.s_acc_mps as f32,
+            ],
             heading_rad: if nav.head_veh_valid {
                 Some(nav.heading_vehicle_deg.to_radians() as f32)
             } else {
@@ -206,7 +220,12 @@ fn diff_metrics(ekf: &sensor_fusion::ekf::Ekf, eskf: &CEskfWrapper) -> DiffSampl
             (ekf.state.vd - n.vd) as f64,
         ]),
         att_deg: quat_angle_deg(
-            [ekf.state.q0 as f64, ekf.state.q1 as f64, ekf.state.q2 as f64, ekf.state.q3 as f64],
+            [
+                ekf.state.q0 as f64,
+                ekf.state.q1 as f64,
+                ekf.state.q2 as f64,
+                ekf.state.q3 as f64,
+            ],
             [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64],
         ),
         bias_g: norm3([
@@ -263,7 +282,9 @@ fn summarize_diffs(diffs: &[DiffSample]) -> DiffMetrics {
 }
 
 fn initial_yaw_rad(gnss: &FusionGnssSample, yaw_init_speed_mps: f32) -> f32 {
-    let speed_h = (gnss.vel_ned_mps[0] * gnss.vel_ned_mps[0] + gnss.vel_ned_mps[1] * gnss.vel_ned_mps[1]).sqrt();
+    let speed_h = (gnss.vel_ned_mps[0] * gnss.vel_ned_mps[0]
+        + gnss.vel_ned_mps[1] * gnss.vel_ned_mps[1])
+        .sqrt();
     if let Some(heading_rad) = gnss.heading_rad {
         heading_rad
     } else if speed_h >= yaw_init_speed_mps.max(1.0) {
@@ -281,9 +302,21 @@ fn yaw_quat(yaw_rad: f32) -> [f32; 4] {
 fn quat_to_rotmat_f32(q: [f32; 4]) -> [[f32; 3]; 3] {
     let [w, x, y, z] = q;
     [
-        [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - w * z), 2.0 * (x * z + w * y)],
-        [2.0 * (x * y + w * z), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - w * x)],
-        [2.0 * (x * z - w * y), 2.0 * (y * z + w * x), 1.0 - 2.0 * (x * x + y * y)],
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y - w * z),
+            2.0 * (x * z + w * y),
+        ],
+        [
+            2.0 * (x * y + w * z),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z - w * x),
+        ],
+        [
+            2.0 * (x * z - w * y),
+            2.0 * (y * z + w * x),
+            1.0 - 2.0 * (x * x + y * y),
+        ],
     ]
 }
 
@@ -321,7 +354,11 @@ fn build_nav_events(frames: &[UbxFrame], tl: &MasterTimeline) -> Vec<(f64, NavPv
     }
     nav_events_nav2.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
     nav_events_pvt.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-    if !nav_events_nav2.is_empty() { nav_events_nav2 } else { nav_events_pvt }
+    if !nav_events_nav2.is_empty() {
+        nav_events_nav2
+    } else {
+        nav_events_pvt
+    }
 }
 
 fn build_imu_packets(frames: &[UbxFrame], tl: &MasterTimeline) -> Vec<ImuPacket> {
@@ -349,12 +386,32 @@ fn build_imu_packets(frames: &[UbxFrame], tl: &MasterTimeline) -> Vec<ImuPacket>
     let mut ax = None;
     let mut ay = None;
     let mut az = None;
-    for (((seq, tag_u), dtype), val) in raw_seq.iter().zip(raw_tag_u.iter()).zip(raw_dtype.iter()).zip(raw_val.iter()) {
+    for (((seq, tag_u), dtype), val) in raw_seq
+        .iter()
+        .zip(raw_tag_u.iter())
+        .zip(raw_dtype.iter())
+        .zip(raw_val.iter())
+    {
         if current_tag != Some(*tag_u) {
-            if let (Some(gxv), Some(gyv), Some(gzv), Some(axv), Some(ayv), Some(azv)) = (gx, gy, gz, ax, ay, az) {
-                imu_packets.push(ImuPacket { t_ms, gx_dps: gxv, gy_dps: gyv, gz_dps: gzv, ax_mps2: axv, ay_mps2: ayv, az_mps2: azv });
+            if let (Some(gxv), Some(gyv), Some(gzv), Some(axv), Some(ayv), Some(azv)) =
+                (gx, gy, gz, ax, ay, az)
+            {
+                imu_packets.push(ImuPacket {
+                    t_ms,
+                    gx_dps: gxv,
+                    gy_dps: gyv,
+                    gz_dps: gzv,
+                    ax_mps2: axv,
+                    ay_mps2: ayv,
+                    az_mps2: azv,
+                });
             }
-            gx = None; gy = None; gz = None; ax = None; ay = None; az = None;
+            gx = None;
+            gy = None;
+            gz = None;
+            ax = None;
+            ay = None;
+            az = None;
             current_tag = Some(*tag_u);
             if let Some(mapped_ms) = tl.map_tag_ms(a_raw, b_raw, *tag_u as f64, *seq) {
                 t_ms = mapped_ms;
@@ -370,8 +427,18 @@ fn build_imu_packets(frames: &[UbxFrame], tl: &MasterTimeline) -> Vec<ImuPacket>
             _ => {}
         }
     }
-    if let (Some(gxv), Some(gyv), Some(gzv), Some(axv), Some(ayv), Some(azv)) = (gx, gy, gz, ax, ay, az) {
-        imu_packets.push(ImuPacket { t_ms, gx_dps: gxv, gy_dps: gyv, gz_dps: gzv, ax_mps2: axv, ay_mps2: ayv, az_mps2: azv });
+    if let (Some(gxv), Some(gyv), Some(gzv), Some(axv), Some(ayv), Some(azv)) =
+        (gx, gy, gz, ax, ay, az)
+    {
+        imu_packets.push(ImuPacket {
+            t_ms,
+            gx_dps: gxv,
+            gy_dps: gyv,
+            gz_dps: gzv,
+            ax_mps2: axv,
+            ay_mps2: ayv,
+            az_mps2: azv,
+        });
     }
     imu_packets.sort_by(|a, b| a.t_ms.partial_cmp(&b.t_ms).unwrap());
     imu_packets
@@ -400,7 +467,9 @@ fn fit_tag_ms_map_local(
 }
 
 fn nav_to_ned(obs: NavPvtObs, ref_nav: Option<NavPvtObs>) -> [f32; 3] {
-    let Some(ref_nav) = ref_nav else { return [0.0, 0.0, 0.0]; };
+    let Some(ref_nav) = ref_nav else {
+        return [0.0, 0.0, 0.0];
+    };
     let lat_scale = 111_320.0;
     let lon_scale = 111_320.0 * (ref_nav.lat_deg.to_radians().cos());
     [
@@ -424,7 +493,11 @@ fn parse_section_files(path: &PathBuf, section: &str) -> Result<Vec<String>> {
             continue;
         }
         if in_section {
-            let name = line.split_whitespace().next().unwrap_or("").trim_end_matches(',');
+            let name = line
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .trim_end_matches(',');
             if !name.is_empty() {
                 out.push(name.to_string());
             }
@@ -450,5 +523,6 @@ fn quat_normalize(q: [f64; 4]) -> [f64; 4] {
 }
 
 fn fmt_opt(v: Option<f64>) -> String {
-    v.map(|x| format!("{x:.6}")).unwrap_or_else(|| "".to_string())
+    v.map(|x| format!("{x:.6}"))
+        .unwrap_or_else(|| "".to_string())
 }

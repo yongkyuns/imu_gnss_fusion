@@ -266,6 +266,8 @@ def derive_measurement_model():
     )
     r_true_to_n = quat_to_rot(q_true)
     v_true_b = r_true_to_n.T * v_true
+    g_true_b = r_true_to_n.T * model["g_n"]
+    stationary_gravity_b = -g_true_b
     return {
         **model,
         "P_cov": p_cov,
@@ -275,6 +277,8 @@ def derive_measurement_model():
         "gps_vel_n": generate_observation_equations(p_cov, model["dx"], v_true[0], Symbol("R_VEL_N", real=True), "ESKF_HK_VEL_N", zero_error_subs),
         "gps_vel_e": generate_observation_equations(p_cov, model["dx"], v_true[1], Symbol("R_VEL_E", real=True), "ESKF_HK_VEL_E", zero_error_subs),
         "gps_vel_d": generate_observation_equations(p_cov, model["dx"], v_true[2], Symbol("R_VEL_D", real=True), "ESKF_HK_VEL_D", zero_error_subs),
+        "stationary_accel_x": generate_observation_equations(p_cov, model["dx"], stationary_gravity_b[0], Symbol("R_STATIONARY_ACCEL", real=True), "ESKF_HK_STAT_AX", zero_error_subs),
+        "stationary_accel_y": generate_observation_equations(p_cov, model["dx"], stationary_gravity_b[1], Symbol("R_STATIONARY_ACCEL", real=True), "ESKF_HK_STAT_AY", zero_error_subs),
         "body_vel_x": generate_observation_equations(p_cov, model["dx"], v_true_b[0], Symbol("R_BODY_VEL", real=True), "ESKF_HK_BODY_X", zero_error_subs),
         "body_vel_y": generate_observation_equations(p_cov, model["dx"], v_true_b[1], Symbol("R_BODY_VEL", real=True), "ESKF_HK_BODY_Y", zero_error_subs),
         "body_vel_z": generate_observation_equations(p_cov, model["dx"], v_true_b[2], Symbol("R_BODY_VEL", real=True), "ESKF_HK_BODY_Z", zero_error_subs),
@@ -331,6 +335,8 @@ def emit_generated_c():
     gps_vel_n_path = GENERATED_C_DIR / "gps_vel_n_generated.c"
     gps_vel_e_path = GENERATED_C_DIR / "gps_vel_e_generated.c"
     gps_vel_d_path = GENERATED_C_DIR / "gps_vel_d_generated.c"
+    stationary_accel_x_path = GENERATED_C_DIR / "stationary_accel_x_generated.c"
+    stationary_accel_y_path = GENERATED_C_DIR / "stationary_accel_y_generated.c"
     body_vel_x_path = GENERATED_C_DIR / "body_vel_x_generated.c"
     body_vel_y_path = GENERATED_C_DIR / "body_vel_y_generated.c"
     body_vel_z_path = GENERATED_C_DIR / "body_vel_z_generated.c"
@@ -363,6 +369,8 @@ def emit_generated_c():
     write_observation_equations(gps_vel_n_path, meas["gps_vel_n"])
     write_observation_equations(gps_vel_e_path, meas["gps_vel_e"])
     write_observation_equations(gps_vel_d_path, meas["gps_vel_d"])
+    write_observation_equations(stationary_accel_x_path, meas["stationary_accel_x"])
+    write_observation_equations(stationary_accel_y_path, meas["stationary_accel_y"])
     write_observation_equations(body_vel_x_path, meas["body_vel_x"])
     write_observation_equations(body_vel_y_path, meas["body_vel_y"])
     write_observation_equations(body_vel_z_path, meas["body_vel_z"])
@@ -377,6 +385,8 @@ def emit_generated_c():
     print("Wrote:", gps_vel_n_path)
     print("Wrote:", gps_vel_e_path)
     print("Wrote:", gps_vel_d_path)
+    print("Wrote:", stationary_accel_x_path)
+    print("Wrote:", stationary_accel_y_path)
     print("Wrote:", body_vel_x_path)
     print("Wrote:", body_vel_y_path)
     print("Wrote:", body_vel_z_path)

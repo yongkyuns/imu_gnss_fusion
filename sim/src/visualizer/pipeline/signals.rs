@@ -294,6 +294,7 @@ pub fn build_signal_traces(
     out.eskf_bias_accel = ekf.eskf_bias_accel;
     out.eskf_cov_bias = ekf.eskf_cov_bias;
     out.eskf_cov_nonbias = ekf.eskf_cov_nonbias;
+    out.eskf_stationary_diag = ekf.eskf_stationary_diag;
     out.eskf_map = ekf.eskf_map;
     out.eskf_map_heading = ekf.eskf_map_heading;
     out.align_cmp_att = align_data.cmp_att;
@@ -364,6 +365,7 @@ pub fn build_signal_traces(
         &mut out.eskf_bias_accel,
         &mut out.eskf_cov_bias,
         &mut out.eskf_cov_nonbias,
+        &mut out.eskf_stationary_diag,
         &mut out.align_cmp_att,
         &mut out.align_res_vel,
         &mut out.align_axis_err,

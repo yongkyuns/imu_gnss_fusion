@@ -118,6 +118,7 @@ fn main() -> Result<()> {
         group_stats("eskf_bias_accel", &data.eskf_bias_accel),
         group_stats("eskf_cov_bias", &data.eskf_cov_bias),
         group_stats("eskf_cov_nonbias", &data.eskf_cov_nonbias),
+        group_stats("eskf_stationary_diag", &data.eskf_stationary_diag),
         group_stats("eskf_map", &data.eskf_map),
         group_stats("align_cmp_att", &data.align_cmp_att),
         group_stats("align_res_vel", &data.align_res_vel),

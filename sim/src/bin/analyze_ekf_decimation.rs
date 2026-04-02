@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use sensor_fusion::ekf::{
-    Ekf, GpsData, GRAVITY_MSS, ImuSample, PredictNoise, ekf_fuse_body_vel, ekf_fuse_gps,
+    Ekf, GRAVITY_MSS, GpsData, ImuSample, PredictNoise, ekf_fuse_body_vel, ekf_fuse_gps,
     ekf_predict, ekf_set_predict_noise,
 };
 
@@ -427,7 +427,9 @@ fn compare_histories(
 }
 
 fn first_below(hist: &[SampledState], idx: usize, threshold: f32) -> Option<f32> {
-    hist.iter().find(|s| s.p_diag[idx] <= threshold).map(|s| s.t_s)
+    hist.iter()
+        .find(|s| s.p_diag[idx] <= threshold)
+        .map(|s| s.t_s)
 }
 
 fn format_opt(v: Option<f32>) -> String {

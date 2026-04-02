@@ -12,14 +12,13 @@ use super::stats::map_center_from_traces;
 
 const MAPBOX_ACCESS_TOKEN: &str = "pk.eyJ1IjoieW9uZ2t5dW5zODciLCJhIjoiY21tNjB5NWt6MGJmOTJzcG02MmRvN3RnYiJ9.fu_66qb1G1cgrLzAE54E0w";
 
-#[derive(Clone)]
-struct TrackOverlay {
-    traces: Vec<Trace>,
-    headings: Vec<HeadingSample>,
+struct TrackOverlay<'a> {
+    traces: Vec<&'a Trace>,
+    headings: Vec<&'a HeadingSample>,
     show_heading: bool,
 }
 
-impl Plugin for TrackOverlay {
+impl Plugin for TrackOverlay<'_> {
     fn run(
         self: Box<Self>,
         ui: &mut egui::Ui,
@@ -142,7 +141,9 @@ impl eframe::App for App {
             std::process::exit(0);
         }
 
-        ctx.request_repaint_after(Duration::from_millis(33));
+        if matches!(self.page, Page::MapDark) || self.show_egui_inspection {
+            ctx.request_repaint_after(Duration::from_millis(33));
+        }
 
         egui::TopBottomPanel::top("top_controls").show(ctx, |ui| {
             let fps = ctx.input(|i| {
@@ -196,21 +197,20 @@ impl eframe::App for App {
             });
         });
 
-        let mut imu_gyro: Vec<Trace> =
+        let mut imu_gyro: Vec<&Trace> =
             Vec::with_capacity(self.data.imu_raw_gyro.len() + self.data.imu_cal_gyro.len());
-        imu_gyro.extend(self.data.imu_raw_gyro.iter().cloned());
+        imu_gyro.extend(self.data.imu_raw_gyro.iter());
         imu_gyro.extend(
             self.data
                 .imu_cal_gyro
                 .iter()
-                .filter(|t| !t.name.starts_with("ESF-MEAS "))
-                .cloned(),
+                .filter(|t| !t.name.starts_with("ESF-MEAS ")),
         );
 
-        let mut imu_accel: Vec<Trace> =
+        let mut imu_accel: Vec<&Trace> =
             Vec::with_capacity(self.data.imu_raw_accel.len() + self.data.imu_cal_accel.len());
-        imu_accel.extend(self.data.imu_raw_accel.iter().cloned());
-        imu_accel.extend(self.data.imu_cal_accel.iter().cloned());
+        imu_accel.extend(self.data.imu_raw_accel.iter());
+        imu_accel.extend(self.data.imu_cal_accel.iter());
         if !self.show_esf_meas {
             imu_accel.retain(|t| !t.name.starts_with("ESF-MEAS "));
         }
@@ -225,28 +225,28 @@ impl eframe::App for App {
                         draw_plot(
                             ui,
                             "Speed",
-                            &self.data.speed,
+                            self.data.speed.iter(),
                             true,
                             self.max_points_per_trace,
                         );
                         draw_plot(
                             ui,
                             "IMU Gyro ESF (RAW/CAL)",
-                            &imu_gyro,
+                            imu_gyro.iter().copied(),
                             true,
                             self.max_points_per_trace,
                         );
                         draw_plot(
                             ui,
                             "ESF-INS Gyro",
-                            &self.data.esf_ins_gyro,
+                            self.data.esf_ins_gyro.iter(),
                             true,
                             self.max_points_per_trace,
                         );
                         draw_plot(
                             ui,
                             "Orientation",
-                            &self.data.orientation,
+                            self.data.orientation.iter(),
                             true,
                             self.max_points_per_trace,
                         );
@@ -256,28 +256,28 @@ impl eframe::App for App {
                     draw_plot(
                         ui,
                         "Signal Strength (C/N0)",
-                        &self.data.sat_cn0,
+                        self.data.sat_cn0.iter(),
                         false,
                         self.max_points_per_trace,
                     );
                     draw_plot(
                         ui,
                         "IMU Accel ESF (RAW/CAL/MEAS)",
-                        &imu_accel,
+                        imu_accel.iter().copied(),
                         true,
                         self.max_points_per_trace,
                     );
                     draw_plot(
                         ui,
                         "ESF-INS Accel",
-                        &self.data.esf_ins_accel,
+                        self.data.esf_ins_accel.iter(),
                         true,
                         self.max_points_per_trace,
                     );
                     draw_plot(
                         ui,
                         "Other Signals",
-                        &self.data.other,
+                        self.data.other.iter(),
                         true,
                         self.max_points_per_trace,
                     );
@@ -285,10 +285,16 @@ impl eframe::App for App {
             }
             Page::EkfCompare => {
                 let half_width = (ctx.content_rect().width() * 0.5).max(260.0);
-                let mut vehicle_gyro = self.data.esf_ins_gyro.clone();
-                vehicle_gyro.extend(self.data.ekf_meas_gyro.iter().cloned());
-                let mut vehicle_accel = self.data.esf_ins_accel.clone();
-                vehicle_accel.extend(self.data.ekf_meas_accel.iter().cloned());
+                let mut vehicle_gyro: Vec<&Trace> = Vec::with_capacity(
+                    self.data.esf_ins_gyro.len() + self.data.ekf_meas_gyro.len(),
+                );
+                vehicle_gyro.extend(self.data.esf_ins_gyro.iter());
+                vehicle_gyro.extend(self.data.ekf_meas_gyro.iter());
+                let mut vehicle_accel: Vec<&Trace> = Vec::with_capacity(
+                    self.data.esf_ins_accel.len() + self.data.ekf_meas_accel.len(),
+                );
+                vehicle_accel.extend(self.data.esf_ins_accel.iter());
+                vehicle_accel.extend(self.data.ekf_meas_accel.iter());
                 egui::SidePanel::left("ekf_compare_left")
                     .resizable(false)
                     .exact_width(half_width)
@@ -296,28 +302,28 @@ impl eframe::App for App {
                         draw_plot(
                             ui,
                             "Velocity: EKF vs u-blox",
-                            &self.data.ekf_cmp_vel,
+                            self.data.ekf_cmp_vel.iter(),
                             true,
                             self.max_points_per_trace,
                         );
                         draw_plot(
                             ui,
                             "Euler Angles: EKF Quaternion vs NAV-ATT",
-                            &self.data.ekf_cmp_att,
+                            self.data.ekf_cmp_att.iter(),
                             true,
                             self.max_points_per_trace,
                         );
                         draw_plot(
                             ui,
                             "EKF Gyro Bias Estimates",
-                            &self.data.ekf_bias_gyro,
+                            self.data.ekf_bias_gyro.iter(),
                             true,
                             self.max_points_per_trace,
                         );
                         draw_plot(
                             ui,
                             "Vehicle Gyro: ESF-INS vs EKF",
-                            &vehicle_gyro,
+                            vehicle_gyro.iter().copied(),
                             true,
                             self.max_points_per_trace,
                         );
@@ -327,28 +333,28 @@ impl eframe::App for App {
                     draw_plot(
                         ui,
                         "EKF Accel Bias Estimates",
-                        &self.data.ekf_bias_accel,
+                        self.data.ekf_bias_accel.iter(),
                         true,
                         self.max_points_per_trace,
                     );
                     draw_plot(
                         ui,
                         "EKF Bias Covariance Diagonal",
-                        &self.data.ekf_cov_bias,
+                        self.data.ekf_cov_bias.iter(),
                         true,
                         self.max_points_per_trace,
                     );
                     draw_plot(
                         ui,
                         "EKF Covariance Diagonal (Non-bias States)",
-                        &self.data.ekf_cov_nonbias,
+                        self.data.ekf_cov_nonbias.iter(),
                         true,
                         self.max_points_per_trace,
                     );
                     draw_plot(
                         ui,
                         "Vehicle Accel: ESF-INS vs EKF",
-                        &vehicle_accel,
+                        vehicle_accel.iter().copied(),
                         true,
                         self.max_points_per_trace,
                     );
@@ -356,10 +362,16 @@ impl eframe::App for App {
             }
             Page::EskfCompare => {
                 let half_width = (ctx.content_rect().width() * 0.5).max(260.0);
-                let mut vehicle_gyro = self.data.esf_ins_gyro.clone();
-                vehicle_gyro.extend(self.data.eskf_meas_gyro.iter().cloned());
-                let mut vehicle_accel = self.data.esf_ins_accel.clone();
-                vehicle_accel.extend(self.data.eskf_meas_accel.iter().cloned());
+                let mut vehicle_gyro: Vec<&Trace> = Vec::with_capacity(
+                    self.data.esf_ins_gyro.len() + self.data.eskf_meas_gyro.len(),
+                );
+                vehicle_gyro.extend(self.data.esf_ins_gyro.iter());
+                vehicle_gyro.extend(self.data.eskf_meas_gyro.iter());
+                let mut vehicle_accel: Vec<&Trace> = Vec::with_capacity(
+                    self.data.esf_ins_accel.len() + self.data.eskf_meas_accel.len(),
+                );
+                vehicle_accel.extend(self.data.esf_ins_accel.iter());
+                vehicle_accel.extend(self.data.eskf_meas_accel.iter());
                 egui::SidePanel::left("eskf_compare_left")
                     .resizable(false)
                     .exact_width(half_width)
@@ -367,28 +379,28 @@ impl eframe::App for App {
                         draw_plot(
                             ui,
                             "Velocity: ESKF vs u-blox",
-                            &self.data.eskf_cmp_vel,
+                            self.data.eskf_cmp_vel.iter(),
                             true,
                             self.max_points_per_trace,
                         );
                         draw_plot(
                             ui,
                             "Euler Angles: ESKF Quaternion vs NAV-ATT",
-                            &self.data.eskf_cmp_att,
+                            self.data.eskf_cmp_att.iter(),
                             true,
                             self.max_points_per_trace,
                         );
                         draw_plot(
                             ui,
                             "ESKF Gyro Bias Estimates",
-                            &self.data.eskf_bias_gyro,
+                            self.data.eskf_bias_gyro.iter(),
                             true,
                             self.max_points_per_trace,
                         );
                         draw_plot(
                             ui,
                             "Vehicle Gyro: ESF-INS vs ESKF",
-                            &vehicle_gyro,
+                            vehicle_gyro.iter().copied(),
                             true,
                             self.max_points_per_trace,
                         );
@@ -398,28 +410,28 @@ impl eframe::App for App {
                     draw_plot(
                         ui,
                         "ESKF Accel Bias Estimates",
-                        &self.data.eskf_bias_accel,
+                        self.data.eskf_bias_accel.iter(),
                         true,
                         self.max_points_per_trace,
                     );
                     draw_plot(
                         ui,
                         "ESKF Bias Covariance Diagonal",
-                        &self.data.eskf_cov_bias,
+                        self.data.eskf_cov_bias.iter(),
                         true,
                         self.max_points_per_trace,
                     );
                     draw_plot(
                         ui,
                         "ESKF Covariance Diagonal (Non-bias States)",
-                        &self.data.eskf_cov_nonbias,
+                        self.data.eskf_cov_nonbias.iter(),
                         true,
                         self.max_points_per_trace,
                     );
                     draw_plot(
                         ui,
                         "Vehicle Accel: ESF-INS vs ESKF",
-                        &vehicle_accel,
+                        vehicle_accel.iter().copied(),
                         true,
                         self.max_points_per_trace,
                     );
@@ -434,28 +446,28 @@ impl eframe::App for App {
                         draw_plot(
                             ui,
                             "Euler Angles: Align KF vs ESF-ALG",
-                            &self.data.align_cmp_att,
+                            self.data.align_cmp_att.iter(),
                             true,
                             self.max_points_per_trace,
                         );
                         draw_plot(
                             ui,
                             "Align Window Diagnostics",
-                            &self.data.align_res_vel,
+                            self.data.align_res_vel.iter(),
                             true,
                             self.max_points_per_trace,
                         );
                         draw_plot(
                             ui,
                             "Align Axis Error vs ESF-ALG",
-                            &self.data.align_axis_err,
+                            self.data.align_axis_err.iter(),
                             true,
                             self.max_points_per_trace,
                         );
                         draw_plot(
                             ui,
                             "Final ESF-ALG vs PCA Heading",
-                            &self.data.align_motion,
+                            self.data.align_motion.iter(),
                             true,
                             self.max_points_per_trace,
                         );
@@ -465,28 +477,28 @@ impl eframe::App for App {
                     draw_plot(
                         ui,
                         "Align Roll Update Contributions",
-                        &self.data.align_roll_contrib,
+                        self.data.align_roll_contrib.iter(),
                         true,
                         self.max_points_per_trace,
                     );
                     draw_plot(
                         ui,
                         "Align Pitch Update Contributions",
-                        &self.data.align_pitch_contrib,
+                        self.data.align_pitch_contrib.iter(),
                         true,
                         self.max_points_per_trace,
                     );
                     draw_plot(
                         ui,
                         "Align Yaw Update Contributions",
-                        &self.data.align_yaw_contrib,
+                        self.data.align_yaw_contrib.iter(),
                         true,
                         self.max_points_per_trace,
                     );
                     draw_plot(
                         ui,
                         "Align Covariance Diagonal",
-                        &self.data.align_cov,
+                        self.data.align_cov.iter(),
                         true,
                         self.max_points_per_trace,
                     );
@@ -520,7 +532,7 @@ impl eframe::App for App {
                         );
                         ui.colored_label(egui::Color32::from_rgb(255, 255, 255), "EKF heading");
                     });
-                    let mut map_traces = self.data.ekf_map.clone();
+                    let mut map_traces: Vec<&Trace> = self.data.ekf_map.iter().collect();
                     if !self.show_nav_pvt {
                         map_traces.retain(|t| t.name != "u-blox path (lon,lat)");
                     }
@@ -534,11 +546,12 @@ impl eframe::App for App {
                         });
                     }
                     if self.show_eskf {
-                        map_traces.extend(self.data.eskf_map.clone());
+                        map_traces.extend(self.data.eskf_map.iter());
                     }
-                    let mut headings = self.data.ekf_map_heading.clone();
+                    let mut headings: Vec<&HeadingSample> =
+                        self.data.ekf_map_heading.iter().collect();
                     if self.show_eskf {
-                        headings.extend(self.data.eskf_map_heading.clone());
+                        headings.extend(self.data.eskf_map_heading.iter());
                     }
                     let track = TrackOverlay {
                         traces: map_traces,
@@ -568,13 +581,15 @@ impl eframe::App for App {
     }
 }
 
-fn draw_plot(
+fn draw_plot<'a, I>(
     ui: &mut egui::Ui,
     title: &str,
-    traces: &[Trace],
+    traces: I,
     show_legend: bool,
     max_points_per_trace: usize,
-) {
+) where
+    I: IntoIterator<Item = &'a Trace>,
+{
     fn visible_decimated(
         points: &[[f64; 2]],
         xmin: f64,

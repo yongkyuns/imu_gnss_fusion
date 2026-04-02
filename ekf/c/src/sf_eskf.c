@@ -9,6 +9,7 @@ static void sf_eskf_quat_multiply(const float p[4], const float q[4], float out[
 static void sf_eskf_inject_error_state(sf_eskf_t *eskf, const float dx[SF_ESKF_ERROR_STATES]);
 static void sf_eskf_apply_reset(float p[SF_ESKF_ERROR_STATES][SF_ESKF_ERROR_STATES],
                                 const float dtheta[3]);
+static void sf_eskf_floor_attitude_covariance(sf_eskf_t *eskf, float sigma_rad);
 static void sf_eskf_fuse_measurement(sf_eskf_t *eskf,
                                      float innovation,
                                      const float h[SF_ESKF_ERROR_STATES],
@@ -20,6 +21,8 @@ static void sf_eskf_fuse_gps_pos_d(sf_eskf_t *eskf, float pos_d, float r_pos_d);
 static void sf_eskf_fuse_gps_vel_n(sf_eskf_t *eskf, float vel_n, float r_vel_n);
 static void sf_eskf_fuse_gps_vel_e(sf_eskf_t *eskf, float vel_e, float r_vel_e);
 static void sf_eskf_fuse_gps_vel_d(sf_eskf_t *eskf, float vel_d, float r_vel_d);
+static void sf_eskf_fuse_stationary_gravity_x(sf_eskf_t *eskf, float accel_x, float r_stationary_accel);
+static void sf_eskf_fuse_stationary_gravity_y(sf_eskf_t *eskf, float accel_y, float r_stationary_accel);
 static void sf_eskf_fuse_body_vel_x(sf_eskf_t *eskf, float r_body_vel);
 static void sf_eskf_fuse_body_vel_y(sf_eskf_t *eskf, float r_body_vel);
 static void sf_eskf_fuse_body_vel_z(sf_eskf_t *eskf, float r_body_vel);
@@ -238,6 +241,16 @@ void sf_eskf_fuse_zero_vel(sf_eskf_t *eskf, float r_zero_vel) {
   sf_eskf_fuse_body_vel_z(eskf, r_zero_vel);
 }
 
+void sf_eskf_fuse_stationary_gravity(sf_eskf_t *eskf,
+                                     const float accel_body_mps2[3],
+                                     float r_stationary_accel) {
+  if (eskf == NULL || accel_body_mps2 == NULL) {
+    return;
+  }
+  sf_eskf_fuse_stationary_gravity_x(eskf, accel_body_mps2[0], r_stationary_accel);
+  sf_eskf_fuse_stationary_gravity_y(eskf, accel_body_mps2[1], r_stationary_accel);
+}
+
 void sf_eskf_compute_error_transition(float f_out[SF_ESKF_ERROR_STATES][SF_ESKF_ERROR_STATES],
                                       float g_out[SF_ESKF_ERROR_STATES][SF_ESKF_NOISE_STATES],
                                       const sf_eskf_t *eskf,
@@ -394,6 +407,17 @@ static void sf_eskf_apply_reset(float p[SF_ESKF_ERROR_STATES][SF_ESKF_ERROR_STAT
   sf_eskf_symmetrize_p(p);
 }
 
+static void sf_eskf_floor_attitude_covariance(sf_eskf_t *eskf, float sigma_rad) {
+  const float var_floor = sigma_rad * sigma_rad;
+  if (eskf->p[0][0] < var_floor) {
+    eskf->p[0][0] = var_floor;
+  }
+  if (eskf->p[1][1] < var_floor) {
+    eskf->p[1][1] = var_floor;
+  }
+  sf_eskf_symmetrize_p(eskf->p);
+}
+
 static void sf_eskf_fuse_measurement(sf_eskf_t *eskf,
                                      float innovation,
                                      const float h[SF_ESKF_ERROR_STATES],
@@ -512,6 +536,83 @@ static void sf_eskf_fuse_gps_vel_d(sf_eskf_t *eskf, float vel_d, float r_vel_d) 
 #define R_VEL_D r_vel_d
 #include "../generated_eskf/gps_vel_d_generated.c"
 #undef R_VEL_D
+  for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
+    dx[i] = K[i] * innovation;
+  }
+  sf_eskf_fuse_measurement(eskf, innovation, H, K, dx);
+}
+
+static void sf_eskf_fuse_stationary_gravity_x(sf_eskf_t *eskf,
+                                              float accel_x,
+                                              float r_stationary_accel) {
+  sf_eskf_floor_attitude_covariance(eskf, 0.10f * (3.14159265358979323846f / 180.0f));
+  const float g_scalar = SF_GRAVITY_MSS;
+  const float q0 = eskf->nominal.q0;
+  const float q1 = eskf->nominal.q1;
+  const float q2 = eskf->nominal.q2;
+  const float q3 = eskf->nominal.q3;
+  const float bax = eskf->nominal.bax;
+  float (*P)[SF_ESKF_ERROR_STATES] = eskf->p;
+  const float gravity_x = 2.0f * (q1 * q3 - q0 * q2) * SF_GRAVITY_MSS;
+  const float innovation = (accel_x - bax) - (-gravity_x);
+  float H[SF_ESKF_ERROR_STATES];
+  float K[SF_ESKF_ERROR_STATES];
+  float dx[SF_ESKF_ERROR_STATES];
+#define R_STATIONARY_ACCEL r_stationary_accel
+#define g g_scalar
+#include "../generated_eskf/stationary_accel_x_generated.c"
+#undef g
+#undef R_STATIONARY_ACCEL
+  eskf->stationary_diag.innovation_x = innovation;
+  eskf->stationary_diag.k_theta_x_from_x = K[0];
+  eskf->stationary_diag.k_theta_y_from_x = K[1];
+  eskf->stationary_diag.k_bax_from_x = K[12];
+  eskf->stationary_diag.k_bay_from_x = K[13];
+  eskf->stationary_diag.p_theta_x = P[0][0];
+  eskf->stationary_diag.p_theta_y = P[1][1];
+  eskf->stationary_diag.p_bax = P[12][12];
+  eskf->stationary_diag.p_bay = P[13][13];
+  eskf->stationary_diag.p_theta_x_bax = P[0][12];
+  eskf->stationary_diag.p_theta_y_bay = P[1][13];
+  for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
+    dx[i] = K[i] * innovation;
+  }
+  sf_eskf_fuse_measurement(eskf, innovation, H, K, dx);
+}
+
+static void sf_eskf_fuse_stationary_gravity_y(sf_eskf_t *eskf,
+                                              float accel_y,
+                                              float r_stationary_accel) {
+  sf_eskf_floor_attitude_covariance(eskf, 0.10f * (3.14159265358979323846f / 180.0f));
+  const float g_scalar = SF_GRAVITY_MSS;
+  const float q0 = eskf->nominal.q0;
+  const float q1 = eskf->nominal.q1;
+  const float q2 = eskf->nominal.q2;
+  const float q3 = eskf->nominal.q3;
+  const float bay = eskf->nominal.bay;
+  float (*P)[SF_ESKF_ERROR_STATES] = eskf->p;
+  const float gravity_y = 2.0f * (q2 * q3 + q0 * q1) * SF_GRAVITY_MSS;
+  const float innovation = (accel_y - bay) - (-gravity_y);
+  float H[SF_ESKF_ERROR_STATES];
+  float K[SF_ESKF_ERROR_STATES];
+  float dx[SF_ESKF_ERROR_STATES];
+#define R_STATIONARY_ACCEL r_stationary_accel
+#define g g_scalar
+#include "../generated_eskf/stationary_accel_y_generated.c"
+#undef g
+#undef R_STATIONARY_ACCEL
+  eskf->stationary_diag.innovation_y = innovation;
+  eskf->stationary_diag.k_theta_x_from_y = K[0];
+  eskf->stationary_diag.k_theta_y_from_y = K[1];
+  eskf->stationary_diag.k_bax_from_y = K[12];
+  eskf->stationary_diag.k_bay_from_y = K[13];
+  eskf->stationary_diag.p_theta_x = P[0][0];
+  eskf->stationary_diag.p_theta_y = P[1][1];
+  eskf->stationary_diag.p_bax = P[12][12];
+  eskf->stationary_diag.p_bay = P[13][13];
+  eskf->stationary_diag.p_theta_x_bax = P[0][12];
+  eskf->stationary_diag.p_theta_y_bay = P[1][13];
+  eskf->stationary_diag.updates += 1u;
   for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
     dx[i] = K[i] * innovation;
   }

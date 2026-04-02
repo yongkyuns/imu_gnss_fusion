@@ -890,16 +890,28 @@ fn print_summary(device: &StatusFrame, host: &HostSummary) {
         eprintln!("host_ekf_init_t_s,none");
     }
     if let (Some(host_q), true) = (host.mount_q_vb, (device.flags & FLAG_MOUNT_Q_VALID) != 0) {
-        eprintln!("mount_q_vb_max_abs_diff,{:.8}", max_abs_diff4(device.mount_q_vb, host_q));
+        eprintln!(
+            "mount_q_vb_max_abs_diff,{:.8}",
+            max_abs_diff4(device.mount_q_vb, host_q)
+        );
     }
     if let Some(host_q) = host.ekf_q_bn {
-        eprintln!("ekf_q_bn_max_abs_diff,{:.8}", max_abs_diff4(device.ekf_q_bn, host_q));
+        eprintln!(
+            "ekf_q_bn_max_abs_diff,{:.8}",
+            max_abs_diff4(device.ekf_q_bn, host_q)
+        );
     }
     if let Some(host_v) = host.ekf_vel_ned_mps {
-        eprintln!("ekf_vel_max_abs_diff,{:.8}", max_abs_diff3(device.ekf_vel_ned_mps, host_v));
+        eprintln!(
+            "ekf_vel_max_abs_diff,{:.8}",
+            max_abs_diff3(device.ekf_vel_ned_mps, host_v)
+        );
     }
     if let Some(host_p) = host.ekf_pos_ned_m {
-        eprintln!("ekf_pos_max_abs_diff,{:.8}", max_abs_diff3(device.ekf_pos_ned_m, host_p));
+        eprintln!(
+            "ekf_pos_max_abs_diff,{:.8}",
+            max_abs_diff3(device.ekf_pos_ned_m, host_p)
+        );
     }
     if let Some(host_sigma) = host.align_sigma_rad {
         eprintln!(

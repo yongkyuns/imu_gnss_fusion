@@ -126,12 +126,7 @@ impl ErrorState {
 }
 
 pub fn quat_from_delta_theta(dtheta_b: [f32; 3]) -> [f32; 4] {
-    let dq = [
-        1.0,
-        0.5 * dtheta_b[0],
-        0.5 * dtheta_b[1],
-        0.5 * dtheta_b[2],
-    ];
+    let dq = [1.0, 0.5 * dtheta_b[0], 0.5 * dtheta_b[1], 0.5 * dtheta_b[2]];
     normalize_quat_copy(dq)
 }
 

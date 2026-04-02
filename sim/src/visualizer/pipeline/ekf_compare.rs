@@ -42,6 +42,7 @@ pub struct EkfCompareData {
     pub eskf_bias_accel: Vec<Trace>,
     pub eskf_cov_bias: Vec<Trace>,
     pub eskf_cov_nonbias: Vec<Trace>,
+    pub eskf_stationary_diag: Vec<Trace>,
     pub eskf_map: Vec<Trace>,
     pub eskf_map_heading: Vec<HeadingSample>,
 }
@@ -49,6 +50,8 @@ pub struct EkfCompareData {
 #[derive(Clone, Copy, Debug)]
 pub struct EkfCompareConfig {
     pub r_body_vel: f32,
+    pub r_zero_vel: f32,
+    pub r_stationary_accel: f32,
     pub vehicle_meas_lpf_cutoff_hz: f64,
     pub predict_imu_lpf_cutoff_hz: Option<f64>,
     pub predict_imu_decimation: usize,
@@ -61,13 +64,15 @@ pub struct EkfCompareConfig {
 impl Default for EkfCompareConfig {
     fn default() -> Self {
         Self {
-            r_body_vel: 1.0,
-            vehicle_meas_lpf_cutoff_hz: 5.0,
+            r_body_vel: 0.2,
+            r_zero_vel: 0.25,
+            r_stationary_accel: 0.2,
+            vehicle_meas_lpf_cutoff_hz: 35.0,
             predict_imu_lpf_cutoff_hz: None,
             predict_imu_decimation: 1,
             yaw_init_speed_mps: 0.0 / 3.6,
-            gnss_pos_r_scale: 1.0,
-            gnss_vel_r_scale: 1.0,
+            gnss_pos_r_scale: 0.1,
+            gnss_vel_r_scale: 0.1,
             predict_noise: None,
         }
     }
@@ -109,6 +114,7 @@ pub fn build_ekf_compare_traces(
             eskf_bias_accel: Vec::new(),
             eskf_cov_bias: Vec::new(),
             eskf_cov_nonbias: Vec::new(),
+            eskf_stationary_diag: Vec::new(),
             eskf_map: Vec::new(),
             eskf_map_heading: Vec::new(),
         };
@@ -335,6 +341,20 @@ pub fn build_ekf_compare_traces(
     let mut eskf_bias_accel_y = Vec::<[f64; 2]>::new();
     let mut eskf_bias_accel_z = Vec::<[f64; 2]>::new();
     let mut eskf_cov_diag: [Vec<[f64; 2]>; 15] = std::array::from_fn(|_| Vec::new());
+    let mut eskf_stationary_innov_x = Vec::<[f64; 2]>::new();
+    let mut eskf_stationary_innov_y = Vec::<[f64; 2]>::new();
+    let mut eskf_stationary_k_theta_x_from_x = Vec::<[f64; 2]>::new();
+    let mut eskf_stationary_k_theta_y_from_x = Vec::<[f64; 2]>::new();
+    let mut eskf_stationary_k_theta_x_from_y = Vec::<[f64; 2]>::new();
+    let mut eskf_stationary_k_theta_y_from_y = Vec::<[f64; 2]>::new();
+    let mut eskf_stationary_k_bax_from_x = Vec::<[f64; 2]>::new();
+    let mut eskf_stationary_k_bay_from_y = Vec::<[f64; 2]>::new();
+    let mut eskf_stationary_p_theta_x = Vec::<[f64; 2]>::new();
+    let mut eskf_stationary_p_theta_y = Vec::<[f64; 2]>::new();
+    let mut eskf_stationary_p_bax = Vec::<[f64; 2]>::new();
+    let mut eskf_stationary_p_bay = Vec::<[f64; 2]>::new();
+    let mut eskf_stationary_p_theta_x_bax = Vec::<[f64; 2]>::new();
+    let mut eskf_stationary_p_theta_y_bay = Vec::<[f64; 2]>::new();
     let mut map_eskf = Vec::<[f64; 2]>::new();
     let mut map_eskf_outage = Vec::<[f64; 2]>::new();
     let mut map_eskf_heading = Vec::<HeadingSample>::new();
@@ -614,7 +634,12 @@ pub fn build_ekf_compare_traces(
             if let Some(eskf_ref) = eskf.as_mut() {
                 eskf_ref.fuse_body_vel(cfg.r_body_vel / block_len_sq.max(1.0));
                 let n = eskf_ref.nominal();
-                let c_n_b = quat_to_rotmat_f64([n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64]);
+                let accel_norm = (avg_predict_accel[0] * avg_predict_accel[0]
+                    + avg_predict_accel[1] * avg_predict_accel[1]
+                    + avg_predict_accel[2] * avg_predict_accel[2])
+                    .sqrt();
+                let c_n_b =
+                    quat_to_rotmat_f64([n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64]);
                 let gravity_b = [
                     c_n_b[2][0] * GRAVITY_MPS2 as f64,
                     c_n_b[2][1] * GRAVITY_MPS2 as f64,
@@ -637,8 +662,34 @@ pub fn build_ekf_compare_traces(
                     + gyro_resid[2] * gyro_resid[2])
                     .sqrt();
                 let speed_h = (n.vn as f64).hypot(n.ve as f64);
-                if speed_h < 0.35 && gyro_norm < deg2rad(0.25) && accel_h < 0.08 {
-                    eskf_ref.fuse_zero_vel(0.01);
+                if false && speed_h < 0.35 && gyro_norm < deg2rad(0.25) && accel_h < 0.08 {
+                    eskf_ref.fuse_zero_vel(cfg.r_zero_vel);
+                    if (accel_norm - GRAVITY_MPS2 as f64).abs() < 0.15 {
+                        eskf_ref.fuse_stationary_gravity(
+                            [
+                                avg_predict_accel[0] as f32,
+                                avg_predict_accel[1] as f32,
+                                avg_predict_accel[2] as f32,
+                            ],
+                            cfg.r_stationary_accel,
+                        );
+                        let d = eskf_ref.stationary_diag();
+                        let t = rel_s(pkt.t_ms);
+                        eskf_stationary_innov_x.push([t, d.innovation_x as f64]);
+                        eskf_stationary_innov_y.push([t, d.innovation_y as f64]);
+                        eskf_stationary_k_theta_x_from_x.push([t, d.k_theta_x_from_x as f64]);
+                        eskf_stationary_k_theta_y_from_x.push([t, d.k_theta_y_from_x as f64]);
+                        eskf_stationary_k_theta_x_from_y.push([t, d.k_theta_x_from_y as f64]);
+                        eskf_stationary_k_theta_y_from_y.push([t, d.k_theta_y_from_y as f64]);
+                        eskf_stationary_k_bax_from_x.push([t, d.k_bax_from_x as f64]);
+                        eskf_stationary_k_bay_from_y.push([t, d.k_bay_from_y as f64]);
+                        eskf_stationary_p_theta_x.push([t, d.p_theta_x as f64]);
+                        eskf_stationary_p_theta_y.push([t, d.p_theta_y as f64]);
+                        eskf_stationary_p_bax.push([t, d.p_bax as f64]);
+                        eskf_stationary_p_bay.push([t, d.p_bay as f64]);
+                        eskf_stationary_p_theta_x_bax.push([t, d.p_theta_x_bax as f64]);
+                        eskf_stationary_p_theta_y_bay.push([t, d.p_theta_y_bay as f64]);
+                    }
                 }
             }
             ekf_set_predict_noise(&mut ekf, base_predict_noise);
@@ -1283,6 +1334,64 @@ pub fn build_ekf_compare_traces(
             points: eskf_cov_diag[2].clone(),
         },
     ];
+    let eskf_stationary_diag = vec![
+        Trace {
+            name: "stationary innov x".to_string(),
+            points: eskf_stationary_innov_x,
+        },
+        Trace {
+            name: "stationary innov y".to_string(),
+            points: eskf_stationary_innov_y,
+        },
+        Trace {
+            name: "stationary K theta_x from x".to_string(),
+            points: eskf_stationary_k_theta_x_from_x,
+        },
+        Trace {
+            name: "stationary K theta_y from x".to_string(),
+            points: eskf_stationary_k_theta_y_from_x,
+        },
+        Trace {
+            name: "stationary K theta_x from y".to_string(),
+            points: eskf_stationary_k_theta_x_from_y,
+        },
+        Trace {
+            name: "stationary K theta_y from y".to_string(),
+            points: eskf_stationary_k_theta_y_from_y,
+        },
+        Trace {
+            name: "stationary K bax from x".to_string(),
+            points: eskf_stationary_k_bax_from_x,
+        },
+        Trace {
+            name: "stationary K bay from y".to_string(),
+            points: eskf_stationary_k_bay_from_y,
+        },
+        Trace {
+            name: "stationary P theta_x".to_string(),
+            points: eskf_stationary_p_theta_x,
+        },
+        Trace {
+            name: "stationary P theta_y".to_string(),
+            points: eskf_stationary_p_theta_y,
+        },
+        Trace {
+            name: "stationary P bax".to_string(),
+            points: eskf_stationary_p_bax,
+        },
+        Trace {
+            name: "stationary P bay".to_string(),
+            points: eskf_stationary_p_bay,
+        },
+        Trace {
+            name: "stationary P theta_x_bax".to_string(),
+            points: eskf_stationary_p_theta_x_bax,
+        },
+        Trace {
+            name: "stationary P theta_y_bay".to_string(),
+            points: eskf_stationary_p_theta_y_bay,
+        },
+    ];
     let eskf_map = vec![
         Trace {
             name: "ESKF path (lon,lat)".to_string(),
@@ -1315,6 +1424,7 @@ pub fn build_ekf_compare_traces(
         eskf_bias_accel,
         eskf_cov_bias,
         eskf_cov_nonbias,
+        eskf_stationary_diag,
         eskf_map,
         eskf_map_heading: map_eskf_heading,
     }
