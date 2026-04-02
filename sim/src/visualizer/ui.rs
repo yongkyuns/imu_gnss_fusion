@@ -132,6 +132,7 @@ pub struct App {
     show_nav_pvt: bool,
     show_nav2_pvt: bool,
     show_ekf: bool,
+    show_eskf: bool,
 }
 
 impl eframe::App for App {
@@ -189,6 +190,7 @@ impl eframe::App for App {
                 ui.label("Page:");
                 ui.selectable_value(&mut self.page, Page::Signals, "Signals");
                 ui.selectable_value(&mut self.page, Page::EkfCompare, "EKF Compare");
+                ui.selectable_value(&mut self.page, Page::EskfCompare, "ESKF Compare");
                 ui.selectable_value(&mut self.page, Page::AlignCompare, "Align Compare");
                 ui.selectable_value(&mut self.page, Page::MapDark, "Map (Dark)");
             });
@@ -352,6 +354,77 @@ impl eframe::App for App {
                     );
                 });
             }
+            Page::EskfCompare => {
+                let half_width = (ctx.content_rect().width() * 0.5).max(260.0);
+                let mut vehicle_gyro = self.data.esf_ins_gyro.clone();
+                vehicle_gyro.extend(self.data.eskf_meas_gyro.iter().cloned());
+                let mut vehicle_accel = self.data.esf_ins_accel.clone();
+                vehicle_accel.extend(self.data.eskf_meas_accel.iter().cloned());
+                egui::SidePanel::left("eskf_compare_left")
+                    .resizable(false)
+                    .exact_width(half_width)
+                    .show(ctx, |ui| {
+                        draw_plot(
+                            ui,
+                            "Velocity: ESKF vs u-blox",
+                            &self.data.eskf_cmp_vel,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "Euler Angles: ESKF Quaternion vs NAV-ATT",
+                            &self.data.eskf_cmp_att,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "ESKF Gyro Bias Estimates",
+                            &self.data.eskf_bias_gyro,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "Vehicle Gyro: ESF-INS vs ESKF",
+                            &vehicle_gyro,
+                            true,
+                            self.max_points_per_trace,
+                        );
+                    });
+
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    draw_plot(
+                        ui,
+                        "ESKF Accel Bias Estimates",
+                        &self.data.eskf_bias_accel,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "ESKF Bias Covariance Diagonal",
+                        &self.data.eskf_cov_bias,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "ESKF Covariance Diagonal (Non-bias States)",
+                        &self.data.eskf_cov_nonbias,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "Vehicle Accel: ESF-INS vs ESKF",
+                        &vehicle_accel,
+                        true,
+                        self.max_points_per_trace,
+                    );
+                });
+            }
             Page::AlignCompare => {
                 let half_width = (ctx.content_rect().width() * 0.5).max(260.0);
                 egui::SidePanel::left("align_compare_left")
@@ -427,6 +500,7 @@ impl eframe::App for App {
                         ui.checkbox(&mut self.show_nav_pvt, "show NAV-PVT");
                         ui.checkbox(&mut self.show_nav2_pvt, "show NAV2-PVT");
                         ui.checkbox(&mut self.show_ekf, "show EKF");
+                        ui.checkbox(&mut self.show_eskf, "show ESKF");
                         if ui.button("Recenter").clicked() {
                             self.map_memory.follow_my_position();
                         }
@@ -438,6 +512,11 @@ impl eframe::App for App {
                         ui.colored_label(
                             egui::Color32::from_rgb(255, 80, 80),
                             "EKF during GNSS outage",
+                        );
+                        ui.colored_label(egui::Color32::from_rgb(120, 170, 255), "ESKF");
+                        ui.colored_label(
+                            egui::Color32::from_rgb(255, 140, 220),
+                            "ESKF during GNSS outage",
                         );
                         ui.colored_label(egui::Color32::from_rgb(255, 255, 255), "EKF heading");
                     });
@@ -454,9 +533,16 @@ impl eframe::App for App {
                                 && t.name != "EKF path during GNSS outage (lon,lat)"
                         });
                     }
+                    if self.show_eskf {
+                        map_traces.extend(self.data.eskf_map.clone());
+                    }
+                    let mut headings = self.data.ekf_map_heading.clone();
+                    if self.show_eskf {
+                        headings.extend(self.data.eskf_map_heading.clone());
+                    }
                     let track = TrackOverlay {
                         traces: map_traces,
-                        headings: self.data.ekf_map_heading.clone(),
+                        headings,
                         show_heading: self.show_heading,
                     };
                     ui.add(
@@ -688,6 +774,7 @@ pub fn run_visualizer(data: PlotData, has_itow: bool) -> Result<()> {
                 show_nav_pvt: true,
                 show_nav2_pvt: true,
                 show_ekf: true,
+                show_eskf: true,
             }))
         }),
     )

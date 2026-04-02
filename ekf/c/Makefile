@@ -61,7 +61,8 @@ CORE_SRCS := \
 	$(SRC_DIR)/sensor_fusion.c \
 	$(SRC_DIR)/sf_align.c \
 	$(SRC_DIR)/sf_stationary_mount.c \
-	$(SRC_DIR)/sf_ekf.c
+	$(SRC_DIR)/sf_ekf.c \
+	$(SRC_DIR)/sf_eskf.c
 
 SRCS := $(CORE_SRCS)
 OBJS := $(patsubst %.c,$(BUILD_DIR)/%.o,$(SRCS))

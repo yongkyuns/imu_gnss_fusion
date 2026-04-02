@@ -1,4 +1,5 @@
 use sensor_fusion::align::GRAVITY_MPS2;
+use sensor_fusion::c_api::{CEskfImuDelta, CEskfWrapper};
 use sensor_fusion::ekf::{
     Ekf, GpsData, ImuSample, PredictNoise, ekf_fuse_body_vel, ekf_fuse_gps, ekf_predict,
     ekf_set_predict_noise,
@@ -32,6 +33,17 @@ pub struct EkfCompareData {
     pub cov_nonbias: Vec<Trace>,
     pub map: Vec<Trace>,
     pub map_heading: Vec<HeadingSample>,
+    pub eskf_cmp_pos: Vec<Trace>,
+    pub eskf_cmp_vel: Vec<Trace>,
+    pub eskf_cmp_att: Vec<Trace>,
+    pub eskf_meas_gyro: Vec<Trace>,
+    pub eskf_meas_accel: Vec<Trace>,
+    pub eskf_bias_gyro: Vec<Trace>,
+    pub eskf_bias_accel: Vec<Trace>,
+    pub eskf_cov_bias: Vec<Trace>,
+    pub eskf_cov_nonbias: Vec<Trace>,
+    pub eskf_map: Vec<Trace>,
+    pub eskf_map_heading: Vec<HeadingSample>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -49,7 +61,7 @@ pub struct EkfCompareConfig {
 impl Default for EkfCompareConfig {
     fn default() -> Self {
         Self {
-            r_body_vel: 5.0,
+            r_body_vel: 1.0,
             vehicle_meas_lpf_cutoff_hz: 5.0,
             predict_imu_lpf_cutoff_hz: None,
             predict_imu_decimation: 1,
@@ -88,6 +100,17 @@ pub fn build_ekf_compare_traces(
             cov_nonbias: Vec::new(),
             map: Vec::new(),
             map_heading: Vec::new(),
+            eskf_cmp_pos: Vec::new(),
+            eskf_cmp_vel: Vec::new(),
+            eskf_cmp_att: Vec::new(),
+            eskf_meas_gyro: Vec::new(),
+            eskf_meas_accel: Vec::new(),
+            eskf_bias_gyro: Vec::new(),
+            eskf_bias_accel: Vec::new(),
+            eskf_cov_bias: Vec::new(),
+            eskf_cov_nonbias: Vec::new(),
+            eskf_map: Vec::new(),
+            eskf_map_heading: Vec::new(),
         };
     }
 
@@ -290,8 +313,34 @@ pub fn build_ekf_compare_traces(
     let mut map_ekf = Vec::<[f64; 2]>::new();
     let mut map_ekf_outage = Vec::<[f64; 2]>::new();
     let mut map_heading = Vec::<HeadingSample>::new();
+    let mut eskf_cmp_pos_n = Vec::<[f64; 2]>::new();
+    let mut eskf_cmp_pos_e = Vec::<[f64; 2]>::new();
+    let mut eskf_cmp_pos_d = Vec::<[f64; 2]>::new();
+    let mut eskf_cmp_vel_n = Vec::<[f64; 2]>::new();
+    let mut eskf_cmp_vel_e = Vec::<[f64; 2]>::new();
+    let mut eskf_cmp_vel_d = Vec::<[f64; 2]>::new();
+    let mut eskf_cmp_att_roll = Vec::<[f64; 2]>::new();
+    let mut eskf_cmp_att_pitch = Vec::<[f64; 2]>::new();
+    let mut eskf_cmp_att_yaw = Vec::<[f64; 2]>::new();
+    let mut eskf_meas_gyro_x = Vec::<[f64; 2]>::new();
+    let mut eskf_meas_gyro_y = Vec::<[f64; 2]>::new();
+    let mut eskf_meas_gyro_z = Vec::<[f64; 2]>::new();
+    let mut eskf_meas_accel_x = Vec::<[f64; 2]>::new();
+    let mut eskf_meas_accel_y = Vec::<[f64; 2]>::new();
+    let mut eskf_meas_accel_z = Vec::<[f64; 2]>::new();
+    let mut eskf_bias_gyro_x = Vec::<[f64; 2]>::new();
+    let mut eskf_bias_gyro_y = Vec::<[f64; 2]>::new();
+    let mut eskf_bias_gyro_z = Vec::<[f64; 2]>::new();
+    let mut eskf_bias_accel_x = Vec::<[f64; 2]>::new();
+    let mut eskf_bias_accel_y = Vec::<[f64; 2]>::new();
+    let mut eskf_bias_accel_z = Vec::<[f64; 2]>::new();
+    let mut eskf_cov_diag: [Vec<[f64; 2]>; 15] = std::array::from_fn(|_| Vec::new());
+    let mut map_eskf = Vec::<[f64; 2]>::new();
+    let mut map_eskf_outage = Vec::<[f64; 2]>::new();
+    let mut map_eskf_heading = Vec::<HeadingSample>::new();
 
     let mut ekf = Ekf::default();
+    let mut eskf: Option<CEskfWrapper> = None;
     let base_predict_noise = cfg.predict_noise.unwrap_or(ekf.noise);
     ekf_set_predict_noise(&mut ekf, base_predict_noise);
     let mut prev_imu_t: Option<f64> = None;
@@ -310,6 +359,8 @@ pub fn build_ekf_compare_traces(
     let mut ref_h = 0.0_f64;
     let mut filt_meas_gyro: Option<[f64; 3]> = None;
     let mut filt_meas_accel: Option<[f64; 3]> = None;
+    let mut filt_eskf_meas_gyro: Option<[f64; 3]> = None;
+    let mut filt_eskf_meas_accel: Option<[f64; 3]> = None;
     let mut filt_predict_gyro: Option<[f64; 3]> = None;
     let mut filt_predict_accel: Option<[f64; 3]> = None;
     let mut predict_gyro_sum = [0.0_f64; 3];
@@ -451,6 +502,10 @@ pub fn build_ekf_compare_traces(
                 let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
                 let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
                 initialize_ekf_from_gnss(&mut ekf, nav, ned);
+                let eskf_predict_noise = cfg
+                    .predict_noise
+                    .unwrap_or(PredictNoise::lsm6dso_typical_104hz());
+                eskf = Some(initialize_eskf_from_nav(nav, ned, eskf_predict_noise, cfg));
                 ekf_initialized = true;
                 yaw_initialized_from_vel = true;
                 append_ekf_sample(
@@ -542,9 +597,23 @@ pub fn build_ekf_compare_traces(
             };
             ekf_predict(&mut ekf, &imu, None);
             clamp_ekf_biases(&mut ekf, pred_dt);
+            if let Some(eskf_ref) = eskf.as_mut() {
+                eskf_ref.predict(CEskfImuDelta {
+                    dax: imu.dax,
+                    day: imu.day,
+                    daz: imu.daz,
+                    dvx: imu.dvx,
+                    dvy: imu.dvy,
+                    dvz: imu.dvz,
+                    dt: imu.dt,
+                });
+            }
 
             ekf_fuse_body_vel(&mut ekf, cfg.r_body_vel / block_len_sq.max(1.0));
             clamp_ekf_biases(&mut ekf, pred_dt);
+            if let Some(eskf_ref) = eskf.as_mut() {
+                eskf_ref.fuse_body_vel(cfg.r_body_vel / block_len_sq.max(1.0));
+            }
             ekf_set_predict_noise(&mut ekf, base_predict_noise);
 
             while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
@@ -597,6 +666,9 @@ pub fn build_ekf_compare_traces(
                 };
                 ekf_fuse_gps(&mut ekf, &gps);
                 clamp_ekf_biases(&mut ekf, pred_dt);
+                if let Some(eskf_ref) = eskf.as_mut() {
+                    eskf_ref.fuse_gps(fusion_gnss_sample(nav, ned, cfg));
+                }
 
                 let t = rel_s(t_ms);
                 let (_, _, ekf_yaw) =
@@ -615,6 +687,24 @@ pub fn build_ekf_compare_traces(
                     lat_deg: ekf_lat,
                     yaw_deg: ekf_yaw,
                 });
+                if let Some(eskf_ref) = eskf.as_ref() {
+                    let n = eskf_ref.nominal();
+                    let (_, _, eskf_yaw) = quat_rpy_deg(n.q0, n.q1, n.q2, n.q3);
+                    let (eskf_lat, eskf_lon, _eskf_h) = ned_to_lla_exact(
+                        n.pn as f64,
+                        n.pe as f64,
+                        n.pd as f64,
+                        ref_lat,
+                        ref_lon,
+                        ref_h,
+                    );
+                    map_eskf_heading.push(HeadingSample {
+                        t_s: t,
+                        lon_deg: eskf_lon,
+                        lat_deg: eskf_lat,
+                        yaw_deg: eskf_yaw,
+                    });
+                }
             }
 
             predict_gyro_sum = [0.0; 3];
@@ -638,6 +728,24 @@ pub fn build_ekf_compare_traces(
                     map_ekf_outage.push([f64::NAN, f64::NAN]);
                 }
                 map_ekf_outage.push([ekf_lon, ekf_lat]);
+            }
+            if let Some(eskf_ref) = eskf.as_ref() {
+                let n = eskf_ref.nominal();
+                let (eskf_lat, eskf_lon, _eskf_h) = ned_to_lla_exact(
+                    n.pn as f64,
+                    n.pe as f64,
+                    n.pd as f64,
+                    ref_lat,
+                    ref_lon,
+                    ref_h,
+                );
+                map_eskf.push([eskf_lon, eskf_lat]);
+                if outage_active {
+                    if !prev_outage_active && !map_eskf_outage.is_empty() {
+                        map_eskf_outage.push([f64::NAN, f64::NAN]);
+                    }
+                    map_eskf_outage.push([eskf_lon, eskf_lat]);
+                }
             }
         }
         prev_outage_active = outage_active;
@@ -694,6 +802,40 @@ pub fn build_ekf_compare_traces(
         cmp_att_roll.push([t_imu, ekf_roll]);
         cmp_att_pitch.push([t_imu, ekf_pitch]);
         cmp_att_yaw.push([t_imu, ekf_yaw]);
+        if let Some(eskf_ref) = eskf.as_ref() {
+            append_eskf_sample(
+                eskf_ref,
+                t_imu,
+                gyro,
+                accel,
+                dt_safe,
+                cfg.vehicle_meas_lpf_cutoff_hz,
+                &mut filt_eskf_meas_gyro,
+                &mut filt_eskf_meas_accel,
+                &mut eskf_cmp_pos_n,
+                &mut eskf_cmp_pos_e,
+                &mut eskf_cmp_pos_d,
+                &mut eskf_cmp_vel_n,
+                &mut eskf_cmp_vel_e,
+                &mut eskf_cmp_vel_d,
+                &mut eskf_cmp_att_roll,
+                &mut eskf_cmp_att_pitch,
+                &mut eskf_cmp_att_yaw,
+                &mut eskf_meas_gyro_x,
+                &mut eskf_meas_gyro_y,
+                &mut eskf_meas_gyro_z,
+                &mut eskf_meas_accel_x,
+                &mut eskf_meas_accel_y,
+                &mut eskf_meas_accel_z,
+                &mut eskf_bias_gyro_x,
+                &mut eskf_bias_gyro_y,
+                &mut eskf_bias_gyro_z,
+                &mut eskf_bias_accel_x,
+                &mut eskf_bias_accel_y,
+                &mut eskf_bias_accel_z,
+                &mut eskf_cov_diag,
+            );
+        }
     }
 
     let cmp_pos = vec![
@@ -703,7 +845,7 @@ pub fn build_ekf_compare_traces(
         },
         Trace {
             name: "UBX posN [m]".to_string(),
-            points: ubx_pos_n,
+            points: ubx_pos_n.clone(),
         },
         Trace {
             name: "EKF posE [m]".to_string(),
@@ -711,7 +853,7 @@ pub fn build_ekf_compare_traces(
         },
         Trace {
             name: "UBX posE [m]".to_string(),
-            points: ubx_pos_e,
+            points: ubx_pos_e.clone(),
         },
         Trace {
             name: "EKF posD [m]".to_string(),
@@ -719,7 +861,7 @@ pub fn build_ekf_compare_traces(
         },
         Trace {
             name: "UBX posD [m]".to_string(),
-            points: ubx_pos_d,
+            points: ubx_pos_d.clone(),
         },
     ];
     let cmp_vel = vec![
@@ -729,7 +871,7 @@ pub fn build_ekf_compare_traces(
         },
         Trace {
             name: "UBX velN [m/s]".to_string(),
-            points: ubx_vel_n,
+            points: ubx_vel_n.clone(),
         },
         Trace {
             name: "EKF velE [m/s]".to_string(),
@@ -737,7 +879,7 @@ pub fn build_ekf_compare_traces(
         },
         Trace {
             name: "UBX velE [m/s]".to_string(),
-            points: ubx_vel_e,
+            points: ubx_vel_e.clone(),
         },
         Trace {
             name: "EKF velD [m/s]".to_string(),
@@ -745,7 +887,7 @@ pub fn build_ekf_compare_traces(
         },
         Trace {
             name: "UBX velD [m/s]".to_string(),
-            points: ubx_vel_d,
+            points: ubx_vel_d.clone(),
         },
     ];
     let cmp_att = vec![
@@ -755,7 +897,7 @@ pub fn build_ekf_compare_traces(
         },
         Trace {
             name: "NAV-ATT roll [deg]".to_string(),
-            points: ubx_att_roll,
+            points: ubx_att_roll.clone(),
         },
         Trace {
             name: "EKF pitch [deg]".to_string(),
@@ -763,7 +905,7 @@ pub fn build_ekf_compare_traces(
         },
         Trace {
             name: "NAV-ATT pitch [deg]".to_string(),
-            points: ubx_att_pitch,
+            points: ubx_att_pitch.clone(),
         },
         Trace {
             name: "EKF yaw [deg]".to_string(),
@@ -771,7 +913,7 @@ pub fn build_ekf_compare_traces(
         },
         Trace {
             name: "NAV-ATT heading [deg]".to_string(),
-            points: ubx_att_yaw,
+            points: ubx_att_yaw.clone(),
         },
     ];
     let meas_gyro = vec![
@@ -916,6 +1058,214 @@ pub fn build_ekf_compare_traces(
             points: map_ekf_outage,
         },
     ];
+    let eskf_cmp_pos = vec![
+        Trace {
+            name: "ESKF posN [m]".to_string(),
+            points: eskf_cmp_pos_n,
+        },
+        Trace {
+            name: "UBX posN [m]".to_string(),
+            points: ubx_pos_n.clone(),
+        },
+        Trace {
+            name: "ESKF posE [m]".to_string(),
+            points: eskf_cmp_pos_e,
+        },
+        Trace {
+            name: "UBX posE [m]".to_string(),
+            points: ubx_pos_e.clone(),
+        },
+        Trace {
+            name: "ESKF posD [m]".to_string(),
+            points: eskf_cmp_pos_d,
+        },
+        Trace {
+            name: "UBX posD [m]".to_string(),
+            points: ubx_pos_d.clone(),
+        },
+    ];
+    let eskf_cmp_vel = vec![
+        Trace {
+            name: "ESKF velN [m/s]".to_string(),
+            points: eskf_cmp_vel_n,
+        },
+        Trace {
+            name: "UBX velN [m/s]".to_string(),
+            points: ubx_vel_n.clone(),
+        },
+        Trace {
+            name: "ESKF velE [m/s]".to_string(),
+            points: eskf_cmp_vel_e,
+        },
+        Trace {
+            name: "UBX velE [m/s]".to_string(),
+            points: ubx_vel_e.clone(),
+        },
+        Trace {
+            name: "ESKF velD [m/s]".to_string(),
+            points: eskf_cmp_vel_d,
+        },
+        Trace {
+            name: "UBX velD [m/s]".to_string(),
+            points: ubx_vel_d.clone(),
+        },
+    ];
+    let eskf_cmp_att = vec![
+        Trace {
+            name: "ESKF roll [deg]".to_string(),
+            points: eskf_cmp_att_roll,
+        },
+        Trace {
+            name: "NAV-ATT roll [deg]".to_string(),
+            points: ubx_att_roll.clone(),
+        },
+        Trace {
+            name: "ESKF pitch [deg]".to_string(),
+            points: eskf_cmp_att_pitch,
+        },
+        Trace {
+            name: "NAV-ATT pitch [deg]".to_string(),
+            points: ubx_att_pitch.clone(),
+        },
+        Trace {
+            name: "ESKF yaw [deg]".to_string(),
+            points: eskf_cmp_att_yaw,
+        },
+        Trace {
+            name: "NAV-ATT heading [deg]".to_string(),
+            points: ubx_att_yaw.clone(),
+        },
+    ];
+    let eskf_meas_gyro = vec![
+        Trace {
+            name: "ESKF vehicle gyro x [deg/s]".to_string(),
+            points: eskf_meas_gyro_x,
+        },
+        Trace {
+            name: "ESKF vehicle gyro y [deg/s]".to_string(),
+            points: eskf_meas_gyro_y,
+        },
+        Trace {
+            name: "ESKF vehicle gyro z [deg/s]".to_string(),
+            points: eskf_meas_gyro_z,
+        },
+    ];
+    let eskf_meas_accel = vec![
+        Trace {
+            name: "ESKF vehicle accel x [m/s^2]".to_string(),
+            points: eskf_meas_accel_x,
+        },
+        Trace {
+            name: "ESKF vehicle accel y [m/s^2]".to_string(),
+            points: eskf_meas_accel_y,
+        },
+        Trace {
+            name: "ESKF vehicle accel z [m/s^2]".to_string(),
+            points: eskf_meas_accel_z,
+        },
+    ];
+    let eskf_bias_gyro = vec![
+        Trace {
+            name: "ESKF gyro bias x [deg/s]".to_string(),
+            points: eskf_bias_gyro_x,
+        },
+        Trace {
+            name: "ESKF gyro bias y [deg/s]".to_string(),
+            points: eskf_bias_gyro_y,
+        },
+        Trace {
+            name: "ESKF gyro bias z [deg/s]".to_string(),
+            points: eskf_bias_gyro_z,
+        },
+    ];
+    let eskf_bias_accel = vec![
+        Trace {
+            name: "ESKF accel bias x [m/s^2]".to_string(),
+            points: eskf_bias_accel_x,
+        },
+        Trace {
+            name: "ESKF accel bias y [m/s^2]".to_string(),
+            points: eskf_bias_accel_y,
+        },
+        Trace {
+            name: "ESKF accel bias z [m/s^2]".to_string(),
+            points: eskf_bias_accel_z,
+        },
+    ];
+    let eskf_cov_bias = vec![
+        Trace {
+            name: "acc_x".to_string(),
+            points: eskf_cov_diag[12].clone(),
+        },
+        Trace {
+            name: "acc_y".to_string(),
+            points: eskf_cov_diag[13].clone(),
+        },
+        Trace {
+            name: "acc_z".to_string(),
+            points: eskf_cov_diag[14].clone(),
+        },
+        Trace {
+            name: "gyro_x".to_string(),
+            points: eskf_cov_diag[9].clone(),
+        },
+        Trace {
+            name: "gyro_y".to_string(),
+            points: eskf_cov_diag[10].clone(),
+        },
+        Trace {
+            name: "gyro_z".to_string(),
+            points: eskf_cov_diag[11].clone(),
+        },
+    ];
+    let eskf_cov_nonbias = vec![
+        Trace {
+            name: "p_n".to_string(),
+            points: eskf_cov_diag[6].clone(),
+        },
+        Trace {
+            name: "p_e".to_string(),
+            points: eskf_cov_diag[7].clone(),
+        },
+        Trace {
+            name: "p_d".to_string(),
+            points: eskf_cov_diag[8].clone(),
+        },
+        Trace {
+            name: "v_n".to_string(),
+            points: eskf_cov_diag[3].clone(),
+        },
+        Trace {
+            name: "v_e".to_string(),
+            points: eskf_cov_diag[4].clone(),
+        },
+        Trace {
+            name: "v_d".to_string(),
+            points: eskf_cov_diag[5].clone(),
+        },
+        Trace {
+            name: "theta_x".to_string(),
+            points: eskf_cov_diag[0].clone(),
+        },
+        Trace {
+            name: "theta_y".to_string(),
+            points: eskf_cov_diag[1].clone(),
+        },
+        Trace {
+            name: "theta_z".to_string(),
+            points: eskf_cov_diag[2].clone(),
+        },
+    ];
+    let eskf_map = vec![
+        Trace {
+            name: "ESKF path (lon,lat)".to_string(),
+            points: map_eskf,
+        },
+        Trace {
+            name: "ESKF path during GNSS outage (lon,lat)".to_string(),
+            points: map_eskf_outage,
+        },
+    ];
 
     EkfCompareData {
         cmp_pos,
@@ -929,6 +1279,17 @@ pub fn build_ekf_compare_traces(
         cov_nonbias,
         map,
         map_heading,
+        eskf_cmp_pos,
+        eskf_cmp_vel,
+        eskf_cmp_att,
+        eskf_meas_gyro,
+        eskf_meas_accel,
+        eskf_bias_gyro,
+        eskf_bias_accel,
+        eskf_cov_bias,
+        eskf_cov_nonbias,
+        eskf_map,
+        eskf_map_heading: map_eskf_heading,
     }
 }
 
@@ -1072,6 +1433,151 @@ fn initialize_ekf_from_gnss(ekf: &mut Ekf, nav: NavPvtObs, ned: [f64; 3]) {
     ekf.p[7][7] = pos_h_var;
     ekf.p[8][8] = pos_h_var;
     ekf.p[9][9] = pos_d_var;
+}
+
+fn initialize_eskf_from_nav(
+    nav: NavPvtObs,
+    ned: [f64; 3],
+    noise: PredictNoise,
+    cfg: EkfCompareConfig,
+) -> CEskfWrapper {
+    let mut eskf = CEskfWrapper::new(noise);
+    let q_bn = yaw_quat_f32(initial_yaw_from_nav(nav));
+    eskf.init_nominal_from_gnss(q_bn, fusion_gnss_sample(nav, ned, cfg));
+    eskf
+}
+
+fn initial_yaw_from_nav(nav: NavPvtObs) -> f32 {
+    let speed_h = nav.vel_n_mps.hypot(nav.vel_e_mps);
+    if nav.head_veh_valid {
+        deg2rad(nav.heading_vehicle_deg) as f32
+    } else if speed_h >= 1.0 {
+        nav.vel_e_mps.atan2(nav.vel_n_mps) as f32
+    } else {
+        deg2rad(nav.heading_motion_deg) as f32
+    }
+}
+
+fn yaw_quat_f32(yaw_rad: f32) -> [f32; 4] {
+    let half = 0.5 * yaw_rad;
+    [half.cos(), 0.0, 0.0, half.sin()]
+}
+
+fn fusion_gnss_sample(
+    nav: NavPvtObs,
+    ned: [f64; 3],
+    cfg: EkfCompareConfig,
+) -> sensor_fusion::fusion::FusionGnssSample {
+    let speed_h = nav.vel_n_mps.hypot(nav.vel_e_mps);
+    let heading_rad = if nav.head_veh_valid {
+        Some(deg2rad(nav.heading_vehicle_deg) as f32)
+    } else if speed_h >= cfg.yaw_init_speed_mps.max(1.0) {
+        Some(nav.vel_e_mps.atan2(nav.vel_n_mps) as f32)
+    } else {
+        Some(deg2rad(nav.heading_motion_deg) as f32)
+    };
+    sensor_fusion::fusion::FusionGnssSample {
+        t_s: 0.0,
+        pos_ned_m: [ned[0] as f32, ned[1] as f32, ned[2] as f32],
+        vel_ned_mps: [
+            nav.vel_n_mps as f32,
+            nav.vel_e_mps as f32,
+            nav.vel_d_mps as f32,
+        ],
+        pos_std_m: [
+            (nav.h_acc_m * cfg.gnss_pos_r_scale.sqrt()) as f32,
+            (nav.h_acc_m * cfg.gnss_pos_r_scale.sqrt()) as f32,
+            (nav.v_acc_m * cfg.gnss_pos_r_scale.sqrt()) as f32,
+        ],
+        vel_std_mps: [
+            (nav.s_acc_mps * cfg.gnss_vel_r_scale.sqrt()) as f32,
+            (nav.s_acc_mps * cfg.gnss_vel_r_scale.sqrt()) as f32,
+            (nav.s_acc_mps * cfg.gnss_vel_r_scale.sqrt()) as f32,
+        ],
+        heading_rad,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_eskf_sample(
+    eskf: &CEskfWrapper,
+    t_imu: f64,
+    gyro: [f64; 3],
+    accel: [f64; 3],
+    dt_safe: f64,
+    vehicle_meas_lpf_cutoff_hz: f64,
+    filt_meas_gyro: &mut Option<[f64; 3]>,
+    filt_meas_accel: &mut Option<[f64; 3]>,
+    cmp_pos_n: &mut Vec<[f64; 2]>,
+    cmp_pos_e: &mut Vec<[f64; 2]>,
+    cmp_pos_d: &mut Vec<[f64; 2]>,
+    cmp_vel_n: &mut Vec<[f64; 2]>,
+    cmp_vel_e: &mut Vec<[f64; 2]>,
+    cmp_vel_d: &mut Vec<[f64; 2]>,
+    cmp_att_roll: &mut Vec<[f64; 2]>,
+    cmp_att_pitch: &mut Vec<[f64; 2]>,
+    cmp_att_yaw: &mut Vec<[f64; 2]>,
+    meas_gyro_x: &mut Vec<[f64; 2]>,
+    meas_gyro_y: &mut Vec<[f64; 2]>,
+    meas_gyro_z: &mut Vec<[f64; 2]>,
+    meas_accel_x: &mut Vec<[f64; 2]>,
+    meas_accel_y: &mut Vec<[f64; 2]>,
+    meas_accel_z: &mut Vec<[f64; 2]>,
+    bias_gyro_x: &mut Vec<[f64; 2]>,
+    bias_gyro_y: &mut Vec<[f64; 2]>,
+    bias_gyro_z: &mut Vec<[f64; 2]>,
+    bias_accel_x: &mut Vec<[f64; 2]>,
+    bias_accel_y: &mut Vec<[f64; 2]>,
+    bias_accel_z: &mut Vec<[f64; 2]>,
+    cov_diag: &mut [Vec<[f64; 2]>; 15],
+) {
+    let n = eskf.nominal();
+    cmp_pos_n.push([t_imu, n.pn as f64]);
+    cmp_pos_e.push([t_imu, n.pe as f64]);
+    cmp_pos_d.push([t_imu, n.pd as f64]);
+    cmp_vel_n.push([t_imu, n.vn as f64]);
+    cmp_vel_e.push([t_imu, n.ve as f64]);
+    cmp_vel_d.push([t_imu, n.vd as f64]);
+    let (roll, pitch, yaw) = quat_rpy_deg(n.q0, n.q1, n.q2, n.q3);
+    cmp_att_roll.push([t_imu, roll]);
+    cmp_att_pitch.push([t_imu, pitch]);
+    cmp_att_yaw.push([t_imu, yaw]);
+
+    let c_n_b = quat_to_rotmat_f64([n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64]);
+    let gravity_b = [
+        c_n_b[2][0] * GRAVITY_MPS2 as f64,
+        c_n_b[2][1] * GRAVITY_MPS2 as f64,
+        c_n_b[2][2] * GRAVITY_MPS2 as f64,
+    ];
+    let raw_meas_gyro = [
+        gyro[0] - rad2deg(n.bgx as f64),
+        gyro[1] - rad2deg(n.bgy as f64),
+        gyro[2] - rad2deg(n.bgz as f64),
+    ];
+    let raw_meas_accel = [
+        accel[0] - n.bax as f64 + gravity_b[0],
+        accel[1] - n.bay as f64 + gravity_b[1],
+        accel[2] - n.baz as f64 + gravity_b[2],
+    ];
+    let alpha_meas = lpf_alpha(dt_safe, vehicle_meas_lpf_cutoff_hz);
+    let filt_gyro = lpf_vec3(filt_meas_gyro, raw_meas_gyro, alpha_meas);
+    let filt_accel = lpf_vec3(filt_meas_accel, raw_meas_accel, alpha_meas);
+    meas_gyro_x.push([t_imu, filt_gyro[0]]);
+    meas_gyro_y.push([t_imu, filt_gyro[1]]);
+    meas_gyro_z.push([t_imu, filt_gyro[2]]);
+    meas_accel_x.push([t_imu, filt_accel[0]]);
+    meas_accel_y.push([t_imu, filt_accel[1]]);
+    meas_accel_z.push([t_imu, filt_accel[2]]);
+    bias_gyro_x.push([t_imu, rad2deg(n.bgx as f64)]);
+    bias_gyro_y.push([t_imu, rad2deg(n.bgy as f64)]);
+    bias_gyro_z.push([t_imu, rad2deg(n.bgz as f64)]);
+    bias_accel_x.push([t_imu, n.bax as f64]);
+    bias_accel_y.push([t_imu, n.bay as f64]);
+    bias_accel_z.push([t_imu, n.baz as f64]);
+    let p = eskf.covariance();
+    for (i, tr) in cov_diag.iter_mut().enumerate() {
+        tr.push([t_imu, p[i][i] as f64]);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

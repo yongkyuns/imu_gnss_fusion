@@ -111,6 +111,17 @@ impl Default for PredictNoise {
     }
 }
 
+impl PredictNoise {
+    pub const fn lsm6dso_typical_104hz() -> Self {
+        Self {
+            gyro_var: 2.287_311_3e-7 * 10.0_f32,
+            accel_var: 2.450_421_4e-5 * 15.0_f32,
+            gyro_bias_rw_var: 0.0002e-9,
+            accel_bias_rw_var: 0.002e-9,
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 struct CEkfGpsData {

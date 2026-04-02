@@ -106,6 +106,57 @@ pub struct CUpdate {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
+pub struct CEskfNominalState {
+    pub q0: f32,
+    pub q1: f32,
+    pub q2: f32,
+    pub q3: f32,
+    pub vn: f32,
+    pub ve: f32,
+    pub vd: f32,
+    pub pn: f32,
+    pub pe: f32,
+    pub pd: f32,
+    pub bgx: f32,
+    pub bgy: f32,
+    pub bgz: f32,
+    pub bax: f32,
+    pub bay: f32,
+    pub baz: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct CEskf {
+    pub nominal: CEskfNominalState,
+    pub p: [[f32; 15]; 15],
+    pub noise: PredictNoise,
+}
+
+impl Default for CEskf {
+    fn default() -> Self {
+        Self {
+            nominal: CEskfNominalState::default(),
+            p: [[0.0; 15]; 15],
+            noise: PredictNoise::lsm6dso_typical_104hz(),
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CEskfImuDelta {
+    pub dax: f32,
+    pub day: f32,
+    pub daz: f32,
+    pub dvx: f32,
+    pub dvy: f32,
+    pub dvz: f32,
+    pub dt: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct CStationaryMountBootstrap {
     pub mean_accel_b: [f32; 3],
     pub c_b_v: [[f32; 3]; 3],
@@ -217,6 +268,11 @@ unsafe extern "C" {
     fn sf_fusion_align(fusion: *const CSensorFusion) -> *const CAlignState;
     fn sf_fusion_mount_ready(fusion: *const CSensorFusion) -> bool;
     fn sf_fusion_mount_q_vb(fusion: *const CSensorFusion, out_q_vb: *mut f32) -> bool;
+
+    fn sf_eskf_init(eskf: *mut CEskf, p_diag: *const f32, noise: *const PredictNoise);
+    fn sf_eskf_predict(eskf: *mut CEskf, imu: *const CEskfImuDelta);
+    fn sf_eskf_fuse_gps(eskf: *mut CEskf, gps: *const CGnssSample);
+    fn sf_eskf_fuse_body_vel(eskf: *mut CEskf, r_body_vel: f32);
 }
 
 pub fn c_align_config_from_rust(cfg: AlignConfig) -> CAlignConfig {
@@ -362,6 +418,11 @@ pub struct CSensorFusionWrapper {
     raw: CSensorFusion,
 }
 
+#[derive(Debug, Clone)]
+pub struct CEskfWrapper {
+    raw: CEskf,
+}
+
 impl CSensorFusionWrapper {
     pub fn new_internal(cfg: FusionConfig) -> Self {
         let mut raw = CSensorFusion::default();
@@ -471,5 +532,91 @@ impl CSensorFusionWrapper {
         let ok =
             unsafe { sf_fusion_mount_q_vb(&self.raw as *const CSensorFusion, out.as_mut_ptr()) };
         ok.then_some(out)
+    }
+}
+
+impl CEskfWrapper {
+    pub fn new(noise: PredictNoise) -> Self {
+        let mut raw = CEskf::default();
+        unsafe { sf_eskf_init(&mut raw as *mut CEskf, core::ptr::null(), &noise as *const _) };
+        Self { raw }
+    }
+
+    pub fn nominal(&self) -> &CEskfNominalState {
+        &self.raw.nominal
+    }
+
+    pub fn covariance(&self) -> &[[f32; 15]; 15] {
+        &self.raw.p
+    }
+
+    pub fn init_nominal_from_gnss(&mut self, q_bn: [f32; 4], gnss: FusionGnssSample) {
+        const DEFAULT_GYRO_BIAS_SIGMA_DPS: f32 = 0.125;
+        const DEFAULT_ACCEL_BIAS_SIGMA_MPS2: f32 = 0.075;
+
+        self.raw.nominal.q0 = q_bn[0];
+        self.raw.nominal.q1 = q_bn[1];
+        self.raw.nominal.q2 = q_bn[2];
+        self.raw.nominal.q3 = q_bn[3];
+        self.raw.nominal.vn = gnss.vel_ned_mps[0];
+        self.raw.nominal.ve = gnss.vel_ned_mps[1];
+        self.raw.nominal.vd = gnss.vel_ned_mps[2];
+        self.raw.nominal.pn = gnss.pos_ned_m[0];
+        self.raw.nominal.pe = gnss.pos_ned_m[1];
+        self.raw.nominal.pd = gnss.pos_ned_m[2];
+        let att_sigma_rad = 2.0f32 * core::f32::consts::PI / 180.0;
+        let att_var = att_sigma_rad * att_sigma_rad;
+        self.raw.p[0][0] = att_var;
+        self.raw.p[1][1] = att_var;
+        self.raw.p[2][2] = att_var;
+
+        let mut vel_std = gnss.vel_std_mps[0]
+            .max(gnss.vel_std_mps[1])
+            .max(gnss.vel_std_mps[2]);
+        if vel_std < 0.2 {
+            vel_std = 0.2;
+        }
+        let vel_var = vel_std * vel_std;
+        self.raw.p[3][3] = vel_var;
+        self.raw.p[4][4] = vel_var;
+        self.raw.p[5][5] = vel_var;
+
+        let pos_n = gnss.pos_std_m[0].max(0.5);
+        let pos_e = gnss.pos_std_m[1].max(0.5);
+        let pos_d = gnss.pos_std_m[2].max(0.5);
+        self.raw.p[6][6] = pos_n * pos_n;
+        self.raw.p[7][7] = pos_e * pos_e;
+        self.raw.p[8][8] = pos_d * pos_d;
+
+        let gyro_bias_sigma_radps =
+            DEFAULT_GYRO_BIAS_SIGMA_DPS * core::f32::consts::PI / 180.0;
+        let accel_bias_sigma_mps2 = DEFAULT_ACCEL_BIAS_SIGMA_MPS2;
+        self.raw.p[9][9] = gyro_bias_sigma_radps * gyro_bias_sigma_radps;
+        self.raw.p[10][10] = gyro_bias_sigma_radps * gyro_bias_sigma_radps;
+        self.raw.p[11][11] = gyro_bias_sigma_radps * gyro_bias_sigma_radps;
+        self.raw.p[12][12] = accel_bias_sigma_mps2 * accel_bias_sigma_mps2;
+        self.raw.p[13][13] = accel_bias_sigma_mps2 * accel_bias_sigma_mps2;
+        self.raw.p[14][14] = accel_bias_sigma_mps2 * accel_bias_sigma_mps2;
+    }
+
+    pub fn predict(&mut self, imu: CEskfImuDelta) {
+        unsafe { sf_eskf_predict(&mut self.raw as *mut CEskf, &imu as *const CEskfImuDelta) };
+    }
+
+    pub fn fuse_gps(&mut self, sample: FusionGnssSample) {
+        let c_sample = CGnssSample {
+            t_s: sample.t_s,
+            pos_ned_m: sample.pos_ned_m,
+            vel_ned_mps: sample.vel_ned_mps,
+            pos_std_m: sample.pos_std_m,
+            vel_std_mps: sample.vel_std_mps,
+            heading_valid: sample.heading_rad.is_some(),
+            heading_rad: sample.heading_rad.unwrap_or(0.0),
+        };
+        unsafe { sf_eskf_fuse_gps(&mut self.raw as *mut CEskf, &c_sample as *const CGnssSample) };
+    }
+
+    pub fn fuse_body_vel(&mut self, r_body_vel: f32) {
+        unsafe { sf_eskf_fuse_body_vel(&mut self.raw as *mut CEskf, r_body_vel) };
     }
 }

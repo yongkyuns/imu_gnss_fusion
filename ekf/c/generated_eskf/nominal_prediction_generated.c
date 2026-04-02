@@ -1,0 +1,39 @@
+// Generated ESKF nominal-state prediction
+const float ESKF_PRED0 = bgx*dt - dax;
+const float ESKF_PRED1 = 0.5F*ESKF_PRED0;
+const float ESKF_PRED2 = bgy*dt - day;
+const float ESKF_PRED3 = 0.5F*ESKF_PRED2;
+const float ESKF_PRED4 = bgz*dt - daz;
+const float ESKF_PRED5 = 0.5F*ESKF_PRED4;
+const float ESKF_PRED6 = q0*q3;
+const float ESKF_PRED7 = q1*q2;
+const float ESKF_PRED8 = q0*q1;
+const float ESKF_PRED9 = q2*q3;
+const float ESKF_PRED10 = ESKF_PRED8 + ESKF_PRED9;
+const float ESKF_PRED11 = dt*g;
+const float ESKF_PRED12 = 2*ESKF_PRED11;
+const float ESKF_PRED13 = ESKF_PRED10*ESKF_PRED12 - bay*dt + dvy;
+const float ESKF_PRED14 = 2*ESKF_PRED13;
+const float ESKF_PRED15 = q0*q2;
+const float ESKF_PRED16 = q1*q3;
+const float ESKF_PRED17 = 2*q1*q1;
+const float ESKF_PRED18 = 2*q2*q2 - 1;
+const float ESKF_PRED19 = ESKF_PRED17 + ESKF_PRED18;
+const float ESKF_PRED20 = ESKF_PRED11*ESKF_PRED19 + baz*dt - dvz;
+const float ESKF_PRED21 = 2*ESKF_PRED20;
+const float ESKF_PRED22 = 2*q3*q3;
+const float ESKF_PRED23 = ESKF_PRED15 - ESKF_PRED16;
+const float ESKF_PRED24 = ESKF_PRED12*ESKF_PRED23 + bax*dt - dvx;
+const float ESKF_PRED25 = 2*ESKF_PRED24;
+
+
+eskf->nominal.q0 = ESKF_PRED1*q1 + ESKF_PRED3*q2 + ESKF_PRED5*q3 + q0;
+eskf->nominal.q1 = -ESKF_PRED1*q0 + 0.5F*ESKF_PRED2*q3 - ESKF_PRED5*q2 + q1;
+eskf->nominal.q2 = -ESKF_PRED1*q3 - ESKF_PRED3*q0 + 0.5F*ESKF_PRED4*q1 + q2;
+eskf->nominal.q3 = 0.5F*ESKF_PRED0*q2 - ESKF_PRED3*q1 - ESKF_PRED5*q0 + q3;
+eskf->nominal.vn = -ESKF_PRED14*(ESKF_PRED6 - ESKF_PRED7) - ESKF_PRED21*(ESKF_PRED15 + ESKF_PRED16) + ESKF_PRED24*(ESKF_PRED18 + ESKF_PRED22) + vn;
+eskf->nominal.ve = -ESKF_PRED13*(ESKF_PRED17 + ESKF_PRED22 - 1) + ESKF_PRED21*(ESKF_PRED8 - ESKF_PRED9) - ESKF_PRED25*(ESKF_PRED6 + ESKF_PRED7) + ve;
+eskf->nominal.vd = ESKF_PRED10*ESKF_PRED14 + ESKF_PRED19*ESKF_PRED20 + ESKF_PRED23*ESKF_PRED25 + vd;
+eskf->nominal.pn = dt*vn + pn;
+eskf->nominal.pe = dt*ve + pe;
+eskf->nominal.pd = dt*vd + pd;

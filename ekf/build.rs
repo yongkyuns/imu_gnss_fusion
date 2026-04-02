@@ -5,6 +5,7 @@ use std::process::Command;
 fn main() {
     println!("cargo:rerun-if-changed=c/Makefile");
     println!("cargo:rerun-if-changed=c/generated");
+    println!("cargo:rerun-if-changed=c/generated_eskf");
     println!("cargo:rerun-if-changed=c/include");
     println!("cargo:rerun-if-changed=c/src");
 
@@ -17,6 +18,7 @@ fn main() {
             PathBuf::from("c/src/sf_align.c"),
             PathBuf::from("c/src/sf_stationary_mount.c"),
             PathBuf::from("c/src/sf_ekf.c"),
+            PathBuf::from("c/src/sf_eskf.c"),
         ],
         &["-Ic", "-Ic/include"],
     );
