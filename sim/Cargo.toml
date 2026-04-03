@@ -28,3 +28,7 @@ path = "src/bin/visualizer.rs"
 [[bin]]
 name = "run_loose_nsr"
 path = "src/bin/run_loose_nsr.rs"
+
+[[bin]]
+name = "compare_filter_runtime"
+path = "src/bin/compare_filter_runtime.rs"

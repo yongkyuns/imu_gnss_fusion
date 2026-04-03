@@ -16,6 +16,64 @@ static const int SF_LOOSE_GPS_REF_SUPPORT_ROW1[2] = {0, 1};
 static const int SF_LOOSE_GPS_REF_SUPPORT_ROW2[3] = {0, 1, 2};
 static const int SF_LOOSE_NHC_Y_SUPPORT[8] = {3, 4, 5, 6, 7, 8, 21, 23};
 static const int SF_LOOSE_NHC_Z_SUPPORT[8] = {3, 4, 5, 6, 7, 8, 21, 22};
+static const unsigned char SF_LOOSE_F_ROW_COUNTS[SF_LOOSE_ERROR_STATES] = {
+    2, 2, 2, 10, 10, 9, 8, 8, 7, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+};
+static const unsigned char SF_LOOSE_F_ROW_COLS[SF_LOOSE_ERROR_STATES][10] = {
+    {0, 3, 0, 0, 0, 0, 0, 0, 0, 0},
+    {1, 4, 0, 0, 0, 0, 0, 0, 0, 0},
+    {2, 5, 0, 0, 0, 0, 0, 0, 0, 0},
+    {3, 4, 7, 8, 9, 10, 11, 15, 16, 17},
+    {3, 4, 6, 8, 9, 10, 11, 15, 16, 17},
+    {5, 6, 7, 9, 10, 11, 15, 16, 17, 0},
+    {6, 7, 12, 13, 14, 18, 19, 20, 0, 0},
+    {6, 7, 12, 13, 14, 18, 19, 20, 0, 0},
+    {8, 12, 13, 14, 18, 19, 20, 0, 0, 0},
+    {9, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {10, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {11, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {12, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {13, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {14, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {15, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {16, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {17, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {18, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {19, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {20, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {21, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {22, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {23, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+};
+static const unsigned char SF_LOOSE_G_ROW_COUNTS[SF_LOOSE_ERROR_STATES] = {
+    0, 0, 0, 3, 3, 3, 3, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+};
+static const unsigned char SF_LOOSE_G_ROW_COLS[SF_LOOSE_ERROR_STATES][3] = {
+    {0, 0, 0},
+    {0, 0, 0},
+    {0, 0, 0},
+    {0, 1, 2},
+    {0, 1, 2},
+    {0, 1, 2},
+    {3, 4, 5},
+    {3, 4, 5},
+    {3, 4, 5},
+    {6, 0, 0},
+    {7, 0, 0},
+    {8, 0, 0},
+    {9, 0, 0},
+    {10, 0, 0},
+    {11, 0, 0},
+    {12, 0, 0},
+    {13, 0, 0},
+    {14, 0, 0},
+    {15, 0, 0},
+    {16, 0, 0},
+    {17, 0, 0},
+    {18, 0, 0},
+    {19, 0, 0},
+    {20, 0, 0},
+};
 
 #if defined(__GNUC__) || defined(__clang__)
 #define SF_MAYBE_UNUSED __attribute__((unused))
@@ -62,7 +120,7 @@ static void sf_loose_fuse_body_vel_x(sf_loose_t *loose, float r_body_vel);
 static void sf_loose_fuse_body_vel_y(sf_loose_t *loose, float r_body_vel);
 static void sf_loose_fuse_body_vel_z(sf_loose_t *loose, float r_body_vel);
 static void sf_loose_predict_noise_default(sf_loose_predict_noise_t *cfg);
-static void sf_loose_predict_covariance_dense(
+static void sf_loose_predict_covariance_sparse(
     double nextP[SF_LOOSE_ERROR_STATES][SF_LOOSE_ERROR_STATES],
     const float F[SF_LOOSE_ERROR_STATES][SF_LOOSE_ERROR_STATES],
     const float G[SF_LOOSE_ERROR_STATES][SF_LOOSE_NOISE_STATES],
@@ -169,7 +227,7 @@ static void sf_loose_sync_covariance_to_shadow(sf_loose_t *loose) {
   }
 }
 
-static void sf_loose_predict_covariance_dense(
+static void sf_loose_predict_covariance_sparse(
     double nextP[SF_LOOSE_ERROR_STATES][SF_LOOSE_ERROR_STATES],
     const float F[SF_LOOSE_ERROR_STATES][SF_LOOSE_ERROR_STATES],
     const float G[SF_LOOSE_ERROR_STATES][SF_LOOSE_NOISE_STATES],
@@ -178,30 +236,27 @@ static void sf_loose_predict_covariance_dense(
   for (int i = 0; i < SF_LOOSE_ERROR_STATES; ++i) {
     for (int j = i; j < SF_LOOSE_ERROR_STATES; ++j) {
       double accum = 0.0;
-      for (int a = 0; a < SF_LOOSE_ERROR_STATES; ++a) {
+      for (int ia = 0; ia < SF_LOOSE_F_ROW_COUNTS[i]; ++ia) {
+        const int a = SF_LOOSE_F_ROW_COLS[i][ia];
         const double fia = (double)F[i][a];
-        if (fia == 0.0f) {
-          continue;
-        }
-        for (int b = 0; b < SF_LOOSE_ERROR_STATES; ++b) {
-          const double fjb = (double)F[j][b];
-          if (fjb == 0.0f) {
-            continue;
-          }
-          accum += fia * P[a][b] * fjb;
+        for (int jb = 0; jb < SF_LOOSE_F_ROW_COUNTS[j]; ++jb) {
+          const int b = SF_LOOSE_F_ROW_COLS[j][jb];
+          accum += fia * P[a][b] * (double)F[j][b];
         }
       }
 
-      for (int a = 0; a < SF_LOOSE_NOISE_STATES; ++a) {
+      for (int ia = 0; ia < SF_LOOSE_G_ROW_COUNTS[i]; ++ia) {
+        const int a = SF_LOOSE_G_ROW_COLS[i][ia];
         const double gia = (double)G[i][a];
-        if (gia == 0.0f || Q[a] == 0.0f) {
+        if (Q[a] == 0.0f) {
           continue;
         }
-        const double gj = (double)G[j][a];
-        if (gj == 0.0f) {
-          continue;
+        for (int jb = 0; jb < SF_LOOSE_G_ROW_COUNTS[j]; ++jb) {
+          const int b = SF_LOOSE_G_ROW_COLS[j][jb];
+          if (a == b) {
+            accum += gia * (double)Q[a] * (double)G[j][b];
+          }
         }
-        accum += gia * (double)Q[a] * gj;
       }
 
       nextP[i][j] = accum;
@@ -402,7 +457,7 @@ void sf_loose_predict(sf_loose_t *loose, const sf_loose_imu_delta_t *imu) {
   Q[20] = Q[18];
 
   memset(nextP, 0, sizeof(nextP));
-  sf_loose_predict_covariance_dense(nextP, F, G, loose->p64, Q);
+  sf_loose_predict_covariance_sparse(nextP, F, G, loose->p64, Q);
   memcpy(loose->p64, nextP, sizeof(loose->p64));
   sf_loose_sync_covariance_from_shadow(loose);
 }
