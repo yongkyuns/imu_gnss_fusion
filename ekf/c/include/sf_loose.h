@@ -76,7 +76,6 @@ void sf_loose_init(sf_loose_t *loose,
 
 void sf_loose_predict(sf_loose_t *loose, const sf_loose_imu_delta_t *imu);
 void sf_loose_predict_nominal(sf_loose_t *loose, const sf_loose_imu_delta_t *imu);
-void sf_loose_fuse_gps(sf_loose_t *loose, const sf_gnss_sample_t *gps);
 void sf_loose_fuse_gps_reference(sf_loose_t *loose,
                                  const double pos_ecef_m[3],
                                  float h_acc_m,
@@ -88,12 +87,10 @@ void sf_loose_fuse_reference_batch(sf_loose_t *loose,
                                    const float gyro_radps[3],
                                    const float accel_mps2[3],
                                    float dt_s);
-void sf_loose_fuse_body_vel(sf_loose_t *loose, float r_body_vel);
 void sf_loose_fuse_nhc_reference(sf_loose_t *loose,
                                  const float gyro_radps[3],
                                  const float accel_mps2[3],
                                  float dt_s);
-void sf_loose_fuse_zero_vel(sf_loose_t *loose, float r_zero_vel);
 
 void sf_loose_compute_error_transition(
     float f_out[SF_LOOSE_ERROR_STATES][SF_LOOSE_ERROR_STATES],

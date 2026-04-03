@@ -137,17 +137,14 @@ fn main() -> Result<()> {
 
     for _ in 0..warmup_runs {
         let _ = run_eskf(&init, &steps);
-        let _ = run_loose(&init, &steps, false);
-        let _ = run_loose(&init, &steps, true);
+        let _ = run_loose(&init, &steps);
     }
 
     let mut eskf_total = FilterStats::default();
-    let mut loose_gps_total = FilterStats::default();
     let mut loose_full_total = FilterStats::default();
     for _ in 0..timed_runs {
         eskf_total += run_eskf(&init, &steps);
-        loose_gps_total += run_loose(&init, &steps, false);
-        loose_full_total += run_loose(&init, &steps, true);
+        loose_full_total += run_loose(&init, &steps);
     }
 
     let data_span_s = steps.last().map(|s| s.t_s).unwrap_or(0.0);
@@ -161,8 +158,6 @@ fn main() -> Result<()> {
     );
     println!();
     print_report("ESKF", eskf_total, timed_runs, data_span_s);
-    println!();
-    print_report("Loose GPS-Only", loose_gps_total, timed_runs, data_span_s);
     println!();
     print_report("Loose GPS+NHC", loose_full_total, timed_runs, data_span_s);
     Ok(())
@@ -355,7 +350,7 @@ fn run_eskf(init: &RefInit, steps: &[ReplayStep]) -> FilterStats {
     stats
 }
 
-fn run_loose(init: &RefInit, steps: &[ReplayStep], enable_nhc: bool) -> FilterStats {
+fn run_loose(init: &RefInit, steps: &[ReplayStep]) -> FilterStats {
     let mut loose = CLooseWrapper::new(LoosePredictNoise::reference_nsr_demo());
     loose.init_from_reference_ecef_state(
         init.q_bn,
@@ -378,32 +373,23 @@ fn run_loose(init: &RefInit, steps: &[ReplayStep], enable_nhc: bool) -> FilterSt
         stats.timing.predict += t0.elapsed();
         stats.counts.predict_steps += 1;
 
-        if enable_nhc {
-            let t1 = Instant::now();
-            loose.fuse_reference_batch(
-                step.gps.map(|g| g.pos_ecef_m),
-                step.gps.map_or(0.0, |g| g.h_acc_m),
-                step.gps.map_or(1.0, |g| g.dt_since_last_gnss_s),
-                step.gyro_radps,
-                step.accel_mps2,
-                step.loose_imu.dt,
-            );
-            stats.timing.constrained_update += t1.elapsed();
-            if let Some(gps) = step.gps {
-                let _ = gps;
-                stats.counts.gps_updates += 1;
-            }
-            let obs_types = loose.last_obs_types();
-            if !obs_types.is_empty() {
-                stats.counts.constrained_updates += 1;
-                stats.counts.observation_rows += obs_types.len();
-            }
-        } else if let Some(gps) = step.gps {
-            let t1 = Instant::now();
-            loose.fuse_gps_reference(gps.pos_ecef_m, gps.h_acc_m, gps.dt_since_last_gnss_s);
-            stats.timing.gps_update += t1.elapsed();
+        let t1 = Instant::now();
+        loose.fuse_reference_batch(
+            step.gps.map(|g| g.pos_ecef_m),
+            step.gps.map_or(0.0, |g| g.h_acc_m),
+            step.gps.map_or(1.0, |g| g.dt_since_last_gnss_s),
+            step.gyro_radps,
+            step.accel_mps2,
+            step.loose_imu.dt,
+        );
+        stats.timing.constrained_update += t1.elapsed();
+        if step.gps.is_some() {
             stats.counts.gps_updates += 1;
-            stats.counts.observation_rows += 3;
+        }
+        let obs_types = loose.last_obs_types();
+        if !obs_types.is_empty() {
+            stats.counts.constrained_updates += 1;
+            stats.counts.observation_rows += obs_types.len();
         }
     }
     stats.total = total_start.elapsed();

@@ -1,6 +1,9 @@
+use std::collections::VecDeque;
+
 use sensor_fusion::align::GRAVITY_MPS2;
-use sensor_fusion::c_api::{CEskfImuDelta, CEskfWrapper};
+use sensor_fusion::c_api::{CEskfImuDelta, CEskfWrapper, CLooseImuDelta, CLooseWrapper};
 use sensor_fusion::ekf::PredictNoise;
+use sensor_fusion::loose::LoosePredictNoise;
 
 use crate::ubxlog::{
     NavPvtObs, UbxFrame, extract_esf_alg, extract_esf_alg_status, extract_esf_raw_samples,
@@ -29,8 +32,23 @@ pub struct EkfCompareData {
     pub eskf_cov_bias: Vec<Trace>,
     pub eskf_cov_nonbias: Vec<Trace>,
     pub eskf_stationary_diag: Vec<Trace>,
+    pub eskf_bump_pitch_speed: Vec<Trace>,
+    pub eskf_bump_diag: Vec<Trace>,
     pub eskf_map: Vec<Trace>,
     pub eskf_map_heading: Vec<HeadingSample>,
+    pub loose_cmp_pos: Vec<Trace>,
+    pub loose_cmp_vel: Vec<Trace>,
+    pub loose_cmp_att: Vec<Trace>,
+    pub loose_meas_gyro: Vec<Trace>,
+    pub loose_meas_accel: Vec<Trace>,
+    pub loose_bias_gyro: Vec<Trace>,
+    pub loose_bias_accel: Vec<Trace>,
+    pub loose_scale_gyro: Vec<Trace>,
+    pub loose_scale_accel: Vec<Trace>,
+    pub loose_cov_bias: Vec<Trace>,
+    pub loose_cov_nonbias: Vec<Trace>,
+    pub loose_map: Vec<Trace>,
+    pub loose_map_heading: Vec<HeadingSample>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -45,6 +63,7 @@ pub struct EkfCompareConfig {
     pub gnss_pos_r_scale: f64,
     pub gnss_vel_r_scale: f64,
     pub predict_noise: Option<PredictNoise>,
+    pub loose_predict_noise: Option<LoosePredictNoise>,
 }
 
 impl Default for EkfCompareConfig {
@@ -60,6 +79,7 @@ impl Default for EkfCompareConfig {
             gnss_pos_r_scale: 0.1,
             gnss_vel_r_scale: 0.1,
             predict_noise: None,
+            loose_predict_noise: None,
         }
     }
 }
@@ -90,8 +110,23 @@ pub fn build_ekf_compare_traces(
             eskf_cov_bias: Vec::new(),
             eskf_cov_nonbias: Vec::new(),
             eskf_stationary_diag: Vec::new(),
+            eskf_bump_pitch_speed: Vec::new(),
+            eskf_bump_diag: Vec::new(),
             eskf_map: Vec::new(),
             eskf_map_heading: Vec::new(),
+            loose_cmp_pos: Vec::new(),
+            loose_cmp_vel: Vec::new(),
+            loose_cmp_att: Vec::new(),
+            loose_meas_gyro: Vec::new(),
+            loose_meas_accel: Vec::new(),
+            loose_bias_gyro: Vec::new(),
+            loose_bias_accel: Vec::new(),
+            loose_scale_gyro: Vec::new(),
+            loose_scale_accel: Vec::new(),
+            loose_cov_bias: Vec::new(),
+            loose_cov_nonbias: Vec::new(),
+            loose_map: Vec::new(),
+            loose_map_heading: Vec::new(),
         };
     }
 
@@ -305,14 +340,48 @@ pub fn build_ekf_compare_traces(
     let mut eskf_stationary_p_bay = Vec::<[f64; 2]>::new();
     let mut eskf_stationary_p_theta_x_bax = Vec::<[f64; 2]>::new();
     let mut eskf_stationary_p_theta_y_bay = Vec::<[f64; 2]>::new();
+    let mut loose_cmp_pos_n = Vec::<[f64; 2]>::new();
+    let mut loose_cmp_pos_e = Vec::<[f64; 2]>::new();
+    let mut loose_cmp_pos_d = Vec::<[f64; 2]>::new();
+    let mut loose_cmp_vel_n = Vec::<[f64; 2]>::new();
+    let mut loose_cmp_vel_e = Vec::<[f64; 2]>::new();
+    let mut loose_cmp_vel_d = Vec::<[f64; 2]>::new();
+    let mut loose_cmp_att_roll = Vec::<[f64; 2]>::new();
+    let mut loose_cmp_att_pitch = Vec::<[f64; 2]>::new();
+    let mut loose_cmp_att_yaw = Vec::<[f64; 2]>::new();
+    let mut loose_meas_gyro_x = Vec::<[f64; 2]>::new();
+    let mut loose_meas_gyro_y = Vec::<[f64; 2]>::new();
+    let mut loose_meas_gyro_z = Vec::<[f64; 2]>::new();
+    let mut loose_meas_accel_x = Vec::<[f64; 2]>::new();
+    let mut loose_meas_accel_y = Vec::<[f64; 2]>::new();
+    let mut loose_meas_accel_z = Vec::<[f64; 2]>::new();
+    let mut loose_bias_gyro_x = Vec::<[f64; 2]>::new();
+    let mut loose_bias_gyro_y = Vec::<[f64; 2]>::new();
+    let mut loose_bias_gyro_z = Vec::<[f64; 2]>::new();
+    let mut loose_bias_accel_x = Vec::<[f64; 2]>::new();
+    let mut loose_bias_accel_y = Vec::<[f64; 2]>::new();
+    let mut loose_bias_accel_z = Vec::<[f64; 2]>::new();
+    let mut loose_scale_gyro_x = Vec::<[f64; 2]>::new();
+    let mut loose_scale_gyro_y = Vec::<[f64; 2]>::new();
+    let mut loose_scale_gyro_z = Vec::<[f64; 2]>::new();
+    let mut loose_scale_accel_x = Vec::<[f64; 2]>::new();
+    let mut loose_scale_accel_y = Vec::<[f64; 2]>::new();
+    let mut loose_scale_accel_z = Vec::<[f64; 2]>::new();
+    let mut loose_cov_diag: [Vec<[f64; 2]>; 24] = std::array::from_fn(|_| Vec::new());
     let mut map_eskf = Vec::<[f64; 2]>::new();
     let mut map_eskf_outage = Vec::<[f64; 2]>::new();
     let mut map_eskf_heading = Vec::<HeadingSample>::new();
+    let mut map_loose = Vec::<[f64; 2]>::new();
+    let mut map_loose_heading = Vec::<HeadingSample>::new();
 
     let mut eskf: Option<CEskfWrapper> = None;
+    let mut loose: Option<CLooseWrapper> = None;
     let base_predict_noise = cfg
         .predict_noise
         .unwrap_or(PredictNoise::lsm6dso_typical_104hz());
+    let base_loose_predict_noise = cfg
+        .loose_predict_noise
+        .unwrap_or(LoosePredictNoise::lsm6dso_loose_104hz());
     let mut prev_imu_t: Option<f64> = None;
     let mut alg_idx = 0usize;
     let mut alg_status_idx = 0usize;
@@ -370,6 +439,7 @@ pub fn build_ekf_compare_traces(
     }
 
     let mut next_gps_update_ms = f64::NEG_INFINITY;
+    let mut loose_last_gps_update_ms: Option<f64> = None;
     let gps_period_ms = 500.0_f64;
     let mut ekf_initialized = false;
     for pkt in &imu_packets {
@@ -469,6 +539,8 @@ pub fn build_ekf_compare_traces(
                 let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
                 let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
                 eskf = Some(initialize_eskf_from_nav(nav, ned, base_predict_noise, cfg));
+                loose = Some(initialize_loose_from_nav(nav, ned, base_loose_predict_noise, cfg));
+                loose_last_gps_update_ms = Some(t_ms);
                 ekf_initialized = true;
                 if let Some(eskf_ref) = eskf.as_ref() {
                     append_eskf_sample(
@@ -502,6 +574,47 @@ pub fn build_ekf_compare_traces(
                         &mut eskf_bias_accel_y,
                         &mut eskf_bias_accel_z,
                         &mut eskf_cov_diag,
+                    );
+                }
+                if let Some(loose_ref) = loose.as_ref() {
+                    append_loose_sample(
+                        loose_ref,
+                        rel_s(t_ms),
+                        gyro,
+                        accel,
+                        dt,
+                        ref_ecef,
+                        ref_lat,
+                        ref_lon,
+                        cfg.vehicle_meas_lpf_cutoff_hz,
+                        &mut loose_cmp_pos_n,
+                        &mut loose_cmp_pos_e,
+                        &mut loose_cmp_pos_d,
+                        &mut loose_cmp_vel_n,
+                        &mut loose_cmp_vel_e,
+                        &mut loose_cmp_vel_d,
+                        &mut loose_cmp_att_roll,
+                        &mut loose_cmp_att_pitch,
+                        &mut loose_cmp_att_yaw,
+                        &mut loose_meas_gyro_x,
+                        &mut loose_meas_gyro_y,
+                        &mut loose_meas_gyro_z,
+                        &mut loose_meas_accel_x,
+                        &mut loose_meas_accel_y,
+                        &mut loose_meas_accel_z,
+                        &mut loose_bias_gyro_x,
+                        &mut loose_bias_gyro_y,
+                        &mut loose_bias_gyro_z,
+                        &mut loose_bias_accel_x,
+                        &mut loose_bias_accel_y,
+                        &mut loose_bias_accel_z,
+                        &mut loose_scale_gyro_x,
+                        &mut loose_scale_gyro_y,
+                        &mut loose_scale_gyro_z,
+                        &mut loose_scale_accel_x,
+                        &mut loose_scale_accel_y,
+                        &mut loose_scale_accel_z,
+                        &mut loose_cov_diag,
                     );
                 }
                 initialized_this_pkt = true;
@@ -563,6 +676,21 @@ pub fn build_ekf_compare_traces(
                 dvy: (avg_predict_accel[1] * pred_dt) as f32,
                 dvz: (avg_predict_accel[2] * pred_dt) as f32,
                 dt: pred_dt as f32,
+            };
+            let loose_imu = CLooseImuDelta {
+                dax_1: imu.dax,
+                day_1: imu.day,
+                daz_1: imu.daz,
+                dvx_1: imu.dvx,
+                dvy_1: imu.dvy,
+                dvz_1: imu.dvz,
+                dax_2: imu.dax,
+                day_2: imu.day,
+                daz_2: imu.daz,
+                dvx_2: imu.dvx,
+                dvy_2: imu.dvy,
+                dvz_2: imu.dvz,
+                dt: imu.dt,
             };
             if let Some(eskf_ref) = eskf.as_mut() {
                 eskf_ref.predict(imu);
@@ -626,6 +754,20 @@ pub fn build_ekf_compare_traces(
                     }
                 }
             }
+            if let Some(loose_ref) = loose.as_mut() {
+                loose_ref.predict(loose_imu);
+            }
+            let loose_gyro_radps = [
+                deg2rad(avg_predict_gyro[0]) as f32,
+                deg2rad(avg_predict_gyro[1]) as f32,
+                deg2rad(avg_predict_gyro[2]) as f32,
+            ];
+            let loose_accel_mps2 = [
+                avg_predict_accel[0] as f32,
+                avg_predict_accel[1] as f32,
+                avg_predict_accel[2] as f32,
+            ];
+            let mut loose_batch_applied = false;
 
             while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
                 let (t_ms, nav) = nav_events[nav_idx];
@@ -655,6 +797,22 @@ pub fn build_ekf_compare_traces(
                 if let Some(eskf_ref) = eskf.as_mut() {
                     eskf_ref.fuse_gps(fusion_gnss_sample(nav, ned, cfg));
                 }
+                if let Some(loose_ref) = loose.as_mut() {
+                    let dt_since_last_gnss_s = loose_last_gps_update_ms
+                        .map(|last_t_ms| ((t_ms - last_t_ms) * 1.0e-3) as f32)
+                        .unwrap_or(1.0)
+                        .clamp(1.0e-3, 1.0);
+                    loose_ref.fuse_reference_batch(
+                        Some(ecef),
+                        (nav.h_acc_m * cfg.gnss_pos_r_scale.sqrt()) as f32,
+                        dt_since_last_gnss_s,
+                        loose_gyro_radps,
+                        loose_accel_mps2,
+                        loose_imu.dt,
+                    );
+                    loose_last_gps_update_ms = Some(t_ms);
+                    loose_batch_applied = true;
+                }
 
                 let t = rel_s(t_ms);
                 if let Some(eskf_ref) = eskf.as_ref() {
@@ -674,6 +832,42 @@ pub fn build_ekf_compare_traces(
                         lat_deg: eskf_lat,
                         yaw_deg: eskf_yaw,
                     });
+                }
+                if let Some(loose_ref) = loose.as_ref() {
+                    let (loose_pos_ned, _, loose_q_ns) =
+                        loose_display_state(loose_ref, ref_ecef, ref_lat, ref_lon);
+                    let (_, _, loose_yaw) = quat_rpy_deg(
+                        loose_q_ns[0] as f32,
+                        loose_q_ns[1] as f32,
+                        loose_q_ns[2] as f32,
+                        loose_q_ns[3] as f32,
+                    );
+                    let (loose_lat, loose_lon, _loose_h) = ned_to_lla_exact(
+                        loose_pos_ned[0],
+                        loose_pos_ned[1],
+                        loose_pos_ned[2],
+                        ref_lat,
+                        ref_lon,
+                        ref_h,
+                    );
+                    map_loose_heading.push(HeadingSample {
+                        t_s: t,
+                        lon_deg: loose_lon,
+                        lat_deg: loose_lat,
+                        yaw_deg: loose_yaw,
+                    });
+                }
+            }
+            if let Some(loose_ref) = loose.as_mut() {
+                if !loose_batch_applied {
+                    loose_ref.fuse_reference_batch(
+                        None,
+                        0.0,
+                        1.0,
+                        loose_gyro_radps,
+                        loose_accel_mps2,
+                        loose_imu.dt,
+                    );
                 }
             }
 
@@ -701,6 +895,18 @@ pub fn build_ekf_compare_traces(
                     }
                     map_eskf_outage.push([eskf_lon, eskf_lat]);
                 }
+            }
+            if let Some(loose_ref) = loose.as_ref() {
+                let (loose_pos_ned, _, _) = loose_display_state(loose_ref, ref_ecef, ref_lat, ref_lon);
+                let (loose_lat, loose_lon, _loose_h) = ned_to_lla_exact(
+                    loose_pos_ned[0],
+                    loose_pos_ned[1],
+                    loose_pos_ned[2],
+                    ref_lat,
+                    ref_lon,
+                    ref_h,
+                );
+                map_loose.push([loose_lon, loose_lat]);
             }
         }
         prev_outage_active = outage_active;
@@ -741,7 +947,56 @@ pub fn build_ekf_compare_traces(
                 &mut eskf_cov_diag,
             );
         }
+        if let Some(loose_ref) = loose.as_ref() {
+            append_loose_sample(
+                loose_ref,
+                t_imu,
+                gyro,
+                accel,
+                dt_safe,
+                ref_ecef,
+                ref_lat,
+                ref_lon,
+                cfg.vehicle_meas_lpf_cutoff_hz,
+                &mut loose_cmp_pos_n,
+                &mut loose_cmp_pos_e,
+                &mut loose_cmp_pos_d,
+                &mut loose_cmp_vel_n,
+                &mut loose_cmp_vel_e,
+                &mut loose_cmp_vel_d,
+                &mut loose_cmp_att_roll,
+                &mut loose_cmp_att_pitch,
+                &mut loose_cmp_att_yaw,
+                &mut loose_meas_gyro_x,
+                &mut loose_meas_gyro_y,
+                &mut loose_meas_gyro_z,
+                &mut loose_meas_accel_x,
+                &mut loose_meas_accel_y,
+                &mut loose_meas_accel_z,
+                &mut loose_bias_gyro_x,
+                &mut loose_bias_gyro_y,
+                &mut loose_bias_gyro_z,
+                &mut loose_bias_accel_x,
+                &mut loose_bias_accel_y,
+                &mut loose_bias_accel_z,
+                &mut loose_scale_gyro_x,
+                &mut loose_scale_gyro_y,
+                &mut loose_scale_gyro_z,
+                &mut loose_scale_accel_x,
+                &mut loose_scale_accel_y,
+                &mut loose_scale_accel_z,
+                &mut loose_cov_diag,
+            );
+        }
     }
+
+    let (eskf_bump_pitch_speed, eskf_bump_diag) = build_bump_diagnostic_traces(
+        &eskf_cmp_att_pitch,
+        &eskf_cmp_vel_n,
+        &eskf_cmp_vel_e,
+        &ubx_vel_n,
+        &ubx_vel_e,
+    );
 
     let eskf_cmp_pos = vec![
         Trace {
@@ -1009,6 +1264,272 @@ pub fn build_ekf_compare_traces(
             points: map_eskf_outage,
         },
     ];
+    let loose_cmp_pos = vec![
+        Trace {
+            name: "Loose posN [m]".to_string(),
+            points: loose_cmp_pos_n,
+        },
+        Trace {
+            name: "UBX posN [m]".to_string(),
+            points: ubx_pos_n.clone(),
+        },
+        Trace {
+            name: "Loose posE [m]".to_string(),
+            points: loose_cmp_pos_e,
+        },
+        Trace {
+            name: "UBX posE [m]".to_string(),
+            points: ubx_pos_e.clone(),
+        },
+        Trace {
+            name: "Loose posD [m]".to_string(),
+            points: loose_cmp_pos_d,
+        },
+        Trace {
+            name: "UBX posD [m]".to_string(),
+            points: ubx_pos_d.clone(),
+        },
+    ];
+    let loose_cmp_vel = vec![
+        Trace {
+            name: "Loose velN [m/s]".to_string(),
+            points: loose_cmp_vel_n,
+        },
+        Trace {
+            name: "UBX velN [m/s]".to_string(),
+            points: ubx_vel_n.clone(),
+        },
+        Trace {
+            name: "Loose velE [m/s]".to_string(),
+            points: loose_cmp_vel_e,
+        },
+        Trace {
+            name: "UBX velE [m/s]".to_string(),
+            points: ubx_vel_e.clone(),
+        },
+        Trace {
+            name: "Loose velD [m/s]".to_string(),
+            points: loose_cmp_vel_d,
+        },
+        Trace {
+            name: "UBX velD [m/s]".to_string(),
+            points: ubx_vel_d.clone(),
+        },
+    ];
+    let loose_cmp_att = vec![
+        Trace {
+            name: "Loose roll [deg]".to_string(),
+            points: loose_cmp_att_roll,
+        },
+        Trace {
+            name: "NAV-ATT roll [deg]".to_string(),
+            points: ubx_att_roll.clone(),
+        },
+        Trace {
+            name: "Loose pitch [deg]".to_string(),
+            points: loose_cmp_att_pitch,
+        },
+        Trace {
+            name: "NAV-ATT pitch [deg]".to_string(),
+            points: ubx_att_pitch.clone(),
+        },
+        Trace {
+            name: "Loose yaw [deg]".to_string(),
+            points: loose_cmp_att_yaw,
+        },
+        Trace {
+            name: "NAV-ATT heading [deg]".to_string(),
+            points: ubx_att_yaw.clone(),
+        },
+    ];
+    let loose_meas_gyro = vec![
+        Trace {
+            name: "Loose vehicle gyro x [deg/s]".to_string(),
+            points: loose_meas_gyro_x,
+        },
+        Trace {
+            name: "Loose vehicle gyro y [deg/s]".to_string(),
+            points: loose_meas_gyro_y,
+        },
+        Trace {
+            name: "Loose vehicle gyro z [deg/s]".to_string(),
+            points: loose_meas_gyro_z,
+        },
+    ];
+    let loose_meas_accel = vec![
+        Trace {
+            name: "Loose vehicle accel x [m/s^2]".to_string(),
+            points: loose_meas_accel_x,
+        },
+        Trace {
+            name: "Loose vehicle accel y [m/s^2]".to_string(),
+            points: loose_meas_accel_y,
+        },
+        Trace {
+            name: "Loose vehicle accel z [m/s^2]".to_string(),
+            points: loose_meas_accel_z,
+        },
+    ];
+    let loose_bias_gyro = vec![
+        Trace {
+            name: "Loose gyro bias x [deg/s]".to_string(),
+            points: loose_bias_gyro_x,
+        },
+        Trace {
+            name: "Loose gyro bias y [deg/s]".to_string(),
+            points: loose_bias_gyro_y,
+        },
+        Trace {
+            name: "Loose gyro bias z [deg/s]".to_string(),
+            points: loose_bias_gyro_z,
+        },
+    ];
+    let loose_bias_accel = vec![
+        Trace {
+            name: "Loose accel bias x [m/s^2]".to_string(),
+            points: loose_bias_accel_x,
+        },
+        Trace {
+            name: "Loose accel bias y [m/s^2]".to_string(),
+            points: loose_bias_accel_y,
+        },
+        Trace {
+            name: "Loose accel bias z [m/s^2]".to_string(),
+            points: loose_bias_accel_z,
+        },
+    ];
+    let loose_scale_gyro = vec![
+        Trace {
+            name: "Loose gyro scale x".to_string(),
+            points: loose_scale_gyro_x,
+        },
+        Trace {
+            name: "Loose gyro scale y".to_string(),
+            points: loose_scale_gyro_y,
+        },
+        Trace {
+            name: "Loose gyro scale z".to_string(),
+            points: loose_scale_gyro_z,
+        },
+    ];
+    let loose_scale_accel = vec![
+        Trace {
+            name: "Loose accel scale x".to_string(),
+            points: loose_scale_accel_x,
+        },
+        Trace {
+            name: "Loose accel scale y".to_string(),
+            points: loose_scale_accel_y,
+        },
+        Trace {
+            name: "Loose accel scale z".to_string(),
+            points: loose_scale_accel_z,
+        },
+    ];
+    let loose_cov_bias = vec![
+        Trace {
+            name: "acc_x".to_string(),
+            points: loose_cov_diag[9].clone(),
+        },
+        Trace {
+            name: "acc_y".to_string(),
+            points: loose_cov_diag[10].clone(),
+        },
+        Trace {
+            name: "acc_z".to_string(),
+            points: loose_cov_diag[11].clone(),
+        },
+        Trace {
+            name: "gyro_x".to_string(),
+            points: loose_cov_diag[12].clone(),
+        },
+        Trace {
+            name: "gyro_y".to_string(),
+            points: loose_cov_diag[13].clone(),
+        },
+        Trace {
+            name: "gyro_z".to_string(),
+            points: loose_cov_diag[14].clone(),
+        },
+        Trace {
+            name: "gyro_scale_x".to_string(),
+            points: loose_cov_diag[18].clone(),
+        },
+        Trace {
+            name: "gyro_scale_y".to_string(),
+            points: loose_cov_diag[19].clone(),
+        },
+        Trace {
+            name: "gyro_scale_z".to_string(),
+            points: loose_cov_diag[20].clone(),
+        },
+        Trace {
+            name: "acc_scale_x".to_string(),
+            points: loose_cov_diag[15].clone(),
+        },
+        Trace {
+            name: "acc_scale_y".to_string(),
+            points: loose_cov_diag[16].clone(),
+        },
+        Trace {
+            name: "acc_scale_z".to_string(),
+            points: loose_cov_diag[17].clone(),
+        },
+    ];
+    let loose_cov_nonbias = vec![
+        Trace {
+            name: "p_n".to_string(),
+            points: loose_cov_diag[0].clone(),
+        },
+        Trace {
+            name: "p_e".to_string(),
+            points: loose_cov_diag[1].clone(),
+        },
+        Trace {
+            name: "p_d".to_string(),
+            points: loose_cov_diag[2].clone(),
+        },
+        Trace {
+            name: "v_n".to_string(),
+            points: loose_cov_diag[3].clone(),
+        },
+        Trace {
+            name: "v_e".to_string(),
+            points: loose_cov_diag[4].clone(),
+        },
+        Trace {
+            name: "v_d".to_string(),
+            points: loose_cov_diag[5].clone(),
+        },
+        Trace {
+            name: "theta_x".to_string(),
+            points: loose_cov_diag[6].clone(),
+        },
+        Trace {
+            name: "theta_y".to_string(),
+            points: loose_cov_diag[7].clone(),
+        },
+        Trace {
+            name: "theta_z".to_string(),
+            points: loose_cov_diag[8].clone(),
+        },
+        Trace {
+            name: "psi_cc_x".to_string(),
+            points: loose_cov_diag[21].clone(),
+        },
+        Trace {
+            name: "psi_cc_y".to_string(),
+            points: loose_cov_diag[22].clone(),
+        },
+        Trace {
+            name: "psi_cc_z".to_string(),
+            points: loose_cov_diag[23].clone(),
+        },
+    ];
+    let loose_map = vec![Trace {
+        name: "Loose path (lon,lat)".to_string(),
+        points: map_loose,
+    }];
 
     EkfCompareData {
         eskf_cmp_pos,
@@ -1021,9 +1542,190 @@ pub fn build_ekf_compare_traces(
         eskf_cov_bias,
         eskf_cov_nonbias,
         eskf_stationary_diag,
+        eskf_bump_pitch_speed,
+        eskf_bump_diag,
         eskf_map,
         eskf_map_heading: map_eskf_heading,
+        loose_cmp_pos,
+        loose_cmp_vel,
+        loose_cmp_att,
+        loose_meas_gyro,
+        loose_meas_accel,
+        loose_bias_gyro,
+        loose_bias_accel,
+        loose_scale_gyro,
+        loose_scale_accel,
+        loose_cov_bias,
+        loose_cov_nonbias,
+        loose_map,
+        loose_map_heading: map_loose_heading,
     }
+}
+
+fn build_bump_diagnostic_traces(
+    eskf_pitch: &[[f64; 2]],
+    eskf_vel_n: &[[f64; 2]],
+    eskf_vel_e: &[[f64; 2]],
+    ubx_vel_n: &[[f64; 2]],
+    ubx_vel_e: &[[f64; 2]],
+) -> (Vec<Trace>, Vec<Trace>) {
+    const WINDOW_S: f64 = 3.0;
+    const FFT_STRIDE: usize = 5;
+    const FFT_MAX_HZ: f64 = 12.0;
+
+    let eskf_speed: Vec<[f64; 2]> = eskf_vel_n
+        .iter()
+        .zip(eskf_vel_e.iter())
+        .map(|(vn, ve)| [vn[0], vn[1].hypot(ve[1])])
+        .collect();
+    let ubx_speed: Vec<[f64; 2]> = ubx_vel_n
+        .iter()
+        .zip(ubx_vel_e.iter())
+        .map(|(vn, ve)| [vn[0], vn[1].hypot(ve[1])])
+        .collect();
+
+    let mut pitch_hpf = Vec::<[f64; 2]>::with_capacity(eskf_pitch.len());
+    let mut pitch_rms = Vec::<[f64; 2]>::with_capacity(eskf_pitch.len());
+    let mut pitch_abs_ema = Vec::<[f64; 2]>::with_capacity(eskf_pitch.len());
+    let mut fft_dom_mag = Vec::<[f64; 2]>::new();
+    let mut fft_dom_freq = Vec::<[f64; 2]>::new();
+
+    let mut lp_pitch = eskf_pitch.first().map(|p| p[1]).unwrap_or(0.0);
+    let mut abs_ema = 0.0_f64;
+    let mut prev_t: Option<f64> = None;
+    let mut hp_window = VecDeque::<[f64; 2]>::new();
+    let mut sum_sq = 0.0_f64;
+
+    for (idx, p) in eskf_pitch.iter().enumerate() {
+        let t = p[0];
+        let pitch_deg = p[1];
+        let dt = prev_t
+            .map(|prev| (t - prev).clamp(1.0e-3, 0.1))
+            .unwrap_or(0.01);
+        prev_t = Some(t);
+
+        let alpha = 1.0 - (-dt / WINDOW_S).exp();
+        lp_pitch += alpha * (pitch_deg - lp_pitch);
+        let hp = pitch_deg - lp_pitch;
+        let hp_abs = hp.abs();
+        abs_ema += alpha * (hp_abs - abs_ema);
+
+        hp_window.push_back([t, hp]);
+        sum_sq += hp * hp;
+        while let Some(front) = hp_window.front().copied() {
+            if t - front[0] > WINDOW_S {
+                sum_sq -= front[1] * front[1];
+                hp_window.pop_front();
+            } else {
+                break;
+            }
+        }
+        let n = hp_window.len().max(1) as f64;
+        pitch_hpf.push([t, hp]);
+        pitch_rms.push([t, (sum_sq / n).sqrt()]);
+        pitch_abs_ema.push([t, abs_ema]);
+
+        if idx % FFT_STRIDE == 0
+            && hp_window.len() >= 16
+            && let Some((freq_hz, mag_deg)) = dominant_fft_metric(&hp_window, FFT_MAX_HZ)
+        {
+            fft_dom_freq.push([t, freq_hz]);
+            fft_dom_mag.push([t, mag_deg]);
+        }
+    }
+
+    (
+        vec![
+            Trace {
+                name: "ESKF pitch [deg]".to_string(),
+                points: eskf_pitch.to_vec(),
+            },
+            Trace {
+                name: "ESKF horiz speed [m/s]".to_string(),
+                points: eskf_speed,
+            },
+            Trace {
+                name: "UBX horiz speed [m/s]".to_string(),
+                points: ubx_speed,
+            },
+        ],
+        vec![
+            Trace {
+                name: "Pitch HPF [deg]".to_string(),
+                points: pitch_hpf,
+            },
+            Trace {
+                name: "Pitch HPF RMS 3.0s [deg]".to_string(),
+                points: pitch_rms,
+            },
+            Trace {
+                name: "Pitch |HPF| EMA 3.0s [deg]".to_string(),
+                points: pitch_abs_ema,
+            },
+            Trace {
+                name: "Pitch FFT dom mag 3.0s [deg]".to_string(),
+                points: fft_dom_mag,
+            },
+            Trace {
+                name: "Pitch FFT dom freq 3.0s [Hz]".to_string(),
+                points: fft_dom_freq,
+            },
+        ],
+    )
+}
+
+fn dominant_fft_metric(window: &VecDeque<[f64; 2]>, max_hz: f64) -> Option<(f64, f64)> {
+    let n = window.len();
+    if n < 16 {
+        return None;
+    }
+    let t0 = window.front().map(|p| p[0])?;
+    let t1 = window.back().map(|p| p[0])?;
+    let duration = (t1 - t0).max(1.0e-6);
+    let dt_avg = duration / ((n - 1) as f64);
+    let nyquist = 0.5 / dt_avg;
+    if !nyquist.is_finite() || nyquist <= 0.0 {
+        return None;
+    }
+
+    let max_bin = ((max_hz * n as f64 * dt_avg).floor() as usize).min(n / 2);
+    if max_bin < 1 {
+        return None;
+    }
+
+    let mean = window.iter().map(|p| p[1]).sum::<f64>() / n as f64;
+    let denom = (n.saturating_sub(1)) as f64;
+    let mut best_freq = 0.0_f64;
+    let mut best_mag = 0.0_f64;
+
+    for k in 1..=max_bin {
+        let mut re = 0.0_f64;
+        let mut im = 0.0_f64;
+        let mut win_sum = 0.0_f64;
+        for (i, sample) in window.iter().enumerate() {
+            let hann = if denom > 0.0 {
+                0.5 - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / denom).cos()
+            } else {
+                1.0
+            };
+            let x = (sample[1] - mean) * hann;
+            win_sum += hann;
+            let phase = 2.0 * std::f64::consts::PI * k as f64 * i as f64 / n as f64;
+            re += x * phase.cos();
+            im -= x * phase.sin();
+        }
+        let mag = if win_sum > 0.0 {
+            2.0 * re.hypot(im) / win_sum
+        } else {
+            0.0
+        };
+        if mag > best_mag {
+            best_mag = mag;
+            best_freq = k as f64 / (n as f64 * dt_avg);
+        }
+    }
+
+    Some((best_freq, best_mag))
 }
 
 fn sample_gnss_outage_windows(
@@ -1139,6 +1841,94 @@ fn initialize_eskf_from_nav(
     let q_bn = yaw_quat_f32(initial_yaw_from_nav(nav));
     eskf.init_nominal_from_gnss(q_bn, fusion_gnss_sample(nav, ned, cfg));
     eskf
+}
+
+fn initialize_loose_from_nav(
+    nav: NavPvtObs,
+    ned: [f64; 3],
+    noise: LoosePredictNoise,
+    cfg: EkfCompareConfig,
+) -> CLooseWrapper {
+    let mut loose = CLooseWrapper::new(noise);
+    let gnss = fusion_gnss_sample(nav, ned, cfg);
+    let p_diag = default_loose_reference_p_diag(gnss);
+    let q_ns = yaw_quat_f32(initial_yaw_from_nav(nav));
+    let q_es = quat_mul(quat_conj(quat_ecef_to_ned(nav.lat_deg, nav.lon_deg)), [
+        q_ns[0] as f64,
+        q_ns[1] as f64,
+        q_ns[2] as f64,
+        q_ns[3] as f64,
+    ]);
+    let vel_ecef = mat_vec(
+        transpose3(ecef_to_ned_matrix(nav.lat_deg, nav.lon_deg)),
+        [nav.vel_n_mps, nav.vel_e_mps, nav.vel_d_mps],
+    );
+    loose.init_from_reference_ecef_state(
+        [
+            q_es[0] as f32,
+            q_es[1] as f32,
+            q_es[2] as f32,
+            q_es[3] as f32,
+        ],
+        lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m),
+        [vel_ecef[0] as f32, vel_ecef[1] as f32, vel_ecef[2] as f32],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [1.0, 1.0, 1.0],
+        [1.0, 1.0, 1.0],
+        [1.0, 0.0, 0.0, 0.0],
+        Some(p_diag),
+    );
+    loose
+}
+
+fn default_loose_reference_p_diag(gnss: sensor_fusion::fusion::FusionGnssSample) -> [f32; 24] {
+    const DEFAULT_GYRO_BIAS_SIGMA_DPS: f32 = 0.125;
+    const DEFAULT_ACCEL_BIAS_SIGMA_MPS2: f32 = 0.075;
+    const DEFAULT_GYRO_SCALE_SIGMA: f32 = 0.02;
+    const DEFAULT_ACCEL_SCALE_SIGMA: f32 = 0.02;
+
+    let att_sigma_rad = 2.0f32 * core::f32::consts::PI / 180.0;
+    let att_var = att_sigma_rad * att_sigma_rad;
+    let mut vel_std = gnss.vel_std_mps[0]
+        .max(gnss.vel_std_mps[1])
+        .max(gnss.vel_std_mps[2]);
+    if vel_std < 0.2 {
+        vel_std = 0.2;
+    }
+    let vel_var = vel_std * vel_std;
+    let pos_n = gnss.pos_std_m[0].max(0.5);
+    let pos_e = gnss.pos_std_m[1].max(0.5);
+    let pos_d = gnss.pos_std_m[2].max(0.5);
+    let gyro_bias_sigma_radps = DEFAULT_GYRO_BIAS_SIGMA_DPS * core::f32::consts::PI / 180.0;
+    let accel_bias_sigma_mps2 = DEFAULT_ACCEL_BIAS_SIGMA_MPS2;
+
+    let mut p_diag = [0.0_f32; 24];
+    p_diag[0] = pos_n * pos_n;
+    p_diag[1] = pos_e * pos_e;
+    p_diag[2] = pos_d * pos_d;
+    p_diag[3] = vel_var;
+    p_diag[4] = vel_var;
+    p_diag[5] = vel_var;
+    p_diag[6] = att_var;
+    p_diag[7] = att_var;
+    p_diag[8] = att_var;
+    p_diag[9] = accel_bias_sigma_mps2 * accel_bias_sigma_mps2;
+    p_diag[10] = accel_bias_sigma_mps2 * accel_bias_sigma_mps2;
+    p_diag[11] = accel_bias_sigma_mps2 * accel_bias_sigma_mps2;
+    p_diag[12] = gyro_bias_sigma_radps * gyro_bias_sigma_radps;
+    p_diag[13] = gyro_bias_sigma_radps * gyro_bias_sigma_radps;
+    p_diag[14] = gyro_bias_sigma_radps * gyro_bias_sigma_radps;
+    p_diag[15] = DEFAULT_ACCEL_SCALE_SIGMA * DEFAULT_ACCEL_SCALE_SIGMA;
+    p_diag[16] = DEFAULT_ACCEL_SCALE_SIGMA * DEFAULT_ACCEL_SCALE_SIGMA;
+    p_diag[17] = DEFAULT_ACCEL_SCALE_SIGMA * DEFAULT_ACCEL_SCALE_SIGMA;
+    p_diag[18] = DEFAULT_GYRO_SCALE_SIGMA * DEFAULT_GYRO_SCALE_SIGMA;
+    p_diag[19] = DEFAULT_GYRO_SCALE_SIGMA * DEFAULT_GYRO_SCALE_SIGMA;
+    p_diag[20] = DEFAULT_GYRO_SCALE_SIGMA * DEFAULT_GYRO_SCALE_SIGMA;
+    p_diag[21] = att_var;
+    p_diag[22] = att_var;
+    p_diag[23] = att_var;
+    p_diag
 }
 
 fn initial_yaw_from_nav(nav: NavPvtObs) -> f32 {
@@ -1262,16 +2052,196 @@ fn append_eskf_sample(
     meas_accel_x.push([t_imu, filt_accel[0]]);
     meas_accel_y.push([t_imu, filt_accel[1]]);
     meas_accel_z.push([t_imu, filt_accel[2]]);
+    // Loose stores additive correction terms (`corrected = scale * raw + bias`),
+    // while the ESKF plots show subtractive sensor-bias estimates. Negate here so
+    // both panels represent the same physical bias convention.
+    bias_gyro_x.push([t_imu, -rad2deg(n.bgx as f64)]);
+    bias_gyro_y.push([t_imu, -rad2deg(n.bgy as f64)]);
+    bias_gyro_z.push([t_imu, -rad2deg(n.bgz as f64)]);
+    bias_accel_x.push([t_imu, -(n.bax as f64)]);
+    bias_accel_y.push([t_imu, -(n.bay as f64)]);
+    bias_accel_z.push([t_imu, -(n.baz as f64)]);
+    let p = eskf.covariance();
+    for (i, tr) in cov_diag.iter_mut().enumerate() {
+        tr.push([t_imu, p[i][i] as f64]);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_loose_sample(
+    loose: &CLooseWrapper,
+    t_imu: f64,
+    gyro: [f64; 3],
+    accel: [f64; 3],
+    dt_safe: f64,
+    ref_ecef: [f64; 3],
+    ref_lat: f64,
+    ref_lon: f64,
+    vehicle_meas_lpf_cutoff_hz: f64,
+    cmp_pos_n: &mut Vec<[f64; 2]>,
+    cmp_pos_e: &mut Vec<[f64; 2]>,
+    cmp_pos_d: &mut Vec<[f64; 2]>,
+    cmp_vel_n: &mut Vec<[f64; 2]>,
+    cmp_vel_e: &mut Vec<[f64; 2]>,
+    cmp_vel_d: &mut Vec<[f64; 2]>,
+    cmp_att_roll: &mut Vec<[f64; 2]>,
+    cmp_att_pitch: &mut Vec<[f64; 2]>,
+    cmp_att_yaw: &mut Vec<[f64; 2]>,
+    meas_gyro_x: &mut Vec<[f64; 2]>,
+    meas_gyro_y: &mut Vec<[f64; 2]>,
+    meas_gyro_z: &mut Vec<[f64; 2]>,
+    meas_accel_x: &mut Vec<[f64; 2]>,
+    meas_accel_y: &mut Vec<[f64; 2]>,
+    meas_accel_z: &mut Vec<[f64; 2]>,
+    bias_gyro_x: &mut Vec<[f64; 2]>,
+    bias_gyro_y: &mut Vec<[f64; 2]>,
+    bias_gyro_z: &mut Vec<[f64; 2]>,
+    bias_accel_x: &mut Vec<[f64; 2]>,
+    bias_accel_y: &mut Vec<[f64; 2]>,
+    bias_accel_z: &mut Vec<[f64; 2]>,
+    scale_gyro_x: &mut Vec<[f64; 2]>,
+    scale_gyro_y: &mut Vec<[f64; 2]>,
+    scale_gyro_z: &mut Vec<[f64; 2]>,
+    scale_accel_x: &mut Vec<[f64; 2]>,
+    scale_accel_y: &mut Vec<[f64; 2]>,
+    scale_accel_z: &mut Vec<[f64; 2]>,
+    cov_diag: &mut [Vec<[f64; 2]>; 24],
+) {
+    let n = loose.nominal();
+    let (pos_ned, vel_ned, q_ns) = loose_display_state(loose, ref_ecef, ref_lat, ref_lon);
+    cmp_pos_n.push([t_imu, pos_ned[0]]);
+    cmp_pos_e.push([t_imu, pos_ned[1]]);
+    cmp_pos_d.push([t_imu, pos_ned[2]]);
+    cmp_vel_n.push([t_imu, vel_ned[0]]);
+    cmp_vel_e.push([t_imu, vel_ned[1]]);
+    cmp_vel_d.push([t_imu, vel_ned[2]]);
+    let (roll, pitch, yaw) =
+        quat_rpy_deg(q_ns[0] as f32, q_ns[1] as f32, q_ns[2] as f32, q_ns[3] as f32);
+    cmp_att_roll.push([t_imu, roll]);
+    cmp_att_pitch.push([t_imu, pitch]);
+    cmp_att_yaw.push([t_imu, yaw]);
+
+    let c_n_v = quat_to_rotmat_f64(q_ns);
+    let gravity_v = [
+        c_n_v[2][0] * GRAVITY_MPS2 as f64,
+        c_n_v[2][1] * GRAVITY_MPS2 as f64,
+        c_n_v[2][2] * GRAVITY_MPS2 as f64,
+    ];
+    // The visualizer feeds loose with IMU samples already converted into the vehicle frame.
+    // Mirror the runtime correction convention here: corrected = scale * raw + bias.
+    let raw_meas_gyro = [
+        rad2deg(n.sgx as f64 * deg2rad(gyro[0]) + n.bgx as f64),
+        rad2deg(n.sgy as f64 * deg2rad(gyro[1]) + n.bgy as f64),
+        rad2deg(n.sgz as f64 * deg2rad(gyro[2]) + n.bgz as f64),
+    ];
+    let raw_meas_accel = [
+        n.sax as f64 * accel[0] + n.bax as f64 + gravity_v[0],
+        n.say as f64 * accel[1] + n.bay as f64 + gravity_v[1],
+        n.saz as f64 * accel[2] + n.baz as f64 + gravity_v[2],
+    ];
+    let alpha_meas = lpf_alpha(dt_safe, vehicle_meas_lpf_cutoff_hz);
+    let filt_gyro = [
+        raw_meas_gyro[0] * alpha_meas
+            + meas_gyro_x.last().map(|p| p[1]).unwrap_or(raw_meas_gyro[0]) * (1.0 - alpha_meas),
+        raw_meas_gyro[1] * alpha_meas
+            + meas_gyro_y.last().map(|p| p[1]).unwrap_or(raw_meas_gyro[1]) * (1.0 - alpha_meas),
+        raw_meas_gyro[2] * alpha_meas
+            + meas_gyro_z.last().map(|p| p[1]).unwrap_or(raw_meas_gyro[2]) * (1.0 - alpha_meas),
+    ];
+    let filt_accel = [
+        raw_meas_accel[0] * alpha_meas
+            + meas_accel_x
+                .last()
+                .map(|p| p[1])
+                .unwrap_or(raw_meas_accel[0])
+                * (1.0 - alpha_meas),
+        raw_meas_accel[1] * alpha_meas
+            + meas_accel_y
+                .last()
+                .map(|p| p[1])
+                .unwrap_or(raw_meas_accel[1])
+                * (1.0 - alpha_meas),
+        raw_meas_accel[2] * alpha_meas
+            + meas_accel_z
+                .last()
+                .map(|p| p[1])
+                .unwrap_or(raw_meas_accel[2])
+                * (1.0 - alpha_meas),
+    ];
+    meas_gyro_x.push([t_imu, filt_gyro[0]]);
+    meas_gyro_y.push([t_imu, filt_gyro[1]]);
+    meas_gyro_z.push([t_imu, filt_gyro[2]]);
+    meas_accel_x.push([t_imu, filt_accel[0]]);
+    meas_accel_y.push([t_imu, filt_accel[1]]);
+    meas_accel_z.push([t_imu, filt_accel[2]]);
     bias_gyro_x.push([t_imu, rad2deg(n.bgx as f64)]);
     bias_gyro_y.push([t_imu, rad2deg(n.bgy as f64)]);
     bias_gyro_z.push([t_imu, rad2deg(n.bgz as f64)]);
     bias_accel_x.push([t_imu, n.bax as f64]);
     bias_accel_y.push([t_imu, n.bay as f64]);
     bias_accel_z.push([t_imu, n.baz as f64]);
-    let p = eskf.covariance();
+    scale_gyro_x.push([t_imu, n.sgx as f64]);
+    scale_gyro_y.push([t_imu, n.sgy as f64]);
+    scale_gyro_z.push([t_imu, n.sgz as f64]);
+    scale_accel_x.push([t_imu, n.sax as f64]);
+    scale_accel_y.push([t_imu, n.say as f64]);
+    scale_accel_z.push([t_imu, n.saz as f64]);
+    let p = loose.covariance();
     for (i, tr) in cov_diag.iter_mut().enumerate() {
         tr.push([t_imu, p[i][i] as f64]);
     }
+}
+
+fn loose_display_state(
+    loose: &CLooseWrapper,
+    ref_ecef: [f64; 3],
+    ref_lat: f64,
+    ref_lon: f64,
+) -> ([f64; 3], [f64; 3], [f64; 4]) {
+    let n = loose.nominal();
+    let pos_ecef = loose.shadow_pos_ecef();
+    let vel_ecef = [n.vn as f64, n.ve as f64, n.vd as f64];
+    let q_ne = quat_ecef_to_ned(ref_lat, ref_lon);
+    (
+        ecef_to_ned(pos_ecef, ref_ecef, ref_lat, ref_lon),
+        mat_vec(ecef_to_ned_matrix(ref_lat, ref_lon), vel_ecef),
+        quat_mul(q_ne, [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64]),
+    )
+}
+
+fn ecef_to_ned_matrix(lat_deg: f64, lon_deg: f64) -> [[f64; 3]; 3] {
+    let lat = deg2rad(lat_deg);
+    let lon = deg2rad(lon_deg);
+    let (slat, clat) = lat.sin_cos();
+    let (slon, clon) = lon.sin_cos();
+    [
+        [-slat * clon, -slat * slon, clat],
+        [-slon, clon, 0.0],
+        [-clat * clon, -clat * slon, -slat],
+    ]
+}
+
+fn quat_conj(q: [f64; 4]) -> [f64; 4] {
+    [q[0], -q[1], -q[2], -q[3]]
+}
+
+fn quat_mul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
+    [
+        a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
+        a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
+        a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
+        a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0],
+    ]
+}
+
+fn quat_ecef_to_ned(lat_deg: f64, lon_deg: f64) -> [f64; 4] {
+    let lon = deg2rad(lon_deg);
+    let lat = deg2rad(lat_deg);
+    let half_lon = 0.5 * lon;
+    let q_lon = [half_lon.cos(), 0.0, 0.0, -half_lon.sin()];
+    let half_lat = 0.5 * (lat + 0.5 * std::f64::consts::PI);
+    let q_lat = [half_lat.cos(), 0.0, half_lat.sin(), 0.0];
+    quat_mul(q_lat, q_lon)
 }
 
 fn quat_to_rotmat_f64(q: [f64; 4]) -> [[f64; 3]; 3] {

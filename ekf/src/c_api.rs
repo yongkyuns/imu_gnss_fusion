@@ -384,7 +384,6 @@ unsafe extern "C" {
 
     fn sf_loose_init(loose: *mut CLoose, p_diag: *const f32, noise: *const LoosePredictNoise);
     fn sf_loose_predict(loose: *mut CLoose, imu: *const CLooseImuDelta);
-    fn sf_loose_fuse_gps(loose: *mut CLoose, gps: *const CGnssSample);
     fn sf_loose_fuse_gps_reference(
         loose: *mut CLoose,
         pos_ecef_m: *const f64,
@@ -400,14 +399,12 @@ unsafe extern "C" {
         accel_mps2: *const f32,
         dt_s: f32,
     );
-    fn sf_loose_fuse_body_vel(loose: *mut CLoose, r_body_vel: f32);
     fn sf_loose_fuse_nhc_reference(
         loose: *mut CLoose,
         gyro_radps: *const f32,
         accel_mps2: *const f32,
         dt_s: f32,
     );
-    fn sf_loose_fuse_zero_vel(loose: *mut CLoose, r_zero_vel: f32);
     fn sf_loose_compute_error_transition(
         f_out: *mut [[f32; 24]; 24],
         g_out: *mut [[f32; 21]; 24],
@@ -819,80 +816,6 @@ impl CLooseWrapper {
         &self.raw.last_obs_types[..count]
     }
 
-    pub fn init_nominal_from_gnss(&mut self, q_bn: [f32; 4], gnss: FusionGnssSample) {
-        const DEFAULT_GYRO_BIAS_SIGMA_DPS: f32 = 0.125;
-        const DEFAULT_ACCEL_BIAS_SIGMA_MPS2: f32 = 0.075;
-        const DEFAULT_GYRO_SCALE_SIGMA: f32 = 0.02;
-        const DEFAULT_ACCEL_SCALE_SIGMA: f32 = 0.02;
-
-        self.raw.nominal.q0 = q_bn[0];
-        self.raw.nominal.q1 = q_bn[1];
-        self.raw.nominal.q2 = q_bn[2];
-        self.raw.nominal.q3 = q_bn[3];
-        self.raw.nominal.vn = gnss.vel_ned_mps[0];
-        self.raw.nominal.ve = gnss.vel_ned_mps[1];
-        self.raw.nominal.vd = gnss.vel_ned_mps[2];
-        self.raw.nominal.pn = gnss.pos_ned_m[0];
-        self.raw.nominal.pe = gnss.pos_ned_m[1];
-        self.raw.nominal.pd = gnss.pos_ned_m[2];
-        self.raw.pos_e64 = [
-            gnss.pos_ned_m[0] as f64,
-            gnss.pos_ned_m[1] as f64,
-            gnss.pos_ned_m[2] as f64,
-        ];
-        self.raw.nominal.qcs0 = 1.0;
-        self.raw.nominal.qcs1 = 0.0;
-        self.raw.nominal.qcs2 = 0.0;
-        self.raw.nominal.qcs3 = 0.0;
-        self.raw.qcs64 = [1.0, 0.0, 0.0, 0.0];
-
-        let att_sigma_rad = 2.0f32 * core::f32::consts::PI / 180.0;
-        let att_var = att_sigma_rad * att_sigma_rad;
-        let mut vel_std = gnss.vel_std_mps[0]
-            .max(gnss.vel_std_mps[1])
-            .max(gnss.vel_std_mps[2]);
-        if vel_std < 0.2 {
-            vel_std = 0.2;
-        }
-        let vel_var = vel_std * vel_std;
-        self.raw.p[3][3] = vel_var;
-        self.raw.p[4][4] = vel_var;
-        self.raw.p[5][5] = vel_var;
-
-        let pos_n = gnss.pos_std_m[0].max(0.5);
-        let pos_e = gnss.pos_std_m[1].max(0.5);
-        let pos_d = gnss.pos_std_m[2].max(0.5);
-        self.raw.p[0][0] = pos_n * pos_n;
-        self.raw.p[1][1] = pos_e * pos_e;
-        self.raw.p[2][2] = pos_d * pos_d;
-        self.raw.p[6][6] = att_var;
-        self.raw.p[7][7] = att_var;
-        self.raw.p[8][8] = att_var;
-
-        let gyro_bias_sigma_radps = DEFAULT_GYRO_BIAS_SIGMA_DPS * core::f32::consts::PI / 180.0;
-        let accel_bias_sigma_mps2 = DEFAULT_ACCEL_BIAS_SIGMA_MPS2;
-        self.raw.p[9][9] = accel_bias_sigma_mps2 * accel_bias_sigma_mps2;
-        self.raw.p[10][10] = accel_bias_sigma_mps2 * accel_bias_sigma_mps2;
-        self.raw.p[11][11] = accel_bias_sigma_mps2 * accel_bias_sigma_mps2;
-        self.raw.p[12][12] = gyro_bias_sigma_radps * gyro_bias_sigma_radps;
-        self.raw.p[13][13] = gyro_bias_sigma_radps * gyro_bias_sigma_radps;
-        self.raw.p[14][14] = gyro_bias_sigma_radps * gyro_bias_sigma_radps;
-        self.raw.p[15][15] = DEFAULT_ACCEL_SCALE_SIGMA * DEFAULT_ACCEL_SCALE_SIGMA;
-        self.raw.p[16][16] = DEFAULT_ACCEL_SCALE_SIGMA * DEFAULT_ACCEL_SCALE_SIGMA;
-        self.raw.p[17][17] = DEFAULT_ACCEL_SCALE_SIGMA * DEFAULT_ACCEL_SCALE_SIGMA;
-        self.raw.p[18][18] = DEFAULT_GYRO_SCALE_SIGMA * DEFAULT_GYRO_SCALE_SIGMA;
-        self.raw.p[19][19] = DEFAULT_GYRO_SCALE_SIGMA * DEFAULT_GYRO_SCALE_SIGMA;
-        self.raw.p[20][20] = DEFAULT_GYRO_SCALE_SIGMA * DEFAULT_GYRO_SCALE_SIGMA;
-        self.raw.p[21][21] = att_var;
-        self.raw.p[22][22] = att_var;
-        self.raw.p[23][23] = att_var;
-        for i in 0..24 {
-            for j in 0..24 {
-                self.raw.p64[i][j] = self.raw.p[i][j] as f64;
-            }
-        }
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub fn init_from_reference_state(
         &mut self,
@@ -981,28 +904,6 @@ impl CLooseWrapper {
         unsafe { sf_loose_predict(&mut self.raw as *mut CLoose, &imu as *const CLooseImuDelta) };
     }
 
-    pub fn fuse_gps(&mut self, sample: FusionGnssSample) {
-        let c_sample = CGnssSample {
-            t_s: sample.t_s,
-            pos_ned_m: sample.pos_ned_m,
-            vel_ned_mps: sample.vel_ned_mps,
-            pos_std_m: sample.pos_std_m,
-            vel_std_mps: sample.vel_std_mps,
-            heading_valid: sample.heading_rad.is_some(),
-            heading_rad: sample.heading_rad.unwrap_or(0.0),
-        };
-        unsafe {
-            sf_loose_fuse_gps(
-                &mut self.raw as *mut CLoose,
-                &c_sample as *const CGnssSample,
-            )
-        };
-    }
-
-    pub fn fuse_body_vel(&mut self, r_body_vel: f32) {
-        unsafe { sf_loose_fuse_body_vel(&mut self.raw as *mut CLoose, r_body_vel) };
-    }
-
     pub fn fuse_gps_reference(&mut self, pos_ecef_m: [f64; 3], h_acc_m: f32, dt_since_last_gnss_s: f32) {
         unsafe {
             sf_loose_fuse_gps_reference(
@@ -1049,10 +950,6 @@ impl CLooseWrapper {
                 dt_s,
             )
         };
-    }
-
-    pub fn fuse_zero_vel(&mut self, r_zero_vel: f32) {
-        unsafe { sf_loose_fuse_zero_vel(&mut self.raw as *mut CLoose, r_zero_vel) };
     }
 
     pub fn compute_error_transition(&self, imu: CLooseImuDelta) -> ([[f32; 24]; 24], [[f32; 21]; 24]) {
