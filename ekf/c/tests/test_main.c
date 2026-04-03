@@ -1,5 +1,6 @@
 #include "sensor_fusion_internal.h"
 #include "sf_eskf.h"
+#include "sf_loose.h"
 #include "unity.h"
 
 void setUp(void) {}
@@ -344,6 +345,250 @@ static void test_eskf_zero_vel_reduces_forward_velocity_when_stopped(void) {
   TEST_ASSERT_TRUE(eskf.p[3][3] < px_before);
 }
 
+static void test_loose_init_copies_all_noise_fields_and_covariance_diag(void) {
+  sf_loose_t loose;
+  float p_diag[SF_LOOSE_ERROR_STATES];
+  sf_loose_predict_noise_t noise = {
+      .gyro_var = 0.11f,
+      .accel_var = 0.22f,
+      .gyro_bias_rw_var = 0.33f,
+      .accel_bias_rw_var = 0.44f,
+      .gyro_scale_rw_var = 0.55f,
+      .accel_scale_rw_var = 0.66f,
+      .mount_align_rw_var = 0.77f,
+  };
+
+  for (int i = 0; i < SF_LOOSE_ERROR_STATES; ++i) {
+    p_diag[i] = 0.01f * (float)(i + 1);
+  }
+
+  sf_loose_init(&loose, p_diag, &noise);
+
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 1.0f, loose.nominal.q0);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 0.11f, loose.noise.gyro_var);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 0.22f, loose.noise.accel_var);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 0.33f, loose.noise.gyro_bias_rw_var);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 0.44f, loose.noise.accel_bias_rw_var);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 0.55f, loose.noise.gyro_scale_rw_var);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 0.66f, loose.noise.accel_scale_rw_var);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 0.77f, loose.noise.mount_align_rw_var);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, p_diag[0], loose.p[0][0]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, p_diag[9], loose.p[9][9]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, p_diag[21], loose.p[21][21]);
+}
+
+static void test_loose_error_transition_has_expected_reference_structure(void) {
+  sf_loose_t loose;
+  sf_loose_imu_delta_t imu = {
+      .dax_1 = 0.0f,
+      .day_1 = 0.0f,
+      .daz_1 = 0.0f,
+      .dvx_1 = 0.0f,
+      .dvy_1 = 0.0f,
+      .dvz_1 = 0.0f,
+      .dax_2 = 0.0f,
+      .day_2 = 0.0f,
+      .daz_2 = 0.0f,
+      .dvx_2 = 0.0f,
+      .dvy_2 = 0.0f,
+      .dvz_2 = 0.0f,
+      .dt = 0.01f,
+  };
+  float F[SF_LOOSE_ERROR_STATES][SF_LOOSE_ERROR_STATES];
+  float G[SF_LOOSE_ERROR_STATES][SF_LOOSE_NOISE_STATES];
+
+  sf_loose_init(&loose, NULL, NULL);
+  loose.nominal.q0 = 1.0f;
+  loose.nominal.qcs0 = 1.0f;
+  loose.nominal.sax = 1.0f;
+  loose.nominal.say = 1.0f;
+  loose.nominal.saz = 1.0f;
+  loose.nominal.sgx = 1.0f;
+  loose.nominal.sgy = 1.0f;
+  loose.nominal.sgz = 1.0f;
+
+  sf_loose_compute_error_transition(F, G, &loose, &imu);
+
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 1.0f, F[0][0]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 1.0f, F[3][3]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 1.0f, F[21][21]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 0.01f, F[0][3]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 0.01f, F[1][4]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 0.01f, F[2][5]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-8f, 2.0f * 7.292115e-5f * 0.01f, F[3][4]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-8f, -2.0f * 7.292115e-5f * 0.01f, F[4][3]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 1.0f, G[3][0]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 1.0f, G[4][1]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 1.0f, G[5][2]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 1.0f, G[6][3]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 1.0f, G[7][4]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 1.0f, G[8][5]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 1.0f, G[9][6]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 1.0f, G[12][9]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 1.0f, G[15][12]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 1.0f, G[18][15]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 1.0f, G[21][18]);
+}
+
+static void test_loose_predict_with_zero_dt_is_noop(void) {
+  sf_loose_t loose;
+  sf_loose_imu_delta_t imu = {
+      .dax_1 = 1.0f,
+      .day_1 = -2.0f,
+      .daz_1 = 3.0f,
+      .dvx_1 = 4.0f,
+      .dvy_1 = -5.0f,
+      .dvz_1 = 6.0f,
+      .dax_2 = 1.0f,
+      .day_2 = -2.0f,
+      .daz_2 = 3.0f,
+      .dvx_2 = 4.0f,
+      .dvy_2 = -5.0f,
+      .dvz_2 = 6.0f,
+      .dt = 0.0f,
+  };
+  float p_diag[SF_LOOSE_ERROR_STATES];
+  sf_loose_nominal_state_t before;
+  float p00_before;
+  float p99_before;
+
+  for (int i = 0; i < SF_LOOSE_ERROR_STATES; ++i) {
+    p_diag[i] = 0.02f * (float)(i + 1);
+  }
+
+  sf_loose_init(&loose, p_diag, NULL);
+  loose.nominal.q0 = 1.0f;
+  loose.nominal.pn = 6378137.0f;
+  loose.pos_e64[0] = 6378137.0;
+  loose.qcs64[0] = 1.0;
+  loose.nominal.vn = 1.0f;
+  loose.nominal.ve = 2.0f;
+  loose.nominal.vd = 3.0f;
+  before = loose.nominal;
+  p00_before = loose.p[0][0];
+  p99_before = loose.p[9][9];
+
+  sf_loose_predict(&loose, &imu);
+
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, before.q0, loose.nominal.q0);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, before.pn, loose.nominal.pn);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, before.vn, loose.nominal.vn);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, before.ve, loose.nominal.ve);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, before.vd, loose.nominal.vd);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, p00_before, loose.p[0][0]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, p99_before, loose.p[9][9]);
+}
+
+static void test_loose_nominal_predict_keeps_equatorial_rest_state_near_rest(void) {
+  sf_loose_t loose;
+  sf_loose_imu_delta_t imu = {
+      .dax_1 = 0.0f,
+      .day_1 = 0.0f,
+      .daz_1 = 0.0f,
+      .dvx_1 = 9.7983f * 0.01f,
+      .dvy_1 = 0.0f,
+      .dvz_1 = 0.0f,
+      .dax_2 = 0.0f,
+      .day_2 = 0.0f,
+      .daz_2 = 0.0f,
+      .dvx_2 = 9.7983f * 0.01f,
+      .dvy_2 = 0.0f,
+      .dvz_2 = 0.0f,
+      .dt = 0.01f,
+  };
+
+  sf_loose_init(&loose, NULL, NULL);
+  loose.nominal.q0 = 1.0f;
+  loose.nominal.sax = 1.0f;
+  loose.nominal.say = 1.0f;
+  loose.nominal.saz = 1.0f;
+  loose.nominal.sgx = 1.0f;
+  loose.nominal.sgy = 1.0f;
+  loose.nominal.sgz = 1.0f;
+  loose.nominal.qcs0 = 1.0f;
+  loose.qcs64[0] = 1.0;
+  loose.nominal.pn = 6378137.0f;
+  loose.nominal.pe = 0.0f;
+  loose.nominal.pd = 0.0f;
+  loose.pos_e64[0] = 6378137.0;
+  loose.pos_e64[1] = 0.0;
+  loose.pos_e64[2] = 0.0;
+
+  sf_loose_predict_nominal(&loose, &imu);
+
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-5f, 1.0f, loose.nominal.q0);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-5f, 0.0f, loose.nominal.q1);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-5f, 0.0f, loose.nominal.q2);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-5f, 0.0f, loose.nominal.q3);
+  TEST_ASSERT_TRUE(fabsf(loose.nominal.vn) < 5.0e-3f);
+  TEST_ASSERT_TRUE(fabsf(loose.nominal.ve) < 5.0e-3f);
+  TEST_ASSERT_TRUE(fabsf(loose.nominal.vd) < 5.0e-3f);
+}
+
+static void test_loose_reference_gps_update_moves_ecef_position_toward_measurement(void) {
+  sf_loose_t loose;
+  const float pos_meas[3] = {6378147.0f, 2.0f, -3.0f};
+  float before_err;
+  float after_err;
+  float p_before;
+
+  sf_loose_init(&loose, NULL, NULL);
+  loose.nominal.q0 = 1.0f;
+  loose.nominal.pn = 6378137.0f;
+  loose.nominal.pe = 0.0f;
+  loose.nominal.pd = 0.0f;
+  loose.pos_e64[0] = 6378137.0;
+  loose.pos_e64[1] = 0.0;
+  loose.pos_e64[2] = 0.0;
+  loose.qcs64[0] = 1.0;
+  loose.p[0][0] = 25.0f;
+  loose.p[1][1] = 25.0f;
+  loose.p[2][2] = 25.0f;
+  p_before = loose.p[0][0];
+  before_err = fabsf(pos_meas[0] - loose.nominal.pn);
+
+  sf_loose_fuse_gps_reference(&loose, pos_meas, 0.5f, 1.0f);
+
+  after_err = fabsf(pos_meas[0] - loose.nominal.pn);
+  TEST_ASSERT_TRUE(after_err < before_err);
+  TEST_ASSERT_TRUE(loose.p[0][0] < p_before);
+}
+
+static void test_loose_reference_nhc_reduces_lateral_and_vertical_car_velocity(void) {
+  sf_loose_t loose;
+  const float gyro_radps[3] = {0.0f, 0.0f, 0.0f};
+  const float accel_mps2[3] = {9.81f, 0.0f, 0.0f};
+  float vy_before;
+  float vz_before;
+
+  sf_loose_init(&loose, NULL, NULL);
+  loose.nominal.q0 = 1.0f;
+  loose.nominal.qcs0 = 1.0f;
+  loose.qcs64[0] = 1.0;
+  loose.nominal.sax = 1.0f;
+  loose.nominal.say = 1.0f;
+  loose.nominal.saz = 1.0f;
+  loose.nominal.sgx = 1.0f;
+  loose.nominal.sgy = 1.0f;
+  loose.nominal.sgz = 1.0f;
+  loose.nominal.vn = 4.0f;
+  loose.nominal.ve = 0.8f;
+  loose.nominal.vd = -0.6f;
+  loose.p[3][3] = 1.0e-3f;
+  loose.p[4][4] = 1.0f;
+  loose.p[5][5] = 1.0f;
+  loose.p[6][6] = 1.0f;
+  loose.p[7][7] = 1.0f;
+  loose.p[8][8] = 1.0f;
+  vy_before = loose.nominal.ve;
+  vz_before = loose.nominal.vd;
+
+  sf_loose_fuse_nhc_reference(&loose, gyro_radps, accel_mps2, 0.01f);
+
+  TEST_ASSERT_TRUE(fabsf(loose.nominal.ve) < fabsf(vy_before));
+  TEST_ASSERT_TRUE(fabsf(loose.nominal.vd) < fabsf(vz_before));
+}
+
 static void test_sensor_fusion_internal_mode_bootstraps_align_state(void) {
   sf_sensor_fusion_t fusion;
   sf_sensor_fusion_impl_t *impl = sf_impl(&fusion);
@@ -418,6 +663,12 @@ int main(void) {
   RUN_TEST(test_eskf_fuse_body_vel_reduces_lateral_and_vertical_velocity);
   RUN_TEST(test_eskf_body_vel_y_reduces_small_yaw_error_on_forward_motion);
   RUN_TEST(test_eskf_zero_vel_reduces_forward_velocity_when_stopped);
+  RUN_TEST(test_loose_init_copies_all_noise_fields_and_covariance_diag);
+  RUN_TEST(test_loose_error_transition_has_expected_reference_structure);
+  RUN_TEST(test_loose_predict_with_zero_dt_is_noop);
+  RUN_TEST(test_loose_nominal_predict_keeps_equatorial_rest_state_near_rest);
+  RUN_TEST(test_loose_reference_gps_update_moves_ecef_position_toward_measurement);
+  RUN_TEST(test_loose_reference_nhc_reduces_lateral_and_vertical_car_velocity);
   RUN_TEST(test_sensor_fusion_internal_mode_bootstraps_align_state);
   return UNITY_END();
 }
