@@ -24,3 +24,7 @@ walkers = "0.52.0"
 [[bin]]
 name = "visualizer"
 path = "src/bin/visualizer.rs"
+
+[[bin]]
+name = "run_loose_nsr"
+path = "src/bin/run_loose_nsr.rs"

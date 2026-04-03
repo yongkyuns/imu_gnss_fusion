@@ -28,6 +28,116 @@ There is now a separate loose filter path in this repo:
 
 The loose path is not yet committed and is still under active debugging.
 
+## Implementation Structure
+
+The current loose implementation is split into four practical layers:
+
+1. Symbolic model and code generation
+
+- source: [ekf/ins_gnss_loose.py](/Users/ykshin/Dev/me/ekf/simulation/imu_gnss_fusion/ekf/ins_gnss_loose.py)
+- generated snippets: [ekf/c/generated_loose](/Users/ykshin/Dev/me/ekf/simulation/imu_gnss_fusion/ekf/c/generated_loose)
+
+This layer defines the symbolic reference math for:
+
+- reference error transition `F`
+- reference noise-input `G`
+- reference NHC observation rows
+
+It emits C snippets that are later included by the C runtime at specific call sites.
+
+2. C runtime implementation
+
+- ABI/state definitions: [ekf/c/include/sf_loose.h](/Users/ykshin/Dev/me/ekf/simulation/imu_gnss_fusion/ekf/c/include/sf_loose.h)
+- runtime: [ekf/c/src/sf_loose.c](/Users/ykshin/Dev/me/ekf/simulation/imu_gnss_fusion/ekf/c/src/sf_loose.c)
+
+This is the real filter implementation. It is mostly handwritten orchestration around generated algebra blocks.
+
+Handwritten C owns:
+
+- nominal propagation
+- covariance prediction orchestration
+- GPS whitening and gating
+- NHC gating and observation assembly
+- Joseph batch update
+- error-state injection
+- ECEF/LLH/gravity helpers
+- precision-sensitive shadow state
+
+The precision-sensitive shadow state currently includes:
+
+- `pos_e64`
+- `qcs64`
+- `p64`
+
+Generated C is included into this runtime for the dense symbolic math:
+
+- transition/noise matrices
+- reference NHC rows
+- scalar GPS/body-velocity update kernels
+- reset Jacobian
+
+3. Rust FFI mirror and wrapper
+
+- Rust noise/config: [ekf/src/loose.rs](/Users/ykshin/Dev/me/ekf/simulation/imu_gnss_fusion/ekf/src/loose.rs)
+- FFI mirror/wrapper: [ekf/src/c_api.rs](/Users/ykshin/Dev/me/ekf/simulation/imu_gnss_fusion/ekf/src/c_api.rs)
+
+Rust mirrors the C ABI manually with `#[repr(C)]` structs and `unsafe extern "C"` declarations.
+
+`CLooseWrapper` is a thin ergonomic layer over the C runtime. It does not reimplement the filter. It mainly provides:
+
+- construction and initialization helpers
+- exact reference-state init entry points
+- safe Rust method calls for predict/update operations
+- access to shadow-state helpers used by replay diagnostics
+
+4. Replay and parity harnesses
+
+- local replay harness: [sim/src/bin/run_loose_nsr.rs](/Users/ykshin/Dev/me/ekf/simulation/imu_gnss_fusion/sim/src/bin/run_loose_nsr.rs)
+- MATLAB exact-step helper: [tmp_loose_matlab_exact_step.m](/Users/ykshin/Dev/me/ekf/simulation/imu_gnss_fusion/tmp_loose_matlab_exact_step.m)
+- MATLAB replay dump helper: [tmp_loose_matlab_replay.m](/Users/ykshin/Dev/me/ekf/simulation/imu_gnss_fusion/tmp_loose_matlab_replay.m)
+
+These sit above the Rust wrapper and are used to verify end-to-end parity against MATLAB.
+
+## One-Step Call Flow
+
+For a replayed loose filter epoch, the call path is:
+
+1. [run_loose_nsr.rs](/Users/ykshin/Dev/me/ekf/simulation/imu_gnss_fusion/sim/src/bin/run_loose_nsr.rs) loads IMU/GNSS samples and builds a `CLooseImuDelta`.
+
+2. Rust calls `CLooseWrapper::predict()`.
+
+3. `CLooseWrapper::predict()` forwards to `sf_loose_predict()`.
+
+4. `sf_loose_predict()`:
+
+- runs `sf_loose_predict_nominal()` for RK2/Heun nominal propagation
+- calls `sf_loose_compute_error_transition()`
+- `sf_loose_compute_error_transition()` includes the generated symbolic `F/G` blocks
+- predicts covariance using the shadow `p64`
+
+5. If a GPS and/or NHC update is eligible, [run_loose_nsr.rs](/Users/ykshin/Dev/me/ekf/simulation/imu_gnss_fusion/sim/src/bin/run_loose_nsr.rs) calls `CLooseWrapper::fuse_reference_batch()`.
+
+6. `CLooseWrapper::fuse_reference_batch()` forwards to `sf_loose_fuse_reference_batch()`.
+
+7. `sf_loose_fuse_reference_batch()`:
+
+- prepares GPS whitening and residuals
+- computes corrected IMU values for NHC gating
+- includes generated reference NHC row code
+- assembles accepted observation rows and variances
+- runs `sf_loose_batch_update_joseph()`
+
+8. `sf_loose_batch_update_joseph()` updates `p64`, then injects the solved error state through `sf_loose_inject_error_state()`.
+
+9. `sf_loose_inject_error_state()` updates:
+
+- nominal quaternion `Q_ES`
+- double-shadow position `pos_e64`
+- nominal velocity/bias/scale states
+- double-shadow mount quaternion `qcs64`
+
+10. The replay harness reads the updated nominal/shadow state and records output/diagnostics.
+
 ## What Already Matches
 
 The current loose replay now matches the MATLAB loose filter on the full NSR drive for the applied-observation sequence.
@@ -53,6 +163,7 @@ Passing checks:
 - `make -C ekf/c test`
 - `cargo test -p sensor-fusion --tests`
 - `cargo check -p sim --bin run_loose_nsr`
+- `cargo test -p sim --test loose_parity`
 
 Passing building-block coverage now includes:
 
@@ -64,6 +175,16 @@ Passing building-block coverage now includes:
 - GPS-only Joseph update
 - NHC-only Joseph update
 - combined GPS+NHC Joseph update
+
+There is also now a fixture-based replay regression for refactors:
+
+- test: [sim/tests/loose_parity.rs](/Users/ykshin/Dev/me/ekf/simulation/imu_gnss_fusion/sim/tests/loose_parity.rs)
+- fixture: [sim/tests/fixtures/loose_nsr_short](/Users/ykshin/Dev/me/ekf/simulation/imu_gnss_fusion/sim/tests/fixtures/loose_nsr_short)
+
+That regression checks:
+
+- the applied-observation sequence over a short replay window
+- several state checkpoints across the same window
 
 So the remaining mismatch is not in the basic one-step math anymore.
 

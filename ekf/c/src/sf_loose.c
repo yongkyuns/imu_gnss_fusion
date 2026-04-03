@@ -11,6 +11,12 @@
 #define SF_WGS84_J2 1.08262982136857e-3f
 #define SF_LOOSE_REF_GYRO_DT_S 0.02f
 
+static const int SF_LOOSE_GPS_REF_SUPPORT_ROW0[1] = {0};
+static const int SF_LOOSE_GPS_REF_SUPPORT_ROW1[2] = {0, 1};
+static const int SF_LOOSE_GPS_REF_SUPPORT_ROW2[3] = {0, 1, 2};
+static const int SF_LOOSE_NHC_Y_SUPPORT[8] = {3, 4, 5, 6, 7, 8, 21, 23};
+static const int SF_LOOSE_NHC_Z_SUPPORT[8] = {3, 4, 5, 6, 7, 8, 21, 22};
+
 #if defined(__GNUC__) || defined(__clang__)
 #define SF_MAYBE_UNUSED __attribute__((unused))
 #else
@@ -42,6 +48,8 @@ static SF_MAYBE_UNUSED void sf_loose_fuse_measurement_joseph(
 static void sf_loose_batch_update_joseph(sf_loose_t *loose,
                                          int obs_count,
                                          const float h[][SF_LOOSE_ERROR_STATES],
+                                         const int *const h_supports[],
+                                         const int h_support_lens[],
                                          const float residuals[],
                                          const float variances[]);
 static void sf_loose_fuse_gps_pos_n(sf_loose_t *loose, float pos_n, float r_pos_n);
@@ -73,6 +81,9 @@ static int sf_loose_test_chi2_vec3(const float residual[3],
                                    const float p[SF_LOOSE_ERROR_STATES][SF_LOOSE_ERROR_STATES],
                                    const float h[3][SF_LOOSE_ERROR_STATES],
                                    const float r_diag[3]);
+static void sf_loose_extract_support_from_row(const float h[SF_LOOSE_ERROR_STATES],
+                                              int support[SF_LOOSE_ERROR_STATES],
+                                              int *support_len);
 
 static void sf_loose_predict_noise_default(sf_loose_predict_noise_t *cfg) {
   if (cfg == NULL) {
@@ -85,6 +96,21 @@ static void sf_loose_predict_noise_default(sf_loose_predict_noise_t *cfg) {
   cfg->gyro_scale_rw_var = 1.0e-10f;
   cfg->accel_scale_rw_var = 1.0e-10f;
   cfg->mount_align_rw_var = 1.0e-8f;
+}
+
+static void sf_loose_extract_support_from_row(const float h[SF_LOOSE_ERROR_STATES],
+                                              int support[SF_LOOSE_ERROR_STATES],
+                                              int *support_len) {
+  if (h == NULL || support == NULL || support_len == NULL) {
+    return;
+  }
+  *support_len = 0;
+  for (int i = 0; i < SF_LOOSE_ERROR_STATES; ++i) {
+    if (h[i] != 0.0f) {
+      support[*support_len] = i;
+      ++(*support_len);
+    }
+  }
 }
 
 static void sf_loose_normalize_nominal_quat(sf_loose_t *loose) {
@@ -451,7 +477,14 @@ void sf_loose_fuse_gps_reference(sf_loose_t *loose,
   }
   float meas_var = 1.0f / fminf(fmaxf(dt_since_last_gnss_s, 1.0e-3f), 1.0f);
   float variances[3] = {meas_var, meas_var, meas_var};
-  sf_loose_batch_update_joseph(loose, 3, h_rows, residual, variances);
+  const int *gps_supports[3] = {
+      SF_LOOSE_GPS_REF_SUPPORT_ROW0,
+      SF_LOOSE_GPS_REF_SUPPORT_ROW1,
+      SF_LOOSE_GPS_REF_SUPPORT_ROW2,
+  };
+  const int gps_support_lens[3] = {1, 2, 3};
+  sf_loose_batch_update_joseph(
+      loose, 3, h_rows, gps_supports, gps_support_lens, residual, variances);
 }
 
 void sf_loose_fuse_reference_batch(sf_loose_t *loose,
@@ -469,9 +502,17 @@ void sf_loose_fuse_reference_batch(sf_loose_t *loose,
   memset(loose->last_obs_types, 0, sizeof(loose->last_obs_types));
 
   float h_rows[5][SF_LOOSE_ERROR_STATES] = {{0}};
+  const int *h_supports[5] = {0};
+  int h_support_lens[5] = {0};
   float residuals[5] = {0};
   float variances[5] = {0};
   int obs_count = 0;
+  const int *gps_supports[3] = {
+      SF_LOOSE_GPS_REF_SUPPORT_ROW0,
+      SF_LOOSE_GPS_REF_SUPPORT_ROW1,
+      SF_LOOSE_GPS_REF_SUPPORT_ROW2,
+  };
+  const int gps_support_lens[3] = {1, 2, 3};
 
   if (pos_ecef_m != NULL && h_acc_m > 0.0f) {
     float lat_rad, lon_rad, height_m;
@@ -531,6 +572,8 @@ void sf_loose_fuse_reference_batch(sf_loose_t *loose,
       float meas_var = 1.0f / fminf(fmaxf(dt_since_last_gnss_s, 1.0e-3f), 1.0f);
       for (int row = 0; row < 3; ++row) {
         memcpy(h_rows[obs_count], h_tmp[row], sizeof(h_tmp[row]));
+        h_supports[obs_count] = gps_supports[row];
+        h_support_lens[obs_count] = gps_support_lens[row];
         residuals[obs_count] = residual[row];
         variances[obs_count] = meas_var;
         loose->last_obs_types[obs_count] = row + 1;
@@ -579,6 +622,8 @@ void sf_loose_fuse_reference_batch(sf_loose_t *loose,
     float var_z = gate_var_z / SF_LOOSE_REF_GYRO_DT_S;
     if (!sf_loose_test_chi2_scalar(-vc_y_est, loose->p, h_y, gate_var_y)) {
       memcpy(h_rows[obs_count], h_y, sizeof(h_y));
+      h_supports[obs_count] = SF_LOOSE_NHC_Y_SUPPORT;
+      h_support_lens[obs_count] = 8;
       residuals[obs_count] = -vc_y_est;
       variances[obs_count] = var_y;
       loose->last_obs_types[obs_count] = 4;
@@ -586,6 +631,8 @@ void sf_loose_fuse_reference_batch(sf_loose_t *loose,
     }
     if (!sf_loose_test_chi2_scalar(-vc_z_est, loose->p, h_z, gate_var_z)) {
       memcpy(h_rows[obs_count], h_z, sizeof(h_z));
+      h_supports[obs_count] = SF_LOOSE_NHC_Z_SUPPORT;
+      h_support_lens[obs_count] = 8;
       residuals[obs_count] = -vc_z_est;
       variances[obs_count] = var_z;
       loose->last_obs_types[obs_count] = 5;
@@ -595,7 +642,8 @@ void sf_loose_fuse_reference_batch(sf_loose_t *loose,
 
   loose->last_obs_count = obs_count;
   if (obs_count > 0) {
-    sf_loose_batch_update_joseph(loose, obs_count, h_rows, residuals, variances);
+    sf_loose_batch_update_joseph(
+        loose, obs_count, h_rows, h_supports, h_support_lens, residuals, variances);
   }
 }
 
@@ -655,23 +703,30 @@ void sf_loose_fuse_nhc_reference(sf_loose_t *loose,
   float var_y = gate_var_y / SF_LOOSE_REF_GYRO_DT_S;
   float var_z = gate_var_z / SF_LOOSE_REF_GYRO_DT_S;
   float h_rows[2][SF_LOOSE_ERROR_STATES];
+  const int *h_supports[2] = {0};
+  int h_support_lens[2] = {0};
   float residuals[2];
   float variances[2];
   int obs_count = 0;
   if (!sf_loose_test_chi2_scalar(-vc_y_est, loose->p, h_y, gate_var_y)) {
     memcpy(h_rows[obs_count], h_y, sizeof(h_y));
+    h_supports[obs_count] = SF_LOOSE_NHC_Y_SUPPORT;
+    h_support_lens[obs_count] = 8;
     residuals[obs_count] = -vc_y_est;
     variances[obs_count] = var_y;
     ++obs_count;
   }
   if (!sf_loose_test_chi2_scalar(-vc_z_est, loose->p, h_z, gate_var_z)) {
     memcpy(h_rows[obs_count], h_z, sizeof(h_z));
+    h_supports[obs_count] = SF_LOOSE_NHC_Z_SUPPORT;
+    h_support_lens[obs_count] = 8;
     residuals[obs_count] = -vc_z_est;
     variances[obs_count] = var_z;
     ++obs_count;
   }
   if (obs_count > 0) {
-    sf_loose_batch_update_joseph(loose, obs_count, h_rows, residuals, variances);
+    sf_loose_batch_update_joseph(
+        loose, obs_count, h_rows, h_supports, h_support_lens, residuals, variances);
   }
 }
 
@@ -957,55 +1012,56 @@ static SF_MAYBE_UNUSED void sf_loose_fuse_measurement_joseph(
 static void sf_loose_batch_update_joseph(sf_loose_t *loose,
                                          int obs_count,
                                          const float h[][SF_LOOSE_ERROR_STATES],
+                                         const int *const h_supports[],
+                                         const int h_support_lens[],
                                          const float residuals[],
                                          const float variances[]) {
   double p[SF_LOOSE_ERROR_STATES][SF_LOOSE_ERROR_STATES];
   double dx[SF_LOOSE_ERROR_STATES] = {0};
   memcpy(p, loose->p64, sizeof(p));
+  int dense_support[SF_LOOSE_ERROR_STATES];
 
   for (int obs = 0; obs < obs_count; ++obs) {
-    double k[SF_LOOSE_ERROR_STATES];
-    double ikh[SF_LOOSE_ERROR_STATES][SF_LOOSE_ERROR_STATES];
-    double p_new[SF_LOOSE_ERROR_STATES][SF_LOOSE_ERROR_STATES];
+    const int *support = dense_support;
+    int support_len = 0;
+    if (h_supports != NULL && h_support_lens != NULL && h_supports[obs] != NULL && h_support_lens[obs] > 0) {
+      support = h_supports[obs];
+      support_len = h_support_lens[obs];
+    } else {
+      sf_loose_extract_support_from_row(h[obs], dense_support, &support_len);
+    }
+    double ph[SF_LOOSE_ERROR_STATES];
     double s = (double)variances[obs];
     for (int i = 0; i < SF_LOOSE_ERROR_STATES; ++i) {
-      double ph = 0.0;
-      for (int j = 0; j < SF_LOOSE_ERROR_STATES; ++j) {
-        ph += p[i][j] * (double)h[obs][j];
+      ph[i] = 0.0;
+      for (int j = 0; j < support_len; ++j) {
+        const int state = support[j];
+        ph[i] += p[i][state] * (double)h[obs][state];
       }
-      k[i] = ph;
     }
-    for (int i = 0; i < SF_LOOSE_ERROR_STATES; ++i) {
-      s += (double)h[obs][i] * k[i];
+    for (int i = 0; i < support_len; ++i) {
+      const int state = support[i];
+      s += (double)h[obs][state] * ph[state];
     }
     if (s <= 0.0) {
       continue;
     }
     double hd = 0.0;
-    for (int i = 0; i < SF_LOOSE_ERROR_STATES; ++i) {
-      hd += (double)h[obs][i] * dx[i];
-      k[i] /= s;
+    for (int i = 0; i < support_len; ++i) {
+      const int state = support[i];
+      hd += (double)h[obs][state] * dx[state];
     }
     for (int i = 0; i < SF_LOOSE_ERROR_STATES; ++i) {
-      dx[i] += k[i] * ((double)residuals[obs] - hd);
+      dx[i] += (ph[i] / s) * ((double)residuals[obs] - hd);
     }
+    /* Scalar Joseph update simplifies exactly to P - (P h^T)(P h^T)^T / s. */
     for (int i = 0; i < SF_LOOSE_ERROR_STATES; ++i) {
-      for (int j = 0; j < SF_LOOSE_ERROR_STATES; ++j) {
-        ikh[i][j] = (i == j ? 1.0 : 0.0) - k[i] * (double)h[obs][j];
+      for (int j = i; j < SF_LOOSE_ERROR_STATES; ++j) {
+        const double updated = p[i][j] - (ph[i] * ph[j]) / s;
+        p[i][j] = updated;
+        p[j][i] = updated;
       }
     }
-    for (int i = 0; i < SF_LOOSE_ERROR_STATES; ++i) {
-      for (int j = 0; j < SF_LOOSE_ERROR_STATES; ++j) {
-        double accum = 0.0;
-        for (int a = 0; a < SF_LOOSE_ERROR_STATES; ++a) {
-          for (int b = 0; b < SF_LOOSE_ERROR_STATES; ++b) {
-            accum += ikh[i][a] * p[a][b] * ikh[j][b];
-          }
-        }
-        p_new[i][j] = accum + (double)variances[obs] * k[i] * k[j];
-      }
-    }
-    memcpy(p, p_new, sizeof(p_new));
   }
 
   memcpy(loose->p64, p, sizeof(loose->p64));
