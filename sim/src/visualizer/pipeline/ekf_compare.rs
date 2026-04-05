@@ -1256,6 +1256,14 @@ pub fn build_ekf_compare_traces(
     ];
     let eskf_map = vec![
         Trace {
+            name: "u-blox path (lon,lat)".to_string(),
+            points: map_ubx,
+        },
+        Trace {
+            name: "NAV2-PVT path (GNSS-only, lon,lat)".to_string(),
+            points: map_nav2,
+        },
+        Trace {
             name: "ESKF path (lon,lat)".to_string(),
             points: map_eskf,
         },

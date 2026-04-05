@@ -284,8 +284,23 @@ pub fn build_signal_traces(
     out.eskf_cov_bias = ekf.eskf_cov_bias;
     out.eskf_cov_nonbias = ekf.eskf_cov_nonbias;
     out.eskf_stationary_diag = ekf.eskf_stationary_diag;
+    out.eskf_bump_pitch_speed = ekf.eskf_bump_pitch_speed;
+    out.eskf_bump_diag = ekf.eskf_bump_diag;
     out.eskf_map = ekf.eskf_map;
     out.eskf_map_heading = ekf.eskf_map_heading;
+    out.loose_cmp_pos = ekf.loose_cmp_pos;
+    out.loose_cmp_vel = ekf.loose_cmp_vel;
+    out.loose_cmp_att = ekf.loose_cmp_att;
+    out.loose_meas_gyro = ekf.loose_meas_gyro;
+    out.loose_meas_accel = ekf.loose_meas_accel;
+    out.loose_bias_gyro = ekf.loose_bias_gyro;
+    out.loose_bias_accel = ekf.loose_bias_accel;
+    out.loose_scale_gyro = ekf.loose_scale_gyro;
+    out.loose_scale_accel = ekf.loose_scale_accel;
+    out.loose_cov_bias = ekf.loose_cov_bias;
+    out.loose_cov_nonbias = ekf.loose_cov_nonbias;
+    out.loose_map = ekf.loose_map;
+    out.loose_map_heading = ekf.loose_map_heading;
     out.align_cmp_att = align_data.cmp_att;
     out.align_res_vel = align_data.res_vel;
     out.align_axis_err = align_data.axis_err;
@@ -346,6 +361,19 @@ pub fn build_signal_traces(
         &mut out.eskf_cov_bias,
         &mut out.eskf_cov_nonbias,
         &mut out.eskf_stationary_diag,
+        &mut out.eskf_bump_pitch_speed,
+        &mut out.eskf_bump_diag,
+        &mut out.loose_cmp_pos,
+        &mut out.loose_cmp_vel,
+        &mut out.loose_cmp_att,
+        &mut out.loose_meas_gyro,
+        &mut out.loose_meas_accel,
+        &mut out.loose_bias_gyro,
+        &mut out.loose_bias_accel,
+        &mut out.loose_scale_gyro,
+        &mut out.loose_scale_accel,
+        &mut out.loose_cov_bias,
+        &mut out.loose_cov_nonbias,
         &mut out.align_cmp_att,
         &mut out.align_res_vel,
         &mut out.align_axis_err,
@@ -362,6 +390,19 @@ pub fn build_signal_traces(
         }
     }
     for tr in &mut out.eskf_map {
+        let mut cleaned = Vec::with_capacity(tr.points.len());
+        for p in tr.points.iter().copied() {
+            let lon = p[0];
+            let lat = p[1];
+            if lon.is_finite() && lat.is_finite() {
+                cleaned.push(p);
+            } else if !lon.is_finite() && !lat.is_finite() {
+                cleaned.push([f64::NAN, f64::NAN]);
+            }
+        }
+        tr.points = cleaned;
+    }
+    for tr in &mut out.loose_map {
         let mut cleaned = Vec::with_capacity(tr.points.len());
         for p in tr.points.iter().copied() {
             let lon = p[0];

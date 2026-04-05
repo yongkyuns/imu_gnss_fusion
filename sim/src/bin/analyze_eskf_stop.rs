@@ -99,7 +99,9 @@ fn main() -> Result<()> {
         None,
         ekf_imu_source,
         EkfCompareConfig {
-            r_body_vel: args.r_body_vel.unwrap_or(EkfCompareConfig::default().r_body_vel),
+            r_body_vel: args
+                .r_body_vel
+                .unwrap_or(EkfCompareConfig::default().r_body_vel),
             vehicle_meas_lpf_cutoff_hz: args
                 .vehicle_meas_lpf_cutoff_hz
                 .unwrap_or(EkfCompareConfig::default().vehicle_meas_lpf_cutoff_hz),
@@ -124,10 +126,30 @@ fn main() -> Result<()> {
     let w0 = args.window_start_s;
     let w1 = args.window_end_s;
 
-    print_trace_stats("ESKF velN [m/s]", find_trace(&plot.eskf_cmp_vel, "ESKF velN [m/s]"), w0, w1);
-    print_trace_stats("ESKF velE [m/s]", find_trace(&plot.eskf_cmp_vel, "ESKF velE [m/s]"), w0, w1);
-    print_trace_stats("UBX velN [m/s]", find_trace(&plot.eskf_cmp_vel, "UBX velN [m/s]"), w0, w1);
-    print_trace_stats("UBX velE [m/s]", find_trace(&plot.eskf_cmp_vel, "UBX velE [m/s]"), w0, w1);
+    print_trace_stats(
+        "ESKF velN [m/s]",
+        find_trace(&plot.eskf_cmp_vel, "ESKF velN [m/s]"),
+        w0,
+        w1,
+    );
+    print_trace_stats(
+        "ESKF velE [m/s]",
+        find_trace(&plot.eskf_cmp_vel, "ESKF velE [m/s]"),
+        w0,
+        w1,
+    );
+    print_trace_stats(
+        "UBX velN [m/s]",
+        find_trace(&plot.eskf_cmp_vel, "UBX velN [m/s]"),
+        w0,
+        w1,
+    );
+    print_trace_stats(
+        "UBX velE [m/s]",
+        find_trace(&plot.eskf_cmp_vel, "UBX velE [m/s]"),
+        w0,
+        w1,
+    );
 
     print_trace_stats(
         "ESKF pitch [deg]",
@@ -309,7 +331,10 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn find_trace<'a>(traces: &'a [sim::visualizer::model::Trace], name: &str) -> &'a sim::visualizer::model::Trace {
+fn find_trace<'a>(
+    traces: &'a [sim::visualizer::model::Trace],
+    name: &str,
+) -> &'a sim::visualizer::model::Trace {
     traces.iter().find(|t| t.name == name).unwrap()
 }
 
@@ -332,7 +357,13 @@ fn print_trace_stats(label: &str, trace: &sim::visualizer::model::Trace, t0: f64
     let last = *pts.last().unwrap();
     println!(
         "{label}: n={} mean={:.6} rms={:.6} min={:.6} max={:.6} first={:.6} last={:.6}",
-        pts.len(), mean, rms, min, max, first, last
+        pts.len(),
+        mean,
+        rms,
+        min,
+        max,
+        first,
+        last
     );
 }
 
@@ -395,7 +426,13 @@ fn print_body_velocity_stats(
     let last = *vals.last().unwrap();
     println!(
         "{label}: n={} mean={:.6} rms={:.6} min={:.6} max={:.6} first={:.6} last={:.6}",
-        vals.len(), mean, rms, min, max, first, last
+        vals.len(),
+        mean,
+        rms,
+        min,
+        max,
+        first,
+        last
     );
 }
 
@@ -425,6 +462,10 @@ fn print_diff_stats(
     let max = diffs.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
     println!(
         "{label}: n={} mean={:.6} rms={:.6} min={:.6} max={:.6}",
-        diffs.len(), mean, rms, min, max
+        diffs.len(),
+        mean,
+        rms,
+        min,
+        max
     );
 }

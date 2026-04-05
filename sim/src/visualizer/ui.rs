@@ -38,6 +38,8 @@ impl Plugin for TrackOverlay<'_> {
                 egui::Color32::from_rgb(120, 170, 255)
             } else if tr.name == "ESKF path during GNSS outage (lon,lat)" {
                 egui::Color32::from_rgb(255, 140, 220)
+            } else if tr.name == "Loose path (lon,lat)" {
+                egui::Color32::from_rgb(120, 255, 170)
             } else {
                 egui::Color32::WHITE
             };
@@ -131,6 +133,7 @@ pub struct App {
     show_nav_pvt: bool,
     show_nav2_pvt: bool,
     show_eskf: bool,
+    show_loose: bool,
 }
 
 impl eframe::App for App {
@@ -190,6 +193,8 @@ impl eframe::App for App {
                 ui.label("Page:");
                 ui.selectable_value(&mut self.page, Page::Signals, "Signals");
                 ui.selectable_value(&mut self.page, Page::EskfCompare, "ESKF Compare");
+                ui.selectable_value(&mut self.page, Page::LooseCompare, "Loose Compare");
+                ui.selectable_value(&mut self.page, Page::EskfBump, "ESKF Bump");
                 ui.selectable_value(&mut self.page, Page::AlignCompare, "Align Compare");
                 ui.selectable_value(&mut self.page, Page::MapDark, "Map (Dark)");
             });
@@ -358,6 +363,137 @@ impl eframe::App for App {
                     );
                 });
             }
+            Page::EskfBump => {
+                let half_width = (ctx.content_rect().width() * 0.5).max(260.0);
+                egui::SidePanel::left("eskf_bump_left")
+                    .resizable(false)
+                    .exact_width(half_width)
+                    .show(ctx, |ui| {
+                        draw_plot(
+                            ui,
+                            "ESKF Pitch Angle",
+                            self.data
+                                .eskf_bump_pitch_speed
+                                .iter()
+                                .filter(|t| t.name.contains("pitch")),
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "Vehicle Speed",
+                            self.data
+                                .eskf_bump_pitch_speed
+                                .iter()
+                                .filter(|t| t.name.contains("speed")),
+                            true,
+                            self.max_points_per_trace,
+                        );
+                    });
+
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    draw_plot(
+                        ui,
+                        "Pitch HPF / RMS / EMA (3.0 s)",
+                        self.data
+                            .eskf_bump_diag
+                            .iter()
+                            .filter(|t| !t.name.contains("FFT dom")),
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "Pitch FFT Metrics (3.0 s trailing window)",
+                        self.data
+                            .eskf_bump_diag
+                            .iter()
+                            .filter(|t| t.name.contains("FFT dom")),
+                        true,
+                        self.max_points_per_trace,
+                    );
+                });
+            }
+            Page::LooseCompare => {
+                let half_width = (ctx.content_rect().width() * 0.5).max(260.0);
+                let mut vehicle_gyro: Vec<&Trace> = Vec::with_capacity(
+                    self.data.esf_ins_gyro.len() + self.data.loose_meas_gyro.len(),
+                );
+                vehicle_gyro.extend(self.data.esf_ins_gyro.iter());
+                vehicle_gyro.extend(self.data.loose_meas_gyro.iter());
+                let mut vehicle_accel: Vec<&Trace> = Vec::with_capacity(
+                    self.data.esf_ins_accel.len() + self.data.loose_meas_accel.len(),
+                );
+                vehicle_accel.extend(self.data.esf_ins_accel.iter());
+                vehicle_accel.extend(self.data.loose_meas_accel.iter());
+                egui::SidePanel::left("loose_compare_left")
+                    .resizable(false)
+                    .exact_width(half_width)
+                    .show(ctx, |ui| {
+                        draw_plot(
+                            ui,
+                            "Velocity: Loose INS/GNSS vs u-blox",
+                            self.data.loose_cmp_vel.iter(),
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "Euler Angles: Loose INS/GNSS vs NAV-ATT",
+                            self.data.loose_cmp_att.iter(),
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "Loose Gyro Bias Estimates",
+                            self.data.loose_bias_gyro.iter(),
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "Vehicle Gyro: ESF-INS vs Loose INS/GNSS",
+                            vehicle_gyro.iter().copied(),
+                            true,
+                            self.max_points_per_trace,
+                        );
+                    });
+
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    draw_plot(
+                        ui,
+                        "Loose Accel Bias Estimates",
+                        self.data.loose_bias_accel.iter(),
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "Loose Scale Factor Estimates",
+                        self.data
+                            .loose_scale_gyro
+                            .iter()
+                            .chain(self.data.loose_scale_accel.iter()),
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "Loose Covariance Diagonal (Bias/Scale States)",
+                        self.data.loose_cov_bias.iter(),
+                        true,
+                        self.max_points_per_trace,
+                    );
+                    draw_plot(
+                        ui,
+                        "Vehicle Accel: ESF-INS vs Loose INS/GNSS",
+                        vehicle_accel.iter().copied(),
+                        true,
+                        self.max_points_per_trace,
+                    );
+                });
+            }
             Page::AlignCompare => {
                 let half_width = (ctx.content_rect().width() * 0.5).max(260.0);
                 egui::SidePanel::left("align_compare_left")
@@ -433,6 +569,7 @@ impl eframe::App for App {
                         ui.checkbox(&mut self.show_nav_pvt, "show NAV-PVT");
                         ui.checkbox(&mut self.show_nav2_pvt, "show NAV2-PVT");
                         ui.checkbox(&mut self.show_eskf, "show ESKF");
+                        ui.checkbox(&mut self.show_loose, "show Loose");
                         if ui.button("Recenter").clicked() {
                             self.map_memory.follow_my_position();
                         }
@@ -441,6 +578,7 @@ impl eframe::App for App {
                         ui.colored_label(egui::Color32::from_rgb(0, 255, 255), "NAV-PVT");
                         ui.colored_label(egui::Color32::from_rgb(255, 196, 0), "NAV2-PVT");
                         ui.colored_label(egui::Color32::from_rgb(120, 170, 255), "ESKF");
+                        ui.colored_label(egui::Color32::from_rgb(120, 255, 170), "Loose");
                         ui.colored_label(
                             egui::Color32::from_rgb(255, 140, 220),
                             "ESKF during GNSS outage",
@@ -460,7 +598,14 @@ impl eframe::App for App {
                                 && t.name != "ESKF path during GNSS outage (lon,lat)"
                         });
                     }
-                    let headings: Vec<&HeadingSample> = self.data.eskf_map_heading.iter().collect();
+                    if self.show_loose {
+                        map_traces.extend(self.data.loose_map.iter());
+                    }
+                    let mut headings: Vec<&HeadingSample> =
+                        self.data.eskf_map_heading.iter().collect();
+                    if self.show_loose {
+                        headings.extend(self.data.loose_map_heading.iter());
+                    }
                     let track = TrackOverlay {
                         traces: map_traces,
                         headings,
@@ -697,6 +842,7 @@ pub fn run_visualizer(data: PlotData, has_itow: bool) -> Result<()> {
                 show_nav_pvt: true,
                 show_nav2_pvt: true,
                 show_eskf: true,
+                show_loose: true,
             }))
         }),
     )
