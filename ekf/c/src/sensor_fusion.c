@@ -12,15 +12,10 @@ static void sf_quat_to_rotmat(const float q[4], float r[3][3]);
 static void sf_transpose3(const float in[3][3], float out[3][3]);
 static void sf_mat3_vec(const float m[3][3], const float v[3], float out[3]);
 static float sf_norm3(const float v[3]);
-static float sf_horizontal_speed(const float v_ned_mps[3]);
-static float sf_interp_speed(const sf_internal_bootstrap_gnss_state_t *prev,
-                             const sf_gnss_sample_t *curr,
-                             float t_s);
 static float sf_ema_update(bool *valid, float *prev, float sample, float alpha);
 static bool sf_bootstrap_update(sf_sensor_fusion_impl_t *impl,
                                 const float accel_b[3],
-                                const float gyro_radps[3],
-                                float speed_mps);
+                                const float gyro_radps[3]);
 static bool sf_take_interval_summary(sf_sensor_fusion_impl_t *impl,
                                      float t0_s,
                                      float t1_s,
@@ -250,15 +245,22 @@ sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
   if (!impl->last_imu_t_valid) {
     impl->last_imu_t_s = sample->t_s;
     impl->last_imu_t_valid = true;
-    if (impl->internal_align_enabled && impl->bootstrap_imu_count < 512U) {
-      impl->bootstrap_imu_buffer[impl->bootstrap_imu_count].t_s = sample->t_s;
-      memcpy(impl->bootstrap_imu_buffer[impl->bootstrap_imu_count].gyro_radps,
-             sample->gyro_radps,
-             sizeof(sample->gyro_radps));
-      memcpy(impl->bootstrap_imu_buffer[impl->bootstrap_imu_count].accel_mps2,
-             sample->accel_mps2,
-             sizeof(sample->accel_mps2));
-      impl->bootstrap_imu_count++;
+    if (impl->internal_align_enabled && !impl->align_initialized &&
+        sf_bootstrap_update(impl, sample->accel_mps2, sample->gyro_radps)) {
+      float mean_accel_sample[1][3] = {{
+          impl->bootstrap_stationary_accel_sum[0] / (float)impl->bootstrap_stationary_count,
+          impl->bootstrap_stationary_accel_sum[1] / (float)impl->bootstrap_stationary_count,
+          impl->bootstrap_stationary_accel_sum[2] / (float)impl->bootstrap_stationary_count,
+      }};
+      if (sf_align_initialize_from_stationary(&impl->align_rt,
+                                              &impl->cfg.align,
+                                              mean_accel_sample,
+                                              1U,
+                                              0.0f)) {
+        impl->align_initialized = true;
+        impl->mount_q_vb_valid = true;
+        memcpy(impl->mount_q_vb, impl->align_rt.state.q_vb, sizeof(impl->mount_q_vb));
+      }
     }
     return sf_update_from_fusion(impl, false, false);
   }
@@ -274,15 +276,22 @@ sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
   impl->interval_imu_sum_accel[2] += sample->accel_mps2[2];
   impl->interval_imu_count++;
 
-  if (impl->internal_align_enabled && impl->bootstrap_imu_count < 512U) {
-    impl->bootstrap_imu_buffer[impl->bootstrap_imu_count].t_s = sample->t_s;
-    memcpy(impl->bootstrap_imu_buffer[impl->bootstrap_imu_count].gyro_radps,
-           sample->gyro_radps,
-           sizeof(sample->gyro_radps));
-    memcpy(impl->bootstrap_imu_buffer[impl->bootstrap_imu_count].accel_mps2,
-           sample->accel_mps2,
-           sizeof(sample->accel_mps2));
-    impl->bootstrap_imu_count++;
+  if (impl->internal_align_enabled && !impl->align_initialized &&
+      sf_bootstrap_update(impl, sample->accel_mps2, sample->gyro_radps)) {
+    float mean_accel_sample[1][3] = {{
+        impl->bootstrap_stationary_accel_sum[0] / (float)impl->bootstrap_stationary_count,
+        impl->bootstrap_stationary_accel_sum[1] / (float)impl->bootstrap_stationary_count,
+        impl->bootstrap_stationary_accel_sum[2] / (float)impl->bootstrap_stationary_count,
+    }};
+    if (sf_align_initialize_from_stationary(&impl->align_rt,
+                                            &impl->cfg.align,
+                                            mean_accel_sample,
+                                            1U,
+                                            0.0f)) {
+      impl->align_initialized = true;
+      impl->mount_q_vb_valid = true;
+      memcpy(impl->mount_q_vb, impl->align_rt.state.q_vb, sizeof(impl->mount_q_vb));
+    }
   }
 
   if (!impl->ekf_initialized || !impl->mount_ready || !impl->mount_q_vb_valid) {
@@ -385,37 +394,6 @@ sf_update_t sf_fusion_process_gnss(sf_sensor_fusion_t *fusion,
           impl, impl->bootstrap_prev_gnss.t_s, sample->t_s, &summary);
     }
 
-    if (!impl->align_initialized) {
-      if (impl->bootstrap_prev_gnss_valid) {
-        for (uint32_t i = 0; i < impl->bootstrap_imu_count; ++i) {
-          float speed_mps = sf_interp_speed(&impl->bootstrap_prev_gnss,
-                                            sample,
-                                            impl->bootstrap_imu_buffer[i].t_s);
-          if (sf_bootstrap_update(impl,
-                                  impl->bootstrap_imu_buffer[i].accel_mps2,
-                                  impl->bootstrap_imu_buffer[i].gyro_radps,
-                                  speed_mps) &&
-              sf_align_initialize_from_stationary(&impl->align_rt,
-                                                  &impl->cfg.align,
-                                                  (const float (*)[3])impl->stationary_accel_buffer,
-                                                  impl->bootstrap_stationary_count,
-                                                  0.0f)) {
-            impl->align_initialized = true;
-            impl->mount_q_vb_valid = true;
-            memcpy(impl->mount_q_vb,
-                   impl->align_rt.state.q_vb,
-                   sizeof(impl->mount_q_vb));
-            break;
-          }
-        }
-      }
-      impl->bootstrap_prev_gnss.t_s = sample->t_s;
-      memcpy(impl->bootstrap_prev_gnss.vel_ned_mps,
-             sample->vel_ned_mps,
-             sizeof(sample->vel_ned_mps));
-      impl->bootstrap_prev_gnss_valid = true;
-    }
-
     if (impl->align_initialized && have_summary) {
       t0_us = sf_profile_stamp(impl);
       sf_align_update_window_with_trace(&impl->align_rt, &impl->cfg.align, &summary, &trace);
@@ -447,7 +425,6 @@ sf_update_t sf_fusion_process_gnss(sf_sensor_fusion_t *fusion,
   }
 
   if (!impl->mount_ready) {
-    impl->bootstrap_imu_count = 0U;
     return sf_update_from_fusion(impl, prev_mount_ready != impl->mount_ready, false);
   }
 
@@ -475,7 +452,6 @@ sf_update_t sf_fusion_process_gnss(sf_sensor_fusion_t *fusion,
     }
   }
 
-  impl->bootstrap_imu_count = 0U;
   return sf_update_from_fusion(impl, prev_mount_ready != impl->mount_ready, ekf_initialized_now);
 }
 
@@ -670,11 +646,6 @@ static float sf_norm3(const float v[3]) {
   return sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
 }
 
-static float sf_horizontal_speed(const float v_ned_mps[3]) {
-  (void)v_ned_mps[2];
-  return sqrtf(v_ned_mps[0] * v_ned_mps[0] + v_ned_mps[1] * v_ned_mps[1]);
-}
-
 static uint32_t sf_profile_stamp(const sf_sensor_fusion_impl_t *impl) {
   if (impl == NULL || impl->profile_now_us == NULL) {
     return 0u;
@@ -696,22 +667,6 @@ static void sf_profile_accumulate(uint32_t *count,
   }
 }
 
-static float sf_interp_speed(const sf_internal_bootstrap_gnss_state_t *prev,
-                             const sf_gnss_sample_t *curr,
-                             float t_s) {
-  float speed_prev = sf_horizontal_speed(prev->vel_ned_mps);
-  float speed_curr = sf_horizontal_speed(curr->vel_ned_mps);
-  float dt = curr->t_s - prev->t_s;
-  float alpha;
-  if (dt <= 1.0e-6f) {
-    return speed_curr;
-  }
-  alpha = (t_s - prev->t_s) / dt;
-  if (alpha < 0.0f) alpha = 0.0f;
-  if (alpha > 1.0f) alpha = 1.0f;
-  return speed_prev + alpha * (speed_curr - speed_prev);
-}
-
 static float sf_ema_update(bool *valid, float *prev, float sample, float alpha) {
   if (alpha < 1.0e-4f) alpha = 1.0e-4f;
   if (alpha > 1.0f) alpha = 1.0f;
@@ -726,8 +681,7 @@ static float sf_ema_update(bool *valid, float *prev, float sample, float alpha) 
 
 static bool sf_bootstrap_update(sf_sensor_fusion_impl_t *impl,
                                 const float accel_b[3],
-                                const float gyro_radps[3],
-                                float speed_mps) {
+                                const float gyro_radps[3]) {
   float gyro_norm = sf_norm3(gyro_radps);
   float accel_err = fabsf(sf_norm3(accel_b) - SF_GRAVITY_MSS);
   float gyro_ema = sf_ema_update(&impl->bootstrap_gyro_ema_valid,
@@ -738,23 +692,21 @@ static bool sf_bootstrap_update(sf_sensor_fusion_impl_t *impl,
                                   &impl->bootstrap_accel_err_ema,
                                   accel_err,
                                   impl->cfg.bootstrap.ema_alpha);
-  float speed_ema = sf_ema_update(&impl->bootstrap_speed_ema_valid,
-                                  &impl->bootstrap_speed_ema,
-                                  speed_mps,
-                                  impl->cfg.bootstrap.ema_alpha);
-  bool stationary = speed_ema <= impl->cfg.bootstrap.max_speed_mps &&
-                    gyro_ema <= impl->cfg.bootstrap.max_gyro_radps &&
+  bool stationary = gyro_ema <= impl->cfg.bootstrap.max_gyro_radps &&
                     accel_ema <= impl->cfg.bootstrap.max_accel_norm_err_mps2;
 
   if (stationary) {
     if (impl->bootstrap_stationary_count < 400U) {
-      memcpy(impl->stationary_accel_buffer[impl->bootstrap_stationary_count],
-             accel_b,
-             sizeof(impl->stationary_accel_buffer[0]));
+      impl->bootstrap_stationary_accel_sum[0] += accel_b[0];
+      impl->bootstrap_stationary_accel_sum[1] += accel_b[1];
+      impl->bootstrap_stationary_accel_sum[2] += accel_b[2];
       impl->bootstrap_stationary_count++;
     }
   } else {
     impl->bootstrap_stationary_count = 0U;
+    impl->bootstrap_stationary_accel_sum[0] = 0.0f;
+    impl->bootstrap_stationary_accel_sum[1] = 0.0f;
+    impl->bootstrap_stationary_accel_sum[2] = 0.0f;
   }
   return impl->bootstrap_stationary_count >= impl->cfg.bootstrap.stationary_samples;
 }

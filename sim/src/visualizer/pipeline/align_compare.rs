@@ -3,9 +3,8 @@ use sensor_fusion::align::AlignConfig;
 use crate::ubxlog::{UbxFrame, extract_esf_alg};
 
 use super::align_replay::{
-    BootstrapConfig as ReplayBootstrapConfig, ImuReplayConfig, build_align_replay,
-    frd_mount_quat_to_esf_alg_flu_quat, quat_rotate, quat_rpy_alg_deg,
-    signed_projected_axis_angle_deg,
+    BootstrapConfig as ReplayBootstrapConfig, ImuReplayConfig, axis_angle_deg,
+    build_align_replay, frd_mount_quat_to_esf_alg_flu_quat, quat_rotate, quat_rpy_alg_deg,
 };
 
 use super::super::math::nearest_master_ms;
@@ -113,15 +112,11 @@ pub fn build_align_compare_traces(
             if let Some(q_ref_final) = final_alg_q {
                 let ref_fwd = quat_rotate(q_ref_final, [1.0, 0.0, 0.0]);
                 let ref_down = quat_rotate(q_ref_final, [0.0, 0.0, 1.0]);
-                let ref_right = quat_rotate(q_ref_final, [0.0, 1.0, 0.0]);
-                let fwd_signed = signed_projected_axis_angle_deg(align_fwd, ref_fwd, ref_down);
-                fwd_err.push([t, fwd_signed]);
-                down_err.push([
-                    t,
-                    signed_projected_axis_angle_deg(align_down, ref_down, ref_right),
-                ]);
+                let fwd_unsigned = axis_angle_deg(align_fwd, ref_fwd);
+                fwd_err.push([t, fwd_unsigned]);
+                down_err.push([t, axis_angle_deg(align_down, ref_down)]);
                 if sample.yaw_initialized {
-                    yaw_init.push([t, fwd_signed]);
+                    yaw_init.push([t, fwd_unsigned]);
                 }
             }
         }

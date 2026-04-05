@@ -16,12 +16,6 @@ typedef struct {
 } sf_internal_bootstrap_gnss_state_t;
 
 typedef struct {
-  float t_s;
-  float gyro_radps[3];
-  float accel_mps2[3];
-} sf_internal_bootstrap_imu_sample_t;
-
-typedef struct {
   float dt_s;
   float mean_gyro_b[3];
   float mean_accel_b[3];
@@ -83,6 +77,7 @@ typedef struct {
   sf_align_t state;
   sf_turn_consistency_sample_t samples[SF_TURN_CONSISTENCY_CAPACITY];
   uint32_t count;
+  bool yaw_observed;
 } sf_align_runtime_t;
 
 typedef uint32_t (*sf_profile_now_us_fn)(void *ctx);
@@ -131,15 +126,11 @@ typedef struct {
   float interval_imu_sum_accel[3];
   uint32_t interval_imu_count;
   uint32_t bootstrap_stationary_count;
+  float bootstrap_stationary_accel_sum[3];
   float bootstrap_gyro_ema;
   float bootstrap_accel_err_ema;
-  float bootstrap_speed_ema;
   bool bootstrap_gyro_ema_valid;
   bool bootstrap_accel_err_ema_valid;
-  bool bootstrap_speed_ema_valid;
-  float stationary_accel_buffer[400][3];
-  sf_internal_bootstrap_imu_sample_t bootstrap_imu_buffer[512];
-  uint32_t bootstrap_imu_count;
   sf_profile_now_us_fn profile_now_us;
   void *profile_ctx;
   sf_profile_counters_t profile;

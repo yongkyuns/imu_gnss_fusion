@@ -85,6 +85,7 @@ void sf_align_init(sf_align_runtime_t *align_rt, const sf_align_config_t *cfg) {
   align_rt->state.gravity_lp_b[0] = 0.0f;
   align_rt->state.gravity_lp_b[1] = 0.0f;
   align_rt->state.gravity_lp_b[2] = -SF_GRAVITY_MSS;
+  align_rt->yaw_observed = false;
 }
 
 bool sf_align_initialize_from_stationary(sf_align_runtime_t *align_rt,
@@ -106,10 +107,11 @@ bool sf_align_initialize_from_stationary(sf_align_runtime_t *align_rt,
   sf_quat_from_rotmat(init.c_b_v, align_rt->state.q_vb);
   d[0] = (0.2f * 3.1415927f / 180.0f) * (0.2f * 3.1415927f / 180.0f);
   d[1] = d[0];
-  d[2] = (0.5f * 3.1415927f / 180.0f) * (0.5f * 3.1415927f / 180.0f);
+  d[2] = (60.0f * 3.1415927f / 180.0f) * (60.0f * 3.1415927f / 180.0f);
   sf_diag3(d, align_rt->state.p);
   memcpy(align_rt->state.gravity_lp_b, init.mean_accel_b, sizeof(init.mean_accel_b));
   sf_turn_consistency_reset(align_rt);
+  align_rt->yaw_observed = false;
   align_rt->state.coarse_alignment_ready = sf_compute_coarse_alignment_ready(align_rt);
   return true;
 }
@@ -145,7 +147,7 @@ float sf_align_update_window_with_trace(sf_align_runtime_t *align_rt,
   float horiz_gnss_norm;
   bool long_valid;
   bool heading_updates_enabled = true;
-  bool gravity_state_mask[3] = {true, true, true};
+  bool gravity_state_mask[3] = {true, true, false};
 
   if (align_rt == NULL || cfg == NULL || window == NULL) {
     return 0.0f;
@@ -299,6 +301,7 @@ float sf_align_update_window_with_trace(sf_align_runtime_t *align_rt,
         }
         score += sf_apply_vehicle_yaw_angle(
             align_rt->state.q_vb, align_rt->state.p, angle_err, effective_std * effective_std);
+        align_rt->yaw_observed = true;
         if (trace_out != NULL) {
           trace_out->after_horiz_accel_valid = true;
           memcpy(trace_out->after_horiz_accel,
@@ -321,6 +324,9 @@ float sf_align_update_window_with_trace(sf_align_runtime_t *align_rt,
         (float[2]){cfg->r_turn_gyro_std_radps * cfg->r_turn_gyro_std_radps,
                    cfg->r_turn_gyro_std_radps * cfg->r_turn_gyro_std_radps},
         state_mask, state_scale);
+    if (state_mask[2]) {
+      align_rt->yaw_observed = true;
+    }
     if (trace_out != NULL) {
       trace_out->after_turn_gyro_valid = true;
       memcpy(trace_out->after_turn_gyro, align_rt->state.q_vb, sizeof(trace_out->after_turn_gyro));
@@ -399,6 +405,9 @@ static void sf_turn_consistency_reset(sf_align_runtime_t *align_rt) {
 }
 
 static bool sf_compute_coarse_alignment_ready(const sf_align_runtime_t *align_rt) {
+  if (align_rt == NULL || !align_rt->yaw_observed) {
+    return false;
+  }
   float sigma_roll_deg = sqrtf(fmaxf(align_rt->state.p[0][0], 0.0f)) * 180.0f / 3.1415927f;
   float sigma_pitch_deg = sqrtf(fmaxf(align_rt->state.p[1][1], 0.0f)) * 180.0f / 3.1415927f;
   float sigma_yaw_deg = sqrtf(fmaxf(align_rt->state.p[2][2], 0.0f)) * 180.0f / 3.1415927f;
