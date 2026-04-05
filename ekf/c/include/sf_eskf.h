@@ -1,7 +1,7 @@
 #ifndef SF_ESKF_H
 #define SF_ESKF_H
 
-#include "sensor_fusion.h"
+#include "sensor_fusion_defs.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -63,6 +63,8 @@ typedef struct {
   float dvz;
   float dt;
 } sf_eskf_imu_delta_t;
+
+void sf_predict_noise_default(sf_predict_noise_t *cfg);
 
 void sf_eskf_init(sf_eskf_t *eskf,
                   const float p_diag[SF_ESKF_ERROR_STATES],

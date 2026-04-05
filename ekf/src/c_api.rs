@@ -2,7 +2,7 @@
 
 use crate::align::{AlignConfig, AlignWindowSummary};
 use crate::ekf::PredictNoise;
-use crate::fusion::{FusionConfig, FusionGnssSample, FusionImuSample, FusionUpdate};
+use crate::fusion::{FusionGnssSample, FusionImuSample, FusionUpdate};
 use crate::loose::LoosePredictNoise;
 
 pub const SF_SENSOR_FUSION_STORAGE_BYTES: usize = 32768;
@@ -56,26 +56,6 @@ pub struct CAlignConfig {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-pub struct CBootstrapConfig {
-    pub ema_alpha: f32,
-    pub max_speed_mps: f32,
-    pub stationary_samples: u32,
-    pub max_gyro_radps: f32,
-    pub max_accel_norm_err_mps2: f32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct CFusionConfig {
-    pub align: CAlignConfig,
-    pub bootstrap: CBootstrapConfig,
-    pub predict_noise: PredictNoise,
-    pub r_body_vel: f32,
-    pub yaw_init_speed_mps: f32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
 pub struct CImuSample {
     pub t_s: f32,
     pub gyro_radps: [f32; 3],
@@ -99,10 +79,40 @@ pub struct CGnssSample {
 pub struct CUpdate {
     pub mount_ready: bool,
     pub mount_ready_changed: bool,
-    pub ekf_initialized: bool,
-    pub ekf_initialized_now: bool,
+    pub sensor_fusion_state: bool,
+    pub sensor_fusion_state_changed: bool,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CAlignStatus {
+    None = 0,
+    Coarse = 1,
+    Fine = 2,
+}
+
+impl Default for CAlignStatus {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CFusionState {
+    pub mount_ready: bool,
     pub mount_q_vb_valid: bool,
     pub mount_q_vb: [f32; 4],
+    pub align_state: CAlignStatus,
+    pub align_q_vb: [f32; 4],
+    pub align_sigma_rad: [f32; 3],
+    pub gravity_lp_b: [f32; 3],
+    pub sensor_fusion_state: bool,
+    pub q_bn: [f32; 4],
+    pub vel_ned_mps: [f32; 3],
+    pub pos_ned_m: [f32; 3],
+    pub gyro_bias_radps: [f32; 3],
+    pub accel_bias_mps2: [f32; 3],
 }
 
 #[repr(C)]
@@ -357,19 +367,12 @@ unsafe extern "C" {
     ) -> f32;
     fn sf_align_coarse_alignment_ready(align_rt: *const CAlignRuntime) -> bool;
 
-    fn sf_fusion_init_internal(fusion: *mut CSensorFusion, cfg: *const CFusionConfig);
-    fn sf_fusion_init_external(
-        fusion: *mut CSensorFusion,
-        cfg: *const CFusionConfig,
-        q_vb: *const f32,
-    );
+    fn sf_init(fusion: *mut CSensorFusion, q_vb_or_null: *const f32);
+    fn sf_process_imu(fusion: *mut CSensorFusion, sample: *const CImuSample) -> CUpdate;
+    fn sf_process_gnss(fusion: *mut CSensorFusion, sample: *const CGnssSample) -> CUpdate;
+    fn sf_get_state(fusion: *const CSensorFusion, out: *mut CFusionState) -> bool;
+
     fn sf_fusion_set_misalignment(fusion: *mut CSensorFusion, q_vb: *const f32);
-    fn sf_fusion_process_imu(fusion: *mut CSensorFusion, sample: *const CImuSample) -> CUpdate;
-    fn sf_fusion_process_gnss(fusion: *mut CSensorFusion, sample: *const CGnssSample) -> CUpdate;
-    fn sf_fusion_eskf(fusion: *const CSensorFusion) -> *const CEskf;
-    fn sf_fusion_align(fusion: *const CSensorFusion) -> *const CAlignState;
-    fn sf_fusion_mount_ready(fusion: *const CSensorFusion) -> bool;
-    fn sf_fusion_mount_q_vb(fusion: *const CSensorFusion, out_q_vb: *mut f32) -> bool;
 
     fn sf_eskf_init(eskf: *mut CEskf, p_diag: *const f32, noise: *const PredictNoise);
     fn sf_eskf_predict(eskf: *mut CEskf, imu: *const CEskfImuDelta);
@@ -437,29 +440,13 @@ pub fn c_align_config_from_rust(cfg: AlignConfig) -> CAlignConfig {
     }
 }
 
-pub fn c_fusion_config_from_rust(cfg: FusionConfig) -> CFusionConfig {
-    CFusionConfig {
-        align: c_align_config_from_rust(cfg.align),
-        bootstrap: CBootstrapConfig {
-            ema_alpha: cfg.bootstrap.ema_alpha,
-            max_speed_mps: cfg.bootstrap.max_speed_mps,
-            stationary_samples: cfg.bootstrap.stationary_samples as u32,
-            max_gyro_radps: cfg.bootstrap.max_gyro_radps,
-            max_accel_norm_err_mps2: cfg.bootstrap.max_accel_norm_err_mps2,
-        },
-        predict_noise: cfg.predict_noise,
-        r_body_vel: cfg.r_body_vel,
-        yaw_init_speed_mps: cfg.yaw_init_speed_mps,
-    }
-}
-
-pub fn c_update_to_rust(update: CUpdate) -> FusionUpdate {
+pub fn c_update_to_rust(update: CUpdate, mount_q_vb: Option<[f32; 4]>) -> FusionUpdate {
     FusionUpdate {
         mount_ready: update.mount_ready,
         mount_ready_changed: update.mount_ready_changed,
-        ekf_initialized: update.ekf_initialized,
-        ekf_initialized_now: update.ekf_initialized_now,
-        mount_q_vb: update.mount_q_vb_valid.then_some(update.mount_q_vb),
+        ekf_initialized: update.sensor_fusion_state,
+        ekf_initialized_now: update.sensor_fusion_state_changed,
+        mount_q_vb,
     }
 }
 
@@ -554,6 +541,9 @@ impl CAlign {
 #[derive(Debug)]
 pub struct CSensorFusionWrapper {
     raw: CSensorFusion,
+    state: CFusionState,
+    cached_eskf: Option<CEskf>,
+    cached_align: Option<CAlignState>,
 }
 
 #[derive(Debug, Clone)]
@@ -566,36 +556,36 @@ pub struct CLooseWrapper {
 }
 
 impl CSensorFusionWrapper {
-    pub fn new_internal(cfg: FusionConfig) -> Self {
+    pub fn new_internal() -> Self {
         let mut raw = CSensorFusion::default();
-        let c_cfg = c_fusion_config_from_rust(cfg);
-        // SAFETY: valid pointers, C does not retain cfg pointer.
-        unsafe {
-            sf_fusion_init_internal(
-                &mut raw as *mut CSensorFusion,
-                &c_cfg as *const CFusionConfig,
-            )
+        unsafe { sf_init(&mut raw as *mut CSensorFusion, core::ptr::null()) };
+        let mut out = Self {
+            raw,
+            state: CFusionState::default(),
+            cached_eskf: None,
+            cached_align: None,
         };
-        Self { raw }
+        out.refresh_state();
+        out
     }
 
-    pub fn new_external(cfg: FusionConfig, q_vb: [f32; 4]) -> Self {
+    pub fn new_external(q_vb: [f32; 4]) -> Self {
         let mut raw = CSensorFusion::default();
-        let c_cfg = c_fusion_config_from_rust(cfg);
-        // SAFETY: valid pointers, C copies inputs.
-        unsafe {
-            sf_fusion_init_external(
-                &mut raw as *mut CSensorFusion,
-                &c_cfg as *const CFusionConfig,
-                q_vb.as_ptr(),
-            )
+        unsafe { sf_init(&mut raw as *mut CSensorFusion, q_vb.as_ptr()) };
+        let mut out = Self {
+            raw,
+            state: CFusionState::default(),
+            cached_eskf: None,
+            cached_align: None,
         };
-        Self { raw }
+        out.refresh_state();
+        out
     }
 
     pub fn set_misalignment(&mut self, q_vb: [f32; 4]) {
         // SAFETY: valid pointer, C copies input.
         unsafe { sf_fusion_set_misalignment(&mut self.raw as *mut CSensorFusion, q_vb.as_ptr()) }
+        self.refresh_state();
     }
 
     pub fn process_imu(&mut self, sample: FusionImuSample) -> FusionUpdate {
@@ -605,13 +595,11 @@ impl CSensorFusionWrapper {
             accel_mps2: sample.accel_mps2,
         };
         // SAFETY: valid pointers, C returns by value.
-        let update = unsafe {
-            sf_fusion_process_imu(
-                &mut self.raw as *mut CSensorFusion,
-                &c_sample as *const CImuSample,
-            )
-        };
-        c_update_to_rust(update)
+        let update =
+            unsafe { sf_process_imu(&mut self.raw as *mut CSensorFusion, &c_sample as *const CImuSample) };
+        self.refresh_state();
+        let mount_q_vb = self.mount_q_vb();
+        c_update_to_rust(update, mount_q_vb)
     }
 
     pub fn process_gnss(&mut self, sample: FusionGnssSample) -> FusionUpdate {
@@ -626,45 +614,83 @@ impl CSensorFusionWrapper {
         };
         // SAFETY: valid pointers, C returns by value.
         let update = unsafe {
-            sf_fusion_process_gnss(
+            sf_process_gnss(
                 &mut self.raw as *mut CSensorFusion,
                 &c_sample as *const CGnssSample,
             )
         };
-        c_update_to_rust(update)
+        self.refresh_state();
+        let mount_q_vb = self.mount_q_vb();
+        c_update_to_rust(update, mount_q_vb)
     }
 
     pub fn eskf(&self) -> Option<&CEskf> {
-        // SAFETY: C returns null or pointer to internal state owned by self.
-        let p = unsafe { sf_fusion_eskf(&self.raw as *const CSensorFusion) };
-        if p.is_null() {
-            None
-        } else {
-            Some(unsafe { &*p })
-        }
+        self.cached_eskf.as_ref()
     }
 
     pub fn align_state(&self) -> Option<&CAlignState> {
-        // SAFETY: C returns null or pointer to internal state owned by self.
-        let p = unsafe { sf_fusion_align(&self.raw as *const CSensorFusion) };
-        if p.is_null() {
-            None
-        } else {
-            Some(unsafe { &*p })
-        }
+        self.cached_align.as_ref()
     }
 
     pub fn mount_ready(&self) -> bool {
-        // SAFETY: valid pointer to owned storage.
-        unsafe { sf_fusion_mount_ready(&self.raw as *const CSensorFusion) }
+        self.state.mount_ready
     }
 
     pub fn mount_q_vb(&self) -> Option<[f32; 4]> {
-        let mut out = [0.0f32; 4];
-        // SAFETY: valid pointers, C writes exactly 4 floats on success.
-        let ok =
-            unsafe { sf_fusion_mount_q_vb(&self.raw as *const CSensorFusion, out.as_mut_ptr()) };
-        ok.then_some(out)
+        self.state.mount_q_vb_valid.then_some(self.state.mount_q_vb)
+    }
+
+    fn refresh_state(&mut self) {
+        let mut state = CFusionState::default();
+        let ok = unsafe {
+            sf_get_state(
+                &self.raw as *const CSensorFusion,
+                &mut state as *mut CFusionState,
+            )
+        };
+        if !ok {
+            return;
+        }
+        self.state = state;
+
+        self.cached_align = match state.align_state {
+            CAlignStatus::None => None,
+            CAlignStatus::Coarse | CAlignStatus::Fine => {
+                let mut p = [[0.0_f32; 3]; 3];
+                p[0][0] = state.align_sigma_rad[0] * state.align_sigma_rad[0];
+                p[1][1] = state.align_sigma_rad[1] * state.align_sigma_rad[1];
+                p[2][2] = state.align_sigma_rad[2] * state.align_sigma_rad[2];
+                Some(CAlignState {
+                    q_vb: state.align_q_vb,
+                    p,
+                    gravity_lp_b: state.gravity_lp_b,
+                    coarse_alignment_ready: true,
+                })
+            }
+        };
+
+        self.cached_eskf = if state.sensor_fusion_state {
+            let mut eskf = CEskf::default();
+            eskf.nominal.q0 = state.q_bn[0];
+            eskf.nominal.q1 = state.q_bn[1];
+            eskf.nominal.q2 = state.q_bn[2];
+            eskf.nominal.q3 = state.q_bn[3];
+            eskf.nominal.vn = state.vel_ned_mps[0];
+            eskf.nominal.ve = state.vel_ned_mps[1];
+            eskf.nominal.vd = state.vel_ned_mps[2];
+            eskf.nominal.pn = state.pos_ned_m[0];
+            eskf.nominal.pe = state.pos_ned_m[1];
+            eskf.nominal.pd = state.pos_ned_m[2];
+            eskf.nominal.bgx = state.gyro_bias_radps[0];
+            eskf.nominal.bgy = state.gyro_bias_radps[1];
+            eskf.nominal.bgz = state.gyro_bias_radps[2];
+            eskf.nominal.bax = state.accel_bias_mps2[0];
+            eskf.nominal.bay = state.accel_bias_mps2[1];
+            eskf.nominal.baz = state.accel_bias_mps2[2];
+            Some(eskf)
+        } else {
+            None
+        };
     }
 }
 

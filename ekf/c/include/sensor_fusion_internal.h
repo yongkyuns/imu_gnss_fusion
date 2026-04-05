@@ -1,12 +1,14 @@
 #ifndef SENSOR_FUSION_INTERNAL_H
 #define SENSOR_FUSION_INTERNAL_H
 
-#include "sensor_fusion.h"
+#include "sensor_fusion_defs.h"
 #include "sf_eskf.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+typedef sf_t sf_sensor_fusion_t;
 
 typedef struct {
   float t_s;
@@ -172,6 +174,26 @@ float sf_align_update_window_with_trace(sf_align_runtime_t *align_rt,
                                         const sf_align_window_summary_t *window,
                                         sf_align_update_trace_t *trace_out);
 bool sf_align_coarse_alignment_ready(const sf_align_runtime_t *align_rt);
+
+void sf_align_config_default(sf_align_config_t *cfg);
+void sf_bootstrap_config_default(sf_bootstrap_config_t *cfg);
+void sf_predict_noise_default(sf_predict_noise_t *cfg);
+void sf_fusion_config_default(sf_fusion_config_t *cfg);
+
+void sf_fusion_init_internal(sf_sensor_fusion_t *fusion,
+                             const sf_fusion_config_t *cfg);
+void sf_fusion_init_external(sf_sensor_fusion_t *fusion,
+                             const sf_fusion_config_t *cfg,
+                             const float q_vb[4]);
+void sf_fusion_set_misalignment(sf_sensor_fusion_t *fusion, const float q_vb[4]);
+sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
+                                  const sf_imu_sample_t *sample);
+sf_update_t sf_fusion_process_gnss(sf_sensor_fusion_t *fusion,
+                                   const sf_gnss_sample_t *sample);
+const sf_eskf_t *sf_fusion_eskf(const sf_sensor_fusion_t *fusion);
+const sf_align_t *sf_fusion_align(const sf_sensor_fusion_t *fusion);
+bool sf_fusion_mount_ready(const sf_sensor_fusion_t *fusion);
+bool sf_fusion_mount_q_vb(const sf_sensor_fusion_t *fusion, float out_q_vb[4]);
 
 void sf_fusion_set_profile_now_us(sf_sensor_fusion_t *fusion,
                                   sf_profile_now_us_fn now_us,

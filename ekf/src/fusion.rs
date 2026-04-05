@@ -1,49 +1,5 @@
 use crate::align::{Align, AlignConfig};
 use crate::c_api::{CEskf, CSensorFusionWrapper};
-use crate::ekf::PredictNoise;
-
-#[derive(Clone, Copy, Debug)]
-pub struct FusionBootstrapConfig {
-    pub ema_alpha: f32,
-    pub max_speed_mps: f32,
-    pub stationary_samples: usize,
-    pub max_gyro_radps: f32,
-    pub max_accel_norm_err_mps2: f32,
-}
-
-impl Default for FusionBootstrapConfig {
-    fn default() -> Self {
-        let align = AlignConfig::default();
-        Self {
-            ema_alpha: 0.05,
-            max_speed_mps: 0.35,
-            stationary_samples: 100,
-            max_gyro_radps: align.max_stationary_gyro_radps,
-            max_accel_norm_err_mps2: align.max_stationary_accel_norm_err_mps2,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct FusionConfig {
-    pub align: AlignConfig,
-    pub bootstrap: FusionBootstrapConfig,
-    pub predict_noise: PredictNoise,
-    pub r_body_vel: f32,
-    pub yaw_init_speed_mps: f32,
-}
-
-impl Default for FusionConfig {
-    fn default() -> Self {
-        Self {
-            align: AlignConfig::default(),
-            bootstrap: FusionBootstrapConfig::default(),
-            predict_noise: PredictNoise::default(),
-            r_body_vel: 5.0,
-            yaw_init_speed_mps: 0.0,
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug)]
 pub struct FusionImuSample {
@@ -79,27 +35,25 @@ pub enum MisalignmentMode {
 
 #[derive(Debug)]
 pub struct SensorFusion {
-    cfg: FusionConfig,
     raw: CSensorFusionWrapper,
     cached_align: Option<Align>,
 }
 
 impl SensorFusion {
-    pub fn new(cfg: FusionConfig) -> Self {
-        Self::with_misalignment_mode(cfg, MisalignmentMode::InternalAlign)
+    pub fn new() -> Self {
+        Self::with_misalignment_mode(MisalignmentMode::InternalAlign)
     }
 
-    pub fn with_misalignment(cfg: FusionConfig, q_vb: [f32; 4]) -> Self {
-        Self::with_misalignment_mode(cfg, MisalignmentMode::External(q_vb))
+    pub fn with_misalignment(q_vb: [f32; 4]) -> Self {
+        Self::with_misalignment_mode(MisalignmentMode::External(q_vb))
     }
 
-    pub fn with_misalignment_mode(cfg: FusionConfig, mode: MisalignmentMode) -> Self {
+    pub fn with_misalignment_mode(mode: MisalignmentMode) -> Self {
         let raw = match mode {
-            MisalignmentMode::InternalAlign => CSensorFusionWrapper::new_internal(cfg),
-            MisalignmentMode::External(q_vb) => CSensorFusionWrapper::new_external(cfg, q_vb),
+            MisalignmentMode::InternalAlign => CSensorFusionWrapper::new_internal(),
+            MisalignmentMode::External(q_vb) => CSensorFusionWrapper::new_external(q_vb),
         };
         let mut out = Self {
-            cfg,
             raw,
             cached_align: None,
         };
@@ -144,6 +98,6 @@ impl SensorFusion {
         self.cached_align = self
             .raw
             .align_state()
-            .map(|s| Align::from_c_state(self.cfg.align, *s));
+            .map(|s| Align::from_c_state(AlignConfig::default(), *s));
     }
 }

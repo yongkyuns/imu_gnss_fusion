@@ -28,11 +28,77 @@ static bool sf_take_interval_summary(sf_sensor_fusion_impl_t *impl,
 static sf_update_t sf_update_from_fusion(const sf_sensor_fusion_impl_t *fusion,
                                          bool mount_ready_changed,
                                          bool ekf_initialized_now);
+static sf_align_state_t sf_align_state_from_impl(const sf_sensor_fusion_impl_t *impl);
 static uint32_t sf_profile_stamp(const sf_sensor_fusion_impl_t *impl);
 static void sf_profile_accumulate(uint32_t *count,
                                   uint64_t *total_us,
                                   uint32_t *max_us,
                                   uint32_t elapsed_us);
+
+void sf_init(sf_t *sf, const float *q_vb_or_null) {
+  if (q_vb_or_null == NULL) {
+    sf_fusion_init_internal((sf_sensor_fusion_t *)sf, NULL);
+  } else {
+    sf_fusion_init_external((sf_sensor_fusion_t *)sf, NULL, q_vb_or_null);
+  }
+}
+
+sf_update_t sf_process_imu(sf_t *sf, const sf_imu_sample_t *sample) {
+  return sf_fusion_process_imu((sf_sensor_fusion_t *)sf, sample);
+}
+
+sf_update_t sf_process_gnss(sf_t *sf, const sf_gnss_sample_t *sample) {
+  return sf_fusion_process_gnss((sf_sensor_fusion_t *)sf, sample);
+}
+
+bool sf_get_state(const sf_t *sf, sf_state_t *out) {
+  const sf_sensor_fusion_impl_t *impl;
+
+  if (sf == NULL || out == NULL) {
+    return false;
+  }
+
+  impl = sf_impl_const((const sf_sensor_fusion_t *)sf);
+  memset(out, 0, sizeof(*out));
+  out->mount_ready = impl->mount_ready;
+  out->mount_q_vb_valid = impl->mount_q_vb_valid;
+  if (impl->mount_q_vb_valid) {
+    memcpy(out->mount_q_vb, impl->mount_q_vb, sizeof(out->mount_q_vb));
+  }
+
+  out->align_state = sf_align_state_from_impl(impl);
+  if (!impl->internal_align_enabled && impl->mount_q_vb_valid) {
+    memcpy(out->align_q_vb, impl->mount_q_vb, sizeof(out->align_q_vb));
+  } else {
+    memcpy(out->align_q_vb, impl->align_rt.state.q_vb, sizeof(out->align_q_vb));
+  }
+  out->align_sigma_rad[0] = sqrtf(fmaxf(impl->align_rt.state.p[0][0], 0.0f));
+  out->align_sigma_rad[1] = sqrtf(fmaxf(impl->align_rt.state.p[1][1], 0.0f));
+  out->align_sigma_rad[2] = sqrtf(fmaxf(impl->align_rt.state.p[2][2], 0.0f));
+  memcpy(out->gravity_lp_b, impl->align_rt.state.gravity_lp_b, sizeof(out->gravity_lp_b));
+
+  out->sensor_fusion_state = impl->ekf_initialized;
+  if (impl->ekf_initialized) {
+    out->q_bn[0] = impl->eskf.nominal.q0;
+    out->q_bn[1] = impl->eskf.nominal.q1;
+    out->q_bn[2] = impl->eskf.nominal.q2;
+    out->q_bn[3] = impl->eskf.nominal.q3;
+    out->vel_ned_mps[0] = impl->eskf.nominal.vn;
+    out->vel_ned_mps[1] = impl->eskf.nominal.ve;
+    out->vel_ned_mps[2] = impl->eskf.nominal.vd;
+    out->pos_ned_m[0] = impl->eskf.nominal.pn;
+    out->pos_ned_m[1] = impl->eskf.nominal.pe;
+    out->pos_ned_m[2] = impl->eskf.nominal.pd;
+    out->gyro_bias_radps[0] = impl->eskf.nominal.bgx;
+    out->gyro_bias_radps[1] = impl->eskf.nominal.bgy;
+    out->gyro_bias_radps[2] = impl->eskf.nominal.bgz;
+    out->accel_bias_mps2[0] = impl->eskf.nominal.bax;
+    out->accel_bias_mps2[1] = impl->eskf.nominal.bay;
+    out->accel_bias_mps2[2] = impl->eskf.nominal.baz;
+  }
+
+  return true;
+}
 
 void sf_align_config_default(sf_align_config_t *cfg) {
   if (cfg == NULL) {
@@ -450,13 +516,25 @@ static sf_update_t sf_update_from_fusion(const sf_sensor_fusion_impl_t *fusion,
 
   out.mount_ready = fusion->mount_ready;
   out.mount_ready_changed = mount_ready_changed;
-  out.ekf_initialized = fusion->ekf_initialized;
-  out.ekf_initialized_now = ekf_initialized_now;
-  out.mount_q_vb_valid = fusion->mount_q_vb_valid;
-  if (fusion->mount_q_vb_valid) {
-    memcpy(out.mount_q_vb, fusion->mount_q_vb, sizeof(out.mount_q_vb));
-  }
+  out.sensor_fusion_state = fusion->ekf_initialized;
+  out.sensor_fusion_state_changed = ekf_initialized_now;
   return out;
+}
+
+static sf_align_state_t sf_align_state_from_impl(const sf_sensor_fusion_impl_t *impl) {
+  if (impl == NULL) {
+    return SF_ALIGN_STATE_NONE;
+  }
+  if (!impl->internal_align_enabled && impl->mount_q_vb_valid) {
+    return SF_ALIGN_STATE_FINE;
+  }
+  if (!impl->align_initialized) {
+    return SF_ALIGN_STATE_NONE;
+  }
+  if (impl->mount_ready) {
+    return SF_ALIGN_STATE_FINE;
+  }
+  return SF_ALIGN_STATE_COARSE;
 }
 
 static void sf_initialize_eskf_from_gnss(sf_eskf_t *eskf,

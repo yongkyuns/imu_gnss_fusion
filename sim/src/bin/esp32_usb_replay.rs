@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use sensor_fusion::fusion::{FusionConfig, FusionGnssSample, FusionImuSample, SensorFusion};
+use sensor_fusion::fusion::{FusionGnssSample, FusionImuSample, SensorFusion};
 use sim::ubxlog::{
     NavPvtObs, UbxFrame, extract_esf_raw_samples, extract_nav2_pvt_obs, parse_ubx_frames,
     sensor_meta,
@@ -161,7 +161,7 @@ fn main() -> Result<()> {
     std::thread::sleep(Duration::from_millis(args.settle_ms));
 
     let (mode, q_vb) = parse_mode_and_q(&args.external_q_vb)?;
-    let host_summary = run_host_reference(&events, mode, q_vb, args.r_body_vel);
+    let host_summary = run_host_reference(&events, mode, q_vb);
     write_frame(
         &mut *port,
         MSG_CONFIG,
@@ -266,16 +266,11 @@ fn run_host_reference(
     events: &[ReplayEvent],
     mode: u8,
     q_vb: [f32; 4],
-    r_body_vel: Option<f32>,
 ) -> HostSummary {
-    let mut cfg = FusionConfig::default();
-    if let Some(r) = r_body_vel {
-        cfg.r_body_vel = r;
-    }
     let mut fusion = if mode == MODE_EXTERNAL_QVB {
-        SensorFusion::with_misalignment(cfg, q_vb)
+        SensorFusion::with_misalignment(q_vb)
     } else {
-        SensorFusion::new(cfg)
+        SensorFusion::new()
     };
     let mut mount_ready_t_s = None;
     let mut ekf_init_t_s = None;
