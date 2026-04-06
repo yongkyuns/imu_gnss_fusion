@@ -10,3 +10,6 @@ path = "src/lib.rs"
 
 [dependencies]
 libm = "0.2"
+
+[build-dependencies]
+cc = "1"

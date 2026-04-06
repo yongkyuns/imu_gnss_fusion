@@ -1,6 +1,44 @@
 use std::env;
-use std::path::PathBuf;
-use std::process::Command;
+use std::path::{Path, PathBuf};
+
+fn first_existing_path(candidates: &[PathBuf]) -> Option<PathBuf> {
+    candidates.iter().find(|path| path.exists()).cloned()
+}
+
+fn wasi_sysroot() -> Option<PathBuf> {
+    if let Ok(path) = env::var("WASI_SYSROOT") {
+        let path = PathBuf::from(path);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    if let Ok(path) = env::var("WASI_SDK_PATH") {
+        let sysroot = Path::new(&path).join("share/wasi-sysroot");
+        if sysroot.exists() {
+            return Some(sysroot);
+        }
+    }
+
+    first_existing_path(&[
+        PathBuf::from("/usr/local/opt/wasi-libc/share/wasi-sysroot"),
+        PathBuf::from("/opt/homebrew/opt/wasi-libc/share/wasi-sysroot"),
+    ])
+}
+
+fn llvm_tool(name: &str) -> Option<PathBuf> {
+    if let Ok(root) = env::var("LLVM_ROOT") {
+        let tool = Path::new(&root).join("bin").join(name);
+        if tool.exists() {
+            return Some(tool);
+        }
+    }
+
+    first_existing_path(&[
+        PathBuf::from(format!("/usr/local/opt/llvm/bin/{name}")),
+        PathBuf::from(format!("/opt/homebrew/opt/llvm/bin/{name}")),
+    ])
+}
 
 fn main() {
     println!("cargo:rerun-if-changed=c/Makefile");
@@ -10,55 +48,40 @@ fn main() {
     println!("cargo:rerun-if-changed=c/include");
     println!("cargo:rerun-if-changed=c/src");
 
-    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR not set"));
-    build_archive(
-        &out_dir,
-        "sensor_fusion_c_impl",
-        &[
-            PathBuf::from("c/src/sensor_fusion.c"),
-            PathBuf::from("c/src/sf_align.c"),
-            PathBuf::from("c/src/sf_stationary_mount.c"),
-            PathBuf::from("c/src/sf_eskf.c"),
-            PathBuf::from("c/src/sf_loose.c"),
-        ],
-        &["-Ic", "-Ic/include"],
-    );
+    let target = env::var("TARGET").unwrap_or_default();
+    let mut build = cc::Build::new();
+    build
+        .std("c11")
+        .opt_level(3)
+        .define("NDEBUG", None)
+        .include("c")
+        .include("c/include")
+        .file("c/src/sensor_fusion.c")
+        .file("c/src/sf_align.c")
+        .file("c/src/sf_stationary_mount.c")
+        .file("c/src/sf_eskf.c")
+        .file("c/src/sf_loose.c");
 
-    println!("cargo:rustc-link-search=native={}", out_dir.display());
-    println!("cargo:rustc-link-lib=static=sensor_fusion_c_impl");
-    #[cfg(target_os = "linux")]
-    println!("cargo:rustc-link-lib=m");
-}
-
-fn build_archive(out_dir: &PathBuf, lib_name: &str, sources: &[PathBuf], includes: &[&str]) {
-    let mut objs = Vec::with_capacity(sources.len());
-    for (idx, src) in sources.iter().enumerate() {
-        let obj = out_dir.join(format!("{lib_name}_{idx}.o"));
-        let mut cmd = Command::new("cc");
-        cmd.arg("-std=c11").arg("-O3").arg("-DNDEBUG");
-        for include in includes {
-            cmd.arg(include);
+    if target == "wasm32-wasip1" {
+        if let Some(clang) = llvm_tool("clang") {
+            build.compiler(clang);
         }
-        cmd.arg("-c").arg(src).arg("-o").arg(&obj);
-        let status = cmd.status().expect("failed to run C compiler");
-        assert!(
-            status.success(),
-            "C compilation failed for {}",
-            src.display()
-        );
-        objs.push(obj);
+        if let Some(llvm_ar) = llvm_tool("llvm-ar") {
+            build.archiver(llvm_ar);
+        }
+        if let Some(sysroot) = wasi_sysroot() {
+            build.flag("--target=wasm32-wasip1");
+            build.flag(&format!("--sysroot={}", sysroot.display()));
+        } else {
+            println!(
+                "cargo:warning=WASI sysroot not found; set WASI_SYSROOT or WASI_SDK_PATH for wasm32-wasip1 builds"
+            );
+        }
     }
 
-    let lib = out_dir.join(format!("lib{lib_name}.a"));
-    let mut ar = Command::new("ar");
-    ar.arg("crus").arg(&lib);
-    for obj in &objs {
-        ar.arg(obj);
+    build.compile("sensor_fusion_c_impl");
+
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
+        println!("cargo:rustc-link-lib=m");
     }
-    let status = ar.status().expect("failed to run ar");
-    assert!(
-        status.success(),
-        "archive creation failed for {}",
-        lib.display()
-    );
 }

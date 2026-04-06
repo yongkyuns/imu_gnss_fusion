@@ -136,6 +136,41 @@ pub struct App {
     show_loose: bool,
 }
 
+fn create_app(cc: &eframe::CreationContext<'_>, data: PlotData, has_itow: bool) -> App {
+    let map_center = map_center_from_traces(&data.eskf_map);
+    let map_tiles = if MAPBOX_ACCESS_TOKEN.is_empty() {
+        HttpTiles::new(OpenStreetMap, cc.egui_ctx.clone())
+    } else {
+        HttpTiles::new(
+            Mapbox {
+                style: MapboxStyle::Dark,
+                high_resolution: true,
+                access_token: MAPBOX_ACCESS_TOKEN.to_string(),
+            },
+            cc.egui_ctx.clone(),
+        )
+    };
+    let mut map_memory = MapMemory::default();
+    let _ = map_memory.set_zoom(15.0);
+    App {
+        data,
+        show_egui_inspection: false,
+        show_esf_meas: false,
+        has_itow,
+        fps_ema: 0.0,
+        max_points_per_trace: 2500,
+        page: Page::Signals,
+        map_tiles,
+        map_memory,
+        map_center,
+        show_heading: false,
+        show_nav_pvt: true,
+        show_nav2_pvt: true,
+        show_eskf: true,
+        show_loose: true,
+    }
+}
+
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
@@ -803,6 +838,7 @@ fn draw_plot<'a, I>(
     });
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run_visualizer(data: PlotData, has_itow: bool) -> Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_maximized(true),
@@ -811,41 +847,28 @@ pub fn run_visualizer(data: PlotData, has_itow: bool) -> Result<()> {
     eframe::run_native(
         "visualizer",
         native_options,
-        Box::new(move |cc| {
-            let map_center = map_center_from_traces(&data.eskf_map);
-            let map_tiles = if MAPBOX_ACCESS_TOKEN.is_empty() {
-                HttpTiles::new(OpenStreetMap, cc.egui_ctx.clone())
-            } else {
-                HttpTiles::new(
-                    Mapbox {
-                        style: MapboxStyle::Dark,
-                        high_resolution: true,
-                        access_token: MAPBOX_ACCESS_TOKEN.to_string(),
-                    },
-                    cc.egui_ctx.clone(),
-                )
-            };
-            let mut map_memory = MapMemory::default();
-            let _ = map_memory.set_zoom(15.0);
-            Ok(Box::new(App {
-                data,
-                show_egui_inspection: false,
-                show_esf_meas: false,
-                has_itow,
-                fps_ema: 0.0,
-                max_points_per_trace: 2500,
-                page: Page::Signals,
-                map_tiles,
-                map_memory,
-                map_center,
-                show_heading: false,
-                show_nav_pvt: true,
-                show_nav2_pvt: true,
-                show_eskf: true,
-                show_loose: true,
-            }))
-        }),
+        Box::new(move |cc| Ok(Box::new(create_app(cc, data, has_itow)))),
     )
     .map_err(|e| anyhow::anyhow!("eframe error: {e}"))?;
     Ok(())
+}
+
+#[cfg(target_arch = "wasm32")]
+pub async fn run_visualizer_web(
+    canvas: eframe::web_sys::HtmlCanvasElement,
+    data: PlotData,
+    has_itow: bool,
+) -> std::result::Result<(), eframe::wasm_bindgen::JsValue> {
+    eframe::WebRunner::new()
+        .start(
+            canvas,
+            eframe::WebOptions::default(),
+            Box::new(move |cc| Ok(Box::new(create_app(cc, data, has_itow)))),
+        )
+        .await
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn run_visualizer(_data: PlotData, _has_itow: bool) -> Result<()> {
+    anyhow::bail!("run_visualizer is native-only on wasm; use run_visualizer_web instead")
 }

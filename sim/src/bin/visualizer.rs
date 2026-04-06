@@ -1,17 +1,27 @@
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
+#[cfg(not(target_arch = "wasm32"))]
 use std::{fs::File, io::Read, path::PathBuf};
 
+#[cfg(not(target_arch = "wasm32"))]
 use anyhow::{Context, Result};
+#[cfg(not(target_arch = "wasm32"))]
 use clap::Parser;
+#[cfg(not(target_arch = "wasm32"))]
 use sim::visualizer::model::EkfImuSource;
+#[cfg(not(target_arch = "wasm32"))]
 use sim::visualizer::pipeline::build_plot_data;
+#[cfg(not(target_arch = "wasm32"))]
 use sim::visualizer::pipeline::ekf_compare::{EkfCompareConfig, GnssOutageConfig};
+#[cfg(not(target_arch = "wasm32"))]
 use sim::visualizer::stats::{
     group_stats, max_gap_sec, max_gap_trace, max_step_abs, trace_stats, trace_time_bounds,
     trace_value_bounds,
 };
+#[cfg(not(target_arch = "wasm32"))]
 use sim::visualizer::ui::run_visualizer;
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Parser, Debug)]
 #[command(name = "visualizer")]
 struct Args {
@@ -44,6 +54,7 @@ struct Args {
     ekf_predict_imu_lpf_cutoff_hz: Option<f64>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> Result<()> {
     let args = Args::parse();
     let t0 = Instant::now();
@@ -206,6 +217,10 @@ fn main() -> Result<()> {
     run_visualizer(data, has_itow)
 }
 
+#[cfg(target_arch = "wasm32")]
+fn main() {}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn parse_misalignment(s: &str) -> Result<EkfImuSource, String> {
     match s.to_ascii_lowercase().as_str() {
         "auto" | "align" => Ok(EkfImuSource::Align),
@@ -216,6 +231,7 @@ fn parse_misalignment(s: &str) -> Result<EkfImuSource, String> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn dump_traces_near_time(
     group: &str,
     traces: &[sim::visualizer::model::Trace],
