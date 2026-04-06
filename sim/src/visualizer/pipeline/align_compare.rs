@@ -56,6 +56,16 @@ pub fn build_align_compare_traces(
     let mut down_err = Vec::<[f64; 2]>::new();
     let mut yaw_init = Vec::<[f64; 2]>::new();
     let mut final_alg_heading = Vec::<[f64; 2]>::new();
+    let mount_ready_markers: Vec<[f64; 2]> = replay
+        .mount_ready_times_s
+        .iter()
+        .map(|&t| [t, 1.0])
+        .collect();
+    let ekf_initialized_markers: Vec<[f64; 2]> = replay
+        .ekf_initialized_times_s
+        .iter()
+        .map(|&t| [t, 2.0])
+        .collect();
     let mut roll_horiz = Vec::<[f64; 2]>::new();
     let mut roll_turn_gyro = Vec::<[f64; 2]>::new();
     let mut roll_lat = Vec::<[f64; 2]>::new();
@@ -184,6 +194,14 @@ pub fn build_align_compare_traces(
         motion: vec![Trace {
             name: "final ESF-ALG heading [deg]".to_string(),
             points: final_alg_heading,
+        },
+        Trace {
+            name: "mount ready".to_string(),
+            points: mount_ready_markers,
+        },
+        Trace {
+            name: "EKF initialized".to_string(),
+            points: ekf_initialized_markers,
         }],
         roll_contrib: vec![
             Trace {

@@ -46,6 +46,8 @@ typedef struct {
 typedef struct {
   float ema_alpha;
   float max_speed_mps;
+  float max_speed_rate_mps2;
+  float max_course_rate_radps;
   uint32_t stationary_samples;
   float max_gyro_radps;
   float max_accel_norm_err_mps2;

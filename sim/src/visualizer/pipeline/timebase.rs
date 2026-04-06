@@ -56,23 +56,15 @@ pub fn build_master_timeline(frames: &[UbxFrame]) -> MasterTimeline {
             m.1 = msu as f64;
         }
 
-        let mut filtered: Vec<(u64, f64)> = Vec::with_capacity(masters.len());
-        let mut last_ms: Option<f64> = None;
-        for (seq, ms) in masters.iter().copied() {
-            match last_ms {
-                None => {
-                    filtered.push((seq, ms));
-                    last_ms = Some(ms);
-                }
-                Some(prev) => {
-                    let dt = ms - prev;
-                    if (0.0..=10_000.0).contains(&dt) {
-                        filtered.push((seq, ms));
-                        last_ms = Some(ms);
-                    }
-                }
-            }
-        }
+        let mut sorted_ms: Vec<f64> = masters.iter().map(|(_, ms)| *ms).collect();
+        sorted_ms.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let median_ms = sorted_ms[sorted_ms.len() / 2];
+        let dominant_window_ms = 4.0 * 3600.0 * 1000.0;
+        let filtered: Vec<(u64, f64)> = masters
+            .iter()
+            .copied()
+            .filter(|(_, ms)| (*ms - median_ms).abs() <= dominant_window_ms)
+            .collect();
         if filtered.len() >= 10 {
             masters = filtered;
         }

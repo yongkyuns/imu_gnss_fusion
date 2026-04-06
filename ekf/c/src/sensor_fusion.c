@@ -13,6 +13,10 @@ static void sf_transpose3(const float in[3][3], float out[3][3]);
 static void sf_mat3_vec(const float m[3][3], const float v[3], float out[3]);
 static float sf_norm3(const float v[3]);
 static float sf_ema_update(bool *valid, float *prev, float sample, float alpha);
+static float sf_wrap_pi(float rad);
+static float sf_horiz_speed(const float vel_ned_mps[3]);
+static void sf_bootstrap_update_gnss_hints(sf_sensor_fusion_impl_t *impl,
+                                           const sf_gnss_sample_t *sample);
 static bool sf_bootstrap_update(sf_sensor_fusion_impl_t *impl,
                                 const float accel_b[3],
                                 const float gyro_radps[3]);
@@ -133,6 +137,8 @@ void sf_bootstrap_config_default(sf_bootstrap_config_t *cfg) {
   sf_align_config_default(&align_cfg);
   cfg->ema_alpha = 0.05f;
   cfg->max_speed_mps = 0.35f;
+  cfg->max_speed_rate_mps2 = 0.15f;
+  cfg->max_course_rate_radps = 1.0f * 3.1415927f / 180.0f;
   cfg->stationary_samples = 100U;
   cfg->max_gyro_radps = align_cfg.max_stationary_gyro_radps;
   cfg->max_accel_norm_err_mps2 = align_cfg.max_stationary_accel_norm_err_mps2;
@@ -413,6 +419,8 @@ sf_update_t sf_fusion_process_gnss(sf_sensor_fusion_t *fusion,
   prev_mount_ready = impl->mount_ready;
 
   if (impl->internal_align_enabled) {
+    sf_bootstrap_update_gnss_hints(impl, sample);
+
     if (impl->align_initialized && impl->bootstrap_prev_gnss_valid) {
       have_summary = sf_take_interval_summary(
           impl, impl->bootstrap_prev_gnss.t_s, sample->t_s, &summary);
@@ -707,6 +715,63 @@ static float sf_ema_update(bool *valid, float *prev, float sample, float alpha) 
   return *prev;
 }
 
+static float sf_wrap_pi(float rad) {
+  while (rad <= -3.1415927f) {
+    rad += 2.0f * 3.1415927f;
+  }
+  while (rad > 3.1415927f) {
+    rad -= 2.0f * 3.1415927f;
+  }
+  return rad;
+}
+
+static float sf_horiz_speed(const float vel_ned_mps[3]) {
+  return sqrtf(vel_ned_mps[0] * vel_ned_mps[0] + vel_ned_mps[1] * vel_ned_mps[1]);
+}
+
+static void sf_bootstrap_update_gnss_hints(sf_sensor_fusion_impl_t *impl,
+                                           const sf_gnss_sample_t *sample) {
+  float dt_s;
+  float speed_mps;
+
+  if (impl == NULL || sample == NULL) {
+    return;
+  }
+
+  speed_mps = sf_horiz_speed(sample->vel_ned_mps);
+  sf_ema_update(&impl->bootstrap_speed_ema_valid,
+                &impl->bootstrap_speed_ema,
+                speed_mps,
+                impl->cfg.bootstrap.ema_alpha);
+
+  if (!impl->bootstrap_prev_gnss_valid) {
+    return;
+  }
+
+  dt_s = sample->t_s - impl->bootstrap_prev_gnss.t_s;
+  if (dt_s <= 1.0e-3f) {
+    return;
+  }
+
+  {
+    float prev_speed_mps = sf_horiz_speed(impl->bootstrap_prev_gnss.vel_ned_mps);
+    float speed_rate_mps2 = (speed_mps - prev_speed_mps) / dt_s;
+    float course_prev_rad = atan2f(impl->bootstrap_prev_gnss.vel_ned_mps[1],
+                                   impl->bootstrap_prev_gnss.vel_ned_mps[0]);
+    float course_curr_rad = atan2f(sample->vel_ned_mps[1], sample->vel_ned_mps[0]);
+    float course_rate_radps = sf_wrap_pi(course_curr_rad - course_prev_rad) / dt_s;
+
+    sf_ema_update(&impl->bootstrap_speed_rate_ema_valid,
+                  &impl->bootstrap_speed_rate_ema,
+                  fabsf(speed_rate_mps2),
+                  impl->cfg.bootstrap.ema_alpha);
+    sf_ema_update(&impl->bootstrap_course_rate_ema_valid,
+                  &impl->bootstrap_course_rate_ema,
+                  fabsf(course_rate_radps),
+                  impl->cfg.bootstrap.ema_alpha);
+  }
+}
+
 static bool sf_bootstrap_update(sf_sensor_fusion_impl_t *impl,
                                 const float accel_b[3],
                                 const float gyro_radps[3]) {
@@ -720,8 +785,17 @@ static bool sf_bootstrap_update(sf_sensor_fusion_impl_t *impl,
                                   &impl->bootstrap_accel_err_ema,
                                   accel_err,
                                   impl->cfg.bootstrap.ema_alpha);
-  bool stationary = gyro_ema <= impl->cfg.bootstrap.max_gyro_radps &&
-                    accel_ema <= impl->cfg.bootstrap.max_accel_norm_err_mps2;
+  bool low_dynamic = gyro_ema <= impl->cfg.bootstrap.max_gyro_radps &&
+                     accel_ema <= impl->cfg.bootstrap.max_accel_norm_err_mps2;
+  bool low_speed = !impl->bootstrap_speed_ema_valid ||
+                   impl->bootstrap_speed_ema <= impl->cfg.bootstrap.max_speed_mps;
+  bool steady_motion = impl->bootstrap_speed_rate_ema_valid &&
+                       impl->bootstrap_course_rate_ema_valid &&
+                       impl->bootstrap_speed_rate_ema <=
+                           impl->cfg.bootstrap.max_speed_rate_mps2 &&
+                       impl->bootstrap_course_rate_ema <=
+                           impl->cfg.bootstrap.max_course_rate_radps;
+  bool stationary = low_dynamic && (low_speed || steady_motion);
 
   if (stationary) {
     if (impl->bootstrap_stationary_count < 400U) {

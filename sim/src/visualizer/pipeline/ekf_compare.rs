@@ -367,6 +367,8 @@ pub fn build_ekf_compare_traces(
     let mut map_eskf = Vec::<[f64; 2]>::new();
     let mut map_eskf_outage = Vec::<[f64; 2]>::new();
     let mut map_eskf_heading = Vec::<HeadingSample>::new();
+    let mut fusion_mount_ready_marker = Vec::<[f64; 2]>::new();
+    let mut fusion_ekf_init_marker = Vec::<[f64; 2]>::new();
     let mut map_loose = Vec::<[f64; 2]>::new();
     let mut map_loose_heading = Vec::<HeadingSample>::new();
 
@@ -594,9 +596,105 @@ pub fn build_ekf_compare_traces(
                 let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
                 let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
                 let t = rel_s(t_ms);
-                if loose.is_none() {
-                    loose = Some(initialize_loose_from_nav(nav, ned, base_loose_predict_noise, cfg));
+                let fusion_gnss = fusion_gnss_sample(nav, ned, cfg, rel_s(t_ms) as f32);
+                let update = fusion_ref.process_gnss(fusion_gnss);
+                if update.mount_ready_changed && update.mount_ready {
+                    fusion_mount_ready_marker.push([t, nav.heading_vehicle_deg]);
+                }
+                if update.ekf_initialized_now {
+                    fusion_ekf_init_marker.push([t, nav.heading_vehicle_deg]);
+                }
+                if let Some(loose_ref) = loose.as_mut() {
+                    let dt_since_last_gnss_s = loose_last_gps_update_ms
+                        .map(|last_t_ms| ((t_ms - last_t_ms) * 1.0e-3) as f32)
+                        .unwrap_or(1.0)
+                        .clamp(1.0e-3, 1.0);
+                    loose_ref.fuse_reference_batch(
+                        Some(ecef),
+                        (nav.h_acc_m * cfg.gnss_pos_r_scale.sqrt()) as f32,
+                        dt_since_last_gnss_s,
+                        loose_gyro_radps,
+                        loose_accel_mps2,
+                        loose_imu.dt,
+                    );
                     loose_last_gps_update_ms = Some(t_ms);
+                    loose_batch_applied = true;
+                }
+
+                if let Some(eskf_ref) = fusion_ref.eskf() {
+                    let n = &eskf_ref.nominal;
+                    let (_, _, eskf_yaw) = quat_rpy_deg(n.q0, n.q1, n.q2, n.q3);
+                    let (eskf_lat, eskf_lon, _eskf_h) = ned_to_lla_exact(
+                        n.pn as f64,
+                        n.pe as f64,
+                        n.pd as f64,
+                        ref_lat,
+                        ref_lon,
+                        ref_h,
+                    );
+                    map_eskf_heading.push(HeadingSample {
+                        t_s: t,
+                        lon_deg: eskf_lon,
+                        lat_deg: eskf_lat,
+                        yaw_deg: eskf_yaw,
+                    });
+                }
+                if update.ekf_initialized_now {
+                    eskf_initialized_this_pkt = true;
+                    if loose.is_none()
+                        && let (Some(eskf_ref), Some(q_cs)) =
+                            (fusion_ref.eskf(), fusion_ref.mount_q_vb())
+                    {
+                        let q_ns = [
+                            eskf_ref.nominal.q0,
+                            eskf_ref.nominal.q1,
+                            eskf_ref.nominal.q2,
+                            eskf_ref.nominal.q3,
+                        ];
+                        loose = Some(initialize_loose_from_nav(
+                            nav,
+                            ned,
+                            q_ns,
+                            q_cs,
+                            base_loose_predict_noise,
+                            cfg,
+                        ));
+                        loose_last_gps_update_ms = Some(t_ms);
+                    }
+                    if let Some(eskf_ref) = fusion_ref.eskf() {
+                        append_eskf_sample(
+                            eskf_ref,
+                            t,
+                            gyro,
+                            accel,
+                            dt,
+                            cfg.vehicle_meas_lpf_cutoff_hz,
+                            &mut filt_eskf_meas_gyro,
+                            &mut filt_eskf_meas_accel,
+                            &mut eskf_cmp_pos_n,
+                            &mut eskf_cmp_pos_e,
+                            &mut eskf_cmp_pos_d,
+                            &mut eskf_cmp_vel_n,
+                            &mut eskf_cmp_vel_e,
+                            &mut eskf_cmp_vel_d,
+                            &mut eskf_cmp_att_roll,
+                            &mut eskf_cmp_att_pitch,
+                            &mut eskf_cmp_att_yaw,
+                            &mut eskf_meas_gyro_x,
+                            &mut eskf_meas_gyro_y,
+                            &mut eskf_meas_gyro_z,
+                            &mut eskf_meas_accel_x,
+                            &mut eskf_meas_accel_y,
+                            &mut eskf_meas_accel_z,
+                            &mut eskf_bias_gyro_x,
+                            &mut eskf_bias_gyro_y,
+                            &mut eskf_bias_gyro_z,
+                            &mut eskf_bias_accel_x,
+                            &mut eskf_bias_accel_y,
+                            &mut eskf_bias_accel_z,
+                            &mut eskf_cov_diag,
+                        );
+                    }
                     if let Some(loose_ref) = loose.as_ref() {
                         append_loose_sample(
                             loose_ref,
@@ -636,80 +734,6 @@ pub fn build_ekf_compare_traces(
                             &mut loose_scale_accel_y,
                             &mut loose_scale_accel_z,
                             &mut loose_cov_diag,
-                        );
-                    }
-                }
-                let fusion_gnss = fusion_gnss_sample(nav, ned, cfg, rel_s(t_ms) as f32);
-                let update = fusion_ref.process_gnss(fusion_gnss);
-                if let Some(loose_ref) = loose.as_mut() {
-                    let dt_since_last_gnss_s = loose_last_gps_update_ms
-                        .map(|last_t_ms| ((t_ms - last_t_ms) * 1.0e-3) as f32)
-                        .unwrap_or(1.0)
-                        .clamp(1.0e-3, 1.0);
-                    loose_ref.fuse_reference_batch(
-                        Some(ecef),
-                        (nav.h_acc_m * cfg.gnss_pos_r_scale.sqrt()) as f32,
-                        dt_since_last_gnss_s,
-                        loose_gyro_radps,
-                        loose_accel_mps2,
-                        loose_imu.dt,
-                    );
-                    loose_last_gps_update_ms = Some(t_ms);
-                    loose_batch_applied = true;
-                }
-
-                if let Some(eskf_ref) = fusion_ref.eskf() {
-                    let n = &eskf_ref.nominal;
-                    let (_, _, eskf_yaw) = quat_rpy_deg(n.q0, n.q1, n.q2, n.q3);
-                    let (eskf_lat, eskf_lon, _eskf_h) = ned_to_lla_exact(
-                        n.pn as f64,
-                        n.pe as f64,
-                        n.pd as f64,
-                        ref_lat,
-                        ref_lon,
-                        ref_h,
-                    );
-                    map_eskf_heading.push(HeadingSample {
-                        t_s: t,
-                        lon_deg: eskf_lon,
-                        lat_deg: eskf_lat,
-                        yaw_deg: eskf_yaw,
-                    });
-                }
-                if update.ekf_initialized_now {
-                    eskf_initialized_this_pkt = true;
-                    if let Some(eskf_ref) = fusion_ref.eskf() {
-                        append_eskf_sample(
-                            eskf_ref,
-                            t,
-                            gyro,
-                            accel,
-                            dt,
-                            cfg.vehicle_meas_lpf_cutoff_hz,
-                            &mut filt_eskf_meas_gyro,
-                            &mut filt_eskf_meas_accel,
-                            &mut eskf_cmp_pos_n,
-                            &mut eskf_cmp_pos_e,
-                            &mut eskf_cmp_pos_d,
-                            &mut eskf_cmp_vel_n,
-                            &mut eskf_cmp_vel_e,
-                            &mut eskf_cmp_vel_d,
-                            &mut eskf_cmp_att_roll,
-                            &mut eskf_cmp_att_pitch,
-                            &mut eskf_cmp_att_yaw,
-                            &mut eskf_meas_gyro_x,
-                            &mut eskf_meas_gyro_y,
-                            &mut eskf_meas_gyro_z,
-                            &mut eskf_meas_accel_x,
-                            &mut eskf_meas_accel_y,
-                            &mut eskf_meas_accel_z,
-                            &mut eskf_bias_gyro_x,
-                            &mut eskf_bias_gyro_y,
-                            &mut eskf_bias_gyro_z,
-                            &mut eskf_bias_accel_x,
-                            &mut eskf_bias_accel_y,
-                            &mut eskf_bias_accel_z,
-                            &mut eskf_cov_diag,
                         );
                     }
                 }
@@ -954,6 +978,14 @@ pub fn build_ekf_compare_traces(
         Trace {
             name: "NAV-ATT heading [deg]".to_string(),
             points: ubx_att_yaw.clone(),
+        },
+        Trace {
+            name: "mount ready".to_string(),
+            points: fusion_mount_ready_marker,
+        },
+        Trace {
+            name: "EKF initialized".to_string(),
+            points: fusion_ekf_init_marker,
         },
     ];
     let eskf_meas_gyro = vec![
@@ -1683,13 +1715,14 @@ impl Lcg64 {
 fn initialize_loose_from_nav(
     nav: NavPvtObs,
     ned: [f64; 3],
+    q_ns: [f32; 4],
+    q_cs: [f32; 4],
     noise: LoosePredictNoise,
     cfg: EkfCompareConfig,
 ) -> CLooseWrapper {
     let mut loose = CLooseWrapper::new(noise);
     let gnss = fusion_gnss_sample(nav, ned, cfg, 0.0);
     let p_diag = default_loose_reference_p_diag(gnss);
-    let q_ns = yaw_quat_f32(initial_yaw_from_nav(nav));
     let q_es = quat_mul(quat_conj(quat_ecef_to_ned(nav.lat_deg, nav.lon_deg)), [
         q_ns[0] as f64,
         q_ns[1] as f64,
@@ -1713,7 +1746,7 @@ fn initialize_loose_from_nav(
         [0.0, 0.0, 0.0],
         [1.0, 1.0, 1.0],
         [1.0, 1.0, 1.0],
-        [1.0, 0.0, 0.0, 0.0],
+        q_cs,
         Some(p_diag),
     );
     loose

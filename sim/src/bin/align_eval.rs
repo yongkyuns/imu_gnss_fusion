@@ -104,6 +104,8 @@ struct BootstrapDetector {
     gyro_ema: Option<f32>,
     accel_err_ema: Option<f32>,
     speed_ema: Option<f32>,
+    speed_rate_ema: Option<f32>,
+    course_rate_ema: Option<f32>,
     stationary_accel: Vec<[f32; 3]>,
     stationary_gyro: Vec<[f32; 3]>,
 }
@@ -153,6 +155,10 @@ struct BootstrapDebugSample {
     t_s: f64,
     speed_mps: f64,
     speed_ema_mps: f64,
+    speed_rate_mps2: f64,
+    speed_rate_ema_mps2: f64,
+    course_rate_dps: f64,
+    course_rate_ema_dps: f64,
     gyro_norm_dps: f64,
     gyro_ema_dps: f64,
     accel_norm_err_mps2: f64,
@@ -390,6 +396,8 @@ fn bootstrap_config_from_args(args: &Args, cfg: &AlignConfig) -> BootstrapConfig
         stationary_samples: args.stationary_samples,
         max_gyro_radps: cfg.max_stationary_gyro_radps,
         max_accel_norm_err_mps2: cfg.max_stationary_accel_norm_err_mps2,
+        max_speed_rate_mps2: 0.15,
+        max_course_rate_radps: 1.0_f32.to_radians(),
     }
 }
 
@@ -533,12 +541,21 @@ impl BootstrapDetector {
             gyro_ema: None,
             accel_err_ema: None,
             speed_ema: None,
+            speed_rate_ema: None,
+            course_rate_ema: None,
             stationary_accel: Vec::new(),
             stationary_gyro: Vec::new(),
         }
     }
 
-    fn update(&mut self, accel_b: [f32; 3], gyro_radps: [f32; 3], speed_mps: f32) -> bool {
+    fn update(
+        &mut self,
+        accel_b: [f32; 3],
+        gyro_radps: [f32; 3],
+        speed_mps: f32,
+        speed_rate_mps2: Option<f32>,
+        course_rate_radps: Option<f32>,
+    ) -> bool {
         let gyro_norm = norm3(gyro_radps);
         let accel_err = (norm3(accel_b) - GRAVITY_MPS2).abs();
         self.gyro_ema = Some(ema_update(self.gyro_ema, gyro_norm, self.cfg.ema_alpha));
@@ -548,10 +565,33 @@ impl BootstrapDetector {
             self.cfg.ema_alpha,
         ));
         self.speed_ema = Some(ema_update(self.speed_ema, speed_mps, self.cfg.ema_alpha));
+        if let Some(speed_rate_mps2) = speed_rate_mps2 {
+            self.speed_rate_ema = Some(ema_update(
+                self.speed_rate_ema,
+                speed_rate_mps2.abs(),
+                self.cfg.ema_alpha,
+            ));
+        }
+        if let Some(course_rate_radps) = course_rate_radps {
+            self.course_rate_ema = Some(ema_update(
+                self.course_rate_ema,
+                course_rate_radps.abs(),
+                self.cfg.ema_alpha,
+            ));
+        }
 
-        let stationary = self.speed_ema.unwrap_or(speed_mps) <= self.cfg.max_speed_mps
-            && self.gyro_ema.unwrap_or(gyro_norm) <= self.cfg.max_gyro_radps
+        let low_dynamic = self.gyro_ema.unwrap_or(gyro_norm) <= self.cfg.max_gyro_radps
             && self.accel_err_ema.unwrap_or(accel_err) <= self.cfg.max_accel_norm_err_mps2;
+        let low_speed = self.speed_ema.unwrap_or(speed_mps) <= self.cfg.max_speed_mps;
+        let steady_motion = self
+            .speed_rate_ema
+            .or(speed_rate_mps2.map(f32::abs))
+            .is_none_or(|v| v <= self.cfg.max_speed_rate_mps2)
+            && self
+                .course_rate_ema
+                .or(course_rate_radps.map(f32::abs))
+                .is_none_or(|v| v <= self.cfg.max_course_rate_radps);
+        let stationary = low_dynamic && (low_speed || steady_motion);
 
         if stationary {
             self.stationary_accel.push(accel_b);
@@ -566,13 +606,27 @@ impl BootstrapDetector {
     fn snapshot(
         &self,
         speed_mps: f32,
+        speed_rate_mps2: Option<f32>,
+        course_rate_radps: Option<f32>,
         gyro_radps: [f32; 3],
         accel_b: [f32; 3],
     ) -> BootstrapDebugSample {
+        let speed_rate = speed_rate_mps2.unwrap_or(f32::NAN);
+        let course_rate = course_rate_radps.unwrap_or(f32::NAN);
         BootstrapDebugSample {
             t_s: 0.0,
             speed_mps: speed_mps as f64,
             speed_ema_mps: self.speed_ema.unwrap_or(speed_mps) as f64,
+            speed_rate_mps2: speed_rate as f64,
+            speed_rate_ema_mps2: self
+                .speed_rate_ema
+                .unwrap_or(speed_rate.abs())
+                as f64,
+            course_rate_dps: course_rate.to_degrees() as f64,
+            course_rate_ema_dps: self
+                .course_rate_ema
+                .unwrap_or(course_rate.abs())
+                .to_degrees() as f64,
             gyro_norm_dps: norm3(gyro_radps).to_degrees() as f64,
             gyro_ema_dps: self.gyro_ema.unwrap_or(norm3(gyro_radps)).to_degrees() as f64,
             accel_norm_err_mps2: (norm3(accel_b) - GRAVITY_MPS2).abs() as f64,
@@ -580,12 +634,24 @@ impl BootstrapDetector {
                 .accel_err_ema
                 .unwrap_or((norm3(accel_b) - GRAVITY_MPS2).abs())
                 as f64,
-            stationary: self.speed_ema.unwrap_or(speed_mps) <= self.cfg.max_speed_mps
-                && self.gyro_ema.unwrap_or(norm3(gyro_radps)) <= self.cfg.max_gyro_radps
-                && self
-                    .accel_err_ema
-                    .unwrap_or((norm3(accel_b) - GRAVITY_MPS2).abs())
-                    <= self.cfg.max_accel_norm_err_mps2,
+            stationary: {
+                let low_dynamic =
+                    self.gyro_ema.unwrap_or(norm3(gyro_radps)) <= self.cfg.max_gyro_radps
+                        && self
+                            .accel_err_ema
+                            .unwrap_or((norm3(accel_b) - GRAVITY_MPS2).abs())
+                            <= self.cfg.max_accel_norm_err_mps2;
+                let low_speed = self.speed_ema.unwrap_or(speed_mps) <= self.cfg.max_speed_mps;
+                let steady_motion = self
+                    .speed_rate_ema
+                    .or(speed_rate_mps2.map(f32::abs))
+                    .is_none_or(|v| v <= self.cfg.max_speed_rate_mps2)
+                    && self
+                        .course_rate_ema
+                        .or(course_rate_radps.map(f32::abs))
+                        .is_none_or(|v| v <= self.cfg.max_course_rate_radps);
+                low_dynamic && (low_speed || steady_motion)
+            },
             sample_count: self.stationary_accel.len(),
         }
     }
@@ -613,9 +679,22 @@ fn build_bootstrap_debug_trace(
                 pkt.gz_dps.to_radians() as f32,
             ];
             let accel_b = [pkt.ax_mps2 as f32, pkt.ay_mps2 as f32, pkt.az_mps2 as f32];
-            let speed_mps = speed_for_bootstrap(prev_nav, (*tn, *nav), pkt.t_ms) as f32;
-            bootstrap.update(accel_b, gyro_radps, speed_mps);
-            let mut row = bootstrap.snapshot(speed_mps, gyro_radps, accel_b);
+            let (speed_mps, speed_rate_mps2, course_rate_radps) =
+                bootstrap_motion_hints(prev_nav, (*tn, *nav), pkt.t_ms);
+            bootstrap.update(
+                accel_b,
+                gyro_radps,
+                speed_mps,
+                speed_rate_mps2,
+                course_rate_radps,
+            );
+            let mut row = bootstrap.snapshot(
+                speed_mps,
+                speed_rate_mps2,
+                course_rate_radps,
+                gyro_radps,
+                accel_b,
+            );
             row.t_s = (pkt.t_ms - dataset.timeline.t0_master_ms) * 1.0e-3;
             out.push(row);
             scan_idx += 1;
@@ -1041,15 +1120,19 @@ fn write_bootstrap_debug_csv(path: &PathBuf, samples: &[BootstrapDebugSample]) -
     let mut w = BufWriter::new(file);
     writeln!(
         w,
-        "t_s,speed_mps,speed_ema_mps,gyro_norm_dps,gyro_ema_dps,accel_norm_err_mps2,accel_err_ema_mps2,stationary,sample_count"
+        "t_s,speed_mps,speed_ema_mps,speed_rate_mps2,speed_rate_ema_mps2,course_rate_dps,course_rate_ema_dps,gyro_norm_dps,gyro_ema_dps,accel_norm_err_mps2,accel_err_ema_mps2,stationary,sample_count"
     )?;
     for s in samples {
         writeln!(
             w,
-            "{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{}",
+            "{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{}",
             s.t_s,
             s.speed_mps,
             s.speed_ema_mps,
+            s.speed_rate_mps2,
+            s.speed_rate_ema_mps2,
+            s.course_rate_dps,
+            s.course_rate_ema_dps,
             s.gyro_norm_dps,
             s.gyro_ema_dps,
             s.accel_norm_err_mps2,
@@ -1087,12 +1170,44 @@ fn speed_for_bootstrap(
     speed_prev + alpha * (speed_curr - speed_prev)
 }
 
+fn bootstrap_motion_hints(
+    prev_nav: Option<(f64, NavPvtObs)>,
+    curr_nav: (f64, NavPvtObs),
+    t_ms: f64,
+) -> (f32, Option<f32>, Option<f32>) {
+    let speed_mps = speed_for_bootstrap(prev_nav, curr_nav, t_ms) as f32;
+    let Some((t_prev_ms, nav_prev)) = prev_nav else {
+        return (speed_mps, None, None);
+    };
+    let dt_s = ((curr_nav.0 - t_prev_ms) * 1.0e-3) as f32;
+    if dt_s <= 1.0e-6 {
+        return (speed_mps, None, None);
+    }
+    let speed_prev = horizontal_speed(nav_prev) as f32;
+    let speed_curr = horizontal_speed(curr_nav.1) as f32;
+    let speed_rate_mps2 = (speed_curr - speed_prev) / dt_s;
+    let course_prev = nav_prev.vel_e_mps.atan2(nav_prev.vel_n_mps) as f32;
+    let course_curr = curr_nav.1.vel_e_mps.atan2(curr_nav.1.vel_n_mps) as f32;
+    let course_rate_radps = wrap_rad_pi((course_curr - course_prev) as f64) as f32 / dt_s;
+    (speed_mps, Some(speed_rate_mps2), Some(course_rate_radps))
+}
+
 fn horizontal_speed(nav: NavPvtObs) -> f64 {
     (nav.vel_n_mps * nav.vel_n_mps + nav.vel_e_mps * nav.vel_e_mps).sqrt()
 }
 
 fn norm3(v: [f32; 3]) -> f32 {
     (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+}
+
+fn wrap_rad_pi(mut rad: f64) -> f64 {
+    while rad <= -std::f64::consts::PI {
+        rad += 2.0 * std::f64::consts::PI;
+    }
+    while rad > std::f64::consts::PI {
+        rad -= 2.0 * std::f64::consts::PI;
+    }
+    rad
 }
 
 fn wrap_deg180(mut deg: f64) -> f64 {

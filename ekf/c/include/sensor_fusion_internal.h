@@ -136,8 +136,14 @@ typedef struct {
   uint32_t interval_imu_count;
   uint32_t bootstrap_stationary_count;
   float bootstrap_stationary_accel_sum[3];
+  float bootstrap_speed_ema;
+  float bootstrap_speed_rate_ema;
+  float bootstrap_course_rate_ema;
   float bootstrap_gyro_ema;
   float bootstrap_accel_err_ema;
+  bool bootstrap_speed_ema_valid;
+  bool bootstrap_speed_rate_ema_valid;
+  bool bootstrap_course_rate_ema_valid;
   bool bootstrap_gyro_ema_valid;
   bool bootstrap_accel_err_ema_valid;
   bool last_align_window_valid;
