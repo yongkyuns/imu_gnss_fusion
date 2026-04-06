@@ -204,6 +204,30 @@ void sf_fusion_set_misalignment(sf_sensor_fusion_t *fusion, const float q_vb[4])
   memcpy(impl->mount_q_vb, q_vb, sizeof(impl->mount_q_vb));
 }
 
+bool sf_fusion_get_debug(const sf_sensor_fusion_t *fusion, sf_fusion_debug_t *out) {
+  const sf_sensor_fusion_impl_t *impl;
+
+  if (fusion == NULL || out == NULL) {
+    return false;
+  }
+
+  impl = sf_impl_const(fusion);
+  memset(out, 0, sizeof(*out));
+  out->align_window_valid = impl->last_align_window_valid;
+  if (impl->last_align_window_valid) {
+    out->align_window = impl->last_align_window;
+  }
+  out->align_trace_valid = impl->last_align_trace_valid;
+  if (impl->last_align_trace_valid) {
+    out->align_trace = impl->last_align_trace;
+  }
+  out->eskf_valid = impl->ekf_initialized;
+  if (impl->ekf_initialized) {
+    out->eskf = impl->eskf;
+  }
+  return true;
+}
+
 void sf_fusion_set_profile_now_us(sf_sensor_fusion_t *fusion,
                                   sf_profile_now_us_fn now_us,
                                   void *ctx) {
@@ -404,6 +428,10 @@ sf_update_t sf_fusion_process_gnss(sf_sensor_fusion_t *fusion,
                               &impl->profile.gnss_align_max_us,
                               elapsed_us);
       }
+      impl->last_align_window = summary;
+      impl->last_align_window_valid = true;
+      impl->last_align_trace = trace;
+      impl->last_align_trace_valid = true;
       memcpy(impl->mount_q_vb, impl->align_rt.state.q_vb, sizeof(impl->mount_q_vb));
       impl->mount_q_vb_valid = true;
       impl->mount_ready = trace.coarse_alignment_ready;

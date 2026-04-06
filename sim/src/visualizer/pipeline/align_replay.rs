@@ -3,14 +3,15 @@ use std::cmp::Ordering;
 use sensor_fusion::align::{
     Align, AlignConfig, AlignUpdateTrace, AlignWindowSummary, GRAVITY_MPS2,
 };
+use sensor_fusion::fusion::{FusionGnssSample, FusionImuSample, SensorFusion};
 
 use crate::ubxlog::{
-    NavPvtObs, UbxFrame, extract_esf_alg, extract_esf_raw_samples, extract_nav2_pvt_obs,
-    sensor_meta,
+    NavPvtObs, UbxFrame, extract_esf_alg, extract_esf_alg_status, extract_esf_raw_samples,
+    extract_nav2_pvt_obs, sensor_meta,
 };
 
-use super::super::math::{nearest_master_ms, normalize_heading_deg};
-use super::super::model::ImuPacket;
+use super::super::math::{ecef_to_ned, lla_to_ecef, nearest_master_ms, normalize_heading_deg};
+use super::super::model::{EkfImuSource, ImuPacket};
 use super::tag_time::fit_tag_ms_map;
 use super::timebase::MasterTimeline;
 
@@ -95,6 +96,421 @@ pub struct AlignReplayData {
     pub alg_events: Vec<AlgEvent>,
     pub final_alg_q: Option<[f64; 4]>,
     pub samples: Vec<AlignReplaySample>,
+}
+
+pub fn build_fusion_align_replay(
+    frames: &[UbxFrame],
+    tl: &MasterTimeline,
+    imu_source: EkfImuSource,
+    imu_cfg: ImuReplayConfig,
+) -> AlignReplayData {
+    let cfg = AlignConfig::default();
+    let mut alg_events = Vec::<AlgEvent>::new();
+    let mut alg_status_events = Vec::<(f64, u8)>::new();
+    let mut nav_events = Vec::<(f64, NavPvtObs)>::new();
+    for f in frames {
+        if let Some((_, roll, pitch, yaw)) = extract_esf_alg(f)
+            && let Some(t_ms) = nearest_master_ms(f.seq, &tl.masters)
+        {
+            alg_events.push(AlgEvent {
+                t_ms,
+                q_frd: esf_alg_flu_to_frd_mount_quat(roll, pitch, yaw),
+            });
+        }
+        if let Some((_, status_code, _is_fine)) = extract_esf_alg_status(f)
+            && let Some(t_ms) = nearest_master_ms(f.seq, &tl.masters)
+        {
+            alg_status_events.push((t_ms, status_code as u8));
+        }
+        if let Some(t_ms) = nearest_master_ms(f.seq, &tl.masters)
+            && let Some(obs) = extract_nav2_pvt_obs(f)
+            && obs.fix_ok
+            && !obs.invalid_llh
+        {
+            nav_events.push((t_ms, obs));
+        }
+    }
+    alg_events.sort_by(|a, b| a.t_ms.partial_cmp(&b.t_ms).unwrap_or(Ordering::Equal));
+    alg_status_events.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+    nav_events.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+
+    let mut raw_seq = Vec::<u64>::new();
+    let mut raw_tag = Vec::<u64>::new();
+    let mut raw_dtype = Vec::<u8>::new();
+    let mut raw_val = Vec::<f64>::new();
+    for f in frames {
+        for (tag, sw) in extract_esf_raw_samples(f) {
+            let (_name, _unit, scale) = sensor_meta(sw.dtype);
+            raw_seq.push(f.seq);
+            raw_tag.push(tag);
+            raw_dtype.push(sw.dtype);
+            raw_val.push(sw.value_i24 as f64 * scale);
+        }
+    }
+    let (raw_tag_u, a_raw, b_raw) = fit_tag_ms_map(&raw_seq, &raw_tag, &tl.masters, Some(1 << 16));
+
+    let mut imu_packets = Vec::<ImuPacket>::new();
+    let mut current_tag: Option<u64> = None;
+    let mut t_ms = 0.0_f64;
+    let mut gx: Option<f64> = None;
+    let mut gy: Option<f64> = None;
+    let mut gz: Option<f64> = None;
+    let mut ax: Option<f64> = None;
+    let mut ay: Option<f64> = None;
+    let mut az: Option<f64> = None;
+    for (((seq, tag_u), dtype), val) in raw_seq
+        .iter()
+        .zip(raw_tag_u.iter())
+        .zip(raw_dtype.iter())
+        .zip(raw_val.iter())
+    {
+        if current_tag != Some(*tag_u) {
+            if let (Some(gxv), Some(gyv), Some(gzv), Some(axv), Some(ayv), Some(azv)) =
+                (gx, gy, gz, ax, ay, az)
+            {
+                imu_packets.push(ImuPacket {
+                    t_ms,
+                    gx_dps: gxv,
+                    gy_dps: gyv,
+                    gz_dps: gzv,
+                    ax_mps2: axv,
+                    ay_mps2: ayv,
+                    az_mps2: azv,
+                });
+            }
+            gx = None;
+            gy = None;
+            gz = None;
+            ax = None;
+            ay = None;
+            az = None;
+            current_tag = Some(*tag_u);
+            if let Some(mapped_ms) = tl.map_tag_ms(a_raw, b_raw, *tag_u as f64, *seq) {
+                t_ms = mapped_ms;
+            }
+        }
+        match *dtype {
+            14 => gx = Some(*val),
+            13 => gy = Some(*val),
+            5 => gz = Some(*val),
+            16 => ax = Some(*val),
+            17 => ay = Some(*val),
+            18 => az = Some(*val),
+            _ => {}
+        }
+    }
+    if let (Some(gxv), Some(gyv), Some(gzv), Some(axv), Some(ayv), Some(azv)) =
+        (gx, gy, gz, ax, ay, az)
+    {
+        imu_packets.push(ImuPacket {
+            t_ms,
+            gx_dps: gxv,
+            gy_dps: gyv,
+            gz_dps: gzv,
+            ax_mps2: axv,
+            ay_mps2: ayv,
+            az_mps2: azv,
+        });
+    }
+    imu_packets.sort_by(|a, b| a.t_ms.partial_cmp(&b.t_ms).unwrap_or(Ordering::Equal));
+    let imu_packets = preprocess_imu_packets(&imu_packets, imu_cfg);
+
+    let Some((_, ref_nav)) = nav_events.first().copied() else {
+        let final_alg_q = alg_events.last().map(|ev| ev.q_frd);
+        return AlignReplayData {
+            alg_events,
+            final_alg_q,
+            samples: Vec::new(),
+        };
+    };
+    let ref_ecef = lla_to_ecef(ref_nav.lat_deg, ref_nav.lon_deg, ref_nav.height_m);
+    let final_alg_q = alg_events.last().map(|ev| ev.q_frd);
+
+    let mut fusion = match imu_source {
+        EkfImuSource::Align => Some(SensorFusion::new()),
+        EkfImuSource::EsfAlg => None,
+    };
+    let mut scan_idx = 0usize;
+    let mut alg_idx = 0usize;
+    let mut alg_status_idx = 0usize;
+    let mut cur_alg: Option<AlgEvent> = None;
+    let mut cur_alg_status: u8 = 0;
+    let mut samples = Vec::<AlignReplaySample>::new();
+
+    for (tn, nav) in &nav_events {
+        while scan_idx < imu_packets.len() && imu_packets[scan_idx].t_ms <= *tn {
+            while alg_idx < alg_events.len() && alg_events[alg_idx].t_ms <= imu_packets[scan_idx].t_ms {
+                cur_alg = Some(alg_events[alg_idx]);
+                alg_idx += 1;
+            }
+            while alg_status_idx < alg_status_events.len()
+                && alg_status_events[alg_status_idx].0 <= imu_packets[scan_idx].t_ms
+            {
+                cur_alg_status = alg_status_events[alg_status_idx].1;
+                alg_status_idx += 1;
+            }
+            let pkt = &imu_packets[scan_idx];
+            if imu_source == EkfImuSource::EsfAlg
+                && fusion.is_none()
+                && cur_alg_status >= 3
+                && let Some(q_vb) = final_alg_q
+            {
+                fusion = Some(SensorFusion::with_misalignment([
+                    q_vb[0] as f32,
+                    q_vb[1] as f32,
+                    q_vb[2] as f32,
+                    q_vb[3] as f32,
+                ]));
+            }
+            if let Some(fusion_ref) = fusion.as_mut() {
+                fusion_ref.process_imu(FusionImuSample {
+                    t_s: ((pkt.t_ms - tl.t0_master_ms) * 1.0e-3) as f32,
+                    gyro_radps: [
+                        pkt.gx_dps.to_radians() as f32,
+                        pkt.gy_dps.to_radians() as f32,
+                        pkt.gz_dps.to_radians() as f32,
+                    ],
+                    accel_mps2: [pkt.ax_mps2 as f32, pkt.ay_mps2 as f32, pkt.az_mps2 as f32],
+                });
+            }
+            scan_idx += 1;
+        }
+        while alg_idx < alg_events.len() && alg_events[alg_idx].t_ms <= *tn {
+            cur_alg = Some(alg_events[alg_idx]);
+            alg_idx += 1;
+        }
+        while alg_status_idx < alg_status_events.len() && alg_status_events[alg_status_idx].0 <= *tn
+        {
+            cur_alg_status = alg_status_events[alg_status_idx].1;
+            alg_status_idx += 1;
+        }
+        if imu_source == EkfImuSource::EsfAlg && fusion.is_none() {
+            continue;
+        }
+
+        let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
+        let ned = ecef_to_ned(ecef, ref_ecef, ref_nav.lat_deg, ref_nav.lon_deg);
+        let update = fusion.as_mut().unwrap().process_gnss(FusionGnssSample {
+            t_s: ((*tn - tl.t0_master_ms) * 1.0e-3) as f32,
+            pos_ned_m: [ned[0] as f32, ned[1] as f32, ned[2] as f32],
+            vel_ned_mps: [
+                nav.vel_n_mps as f32,
+                nav.vel_e_mps as f32,
+                nav.vel_d_mps as f32,
+            ],
+            pos_std_m: [nav.h_acc_m as f32, nav.h_acc_m as f32, nav.v_acc_m as f32],
+            vel_std_mps: [
+                nav.s_acc_mps as f32,
+                nav.s_acc_mps as f32,
+                nav.s_acc_mps as f32,
+            ],
+            heading_rad: nav.head_veh_valid.then_some(nav.heading_vehicle_deg.to_radians() as f32),
+        });
+
+        let Some(align) = fusion.as_ref().and_then(|f| f.align()) else {
+            continue;
+        };
+        let debug = fusion.as_ref().and_then(|f| f.align_debug());
+        let (
+            _dt,
+            speed_mid,
+            course_rate_dps,
+            a_long,
+            a_lat,
+            stationary,
+            turn_valid,
+            long_valid,
+            trace_opt,
+            mean_accel_b,
+        ) =
+            if let Some(debug) = debug {
+                let window = debug.window;
+                let trace = debug.trace;
+                let dt = window.dt as f64;
+                let v_prev = [
+                    window.gnss_vel_prev_n[0] as f64,
+                    window.gnss_vel_prev_n[1] as f64,
+                ];
+                let v_curr = [
+                    window.gnss_vel_curr_n[0] as f64,
+                    window.gnss_vel_curr_n[1] as f64,
+                ];
+                let course_prev = v_prev[1].atan2(v_prev[0]);
+                let course_curr = v_curr[1].atan2(v_curr[0]);
+                let course_rate_dps = if dt > 0.0 {
+                    wrap_rad_pi(course_curr - course_prev).to_degrees() / dt
+                } else {
+                    0.0
+                };
+                let a_n = if dt > 0.0 {
+                    [
+                        (window.gnss_vel_curr_n[0] - window.gnss_vel_prev_n[0]) as f64 / dt,
+                        (window.gnss_vel_curr_n[1] - window.gnss_vel_prev_n[1]) as f64 / dt,
+                    ]
+                } else {
+                    [0.0, 0.0]
+                };
+                let v_mid = [0.5 * (v_prev[0] + v_curr[0]), 0.5 * (v_prev[1] + v_curr[1])];
+                let (a_long, a_lat) = if let Some(t_hat) = normalize2(v_mid) {
+                    let lat_hat = [-t_hat[1], t_hat[0]];
+                    (
+                        t_hat[0] * a_n[0] + t_hat[1] * a_n[1],
+                        lat_hat[0] * a_n[0] + lat_hat[1] * a_n[1],
+                    )
+                } else {
+                    (0.0, 0.0)
+                };
+                let mean_gyro_b = window.mean_gyro_b;
+                let mean_accel_b = window.mean_accel_b;
+                let gyro_norm = (mean_gyro_b[0] * mean_gyro_b[0]
+                    + mean_gyro_b[1] * mean_gyro_b[1]
+                    + mean_gyro_b[2] * mean_gyro_b[2])
+                    .sqrt();
+                let accel_norm = (mean_accel_b[0] * mean_accel_b[0]
+                    + mean_accel_b[1] * mean_accel_b[1]
+                    + mean_accel_b[2] * mean_accel_b[2])
+                    .sqrt();
+                let speed_prev = (v_prev[0] * v_prev[0] + v_prev[1] * v_prev[1]).sqrt() as f32;
+                let speed_curr = (v_curr[0] * v_curr[0] + v_curr[1] * v_curr[1]).sqrt() as f32;
+                let speed_mid = 0.5_f32 * (speed_prev + speed_curr);
+                let stationary = gyro_norm <= cfg.max_stationary_gyro_radps
+                    && (accel_norm - GRAVITY_MPS2).abs() <= cfg.max_stationary_accel_norm_err_mps2
+                    && speed_mid < 0.5;
+                let turn_valid = speed_mid > cfg.min_speed_mps
+                    && course_rate_dps.abs() > cfg.min_turn_rate_radps.to_degrees() as f64
+                    && a_lat.abs() > cfg.min_lat_acc_mps2 as f64;
+                let long_valid = speed_mid > cfg.min_speed_mps
+                    && (a_long.abs() > cfg.min_long_acc_mps2 as f64)
+                    && (a_lat.abs() < (0.5_f64).max(0.6 * a_long.abs()))
+                    && (a_long * a_long + a_lat * a_lat).sqrt() > cfg.min_long_acc_mps2 as f64;
+                (
+                    dt,
+                    speed_mid,
+                    course_rate_dps,
+                    a_long,
+                    a_lat,
+                    stationary,
+                    turn_valid,
+                    long_valid,
+                    Some(trace),
+                    mean_accel_b,
+                )
+            } else {
+                (
+                    0.0,
+                    f32::NAN,
+                    f64::NAN,
+                    f64::NAN,
+                    f64::NAN,
+                    false,
+                    false,
+                    false,
+                    None,
+                    [f32::NAN; 3],
+                )
+            };
+
+        let q_align = [
+            align.q_vb[0] as f64,
+            align.q_vb[1] as f64,
+            align.q_vb[2] as f64,
+            align.q_vb[3] as f64,
+        ];
+        let align_rpy_deg = {
+            let (r, p, y) = quat_rpy_alg_deg(q_align[0], q_align[1], q_align[2], q_align[3]);
+            [r, p, y]
+        };
+        let alg_q = interpolate_alg_quat(&alg_events, *tn);
+        let alg_rpy_deg = alg_q.map(|q| {
+            let (r, p, y) = quat_rpy_alg_deg(q[0], q[1], q[2], q[3]);
+            [r, p, y]
+        });
+        let trace = trace_opt.as_ref();
+        let horiz_trace = HorizTraceSample {
+            angle_err_deg: trace
+                .and_then(|t| t.horiz_angle_err_rad)
+                .map(|v| (v as f64).to_degrees())
+                .unwrap_or(f64::NAN),
+            effective_std_deg: trace
+                .and_then(|t| t.horiz_effective_std_rad)
+                .map(|v| (v as f64).to_degrees())
+                .unwrap_or(f64::NAN),
+            gnss_norm_mps2: trace
+                .and_then(|t| t.horiz_gnss_norm_mps2)
+                .unwrap_or(f32::NAN) as f64,
+            imu_norm_mps2: trace
+                .and_then(|t| t.horiz_imu_norm_mps2)
+                .unwrap_or(f32::NAN) as f64,
+            speed_q: trace.and_then(|t| t.horiz_speed_q).unwrap_or(f32::NAN) as f64,
+            accel_q: trace.and_then(|t| t.horiz_accel_q).unwrap_or(f32::NAN) as f64,
+            straight_q: trace.and_then(|t| t.horiz_straight_q).unwrap_or(f32::NAN) as f64,
+            turn_q: trace.and_then(|t| t.horiz_turn_q).unwrap_or(f32::NAN) as f64,
+            dominance_q: trace.and_then(|t| t.horiz_dominance_q).unwrap_or(f32::NAN) as f64,
+            turn_core_valid: trace.map(|t| t.horiz_turn_core_valid).unwrap_or(false),
+            straight_core_valid: trace
+                .map(|t| t.horiz_straight_core_valid)
+                .unwrap_or(false),
+            applied: trace.and_then(|t| t.after_horiz_accel).is_some(),
+        };
+        let g_norm = (align.gravity_lp_b[0] * align.gravity_lp_b[0]
+            + align.gravity_lp_b[1] * align.gravity_lp_b[1]
+            + align.gravity_lp_b[2] * align.gravity_lp_b[2])
+            .sqrt();
+        let horiz_accel_b = if g_norm > 1.0e-6 {
+            let g_hat_b = [
+                align.gravity_lp_b[0] / g_norm,
+                align.gravity_lp_b[1] / g_norm,
+                align.gravity_lp_b[2] / g_norm,
+            ];
+            let accel_proj = mean_accel_b[0] * g_hat_b[0]
+                + mean_accel_b[1] * g_hat_b[1]
+                + mean_accel_b[2] * g_hat_b[2];
+            [
+                mean_accel_b[0] - g_hat_b[0] * accel_proj,
+                mean_accel_b[1] - g_hat_b[1] * accel_proj,
+                mean_accel_b[2] - g_hat_b[2] * accel_proj,
+            ]
+        } else {
+            mean_accel_b
+        };
+        samples.push(AlignReplaySample {
+            t_ms: *tn,
+            t_s: (*tn - tl.t0_master_ms) * 1.0e-3,
+            speed_mps: speed_mid as f64,
+            q_align,
+            horiz_accel_b: [
+                horiz_accel_b[0] as f64,
+                horiz_accel_b[1] as f64,
+                horiz_accel_b[2] as f64,
+            ],
+            align_rpy_deg,
+            alg_q,
+            alg_rpy_deg,
+            course_rate_dps,
+            a_lat_mps2: a_lat,
+            a_long_mps2: a_long,
+            stationary,
+            turn_valid,
+            long_valid,
+            upd_gravity: trace.and_then(|t| t.after_gravity).is_some(),
+            upd_turn_gyro: trace.and_then(|t| t.after_turn_gyro).is_some(),
+            upd_lat: trace.and_then(|t| t.after_horiz_accel).is_some(),
+            yaw_initialized: update.mount_ready_changed && update.mount_ready,
+            contrib: trace_opt.map(align_update_contrib_deg).unwrap_or_default(),
+            p_diag: [
+                align.P[0][0] as f64,
+                align.P[1][1] as f64,
+                align.P[2][2] as f64,
+            ],
+            horiz_trace,
+        });
+    }
+
+    AlignReplayData {
+        alg_events,
+        final_alg_q,
+        samples,
+    }
 }
 
 pub fn build_align_replay(

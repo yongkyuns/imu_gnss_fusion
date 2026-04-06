@@ -1,8 +1,9 @@
 use std::collections::VecDeque;
 
 use sensor_fusion::align::GRAVITY_MPS2;
-use sensor_fusion::c_api::{CEskfImuDelta, CEskfWrapper, CLooseImuDelta, CLooseWrapper};
+use sensor_fusion::c_api::{CEskf, CLooseImuDelta, CLooseWrapper};
 use sensor_fusion::ekf::PredictNoise;
+use sensor_fusion::fusion::{FusionImuSample, SensorFusion};
 use sensor_fusion::loose::LoosePredictNoise;
 
 use crate::ubxlog::{
@@ -12,12 +13,10 @@ use crate::ubxlog::{
 
 use super::super::math::{
     deg2rad, ecef_to_ned, lla_to_ecef, mat_vec, ned_to_lla_exact, normalize_heading_deg,
-    quat_rpy_deg, rad2deg, rot_zyx,
+    quat_rpy_deg, rad2deg,
 };
 use super::super::model::{AlgEvent, EkfImuSource, HeadingSample, ImuPacket, NavAttEvent, Trace};
-use super::align_replay::{
-    BootstrapConfig as AlignBootstrapConfig, ImuReplayConfig, build_align_replay,
-};
+use super::align_replay::esf_alg_flu_to_frd_mount_quat;
 use super::tag_time::fit_tag_ms_map;
 use super::timebase::MasterTimeline;
 
@@ -192,6 +191,9 @@ pub fn build_ekf_compare_traces(
     nav_events_pvt.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     let nav_pvt_events_for_map = nav_events_pvt.clone();
     let nav2_events_for_map = nav_events_nav2.clone();
+    let final_alg_q = alg_events.last().map(|alg| {
+        esf_alg_flu_to_frd_mount_quat(alg.roll_deg, alg.pitch_deg, alg.yaw_deg)
+    });
     let (nav_events, use_nav2_for_ekf) = if !nav_events_nav2.is_empty() {
         (nav_events_nav2, true)
     } else {
@@ -285,12 +287,6 @@ pub fn build_ekf_compare_traces(
             .partial_cmp(&b.t_ms)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    let align_events = if ekf_imu_source == EkfImuSource::Align {
-        build_align_mount_events(frames, tl, ImuReplayConfig::default())
-    } else {
-        Vec::new()
-    };
-
     let mut ubx_pos_n = Vec::<[f64; 2]>::new();
     let mut ubx_pos_e = Vec::<[f64; 2]>::new();
     let mut ubx_pos_d = Vec::<[f64; 2]>::new();
@@ -374,22 +370,20 @@ pub fn build_ekf_compare_traces(
     let mut map_loose = Vec::<[f64; 2]>::new();
     let mut map_loose_heading = Vec::<HeadingSample>::new();
 
-    let mut eskf: Option<CEskfWrapper> = None;
+    let mut fusion = match ekf_imu_source {
+        EkfImuSource::Align => Some(SensorFusion::new()),
+        EkfImuSource::EsfAlg => None,
+    };
     let mut loose: Option<CLooseWrapper> = None;
-    let base_predict_noise = cfg
-        .predict_noise
-        .unwrap_or(PredictNoise::lsm6dso_typical_104hz());
     let base_loose_predict_noise = cfg
         .loose_predict_noise
         .unwrap_or(LoosePredictNoise::lsm6dso_loose_104hz());
     let mut prev_imu_t: Option<f64> = None;
     let mut alg_idx = 0usize;
     let mut alg_status_idx = 0usize;
-    let mut align_idx = 0usize;
     let mut nav_idx = 0usize;
     let mut cur_alg: Option<AlgEvent> = None;
     let mut cur_alg_status: u8 = 0;
-    let mut cur_align_q_vb: Option<[f32; 4]> = None;
 
     let mut origin_set = false;
     let mut ref_lat = 0.0_f64;
@@ -441,7 +435,6 @@ pub fn build_ekf_compare_traces(
     let mut next_gps_update_ms = f64::NEG_INFINITY;
     let mut loose_last_gps_update_ms: Option<f64> = None;
     let gps_period_ms = 500.0_f64;
-    let mut ekf_initialized = false;
     for pkt in &imu_packets {
         while alg_idx < alg_events.len() && alg_events[alg_idx].t_ms <= pkt.t_ms {
             cur_alg = Some(alg_events[alg_idx]);
@@ -452,10 +445,6 @@ pub fn build_ekf_compare_traces(
         {
             cur_alg_status = alg_status_events[alg_status_idx].1;
             alg_status_idx += 1;
-        }
-        while align_idx < align_events.len() && align_events[align_idx].0 <= pkt.t_ms {
-            cur_align_q_vb = Some(align_events[align_idx].1);
-            align_idx += 1;
         }
         let dt = match prev_imu_t {
             Some(prev) => (pkt.t_ms - prev) * 1e-3,
@@ -468,169 +457,51 @@ pub fn build_ekf_compare_traces(
         if !(0.001..=0.05).contains(&dt) {
             continue;
         }
-        let imu_ready = match ekf_imu_source {
-            EkfImuSource::Align => cur_align_q_vb.is_some(),
-            EkfImuSource::EsfAlg => cur_alg_status >= 3 && cur_alg.is_some(),
-        };
-        if !imu_ready {
+        if ekf_imu_source == EkfImuSource::EsfAlg
+            && fusion.is_none()
+            && cur_alg_status >= 3
+            && let Some(q_vb) = final_alg_q
+        {
+            fusion = Some(SensorFusion::with_misalignment([
+                q_vb[0] as f32,
+                q_vb[1] as f32,
+                q_vb[2] as f32,
+                q_vb[3] as f32,
+            ]));
+        }
+        let Some(fusion_ref) = fusion.as_mut() else {
             while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
                 nav_idx += 1;
             }
             continue;
-        }
+        };
         let outage_active = in_gnss_outage(pkt.t_ms, &outage_windows_ms);
 
-        let mut gyro = [pkt.gx_dps, pkt.gy_dps, pkt.gz_dps];
-        let mut accel = [pkt.ax_mps2, pkt.ay_mps2, pkt.az_mps2];
-        match ekf_imu_source {
-            EkfImuSource::Align => {
-                if let Some(q_vb) = cur_align_q_vb {
-                    let c_bv = transpose3(quat_to_rotmat_f64([
-                        q_vb[0] as f64,
-                        q_vb[1] as f64,
-                        q_vb[2] as f64,
-                        q_vb[3] as f64,
-                    ]));
-                    gyro = mat_vec(c_bv, gyro);
-                    accel = mat_vec(c_bv, accel);
-                }
-            }
-            EkfImuSource::EsfAlg => {
-                if let Some(alg) = cur_alg {
-                    let r_sb = rot_zyx(
-                        deg2rad(alg.yaw_deg),
-                        deg2rad(alg.pitch_deg),
-                        deg2rad(alg.roll_deg),
-                    );
-                    gyro = mat_vec(r_sb, gyro);
-                    accel = mat_vec(r_sb, accel);
-                    gyro[1] = -gyro[1];
-                    gyro[2] = -gyro[2];
-                    accel[1] = -accel[1];
-                    accel[2] = -accel[2];
-                }
-            }
-        }
-        if !ekf_initialized {
-            let mut initialized_this_pkt = false;
-            while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
-                let (t_ms, nav) = nav_events[nav_idx];
-                nav_idx += 1;
-                if in_gnss_outage(t_ms, &outage_windows_ms) {
-                    continue;
-                }
-                if !use_nav2_for_ekf {
-                    if !next_gps_update_ms.is_finite() {
-                        next_gps_update_ms = t_ms;
-                    }
-                    if t_ms + 1e-6 < next_gps_update_ms {
-                        continue;
-                    }
-                    next_gps_update_ms += gps_period_ms;
-                }
+        let raw_gyro_radps = [
+            pkt.gx_dps.to_radians() as f32,
+            pkt.gy_dps.to_radians() as f32,
+            pkt.gz_dps.to_radians() as f32,
+        ];
+        let raw_accel_mps2 = [pkt.ax_mps2 as f32, pkt.ay_mps2 as f32, pkt.az_mps2 as f32];
+        fusion_ref.process_imu(FusionImuSample {
+            t_s: rel_s(pkt.t_ms) as f32,
+            gyro_radps: raw_gyro_radps,
+            accel_mps2: raw_accel_mps2,
+        });
 
-                if !origin_set {
-                    ref_lat = nav.lat_deg;
-                    ref_lon = nav.lon_deg;
-                    ref_h = nav.height_m;
-                    ref_ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
-                    origin_set = true;
-                }
-                let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
-                let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
-                eskf = Some(initialize_eskf_from_nav(nav, ned, base_predict_noise, cfg));
-                loose = Some(initialize_loose_from_nav(nav, ned, base_loose_predict_noise, cfg));
-                loose_last_gps_update_ms = Some(t_ms);
-                ekf_initialized = true;
-                if let Some(eskf_ref) = eskf.as_ref() {
-                    append_eskf_sample(
-                        eskf_ref,
-                        rel_s(t_ms),
-                        gyro,
-                        accel,
-                        dt,
-                        cfg.vehicle_meas_lpf_cutoff_hz,
-                        &mut filt_eskf_meas_gyro,
-                        &mut filt_eskf_meas_accel,
-                        &mut eskf_cmp_pos_n,
-                        &mut eskf_cmp_pos_e,
-                        &mut eskf_cmp_pos_d,
-                        &mut eskf_cmp_vel_n,
-                        &mut eskf_cmp_vel_e,
-                        &mut eskf_cmp_vel_d,
-                        &mut eskf_cmp_att_roll,
-                        &mut eskf_cmp_att_pitch,
-                        &mut eskf_cmp_att_yaw,
-                        &mut eskf_meas_gyro_x,
-                        &mut eskf_meas_gyro_y,
-                        &mut eskf_meas_gyro_z,
-                        &mut eskf_meas_accel_x,
-                        &mut eskf_meas_accel_y,
-                        &mut eskf_meas_accel_z,
-                        &mut eskf_bias_gyro_x,
-                        &mut eskf_bias_gyro_y,
-                        &mut eskf_bias_gyro_z,
-                        &mut eskf_bias_accel_x,
-                        &mut eskf_bias_accel_y,
-                        &mut eskf_bias_accel_z,
-                        &mut eskf_cov_diag,
-                    );
-                }
-                if let Some(loose_ref) = loose.as_ref() {
-                    append_loose_sample(
-                        loose_ref,
-                        rel_s(t_ms),
-                        gyro,
-                        accel,
-                        dt,
-                        ref_ecef,
-                        ref_lat,
-                        ref_lon,
-                        cfg.vehicle_meas_lpf_cutoff_hz,
-                        &mut loose_cmp_pos_n,
-                        &mut loose_cmp_pos_e,
-                        &mut loose_cmp_pos_d,
-                        &mut loose_cmp_vel_n,
-                        &mut loose_cmp_vel_e,
-                        &mut loose_cmp_vel_d,
-                        &mut loose_cmp_att_roll,
-                        &mut loose_cmp_att_pitch,
-                        &mut loose_cmp_att_yaw,
-                        &mut loose_meas_gyro_x,
-                        &mut loose_meas_gyro_y,
-                        &mut loose_meas_gyro_z,
-                        &mut loose_meas_accel_x,
-                        &mut loose_meas_accel_y,
-                        &mut loose_meas_accel_z,
-                        &mut loose_bias_gyro_x,
-                        &mut loose_bias_gyro_y,
-                        &mut loose_bias_gyro_z,
-                        &mut loose_bias_accel_x,
-                        &mut loose_bias_accel_y,
-                        &mut loose_bias_accel_z,
-                        &mut loose_scale_gyro_x,
-                        &mut loose_scale_gyro_y,
-                        &mut loose_scale_gyro_z,
-                        &mut loose_scale_accel_x,
-                        &mut loose_scale_accel_y,
-                        &mut loose_scale_accel_z,
-                        &mut loose_cov_diag,
-                    );
-                }
-                initialized_this_pkt = true;
-                break;
-            }
-            if initialized_this_pkt {
-                continue;
-            }
-        }
-
-        if !ekf_initialized {
-            while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
-                nav_idx += 1;
-            }
-            continue;
-        }
+        let (gyro, accel) = vehicle_measurements_from_mount(
+            fusion_ref.mount_q_vb(),
+            [
+                raw_gyro_radps[0] as f64,
+                raw_gyro_radps[1] as f64,
+                raw_gyro_radps[2] as f64,
+            ],
+            [
+                raw_accel_mps2[0] as f64,
+                raw_accel_mps2[1] as f64,
+                raw_accel_mps2[2] as f64,
+            ],
+        );
 
         let predict_gyro = if let Some(cutoff_hz) = cfg.predict_imu_lpf_cutoff_hz {
             let alpha_pred = lpf_alpha(dt, cutoff_hz);
@@ -653,9 +524,9 @@ pub fn build_ekf_compare_traces(
         predict_accel_sum[1] += predict_accel[1];
         predict_accel_sum[2] += predict_accel[2];
         let predict_decimation = cfg.predict_imu_decimation.max(1);
+        let mut eskf_initialized_this_pkt = false;
         if predict_decim_count >= predict_decimation {
             let pred_dt = predict_dt_accum.max(1.0e-6);
-            let block_len = predict_decim_count.max(1) as f32;
             let inv_block_len = 1.0 / (predict_decim_count.max(1) as f64);
             let avg_predict_gyro = [
                 predict_gyro_sum[0] * inv_block_len,
@@ -667,93 +538,21 @@ pub fn build_ekf_compare_traces(
                 predict_accel_sum[1] * inv_block_len,
                 predict_accel_sum[2] * inv_block_len,
             ];
-            let block_len_sq = block_len * block_len;
-            let imu = CEskfImuDelta {
-                dax: (deg2rad(avg_predict_gyro[0]) * pred_dt) as f32,
-                day: (deg2rad(avg_predict_gyro[1]) * pred_dt) as f32,
-                daz: (deg2rad(avg_predict_gyro[2]) * pred_dt) as f32,
-                dvx: (avg_predict_accel[0] * pred_dt) as f32,
-                dvy: (avg_predict_accel[1] * pred_dt) as f32,
-                dvz: (avg_predict_accel[2] * pred_dt) as f32,
+            let loose_imu = CLooseImuDelta {
+                dax_1: (deg2rad(avg_predict_gyro[0]) * pred_dt) as f32,
+                day_1: (deg2rad(avg_predict_gyro[1]) * pred_dt) as f32,
+                daz_1: (deg2rad(avg_predict_gyro[2]) * pred_dt) as f32,
+                dvx_1: (avg_predict_accel[0] * pred_dt) as f32,
+                dvy_1: (avg_predict_accel[1] * pred_dt) as f32,
+                dvz_1: (avg_predict_accel[2] * pred_dt) as f32,
+                dax_2: (deg2rad(avg_predict_gyro[0]) * pred_dt) as f32,
+                day_2: (deg2rad(avg_predict_gyro[1]) * pred_dt) as f32,
+                daz_2: (deg2rad(avg_predict_gyro[2]) * pred_dt) as f32,
+                dvx_2: (avg_predict_accel[0] * pred_dt) as f32,
+                dvy_2: (avg_predict_accel[1] * pred_dt) as f32,
+                dvz_2: (avg_predict_accel[2] * pred_dt) as f32,
                 dt: pred_dt as f32,
             };
-            let loose_imu = CLooseImuDelta {
-                dax_1: imu.dax,
-                day_1: imu.day,
-                daz_1: imu.daz,
-                dvx_1: imu.dvx,
-                dvy_1: imu.dvy,
-                dvz_1: imu.dvz,
-                dax_2: imu.dax,
-                day_2: imu.day,
-                daz_2: imu.daz,
-                dvx_2: imu.dvx,
-                dvy_2: imu.dvy,
-                dvz_2: imu.dvz,
-                dt: imu.dt,
-            };
-            if let Some(eskf_ref) = eskf.as_mut() {
-                eskf_ref.predict(imu);
-                eskf_ref.fuse_body_vel(cfg.r_body_vel / block_len_sq.max(1.0));
-                let n = eskf_ref.nominal();
-                let accel_norm = (avg_predict_accel[0] * avg_predict_accel[0]
-                    + avg_predict_accel[1] * avg_predict_accel[1]
-                    + avg_predict_accel[2] * avg_predict_accel[2])
-                    .sqrt();
-                let c_n_b =
-                    quat_to_rotmat_f64([n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64]);
-                let gravity_b = [
-                    c_n_b[2][0] * GRAVITY_MPS2 as f64,
-                    c_n_b[2][1] * GRAVITY_MPS2 as f64,
-                    c_n_b[2][2] * GRAVITY_MPS2 as f64,
-                ];
-                let accel_resid = [
-                    avg_predict_accel[0] - n.bax as f64 + gravity_b[0],
-                    avg_predict_accel[1] - n.bay as f64 + gravity_b[1],
-                    avg_predict_accel[2] - n.baz as f64 + gravity_b[2],
-                ];
-                let accel_h =
-                    (accel_resid[0] * accel_resid[0] + accel_resid[1] * accel_resid[1]).sqrt();
-                let gyro_resid = [
-                    deg2rad(avg_predict_gyro[0]) - n.bgx as f64,
-                    deg2rad(avg_predict_gyro[1]) - n.bgy as f64,
-                    deg2rad(avg_predict_gyro[2]) - n.bgz as f64,
-                ];
-                let gyro_norm = (gyro_resid[0] * gyro_resid[0]
-                    + gyro_resid[1] * gyro_resid[1]
-                    + gyro_resid[2] * gyro_resid[2])
-                    .sqrt();
-                let speed_h = (n.vn as f64).hypot(n.ve as f64);
-                if false && speed_h < 0.35 && gyro_norm < deg2rad(0.25) && accel_h < 0.08 {
-                    eskf_ref.fuse_zero_vel(cfg.r_zero_vel);
-                    if (accel_norm - GRAVITY_MPS2 as f64).abs() < 0.15 {
-                        eskf_ref.fuse_stationary_gravity(
-                            [
-                                avg_predict_accel[0] as f32,
-                                avg_predict_accel[1] as f32,
-                                avg_predict_accel[2] as f32,
-                            ],
-                            cfg.r_stationary_accel,
-                        );
-                        let d = eskf_ref.stationary_diag();
-                        let t = rel_s(pkt.t_ms);
-                        eskf_stationary_innov_x.push([t, d.innovation_x as f64]);
-                        eskf_stationary_innov_y.push([t, d.innovation_y as f64]);
-                        eskf_stationary_k_theta_x_from_x.push([t, d.k_theta_x_from_x as f64]);
-                        eskf_stationary_k_theta_y_from_x.push([t, d.k_theta_y_from_x as f64]);
-                        eskf_stationary_k_theta_x_from_y.push([t, d.k_theta_x_from_y as f64]);
-                        eskf_stationary_k_theta_y_from_y.push([t, d.k_theta_y_from_y as f64]);
-                        eskf_stationary_k_bax_from_x.push([t, d.k_bax_from_x as f64]);
-                        eskf_stationary_k_bay_from_y.push([t, d.k_bay_from_y as f64]);
-                        eskf_stationary_p_theta_x.push([t, d.p_theta_x as f64]);
-                        eskf_stationary_p_theta_y.push([t, d.p_theta_y as f64]);
-                        eskf_stationary_p_bax.push([t, d.p_bax as f64]);
-                        eskf_stationary_p_bay.push([t, d.p_bay as f64]);
-                        eskf_stationary_p_theta_x_bax.push([t, d.p_theta_x_bax as f64]);
-                        eskf_stationary_p_theta_y_bay.push([t, d.p_theta_y_bay as f64]);
-                    }
-                }
-            }
             if let Some(loose_ref) = loose.as_mut() {
                 loose_ref.predict(loose_imu);
             }
@@ -794,9 +593,54 @@ pub fn build_ekf_compare_traces(
                 }
                 let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
                 let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
-                if let Some(eskf_ref) = eskf.as_mut() {
-                    eskf_ref.fuse_gps(fusion_gnss_sample(nav, ned, cfg));
+                let t = rel_s(t_ms);
+                if loose.is_none() {
+                    loose = Some(initialize_loose_from_nav(nav, ned, base_loose_predict_noise, cfg));
+                    loose_last_gps_update_ms = Some(t_ms);
+                    if let Some(loose_ref) = loose.as_ref() {
+                        append_loose_sample(
+                            loose_ref,
+                            t,
+                            gyro,
+                            accel,
+                            dt,
+                            ref_ecef,
+                            ref_lat,
+                            ref_lon,
+                            cfg.vehicle_meas_lpf_cutoff_hz,
+                            &mut loose_cmp_pos_n,
+                            &mut loose_cmp_pos_e,
+                            &mut loose_cmp_pos_d,
+                            &mut loose_cmp_vel_n,
+                            &mut loose_cmp_vel_e,
+                            &mut loose_cmp_vel_d,
+                            &mut loose_cmp_att_roll,
+                            &mut loose_cmp_att_pitch,
+                            &mut loose_cmp_att_yaw,
+                            &mut loose_meas_gyro_x,
+                            &mut loose_meas_gyro_y,
+                            &mut loose_meas_gyro_z,
+                            &mut loose_meas_accel_x,
+                            &mut loose_meas_accel_y,
+                            &mut loose_meas_accel_z,
+                            &mut loose_bias_gyro_x,
+                            &mut loose_bias_gyro_y,
+                            &mut loose_bias_gyro_z,
+                            &mut loose_bias_accel_x,
+                            &mut loose_bias_accel_y,
+                            &mut loose_bias_accel_z,
+                            &mut loose_scale_gyro_x,
+                            &mut loose_scale_gyro_y,
+                            &mut loose_scale_gyro_z,
+                            &mut loose_scale_accel_x,
+                            &mut loose_scale_accel_y,
+                            &mut loose_scale_accel_z,
+                            &mut loose_cov_diag,
+                        );
+                    }
                 }
+                let fusion_gnss = fusion_gnss_sample(nav, ned, cfg, rel_s(t_ms) as f32);
+                let update = fusion_ref.process_gnss(fusion_gnss);
                 if let Some(loose_ref) = loose.as_mut() {
                     let dt_since_last_gnss_s = loose_last_gps_update_ms
                         .map(|last_t_ms| ((t_ms - last_t_ms) * 1.0e-3) as f32)
@@ -814,9 +658,8 @@ pub fn build_ekf_compare_traces(
                     loose_batch_applied = true;
                 }
 
-                let t = rel_s(t_ms);
-                if let Some(eskf_ref) = eskf.as_ref() {
-                    let n = eskf_ref.nominal();
+                if let Some(eskf_ref) = fusion_ref.eskf() {
+                    let n = &eskf_ref.nominal;
                     let (_, _, eskf_yaw) = quat_rpy_deg(n.q0, n.q1, n.q2, n.q3);
                     let (eskf_lat, eskf_lon, _eskf_h) = ned_to_lla_exact(
                         n.pn as f64,
@@ -832,6 +675,43 @@ pub fn build_ekf_compare_traces(
                         lat_deg: eskf_lat,
                         yaw_deg: eskf_yaw,
                     });
+                }
+                if update.ekf_initialized_now {
+                    eskf_initialized_this_pkt = true;
+                    if let Some(eskf_ref) = fusion_ref.eskf() {
+                        append_eskf_sample(
+                            eskf_ref,
+                            t,
+                            gyro,
+                            accel,
+                            dt,
+                            cfg.vehicle_meas_lpf_cutoff_hz,
+                            &mut filt_eskf_meas_gyro,
+                            &mut filt_eskf_meas_accel,
+                            &mut eskf_cmp_pos_n,
+                            &mut eskf_cmp_pos_e,
+                            &mut eskf_cmp_pos_d,
+                            &mut eskf_cmp_vel_n,
+                            &mut eskf_cmp_vel_e,
+                            &mut eskf_cmp_vel_d,
+                            &mut eskf_cmp_att_roll,
+                            &mut eskf_cmp_att_pitch,
+                            &mut eskf_cmp_att_yaw,
+                            &mut eskf_meas_gyro_x,
+                            &mut eskf_meas_gyro_y,
+                            &mut eskf_meas_gyro_z,
+                            &mut eskf_meas_accel_x,
+                            &mut eskf_meas_accel_y,
+                            &mut eskf_meas_accel_z,
+                            &mut eskf_bias_gyro_x,
+                            &mut eskf_bias_gyro_y,
+                            &mut eskf_bias_gyro_z,
+                            &mut eskf_bias_accel_x,
+                            &mut eskf_bias_accel_y,
+                            &mut eskf_bias_accel_z,
+                            &mut eskf_cov_diag,
+                        );
+                    }
                 }
                 if let Some(loose_ref) = loose.as_ref() {
                     let (loose_pos_ned, _, loose_q_ns) =
@@ -878,8 +758,8 @@ pub fn build_ekf_compare_traces(
         }
 
         if origin_set {
-            if let Some(eskf_ref) = eskf.as_ref() {
-                let n = eskf_ref.nominal();
+            if let Some(eskf_ref) = fusion_ref.eskf() {
+                let n = &eskf_ref.nominal;
                 let (eskf_lat, eskf_lon, _eskf_h) = ned_to_lla_exact(
                     n.pn as f64,
                     n.pe as f64,
@@ -913,7 +793,7 @@ pub fn build_ekf_compare_traces(
 
         let t_imu = rel_s(pkt.t_ms);
         let dt_safe = dt.max(1.0e-6);
-        if let Some(eskf_ref) = eskf.as_ref() {
+        if let Some(eskf_ref) = fusion_ref.eskf() && !eskf_initialized_this_pkt {
             append_eskf_sample(
                 eskf_ref,
                 t_imu,
@@ -1800,57 +1680,6 @@ impl Lcg64 {
     }
 }
 
-fn build_align_mount_events(
-    frames: &[UbxFrame],
-    tl: &MasterTimeline,
-    imu_cfg: ImuReplayConfig,
-) -> Vec<(f64, [f32; 4])> {
-    if tl.masters.is_empty() {
-        return Vec::new();
-    }
-
-    let cfg = sensor_fusion::align::AlignConfig::default();
-    let bootstrap_cfg = AlignBootstrapConfig {
-        ema_alpha: 0.05,
-        max_speed_mps: 0.35,
-        stationary_samples: 100,
-        max_gyro_radps: cfg.max_stationary_gyro_radps,
-        max_accel_norm_err_mps2: cfg.max_stationary_accel_norm_err_mps2,
-    };
-    let replay = build_align_replay(frames, tl, cfg, bootstrap_cfg, imu_cfg);
-    let mut out = Vec::<(f64, [f32; 4])>::new();
-    let mut ready = false;
-    for sample in replay.samples {
-        if sample.yaw_initialized {
-            ready = true;
-        }
-        if ready {
-            out.push((
-                sample.t_ms,
-                [
-                    sample.q_align[0] as f32,
-                    sample.q_align[1] as f32,
-                    sample.q_align[2] as f32,
-                    sample.q_align[3] as f32,
-                ],
-            ));
-        }
-    }
-    out
-}
-
-fn initialize_eskf_from_nav(
-    nav: NavPvtObs,
-    ned: [f64; 3],
-    noise: PredictNoise,
-    cfg: EkfCompareConfig,
-) -> CEskfWrapper {
-    let mut eskf = CEskfWrapper::new(noise);
-    let q_bn = yaw_quat_f32(initial_yaw_from_nav(nav));
-    eskf.init_nominal_from_gnss(q_bn, fusion_gnss_sample(nav, ned, cfg));
-    eskf
-}
-
 fn initialize_loose_from_nav(
     nav: NavPvtObs,
     ned: [f64; 3],
@@ -1858,7 +1687,7 @@ fn initialize_loose_from_nav(
     cfg: EkfCompareConfig,
 ) -> CLooseWrapper {
     let mut loose = CLooseWrapper::new(noise);
-    let gnss = fusion_gnss_sample(nav, ned, cfg);
+    let gnss = fusion_gnss_sample(nav, ned, cfg, 0.0);
     let p_diag = default_loose_reference_p_diag(gnss);
     let q_ns = yaw_quat_f32(initial_yaw_from_nav(nav));
     let q_es = quat_mul(quat_conj(quat_ecef_to_ned(nav.lat_deg, nav.lon_deg)), [
@@ -1959,6 +1788,7 @@ fn fusion_gnss_sample(
     nav: NavPvtObs,
     ned: [f64; 3],
     cfg: EkfCompareConfig,
+    t_s: f32,
 ) -> sensor_fusion::fusion::FusionGnssSample {
     let speed_h = nav.vel_n_mps.hypot(nav.vel_e_mps);
     let heading_rad = if nav.head_veh_valid {
@@ -1969,7 +1799,7 @@ fn fusion_gnss_sample(
         Some(deg2rad(nav.heading_motion_deg) as f32)
     };
     sensor_fusion::fusion::FusionGnssSample {
-        t_s: 0.0,
+        t_s,
         pos_ned_m: [ned[0] as f32, ned[1] as f32, ned[2] as f32],
         vel_ned_mps: [
             nav.vel_n_mps as f32,
@@ -1990,9 +1820,42 @@ fn fusion_gnss_sample(
     }
 }
 
+fn vehicle_measurements_from_mount(
+    q_vb: Option<[f32; 4]>,
+    raw_gyro_radps: [f64; 3],
+    raw_accel_mps2: [f64; 3],
+) -> ([f64; 3], [f64; 3]) {
+    let Some(q_vb) = q_vb else {
+        return (
+            [
+                raw_gyro_radps[0].to_degrees(),
+                raw_gyro_radps[1].to_degrees(),
+                raw_gyro_radps[2].to_degrees(),
+            ],
+            raw_accel_mps2,
+        );
+    };
+    let c_bv = transpose3(quat_to_rotmat_f64([
+        q_vb[0] as f64,
+        q_vb[1] as f64,
+        q_vb[2] as f64,
+        q_vb[3] as f64,
+    ]));
+    let gyro_vehicle_radps = mat_vec(c_bv, raw_gyro_radps);
+    let accel_vehicle_mps2 = mat_vec(c_bv, raw_accel_mps2);
+    (
+        [
+            gyro_vehicle_radps[0].to_degrees(),
+            gyro_vehicle_radps[1].to_degrees(),
+            gyro_vehicle_radps[2].to_degrees(),
+        ],
+        accel_vehicle_mps2,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn append_eskf_sample(
-    eskf: &CEskfWrapper,
+    eskf: &CEskf,
     t_imu: f64,
     gyro: [f64; 3],
     accel: [f64; 3],
@@ -2023,7 +1886,7 @@ fn append_eskf_sample(
     bias_accel_z: &mut Vec<[f64; 2]>,
     cov_diag: &mut [Vec<[f64; 2]>; 15],
 ) {
-    let n = eskf.nominal();
+    let n = &eskf.nominal;
     cmp_pos_n.push([t_imu, n.pn as f64]);
     cmp_pos_e.push([t_imu, n.pe as f64]);
     cmp_pos_d.push([t_imu, n.pd as f64]);
@@ -2069,7 +1932,7 @@ fn append_eskf_sample(
     bias_accel_x.push([t_imu, -(n.bax as f64)]);
     bias_accel_y.push([t_imu, -(n.bay as f64)]);
     bias_accel_z.push([t_imu, -(n.baz as f64)]);
-    let p = eskf.covariance();
+    let p = &eskf.p;
     for (i, tr) in cov_diag.iter_mut().enumerate() {
         tr.push([t_imu, p[i][i] as f64]);
     }

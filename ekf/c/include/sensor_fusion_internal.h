@@ -107,6 +107,15 @@ typedef struct {
 } sf_profile_counters_t;
 
 typedef struct {
+  bool align_window_valid;
+  sf_align_window_summary_t align_window;
+  bool align_trace_valid;
+  sf_align_update_trace_t align_trace;
+  bool eskf_valid;
+  sf_eskf_t eskf;
+} sf_fusion_debug_t;
+
+typedef struct {
   sf_fusion_config_t cfg;
   sf_eskf_t eskf;
   sf_align_runtime_t align_rt;
@@ -131,6 +140,10 @@ typedef struct {
   float bootstrap_accel_err_ema;
   bool bootstrap_gyro_ema_valid;
   bool bootstrap_accel_err_ema_valid;
+  bool last_align_window_valid;
+  sf_align_window_summary_t last_align_window;
+  bool last_align_trace_valid;
+  sf_align_update_trace_t last_align_trace;
   sf_profile_now_us_fn profile_now_us;
   void *profile_ctx;
   sf_profile_counters_t profile;
@@ -185,6 +198,7 @@ const sf_eskf_t *sf_fusion_eskf(const sf_sensor_fusion_t *fusion);
 const sf_align_t *sf_fusion_align(const sf_sensor_fusion_t *fusion);
 bool sf_fusion_mount_ready(const sf_sensor_fusion_t *fusion);
 bool sf_fusion_mount_q_vb(const sf_sensor_fusion_t *fusion, float out_q_vb[4]);
+bool sf_fusion_get_debug(const sf_sensor_fusion_t *fusion, sf_fusion_debug_t *out);
 
 void sf_fusion_set_profile_now_us(sf_sensor_fusion_t *fusion,
                                   sf_profile_now_us_fn now_us,

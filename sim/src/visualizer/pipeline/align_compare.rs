@@ -1,10 +1,9 @@
-use sensor_fusion::align::AlignConfig;
-
 use crate::ubxlog::{UbxFrame, extract_esf_alg};
 
+use super::super::model::EkfImuSource;
 use super::align_replay::{
-    BootstrapConfig as ReplayBootstrapConfig, ImuReplayConfig, axis_angle_deg,
-    build_align_replay, frd_mount_quat_to_esf_alg_flu_quat, quat_rotate, quat_rpy_alg_deg,
+    ImuReplayConfig, axis_angle_deg, build_fusion_align_replay, frd_mount_quat_to_esf_alg_flu_quat,
+    quat_rotate, quat_rpy_alg_deg,
 };
 
 use super::super::math::nearest_master_ms;
@@ -25,6 +24,7 @@ pub struct AlignCompareData {
 pub fn build_align_compare_traces(
     frames: &[UbxFrame],
     tl: &MasterTimeline,
+    imu_source: EkfImuSource,
     imu_cfg: ImuReplayConfig,
 ) -> AlignCompareData {
     if tl.masters.is_empty() {
@@ -40,15 +40,7 @@ pub fn build_align_compare_traces(
         };
     }
     let rel_s = |master_ms: f64| (master_ms - tl.t0_master_ms) * 1e-3;
-    let cfg = AlignConfig::default();
-    let bootstrap_cfg = ReplayBootstrapConfig {
-        ema_alpha: 0.05,
-        max_speed_mps: 0.35,
-        stationary_samples: 300,
-        max_gyro_radps: cfg.max_stationary_gyro_radps,
-        max_accel_norm_err_mps2: cfg.max_stationary_accel_norm_err_mps2,
-    };
-    let replay = build_align_replay(frames, tl, cfg, bootstrap_cfg, imu_cfg);
+    let replay = build_fusion_align_replay(frames, tl, imu_source, imu_cfg);
     let final_alg_q = replay.final_alg_q;
 
     let mut out_roll = Vec::<[f64; 2]>::new();

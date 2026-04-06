@@ -1,5 +1,5 @@
-use crate::align::{Align, AlignConfig};
-use crate::c_api::{CEskf, CSensorFusionWrapper};
+use crate::align::{Align, AlignConfig, AlignUpdateTrace, AlignWindowSummary};
+use crate::c_api::{CAlignUpdateTrace, CEskf, CSensorFusionWrapper};
 
 #[derive(Clone, Copy, Debug)]
 pub struct FusionImuSample {
@@ -25,6 +25,12 @@ pub struct FusionUpdate {
     pub ekf_initialized: bool,
     pub ekf_initialized_now: bool,
     pub mount_q_vb: Option<[f32; 4]>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct FusionAlignDebug {
+    pub window: AlignWindowSummary,
+    pub trace: AlignUpdateTrace,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -94,10 +100,62 @@ impl SensorFusion {
         self.cached_align.as_ref()
     }
 
+    pub fn align_debug(&self) -> Option<FusionAlignDebug> {
+        let window = self.raw.align_window_debug()?;
+        let trace = self.raw.align_trace_debug()?;
+        Some(FusionAlignDebug {
+            window: AlignWindowSummary {
+                dt: window.dt,
+                mean_gyro_b: window.mean_gyro_b,
+                mean_accel_b: window.mean_accel_b,
+                gnss_vel_prev_n: window.gnss_vel_prev_n,
+                gnss_vel_curr_n: window.gnss_vel_curr_n,
+            },
+            trace: convert_align_trace(*trace),
+        })
+    }
+
     fn refresh_align_snapshot(&mut self) {
         self.cached_align = self
             .raw
             .align_state()
             .map(|s| Align::from_c_state(AlignConfig::default(), *s));
+    }
+}
+
+fn convert_align_trace(trace: CAlignUpdateTrace) -> AlignUpdateTrace {
+    AlignUpdateTrace {
+        q_start: trace.q_start,
+        coarse_alignment_ready: trace.coarse_alignment_ready,
+        after_gravity: trace.after_gravity_valid.then_some(trace.after_gravity),
+        after_horiz_accel: trace
+            .after_horiz_accel_valid
+            .then_some(trace.after_horiz_accel),
+        horiz_angle_err_rad: trace
+            .horiz_angle_err_rad_valid
+            .then_some(trace.horiz_angle_err_rad),
+        horiz_effective_std_rad: trace
+            .horiz_effective_std_rad_valid
+            .then_some(trace.horiz_effective_std_rad),
+        horiz_gnss_norm_mps2: trace
+            .horiz_gnss_norm_mps2_valid
+            .then_some(trace.horiz_gnss_norm_mps2),
+        horiz_imu_norm_mps2: trace
+            .horiz_imu_norm_mps2_valid
+            .then_some(trace.horiz_imu_norm_mps2),
+        horiz_speed_q: trace.horiz_speed_q_valid.then_some(trace.horiz_speed_q),
+        horiz_accel_q: trace.horiz_accel_q_valid.then_some(trace.horiz_accel_q),
+        horiz_straight_q: trace
+            .horiz_straight_q_valid
+            .then_some(trace.horiz_straight_q),
+        horiz_turn_q: trace.horiz_turn_q_valid.then_some(trace.horiz_turn_q),
+        horiz_dominance_q: trace
+            .horiz_dominance_q_valid
+            .then_some(trace.horiz_dominance_q),
+        horiz_turn_core_valid: trace.horiz_turn_core_valid,
+        horiz_straight_core_valid: trace.horiz_straight_core_valid,
+        after_turn_gyro: trace
+            .after_turn_gyro_valid
+            .then_some(trace.after_turn_gyro),
     }
 }

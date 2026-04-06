@@ -117,6 +117,17 @@ pub struct CFusionState {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
+pub struct CFusionDebug {
+    pub align_window_valid: bool,
+    pub align_window: CAlignWindowSummary,
+    pub align_trace_valid: bool,
+    pub align_trace: CAlignUpdateTrace,
+    pub eskf_valid: bool,
+    pub eskf: CEskf,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct CEskfNominalState {
     pub q0: f32,
     pub q1: f32,
@@ -371,6 +382,7 @@ unsafe extern "C" {
     fn sf_process_imu(fusion: *mut CSensorFusion, sample: *const CImuSample) -> CUpdate;
     fn sf_process_gnss(fusion: *mut CSensorFusion, sample: *const CGnssSample) -> CUpdate;
     fn sf_get_state(fusion: *const CSensorFusion, out: *mut CFusionState) -> bool;
+    fn sf_fusion_get_debug(fusion: *const CSensorFusion, out: *mut CFusionDebug) -> bool;
 
     fn sf_fusion_set_misalignment(fusion: *mut CSensorFusion, q_vb: *const f32);
 
@@ -542,6 +554,7 @@ impl CAlign {
 pub struct CSensorFusionWrapper {
     raw: CSensorFusion,
     state: CFusionState,
+    debug: CFusionDebug,
     cached_eskf: Option<CEskf>,
     cached_align: Option<CAlignState>,
 }
@@ -562,6 +575,7 @@ impl CSensorFusionWrapper {
         let mut out = Self {
             raw,
             state: CFusionState::default(),
+            debug: CFusionDebug::default(),
             cached_eskf: None,
             cached_align: None,
         };
@@ -575,6 +589,7 @@ impl CSensorFusionWrapper {
         let mut out = Self {
             raw,
             state: CFusionState::default(),
+            debug: CFusionDebug::default(),
             cached_eskf: None,
             cached_align: None,
         };
@@ -640,8 +655,17 @@ impl CSensorFusionWrapper {
         self.state.mount_q_vb_valid.then_some(self.state.mount_q_vb)
     }
 
+    pub fn align_window_debug(&self) -> Option<&CAlignWindowSummary> {
+        self.debug.align_window_valid.then_some(&self.debug.align_window)
+    }
+
+    pub fn align_trace_debug(&self) -> Option<&CAlignUpdateTrace> {
+        self.debug.align_trace_valid.then_some(&self.debug.align_trace)
+    }
+
     fn refresh_state(&mut self) {
         let mut state = CFusionState::default();
+        let mut debug = CFusionDebug::default();
         let ok = unsafe {
             sf_get_state(
                 &self.raw as *const CSensorFusion,
@@ -651,7 +675,14 @@ impl CSensorFusionWrapper {
         if !ok {
             return;
         }
+        let _ = unsafe {
+            sf_fusion_get_debug(
+                &self.raw as *const CSensorFusion,
+                &mut debug as *mut CFusionDebug,
+            )
+        };
         self.state = state;
+        self.debug = debug;
 
         self.cached_align = match state.align_state {
             CAlignStatus::None => None,
@@ -664,12 +695,14 @@ impl CSensorFusionWrapper {
                     q_vb: state.align_q_vb,
                     p,
                     gravity_lp_b: state.gravity_lp_b,
-                    coarse_alignment_ready: true,
+                    coarse_alignment_ready: state.align_state == CAlignStatus::Fine,
                 })
             }
         };
 
-        self.cached_eskf = if state.sensor_fusion_state {
+        self.cached_eskf = if debug.eskf_valid {
+            Some(debug.eskf)
+        } else if state.sensor_fusion_state {
             let mut eskf = CEskf::default();
             eskf.nominal.q0 = state.q_bn[0];
             eskf.nominal.q1 = state.q_bn[1];

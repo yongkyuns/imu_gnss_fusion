@@ -21,8 +21,13 @@ struct Args {
     max_records: Option<usize>,
     #[arg(long)]
     profile_only: bool,
-    #[arg(long, default_value = "align", value_parser = parse_ekf_imu_source)]
-    ekf_imu_source: EkfImuSource,
+    #[arg(
+        long = "misalignment",
+        alias = "ekf-imu-source",
+        default_value = "auto",
+        value_parser = parse_misalignment
+    )]
+    misalignment: EkfImuSource,
     #[arg(long)]
     dump_align_axis_time_s: Option<f64>,
     #[arg(long, default_value_t = 3.0)]
@@ -58,7 +63,7 @@ fn main() -> Result<()> {
     let (data, has_itow) = build_plot_data(
         &bytes,
         args.max_records,
-        args.ekf_imu_source,
+        args.misalignment,
         ekf_cfg,
         GnssOutageConfig {
             count: args.gnss_outage_count,
@@ -201,12 +206,12 @@ fn main() -> Result<()> {
     run_visualizer(data, has_itow)
 }
 
-fn parse_ekf_imu_source(s: &str) -> Result<EkfImuSource, String> {
+fn parse_misalignment(s: &str) -> Result<EkfImuSource, String> {
     match s.to_ascii_lowercase().as_str() {
-        "align" => Ok(EkfImuSource::Align),
-        "esf-alg" | "esf_alg" | "alg" => Ok(EkfImuSource::EsfAlg),
+        "auto" | "align" => Ok(EkfImuSource::Align),
+        "manual" | "esf-alg" | "esf_alg" | "alg" => Ok(EkfImuSource::EsfAlg),
         _ => Err(format!(
-            "invalid ekf IMU source '{s}', expected 'align' or 'esf-alg'"
+            "invalid misalignment '{s}', expected 'auto' or 'manual'"
         )),
     }
 }
