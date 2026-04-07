@@ -44,13 +44,27 @@ typedef struct {
 
 typedef struct {
   float t_s;
-  float pos_ned_m[3];
+  float lat_deg;
+  float lon_deg;
+  float height_m;
   float vel_ned_mps[3];
   float pos_std_m[3];
   float vel_std_mps[3];
   bool heading_valid;
   float heading_rad;
 } sf_gnss_sample_t;
+
+typedef enum {
+  SF_VEHICLE_SPEED_DIRECTION_UNKNOWN = 0,
+  SF_VEHICLE_SPEED_DIRECTION_FORWARD = 1,
+  SF_VEHICLE_SPEED_DIRECTION_REVERSE = 2,
+} sf_vehicle_speed_direction_t;
+
+typedef struct {
+  float t_s;
+  float speed_mps;
+  sf_vehicle_speed_direction_t direction;
+} sf_vehicle_speed_sample_t;
 
 typedef struct {
   bool mount_ready;
@@ -85,7 +99,10 @@ typedef union {
 void sf_init(sf_t *sf, const float *q_vb_or_null);
 sf_update_t sf_process_imu(sf_t *sf, const sf_imu_sample_t *sample);
 sf_update_t sf_process_gnss(sf_t *sf, const sf_gnss_sample_t *sample);
+sf_update_t sf_process_vehicle_speed(sf_t *sf,
+                                     const sf_vehicle_speed_sample_t *sample);
 bool sf_get_state(const sf_t *sf, sf_state_t *out);
+bool sf_get_lla(const sf_t *sf, float out_lla[3]);
 
 #ifdef __cplusplus
 }

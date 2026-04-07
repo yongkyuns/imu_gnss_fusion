@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use sensor_fusion::c_api::{CEskfImuDelta, CEskfWrapper, CLooseImuDelta, CLooseWrapper};
+use sensor_fusion::c_api::{CEskfImuDelta, CEskfWrapper, CLooseImuDelta, CLooseWrapper, EskfGnssSample};
 use sensor_fusion::ekf::PredictNoise;
 use sensor_fusion::fusion::FusionGnssSample;
 use sensor_fusion::loose::LoosePredictNoise;
@@ -84,6 +84,7 @@ struct RefInit {
 #[derive(Debug, Clone, Copy)]
 struct GpsUpdate {
     fusion: FusionGnssSample,
+    eskf: EskfGnssSample,
     pos_ecef_m: [f64; 3],
     h_acc_m: f32,
     dt_since_last_gnss_s: f32,
@@ -258,6 +259,16 @@ fn build_replay_steps(
                         Some(GpsUpdate {
                             fusion: FusionGnssSample {
                                 t_s: ((curr.ttag_us - init.start_ttag_us) as f64 * 1.0e-6) as f32,
+                                lat_deg: g.lat_deg as f32,
+                                lon_deg: g.lon_deg as f32,
+                                height_m: g.height_m as f32,
+                                vel_ned_mps: vel_ned,
+                                pos_std_m: [g.h_acc_m as f32, g.h_acc_m as f32, g.v_acc_m as f32],
+                                vel_std_mps: [g.speed_acc_mps as f32; 3],
+                                heading_rad: None,
+                            },
+                            eskf: EskfGnssSample {
+                                t_s: ((curr.ttag_us - init.start_ttag_us) as f64 * 1.0e-6) as f32,
                                 pos_ned_m: [pos_ned[0] as f32, pos_ned[1] as f32, pos_ned[2] as f32],
                                 vel_ned_mps: vel_ned,
                                 pos_std_m: [g.h_acc_m as f32, g.h_acc_m as f32, g.v_acc_m as f32],
@@ -321,7 +332,7 @@ fn build_replay_steps(
 
 fn run_eskf(init: &RefInit, steps: &[ReplayStep]) -> FilterStats {
     let mut eskf = CEskfWrapper::new(PredictNoise::default());
-    let init_gnss = FusionGnssSample {
+    let init_gnss = EskfGnssSample {
         t_s: 0.0,
         pos_ned_m: init.pos_ned_m,
         vel_ned_mps: init.vel_ned_mps,
@@ -341,7 +352,7 @@ fn run_eskf(init: &RefInit, steps: &[ReplayStep]) -> FilterStats {
 
         if let Some(gps) = step.gps {
             let t1 = Instant::now();
-            eskf.fuse_gps(gps.fusion);
+            eskf.fuse_gps(gps.eskf);
             stats.timing.gps_update += t1.elapsed();
             stats.counts.gps_updates += 1;
         }

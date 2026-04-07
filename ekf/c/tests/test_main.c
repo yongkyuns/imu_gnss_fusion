@@ -13,14 +13,166 @@ static float quat_yaw_rad(float q0, float q1, float q2, float q3) {
                 1.0f - 2.0f * (q2 * q2 + q3 * q3));
 }
 
+static void test_transpose3(const float in[3][3], float out[3][3]) {
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j) {
+      out[j][i] = in[i][j];
+    }
+  }
+}
+
+static void test_mat3_vec(const float m[3][3], const float v[3], float out[3]) {
+  for (int i = 0; i < 3; ++i) {
+    out[i] = m[i][0] * v[0] + m[i][1] * v[1] + m[i][2] * v[2];
+  }
+}
+
+static void test_mat3_mul(const float a[3][3], const float b[3][3], float out[3][3]) {
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j) {
+      out[i][j] = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j];
+    }
+  }
+}
+
+static void test_quat_normalize(float q[4]) {
+  const float norm =
+      sqrtf(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+  if (norm > 0.0f) {
+    q[0] /= norm;
+    q[1] /= norm;
+    q[2] /= norm;
+    q[3] /= norm;
+  }
+}
+
+static void test_quat_to_rotmat(const float q[4], float r[3][3]) {
+  const float q0 = q[0];
+  const float q1 = q[1];
+  const float q2 = q[2];
+  const float q3 = q[3];
+  const float q00 = q0 * q0;
+  const float q11 = q1 * q1;
+  const float q22 = q2 * q2;
+  const float q33 = q3 * q3;
+  const float q01 = q0 * q1;
+  const float q02 = q0 * q2;
+  const float q03 = q0 * q3;
+  const float q12 = q1 * q2;
+  const float q13 = q1 * q3;
+  const float q23 = q2 * q3;
+
+  r[0][0] = q00 + q11 - q22 - q33;
+  r[0][1] = 2.0f * (q12 - q03);
+  r[0][2] = 2.0f * (q13 + q02);
+  r[1][0] = 2.0f * (q12 + q03);
+  r[1][1] = q00 - q11 + q22 - q33;
+  r[1][2] = 2.0f * (q23 - q01);
+  r[2][0] = 2.0f * (q13 - q02);
+  r[2][1] = 2.0f * (q23 + q01);
+  r[2][2] = q00 - q11 - q22 + q33;
+}
+
+static void test_quat_from_rpy(float roll_rad, float pitch_rad, float yaw_rad,
+                               float out[4]) {
+  const float cr = cosf(0.5f * roll_rad);
+  const float sr = sinf(0.5f * roll_rad);
+  const float cp = cosf(0.5f * pitch_rad);
+  const float sp = sinf(0.5f * pitch_rad);
+  const float cy = cosf(0.5f * yaw_rad);
+  const float sy = sinf(0.5f * yaw_rad);
+
+  out[0] = cr * cp * cy + sr * sp * sy;
+  out[1] = sr * cp * cy - cr * sp * sy;
+  out[2] = cr * sp * cy + sr * cp * sy;
+  out[3] = cr * cp * sy - sr * sp * cy;
+  test_quat_normalize(out);
+}
+
+static void test_lla_to_ecef(double lat_deg, double lon_deg, double height_m,
+                             double out[3]) {
+  const double a = 6378137.0;
+  const double e2 = 6.69437999014e-3;
+  const double lat = lat_deg * 3.14159265358979323846 / 180.0;
+  const double lon = lon_deg * 3.14159265358979323846 / 180.0;
+  const double sin_lat = sin(lat);
+  const double cos_lat = cos(lat);
+  const double sin_lon = sin(lon);
+  const double cos_lon = cos(lon);
+  const double n = a / sqrt(1.0 - e2 * sin_lat * sin_lat);
+
+  out[0] = (n + height_m) * cos_lat * cos_lon;
+  out[1] = (n + height_m) * cos_lat * sin_lon;
+  out[2] = (n * (1.0 - e2) + height_m) * sin_lat;
+}
+
+static void test_ecef_to_lla(const double ecef[3], float out_lla[3]) {
+  const double a = 6378137.0;
+  const double e2 = 6.69437999014e-3;
+  const double b = a * sqrt(1.0 - e2);
+  const double ep2 = (a * a - b * b) / (b * b);
+  const double x = ecef[0];
+  const double y = ecef[1];
+  const double z = ecef[2];
+  const double p = sqrt(x * x + y * y);
+  const double th = atan2(a * z, b * p);
+  const double lon = atan2(y, x);
+  const double lat = atan2(z + ep2 * b * pow(sin(th), 3.0),
+                           p - e2 * a * pow(cos(th), 3.0));
+  const double sin_lat = sin(lat);
+  const double n = a / sqrt(1.0 - e2 * sin_lat * sin_lat);
+  const double h = p / cos(lat) - n;
+  out_lla[0] = (float)(lat * 180.0 / 3.14159265358979323846);
+  out_lla[1] = (float)(lon * 180.0 / 3.14159265358979323846);
+  out_lla[2] = (float)h;
+}
+
+static void test_ecef_to_ned_matrix(float lat_deg, float lon_deg, float out[3][3]) {
+  const float lat = lat_deg * 3.14159265358979323846f / 180.0f;
+  const float lon = lon_deg * 3.14159265358979323846f / 180.0f;
+  const float s_lat = sinf(lat);
+  const float c_lat = cosf(lat);
+  const float s_lon = sinf(lon);
+  const float c_lon = cosf(lon);
+
+  out[0][0] = -s_lat * c_lon;
+  out[0][1] = -s_lat * s_lon;
+  out[0][2] = c_lat;
+  out[1][0] = -s_lon;
+  out[1][1] = c_lon;
+  out[1][2] = 0.0f;
+  out[2][0] = -c_lat * c_lon;
+  out[2][1] = -c_lat * s_lon;
+  out[2][2] = -s_lat;
+}
+
+static void test_ned_offset_to_lla(float lat_deg, float lon_deg, float height_m,
+                                   const float ned_m[3], float out_lla[3]) {
+  double anchor_ecef[3];
+  float c_ne[3][3];
+  float c_en[3][3];
+  double ecef[3];
+
+  test_lla_to_ecef((double)lat_deg, (double)lon_deg, (double)height_m, anchor_ecef);
+  test_ecef_to_ned_matrix(lat_deg, lon_deg, c_ne);
+  test_transpose3(c_ne, c_en);
+  ecef[0] = anchor_ecef[0] + (double)c_en[0][0] * ned_m[0] +
+            (double)c_en[0][1] * ned_m[1] + (double)c_en[0][2] * ned_m[2];
+  ecef[1] = anchor_ecef[1] + (double)c_en[1][0] * ned_m[0] +
+            (double)c_en[1][1] * ned_m[1] + (double)c_en[1][2] * ned_m[2];
+  ecef[2] = anchor_ecef[2] + (double)c_en[2][0] * ned_m[0] +
+            (double)c_en[2][1] * ned_m[1] + (double)c_en[2][2] * ned_m[2];
+  test_ecef_to_lla(ecef, out_lla);
+}
+
 static void test_predict_noise_defaults(void) {
   sf_predict_noise_t noise;
   sf_predict_noise_default(&noise);
 
-  TEST_ASSERT_FLOAT_WITHIN(1.0e-9f, 0.0001f, noise.gyro_var);
-  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 12.0f, noise.accel_var);
-  TEST_ASSERT_FLOAT_WITHIN(1.0e-15f, 0.002e-9f, noise.gyro_bias_rw_var);
-  TEST_ASSERT_FLOAT_WITHIN(1.0e-13f, 0.2e-9f, noise.accel_bias_rw_var);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-12f, 2.2873113e-7f * 10.0f, noise.gyro_var);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-9f, 2.4504214e-5f * 15.0f, noise.accel_var);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-15f, 0.0002e-9f, noise.gyro_bias_rw_var);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-15f, 0.002e-9f, noise.accel_bias_rw_var);
 }
 
 static void test_external_misalignment_sets_mount_ready(void) {
@@ -54,7 +206,9 @@ static void test_sensor_fusion_external_mode_initializes_and_predicts(void) {
   };
   sf_gnss_sample_t gnss = {
       .t_s = 10.00,
-      .pos_ned_m = {100.0f, 50.0f, -2.0f},
+      .lat_deg = 45.0f,
+      .lon_deg = -79.0f,
+      .height_m = 120.0f,
       .vel_ned_mps = {5.0f, 0.0f, 0.0f},
       .pos_std_m = {0.5f, 0.5f, 1.0f},
       .vel_std_mps = {0.2f, 0.2f, 0.2f},
@@ -69,15 +223,15 @@ static void test_sensor_fusion_external_mode_initializes_and_predicts(void) {
 
   upd = sf_fusion_process_gnss(&fusion, &gnss);
   TEST_ASSERT_TRUE(upd.mount_ready);
-  TEST_ASSERT_TRUE(upd.ekf_initialized);
-  TEST_ASSERT_TRUE(upd.ekf_initialized_now);
-  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, gnss.pos_ned_m[0], impl->eskf.nominal.pn);
-  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, gnss.pos_ned_m[1], impl->eskf.nominal.pe);
+  TEST_ASSERT_TRUE(upd.sensor_fusion_state);
+  TEST_ASSERT_TRUE(upd.sensor_fusion_state_changed);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 0.0f, impl->eskf.nominal.pn);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 0.0f, impl->eskf.nominal.pe);
 
   upd = sf_fusion_process_imu(&fusion, &imu0);
-  TEST_ASSERT_TRUE(upd.ekf_initialized);
+  TEST_ASSERT_TRUE(upd.sensor_fusion_state);
   upd = sf_fusion_process_imu(&fusion, &imu1);
-  TEST_ASSERT_TRUE(upd.ekf_initialized);
+  TEST_ASSERT_TRUE(upd.sensor_fusion_state);
   TEST_ASSERT_TRUE(impl->eskf.nominal.q3 > 0.0f);
 }
 
@@ -252,7 +406,7 @@ static void test_eskf_predict_updates_covariance_symmetrically(void) {
 
 static void test_eskf_fuse_gps_moves_nominal_state_toward_measurement(void) {
   sf_eskf_t eskf;
-  sf_gnss_sample_t gps = {
+  sf_gnss_ned_sample_t gps = {
       .pos_ned_m = {10.0f, -5.0f, 2.0f},
       .vel_ned_mps = {3.0f, -1.0f, 0.5f},
       .pos_std_m = {0.5f, 0.5f, 0.5f},
@@ -343,6 +497,22 @@ static void test_eskf_zero_vel_reduces_forward_velocity_when_stopped(void) {
 
   TEST_ASSERT_TRUE(fabsf(eskf.nominal.vn) < 0.3f);
   TEST_ASSERT_TRUE(eskf.p[3][3] < px_before);
+}
+
+static void test_eskf_fuse_body_speed_x_moves_forward_velocity_toward_measurement(void) {
+  sf_eskf_t eskf;
+  float vx_before;
+
+  sf_eskf_init(&eskf, NULL, NULL);
+  eskf.nominal.vn = 2.5f;
+  eskf.nominal.ve = 0.0f;
+  eskf.nominal.vd = 0.0f;
+  vx_before = eskf.nominal.vn;
+
+  sf_eskf_fuse_body_speed_x(&eskf, 4.0f, 0.04f);
+
+  TEST_ASSERT_TRUE(eskf.nominal.vn > vx_before);
+  TEST_ASSERT_TRUE(eskf.nominal.vn < 4.0f);
 }
 
 static void test_loose_init_copies_all_noise_fields_and_covariance_diag(void) {
@@ -527,7 +697,7 @@ static void test_loose_nominal_predict_keeps_equatorial_rest_state_near_rest(voi
 
 static void test_loose_reference_gps_update_moves_ecef_position_toward_measurement(void) {
   sf_loose_t loose;
-  const float pos_meas[3] = {6378147.0f, 2.0f, -3.0f};
+  const double pos_meas[3] = {6378147.0, 2.0, -3.0};
   float before_err;
   float after_err;
   float p_before;
@@ -545,11 +715,11 @@ static void test_loose_reference_gps_update_moves_ecef_position_toward_measureme
   loose.p[1][1] = 25.0f;
   loose.p[2][2] = 25.0f;
   p_before = loose.p[0][0];
-  before_err = fabsf(pos_meas[0] - loose.nominal.pn);
+  before_err = fabsf((float)pos_meas[0] - loose.nominal.pn);
 
   sf_loose_fuse_gps_reference(&loose, pos_meas, 0.5f, 1.0f);
 
-  after_err = fabsf(pos_meas[0] - loose.nominal.pn);
+  after_err = fabsf((float)pos_meas[0] - loose.nominal.pn);
   TEST_ASSERT_TRUE(after_err < before_err);
   TEST_ASSERT_TRUE(loose.p[0][0] < p_before);
 }
@@ -595,7 +765,9 @@ static void test_sensor_fusion_internal_mode_bootstraps_align_state(void) {
   sf_fusion_config_t cfg;
   sf_gnss_sample_t gnss0 = {
       .t_s = 0.0,
-      .pos_ned_m = {0.0f, 0.0f, 0.0f},
+      .lat_deg = 45.0f,
+      .lon_deg = -79.0f,
+      .height_m = 120.0f,
       .vel_ned_mps = {0.0f, 0.0f, 0.0f},
       .pos_std_m = {0.5f, 0.5f, 1.0f},
       .vel_std_mps = {0.2f, 0.2f, 0.2f},
@@ -604,7 +776,9 @@ static void test_sensor_fusion_internal_mode_bootstraps_align_state(void) {
   };
   sf_gnss_sample_t gnss1 = {
       .t_s = 1.0,
-      .pos_ned_m = {0.0f, 0.0f, 0.0f},
+      .lat_deg = 45.0f,
+      .lon_deg = -79.0f,
+      .height_m = 120.0f,
       .vel_ned_mps = {0.0f, 0.0f, 0.0f},
       .pos_std_m = {0.5f, 0.5f, 1.0f},
       .vel_std_mps = {0.2f, 0.2f, 0.2f},
@@ -613,7 +787,9 @@ static void test_sensor_fusion_internal_mode_bootstraps_align_state(void) {
   };
   sf_gnss_sample_t gnss2 = {
       .t_s = 2.0,
-      .pos_ned_m = {0.0f, 0.0f, 0.0f},
+      .lat_deg = 45.0f,
+      .lon_deg = -79.0f,
+      .height_m = 120.0f,
       .vel_ned_mps = {3.0f, 0.0f, 0.0f},
       .pos_std_m = {0.5f, 0.5f, 1.0f},
       .vel_std_mps = {0.2f, 0.2f, 0.2f},
@@ -641,10 +817,305 @@ static void test_sensor_fusion_internal_mode_bootstraps_align_state(void) {
 
   upd = sf_fusion_process_gnss(&fusion, &gnss1);
   TEST_ASSERT_TRUE(impl->align_initialized);
-  TEST_ASSERT_TRUE(upd.mount_q_vb_valid);
+  TEST_ASSERT_TRUE(impl->mount_q_vb_valid);
   TEST_ASSERT_TRUE(impl->mount_q_vb_valid);
   upd = sf_fusion_process_gnss(&fusion, &gnss2);
-  TEST_ASSERT_TRUE(upd.mount_q_vb_valid);
+  TEST_ASSERT_TRUE(impl->mount_q_vb_valid);
+}
+
+static void test_sensor_fusion_vehicle_speed_updates_forward_velocity(void) {
+  sf_sensor_fusion_t fusion;
+  sf_sensor_fusion_impl_t *impl = sf_impl(&fusion);
+  sf_fusion_config_t cfg;
+  sf_gnss_sample_t gnss = {
+      .t_s = 1.0f,
+      .lat_deg = 43.500000f,
+      .lon_deg = -79.600000f,
+      .height_m = 100.0f,
+      .vel_ned_mps = {2.0f, 0.0f, 0.0f},
+      .pos_std_m = {0.5f, 0.5f, 1.0f},
+      .vel_std_mps = {0.2f, 0.2f, 0.2f},
+      .heading_valid = true,
+      .heading_rad = 0.0f,
+  };
+  sf_vehicle_speed_sample_t speed = {
+      .t_s = 1.1f,
+      .speed_mps = 4.0f,
+      .direction = SF_VEHICLE_SPEED_DIRECTION_FORWARD,
+  };
+  float vn_before;
+
+  sf_fusion_config_default(&cfg);
+  sf_fusion_init_external(&fusion, &cfg, (float[4]){1.0f, 0.0f, 0.0f, 0.0f});
+  (void)sf_fusion_process_gnss(&fusion, &gnss);
+  vn_before = impl->eskf.nominal.vn;
+  (void)sf_fusion_process_vehicle_speed(&fusion, &speed);
+
+  TEST_ASSERT_TRUE(impl->ekf_initialized);
+  TEST_ASSERT_TRUE(impl->eskf.nominal.vn > vn_before);
+  TEST_ASSERT_TRUE(impl->eskf.nominal.vn < speed.speed_mps);
+}
+
+static void test_sensor_fusion_vehicle_speed_reverse_updates_negative_velocity(void) {
+  sf_sensor_fusion_t fusion;
+  sf_sensor_fusion_impl_t *impl = sf_impl(&fusion);
+  sf_fusion_config_t cfg;
+  sf_gnss_sample_t gnss = {
+      .t_s = 1.0f,
+      .lat_deg = 43.500000f,
+      .lon_deg = -79.600000f,
+      .height_m = 100.0f,
+      .vel_ned_mps = {-2.0f, 0.0f, 0.0f},
+      .pos_std_m = {0.5f, 0.5f, 1.0f},
+      .vel_std_mps = {0.2f, 0.2f, 0.2f},
+      .heading_valid = true,
+      .heading_rad = 0.0f,
+  };
+  sf_vehicle_speed_sample_t speed = {
+      .t_s = 1.1f,
+      .speed_mps = 4.0f,
+      .direction = SF_VEHICLE_SPEED_DIRECTION_REVERSE,
+  };
+  float vn_before;
+
+  sf_fusion_config_default(&cfg);
+  sf_fusion_init_external(&fusion, &cfg, (float[4]){1.0f, 0.0f, 0.0f, 0.0f});
+  (void)sf_fusion_process_gnss(&fusion, &gnss);
+  vn_before = impl->eskf.nominal.vn;
+  (void)sf_fusion_process_vehicle_speed(&fusion, &speed);
+
+  TEST_ASSERT_TRUE(impl->eskf.nominal.vn < vn_before);
+  TEST_ASSERT_TRUE(impl->eskf.nominal.vn > -speed.speed_mps);
+}
+
+static void test_sensor_fusion_vehicle_speed_unknown_direction_uses_predicted_sign(void) {
+  sf_sensor_fusion_t fusion;
+  sf_sensor_fusion_impl_t *impl = sf_impl(&fusion);
+  sf_fusion_config_t cfg;
+  sf_gnss_sample_t gnss = {
+      .t_s = 1.0f,
+      .lat_deg = 43.500000f,
+      .lon_deg = -79.600000f,
+      .height_m = 100.0f,
+      .vel_ned_mps = {-3.0f, 0.0f, 0.0f},
+      .pos_std_m = {0.5f, 0.5f, 1.0f},
+      .vel_std_mps = {0.2f, 0.2f, 0.2f},
+      .heading_valid = true,
+      .heading_rad = 0.0f,
+  };
+  sf_vehicle_speed_sample_t speed = {
+      .t_s = 1.1f,
+      .speed_mps = 4.0f,
+      .direction = SF_VEHICLE_SPEED_DIRECTION_UNKNOWN,
+  };
+  float vn_before;
+
+  sf_fusion_config_default(&cfg);
+  sf_fusion_init_external(&fusion, &cfg, (float[4]){1.0f, 0.0f, 0.0f, 0.0f});
+  (void)sf_fusion_process_gnss(&fusion, &gnss);
+  vn_before = impl->eskf.nominal.vn;
+  (void)sf_fusion_process_vehicle_speed(&fusion, &speed);
+
+  TEST_ASSERT_TRUE(impl->eskf.nominal.vn < vn_before);
+  TEST_ASSERT_TRUE(impl->eskf.nominal.vn > -speed.speed_mps);
+}
+
+static void test_sensor_fusion_get_lla_reports_current_global_position(void) {
+  sf_sensor_fusion_t fusion;
+  sf_sensor_fusion_impl_t *impl = sf_impl(&fusion);
+  sf_fusion_config_t cfg;
+  sf_gnss_sample_t gnss = {
+      .t_s = 0.0f,
+      .lat_deg = 43.500000f,
+      .lon_deg = -79.600000f,
+      .height_m = 100.0f,
+      .vel_ned_mps = {1.0f, 2.0f, -0.1f},
+      .pos_std_m = {0.5f, 0.5f, 1.0f},
+      .vel_std_mps = {0.2f, 0.2f, 0.2f},
+      .heading_valid = false,
+      .heading_rad = 0.0f,
+  };
+  float lla[3];
+
+  sf_fusion_config_default(&cfg);
+  sf_fusion_init_external(&fusion, &cfg, (float[4]){1.0f, 0.0f, 0.0f, 0.0f});
+  (void)sf_fusion_process_gnss(&fusion, &gnss);
+
+  impl->eskf.nominal.pn = 120.0f;
+  impl->eskf.nominal.pe = -45.0f;
+  impl->eskf.nominal.pd = 8.0f;
+
+  TEST_ASSERT_TRUE(sf_get_lla((const sf_t *)&fusion, lla));
+  TEST_ASSERT_TRUE(fabsf(lla[0] - gnss.lat_deg) > 1.0e-4f);
+  TEST_ASSERT_TRUE(fabsf(lla[1] - gnss.lon_deg) > 1.0e-4f);
+  TEST_ASSERT_FLOAT_WITHIN(20.0f, gnss.height_m - 8.0f, lla[2]);
+}
+
+static void test_sensor_fusion_reanchor_debug_counts_and_tracks_anchor(void) {
+  sf_sensor_fusion_t fusion;
+  sf_sensor_fusion_impl_t *impl = sf_impl(&fusion);
+  sf_fusion_config_t cfg;
+  sf_gnss_sample_t gnss0 = {
+      .t_s = 0.0f,
+      .lat_deg = 43.500000f,
+      .lon_deg = -79.600000f,
+      .height_m = 100.0f,
+      .vel_ned_mps = {4.0f, 0.0f, 0.0f},
+      .pos_std_m = {0.5f, 0.5f, 1.0f},
+      .vel_std_mps = {0.2f, 0.2f, 0.2f},
+      .heading_valid = false,
+      .heading_rad = 0.0f,
+  };
+  sf_gnss_sample_t gnss1;
+  sf_gnss_sample_t gnss2;
+  sf_fusion_debug_t debug;
+  float lla1[3];
+  float lla2[3];
+
+  sf_fusion_config_default(&cfg);
+  sf_fusion_init_external(&fusion, &cfg, (float[4]){1.0f, 0.0f, 0.0f, 0.0f});
+  (void)sf_fusion_process_gnss(&fusion, &gnss0);
+
+  test_ned_offset_to_lla(gnss0.lat_deg, gnss0.lon_deg, gnss0.height_m,
+                         (float[3]){6000.0f, 0.0f, 0.0f}, lla1);
+  gnss1 = gnss0;
+  gnss1.t_s = 10.0f;
+  gnss1.lat_deg = lla1[0];
+  gnss1.lon_deg = lla1[1];
+  gnss1.height_m = lla1[2];
+  (void)sf_fusion_process_gnss(&fusion, &gnss1);
+
+  TEST_ASSERT_TRUE(sf_fusion_get_debug(&fusion, &debug));
+  TEST_ASSERT_EQUAL_UINT32(1u, debug.reanchor_count);
+  TEST_ASSERT_TRUE(debug.last_reanchor_valid);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-5f, 10.0f, debug.last_reanchor_t_s);
+  TEST_ASSERT_TRUE(debug.last_reanchor_distance_m > 5000.0f);
+  TEST_ASSERT_TRUE(debug.anchor_valid);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-4f, gnss1.lat_deg, debug.anchor_lat_deg);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-4f, gnss1.lon_deg, debug.anchor_lon_deg);
+  TEST_ASSERT_FLOAT_WITHIN(0.5f, gnss1.height_m, debug.anchor_height_m);
+  TEST_ASSERT_TRUE(fabsf(impl->last_gnss.pos_ned_m[0]) < 2.0f);
+  TEST_ASSERT_TRUE(fabsf(impl->last_gnss.pos_ned_m[1]) < 2.0f);
+
+  test_ned_offset_to_lla(gnss1.lat_deg, gnss1.lon_deg, gnss1.height_m,
+                         (float[3]){6000.0f, 100.0f, 0.0f}, lla2);
+  gnss2 = gnss1;
+  gnss2.t_s = 20.0f;
+  gnss2.lat_deg = lla2[0];
+  gnss2.lon_deg = lla2[1];
+  gnss2.height_m = lla2[2];
+  (void)sf_fusion_process_gnss(&fusion, &gnss2);
+
+  TEST_ASSERT_TRUE(sf_fusion_get_debug(&fusion, &debug));
+  TEST_ASSERT_EQUAL_UINT32(2u, debug.reanchor_count);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-5f, 20.0f, debug.last_reanchor_t_s);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-4f, gnss2.lat_deg, debug.anchor_lat_deg);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-4f, gnss2.lon_deg, debug.anchor_lon_deg);
+}
+
+static void test_sensor_fusion_reanchor_preserves_global_state_continuity(void) {
+  sf_sensor_fusion_t fusion;
+  sf_sensor_fusion_impl_t *impl = sf_impl(&fusion);
+  sf_fusion_config_t cfg;
+  sf_gnss_sample_t gnss0 = {
+      .t_s = 0.0f,
+      .lat_deg = 43.500000f,
+      .lon_deg = -79.600000f,
+      .height_m = 100.0f,
+      .vel_ned_mps = {3.0f, -1.0f, 0.2f},
+      .pos_std_m = {0.5f, 0.5f, 1.0f},
+      .vel_std_mps = {0.2f, 0.2f, 0.2f},
+      .heading_valid = false,
+      .heading_rad = 0.0f,
+  };
+  sf_gnss_sample_t gnss_far;
+  sf_fusion_debug_t debug;
+  float lla_before[3];
+  float lla_after[3];
+  float q_before[4];
+  float q_after[4];
+  float c_bn_before[3][3];
+  float c_bn_after[3][3];
+  float c_ne_before[3][3];
+  float c_en_before[3][3];
+  float c_en_after[3][3];
+  float c_be_before[3][3];
+  float c_be_after[3][3];
+  float vel_ecef_before[3];
+  float vel_ecef_after[3];
+  float far_lla[3];
+
+  sf_fusion_config_default(&cfg);
+  sf_fusion_init_external(&fusion, &cfg, (float[4]){1.0f, 0.0f, 0.0f, 0.0f});
+  (void)sf_fusion_process_gnss(&fusion, &gnss0);
+
+  impl->eskf.nominal.pn = 1250.0f;
+  impl->eskf.nominal.pe = -340.0f;
+  impl->eskf.nominal.pd = 12.0f;
+  impl->eskf.nominal.vn = 7.5f;
+  impl->eskf.nominal.ve = -2.0f;
+  impl->eskf.nominal.vd = 0.3f;
+  test_quat_from_rpy(-2.0f * 3.14159265358979323846f / 180.0f,
+                     5.0f * 3.14159265358979323846f / 180.0f,
+                     20.0f * 3.14159265358979323846f / 180.0f, q_before);
+  impl->eskf.nominal.q0 = q_before[0];
+  impl->eskf.nominal.q1 = q_before[1];
+  impl->eskf.nominal.q2 = q_before[2];
+  impl->eskf.nominal.q3 = q_before[3];
+
+  TEST_ASSERT_TRUE(sf_get_lla((const sf_t *)&fusion, lla_before));
+  test_quat_to_rotmat(q_before, c_bn_before);
+  test_ecef_to_ned_matrix(impl->anchor.lat_deg, impl->anchor.lon_deg, c_ne_before);
+  test_transpose3(c_ne_before, c_en_before);
+  test_mat3_vec(c_en_before,
+                (float[3]){impl->eskf.nominal.vn, impl->eskf.nominal.ve,
+                           impl->eskf.nominal.vd},
+                vel_ecef_before);
+  test_mat3_mul(c_en_before, c_bn_before, c_be_before);
+
+  test_ned_offset_to_lla(gnss0.lat_deg, gnss0.lon_deg, gnss0.height_m,
+                         (float[3]){6000.0f, 0.0f, 0.0f}, far_lla);
+  gnss_far = gnss0;
+  gnss_far.t_s = 10.0f;
+  gnss_far.lat_deg = far_lla[0];
+  gnss_far.lon_deg = far_lla[1];
+  gnss_far.height_m = far_lla[2];
+  gnss_far.pos_std_m[0] = 1.0e6f;
+  gnss_far.pos_std_m[1] = 1.0e6f;
+  gnss_far.pos_std_m[2] = 1.0e6f;
+  gnss_far.vel_std_mps[0] = 1.0e6f;
+  gnss_far.vel_std_mps[1] = 1.0e6f;
+  gnss_far.vel_std_mps[2] = 1.0e6f;
+  gnss_far.heading_valid = false;
+  (void)sf_fusion_process_gnss(&fusion, &gnss_far);
+
+  TEST_ASSERT_TRUE(sf_fusion_get_debug(&fusion, &debug));
+  TEST_ASSERT_EQUAL_UINT32(1u, debug.reanchor_count);
+  TEST_ASSERT_TRUE(sf_get_lla((const sf_t *)&fusion, lla_after));
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-4f, lla_before[0], lla_after[0]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-4f, lla_before[1], lla_after[1]);
+  TEST_ASSERT_FLOAT_WITHIN(0.5f, lla_before[2], lla_after[2]);
+
+  q_after[0] = impl->eskf.nominal.q0;
+  q_after[1] = impl->eskf.nominal.q1;
+  q_after[2] = impl->eskf.nominal.q2;
+  q_after[3] = impl->eskf.nominal.q3;
+  test_quat_to_rotmat(q_after, c_bn_after);
+  test_transpose3(impl->anchor.c_ne, c_en_after);
+  test_mat3_vec(c_en_after,
+                (float[3]){impl->eskf.nominal.vn, impl->eskf.nominal.ve,
+                           impl->eskf.nominal.vd},
+                vel_ecef_after);
+  test_mat3_mul(c_en_after, c_bn_after, c_be_after);
+
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-3f, vel_ecef_before[0], vel_ecef_after[0]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-3f, vel_ecef_before[1], vel_ecef_after[1]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-3f, vel_ecef_before[2], vel_ecef_after[2]);
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j) {
+      TEST_ASSERT_FLOAT_WITHIN(1.0e-4f, c_be_before[i][j], c_be_after[i][j]);
+    }
+  }
 }
 
 int main(void) {
@@ -663,6 +1134,7 @@ int main(void) {
   RUN_TEST(test_eskf_fuse_body_vel_reduces_lateral_and_vertical_velocity);
   RUN_TEST(test_eskf_body_vel_y_reduces_small_yaw_error_on_forward_motion);
   RUN_TEST(test_eskf_zero_vel_reduces_forward_velocity_when_stopped);
+  RUN_TEST(test_eskf_fuse_body_speed_x_moves_forward_velocity_toward_measurement);
   RUN_TEST(test_loose_init_copies_all_noise_fields_and_covariance_diag);
   RUN_TEST(test_loose_error_transition_has_expected_reference_structure);
   RUN_TEST(test_loose_predict_with_zero_dt_is_noop);
@@ -670,5 +1142,11 @@ int main(void) {
   RUN_TEST(test_loose_reference_gps_update_moves_ecef_position_toward_measurement);
   RUN_TEST(test_loose_reference_nhc_reduces_lateral_and_vertical_car_velocity);
   RUN_TEST(test_sensor_fusion_internal_mode_bootstraps_align_state);
+  RUN_TEST(test_sensor_fusion_vehicle_speed_updates_forward_velocity);
+  RUN_TEST(test_sensor_fusion_vehicle_speed_reverse_updates_negative_velocity);
+  RUN_TEST(test_sensor_fusion_vehicle_speed_unknown_direction_uses_predicted_sign);
+  RUN_TEST(test_sensor_fusion_get_lla_reports_current_global_position);
+  RUN_TEST(test_sensor_fusion_reanchor_debug_counts_and_tracks_anchor);
+  RUN_TEST(test_sensor_fusion_reanchor_preserves_global_state_continuity);
   return UNITY_END();
 }

@@ -86,7 +86,6 @@ static void sf_loose_normalize_nominal_quat(sf_loose_t *loose);
 static void sf_loose_sync_nominal_position_from_shadow(sf_loose_t *loose);
 static void sf_loose_sync_nominal_mount_from_shadow(sf_loose_t *loose);
 static void sf_loose_sync_covariance_from_shadow(sf_loose_t *loose);
-static void sf_loose_sync_covariance_to_shadow(sf_loose_t *loose);
 static void sf_loose_symmetrize_p(float p[SF_LOOSE_ERROR_STATES][SF_LOOSE_ERROR_STATES]);
 static void sf_loose_quat_multiply(const float p[4], const float q[4], float out[4]);
 static void sf_loose_euler_to_quat(float roll, float pitch, float yaw, float out[4]);
@@ -207,17 +206,6 @@ static void sf_loose_sync_covariance_from_shadow(sf_loose_t *loose) {
     }
   }
   sf_loose_symmetrize_p(loose->p);
-}
-
-static void sf_loose_sync_covariance_to_shadow(sf_loose_t *loose) {
-  if (loose == NULL) {
-    return;
-  }
-  for (int i = 0; i < SF_LOOSE_ERROR_STATES; ++i) {
-    for (int j = 0; j < SF_LOOSE_ERROR_STATES; ++j) {
-      loose->p64[i][j] = (double)loose->p[i][j];
-    }
-  }
 }
 
 static void sf_loose_predict_covariance_sparse(

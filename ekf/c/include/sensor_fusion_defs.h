@@ -58,8 +58,19 @@ typedef struct {
   sf_bootstrap_config_t bootstrap;
   sf_predict_noise_t predict_noise;
   float r_body_vel;
+  float r_vehicle_speed;
   float yaw_init_speed_mps;
 } sf_fusion_config_t;
+
+typedef struct {
+  float t_s;
+  float pos_ned_m[3];
+  float vel_ned_mps[3];
+  float pos_std_m[3];
+  float vel_std_mps[3];
+  bool heading_valid;
+  float heading_rad;
+} sf_gnss_ned_sample_t;
 
 #ifdef __cplusplus
 }

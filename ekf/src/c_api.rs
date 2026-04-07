@@ -2,7 +2,10 @@
 
 use crate::align::{AlignConfig, AlignWindowSummary};
 use crate::ekf::PredictNoise;
-use crate::fusion::{FusionGnssSample, FusionImuSample, FusionUpdate};
+use crate::fusion::{
+    FusionGnssSample, FusionImuSample, FusionUpdate, FusionVehicleSpeedDirection,
+    FusionVehicleSpeedSample,
+};
 use crate::loose::LoosePredictNoise;
 
 pub const SF_SENSOR_FUSION_STORAGE_BYTES: usize = 32768;
@@ -66,6 +69,37 @@ pub struct CImuSample {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CGnssSample {
     pub t_s: f32,
+    pub lat_deg: f32,
+    pub lon_deg: f32,
+    pub height_m: f32,
+    pub vel_ned_mps: [f32; 3],
+    pub pos_std_m: [f32; 3],
+    pub vel_std_mps: [f32; 3],
+    pub heading_valid: bool,
+    pub heading_rad: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CVehicleSpeedSample {
+    pub t_s: f32,
+    pub speed_mps: f32,
+    pub direction: CVehicleSpeedDirection,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CVehicleSpeedDirection {
+    #[default]
+    Unknown = 0,
+    Forward = 1,
+    Reverse = 2,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CGnssNedSample {
+    pub t_s: f32,
     pub pos_ned_m: [f32; 3],
     pub vel_ned_mps: [f32; 3],
     pub pos_std_m: [f32; 3],
@@ -124,6 +158,14 @@ pub struct CFusionDebug {
     pub align_trace: CAlignUpdateTrace,
     pub eskf_valid: bool,
     pub eskf: CEskf,
+    pub reanchor_count: u32,
+    pub last_reanchor_valid: bool,
+    pub last_reanchor_t_s: f32,
+    pub last_reanchor_distance_m: f32,
+    pub anchor_valid: bool,
+    pub anchor_lat_deg: f32,
+    pub anchor_lon_deg: f32,
+    pub anchor_height_m: f32,
 }
 
 #[repr(C)]
@@ -176,6 +218,16 @@ pub struct CEskf {
     pub p: [[f32; 15]; 15],
     pub noise: PredictNoise,
     pub stationary_diag: CEskfStationaryDiag,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct EskfGnssSample {
+    pub t_s: f32,
+    pub pos_ned_m: [f32; 3],
+    pub vel_ned_mps: [f32; 3],
+    pub pos_std_m: [f32; 3],
+    pub vel_std_mps: [f32; 3],
+    pub heading_rad: Option<f32>,
 }
 
 impl Default for CEskf {
@@ -382,14 +434,20 @@ unsafe extern "C" {
     fn sf_init(fusion: *mut CSensorFusion, q_vb_or_null: *const f32);
     fn sf_process_imu(fusion: *mut CSensorFusion, sample: *const CImuSample) -> CUpdate;
     fn sf_process_gnss(fusion: *mut CSensorFusion, sample: *const CGnssSample) -> CUpdate;
+    fn sf_process_vehicle_speed(
+        fusion: *mut CSensorFusion,
+        sample: *const CVehicleSpeedSample,
+    ) -> CUpdate;
     fn sf_get_state(fusion: *const CSensorFusion, out: *mut CFusionState) -> bool;
+    fn sf_get_lla(fusion: *const CSensorFusion, out_lla: *mut f32) -> bool;
     fn sf_fusion_get_debug(fusion: *const CSensorFusion, out: *mut CFusionDebug) -> bool;
 
     fn sf_fusion_set_misalignment(fusion: *mut CSensorFusion, q_vb: *const f32);
 
     fn sf_eskf_init(eskf: *mut CEskf, p_diag: *const f32, noise: *const PredictNoise);
     fn sf_eskf_predict(eskf: *mut CEskf, imu: *const CEskfImuDelta);
-    fn sf_eskf_fuse_gps(eskf: *mut CEskf, gps: *const CGnssSample);
+    fn sf_eskf_fuse_gps(eskf: *mut CEskf, gps: *const CGnssNedSample);
+    fn sf_eskf_fuse_body_speed_x(eskf: *mut CEskf, speed_mps: f32, r_speed: f32);
     fn sf_eskf_fuse_body_vel(eskf: *mut CEskf, r_body_vel: f32);
     fn sf_eskf_fuse_zero_vel(eskf: *mut CEskf, r_zero_vel: f32);
     fn sf_eskf_fuse_stationary_gravity(
@@ -621,7 +679,9 @@ impl CSensorFusionWrapper {
     pub fn process_gnss(&mut self, sample: FusionGnssSample) -> FusionUpdate {
         let c_sample = CGnssSample {
             t_s: sample.t_s,
-            pos_ned_m: sample.pos_ned_m,
+            lat_deg: sample.lat_deg,
+            lon_deg: sample.lon_deg,
+            height_m: sample.height_m,
             vel_ned_mps: sample.vel_ned_mps,
             pos_std_m: sample.pos_std_m,
             vel_std_mps: sample.vel_std_mps,
@@ -633,6 +693,27 @@ impl CSensorFusionWrapper {
             sf_process_gnss(
                 &mut self.raw as *mut CSensorFusion,
                 &c_sample as *const CGnssSample,
+            )
+        };
+        self.refresh_state();
+        let mount_q_vb = self.mount_q_vb();
+        c_update_to_rust(update, mount_q_vb)
+    }
+
+    pub fn process_vehicle_speed(&mut self, sample: FusionVehicleSpeedSample) -> FusionUpdate {
+        let c_sample = CVehicleSpeedSample {
+            t_s: sample.t_s,
+            speed_mps: sample.speed_mps,
+            direction: match sample.direction {
+                FusionVehicleSpeedDirection::Unknown => CVehicleSpeedDirection::Unknown,
+                FusionVehicleSpeedDirection::Forward => CVehicleSpeedDirection::Forward,
+                FusionVehicleSpeedDirection::Reverse => CVehicleSpeedDirection::Reverse,
+            },
+        };
+        let update = unsafe {
+            sf_process_vehicle_speed(
+                &mut self.raw as *mut CSensorFusion,
+                &c_sample as *const CVehicleSpeedSample,
             )
         };
         self.refresh_state();
@@ -654,6 +735,32 @@ impl CSensorFusionWrapper {
 
     pub fn mount_q_vb(&self) -> Option<[f32; 4]> {
         self.state.mount_q_vb_valid.then_some(self.state.mount_q_vb)
+    }
+
+    pub fn position_lla(&self) -> Option<[f32; 3]> {
+        let mut out = [0.0_f32; 3];
+        let ok = unsafe { sf_get_lla(&self.raw as *const CSensorFusion, out.as_mut_ptr()) };
+        ok.then_some(out)
+    }
+
+    pub fn reanchor_count(&self) -> u32 {
+        self.debug.reanchor_count
+    }
+
+    pub fn last_reanchor_info(&self) -> Option<(f32, f32)> {
+        self.debug
+            .last_reanchor_valid
+            .then_some((self.debug.last_reanchor_t_s, self.debug.last_reanchor_distance_m))
+    }
+
+    pub fn anchor_lla_debug(&self) -> Option<[f32; 3]> {
+        self.debug
+            .anchor_valid
+            .then_some([
+                self.debug.anchor_lat_deg,
+                self.debug.anchor_lon_deg,
+                self.debug.anchor_height_m,
+            ])
     }
 
     pub fn align_window_debug(&self) -> Option<&CAlignWindowSummary> {
@@ -753,7 +860,7 @@ impl CEskfWrapper {
         &self.raw.stationary_diag
     }
 
-    pub fn init_nominal_from_gnss(&mut self, q_bn: [f32; 4], gnss: FusionGnssSample) {
+    pub fn init_nominal_from_gnss(&mut self, q_bn: [f32; 4], gnss: EskfGnssSample) {
         const DEFAULT_GYRO_BIAS_SIGMA_DPS: f32 = 0.125;
         const DEFAULT_ACCEL_BIAS_SIGMA_MPS2: f32 = 0.20;
 
@@ -805,8 +912,8 @@ impl CEskfWrapper {
         unsafe { sf_eskf_predict(&mut self.raw as *mut CEskf, &imu as *const CEskfImuDelta) };
     }
 
-    pub fn fuse_gps(&mut self, sample: FusionGnssSample) {
-        let c_sample = CGnssSample {
+    pub fn fuse_gps(&mut self, sample: EskfGnssSample) {
+        let c_sample = CGnssNedSample {
             t_s: sample.t_s,
             pos_ned_m: sample.pos_ned_m,
             vel_ned_mps: sample.vel_ned_mps,
@@ -815,11 +922,17 @@ impl CEskfWrapper {
             heading_valid: sample.heading_rad.is_some(),
             heading_rad: sample.heading_rad.unwrap_or(0.0),
         };
-        unsafe { sf_eskf_fuse_gps(&mut self.raw as *mut CEskf, &c_sample as *const CGnssSample) };
+        unsafe {
+            sf_eskf_fuse_gps(&mut self.raw as *mut CEskf, &c_sample as *const CGnssNedSample)
+        };
     }
 
     pub fn fuse_body_vel(&mut self, r_body_vel: f32) {
         unsafe { sf_eskf_fuse_body_vel(&mut self.raw as *mut CEskf, r_body_vel) };
+    }
+
+    pub fn fuse_body_speed_x(&mut self, speed_mps: f32, r_speed: f32) {
+        unsafe { sf_eskf_fuse_body_speed_x(&mut self.raw as *mut CEskf, speed_mps, r_speed) };
     }
 
     pub fn fuse_zero_vel(&mut self, r_zero_vel: f32) {

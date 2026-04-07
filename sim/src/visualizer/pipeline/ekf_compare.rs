@@ -322,20 +322,20 @@ pub fn build_ekf_compare_traces(
     let mut eskf_bias_accel_y = Vec::<[f64; 2]>::new();
     let mut eskf_bias_accel_z = Vec::<[f64; 2]>::new();
     let mut eskf_cov_diag: [Vec<[f64; 2]>; 15] = std::array::from_fn(|_| Vec::new());
-    let mut eskf_stationary_innov_x = Vec::<[f64; 2]>::new();
-    let mut eskf_stationary_innov_y = Vec::<[f64; 2]>::new();
-    let mut eskf_stationary_k_theta_x_from_x = Vec::<[f64; 2]>::new();
-    let mut eskf_stationary_k_theta_y_from_x = Vec::<[f64; 2]>::new();
-    let mut eskf_stationary_k_theta_x_from_y = Vec::<[f64; 2]>::new();
-    let mut eskf_stationary_k_theta_y_from_y = Vec::<[f64; 2]>::new();
-    let mut eskf_stationary_k_bax_from_x = Vec::<[f64; 2]>::new();
-    let mut eskf_stationary_k_bay_from_y = Vec::<[f64; 2]>::new();
-    let mut eskf_stationary_p_theta_x = Vec::<[f64; 2]>::new();
-    let mut eskf_stationary_p_theta_y = Vec::<[f64; 2]>::new();
-    let mut eskf_stationary_p_bax = Vec::<[f64; 2]>::new();
-    let mut eskf_stationary_p_bay = Vec::<[f64; 2]>::new();
-    let mut eskf_stationary_p_theta_x_bax = Vec::<[f64; 2]>::new();
-    let mut eskf_stationary_p_theta_y_bay = Vec::<[f64; 2]>::new();
+    let eskf_stationary_innov_x = Vec::<[f64; 2]>::new();
+    let eskf_stationary_innov_y = Vec::<[f64; 2]>::new();
+    let eskf_stationary_k_theta_x_from_x = Vec::<[f64; 2]>::new();
+    let eskf_stationary_k_theta_y_from_x = Vec::<[f64; 2]>::new();
+    let eskf_stationary_k_theta_x_from_y = Vec::<[f64; 2]>::new();
+    let eskf_stationary_k_theta_y_from_y = Vec::<[f64; 2]>::new();
+    let eskf_stationary_k_bax_from_x = Vec::<[f64; 2]>::new();
+    let eskf_stationary_k_bay_from_y = Vec::<[f64; 2]>::new();
+    let eskf_stationary_p_theta_x = Vec::<[f64; 2]>::new();
+    let eskf_stationary_p_theta_y = Vec::<[f64; 2]>::new();
+    let eskf_stationary_p_bax = Vec::<[f64; 2]>::new();
+    let eskf_stationary_p_bay = Vec::<[f64; 2]>::new();
+    let eskf_stationary_p_theta_x_bax = Vec::<[f64; 2]>::new();
+    let eskf_stationary_p_theta_y_bay = Vec::<[f64; 2]>::new();
     let mut loose_cmp_pos_n = Vec::<[f64; 2]>::new();
     let mut loose_cmp_pos_e = Vec::<[f64; 2]>::new();
     let mut loose_cmp_pos_d = Vec::<[f64; 2]>::new();
@@ -384,7 +384,6 @@ pub fn build_ekf_compare_traces(
     let mut alg_idx = 0usize;
     let mut alg_status_idx = 0usize;
     let mut nav_idx = 0usize;
-    let mut cur_alg: Option<AlgEvent> = None;
     let mut cur_alg_status: u8 = 0;
 
     let mut origin_set = false;
@@ -446,7 +445,6 @@ pub fn build_ekf_compare_traces(
     let gps_period_ms = 500.0_f64;
     for pkt in &imu_packets {
         while alg_idx < alg_events.len() && alg_events[alg_idx].t_ms <= pkt.t_ms {
-            cur_alg = Some(alg_events[alg_idx]);
             alg_idx += 1;
         }
         while alg_status_idx < alg_status_events.len()
@@ -603,7 +601,7 @@ pub fn build_ekf_compare_traces(
                 let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
                 let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
                 let t = rel_s(t_ms);
-                let fusion_gnss = fusion_gnss_sample(nav, ned, cfg, rel_s(t_ms) as f32);
+                let fusion_gnss = fusion_gnss_sample(nav, cfg, rel_s(t_ms) as f32);
                 let update = fusion_ref.process_gnss(fusion_gnss);
                 if update.mount_ready_changed && update.mount_ready {
                     fusion_mount_ready_marker.push([t, nav.heading_vehicle_deg]);
@@ -629,16 +627,16 @@ pub fn build_ekf_compare_traces(
                 }
 
                 if let Some(eskf_ref) = fusion_ref.eskf() {
-                    let n = &eskf_ref.nominal;
-                    let (_, _, eskf_yaw) = quat_rpy_deg(n.q0, n.q1, n.q2, n.q3);
-                    let (eskf_lat, eskf_lon, _eskf_h) = ned_to_lla_exact(
-                        n.pn as f64,
-                        n.pe as f64,
-                        n.pd as f64,
-                        ref_lat,
-                        ref_lon,
-                        ref_h,
+                    let (_, _, eskf_yaw) = quat_rpy_deg(
+                        eskf_ref.nominal.q0,
+                        eskf_ref.nominal.q1,
+                        eskf_ref.nominal.q2,
+                        eskf_ref.nominal.q3,
                     );
+                    let [eskf_lat, eskf_lon, _eskf_h] = fusion_ref
+                        .position_lla()
+                        .map(|x| [x[0] as f64, x[1] as f64, x[2] as f64])
+                        .unwrap_or([nav.lat_deg, nav.lon_deg, nav.height_m]);
                     map_eskf_heading.push(HeadingSample {
                         t_s: t,
                         lon_deg: eskf_lon,
@@ -789,16 +787,11 @@ pub fn build_ekf_compare_traces(
         }
 
         if origin_set {
-            if let Some(eskf_ref) = fusion_ref.eskf() {
-                let n = &eskf_ref.nominal;
-                let (eskf_lat, eskf_lon, _eskf_h) = ned_to_lla_exact(
-                    n.pn as f64,
-                    n.pe as f64,
-                    n.pd as f64,
-                    ref_lat,
-                    ref_lon,
-                    ref_h,
-                );
+            if let Some(_eskf_ref) = fusion_ref.eskf() {
+                let [eskf_lat, eskf_lon, _eskf_h] = fusion_ref
+                    .position_lla()
+                    .map(|x| [x[0] as f64, x[1] as f64, x[2] as f64])
+                    .unwrap_or([ref_lat, ref_lon, ref_h]);
                 map_eskf.push([eskf_lon, eskf_lat]);
                 if outage_active {
                     if !prev_outage_active && !map_eskf_outage.is_empty() {
@@ -1721,14 +1714,14 @@ impl Lcg64 {
 
 fn initialize_loose_from_nav(
     nav: NavPvtObs,
-    ned: [f64; 3],
+    _ned: [f64; 3],
     q_ns: [f32; 4],
     q_cs: [f32; 4],
     noise: LoosePredictNoise,
     cfg: EkfCompareConfig,
 ) -> CLooseWrapper {
     let mut loose = CLooseWrapper::new(noise);
-    let gnss = fusion_gnss_sample(nav, ned, cfg, 0.0);
+    let gnss = fusion_gnss_sample(nav, cfg, 0.0);
     let p_diag = default_loose_reference_p_diag(gnss);
     let q_es = quat_mul(quat_conj(quat_ecef_to_ned(nav.lat_deg, nav.lon_deg)), [
         q_ns[0] as f64,
@@ -1808,28 +1801,7 @@ fn default_loose_reference_p_diag(gnss: sensor_fusion::fusion::FusionGnssSample)
     p_diag
 }
 
-fn initial_yaw_from_nav(nav: NavPvtObs) -> f32 {
-    let speed_h = nav.vel_n_mps.hypot(nav.vel_e_mps);
-    if nav.head_veh_valid {
-        deg2rad(nav.heading_vehicle_deg) as f32
-    } else if speed_h >= 1.0 {
-        nav.vel_e_mps.atan2(nav.vel_n_mps) as f32
-    } else {
-        deg2rad(nav.heading_motion_deg) as f32
-    }
-}
-
-fn yaw_quat_f32(yaw_rad: f32) -> [f32; 4] {
-    let half = 0.5 * yaw_rad;
-    [half.cos(), 0.0, 0.0, half.sin()]
-}
-
-fn fusion_gnss_sample(
-    nav: NavPvtObs,
-    ned: [f64; 3],
-    cfg: EkfCompareConfig,
-    t_s: f32,
-) -> sensor_fusion::fusion::FusionGnssSample {
+fn fusion_gnss_sample(nav: NavPvtObs, cfg: EkfCompareConfig, t_s: f32) -> sensor_fusion::fusion::FusionGnssSample {
     let speed_h = nav.vel_n_mps.hypot(nav.vel_e_mps);
     let heading_rad = if nav.head_veh_valid {
         Some(deg2rad(nav.heading_vehicle_deg) as f32)
@@ -1840,7 +1812,9 @@ fn fusion_gnss_sample(
     };
     sensor_fusion::fusion::FusionGnssSample {
         t_s,
-        pos_ned_m: [ned[0] as f32, ned[1] as f32, ned[2] as f32],
+        lat_deg: nav.lat_deg as f32,
+        lon_deg: nav.lon_deg as f32,
+        height_m: nav.height_m as f32,
         vel_ned_mps: [
             nav.vel_n_mps as f32,
             nav.vel_e_mps as f32,

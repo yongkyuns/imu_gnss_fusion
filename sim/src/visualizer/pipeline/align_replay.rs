@@ -10,7 +10,7 @@ use crate::ubxlog::{
     extract_nav2_pvt_obs, sensor_meta,
 };
 
-use super::super::math::{ecef_to_ned, lla_to_ecef, nearest_master_ms, normalize_heading_deg};
+use super::super::math::{nearest_master_ms, normalize_heading_deg};
 use super::super::model::{EkfImuSource, ImuPacket};
 use super::tag_time::fit_tag_ms_map;
 use super::timebase::MasterTimeline;
@@ -222,7 +222,7 @@ pub fn build_fusion_align_replay(
     imu_packets.sort_by(|a, b| a.t_ms.partial_cmp(&b.t_ms).unwrap_or(Ordering::Equal));
     let imu_packets = preprocess_imu_packets(&imu_packets, imu_cfg);
 
-    let Some((_, ref_nav)) = nav_events.first().copied() else {
+    let Some((_, _ref_nav)) = nav_events.first().copied() else {
         let final_alg_q = alg_events.last().map(|ev| ev.q_frd);
         return AlignReplayData {
             alg_events,
@@ -232,7 +232,6 @@ pub fn build_fusion_align_replay(
             ekf_initialized_times_s: Vec::new(),
         };
     };
-    let ref_ecef = lla_to_ecef(ref_nav.lat_deg, ref_nav.lon_deg, ref_nav.height_m);
     let final_alg_q = alg_events.last().map(|ev| ev.q_frd);
 
     let mut fusion = match imu_source {
@@ -242,7 +241,6 @@ pub fn build_fusion_align_replay(
     let mut scan_idx = 0usize;
     let mut alg_idx = 0usize;
     let mut alg_status_idx = 0usize;
-    let mut cur_alg: Option<AlgEvent> = None;
     let mut cur_alg_status: u8 = 0;
     let mut samples = Vec::<AlignReplaySample>::new();
     let mut mount_ready_times_s = Vec::<f64>::new();
@@ -251,7 +249,6 @@ pub fn build_fusion_align_replay(
     for (tn, nav) in &nav_events {
         while scan_idx < imu_packets.len() && imu_packets[scan_idx].t_ms <= *tn {
             while alg_idx < alg_events.len() && alg_events[alg_idx].t_ms <= imu_packets[scan_idx].t_ms {
-                cur_alg = Some(alg_events[alg_idx]);
                 alg_idx += 1;
             }
             while alg_status_idx < alg_status_events.len()
@@ -287,7 +284,6 @@ pub fn build_fusion_align_replay(
             scan_idx += 1;
         }
         while alg_idx < alg_events.len() && alg_events[alg_idx].t_ms <= *tn {
-            cur_alg = Some(alg_events[alg_idx]);
             alg_idx += 1;
         }
         while alg_status_idx < alg_status_events.len() && alg_status_events[alg_status_idx].0 <= *tn
@@ -299,11 +295,11 @@ pub fn build_fusion_align_replay(
             continue;
         }
 
-        let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
-        let ned = ecef_to_ned(ecef, ref_ecef, ref_nav.lat_deg, ref_nav.lon_deg);
         let update = fusion.as_mut().unwrap().process_gnss(FusionGnssSample {
             t_s: ((*tn - tl.t0_master_ms) * 1.0e-3) as f32,
-            pos_ned_m: [ned[0] as f32, ned[1] as f32, ned[2] as f32],
+            lat_deg: nav.lat_deg as f32,
+            lon_deg: nav.lon_deg as f32,
+            height_m: nav.height_m as f32,
             vel_ned_mps: [
                 nav.vel_n_mps as f32,
                 nav.vel_e_mps as f32,

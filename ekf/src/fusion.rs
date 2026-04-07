@@ -11,11 +11,28 @@ pub struct FusionImuSample {
 #[derive(Clone, Copy, Debug)]
 pub struct FusionGnssSample {
     pub t_s: f32,
-    pub pos_ned_m: [f32; 3],
+    pub lat_deg: f32,
+    pub lon_deg: f32,
+    pub height_m: f32,
     pub vel_ned_mps: [f32; 3],
     pub pos_std_m: [f32; 3],
     pub vel_std_mps: [f32; 3],
     pub heading_rad: Option<f32>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct FusionVehicleSpeedSample {
+    pub t_s: f32,
+    pub speed_mps: f32,
+    pub direction: FusionVehicleSpeedDirection,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FusionVehicleSpeedDirection {
+    #[default]
+    Unknown,
+    Forward,
+    Reverse,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -84,6 +101,12 @@ impl SensorFusion {
         update
     }
 
+    pub fn process_vehicle_speed(&mut self, speed: FusionVehicleSpeedSample) -> FusionUpdate {
+        let update = self.raw.process_vehicle_speed(speed);
+        self.refresh_align_snapshot();
+        update
+    }
+
     pub fn eskf(&self) -> Option<&CEskf> {
         self.raw.eskf()
     }
@@ -94,6 +117,10 @@ impl SensorFusion {
 
     pub fn mount_ready(&self) -> bool {
         self.raw.mount_ready()
+    }
+
+    pub fn position_lla(&self) -> Option<[f32; 3]> {
+        self.raw.position_lla()
     }
 
     pub fn align(&self) -> Option<&Align> {

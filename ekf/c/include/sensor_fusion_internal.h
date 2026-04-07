@@ -16,6 +16,15 @@ typedef struct {
 } sf_internal_bootstrap_gnss_state_t;
 
 typedef struct {
+  bool valid;
+  float lat_deg;
+  float lon_deg;
+  float height_m;
+  double ecef_m[3];
+  float c_ne[3][3];
+} sf_internal_anchor_state_t;
+
+typedef struct {
   float dt_s;
   float mean_gyro_b[3];
   float mean_accel_b[3];
@@ -114,12 +123,21 @@ typedef struct {
   sf_align_update_trace_t align_trace;
   bool eskf_valid;
   sf_eskf_t eskf;
+  uint32_t reanchor_count;
+  bool last_reanchor_valid;
+  float last_reanchor_t_s;
+  float last_reanchor_distance_m;
+  bool anchor_valid;
+  float anchor_lat_deg;
+  float anchor_lon_deg;
+  float anchor_height_m;
 } sf_fusion_debug_t;
 
 typedef struct {
   sf_fusion_config_t cfg;
   sf_eskf_t eskf;
   sf_align_runtime_t align_rt;
+  sf_internal_anchor_state_t anchor;
   bool internal_align_enabled;
   bool align_initialized;
   bool mount_ready;
@@ -128,7 +146,7 @@ typedef struct {
   float mount_q_vb[4];
   float last_imu_t_s;
   bool last_imu_t_valid;
-  sf_gnss_sample_t last_gnss;
+  sf_gnss_ned_sample_t last_gnss;
   bool last_gnss_valid;
   sf_internal_bootstrap_gnss_state_t bootstrap_prev_gnss;
   bool bootstrap_prev_gnss_valid;
@@ -154,6 +172,10 @@ typedef struct {
   sf_profile_now_us_fn profile_now_us;
   void *profile_ctx;
   sf_profile_counters_t profile;
+  uint32_t reanchor_count;
+  bool last_reanchor_valid;
+  float last_reanchor_t_s;
+  float last_reanchor_distance_m;
 } sf_sensor_fusion_impl_t;
 
 _Static_assert(sizeof(sf_sensor_fusion_impl_t) <= SF_SENSOR_FUSION_STORAGE_BYTES,
@@ -201,6 +223,8 @@ sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
                                   const sf_imu_sample_t *sample);
 sf_update_t sf_fusion_process_gnss(sf_sensor_fusion_t *fusion,
                                    const sf_gnss_sample_t *sample);
+sf_update_t sf_fusion_process_vehicle_speed(
+    sf_sensor_fusion_t *fusion, const sf_vehicle_speed_sample_t *sample);
 const sf_eskf_t *sf_fusion_eskf(const sf_sensor_fusion_t *fusion);
 const sf_align_t *sf_fusion_align(const sf_sensor_fusion_t *fusion);
 bool sf_fusion_mount_ready(const sf_sensor_fusion_t *fusion);

@@ -80,6 +80,9 @@ enum ReplayEvent {
     },
     Gnss {
         t_s: f32,
+        lat_deg: f32,
+        lon_deg: f32,
+        height_m: f32,
         pos_ned_m: [f32; 3],
         vel_ned_mps: [f32; 3],
         pos_std_m: [f32; 3],
@@ -204,6 +207,9 @@ fn main() -> Result<()> {
             }
             ReplayEvent::Gnss {
                 t_s,
+                lat_deg: _,
+                lon_deg: _,
+                height_m: _,
                 pos_ned_m,
                 vel_ned_mps,
                 pos_std_m,
@@ -296,6 +302,9 @@ fn run_host_reference(
             }
             ReplayEvent::Gnss {
                 t_s,
+                lat_deg,
+                lon_deg,
+                height_m,
                 pos_ned_m,
                 vel_ned_mps,
                 pos_std_m,
@@ -305,7 +314,9 @@ fn run_host_reference(
             } => {
                 let update = fusion.process_gnss(FusionGnssSample {
                     t_s,
-                    pos_ned_m,
+                    lat_deg,
+                    lon_deg,
+                    height_m,
                     vel_ned_mps,
                     pos_std_m,
                     vel_std_mps,
@@ -401,6 +412,9 @@ fn build_replay_events(path: &PathBuf) -> Result<Vec<ReplayEvent>> {
             t_ms,
             ReplayEvent::Gnss {
                 t_s: ((t_ms - t0_ms) / 1000.0) as f32,
+                lat_deg: nav.lat_deg as f32,
+                lon_deg: nav.lon_deg as f32,
+                height_m: nav.height_m as f32,
                 pos_ned_m,
                 vel_ned_mps: [
                     nav.vel_n_mps as f32,
