@@ -127,26 +127,26 @@ fn main() -> Result<()> {
     let w1 = args.window_end_s;
 
     print_trace_stats(
-        "ESKF velN [m/s]",
-        find_trace(&plot.eskf_cmp_vel, "ESKF velN [m/s]"),
+        "ESKF forward vel [m/s]",
+        find_trace(&plot.eskf_cmp_vel, "ESKF forward vel [m/s]"),
         w0,
         w1,
     );
     print_trace_stats(
-        "ESKF velE [m/s]",
-        find_trace(&plot.eskf_cmp_vel, "ESKF velE [m/s]"),
+        "ESKF lateral vel [m/s]",
+        find_trace(&plot.eskf_cmp_vel, "ESKF lateral vel [m/s]"),
         w0,
         w1,
     );
     print_trace_stats(
-        "UBX velN [m/s]",
-        find_trace(&plot.eskf_cmp_vel, "UBX velN [m/s]"),
+        "u-blox forward vel [m/s]",
+        find_trace(&plot.eskf_cmp_vel, "u-blox forward vel [m/s]"),
         w0,
         w1,
     );
     print_trace_stats(
-        "UBX velE [m/s]",
-        find_trace(&plot.eskf_cmp_vel, "UBX velE [m/s]"),
+        "u-blox lateral vel [m/s]",
+        find_trace(&plot.eskf_cmp_vel, "u-blox lateral vel [m/s]"),
         w0,
         w1,
     );
@@ -228,8 +228,8 @@ fn main() -> Result<()> {
     );
     print_body_velocity_stats(
         "ESKF body vel x [m/s]",
-        find_trace(&plot.eskf_cmp_vel, "ESKF velN [m/s]"),
-        find_trace(&plot.eskf_cmp_vel, "ESKF velE [m/s]"),
+        find_trace(&plot.eskf_cmp_vel, "ESKF forward vel [m/s]"),
+        find_trace(&plot.eskf_cmp_vel, "ESKF lateral vel [m/s]"),
         find_trace(&plot.eskf_cmp_att, "ESKF yaw [deg]"),
         w0,
         w1,
@@ -237,8 +237,8 @@ fn main() -> Result<()> {
     );
     print_body_velocity_stats(
         "ESKF body vel y [m/s]",
-        find_trace(&plot.eskf_cmp_vel, "ESKF velN [m/s]"),
-        find_trace(&plot.eskf_cmp_vel, "ESKF velE [m/s]"),
+        find_trace(&plot.eskf_cmp_vel, "ESKF forward vel [m/s]"),
+        find_trace(&plot.eskf_cmp_vel, "ESKF lateral vel [m/s]"),
         find_trace(&plot.eskf_cmp_att, "ESKF yaw [deg]"),
         w0,
         w1,

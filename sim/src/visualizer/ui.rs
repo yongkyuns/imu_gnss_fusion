@@ -339,7 +339,7 @@ impl eframe::App for App {
                     .show(ctx, |ui| {
                         draw_plot(
                             ui,
-                            "Velocity: ESKF vs u-blox",
+                            "Vehicle Velocity: ESKF vs u-blox",
                             self.data.eskf_cmp_vel.iter(),
                             true,
                             self.max_points_per_trace,
@@ -467,7 +467,7 @@ impl eframe::App for App {
                     .show(ctx, |ui| {
                         draw_plot(
                             ui,
-                            "Velocity: Loose INS/GNSS vs u-blox",
+                            "Vehicle Velocity: Loose INS/GNSS vs u-blox",
                             self.data.loose_cmp_vel.iter(),
                             true,
                             self.max_points_per_trace,

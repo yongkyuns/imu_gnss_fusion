@@ -13,7 +13,7 @@ use crate::ubxlog::{
 
 use super::super::math::{
     deg2rad, ecef_to_ned, lla_to_ecef, mat_vec, ned_to_lla_exact, normalize_heading_deg,
-    quat_rpy_deg, rad2deg,
+    quat_rpy_deg, rad2deg, rot_zyx,
 };
 use super::super::model::{AlgEvent, EkfImuSource, HeadingSample, ImuPacket, NavAttEvent, Trace};
 use super::align_replay::esf_alg_flu_to_frd_mount_quat;
@@ -291,9 +291,9 @@ pub fn build_ekf_compare_traces(
     let mut ubx_pos_e = Vec::<[f64; 2]>::new();
     let mut ubx_pos_d = Vec::<[f64; 2]>::new();
 
-    let mut ubx_vel_n = Vec::<[f64; 2]>::new();
-    let mut ubx_vel_e = Vec::<[f64; 2]>::new();
-    let mut ubx_vel_d = Vec::<[f64; 2]>::new();
+    let mut ubx_vel_forward = Vec::<[f64; 2]>::new();
+    let mut ubx_vel_lateral = Vec::<[f64; 2]>::new();
+    let mut ubx_vel_vertical = Vec::<[f64; 2]>::new();
 
     let mut ubx_att_roll = Vec::<[f64; 2]>::new();
     let mut ubx_att_pitch = Vec::<[f64; 2]>::new();
@@ -303,9 +303,9 @@ pub fn build_ekf_compare_traces(
     let mut eskf_cmp_pos_n = Vec::<[f64; 2]>::new();
     let mut eskf_cmp_pos_e = Vec::<[f64; 2]>::new();
     let mut eskf_cmp_pos_d = Vec::<[f64; 2]>::new();
-    let mut eskf_cmp_vel_n = Vec::<[f64; 2]>::new();
-    let mut eskf_cmp_vel_e = Vec::<[f64; 2]>::new();
-    let mut eskf_cmp_vel_d = Vec::<[f64; 2]>::new();
+    let mut eskf_cmp_vel_forward = Vec::<[f64; 2]>::new();
+    let mut eskf_cmp_vel_lateral = Vec::<[f64; 2]>::new();
+    let mut eskf_cmp_vel_vertical = Vec::<[f64; 2]>::new();
     let mut eskf_cmp_att_roll = Vec::<[f64; 2]>::new();
     let mut eskf_cmp_att_pitch = Vec::<[f64; 2]>::new();
     let mut eskf_cmp_att_yaw = Vec::<[f64; 2]>::new();
@@ -339,9 +339,9 @@ pub fn build_ekf_compare_traces(
     let mut loose_cmp_pos_n = Vec::<[f64; 2]>::new();
     let mut loose_cmp_pos_e = Vec::<[f64; 2]>::new();
     let mut loose_cmp_pos_d = Vec::<[f64; 2]>::new();
-    let mut loose_cmp_vel_n = Vec::<[f64; 2]>::new();
-    let mut loose_cmp_vel_e = Vec::<[f64; 2]>::new();
-    let mut loose_cmp_vel_d = Vec::<[f64; 2]>::new();
+    let mut loose_cmp_vel_forward = Vec::<[f64; 2]>::new();
+    let mut loose_cmp_vel_lateral = Vec::<[f64; 2]>::new();
+    let mut loose_cmp_vel_vertical = Vec::<[f64; 2]>::new();
     let mut loose_cmp_att_roll = Vec::<[f64; 2]>::new();
     let mut loose_cmp_att_pitch = Vec::<[f64; 2]>::new();
     let mut loose_cmp_att_yaw = Vec::<[f64; 2]>::new();
@@ -409,16 +409,23 @@ pub fn build_ekf_compare_traces(
         ref_ecef = lla_to_ecef(ref_lat, ref_lon, ref_h);
         origin_set = true;
 
+        let mut nav_att_idx = 0usize;
+        let mut current_nav_att: Option<NavAttEvent> = None;
         for (t_ms, nav) in &nav_events {
+            while nav_att_idx < nav_att_events.len() && nav_att_events[nav_att_idx].t_ms <= *t_ms {
+                current_nav_att = Some(nav_att_events[nav_att_idx]);
+                nav_att_idx += 1;
+            }
             let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
             let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
+            let vel_vehicle = ubx_vehicle_velocity(*nav, current_nav_att);
             let t = rel_s(*t_ms);
             ubx_pos_n.push([t, ned[0]]);
             ubx_pos_e.push([t, ned[1]]);
             ubx_pos_d.push([t, ned[2]]);
-            ubx_vel_n.push([t, nav.vel_n_mps]);
-            ubx_vel_e.push([t, nav.vel_e_mps]);
-            ubx_vel_d.push([t, nav.vel_d_mps]);
+            ubx_vel_forward.push([t, vel_vehicle[0]]);
+            ubx_vel_lateral.push([t, vel_vehicle[1]]);
+            ubx_vel_vertical.push([t, vel_vehicle[2]]);
         }
     }
     for (_t_ms, nav_pvt) in &nav_pvt_events_for_map {
@@ -674,9 +681,9 @@ pub fn build_ekf_compare_traces(
                             &mut eskf_cmp_pos_n,
                             &mut eskf_cmp_pos_e,
                             &mut eskf_cmp_pos_d,
-                            &mut eskf_cmp_vel_n,
-                            &mut eskf_cmp_vel_e,
-                            &mut eskf_cmp_vel_d,
+                            &mut eskf_cmp_vel_forward,
+                            &mut eskf_cmp_vel_lateral,
+                            &mut eskf_cmp_vel_vertical,
                             &mut eskf_cmp_att_roll,
                             &mut eskf_cmp_att_pitch,
                             &mut eskf_cmp_att_yaw,
@@ -709,9 +716,9 @@ pub fn build_ekf_compare_traces(
                             &mut loose_cmp_pos_n,
                             &mut loose_cmp_pos_e,
                             &mut loose_cmp_pos_d,
-                            &mut loose_cmp_vel_n,
-                            &mut loose_cmp_vel_e,
-                            &mut loose_cmp_vel_d,
+                            &mut loose_cmp_vel_forward,
+                            &mut loose_cmp_vel_lateral,
+                            &mut loose_cmp_vel_vertical,
                             &mut loose_cmp_att_roll,
                             &mut loose_cmp_att_pitch,
                             &mut loose_cmp_att_yaw,
@@ -830,9 +837,9 @@ pub fn build_ekf_compare_traces(
                 &mut eskf_cmp_pos_n,
                 &mut eskf_cmp_pos_e,
                 &mut eskf_cmp_pos_d,
-                &mut eskf_cmp_vel_n,
-                &mut eskf_cmp_vel_e,
-                &mut eskf_cmp_vel_d,
+                &mut eskf_cmp_vel_forward,
+                &mut eskf_cmp_vel_lateral,
+                &mut eskf_cmp_vel_vertical,
                 &mut eskf_cmp_att_roll,
                 &mut eskf_cmp_att_pitch,
                 &mut eskf_cmp_att_yaw,
@@ -865,9 +872,9 @@ pub fn build_ekf_compare_traces(
                 &mut loose_cmp_pos_n,
                 &mut loose_cmp_pos_e,
                 &mut loose_cmp_pos_d,
-                &mut loose_cmp_vel_n,
-                &mut loose_cmp_vel_e,
-                &mut loose_cmp_vel_d,
+                &mut loose_cmp_vel_forward,
+                &mut loose_cmp_vel_lateral,
+                &mut loose_cmp_vel_vertical,
                 &mut loose_cmp_att_roll,
                 &mut loose_cmp_att_pitch,
                 &mut loose_cmp_att_yaw,
@@ -896,10 +903,10 @@ pub fn build_ekf_compare_traces(
 
     let (eskf_bump_pitch_speed, eskf_bump_diag) = build_bump_diagnostic_traces(
         &eskf_cmp_att_pitch,
-        &eskf_cmp_vel_n,
-        &eskf_cmp_vel_e,
-        &ubx_vel_n,
-        &ubx_vel_e,
+        &eskf_cmp_vel_forward,
+        &eskf_cmp_vel_lateral,
+        &ubx_vel_forward,
+        &ubx_vel_lateral,
     );
 
     let eskf_cmp_pos = vec![
@@ -930,28 +937,28 @@ pub fn build_ekf_compare_traces(
     ];
     let eskf_cmp_vel = vec![
         Trace {
-            name: "ESKF velN [m/s]".to_string(),
-            points: eskf_cmp_vel_n,
+            name: "ESKF forward vel [m/s]".to_string(),
+            points: eskf_cmp_vel_forward,
         },
         Trace {
-            name: "UBX velN [m/s]".to_string(),
-            points: ubx_vel_n.clone(),
+            name: "u-blox forward vel [m/s]".to_string(),
+            points: ubx_vel_forward.clone(),
         },
         Trace {
-            name: "ESKF velE [m/s]".to_string(),
-            points: eskf_cmp_vel_e,
+            name: "ESKF lateral vel [m/s]".to_string(),
+            points: eskf_cmp_vel_lateral,
         },
         Trace {
-            name: "UBX velE [m/s]".to_string(),
-            points: ubx_vel_e.clone(),
+            name: "u-blox lateral vel [m/s]".to_string(),
+            points: ubx_vel_lateral.clone(),
         },
         Trace {
-            name: "ESKF velD [m/s]".to_string(),
-            points: eskf_cmp_vel_d,
+            name: "ESKF vertical vel [m/s]".to_string(),
+            points: eskf_cmp_vel_vertical,
         },
         Trace {
-            name: "UBX velD [m/s]".to_string(),
-            points: ubx_vel_d.clone(),
+            name: "u-blox vertical vel [m/s]".to_string(),
+            points: ubx_vel_vertical.clone(),
         },
     ];
     let eskf_cmp_att = vec![
@@ -1212,28 +1219,28 @@ pub fn build_ekf_compare_traces(
     ];
     let loose_cmp_vel = vec![
         Trace {
-            name: "Loose velN [m/s]".to_string(),
-            points: loose_cmp_vel_n,
+            name: "Loose forward vel [m/s]".to_string(),
+            points: loose_cmp_vel_forward,
         },
         Trace {
-            name: "UBX velN [m/s]".to_string(),
-            points: ubx_vel_n.clone(),
+            name: "u-blox forward vel [m/s]".to_string(),
+            points: ubx_vel_forward.clone(),
         },
         Trace {
-            name: "Loose velE [m/s]".to_string(),
-            points: loose_cmp_vel_e,
+            name: "Loose lateral vel [m/s]".to_string(),
+            points: loose_cmp_vel_lateral,
         },
         Trace {
-            name: "UBX velE [m/s]".to_string(),
-            points: ubx_vel_e.clone(),
+            name: "u-blox lateral vel [m/s]".to_string(),
+            points: ubx_vel_lateral.clone(),
         },
         Trace {
-            name: "Loose velD [m/s]".to_string(),
-            points: loose_cmp_vel_d,
+            name: "Loose vertical vel [m/s]".to_string(),
+            points: loose_cmp_vel_vertical,
         },
         Trace {
-            name: "UBX velD [m/s]".to_string(),
-            points: ubx_vel_d.clone(),
+            name: "u-blox vertical vel [m/s]".to_string(),
+            points: ubx_vel_vertical.clone(),
         },
     ];
     let loose_cmp_att = vec![
@@ -1899,9 +1906,9 @@ fn append_eskf_sample(
     cmp_pos_n: &mut Vec<[f64; 2]>,
     cmp_pos_e: &mut Vec<[f64; 2]>,
     cmp_pos_d: &mut Vec<[f64; 2]>,
-    cmp_vel_n: &mut Vec<[f64; 2]>,
-    cmp_vel_e: &mut Vec<[f64; 2]>,
-    cmp_vel_d: &mut Vec<[f64; 2]>,
+    cmp_vel_forward: &mut Vec<[f64; 2]>,
+    cmp_vel_lateral: &mut Vec<[f64; 2]>,
+    cmp_vel_vertical: &mut Vec<[f64; 2]>,
     cmp_att_roll: &mut Vec<[f64; 2]>,
     cmp_att_pitch: &mut Vec<[f64; 2]>,
     cmp_att_yaw: &mut Vec<[f64; 2]>,
@@ -1923,15 +1930,16 @@ fn append_eskf_sample(
     cmp_pos_n.push([t_imu, n.pn as f64]);
     cmp_pos_e.push([t_imu, n.pe as f64]);
     cmp_pos_d.push([t_imu, n.pd as f64]);
-    cmp_vel_n.push([t_imu, n.vn as f64]);
-    cmp_vel_e.push([t_imu, n.ve as f64]);
-    cmp_vel_d.push([t_imu, n.vd as f64]);
+    let c_n_b = quat_to_rotmat_f64([n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64]);
+    let vel_vehicle = mat_vec(transpose3(c_n_b), [n.vn as f64, n.ve as f64, n.vd as f64]);
+    cmp_vel_forward.push([t_imu, vel_vehicle[0]]);
+    cmp_vel_lateral.push([t_imu, vel_vehicle[1]]);
+    cmp_vel_vertical.push([t_imu, vel_vehicle[2]]);
     let (roll, pitch, yaw) = quat_rpy_deg(n.q0, n.q1, n.q2, n.q3);
     cmp_att_roll.push([t_imu, roll]);
     cmp_att_pitch.push([t_imu, pitch]);
     cmp_att_yaw.push([t_imu, yaw]);
 
-    let c_n_b = quat_to_rotmat_f64([n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64]);
     let gravity_b = [
         c_n_b[2][0] * GRAVITY_MPS2 as f64,
         c_n_b[2][1] * GRAVITY_MPS2 as f64,
@@ -1985,9 +1993,9 @@ fn append_loose_sample(
     cmp_pos_n: &mut Vec<[f64; 2]>,
     cmp_pos_e: &mut Vec<[f64; 2]>,
     cmp_pos_d: &mut Vec<[f64; 2]>,
-    cmp_vel_n: &mut Vec<[f64; 2]>,
-    cmp_vel_e: &mut Vec<[f64; 2]>,
-    cmp_vel_d: &mut Vec<[f64; 2]>,
+    cmp_vel_forward: &mut Vec<[f64; 2]>,
+    cmp_vel_lateral: &mut Vec<[f64; 2]>,
+    cmp_vel_vertical: &mut Vec<[f64; 2]>,
     cmp_att_roll: &mut Vec<[f64; 2]>,
     cmp_att_pitch: &mut Vec<[f64; 2]>,
     cmp_att_yaw: &mut Vec<[f64; 2]>,
@@ -2016,16 +2024,17 @@ fn append_loose_sample(
     cmp_pos_n.push([t_imu, pos_ned[0]]);
     cmp_pos_e.push([t_imu, pos_ned[1]]);
     cmp_pos_d.push([t_imu, pos_ned[2]]);
-    cmp_vel_n.push([t_imu, vel_ned[0]]);
-    cmp_vel_e.push([t_imu, vel_ned[1]]);
-    cmp_vel_d.push([t_imu, vel_ned[2]]);
+    let c_n_v = quat_to_rotmat_f64(q_ns);
+    let vel_vehicle = mat_vec(transpose3(c_n_v), vel_ned);
+    cmp_vel_forward.push([t_imu, vel_vehicle[0]]);
+    cmp_vel_lateral.push([t_imu, vel_vehicle[1]]);
+    cmp_vel_vertical.push([t_imu, vel_vehicle[2]]);
     let (roll, pitch, yaw) =
         quat_rpy_deg(q_ns[0] as f32, q_ns[1] as f32, q_ns[2] as f32, q_ns[3] as f32);
     cmp_att_roll.push([t_imu, roll]);
     cmp_att_pitch.push([t_imu, pitch]);
     cmp_att_yaw.push([t_imu, yaw]);
 
-    let c_n_v = quat_to_rotmat_f64(q_ns);
     let gravity_v = [
         c_n_v[2][0] * GRAVITY_MPS2 as f64,
         c_n_v[2][1] * GRAVITY_MPS2 as f64,
@@ -2180,6 +2189,26 @@ fn transpose3(a: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
         [a[0][1], a[1][1], a[2][1]],
         [a[0][2], a[1][2], a[2][2]],
     ]
+}
+
+fn ubx_vehicle_velocity(nav: NavPvtObs, att: Option<NavAttEvent>) -> [f64; 3] {
+    let vel_ned = [nav.vel_n_mps, nav.vel_e_mps, nav.vel_d_mps];
+    let c_n_v = match att {
+        Some(att) => transpose3(rot_zyx(
+            deg2rad(att.heading_deg),
+            deg2rad(att.pitch_deg),
+            deg2rad(att.roll_deg),
+        )),
+        None => {
+            let yaw_deg = if nav.head_veh_valid {
+                nav.heading_vehicle_deg
+            } else {
+                normalize_heading_deg(rad2deg(nav.vel_e_mps.atan2(nav.vel_n_mps)))
+            };
+            transpose3(rot_zyx(deg2rad(yaw_deg), 0.0, 0.0))
+        }
+    };
+    mat_vec(c_n_v, vel_ned)
 }
 
 fn lpf_alpha(dt_s: f64, cutoff_hz: f64) -> f64 {
