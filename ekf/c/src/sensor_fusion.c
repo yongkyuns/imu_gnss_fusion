@@ -574,7 +574,7 @@ static void sf_initialize_eskf_from_gnss(sf_eskf_t *eskf,
   float speed_h;
   float yaw_rad;
   const float gyro_bias_sigma_radps = 0.125f * 3.1415927f / 180.0f;
-  const float accel_bias_sigma_mps2 = 0.075f;
+  const float accel_bias_sigma_mps2 = 0.20f;
   sf_predict_noise_t noise = eskf->noise;
 
   sf_eskf_init(eskf, NULL, &noise);
