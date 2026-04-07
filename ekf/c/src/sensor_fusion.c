@@ -148,10 +148,10 @@ void sf_predict_noise_default(sf_predict_noise_t *cfg) {
   if (cfg == NULL) {
     return;
   }
-  cfg->gyro_var = 0.0001f;
-  cfg->accel_var = 12.0f;
-  cfg->gyro_bias_rw_var = 0.002e-9f;
-  cfg->accel_bias_rw_var = 0.2e-9f;
+  cfg->gyro_var = 2.2873113e-7f * 10.0f;
+  cfg->accel_var = 2.4504214e-5f * 15.0f;
+  cfg->gyro_bias_rw_var = 0.0002e-9f;
+  cfg->accel_bias_rw_var = 0.002e-9f;
 }
 
 void sf_fusion_config_default(sf_fusion_config_t *cfg) {
@@ -161,7 +161,7 @@ void sf_fusion_config_default(sf_fusion_config_t *cfg) {
   sf_align_config_default(&cfg->align);
   sf_bootstrap_config_default(&cfg->bootstrap);
   sf_predict_noise_default(&cfg->predict_noise);
-  cfg->r_body_vel = 5.0f;
+  cfg->r_body_vel = 0.2f;
   cfg->yaw_init_speed_mps = 0.0f;
 }
 
