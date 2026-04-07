@@ -226,6 +226,7 @@ float sf_align_update_window_with_trace(sf_align_runtime_t *align_rt,
         cfg->r_gravity_std_mps2 * cfg->r_gravity_std_mps2, gravity_state_mask);
     if (trace_out != NULL) {
       trace_out->after_gravity_valid = true;
+      trace_out->after_gravity_quasi_static = false;
       memcpy(trace_out->after_gravity, align_rt->state.q_vb, sizeof(trace_out->after_gravity));
     }
   }

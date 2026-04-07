@@ -72,6 +72,7 @@ pub struct AlignUpdateTrace {
     pub q_start: [f32; 4],
     pub coarse_alignment_ready: bool,
     pub after_gravity: Option<[f32; 4]>,
+    pub after_gravity_quasi_static: bool,
     pub after_horiz_accel: Option<[f32; 4]>,
     pub horiz_angle_err_rad: Option<f32>,
     pub horiz_effective_std_rad: Option<f32>,
@@ -197,6 +198,7 @@ fn convert_trace(trace: CAlignUpdateTrace) -> AlignUpdateTrace {
         q_start: trace.q_start,
         coarse_alignment_ready: trace.coarse_alignment_ready,
         after_gravity: trace.after_gravity_valid.then_some(trace.after_gravity),
+        after_gravity_quasi_static: trace.after_gravity_quasi_static,
         after_horiz_accel: trace
             .after_horiz_accel_valid
             .then_some(trace.after_horiz_accel),

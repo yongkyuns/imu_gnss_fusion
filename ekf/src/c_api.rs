@@ -302,6 +302,7 @@ pub struct CAlignUpdateTrace {
     pub coarse_alignment_ready: bool,
     pub after_gravity_valid: bool,
     pub after_gravity: [f32; 4],
+    pub after_gravity_quasi_static: bool,
     pub after_horiz_accel_valid: bool,
     pub after_horiz_accel: [f32; 4],
     pub horiz_angle_err_rad_valid: bool,

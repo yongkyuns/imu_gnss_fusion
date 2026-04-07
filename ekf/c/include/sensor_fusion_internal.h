@@ -39,6 +39,7 @@ typedef struct {
   bool coarse_alignment_ready;
   bool after_gravity_valid;
   float after_gravity[4];
+  bool after_gravity_quasi_static;
   bool after_horiz_accel_valid;
   float after_horiz_accel[4];
   bool horiz_angle_err_rad_valid;

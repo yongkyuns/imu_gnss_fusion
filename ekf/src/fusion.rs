@@ -128,6 +128,7 @@ fn convert_align_trace(trace: CAlignUpdateTrace) -> AlignUpdateTrace {
         q_start: trace.q_start,
         coarse_alignment_ready: trace.coarse_alignment_ready,
         after_gravity: trace.after_gravity_valid.then_some(trace.after_gravity),
+        after_gravity_quasi_static: trace.after_gravity_quasi_static,
         after_horiz_accel: trace
             .after_horiz_accel_valid
             .then_some(trace.after_horiz_accel),

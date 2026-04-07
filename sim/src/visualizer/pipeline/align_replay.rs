@@ -88,6 +88,7 @@ pub struct AlignReplaySample {
     pub turn_valid: bool,
     pub long_valid: bool,
     pub upd_gravity: bool,
+    pub upd_gravity_quasi_static: bool,
     pub upd_turn_gyro: bool,
     pub upd_lat: bool,
     pub yaw_initialized: bool,
@@ -510,6 +511,9 @@ pub fn build_fusion_align_replay(
             turn_valid,
             long_valid,
             upd_gravity: trace.and_then(|t| t.after_gravity).is_some(),
+            upd_gravity_quasi_static: trace
+                .map(|t| t.after_gravity_quasi_static)
+                .unwrap_or(false),
             upd_turn_gyro: trace.and_then(|t| t.after_turn_gyro).is_some(),
             upd_lat: trace.and_then(|t| t.after_horiz_accel).is_some(),
             yaw_initialized: update.mount_ready_changed && update.mount_ready,
@@ -843,6 +847,7 @@ pub fn build_align_replay(
                     turn_valid,
                     long_valid,
                     upd_gravity: cfg.use_gravity && stationary,
+                    upd_gravity_quasi_static: trace.after_gravity_quasi_static,
                     upd_turn_gyro: cfg.use_turn_gyro && turn_valid,
                     upd_lat: false,
                     yaw_initialized: yaw_initialized_now,

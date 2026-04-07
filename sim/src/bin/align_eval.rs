@@ -11,9 +11,10 @@ use sim::ubxlog::{
     parse_ubx_frames, sensor_meta, unwrap_counter,
 };
 use sim::visualizer::math::nearest_master_ms;
-use sim::visualizer::model::ImuPacket;
+use sim::visualizer::model::{EkfImuSource, ImuPacket};
 use sim::visualizer::pipeline::align_replay::{
-    BootstrapConfig, ImuReplayConfig, axis_angle_deg, build_align_replay, quat_rotate,
+    AlignReplayData, BootstrapConfig, ImuReplayConfig, axis_angle_deg, build_align_replay,
+    build_fusion_align_replay, quat_rotate,
     signed_projected_axis_angle_deg,
 };
 use sim::visualizer::pipeline::timebase::{MasterTimeline, build_master_timeline};
@@ -32,6 +33,15 @@ struct Args {
 
     #[arg(long)]
     bootstrap_debug_csv: Option<PathBuf>,
+
+    #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
+    horiz_accel_report: bool,
+
+    #[arg(long)]
+    horiz_accel_csv: Option<PathBuf>,
+
+    #[arg(long, default_value_t = 0.2)]
+    horiz_accel_min_norm_mps2: f64,
 
     #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     alg_valid_only: bool,
@@ -145,6 +155,8 @@ struct ResidualSample {
     horiz_turn_core_valid: bool,
     horiz_straight_core_valid: bool,
     horiz_applied: bool,
+    gravity_applied: bool,
+    gravity_quasi_static: bool,
     planar_gyro_valid: bool,
     planar_gyro_residual_x_dps: f64,
     planar_gyro_residual_y_dps: f64,
@@ -200,6 +212,45 @@ struct EvalResult {
     bootstrap_cfg: BootstrapConfig,
     metrics: EvalMetrics,
     samples: Vec<ResidualSample>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct HorizAccelQualitySample {
+    t_s: f64,
+    gnss_long_mps2: f64,
+    gnss_lat_mps2: f64,
+    imu_long_mps2: f64,
+    imu_lat_mps2: f64,
+    gnss_norm_mps2: f64,
+    imu_norm_mps2: f64,
+    angle_err_deg: f64,
+    long_resid_mps2: f64,
+    lat_resid_mps2: f64,
+    straight_core_valid: bool,
+    turn_core_valid: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct HorizAccelQualityReport {
+    n_total: usize,
+    n_with_ref: usize,
+    n_valid: usize,
+    mean_abs_angle_err_deg: f64,
+    p90_abs_angle_err_deg: f64,
+    within_10_deg_frac: f64,
+    within_20_deg_frac: f64,
+    within_30_deg_frac: f64,
+    long_bias_mps2: f64,
+    lat_bias_mps2: f64,
+    long_rmse_mps2: f64,
+    lat_rmse_mps2: f64,
+    long_corr_zero_lag: f64,
+    lat_corr_zero_lag: f64,
+    long_best_corr: f64,
+    lat_best_corr: f64,
+    long_best_lag_windows: isize,
+    lat_best_lag_windows: isize,
+    median_dt_s: f64,
 }
 
 #[derive(Clone, Copy)]
@@ -300,6 +351,36 @@ fn main() -> Result<()> {
     let base = evaluate_dispatch(filter_mode, &dataset, &cfg, &bootstrap_cfg, &args)?;
     print_metrics("baseline", &base.metrics);
 
+    if args.horiz_accel_report || args.horiz_accel_csv.is_some() {
+        let replay = build_replay_for_mode(filter_mode, &dataset, &cfg, &bootstrap_cfg);
+        let quality_samples =
+            build_horiz_accel_quality_samples(&replay, args.horiz_accel_min_norm_mps2);
+        let report = summarize_horiz_accel_quality(&quality_samples);
+        print_horiz_accel_quality_report("horiz-accel", &report);
+        let straight_samples: Vec<_> = quality_samples
+            .iter()
+            .copied()
+            .filter(|s| s.straight_core_valid)
+            .collect();
+        let turn_samples: Vec<_> = quality_samples
+            .iter()
+            .copied()
+            .filter(|s| s.turn_core_valid)
+            .collect();
+        print_horiz_accel_quality_report(
+            "horiz-accel-straight",
+            &summarize_horiz_accel_quality(&straight_samples),
+        );
+        print_horiz_accel_quality_report(
+            "horiz-accel-turn",
+            &summarize_horiz_accel_quality(&turn_samples),
+        );
+        if let Some(path) = &args.horiz_accel_csv {
+            write_horiz_accel_csv(path, &quality_samples)?;
+            eprintln!("wrote horizontal accel CSV: {}", path.display());
+        }
+    }
+
     let mut best = base;
     if args.tune {
         if !matches!(filter_mode, FilterMode::Align) {
@@ -324,12 +405,14 @@ fn main() -> Result<()> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FilterMode {
     Align,
+    Fusion,
 }
 
 fn parse_filter_mode(s: &str) -> Result<FilterMode> {
     match s {
         "align" => Ok(FilterMode::Align),
-        _ => bail!("unknown --filter-mode {}, expected align", s),
+        "fusion" => Ok(FilterMode::Fusion),
+        _ => bail!("unknown --filter-mode {}, expected align or fusion", s),
     }
 }
 
@@ -774,6 +857,8 @@ fn evaluate_config(
                 horiz_turn_core_valid: sample.horiz_trace.turn_core_valid,
                 horiz_straight_core_valid: sample.horiz_trace.straight_core_valid,
                 horiz_applied: sample.horiz_trace.applied,
+                gravity_applied: sample.upd_gravity,
+                gravity_quasi_static: sample.upd_gravity_quasi_static,
                 planar_gyro_valid: false,
                 planar_gyro_residual_x_dps: f64::NAN,
                 planar_gyro_residual_y_dps: f64::NAN,
@@ -790,6 +875,103 @@ fn evaluate_config(
     })
 }
 
+fn evaluate_fusion_config(dataset: &AlignDataset) -> EvalResult {
+    let cfg = AlignConfig::default();
+    let bootstrap_cfg = BootstrapConfig {
+        ema_alpha: 0.05,
+        max_speed_mps: 0.35,
+        stationary_samples: 300,
+        max_gyro_radps: cfg.max_stationary_gyro_radps,
+        max_accel_norm_err_mps2: cfg.max_stationary_accel_norm_err_mps2,
+        max_speed_rate_mps2: 0.15,
+        max_course_rate_radps: 1.0_f32.to_radians(),
+    };
+    let samples = replay_to_residuals(build_fusion_align_replay(
+        &dataset.frames,
+        &dataset.timeline,
+        EkfImuSource::Align,
+        ImuReplayConfig::default(),
+    ));
+    let init_time_s = samples.first().map(|s| s.t_s).unwrap_or(f64::NAN);
+    let metrics = score_samples(&samples, dataset.total_nav_events, init_time_s);
+    EvalResult {
+        cfg,
+        bootstrap_cfg,
+        metrics,
+        samples,
+    }
+}
+
+fn replay_to_residuals(
+    replay: sim::visualizer::pipeline::align_replay::AlignReplayData,
+) -> Vec<ResidualSample> {
+    let mut samples = Vec::<ResidualSample>::new();
+    let final_alg_q = replay.final_alg_q;
+    for sample in &replay.samples {
+        if let (Some(q_alg), Some(alg_rpy_deg)) = (sample.alg_q, sample.alg_rpy_deg) {
+            let q_ref_axis = final_alg_q.unwrap_or(q_alg);
+            let err_roll_deg = wrap_deg180(sample.align_rpy_deg[0] - alg_rpy_deg[0]);
+            let err_pitch_deg = sample.align_rpy_deg[1] - alg_rpy_deg[1];
+            let err_yaw_deg = wrap_deg180(sample.align_rpy_deg[2] - alg_rpy_deg[2]);
+            samples.push(ResidualSample {
+                t_s: sample.t_s,
+                align_roll_deg: sample.align_rpy_deg[0],
+                align_pitch_deg: sample.align_rpy_deg[1],
+                align_yaw_deg: sample.align_rpy_deg[2],
+                alg_roll_deg: alg_rpy_deg[0],
+                alg_pitch_deg: alg_rpy_deg[1],
+                alg_yaw_deg: alg_rpy_deg[2],
+                err_roll_deg,
+                err_pitch_deg,
+                err_yaw_deg,
+                sigma_roll_deg: sample.p_diag[0].sqrt().to_degrees(),
+                sigma_pitch_deg: sample.p_diag[1].sqrt().to_degrees(),
+                sigma_yaw_deg: sample.p_diag[2].sqrt().to_degrees(),
+                course_rate_dps: sample.course_rate_dps,
+                a_lat_mps2: sample.a_lat_mps2,
+                a_long_mps2: sample.a_long_mps2,
+                rot_err_deg: quat_angle_deg(sample.q_align, q_alg),
+                fwd_err_deg: axis_angle_deg(
+                    quat_rotate(sample.q_align, [1.0, 0.0, 0.0]),
+                    quat_rotate(q_ref_axis, [1.0, 0.0, 0.0]),
+                ),
+                down_err_deg: axis_angle_deg(
+                    quat_rotate(sample.q_align, [0.0, 0.0, 1.0]),
+                    quat_rotate(q_ref_axis, [0.0, 0.0, 1.0]),
+                ),
+                fwd_err_signed_deg: signed_projected_axis_angle_deg(
+                    quat_rotate(sample.q_align, [1.0, 0.0, 0.0]),
+                    quat_rotate(q_ref_axis, [1.0, 0.0, 0.0]),
+                    quat_rotate(q_ref_axis, [0.0, 0.0, 1.0]),
+                ),
+                down_err_signed_deg: signed_projected_axis_angle_deg(
+                    quat_rotate(sample.q_align, [0.0, 0.0, 1.0]),
+                    quat_rotate(q_ref_axis, [0.0, 0.0, 1.0]),
+                    quat_rotate(q_ref_axis, [0.0, 1.0, 0.0]),
+                ),
+                horiz_angle_err_deg: sample.horiz_trace.angle_err_deg,
+                horiz_effective_std_deg: sample.horiz_trace.effective_std_deg,
+                horiz_gnss_norm_mps2: sample.horiz_trace.gnss_norm_mps2,
+                horiz_imu_norm_mps2: sample.horiz_trace.imu_norm_mps2,
+                horiz_speed_q: sample.horiz_trace.speed_q,
+                horiz_accel_q: sample.horiz_trace.accel_q,
+                horiz_straight_q: sample.horiz_trace.straight_q,
+                horiz_turn_q: sample.horiz_trace.turn_q,
+                horiz_dominance_q: sample.horiz_trace.dominance_q,
+                horiz_turn_core_valid: sample.horiz_trace.turn_core_valid,
+                horiz_straight_core_valid: sample.horiz_trace.straight_core_valid,
+                horiz_applied: sample.horiz_trace.applied,
+                gravity_applied: sample.upd_gravity,
+                gravity_quasi_static: sample.upd_gravity_quasi_static,
+                planar_gyro_valid: false,
+                planar_gyro_residual_x_dps: f64::NAN,
+                planar_gyro_residual_y_dps: f64::NAN,
+            });
+        }
+    }
+    samples
+}
+
 fn evaluate_dispatch(
     mode: FilterMode,
     dataset: &AlignDataset,
@@ -799,6 +981,284 @@ fn evaluate_dispatch(
 ) -> Result<EvalResult> {
     match mode {
         FilterMode::Align => evaluate_config(dataset, cfg, bootstrap_cfg),
+        FilterMode::Fusion => Ok(evaluate_fusion_config(dataset)),
+    }
+}
+
+fn build_replay_for_mode(
+    mode: FilterMode,
+    dataset: &AlignDataset,
+    cfg: &AlignConfig,
+    bootstrap_cfg: &BootstrapConfig,
+) -> AlignReplayData {
+    match mode {
+        FilterMode::Align => build_align_replay(
+            &dataset.frames,
+            &dataset.timeline,
+            *cfg,
+            *bootstrap_cfg,
+            ImuReplayConfig::default(),
+        ),
+        FilterMode::Fusion => build_fusion_align_replay(
+            &dataset.frames,
+            &dataset.timeline,
+            EkfImuSource::Align,
+            ImuReplayConfig::default(),
+        ),
+    }
+}
+
+fn build_horiz_accel_quality_samples(
+    replay: &AlignReplayData,
+    min_norm_mps2: f64,
+) -> Vec<HorizAccelQualitySample> {
+    let mut out = Vec::new();
+    for sample in &replay.samples {
+        let Some(q_alg) = sample.alg_q else {
+            continue;
+        };
+        let imu_vehicle = quat_rotate(
+            q_alg,
+            [
+                sample.horiz_accel_b[0],
+                sample.horiz_accel_b[1],
+                sample.horiz_accel_b[2],
+            ],
+        );
+        let gnss_long = sample.a_long_mps2;
+        let gnss_lat = sample.a_lat_mps2;
+        let imu_long = imu_vehicle[0];
+        let imu_lat = imu_vehicle[1];
+        let gnss_norm = (gnss_long * gnss_long + gnss_lat * gnss_lat).sqrt();
+        let imu_norm = (imu_long * imu_long + imu_lat * imu_lat).sqrt();
+        if !gnss_norm.is_finite()
+            || !imu_norm.is_finite()
+            || gnss_norm < min_norm_mps2
+            || imu_norm < min_norm_mps2
+        {
+            continue;
+        }
+        let angle_err_deg = angle_err_2d_deg([imu_long, imu_lat], [gnss_long, gnss_lat]);
+        out.push(HorizAccelQualitySample {
+            t_s: sample.t_s,
+            gnss_long_mps2: gnss_long,
+            gnss_lat_mps2: gnss_lat,
+            imu_long_mps2: imu_long,
+            imu_lat_mps2: imu_lat,
+            gnss_norm_mps2: gnss_norm,
+            imu_norm_mps2: imu_norm,
+            angle_err_deg,
+            long_resid_mps2: imu_long - gnss_long,
+            lat_resid_mps2: imu_lat - gnss_lat,
+            straight_core_valid: sample.horiz_trace.straight_core_valid,
+            turn_core_valid: sample.horiz_trace.turn_core_valid,
+        });
+    }
+    out
+}
+
+fn summarize_horiz_accel_quality(samples: &[HorizAccelQualitySample]) -> HorizAccelQualityReport {
+    if samples.is_empty() {
+        return HorizAccelQualityReport::default();
+    }
+    let n = samples.len() as f64;
+    let mut abs_angles: Vec<f64> = samples.iter().map(|s| s.angle_err_deg.abs()).collect();
+    abs_angles.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+    let p90_idx = ((abs_angles.len() as f64) * 0.90).floor() as usize;
+    let p90_abs_angle_err_deg = abs_angles[p90_idx.min(abs_angles.len() - 1)];
+    let mean_abs_angle_err_deg = abs_angles.iter().sum::<f64>() / n;
+    let within_10_deg_frac = abs_angles.iter().filter(|v| **v <= 10.0).count() as f64 / n;
+    let within_20_deg_frac = abs_angles.iter().filter(|v| **v <= 20.0).count() as f64 / n;
+    let within_30_deg_frac = abs_angles.iter().filter(|v| **v <= 30.0).count() as f64 / n;
+    let long_bias_mps2 = samples.iter().map(|s| s.long_resid_mps2).sum::<f64>() / n;
+    let lat_bias_mps2 = samples.iter().map(|s| s.lat_resid_mps2).sum::<f64>() / n;
+    let long_rmse_mps2 = (samples
+        .iter()
+        .map(|s| s.long_resid_mps2 * s.long_resid_mps2)
+        .sum::<f64>()
+        / n)
+        .sqrt();
+    let lat_rmse_mps2 = (samples
+        .iter()
+        .map(|s| s.lat_resid_mps2 * s.lat_resid_mps2)
+        .sum::<f64>()
+        / n)
+        .sqrt();
+    let long_zero = pearson_corr(
+        &samples.iter().map(|s| s.imu_long_mps2).collect::<Vec<_>>(),
+        &samples.iter().map(|s| s.gnss_long_mps2).collect::<Vec<_>>(),
+    );
+    let lat_zero = pearson_corr(
+        &samples.iter().map(|s| s.imu_lat_mps2).collect::<Vec<_>>(),
+        &samples.iter().map(|s| s.gnss_lat_mps2).collect::<Vec<_>>(),
+    );
+    let (long_best_lag_windows, long_best_corr) = best_lag_corr(
+        &samples.iter().map(|s| s.imu_long_mps2).collect::<Vec<_>>(),
+        &samples.iter().map(|s| s.gnss_long_mps2).collect::<Vec<_>>(),
+        10,
+    );
+    let (lat_best_lag_windows, lat_best_corr) = best_lag_corr(
+        &samples.iter().map(|s| s.imu_lat_mps2).collect::<Vec<_>>(),
+        &samples.iter().map(|s| s.gnss_lat_mps2).collect::<Vec<_>>(),
+        10,
+    );
+    let mut dts = Vec::new();
+    for w in samples.windows(2) {
+        let dt = w[1].t_s - w[0].t_s;
+        if dt.is_finite() && dt > 0.0 {
+            dts.push(dt);
+        }
+    }
+    dts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+    let median_dt_s = if dts.is_empty() {
+        f64::NAN
+    } else {
+        dts[dts.len() / 2]
+    };
+    HorizAccelQualityReport {
+        n_total: samples.len(),
+        n_with_ref: samples.len(),
+        n_valid: samples.len(),
+        mean_abs_angle_err_deg,
+        p90_abs_angle_err_deg,
+        within_10_deg_frac,
+        within_20_deg_frac,
+        within_30_deg_frac,
+        long_bias_mps2,
+        lat_bias_mps2,
+        long_rmse_mps2,
+        lat_rmse_mps2,
+        long_corr_zero_lag: long_zero,
+        lat_corr_zero_lag: lat_zero,
+        long_best_corr,
+        lat_best_corr,
+        long_best_lag_windows,
+        lat_best_lag_windows,
+        median_dt_s,
+    }
+}
+
+fn print_horiz_accel_quality_report(label: &str, report: &HorizAccelQualityReport) {
+    eprintln!(
+        "[{}] n_total={} n_valid={} median_dt={:.3}s",
+        label, report.n_total, report.n_valid, report.median_dt_s
+    );
+    eprintln!(
+        "[{}] angle_abs_deg mean={:.3} p90={:.3} within10={:.3} within20={:.3} within30={:.3}",
+        label,
+        report.mean_abs_angle_err_deg,
+        report.p90_abs_angle_err_deg,
+        report.within_10_deg_frac,
+        report.within_20_deg_frac,
+        report.within_30_deg_frac
+    );
+    eprintln!(
+        "[{}] residual_mps2 long_bias={:.3} long_rmse={:.3} lat_bias={:.3} lat_rmse={:.3}",
+        label,
+        report.long_bias_mps2,
+        report.long_rmse_mps2,
+        report.lat_bias_mps2,
+        report.lat_rmse_mps2
+    );
+    eprintln!(
+        "[{}] corr_zero long={:.3} lat={:.3} | corr_best long={:.3}@{} lat={:.3}@{}",
+        label,
+        report.long_corr_zero_lag,
+        report.lat_corr_zero_lag,
+        report.long_best_corr,
+        report.long_best_lag_windows,
+        report.lat_best_corr,
+        report.lat_best_lag_windows
+    );
+}
+
+fn write_horiz_accel_csv(path: &PathBuf, samples: &[HorizAccelQualitySample]) -> Result<()> {
+    let file =
+        File::create(path).with_context(|| format!("failed to create {}", path.display()))?;
+    let mut w = BufWriter::new(file);
+    writeln!(
+        w,
+        "t_s,gnss_long_mps2,gnss_lat_mps2,imu_long_mps2,imu_lat_mps2,gnss_norm_mps2,imu_norm_mps2,angle_err_deg,long_resid_mps2,lat_resid_mps2,straight_core_valid,turn_core_valid"
+    )?;
+    for s in samples {
+        writeln!(
+            w,
+            "{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{}",
+            s.t_s,
+            s.gnss_long_mps2,
+            s.gnss_lat_mps2,
+            s.imu_long_mps2,
+            s.imu_lat_mps2,
+            s.gnss_norm_mps2,
+            s.imu_norm_mps2,
+            s.angle_err_deg,
+            s.long_resid_mps2,
+            s.lat_resid_mps2,
+            s.straight_core_valid as u8,
+            s.turn_core_valid as u8
+        )?;
+    }
+    Ok(())
+}
+
+fn angle_err_2d_deg(a: [f64; 2], b: [f64; 2]) -> f64 {
+    let na = (a[0] * a[0] + a[1] * a[1]).sqrt();
+    let nb = (b[0] * b[0] + b[1] * b[1]).sqrt();
+    if na <= 1.0e-9 || nb <= 1.0e-9 {
+        return f64::NAN;
+    }
+    let dot = ((a[0] * b[0] + a[1] * b[1]) / (na * nb)).clamp(-1.0, 1.0);
+    dot.acos().to_degrees()
+}
+
+fn pearson_corr(a: &[f64], b: &[f64]) -> f64 {
+    if a.len() != b.len() || a.len() < 3 {
+        return f64::NAN;
+    }
+    let n = a.len() as f64;
+    let mean_a = a.iter().sum::<f64>() / n;
+    let mean_b = b.iter().sum::<f64>() / n;
+    let mut cov = 0.0;
+    let mut var_a = 0.0;
+    let mut var_b = 0.0;
+    for (xa, xb) in a.iter().zip(b.iter()) {
+        let da = *xa - mean_a;
+        let db = *xb - mean_b;
+        cov += da * db;
+        var_a += da * da;
+        var_b += db * db;
+    }
+    if var_a <= 1.0e-12 || var_b <= 1.0e-12 {
+        return f64::NAN;
+    }
+    cov / (var_a.sqrt() * var_b.sqrt())
+}
+
+fn best_lag_corr(a: &[f64], b: &[f64], max_lag: isize) -> (isize, f64) {
+    let mut best = (0isize, f64::NEG_INFINITY);
+    for lag in -max_lag..=max_lag {
+        let (a_slice, b_slice) = if lag >= 0 {
+            let lag = lag as usize;
+            if lag >= a.len() || lag >= b.len() {
+                continue;
+            }
+            (&a[lag..], &b[..b.len() - lag])
+        } else {
+            let lag = (-lag) as usize;
+            if lag >= a.len() || lag >= b.len() {
+                continue;
+            }
+            (&a[..a.len() - lag], &b[lag..])
+        };
+        let corr = pearson_corr(a_slice, b_slice);
+        if corr.is_finite() && corr > best.1 {
+            best = (lag, corr);
+        }
+    }
+    if best.1 == f64::NEG_INFINITY {
+        (0, f64::NAN)
+    } else {
+        best
     }
 }
 
@@ -1067,12 +1527,12 @@ fn write_residual_csv(path: &PathBuf, samples: &[ResidualSample]) -> Result<()> 
     let mut w = BufWriter::new(file);
     writeln!(
         w,
-        "t_s,align_roll_deg,align_pitch_deg,align_yaw_deg,alg_roll_deg,alg_pitch_deg,alg_yaw_deg,err_roll_deg,err_pitch_deg,err_yaw_deg,sigma_roll_deg,sigma_pitch_deg,sigma_yaw_deg,course_rate_dps,a_lat_mps2,a_long_mps2,rot_err_deg,fwd_err_deg,down_err_deg,fwd_err_signed_deg,down_err_signed_deg,horiz_angle_err_deg,horiz_effective_std_deg,horiz_gnss_norm_mps2,horiz_imu_norm_mps2,horiz_speed_q,horiz_accel_q,horiz_straight_q,horiz_turn_q,horiz_dominance_q,horiz_turn_core_valid,horiz_straight_core_valid,horiz_applied,planar_gyro_valid,planar_gyro_residual_x_dps,planar_gyro_residual_y_dps"
+        "t_s,align_roll_deg,align_pitch_deg,align_yaw_deg,alg_roll_deg,alg_pitch_deg,alg_yaw_deg,err_roll_deg,err_pitch_deg,err_yaw_deg,sigma_roll_deg,sigma_pitch_deg,sigma_yaw_deg,course_rate_dps,a_lat_mps2,a_long_mps2,rot_err_deg,fwd_err_deg,down_err_deg,fwd_err_signed_deg,down_err_signed_deg,horiz_angle_err_deg,horiz_effective_std_deg,horiz_gnss_norm_mps2,horiz_imu_norm_mps2,horiz_speed_q,horiz_accel_q,horiz_straight_q,horiz_turn_q,horiz_dominance_q,horiz_turn_core_valid,horiz_straight_core_valid,horiz_applied,gravity_applied,gravity_quasi_static,planar_gyro_valid,planar_gyro_residual_x_dps,planar_gyro_residual_y_dps"
     )?;
     for s in samples {
         writeln!(
             w,
-            "{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{},{:.6},{:.6}",
+            "{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{},{},{},{:.6},{:.6}",
             s.t_s,
             s.align_roll_deg,
             s.align_pitch_deg,
@@ -1106,6 +1566,8 @@ fn write_residual_csv(path: &PathBuf, samples: &[ResidualSample]) -> Result<()> 
             s.horiz_turn_core_valid as u8,
             s.horiz_straight_core_valid as u8,
             s.horiz_applied as u8,
+            s.gravity_applied as u8,
+            s.gravity_quasi_static as u8,
             s.planar_gyro_valid as u8,
             s.planar_gyro_residual_x_dps,
             s.planar_gyro_residual_y_dps,
