@@ -233,7 +233,6 @@ struct HorizAccelQualitySample {
 #[derive(Clone, Copy, Debug, Default)]
 struct HorizAccelQualityReport {
     n_total: usize,
-    n_with_ref: usize,
     n_valid: usize,
     mean_abs_angle_err_deg: f64,
     p90_abs_angle_err_deg: f64,
@@ -1117,7 +1116,6 @@ fn summarize_horiz_accel_quality(samples: &[HorizAccelQualitySample]) -> HorizAc
     };
     HorizAccelQualityReport {
         n_total: samples.len(),
-        n_with_ref: samples.len(),
         n_valid: samples.len(),
         mean_abs_angle_err_deg,
         p90_abs_angle_err_deg,

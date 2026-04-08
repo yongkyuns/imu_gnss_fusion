@@ -153,8 +153,10 @@ float sf_align_update_window_with_trace(sf_align_runtime_t *align_rt,
     return 0.0f;
   }
 
-  memset(trace_out, 0, sizeof(*trace_out));
-  memcpy(trace_out->q_start, align_rt->state.q_vb, sizeof(trace_out->q_start));
+  if (trace_out != NULL) {
+    memset(trace_out, 0, sizeof(*trace_out));
+    memcpy(trace_out->q_start, align_rt->state.q_vb, sizeof(trace_out->q_start));
+  }
 
   sf_align_predict_covariance(align_rt->state.p, cfg, window->dt > 1.0e-3f ? window->dt : 1.0e-3f);
 
@@ -289,6 +291,7 @@ float sf_align_update_window_with_trace(sf_align_runtime_t *align_rt,
           trace_out->horiz_straight_q_valid = true;
           trace_out->horiz_straight_q = straight_q;
         }
+
       }
       {
         float cross = horiz_obs[3] * a_lat - horiz_obs[4] * a_long;
