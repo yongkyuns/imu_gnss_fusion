@@ -59,6 +59,14 @@ typedef struct {
   float horiz_gnss_norm_mps2;
   bool horiz_imu_norm_mps2_valid;
   float horiz_imu_norm_mps2;
+  bool horiz_obs_accel_vx_valid;
+  float horiz_obs_accel_vx;
+  bool horiz_obs_accel_vy_valid;
+  float horiz_obs_accel_vy;
+  bool horiz_accel_bx_valid;
+  float horiz_accel_bx;
+  bool horiz_accel_by_valid;
+  float horiz_accel_by;
   bool horiz_speed_q_valid;
   float horiz_speed_q;
   bool horiz_accel_q_valid;

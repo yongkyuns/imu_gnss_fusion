@@ -171,6 +171,18 @@ fn convert_align_trace(trace: CAlignUpdateTrace) -> AlignUpdateTrace {
         horiz_imu_norm_mps2: trace
             .horiz_imu_norm_mps2_valid
             .then_some(trace.horiz_imu_norm_mps2),
+        horiz_obs_accel_vx: trace
+            .horiz_obs_accel_vx_valid
+            .then_some(trace.horiz_obs_accel_vx),
+        horiz_obs_accel_vy: trace
+            .horiz_obs_accel_vy_valid
+            .then_some(trace.horiz_obs_accel_vy),
+        horiz_accel_bx: trace
+            .horiz_accel_bx_valid
+            .then_some(trace.horiz_accel_bx),
+        horiz_accel_by: trace
+            .horiz_accel_by_valid
+            .then_some(trace.horiz_accel_by),
         horiz_speed_q: trace.horiz_speed_q_valid.then_some(trace.horiz_speed_q),
         horiz_accel_q: trace.horiz_accel_q_valid.then_some(trace.horiz_accel_q),
         horiz_straight_q: trace

@@ -12,7 +12,6 @@ static void sf_vec3_sub(const float a[3], const float b[3], float out[3]);
 static void sf_vec3_scale(const float v[3], float s, float out[3]);
 static float sf_vec3_dot(const float a[3], const float b[3]);
 static float sf_vec3_norm(const float v[3]);
-static bool sf_vec3_normalize(const float v[3], float out[3]);
 static float sf_vec2_norm(const float v[2]);
 static bool sf_vec2_normalize(const float v[2], float out[2]);
 static void sf_skew3(const float v[3], float out[3][3]);
@@ -26,6 +25,7 @@ static void sf_quat_from_small_angle(const float dtheta[3], float out[4]);
 static void sf_quat_from_yaw(float yaw_rad, float out[4]);
 static void sf_quat_to_rotmat(const float q[4], float out[3][3]);
 static void sf_quat_from_rotmat(float (*c)[3], float out[4]);
+static void sf_gravity_dir_body_from_q_vb(const float q_vb[4], float out[3]);
 static void sf_transpose3x3(float (*a)[3], float (*out)[3]);
 static void sf_align_obs(const float q_vb[4],
                          const float gyro_b[3],
@@ -185,7 +185,8 @@ float sf_align_update_window_with_trace(sf_align_runtime_t *align_rt,
 
   gyro_norm = sf_vec3_norm(window->mean_gyro_b);
   accel_norm = sf_vec3_norm(window->mean_accel_b);
-  if (sf_vec3_normalize(align_rt->state.gravity_lp_b, g_hat_b)) {
+  sf_gravity_dir_body_from_q_vb(align_rt->state.q_vb, g_hat_b);
+  if (sf_vec3_norm(g_hat_b) > 1.0e-8f) {
     float proj[3];
     sf_vec3_scale(g_hat_b, sf_vec3_dot(window->mean_accel_b, g_hat_b), proj);
     sf_vec3_sub(window->mean_accel_b, proj, horiz_accel_b);
@@ -260,6 +261,14 @@ float sf_align_update_window_with_trace(sf_align_runtime_t *align_rt,
         trace_out->horiz_gnss_norm_mps2 = horiz_gnss_norm;
         trace_out->horiz_imu_norm_mps2_valid = true;
         trace_out->horiz_imu_norm_mps2 = horiz_imu_norm;
+        trace_out->horiz_obs_accel_vx_valid = true;
+        trace_out->horiz_obs_accel_vx = horiz_obs[3];
+        trace_out->horiz_obs_accel_vy_valid = true;
+        trace_out->horiz_obs_accel_vy = horiz_obs[4];
+        trace_out->horiz_accel_bx_valid = true;
+        trace_out->horiz_accel_bx = horiz_accel_b[0];
+        trace_out->horiz_accel_by_valid = true;
+        trace_out->horiz_accel_by = horiz_accel_b[1];
         trace_out->horiz_speed_q_valid = true;
         trace_out->horiz_speed_q = speed_q;
         trace_out->horiz_accel_q_valid = true;
@@ -672,15 +681,6 @@ static float sf_vec3_norm(const float v[3]) {
   return sqrtf(sf_vec3_dot(v, v));
 }
 
-static bool sf_vec3_normalize(const float v[3], float out[3]) {
-  float n = sf_vec3_norm(v);
-  if (!isfinite(n) || n <= 1.0e-8f) {
-    return false;
-  }
-  sf_vec3_scale(v, 1.0f / n, out);
-  return true;
-}
-
 static float sf_vec2_norm(const float v[2]) {
   return sqrtf(v[0] * v[0] + v[1] * v[1]);
 }
@@ -823,6 +823,14 @@ static void sf_quat_from_rotmat(float (*c)[3], float out[4]) {
     out[3] = 0.25f * s;
   }
   sf_quat_normalize(out);
+}
+
+static void sf_gravity_dir_body_from_q_vb(const float q_vb[4], float out[3]) {
+  float c_vb[3][3];
+  sf_quat_to_rotmat(q_vb, c_vb);
+  out[0] = -c_vb[0][2];
+  out[1] = -c_vb[1][2];
+  out[2] = -c_vb[2][2];
 }
 
 static void sf_transpose3x3(float (*a)[3], float (*out)[3]) {

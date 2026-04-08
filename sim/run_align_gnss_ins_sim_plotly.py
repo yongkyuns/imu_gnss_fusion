@@ -174,17 +174,13 @@ def make_plot(series: dict[str, list[float]], title: str):
         shared_xaxes=True,
         vertical_spacing=0.08,
         horizontal_spacing=0.08,
-        specs=[
-            [{}, {}],
-            [{}, {}],
-            [{"colspan": 2}, None],
-        ],
         subplot_titles=[
             "Roll",
             "Pitch",
             "Yaw",
             "Unsigned Axis Errors",
             "Signed Axis Errors",
+            "Motion Context",
         ],
     )
 
@@ -242,10 +238,25 @@ def make_plot(series: dict[str, list[float]], title: str):
         row=3,
         col=1,
     )
+    fig.add_trace(
+        go.Scatter(x=t, y=series["speed_mps"], name="Speed [m/s]", mode="lines", line={"color": "#4ea1ff", "width": 2}),
+        row=3,
+        col=2,
+    )
+    fig.add_trace(
+        go.Scatter(x=t, y=series["course_rate_dps"], name="Yaw-rate [deg/s]", mode="lines", line={"color": "#ff8c42", "width": 2}),
+        row=3,
+        col=2,
+    )
+    fig.add_trace(
+        go.Scatter(x=t, y=series["a_long_mps2"], name="Long accel [m/s^2]", mode="lines", line={"color": "#7bd88f", "width": 2}),
+        row=3,
+        col=2,
+    )
 
     fig.update_layout(
         template="plotly_dark",
-        height=1200,
+        height=1500,
         width=1600,
         title=title,
         legend={
@@ -257,12 +268,15 @@ def make_plot(series: dict[str, list[float]], title: str):
         },
         margin={"t": 120, "r": 260},
     )
+    fig.update_xaxes(matches="x")
     fig.update_xaxes(title_text="Time (s)", row=3, col=1)
+    fig.update_xaxes(title_text="Time (s)", row=3, col=2)
     fig.update_yaxes(title_text="deg", row=1, col=1)
     fig.update_yaxes(title_text="deg", row=1, col=2)
     fig.update_yaxes(title_text="deg", row=2, col=1)
     fig.update_yaxes(title_text="deg", row=2, col=2)
     fig.update_yaxes(title_text="deg", row=3, col=1)
+    fig.update_yaxes(title_text="mixed", row=3, col=2)
     return fig
 
 

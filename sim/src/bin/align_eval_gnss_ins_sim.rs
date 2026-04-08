@@ -65,6 +65,13 @@ struct ResidualSample {
     align_roll_deg: f64,
     align_pitch_deg: f64,
     align_yaw_deg: f64,
+    yaw_start_deg: f64,
+    yaw_after_gravity_deg: f64,
+    yaw_after_horiz_deg: f64,
+    yaw_after_turn_gyro_deg: f64,
+    yaw_delta_gravity_deg: f64,
+    yaw_delta_horiz_deg: f64,
+    yaw_delta_turn_gyro_deg: f64,
     truth_roll_deg: f64,
     truth_pitch_deg: f64,
     truth_yaw_deg: f64,
@@ -74,9 +81,17 @@ struct ResidualSample {
     sigma_roll_deg: f64,
     sigma_pitch_deg: f64,
     sigma_yaw_deg: f64,
+    speed_mps: f64,
     course_rate_dps: f64,
     a_lat_mps2: f64,
     a_long_mps2: f64,
+    gravity_lpb_x: f64,
+    gravity_lpb_y: f64,
+    gravity_lpb_z: f64,
+    horiz_obs_accel_vx: f64,
+    horiz_obs_accel_vy: f64,
+    horiz_accel_bx: f64,
+    horiz_accel_by: f64,
     rot_err_deg: f64,
     fwd_err_deg: f64,
     down_err_deg: f64,
@@ -86,6 +101,9 @@ struct ResidualSample {
     gravity_applied: bool,
     turn_core_valid: bool,
     straight_core_valid: bool,
+    coarse_alignment_ready: bool,
+    horiz_angle_err_deg: f64,
+    horiz_effective_std_deg: f64,
 }
 
 fn main() -> Result<()> {
@@ -154,7 +172,7 @@ fn main() -> Result<()> {
                 ];
                 let align_rpy = quat_rpy_alg_deg(q_align[0], q_align[1], q_align[2], q_align[3]);
                 let debug = fusion.align_debug();
-                let (course_rate_dps, a_lat_mps2, a_long_mps2, gravity_applied, horiz_applied, turn_core_valid, straight_core_valid) =
+                let (speed_mps, course_rate_dps, a_lat_mps2, a_long_mps2, gravity_applied, horiz_applied, turn_core_valid, straight_core_valid) =
                     if let Some(debug) = debug {
                         let dt = debug.window.dt as f64;
                         let v_prev = [debug.window.gnss_vel_prev_n[0] as f64, debug.window.gnss_vel_prev_n[1] as f64];
@@ -183,6 +201,7 @@ fn main() -> Result<()> {
                             (0.0, 0.0)
                         };
                         (
+                            speed,
                             course_rate_dps,
                             a_lat,
                             a_long,
@@ -192,14 +211,113 @@ fn main() -> Result<()> {
                             debug.trace.horiz_straight_core_valid,
                         )
                     } else {
-                        (0.0, 0.0, 0.0, false, false, false, false)
+                        (0.0, 0.0, 0.0, 0.0, false, false, false, false)
                     };
+                let (
+                    yaw_start_deg,
+                    yaw_after_gravity_deg,
+                    yaw_after_horiz_deg,
+                    yaw_after_turn_gyro_deg,
+                    yaw_delta_gravity_deg,
+                    yaw_delta_horiz_deg,
+                    yaw_delta_turn_gyro_deg,
+                    coarse_alignment_ready,
+                    horiz_angle_err_deg,
+                    horiz_effective_std_deg,
+                    horiz_obs_accel_vx,
+                    horiz_obs_accel_vy,
+                    horiz_accel_bx,
+                    horiz_accel_by,
+                ) = if let Some(debug) = debug {
+                    let yaw_of = |q: [f32; 4]| {
+                        let (_, _, y) = quat_rpy_alg_deg(
+                            q[0] as f64,
+                            q[1] as f64,
+                            q[2] as f64,
+                            q[3] as f64,
+                        );
+                        y
+                    };
+                    let yaw_start = yaw_of(debug.trace.q_start);
+                    let yaw_after_gravity = debug.trace.after_gravity.map(yaw_of).unwrap_or(f64::NAN);
+                    let yaw_after_horiz = debug.trace.after_horiz_accel.map(yaw_of).unwrap_or(f64::NAN);
+                    let yaw_after_turn_gyro = debug.trace.after_turn_gyro.map(yaw_of).unwrap_or(f64::NAN);
+                    let yaw_delta_gravity = debug
+                        .trace
+                        .after_gravity
+                        .map(|q| wrap_deg180(yaw_of(q) - yaw_start))
+                        .unwrap_or(f64::NAN);
+                    let yaw_delta_horiz = debug
+                        .trace
+                        .after_horiz_accel
+                        .map(|q| {
+                            let prev = debug.trace.after_gravity.map(yaw_of).unwrap_or(yaw_start);
+                            wrap_deg180(yaw_of(q) - prev)
+                        })
+                        .unwrap_or(f64::NAN);
+                    let yaw_delta_turn_gyro = debug
+                        .trace
+                        .after_turn_gyro
+                        .map(|q| {
+                            let prev = debug
+                                .trace
+                                .after_horiz_accel
+                                .map(yaw_of)
+                                .or_else(|| debug.trace.after_gravity.map(yaw_of))
+                                .unwrap_or(yaw_start);
+                            wrap_deg180(yaw_of(q) - prev)
+                        })
+                        .unwrap_or(f64::NAN);
+                    (
+                        yaw_start,
+                        yaw_after_gravity,
+                        yaw_after_horiz,
+                        yaw_after_turn_gyro,
+                        yaw_delta_gravity,
+                        yaw_delta_horiz,
+                        yaw_delta_turn_gyro,
+                        debug.trace.coarse_alignment_ready,
+                        debug.trace.horiz_angle_err_rad.map(|x| (x as f64).to_degrees()).unwrap_or(f64::NAN),
+                        debug.trace
+                            .horiz_effective_std_rad
+                            .map(|x| (x as f64).to_degrees())
+                            .unwrap_or(f64::NAN),
+                        debug.trace.horiz_obs_accel_vx.map(|x| x as f64).unwrap_or(f64::NAN),
+                        debug.trace.horiz_obs_accel_vy.map(|x| x as f64).unwrap_or(f64::NAN),
+                        debug.trace.horiz_accel_bx.map(|x| x as f64).unwrap_or(f64::NAN),
+                        debug.trace.horiz_accel_by.map(|x| x as f64).unwrap_or(f64::NAN),
+                    )
+                } else {
+                    (
+                        f64::NAN,
+                        f64::NAN,
+                        f64::NAN,
+                        f64::NAN,
+                        f64::NAN,
+                        f64::NAN,
+                        f64::NAN,
+                        false,
+                        f64::NAN,
+                        f64::NAN,
+                        f64::NAN,
+                        f64::NAN,
+                        f64::NAN,
+                        f64::NAN,
+                    )
+                };
 
                 residuals.push(ResidualSample {
                     t_s: s.t_s,
                     align_roll_deg: align_rpy.0,
                     align_pitch_deg: align_rpy.1,
                     align_yaw_deg: align_rpy.2,
+                    yaw_start_deg,
+                    yaw_after_gravity_deg,
+                    yaw_after_horiz_deg,
+                    yaw_after_turn_gyro_deg,
+                    yaw_delta_gravity_deg,
+                    yaw_delta_horiz_deg,
+                    yaw_delta_turn_gyro_deg,
                     truth_roll_deg: truth_rpy.0,
                     truth_pitch_deg: truth_rpy.1,
                     truth_yaw_deg: truth_rpy.2,
@@ -209,9 +327,17 @@ fn main() -> Result<()> {
                     sigma_roll_deg: (align.P[0][0] as f64).max(0.0).sqrt().to_degrees(),
                     sigma_pitch_deg: (align.P[1][1] as f64).max(0.0).sqrt().to_degrees(),
                     sigma_yaw_deg: (align.P[2][2] as f64).max(0.0).sqrt().to_degrees(),
+                    speed_mps,
                     course_rate_dps,
                     a_lat_mps2,
                     a_long_mps2,
+                    gravity_lpb_x: align.gravity_lp_b[0] as f64,
+                    gravity_lpb_y: align.gravity_lp_b[1] as f64,
+                    gravity_lpb_z: align.gravity_lp_b[2] as f64,
+                    horiz_obs_accel_vx,
+                    horiz_obs_accel_vy,
+                    horiz_accel_bx,
+                    horiz_accel_by,
                     rot_err_deg: quat_angle_deg(q_align, q_truth),
                     fwd_err_deg: axis_angle_deg(quat_rotate(q_align, [1.0, 0.0, 0.0]), quat_rotate(q_truth, [1.0, 0.0, 0.0])),
                     down_err_deg: axis_angle_deg(quat_rotate(q_align, [0.0, 0.0, 1.0]), quat_rotate(q_truth, [0.0, 0.0, 1.0])),
@@ -229,6 +355,9 @@ fn main() -> Result<()> {
                     gravity_applied,
                     turn_core_valid,
                     straight_core_valid,
+                    coarse_alignment_ready,
+                    horiz_angle_err_deg,
+                    horiz_effective_std_deg,
                 });
             }
             gnss_idx += 1;
@@ -462,16 +591,23 @@ fn write_residual_csv(path: &Path, samples: &[ResidualSample]) -> Result<()> {
     let mut w = BufWriter::new(file);
     writeln!(
         w,
-        "t_s,align_roll_deg,align_pitch_deg,align_yaw_deg,truth_roll_deg,truth_pitch_deg,truth_yaw_deg,err_roll_deg,err_pitch_deg,err_yaw_deg,sigma_roll_deg,sigma_pitch_deg,sigma_yaw_deg,course_rate_dps,a_lat_mps2,a_long_mps2,rot_err_deg,fwd_err_deg,down_err_deg,fwd_err_signed_deg,down_err_signed_deg,horiz_applied,gravity_applied,turn_core_valid,straight_core_valid"
+        "t_s,align_roll_deg,align_pitch_deg,align_yaw_deg,yaw_start_deg,yaw_after_gravity_deg,yaw_after_horiz_deg,yaw_after_turn_gyro_deg,yaw_delta_gravity_deg,yaw_delta_horiz_deg,yaw_delta_turn_gyro_deg,truth_roll_deg,truth_pitch_deg,truth_yaw_deg,err_roll_deg,err_pitch_deg,err_yaw_deg,sigma_roll_deg,sigma_pitch_deg,sigma_yaw_deg,speed_mps,course_rate_dps,a_lat_mps2,a_long_mps2,gravity_lpb_x,gravity_lpb_y,gravity_lpb_z,horiz_obs_accel_vx,horiz_obs_accel_vy,horiz_accel_bx,horiz_accel_by,rot_err_deg,fwd_err_deg,down_err_deg,fwd_err_signed_deg,down_err_signed_deg,horiz_applied,gravity_applied,turn_core_valid,straight_core_valid,coarse_alignment_ready,horiz_angle_err_deg,horiz_effective_std_deg"
     )?;
     for s in samples {
         writeln!(
             w,
-            "{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             s.t_s,
             s.align_roll_deg,
             s.align_pitch_deg,
             s.align_yaw_deg,
+            s.yaw_start_deg,
+            s.yaw_after_gravity_deg,
+            s.yaw_after_horiz_deg,
+            s.yaw_after_turn_gyro_deg,
+            s.yaw_delta_gravity_deg,
+            s.yaw_delta_horiz_deg,
+            s.yaw_delta_turn_gyro_deg,
             s.truth_roll_deg,
             s.truth_pitch_deg,
             s.truth_yaw_deg,
@@ -481,9 +617,17 @@ fn write_residual_csv(path: &Path, samples: &[ResidualSample]) -> Result<()> {
             s.sigma_roll_deg,
             s.sigma_pitch_deg,
             s.sigma_yaw_deg,
+            s.speed_mps,
             s.course_rate_dps,
             s.a_lat_mps2,
             s.a_long_mps2,
+            s.gravity_lpb_x,
+            s.gravity_lpb_y,
+            s.gravity_lpb_z,
+            s.horiz_obs_accel_vx,
+            s.horiz_obs_accel_vy,
+            s.horiz_accel_bx,
+            s.horiz_accel_by,
             s.rot_err_deg,
             s.fwd_err_deg,
             s.down_err_deg,
@@ -493,6 +637,9 @@ fn write_residual_csv(path: &Path, samples: &[ResidualSample]) -> Result<()> {
             s.gravity_applied as u8,
             s.turn_core_valid as u8,
             s.straight_core_valid as u8,
+            s.coarse_alignment_ready as u8,
+            s.horiz_angle_err_deg,
+            s.horiz_effective_std_deg,
         )?;
     }
     Ok(())
