@@ -102,7 +102,9 @@ static void sf_loose_batch_update_joseph(sf_loose_t *loose,
                                          const float variances[]);
 static int sf_loose_append_reference_gps_observations(sf_loose_t *loose,
                                                       const double pos_ecef_m[3],
+                                                      const float vel_ecef_mps[3],
                                                       float h_acc_m,
+                                                      float speed_acc_mps,
                                                       float dt_since_last_gnss_s,
                                                       float h_rows[][SF_LOOSE_ERROR_STATES],
                                                       const int *h_supports[],
@@ -445,7 +447,9 @@ void sf_loose_predict(sf_loose_t *loose, const sf_loose_imu_delta_t *imu) {
 
 void sf_loose_fuse_gps_reference(sf_loose_t *loose,
                                  const double pos_ecef_m[3],
+                                 const float vel_ecef_mps[3],
                                  float h_acc_m,
+                                 float speed_acc_mps,
                                  float dt_since_last_gnss_s) {
   if (loose == NULL) {
     return;
@@ -459,7 +463,9 @@ void sf_loose_fuse_gps_reference(sf_loose_t *loose,
   int obs_count = sf_loose_append_reference_gps_observations(
       loose,
       pos_ecef_m,
+      vel_ecef_mps,
       h_acc_m,
+      speed_acc_mps,
       dt_since_last_gnss_s,
       h_rows,
       h_supports,
@@ -476,7 +482,9 @@ void sf_loose_fuse_gps_reference(sf_loose_t *loose,
 
 void sf_loose_fuse_reference_batch(sf_loose_t *loose,
                                    const double pos_ecef_m[3],
+                                   const float vel_ecef_mps[3],
                                    float h_acc_m,
+                                   float speed_acc_mps,
                                    float dt_since_last_gnss_s,
                                    const float gyro_radps[3],
                                    const float accel_mps2[3],
@@ -488,16 +496,18 @@ void sf_loose_fuse_reference_batch(sf_loose_t *loose,
   loose->last_obs_count = 0;
   memset(loose->last_obs_types, 0, sizeof(loose->last_obs_types));
 
-  float h_rows[5][SF_LOOSE_ERROR_STATES] = {{0}};
-  const int *h_supports[5] = {0};
-  int h_support_lens[5] = {0};
-  float residuals[5] = {0};
-  float variances[5] = {0};
+  float h_rows[8][SF_LOOSE_ERROR_STATES] = {{0}};
+  const int *h_supports[8] = {0};
+  int h_support_lens[8] = {0};
+  float residuals[8] = {0};
+  float variances[8] = {0};
   int obs_count = 0;
   obs_count = sf_loose_append_reference_gps_observations(
       loose,
       pos_ecef_m,
+      vel_ecef_mps,
       h_acc_m,
+      speed_acc_mps,
       dt_since_last_gnss_s,
       h_rows,
       h_supports,
@@ -551,7 +561,7 @@ void sf_loose_fuse_reference_batch(sf_loose_t *loose,
       h_support_lens[obs_count] = 8;
       residuals[obs_count] = -vc_y_est;
       variances[obs_count] = var_y;
-      loose->last_obs_types[obs_count] = 4;
+      loose->last_obs_types[obs_count] = 7;
       ++obs_count;
     }
     if (!sf_loose_test_chi2_scalar(-vc_z_est, loose->p, h_z, gate_var_z)) {
@@ -560,7 +570,7 @@ void sf_loose_fuse_reference_batch(sf_loose_t *loose,
       h_support_lens[obs_count] = 8;
       residuals[obs_count] = -vc_z_est;
       variances[obs_count] = var_z;
-      loose->last_obs_types[obs_count] = 5;
+      loose->last_obs_types[obs_count] = 8;
       ++obs_count;
     }
   }
@@ -574,7 +584,9 @@ void sf_loose_fuse_reference_batch(sf_loose_t *loose,
 
 static int sf_loose_append_reference_gps_observations(sf_loose_t *loose,
                                                       const double pos_ecef_m[3],
+                                                      const float vel_ecef_mps[3],
                                                       float h_acc_m,
+                                                      float speed_acc_mps,
                                                       float dt_since_last_gnss_s,
                                                       float h_rows[][SF_LOOSE_ERROR_STATES],
                                                       const int *h_supports[],
@@ -583,87 +595,116 @@ static int sf_loose_append_reference_gps_observations(sf_loose_t *loose,
                                                       float variances[],
                                                       int obs_types[],
                                                       int obs_count) {
-  if (loose == NULL || pos_ecef_m == NULL || h_acc_m <= 0.0f || h_rows == NULL ||
+  static const int gps_vel_supports[3][1] = {{3}, {4}, {5}};
+
+  if (loose == NULL || h_rows == NULL ||
       h_supports == NULL || h_support_lens == NULL || residuals == NULL || variances == NULL) {
     return obs_count;
   }
 
-  float lat_rad, lon_rad, height_m;
-  sf_loose_ecef_to_llh(
-      (const float[3]){(float)loose->pos_e64[0], (float)loose->pos_e64[1], (float)loose->pos_e64[2]},
-      &lat_rad,
-      &lon_rad,
-      &height_m);
-  (void)height_m;
+  if (pos_ecef_m != NULL && h_acc_m > 0.0f) {
+    float lat_rad, lon_rad, height_m;
+    sf_loose_ecef_to_llh(
+        (const float[3]){(float)loose->pos_e64[0], (float)loose->pos_e64[1], (float)loose->pos_e64[2]},
+        &lat_rad,
+        &lon_rad,
+        &height_m);
+    (void)height_m;
 
-  float c_en[3][3];
-  sf_loose_dcm_ecef_to_ned(lat_rad, lon_rad, c_en);
-  float r_n_diag[3] = {
-      h_acc_m * h_acc_m,
-      h_acc_m * h_acc_m,
-      (2.5f * h_acc_m) * (2.5f * h_acc_m),
-  };
-  float r_e[3][3] = {{0}};
-  for (int i = 0; i < 3; ++i) {
-    for (int j = 0; j < 3; ++j) {
-      for (int k = 0; k < 3; ++k) {
-        r_e[i][j] += c_en[i][k] * r_n_diag[k] * c_en[j][k];
+    float c_en[3][3];
+    sf_loose_dcm_ecef_to_ned(lat_rad, lon_rad, c_en);
+    float r_n_diag[3] = {
+        h_acc_m * h_acc_m,
+        h_acc_m * h_acc_m,
+        (2.5f * h_acc_m) * (2.5f * h_acc_m),
+    };
+    float r_e[3][3] = {{0}};
+    for (int i = 0; i < 3; ++i) {
+      for (int j = 0; j < 3; ++j) {
+        for (int k = 0; k < 3; ++k) {
+          r_e[i][j] += c_en[i][k] * r_n_diag[k] * c_en[j][k];
+        }
+      }
+    }
+
+    float u11 = sqrtf(fmaxf(r_e[0][0], 1.0e-9f));
+    float u12 = r_e[0][1] / u11;
+    float u13 = r_e[0][2] / u11;
+    float u22 = sqrtf(fmaxf(r_e[1][1] - u12 * u12, 1.0e-9f));
+    float u23 = (r_e[1][2] - u12 * u13) / u22;
+    float u33 = sqrtf(fmaxf(r_e[2][2] - u13 * u13 - u23 * u23, 1.0e-9f));
+
+    float t[3][3] = {
+        {1.0f / u11, 0.0f, 0.0f},
+        {-u12 / (u11 * u22), 1.0f / u22, 0.0f},
+        {(u12 * u23 - u13 * u22) / (u11 * u22 * u33), -u23 / (u22 * u33), 1.0f / u33},
+    };
+    double x_meas[3] = {0};
+    double x_est[3] = {loose->pos_e64[0], loose->pos_e64[1], loose->pos_e64[2]};
+    float h_tmp[3][SF_LOOSE_ERROR_STATES] = {{0}};
+    for (int i = 0; i < 3; ++i) {
+      for (int j = 0; j < 3; ++j) {
+        x_meas[i] += (double)t[i][j] * pos_ecef_m[j];
+        h_tmp[i][j] = t[i][j];
+      }
+    }
+
+    float residual[3] = {
+        (float)(x_meas[0] -
+                ((double)t[0][0] * x_est[0] + (double)t[0][1] * x_est[1] + (double)t[0][2] * x_est[2])),
+        (float)(x_meas[1] -
+                ((double)t[1][0] * x_est[0] + (double)t[1][1] * x_est[1] + (double)t[1][2] * x_est[2])),
+        (float)(x_meas[2] -
+                ((double)t[2][0] * x_est[0] + (double)t[2][1] * x_est[1] + (double)t[2][2] * x_est[2])),
+    };
+    float r_diag[3] = {1.0f, 1.0f, 1.0f};
+    if (!sf_loose_test_chi2_vec3(residual, loose->p, h_tmp, r_diag)) {
+      const float meas_var = 1.0f / fminf(fmaxf(dt_since_last_gnss_s, 1.0e-3f), 1.0f);
+      const int *gps_supports[3] = {
+          SF_LOOSE_GPS_REF_SUPPORT_ROW0,
+          SF_LOOSE_GPS_REF_SUPPORT_ROW1,
+          SF_LOOSE_GPS_REF_SUPPORT_ROW2,
+      };
+      const int gps_support_lens[3] = {1, 2, 3};
+      for (int row = 0; row < 3; ++row) {
+        memcpy(h_rows[obs_count], h_tmp[row], sizeof(h_tmp[row]));
+        h_supports[obs_count] = gps_supports[row];
+        h_support_lens[obs_count] = gps_support_lens[row];
+        residuals[obs_count] = residual[row];
+        variances[obs_count] = meas_var;
+        if (obs_types != NULL) {
+          obs_types[obs_count] = row + 1;
+        }
+        ++obs_count;
       }
     }
   }
 
-  float u11 = sqrtf(fmaxf(r_e[0][0], 1.0e-9f));
-  float u12 = r_e[0][1] / u11;
-  float u13 = r_e[0][2] / u11;
-  float u22 = sqrtf(fmaxf(r_e[1][1] - u12 * u12, 1.0e-9f));
-  float u23 = (r_e[1][2] - u12 * u13) / u22;
-  float u33 = sqrtf(fmaxf(r_e[2][2] - u13 * u13 - u23 * u23, 1.0e-9f));
-
-  float t[3][3] = {
-      {1.0f / u11, 0.0f, 0.0f},
-      {-u12 / (u11 * u22), 1.0f / u22, 0.0f},
-      {(u12 * u23 - u13 * u22) / (u11 * u22 * u33), -u23 / (u22 * u33), 1.0f / u33},
-  };
-  double x_meas[3] = {0};
-  double x_est[3] = {loose->pos_e64[0], loose->pos_e64[1], loose->pos_e64[2]};
-  float h_tmp[3][SF_LOOSE_ERROR_STATES] = {{0}};
-  for (int i = 0; i < 3; ++i) {
-    for (int j = 0; j < 3; ++j) {
-      x_meas[i] += (double)t[i][j] * pos_ecef_m[j];
-      h_tmp[i][j] = t[i][j];
+  if (vel_ecef_mps != NULL && speed_acc_mps > 0.0f) {
+    float vel_residual[3] = {
+        vel_ecef_mps[0] - loose->nominal.vn,
+        vel_ecef_mps[1] - loose->nominal.ve,
+        vel_ecef_mps[2] - loose->nominal.vd,
+    };
+    float vel_rows[3][SF_LOOSE_ERROR_STATES] = {{0}};
+    const float vel_var = fmaxf(speed_acc_mps * speed_acc_mps, 1.0e-4f);
+    float vel_r_diag[3] = {vel_var, vel_var, vel_var};
+    vel_rows[0][3] = 1.0f;
+    vel_rows[1][4] = 1.0f;
+    vel_rows[2][5] = 1.0f;
+    if (!sf_loose_test_chi2_vec3(vel_residual, loose->p, vel_rows, vel_r_diag)) {
+      for (int row = 0; row < 3; ++row) {
+        memcpy(h_rows[obs_count], vel_rows[row], sizeof(vel_rows[row]));
+        h_supports[obs_count] = gps_vel_supports[row];
+        h_support_lens[obs_count] = 1;
+        residuals[obs_count] = vel_residual[row];
+        variances[obs_count] = vel_var;
+        if (obs_types != NULL) {
+          obs_types[obs_count] = row + 4;
+        }
+        ++obs_count;
+      }
     }
-  }
-
-  float residual[3] = {
-      (float)(x_meas[0] -
-              ((double)t[0][0] * x_est[0] + (double)t[0][1] * x_est[1] + (double)t[0][2] * x_est[2])),
-      (float)(x_meas[1] -
-              ((double)t[1][0] * x_est[0] + (double)t[1][1] * x_est[1] + (double)t[1][2] * x_est[2])),
-      (float)(x_meas[2] -
-              ((double)t[2][0] * x_est[0] + (double)t[2][1] * x_est[1] + (double)t[2][2] * x_est[2])),
-  };
-  float r_diag[3] = {1.0f, 1.0f, 1.0f};
-  if (sf_loose_test_chi2_vec3(residual, loose->p, h_tmp, r_diag)) {
-    return obs_count;
-  }
-
-  const float meas_var = 1.0f / fminf(fmaxf(dt_since_last_gnss_s, 1.0e-3f), 1.0f);
-  const int *gps_supports[3] = {
-      SF_LOOSE_GPS_REF_SUPPORT_ROW0,
-      SF_LOOSE_GPS_REF_SUPPORT_ROW1,
-      SF_LOOSE_GPS_REF_SUPPORT_ROW2,
-  };
-  const int gps_support_lens[3] = {1, 2, 3};
-  for (int row = 0; row < 3; ++row) {
-    memcpy(h_rows[obs_count], h_tmp[row], sizeof(h_tmp[row]));
-    h_supports[obs_count] = gps_supports[row];
-    h_support_lens[obs_count] = gps_support_lens[row];
-    residuals[obs_count] = residual[row];
-    variances[obs_count] = meas_var;
-    if (obs_types != NULL) {
-      obs_types[obs_count] = row + 1;
-    }
-    ++obs_count;
   }
   return obs_count;
 }

@@ -461,13 +461,17 @@ unsafe extern "C" {
     fn sf_loose_fuse_gps_reference(
         loose: *mut CLoose,
         pos_ecef_m: *const f64,
+        vel_ecef_mps: *const f32,
         h_acc_m: f32,
+        speed_acc_mps: f32,
         dt_since_last_gnss_s: f32,
     );
     fn sf_loose_fuse_reference_batch(
         loose: *mut CLoose,
         pos_ecef_m: *const f64,
+        vel_ecef_mps: *const f32,
         h_acc_m: f32,
+        speed_acc_mps: f32,
         dt_since_last_gnss_s: f32,
         gyro_radps: *const f32,
         accel_mps2: *const f32,
@@ -1077,12 +1081,25 @@ impl CLooseWrapper {
         unsafe { sf_loose_predict(&mut self.raw as *mut CLoose, &imu as *const CLooseImuDelta) };
     }
 
-    pub fn fuse_gps_reference(&mut self, pos_ecef_m: [f64; 3], h_acc_m: f32, dt_since_last_gnss_s: f32) {
+    pub fn fuse_gps_reference(
+        &mut self,
+        pos_ecef_m: [f64; 3],
+        vel_ecef_mps: Option<[f32; 3]>,
+        h_acc_m: f32,
+        speed_acc_mps: f32,
+        dt_since_last_gnss_s: f32,
+    ) {
+        let vel_ptr = vel_ecef_mps
+            .as_ref()
+            .map(|v| v.as_ptr())
+            .unwrap_or(core::ptr::null());
         unsafe {
             sf_loose_fuse_gps_reference(
                 &mut self.raw as *mut CLoose,
                 pos_ecef_m.as_ptr(),
+                vel_ptr,
                 h_acc_m,
+                speed_acc_mps,
                 dt_since_last_gnss_s,
             )
         };
@@ -1102,7 +1119,9 @@ impl CLooseWrapper {
     pub fn fuse_reference_batch(
         &mut self,
         pos_ecef_m: Option<[f64; 3]>,
+        vel_ecef_mps: Option<[f32; 3]>,
         h_acc_m: f32,
+        speed_acc_mps: f32,
         dt_since_last_gnss_s: f32,
         gyro_radps: [f32; 3],
         accel_mps2: [f32; 3],
@@ -1112,11 +1131,17 @@ impl CLooseWrapper {
             .as_ref()
             .map(|v| v.as_ptr())
             .unwrap_or(core::ptr::null());
+        let vel_ptr = vel_ecef_mps
+            .as_ref()
+            .map(|v| v.as_ptr())
+            .unwrap_or(core::ptr::null());
         unsafe {
             sf_loose_fuse_reference_batch(
                 &mut self.raw as *mut CLoose,
                 pos_ptr,
+                vel_ptr,
                 h_acc_m,
+                speed_acc_mps,
                 dt_since_last_gnss_s,
                 gyro_radps.as_ptr(),
                 accel_mps2.as_ptr(),

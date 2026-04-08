@@ -291,6 +291,7 @@ pub fn build_signal_traces(
     out.loose_cmp_pos = ekf.loose_cmp_pos;
     out.loose_cmp_vel = ekf.loose_cmp_vel;
     out.loose_cmp_att = ekf.loose_cmp_att;
+    out.loose_misalignment = ekf.loose_misalignment;
     out.loose_meas_gyro = ekf.loose_meas_gyro;
     out.loose_meas_accel = ekf.loose_meas_accel;
     out.loose_bias_gyro = ekf.loose_bias_gyro;
@@ -305,6 +306,7 @@ pub fn build_signal_traces(
     out.align_res_vel = align_data.res_vel;
     out.align_axis_err = align_data.axis_err;
     out.align_motion = align_data.motion;
+    out.align_flags = align_data.flags;
     out.align_roll_contrib = align_data.roll_contrib;
     out.align_pitch_contrib = align_data.pitch_contrib;
     out.align_yaw_contrib = align_data.yaw_contrib;
@@ -366,6 +368,7 @@ pub fn build_signal_traces(
         &mut out.loose_cmp_pos,
         &mut out.loose_cmp_vel,
         &mut out.loose_cmp_att,
+        &mut out.loose_misalignment,
         &mut out.loose_meas_gyro,
         &mut out.loose_meas_accel,
         &mut out.loose_bias_gyro,
@@ -378,6 +381,7 @@ pub fn build_signal_traces(
         &mut out.align_res_vel,
         &mut out.align_axis_err,
         &mut out.align_motion,
+        &mut out.align_flags,
         &mut out.align_roll_contrib,
         &mut out.align_pitch_contrib,
         &mut out.align_yaw_contrib,

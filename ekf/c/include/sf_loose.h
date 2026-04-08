@@ -51,7 +51,7 @@ typedef struct sf_loose {
   double qcs64[4];
   double p64[SF_LOOSE_ERROR_STATES][SF_LOOSE_ERROR_STATES];
   int last_obs_count;
-  int last_obs_types[5];
+  int last_obs_types[8];
 } sf_loose_t;
 
 typedef struct {
@@ -78,11 +78,15 @@ void sf_loose_predict(sf_loose_t *loose, const sf_loose_imu_delta_t *imu);
 void sf_loose_predict_nominal(sf_loose_t *loose, const sf_loose_imu_delta_t *imu);
 void sf_loose_fuse_gps_reference(sf_loose_t *loose,
                                  const double pos_ecef_m[3],
+                                 const float vel_ecef_mps[3],
                                  float h_acc_m,
+                                 float speed_acc_mps,
                                  float dt_since_last_gnss_s);
 void sf_loose_fuse_reference_batch(sf_loose_t *loose,
                                    const double pos_ecef_m[3],
+                                   const float vel_ecef_mps[3],
                                    float h_acc_m,
+                                   float speed_acc_mps,
                                    float dt_since_last_gnss_s,
                                    const float gyro_radps[3],
                                    const float accel_mps2[3],

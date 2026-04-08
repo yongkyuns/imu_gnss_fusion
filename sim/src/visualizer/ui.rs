@@ -481,6 +481,13 @@ impl eframe::App for App {
                         );
                         draw_plot(
                             ui,
+                            "Loose Misalignment Estimates",
+                            self.data.loose_misalignment.iter(),
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
                             "Loose Gyro Bias Estimates",
                             self.data.loose_bias_gyro.iter(),
                             true,
@@ -535,65 +542,76 @@ impl eframe::App for App {
                     .resizable(false)
                     .exact_width(half_width)
                     .show(ctx, |ui| {
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            draw_plot(
+                                ui,
+                                "Euler Angles: Align KF vs ESF-ALG",
+                                self.data.align_cmp_att.iter(),
+                                true,
+                                self.max_points_per_trace,
+                            );
+                            draw_plot(
+                                ui,
+                                "Align Window Diagnostics",
+                                self.data.align_res_vel.iter(),
+                                true,
+                                self.max_points_per_trace,
+                            );
+                            draw_plot(
+                                ui,
+                                "Align Axis Error vs ESF-ALG",
+                                self.data.align_axis_err.iter(),
+                                true,
+                                self.max_points_per_trace,
+                            );
+                            draw_plot(
+                                ui,
+                                "Final ESF-ALG vs PCA Heading",
+                                self.data.align_motion.iter(),
+                                true,
+                                self.max_points_per_trace,
+                            );
+                            draw_plot(
+                                ui,
+                                "Align Window Flags",
+                                self.data.align_flags.iter(),
+                                true,
+                                self.max_points_per_trace,
+                            );
+                        });
+                    });
+
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
                         draw_plot(
                             ui,
-                            "Euler Angles: Align KF vs ESF-ALG",
-                            self.data.align_cmp_att.iter(),
+                            "Align Roll Update Contributions",
+                            self.data.align_roll_contrib.iter(),
                             true,
                             self.max_points_per_trace,
                         );
                         draw_plot(
                             ui,
-                            "Align Window Diagnostics",
-                            self.data.align_res_vel.iter(),
+                            "Align Pitch Update Contributions",
+                            self.data.align_pitch_contrib.iter(),
                             true,
                             self.max_points_per_trace,
                         );
                         draw_plot(
                             ui,
-                            "Align Axis Error vs ESF-ALG",
-                            self.data.align_axis_err.iter(),
+                            "Align Yaw Update Contributions",
+                            self.data.align_yaw_contrib.iter(),
                             true,
                             self.max_points_per_trace,
                         );
                         draw_plot(
                             ui,
-                            "Final ESF-ALG vs PCA Heading",
-                            self.data.align_motion.iter(),
+                            "Align Covariance Diagonal",
+                            self.data.align_cov.iter(),
                             true,
                             self.max_points_per_trace,
                         );
                     });
-
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    draw_plot(
-                        ui,
-                        "Align Roll Update Contributions",
-                        self.data.align_roll_contrib.iter(),
-                        true,
-                        self.max_points_per_trace,
-                    );
-                    draw_plot(
-                        ui,
-                        "Align Pitch Update Contributions",
-                        self.data.align_pitch_contrib.iter(),
-                        true,
-                        self.max_points_per_trace,
-                    );
-                    draw_plot(
-                        ui,
-                        "Align Yaw Update Contributions",
-                        self.data.align_yaw_contrib.iter(),
-                        true,
-                        self.max_points_per_trace,
-                    );
-                    draw_plot(
-                        ui,
-                        "Align Covariance Diagonal",
-                        self.data.align_cov.iter(),
-                        true,
-                        self.max_points_per_trace,
-                    );
                 });
             }
             Page::MapDark => {

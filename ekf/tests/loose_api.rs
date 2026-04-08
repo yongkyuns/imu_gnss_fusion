@@ -931,8 +931,8 @@ fn loose_reference_batch_matches_gps_only_reference_update() {
         Some(p_diag),
     );
 
-    gps_only.fuse_gps_reference(pos_meas, 1.8, 0.5);
-    batch.fuse_reference_batch(Some(pos_meas), 1.8, 0.5, gyro_radps, accel_mps2, 0.01);
+    gps_only.fuse_gps_reference(pos_meas, None, 1.8, 0.0, 0.5);
+    batch.fuse_reference_batch(Some(pos_meas), None, 1.8, 0.0, 0.5, gyro_radps, accel_mps2, 0.01);
 
     assert_nominal_close(batch.nominal(), gps_only.nominal(), 1.0e-6, "gps_only_batch");
     let batch_p = batch.covariance();
@@ -981,7 +981,7 @@ fn loose_reference_batch_matches_nhc_only_reference_update() {
     );
 
     nhc_only.fuse_nhc_reference(gyro_radps, accel_mps2, 0.01);
-    batch.fuse_reference_batch(None, 0.0, 1.0, gyro_radps, accel_mps2, 0.01);
+    batch.fuse_reference_batch(None, None, 0.0, 0.0, 1.0, gyro_radps, accel_mps2, 0.01);
 
     assert_nominal_close(batch.nominal(), nhc_only.nominal(), 1.0e-6, "nhc_only_batch");
     let batch_p = batch.covariance();
@@ -1048,7 +1048,7 @@ fn loose_reference_batch_matches_reference_combined_gps_nhc_update() {
         0.01,
     );
 
-    batch.fuse_reference_batch(Some(pos_meas), 1.4, 0.4, gyro_radps, accel_mps2, 0.01);
+    batch.fuse_reference_batch(Some(pos_meas), None, 1.4, 0.0, 0.4, gyro_radps, accel_mps2, 0.01);
 
     let x_actual = batch.nominal();
     assert_close(x_actual.q0, x_expected.q_es[0], 2.0e-4, "combined.q0");

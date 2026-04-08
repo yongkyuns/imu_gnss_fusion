@@ -2,7 +2,6 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 use sensor_fusion::c_api::{CEskfImuDelta, CEskfWrapper, CLooseImuDelta, CLooseWrapper, EskfGnssSample};
 use sensor_fusion::ekf::PredictNoise;
-use sensor_fusion::fusion::FusionGnssSample;
 use sensor_fusion::loose::LoosePredictNoise;
 use serde::Deserialize;
 use sim::visualizer::math::{ecef_to_ned, lla_to_ecef};
@@ -83,10 +82,11 @@ struct RefInit {
 
 #[derive(Debug, Clone, Copy)]
 struct GpsUpdate {
-    fusion: FusionGnssSample,
     eskf: EskfGnssSample,
     pos_ecef_m: [f64; 3],
+    vel_ecef_mps: [f32; 3],
     h_acc_m: f32,
+    speed_acc_mps: f32,
     dt_since_last_gnss_s: f32,
 }
 
@@ -250,6 +250,10 @@ fn build_replay_steps(
                             (g.speed_mps * heading_rad.sin()) as f32,
                             0.0,
                         ];
+                        let vel_ecef = mat_vec(
+                            transpose3(ecef_to_ned_matrix(g.lat_deg, g.lon_deg)),
+                            [vel_ned[0] as f64, vel_ned[1] as f64, vel_ned[2] as f64],
+                        );
                         let dt_since_last_gnss_s = if last_gnss_used_ttag == i64::MIN {
                             1.0
                         } else {
@@ -257,16 +261,6 @@ fn build_replay_steps(
                         };
                         last_gnss_used_ttag = g.ttag_us;
                         Some(GpsUpdate {
-                            fusion: FusionGnssSample {
-                                t_s: ((curr.ttag_us - init.start_ttag_us) as f64 * 1.0e-6) as f32,
-                                lat_deg: g.lat_deg as f32,
-                                lon_deg: g.lon_deg as f32,
-                                height_m: g.height_m as f32,
-                                vel_ned_mps: vel_ned,
-                                pos_std_m: [g.h_acc_m as f32, g.h_acc_m as f32, g.v_acc_m as f32],
-                                vel_std_mps: [g.speed_acc_mps as f32; 3],
-                                heading_rad: None,
-                            },
                             eskf: EskfGnssSample {
                                 t_s: ((curr.ttag_us - init.start_ttag_us) as f64 * 1.0e-6) as f32,
                                 pos_ned_m: [pos_ned[0] as f32, pos_ned[1] as f32, pos_ned[2] as f32],
@@ -276,7 +270,9 @@ fn build_replay_steps(
                                 heading_rad: None,
                             },
                             pos_ecef_m: pos_ecef,
+                            vel_ecef_mps: [vel_ecef[0] as f32, vel_ecef[1] as f32, vel_ecef[2] as f32],
                             h_acc_m: g.h_acc_m as f32,
+                            speed_acc_mps: g.speed_acc_mps as f32,
                             dt_since_last_gnss_s,
                         })
                     } else {
@@ -387,7 +383,9 @@ fn run_loose(init: &RefInit, steps: &[ReplayStep]) -> FilterStats {
         let t1 = Instant::now();
         loose.fuse_reference_batch(
             step.gps.map(|g| g.pos_ecef_m),
+            step.gps.map(|g| g.vel_ecef_mps),
             step.gps.map_or(0.0, |g| g.h_acc_m),
+            step.gps.map_or(0.0, |g| g.speed_acc_mps),
             step.gps.map_or(1.0, |g| g.dt_since_last_gnss_s),
             step.gyro_radps,
             step.accel_mps2,
@@ -577,6 +575,34 @@ fn accel_at(ttag_us: i64, accel: &[AccelSample]) -> Option<[f64; 3]> {
             ])
         }
     }
+}
+
+fn ecef_to_ned_matrix(lat_deg: f64, lon_deg: f64) -> [[f64; 3]; 3] {
+    let lat = lat_deg.to_radians();
+    let lon = lon_deg.to_radians();
+    let (slat, clat) = lat.sin_cos();
+    let (slon, clon) = lon.sin_cos();
+    [
+        [-slat * clon, -slat * slon, clat],
+        [-slon, clon, 0.0],
+        [-clat * clon, -clat * slon, -slat],
+    ]
+}
+
+fn transpose3(a: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    [
+        [a[0][0], a[1][0], a[2][0]],
+        [a[0][1], a[1][1], a[2][1]],
+        [a[0][2], a[1][2], a[2][2]],
+    ]
+}
+
+fn mat_vec(a: [[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
+    [
+        a[0][0] * v[0] + a[0][1] * v[1] + a[0][2] * v[2],
+        a[1][0] * v[0] + a[1][1] * v[1] + a[1][2] * v[2],
+        a[2][0] * v[0] + a[2][1] * v[1] + a[2][2] * v[2],
+    ]
 }
 
 impl core::ops::AddAssign for FilterStats {

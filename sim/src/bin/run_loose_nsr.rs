@@ -64,6 +64,7 @@ struct Event {
     index: usize,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct RefInit {
     start_ttag_us: i64,
@@ -436,7 +437,9 @@ fn main() -> Result<()> {
                     if nhc_active || gps_pos_ecef.is_some() {
                         loose.fuse_reference_batch(
                             gps_pos_ecef,
+                            None,
                             gps_h_acc_m,
+                            0.0,
                             dt_since_last_gnss,
                             [
                                 curr.omega_radps[0] as f32,
@@ -525,7 +528,9 @@ fn main() -> Result<()> {
                 } else if nhc_active || gps_pos_ecef.is_some() {
                     loose.fuse_reference_batch(
                         gps_pos_ecef,
+                        None,
                         gps_h_acc_m,
+                        0.0,
                         dt_since_last_gnss,
                         [
                             curr.omega_radps[0] as f32,

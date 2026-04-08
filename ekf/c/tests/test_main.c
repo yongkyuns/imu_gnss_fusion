@@ -717,11 +717,37 @@ static void test_loose_reference_gps_update_moves_ecef_position_toward_measureme
   p_before = loose.p[0][0];
   before_err = fabsf((float)pos_meas[0] - loose.nominal.pn);
 
-  sf_loose_fuse_gps_reference(&loose, pos_meas, 0.5f, 1.0f);
+  sf_loose_fuse_gps_reference(&loose, pos_meas, NULL, 0.5f, 0.0f, 1.0f);
 
   after_err = fabsf((float)pos_meas[0] - loose.nominal.pn);
   TEST_ASSERT_TRUE(after_err < before_err);
   TEST_ASSERT_TRUE(loose.p[0][0] < p_before);
+}
+
+static void test_loose_reference_gps_velocity_update_moves_ecef_velocity_toward_measurement(void) {
+  sf_loose_t loose;
+  const float vel_meas[3] = {8.0f, -1.5f, 0.25f};
+  float before_err;
+  float after_err;
+  float p_before;
+
+  sf_loose_init(&loose, NULL, NULL);
+  loose.nominal.q0 = 1.0f;
+  loose.nominal.vn = 5.0f;
+  loose.nominal.ve = 0.5f;
+  loose.nominal.vd = -0.75f;
+  loose.qcs64[0] = 1.0;
+  loose.p[3][3] = 4.0f;
+  loose.p[4][4] = 4.0f;
+  loose.p[5][5] = 4.0f;
+  p_before = loose.p[3][3];
+  before_err = fabsf(vel_meas[0] - loose.nominal.vn);
+
+  sf_loose_fuse_gps_reference(&loose, NULL, vel_meas, 0.0f, 0.2f, 1.0f);
+
+  after_err = fabsf(vel_meas[0] - loose.nominal.vn);
+  TEST_ASSERT_TRUE(after_err < before_err);
+  TEST_ASSERT_TRUE(loose.p[3][3] < p_before);
 }
 
 static void test_loose_reference_nhc_reduces_lateral_and_vertical_car_velocity(void) {
@@ -1140,6 +1166,7 @@ int main(void) {
   RUN_TEST(test_loose_predict_with_zero_dt_is_noop);
   RUN_TEST(test_loose_nominal_predict_keeps_equatorial_rest_state_near_rest);
   RUN_TEST(test_loose_reference_gps_update_moves_ecef_position_toward_measurement);
+  RUN_TEST(test_loose_reference_gps_velocity_update_moves_ecef_velocity_toward_measurement);
   RUN_TEST(test_loose_reference_nhc_reduces_lateral_and_vertical_car_velocity);
   RUN_TEST(test_sensor_fusion_internal_mode_bootstraps_align_state);
   RUN_TEST(test_sensor_fusion_vehicle_speed_updates_forward_velocity);

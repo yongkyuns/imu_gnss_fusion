@@ -15,6 +15,7 @@ pub struct AlignCompareData {
     pub res_vel: Vec<Trace>,
     pub axis_err: Vec<Trace>,
     pub motion: Vec<Trace>,
+    pub flags: Vec<Trace>,
     pub roll_contrib: Vec<Trace>,
     pub pitch_contrib: Vec<Trace>,
     pub yaw_contrib: Vec<Trace>,
@@ -33,6 +34,7 @@ pub fn build_align_compare_traces(
             res_vel: Vec::new(),
             axis_err: Vec::new(),
             motion: Vec::new(),
+            flags: Vec::new(),
             roll_contrib: Vec::new(),
             pitch_contrib: Vec::new(),
             yaw_contrib: Vec::new(),
@@ -56,6 +58,11 @@ pub fn build_align_compare_traces(
     let mut down_err = Vec::<[f64; 2]>::new();
     let mut yaw_init = Vec::<[f64; 2]>::new();
     let mut final_alg_heading = Vec::<[f64; 2]>::new();
+    let mut stationary_trace = Vec::<[f64; 2]>::new();
+    let mut gravity_applied_trace = Vec::<[f64; 2]>::new();
+    let mut gravity_quasi_static_trace = Vec::<[f64; 2]>::new();
+    let mut turn_core_trace = Vec::<[f64; 2]>::new();
+    let mut straight_core_trace = Vec::<[f64; 2]>::new();
     let mount_ready_markers: Vec<[f64; 2]> = replay
         .mount_ready_times_s
         .iter()
@@ -94,6 +101,25 @@ pub fn build_align_compare_traces(
         diag_course.push([t, sample.course_rate_dps]);
         diag_lat.push([t, sample.a_lat_mps2]);
         diag_long.push([t, sample.a_long_mps2]);
+        stationary_trace.push([t, if sample.stationary { 1.0 } else { 0.0 }]);
+        gravity_applied_trace.push([t, if sample.upd_gravity { 1.0 } else { 0.0 }]);
+        gravity_quasi_static_trace.push([
+            t,
+            if sample.upd_gravity_quasi_static {
+                1.0
+            } else {
+                0.0
+            },
+        ]);
+        turn_core_trace.push([t, if sample.horiz_trace.turn_core_valid { 1.0 } else { 0.0 }]);
+        straight_core_trace.push([
+            t,
+            if sample.horiz_trace.straight_core_valid {
+                1.0
+            } else {
+                0.0
+            },
+        ]);
         if let Some(yaw_deg) = final_alg_heading_deg {
             final_alg_heading.push([t, yaw_deg]);
         }
@@ -194,8 +220,7 @@ pub fn build_align_compare_traces(
         motion: vec![Trace {
             name: "final ESF-ALG heading [deg]".to_string(),
             points: final_alg_heading,
-        },
-        Trace {
+        }, Trace {
             name: "mount ready".to_string(),
             points: mount_ready_markers,
         },
@@ -203,6 +228,28 @@ pub fn build_align_compare_traces(
             name: "EKF initialized".to_string(),
             points: ekf_initialized_markers,
         }],
+        flags: vec![
+            Trace {
+                name: "stationary".to_string(),
+                points: stationary_trace,
+            },
+            Trace {
+                name: "gravity applied".to_string(),
+                points: gravity_applied_trace,
+            },
+            Trace {
+                name: "gravity quasi-static".to_string(),
+                points: gravity_quasi_static_trace,
+            },
+            Trace {
+                name: "turn core valid".to_string(),
+                points: turn_core_trace,
+            },
+            Trace {
+                name: "straight core valid".to_string(),
+                points: straight_core_trace,
+            },
+        ],
         roll_contrib: vec![
             Trace {
                 name: "horiz accel".to_string(),
