@@ -525,8 +525,8 @@ void sf_loose_fuse_reference_batch(
     float gate_var_y = 0.1f * 0.1f;
     float gate_var_z = 0.05f * 0.05f;
     float dt_obs = 0.02f;
-    float var_y = 0.01f * (gate_var_y / dt_obs);
-    float var_z = 0.01f * (gate_var_z / dt_obs);
+    float var_y = gate_var_y / dt_obs;
+    float var_z = gate_var_z / dt_obs;
     if (!sf_loose_test_chi2_scalar(-vc_y_est, loose->p, h_y, gate_var_y)) {
       memcpy(h_rows[obs_count], h_y, sizeof(h_y));
       h_supports[obs_count] = SF_LOOSE_NHC_Y_SUPPORT;
@@ -615,8 +615,8 @@ void sf_loose_fuse_reference_batch_full(
     float gate_var_y = 0.1f * 0.1f;
     float gate_var_z = 0.05f * 0.05f;
     float dt_obs = 0.02f;
-    float var_y = 0.01f * (gate_var_y / dt_obs);
-    float var_z = 0.01f * (gate_var_z / dt_obs);
+    float var_y = gate_var_y / dt_obs;
+    float var_z = gate_var_z / dt_obs;
     if (!sf_loose_test_chi2_scalar(-vc_y_est, loose->p, h_y, gate_var_y)) {
       memcpy(h_rows[obs_count], h_y, sizeof(h_y));
       h_supports[obs_count] = SF_LOOSE_NHC_Y_SUPPORT;
@@ -775,13 +775,13 @@ static int sf_loose_append_reference_gps_observations(
       l32 = (vel_cov_e[2][1] - l31 * l21) / l22;
       l33 = sqrtf(fmaxf(vel_cov_e[2][2] - l31 * l31 - l32 * l32, 1.0e-9f));
       t_vel[0][0] = 1.0f / l11;
-      t_vel[0][1] = -l21 / (l11 * l22);
-      t_vel[0][2] = (l21 * l32 - l31 * l22) / (l11 * l22 * l33);
-      t_vel[1][0] = 0.0f;
+      t_vel[0][1] = 0.0f;
+      t_vel[0][2] = 0.0f;
+      t_vel[1][0] = -l21 / (l11 * l22);
       t_vel[1][1] = 1.0f / l22;
-      t_vel[1][2] = -l32 / (l22 * l33);
-      t_vel[2][0] = 0.0f;
-      t_vel[2][1] = 0.0f;
+      t_vel[1][2] = 0.0f;
+      t_vel[2][0] = (l21 * l32 - l31 * l22) / (l11 * l22 * l33);
+      t_vel[2][1] = -l32 / (l22 * l33);
       t_vel[2][2] = 1.0f / l33;
       for (int row = 0; row < 3; ++row) {
         vel_rows[row][3] = t_vel[row][0];
