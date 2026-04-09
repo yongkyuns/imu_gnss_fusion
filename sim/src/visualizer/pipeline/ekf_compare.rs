@@ -18,7 +18,7 @@ use super::super::math::{
 use super::super::model::{AlgEvent, EkfImuSource, HeadingSample, ImuPacket, NavAttEvent, Trace};
 use super::align_replay::{
     BootstrapConfig as AlignBootstrapConfig, ImuReplayConfig, build_align_replay,
-    esf_alg_flu_to_frd_mount_quat,
+    esf_alg_flu_to_frd_mount_quat, frd_mount_quat_to_esf_alg_flu_quat, quat_rpy_alg_deg,
 };
 use super::tag_time::fit_tag_ms_map;
 use super::timebase::MasterTimeline;
@@ -142,22 +142,21 @@ pub fn build_ekf_compare_traces(
     let mut nav_events_pvt = Vec::<(f64, NavPvtObs)>::new();
     let mut nav_events_nav2 = Vec::<(f64, NavPvtObs)>::new();
     for f in frames {
-        if ekf_imu_source == EkfImuSource::EsfAlg {
-            if let Some((_, roll, pitch, yaw)) = extract_esf_alg(f)
-                && let Some(t_ms) = super::super::math::nearest_master_ms(f.seq, &tl.masters)
-            {
-                alg_events.push(AlgEvent {
-                    t_ms,
-                    roll_deg: roll,
-                    pitch_deg: pitch,
-                    yaw_deg: yaw,
-                });
-            }
-            if let Some((_, status_code, _is_fine)) = extract_esf_alg_status(f)
-                && let Some(t_ms) = super::super::math::nearest_master_ms(f.seq, &tl.masters)
-            {
-                alg_status_events.push((t_ms, status_code as u8));
-            }
+        if let Some((_, roll, pitch, yaw)) = extract_esf_alg(f)
+            && let Some(t_ms) = super::super::math::nearest_master_ms(f.seq, &tl.masters)
+        {
+            alg_events.push(AlgEvent {
+                t_ms,
+                roll_deg: roll,
+                pitch_deg: pitch,
+                yaw_deg: yaw,
+            });
+        }
+        if ekf_imu_source == EkfImuSource::EsfAlg
+            && let Some((_, status_code, _is_fine)) = extract_esf_alg_status(f)
+            && let Some(t_ms) = super::super::math::nearest_master_ms(f.seq, &tl.masters)
+        {
+            alg_status_events.push((t_ms, status_code as u8));
         }
         if let Some((_itow, roll, pitch, heading)) = extract_nav_att(f) {
             if let Some(t_ms) = super::super::math::nearest_master_ms(f.seq, &tl.masters) {
@@ -403,6 +402,7 @@ pub fn build_ekf_compare_traces(
     let mut cur_align_q_vb: Option<[f32; 4]> = None;
 
     let mut origin_set = false;
+    let mut loose_seed_mount_q_vb: Option<[f32; 4]> = None;
     let mut ref_lat = 0.0_f64;
     let mut ref_lon = 0.0_f64;
     let mut ref_ecef = [0.0_f64; 3];
@@ -452,57 +452,29 @@ pub fn build_ekf_compare_traces(
         ubx_att_pitch.push([t, att.pitch_deg]);
         ubx_att_yaw.push([t, att.heading_deg]);
     }
-    let source_mount_ref = match ekf_imu_source {
-        EkfImuSource::Align => {
-            let mut traces = Vec::with_capacity(3);
-            let mut roll = Vec::<[f64; 2]>::with_capacity(align_events.len());
-            let mut pitch = Vec::<[f64; 2]>::with_capacity(align_events.len());
-            let mut yaw = Vec::<[f64; 2]>::with_capacity(align_events.len());
-            for (t_ms, q_vb) in &align_events {
-                let (r, p, y) = quat_rpy_deg(q_vb[0], q_vb[1], q_vb[2], q_vb[3]);
-                let t = rel_s(*t_ms);
-                roll.push([t, r]);
-                pitch.push([t, p]);
-                yaw.push([t, y]);
-            }
-            traces.push(Trace {
-                name: "Align mount roll [deg]".to_string(),
-                points: roll,
-            });
-            traces.push(Trace {
-                name: "Align mount pitch [deg]".to_string(),
-                points: pitch,
-            });
-            traces.push(Trace {
-                name: "Align mount yaw [deg]".to_string(),
-                points: yaw,
-            });
-            traces
-        }
-        EkfImuSource::EsfAlg => vec![
-            Trace {
-                name: "ESF-ALG mount roll [deg]".to_string(),
-                points: alg_events
-                    .iter()
-                    .map(|alg| [rel_s(alg.t_ms), alg.roll_deg])
-                    .collect(),
-            },
-            Trace {
-                name: "ESF-ALG mount pitch [deg]".to_string(),
-                points: alg_events
-                    .iter()
-                    .map(|alg| [rel_s(alg.t_ms), alg.pitch_deg])
-                    .collect(),
-            },
-            Trace {
-                name: "ESF-ALG mount yaw [deg]".to_string(),
-                points: alg_events
-                    .iter()
-                    .map(|alg| [rel_s(alg.t_ms), normalize_heading_deg(alg.yaw_deg)])
-                    .collect(),
-            },
-        ],
-    };
+    let esf_alg_mount_ref = vec![
+        Trace {
+            name: "ESF-ALG mount roll [deg]".to_string(),
+            points: alg_events
+                .iter()
+                .map(|alg| [rel_s(alg.t_ms), alg.roll_deg])
+                .collect(),
+        },
+        Trace {
+            name: "ESF-ALG mount pitch [deg]".to_string(),
+            points: alg_events
+                .iter()
+                .map(|alg| [rel_s(alg.t_ms), alg.pitch_deg])
+                .collect(),
+        },
+        Trace {
+            name: "ESF-ALG mount yaw [deg]".to_string(),
+            points: alg_events
+                .iter()
+                .map(|alg| [rel_s(alg.t_ms), normalize_heading_deg(alg.yaw_deg)])
+                .collect(),
+        },
+    ];
     for (_t_ms, nav2) in &nav2_events_for_map {
         map_nav2.push([nav2.lon_deg, nav2.lat_deg]);
     }
@@ -583,7 +555,7 @@ pub fn build_ekf_compare_traces(
         );
         let (loose_gyro_deg, loose_accel) = match ekf_imu_source {
             EkfImuSource::Align => {
-                if let Some(q_vb) = cur_align_q_vb {
+                if let Some(q_vb) = loose_seed_mount_q_vb {
                     vehicle_measurements_from_mount(
                         Some(q_vb),
                         [
@@ -719,14 +691,6 @@ pub fn build_ekf_compare_traces(
                 let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
                 let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
                 let t = rel_s(t_ms);
-                let loose_imu_ready = match ekf_imu_source {
-                    EkfImuSource::Align => cur_align_q_vb.is_some(),
-                    EkfImuSource::EsfAlg => cur_alg_status >= 3 && cur_alg.is_some(),
-                };
-                if loose.is_none() && loose_imu_ready {
-                    loose = Some(initialize_loose_from_nav(nav, ned, base_loose_predict_noise, cfg));
-                    loose_last_gps_update_ms = Some(t_ms);
-                }
                 let fusion_gnss = fusion_gnss_sample(nav, cfg, rel_s(t_ms) as f32);
                 let update = fusion_ref.process_gnss(fusion_gnss);
                 if update.mount_ready_changed && update.mount_ready {
@@ -734,6 +698,43 @@ pub fn build_ekf_compare_traces(
                 }
                 if update.ekf_initialized_now {
                     fusion_ekf_init_marker.push([t, nav.heading_vehicle_deg]);
+                }
+                if loose.is_none() {
+                    match ekf_imu_source {
+                        EkfImuSource::Align => {
+                            if update.mount_ready {
+                                if let Some(q_vb) = cur_align_q_vb.or_else(|| fusion_ref.mount_q_vb()) {
+                                    loose_seed_mount_q_vb = Some(q_vb);
+                                    loose = Some(initialize_loose_from_nav(
+                                        nav,
+                                        ned,
+                                        base_loose_predict_noise,
+                                        cfg,
+                                    ));
+                                    loose_last_gps_update_ms = Some(t_ms);
+                                }
+                            }
+                        }
+                        EkfImuSource::EsfAlg => {
+                            if cur_alg_status >= 3 && cur_alg.is_some() {
+                                loose_seed_mount_q_vb = cur_alg.map(|alg| {
+                                    let q = esf_alg_flu_to_frd_mount_quat(
+                                        alg.roll_deg,
+                                        alg.pitch_deg,
+                                        alg.yaw_deg,
+                                    );
+                                    [q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32]
+                                });
+                                loose = Some(initialize_loose_from_nav(
+                                    nav,
+                                    ned,
+                                    base_loose_predict_noise,
+                                    cfg,
+                                ));
+                                loose_last_gps_update_ms = Some(t_ms);
+                            }
+                        }
+                    }
                 }
                 if let Some(loose_ref) = loose.as_mut() {
                     let dt_since_last_gnss_s = loose_last_gps_update_ms
@@ -815,6 +816,7 @@ pub fn build_ekf_compare_traces(
                             gyro,
                             accel,
                             dt,
+                            loose_seed_mount_q_vb,
                             ref_ecef,
                             ref_lat,
                             ref_lon,
@@ -971,6 +973,7 @@ pub fn build_ekf_compare_traces(
                 gyro,
                 accel,
                 dt_safe,
+                loose_seed_mount_q_vb,
                 ref_ecef,
                 ref_lat,
                 ref_lon,
@@ -1380,19 +1383,19 @@ pub fn build_ekf_compare_traces(
     ];
     let mut loose_misalignment = vec![
         Trace {
-            name: "Loose mount roll [deg]".to_string(),
+            name: "Loose full mount roll [deg]".to_string(),
             points: loose_mount_roll,
         },
         Trace {
-            name: "Loose mount pitch [deg]".to_string(),
+            name: "Loose full mount pitch [deg]".to_string(),
             points: loose_mount_pitch,
         },
         Trace {
-            name: "Loose mount yaw [deg]".to_string(),
+            name: "Loose full mount yaw [deg]".to_string(),
             points: loose_mount_yaw,
         },
     ];
-    loose_misalignment.extend(source_mount_ref);
+    loose_misalignment.extend(esf_alg_mount_ref);
     let loose_meas_gyro = vec![
         Trace {
             name: "Loose vehicle gyro x [deg/s]".to_string(),
@@ -2148,6 +2151,7 @@ fn append_loose_sample(
     gyro: [f64; 3],
     accel: [f64; 3],
     dt_safe: f64,
+    seed_mount_q_vb: Option<[f32; 4]>,
     ref_ecef: [f64; 3],
     ref_lat: f64,
     ref_lon: f64,
@@ -2199,7 +2203,18 @@ fn append_loose_sample(
     cmp_att_roll.push([t_imu, roll]);
     cmp_att_pitch.push([t_imu, pitch]);
     cmp_att_yaw.push([t_imu, yaw]);
-    let (mount_r, mount_p, mount_y) = quat_rpy_deg(n.qcs0, n.qcs1, n.qcs2, n.qcs3);
+    let q_seed = seed_mount_q_vb
+        .map(|q| [q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64])
+        .unwrap_or([1.0, 0.0, 0.0, 0.0]);
+    let q_cs = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
+    let q_total_vb = quat_mul(quat_conj(q_cs), q_seed);
+    let q_total_flu = frd_mount_quat_to_esf_alg_flu_quat(q_total_vb);
+    let (mount_r, mount_p, mount_y) = quat_rpy_alg_deg(
+        q_total_flu[0],
+        q_total_flu[1],
+        q_total_flu[2],
+        q_total_flu[3],
+    );
     mount_roll.push([t_imu, mount_r]);
     mount_pitch.push([t_imu, mount_p]);
     mount_yaw.push([t_imu, mount_y]);

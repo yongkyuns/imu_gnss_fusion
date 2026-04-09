@@ -293,8 +293,9 @@ pub struct CLoose {
     pub pos_e64: [f64; 3],
     pub qcs64: [f64; 4],
     pub p64: [[f64; 24]; 24],
+    pub last_dx: [f32; 24],
     pub last_obs_count: i32,
-    pub last_obs_types: [i32; 5],
+    pub last_obs_types: [i32; 8],
 }
 
 impl Default for CLoose {
@@ -306,8 +307,9 @@ impl Default for CLoose {
             pos_e64: [0.0; 3],
             qcs64: [1.0, 0.0, 0.0, 0.0],
             p64: [[0.0; 24]; 24],
+            last_dx: [0.0; 24],
             last_obs_count: 0,
-            last_obs_types: [0; 5],
+            last_obs_types: [0; 8],
         }
     }
 }
@@ -474,12 +476,31 @@ unsafe extern "C" {
         speed_acc_mps: f32,
         dt_since_last_gnss_s: f32,
     );
+    fn sf_loose_fuse_gps_reference_full(
+        loose: *mut CLoose,
+        pos_ecef_m: *const f64,
+        vel_ecef_mps: *const f32,
+        h_acc_m: f32,
+        vel_std_ned_mps: *const f32,
+        dt_since_last_gnss_s: f32,
+    );
     fn sf_loose_fuse_reference_batch(
         loose: *mut CLoose,
         pos_ecef_m: *const f64,
         vel_ecef_mps: *const f32,
         h_acc_m: f32,
         speed_acc_mps: f32,
+        dt_since_last_gnss_s: f32,
+        gyro_radps: *const f32,
+        accel_mps2: *const f32,
+        dt_s: f32,
+    );
+    fn sf_loose_fuse_reference_batch_full(
+        loose: *mut CLoose,
+        pos_ecef_m: *const f64,
+        vel_ecef_mps: *const f32,
+        h_acc_m: f32,
+        vel_std_ned_mps: *const f32,
         dt_since_last_gnss_s: f32,
         gyro_radps: *const f32,
         accel_mps2: *const f32,
@@ -1113,6 +1134,34 @@ impl CLooseWrapper {
         };
     }
 
+    pub fn fuse_gps_reference_full(
+        &mut self,
+        pos_ecef_m: [f64; 3],
+        vel_ecef_mps: Option<[f32; 3]>,
+        h_acc_m: f32,
+        vel_std_ned_mps: Option<[f32; 3]>,
+        dt_since_last_gnss_s: f32,
+    ) {
+        let vel_ptr = vel_ecef_mps
+            .as_ref()
+            .map(|v| v.as_ptr())
+            .unwrap_or(core::ptr::null());
+        let vel_std_ptr = vel_std_ned_mps
+            .as_ref()
+            .map(|v| v.as_ptr())
+            .unwrap_or(core::ptr::null());
+        unsafe {
+            sf_loose_fuse_gps_reference_full(
+                &mut self.raw as *mut CLoose,
+                pos_ecef_m.as_ptr(),
+                vel_ptr,
+                h_acc_m,
+                vel_std_ptr,
+                dt_since_last_gnss_s,
+            )
+        };
+    }
+
     pub fn fuse_nhc_reference(&mut self, gyro_radps: [f32; 3], accel_mps2: [f32; 3], dt_s: f32) {
         unsafe {
             sf_loose_fuse_nhc_reference(
@@ -1150,6 +1199,44 @@ impl CLooseWrapper {
                 vel_ptr,
                 h_acc_m,
                 speed_acc_mps,
+                dt_since_last_gnss_s,
+                gyro_radps.as_ptr(),
+                accel_mps2.as_ptr(),
+                dt_s,
+            )
+        };
+    }
+
+    pub fn fuse_reference_batch_full(
+        &mut self,
+        pos_ecef_m: Option<[f64; 3]>,
+        vel_ecef_mps: Option<[f32; 3]>,
+        h_acc_m: f32,
+        vel_std_ned_mps: Option<[f32; 3]>,
+        dt_since_last_gnss_s: f32,
+        gyro_radps: [f32; 3],
+        accel_mps2: [f32; 3],
+        dt_s: f32,
+    ) {
+        let pos_ptr = pos_ecef_m
+            .as_ref()
+            .map(|v| v.as_ptr())
+            .unwrap_or(core::ptr::null());
+        let vel_ptr = vel_ecef_mps
+            .as_ref()
+            .map(|v| v.as_ptr())
+            .unwrap_or(core::ptr::null());
+        let vel_std_ptr = vel_std_ned_mps
+            .as_ref()
+            .map(|v| v.as_ptr())
+            .unwrap_or(core::ptr::null());
+        unsafe {
+            sf_loose_fuse_reference_batch_full(
+                &mut self.raw as *mut CLoose,
+                pos_ptr,
+                vel_ptr,
+                h_acc_m,
+                vel_std_ptr,
                 dt_since_last_gnss_s,
                 gyro_radps.as_ptr(),
                 accel_mps2.as_ptr(),

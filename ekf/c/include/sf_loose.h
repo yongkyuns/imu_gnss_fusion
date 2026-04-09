@@ -50,6 +50,7 @@ typedef struct sf_loose {
   double pos_e64[3];
   double qcs64[4];
   double p64[SF_LOOSE_ERROR_STATES][SF_LOOSE_ERROR_STATES];
+  float last_dx[SF_LOOSE_ERROR_STATES];
   int last_obs_count;
   int last_obs_types[8];
 } sf_loose_t;
@@ -82,6 +83,12 @@ void sf_loose_fuse_gps_reference(sf_loose_t *loose,
                                  float h_acc_m,
                                  float speed_acc_mps,
                                  float dt_since_last_gnss_s);
+void sf_loose_fuse_gps_reference_full(sf_loose_t *loose,
+                                      const double pos_ecef_m[3],
+                                      const float vel_ecef_mps[3],
+                                      float h_acc_m,
+                                      const float vel_std_ned_mps[3],
+                                      float dt_since_last_gnss_s);
 void sf_loose_fuse_reference_batch(sf_loose_t *loose,
                                    const double pos_ecef_m[3],
                                    const float vel_ecef_mps[3],
@@ -91,6 +98,15 @@ void sf_loose_fuse_reference_batch(sf_loose_t *loose,
                                    const float gyro_radps[3],
                                    const float accel_mps2[3],
                                    float dt_s);
+void sf_loose_fuse_reference_batch_full(sf_loose_t *loose,
+                                        const double pos_ecef_m[3],
+                                        const float vel_ecef_mps[3],
+                                        float h_acc_m,
+                                        const float vel_std_ned_mps[3],
+                                        float dt_since_last_gnss_s,
+                                        const float gyro_radps[3],
+                                        const float accel_mps2[3],
+                                        float dt_s);
 void sf_loose_fuse_nhc_reference(sf_loose_t *loose,
                                  const float gyro_radps[3],
                                  const float accel_mps2[3],
