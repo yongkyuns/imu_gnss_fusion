@@ -741,11 +741,20 @@ pub fn build_ekf_compare_traces(
                         .map(|last_t_ms| ((t_ms - last_t_ms) * 1.0e-3) as f32)
                         .unwrap_or(1.0)
                         .clamp(1.0e-3, 1.0);
-                    loose_ref.fuse_reference_batch(
+                    let vel_ecef = mat_vec(
+                        transpose3(ecef_to_ned_matrix(nav.lat_deg, nav.lon_deg)),
+                        [nav.vel_n_mps, nav.vel_e_mps, nav.vel_d_mps],
+                    );
+                    let vel_std_ned = [
+                        (nav.s_acc_mps * cfg.gnss_vel_r_scale.sqrt()) as f32,
+                        (nav.s_acc_mps * cfg.gnss_vel_r_scale.sqrt()) as f32,
+                        (nav.s_acc_mps * cfg.gnss_vel_r_scale.sqrt()) as f32,
+                    ];
+                    loose_ref.fuse_reference_batch_full(
                         Some(ecef),
-                        None,
+                        Some([vel_ecef[0] as f32, vel_ecef[1] as f32, vel_ecef[2] as f32]),
                         (nav.h_acc_m * cfg.gnss_pos_r_scale.sqrt()) as f32,
-                        0.0,
+                        Some(vel_std_ned),
                         dt_since_last_gnss_s,
                         loose_gyro_radps,
                         loose_accel_mps2,
@@ -882,11 +891,11 @@ pub fn build_ekf_compare_traces(
             }
             if let Some(loose_ref) = loose.as_mut() {
                 if !loose_batch_applied {
-                    loose_ref.fuse_reference_batch(
+                    loose_ref.fuse_reference_batch_full(
                         None,
                         None,
                         0.0,
-                        0.0,
+                        None,
                         1.0,
                         loose_gyro_radps,
                         loose_accel_mps2,
