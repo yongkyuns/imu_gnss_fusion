@@ -741,8 +741,7 @@ static int sf_loose_append_reference_gps_observations(
     float vel_rows[3][SF_LOOSE_ERROR_STATES] = {{0}};
     float vel_residual[3] = {0};
     float vel_r_diag[3] = {1.0f, 1.0f, 1.0f};
-    const float meas_var =
-        1.0f / fminf(fmaxf(dt_since_last_gnss_s, 1.0e-3f), 1.0f);
+    float vel_update_var[3] = {1.0f, 1.0f, 1.0f};
     if (vel_std_ned_mps != NULL) {
       float lat_meas, lon_meas, h_meas;
       float c_en_meas[3][3];
@@ -791,12 +790,16 @@ static int sf_loose_append_reference_gps_observations(
             t_vel[row][0] * (vel_ecef_mps[0] - loose->nominal.vn) +
             t_vel[row][1] * (vel_ecef_mps[1] - loose->nominal.ve) +
             t_vel[row][2] * (vel_ecef_mps[2] - loose->nominal.vd);
+        vel_update_var[row] = 1.0f;
       }
     } else if (speed_acc_mps > 0.0f) {
       const float vel_var = fmaxf(speed_acc_mps * speed_acc_mps, 1.0e-4f);
       vel_r_diag[0] = vel_var;
       vel_r_diag[1] = vel_var;
       vel_r_diag[2] = vel_var;
+      vel_update_var[0] = vel_var;
+      vel_update_var[1] = vel_var;
+      vel_update_var[2] = vel_var;
       vel_rows[0][3] = 1.0f;
       vel_rows[1][4] = 1.0f;
       vel_rows[2][5] = 1.0f;
@@ -811,7 +814,7 @@ static int sf_loose_append_reference_gps_observations(
         h_supports[obs_count] = NULL;
         h_support_lens[obs_count] = 0;
         residuals[obs_count] = vel_residual[row];
-        variances[obs_count] = meas_var;
+        variances[obs_count] = vel_update_var[row];
         if (obs_types != NULL) {
           obs_types[obs_count] = row + 4;
         }

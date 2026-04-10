@@ -705,12 +705,14 @@ pub fn build_ekf_compare_traces(
                             if update.mount_ready {
                                 if let Some(q_vb) = cur_align_q_vb.or_else(|| fusion_ref.mount_q_vb()) {
                                     loose_seed_mount_q_vb = Some(q_vb);
-                                    loose = Some(initialize_loose_from_nav(
+                                    let mut loose_init = initialize_loose_from_nav(
                                         nav,
                                         ned,
                                         base_loose_predict_noise,
                                         cfg,
-                                    ));
+                                    );
+                                    tighten_seeded_loose_mount_cov(&mut loose_init, 0.25);
+                                    loose = Some(loose_init);
                                     loose_last_gps_update_ms = Some(t_ms);
                                 }
                             }
@@ -725,12 +727,14 @@ pub fn build_ekf_compare_traces(
                                     );
                                     [q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32]
                                 });
-                                loose = Some(initialize_loose_from_nav(
+                                let mut loose_init = initialize_loose_from_nav(
                                     nav,
                                     ned,
                                     base_loose_predict_noise,
                                     cfg,
-                                ));
+                                );
+                                tighten_seeded_loose_mount_cov(&mut loose_init, 0.25);
+                                loose = Some(loose_init);
                                 loose_last_gps_update_ms = Some(t_ms);
                             }
                         }
@@ -1895,6 +1899,19 @@ fn initialize_loose_from_nav(
     loose
 }
 
+fn tighten_seeded_loose_mount_cov(loose: &mut CLooseWrapper, sigma_deg: f32) {
+    let mut p = *loose.covariance();
+    let var = deg2rad(sigma_deg as f64).powi(2) as f32;
+    for i in 21..24 {
+        for j in 0..24 {
+            p[i][j] = 0.0;
+            p[j][i] = 0.0;
+        }
+        p[i][i] = var;
+    }
+    loose.set_covariance(p);
+}
+
 fn build_align_mount_events(
     frames: &[UbxFrame],
     tl: &MasterTimeline,
@@ -2216,7 +2233,7 @@ fn append_loose_sample(
         .map(|q| [q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64])
         .unwrap_or([1.0, 0.0, 0.0, 0.0]);
     let q_cs = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
-    let q_total_vb = quat_mul(quat_conj(q_cs), q_seed);
+    let q_total_vb = quat_mul(q_cs, q_seed);
     let q_total_flu = frd_mount_quat_to_esf_alg_flu_quat(q_total_vb);
     let (mount_r, mount_p, mount_y) = quat_rpy_alg_deg(
         q_total_flu[0],

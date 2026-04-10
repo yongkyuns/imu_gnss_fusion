@@ -1022,6 +1022,10 @@ impl CLooseWrapper {
         &self.raw.last_obs_types[..count]
     }
 
+    pub fn last_dx(&self) -> &[f32; 24] {
+        &self.raw.last_dx
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn init_from_reference_state(
         &mut self,
