@@ -80,7 +80,7 @@ impl Default for EkfCompareConfig {
             predict_imu_decimation: 1,
             yaw_init_speed_mps: 0.0 / 3.6,
             gnss_pos_r_scale: 0.1,
-            gnss_vel_r_scale: 0.1,
+            gnss_vel_r_scale: 3.0,
             predict_noise: None,
             loose_predict_noise: None,
         }
@@ -195,9 +195,9 @@ pub fn build_ekf_compare_traces(
     nav_events_pvt.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     let nav_pvt_events_for_map = nav_events_pvt.clone();
     let nav2_events_for_map = nav_events_nav2.clone();
-    let final_alg_q = alg_events.last().map(|alg| {
-        esf_alg_flu_to_frd_mount_quat(alg.roll_deg, alg.pitch_deg, alg.yaw_deg)
-    });
+    let final_alg_q = alg_events
+        .last()
+        .map(|alg| esf_alg_flu_to_frd_mount_quat(alg.roll_deg, alg.pitch_deg, alg.yaw_deg));
     let align_events = if ekf_imu_source == EkfImuSource::Align {
         build_align_mount_events(frames, tl, ImuReplayConfig::default())
     } else {
@@ -584,8 +584,7 @@ pub fn build_ekf_compare_traces(
                         deg2rad(alg.roll_deg),
                     );
                     let mut loose_gyro = mat_vec(r_sb, [pkt.gx_dps, pkt.gy_dps, pkt.gz_dps]);
-                    let mut loose_accel =
-                        mat_vec(r_sb, [pkt.ax_mps2, pkt.ay_mps2, pkt.az_mps2]);
+                    let mut loose_accel = mat_vec(r_sb, [pkt.ax_mps2, pkt.ay_mps2, pkt.az_mps2]);
                     loose_gyro[1] = -loose_gyro[1];
                     loose_gyro[2] = -loose_gyro[2];
                     loose_accel[1] = -loose_accel[1];
@@ -689,7 +688,6 @@ pub fn build_ekf_compare_traces(
                     origin_set = true;
                 }
                 let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
-                let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
                 let t = rel_s(t_ms);
                 let fusion_gnss = fusion_gnss_sample(nav, cfg, rel_s(t_ms) as f32);
                 let update = fusion_ref.process_gnss(fusion_gnss);
@@ -703,15 +701,15 @@ pub fn build_ekf_compare_traces(
                     match ekf_imu_source {
                         EkfImuSource::Align => {
                             if update.mount_ready {
-                                if let Some(q_vb) = cur_align_q_vb.or_else(|| fusion_ref.mount_q_vb()) {
+                                if let Some(q_vb) =
+                                    cur_align_q_vb.or_else(|| fusion_ref.mount_q_vb())
+                                {
                                     loose_seed_mount_q_vb = Some(q_vb);
-                                    let mut loose_init = initialize_loose_from_nav(
+                                    let loose_init = initialize_loose_from_nav(
                                         nav,
-                                        ned,
                                         base_loose_predict_noise,
                                         cfg,
                                     );
-                                    tighten_seeded_loose_mount_cov(&mut loose_init, 0.25);
                                     loose = Some(loose_init);
                                     loose_last_gps_update_ms = Some(t_ms);
                                 }
@@ -727,13 +725,8 @@ pub fn build_ekf_compare_traces(
                                     );
                                     [q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32]
                                 });
-                                let mut loose_init = initialize_loose_from_nav(
-                                    nav,
-                                    ned,
-                                    base_loose_predict_noise,
-                                    cfg,
-                                );
-                                tighten_seeded_loose_mount_cov(&mut loose_init, 0.25);
+                                let loose_init =
+                                    initialize_loose_from_nav(nav, base_loose_predict_noise, cfg);
                                 loose = Some(loose_init);
                                 loose_last_gps_update_ms = Some(t_ms);
                             }
@@ -929,7 +922,8 @@ pub fn build_ekf_compare_traces(
                 }
             }
             if let Some(loose_ref) = loose.as_ref() {
-                let (loose_pos_ned, _, _) = loose_display_state(loose_ref, ref_ecef, ref_lat, ref_lon);
+                let (loose_pos_ned, _, _) =
+                    loose_display_state(loose_ref, ref_ecef, ref_lat, ref_lon);
                 let (loose_lat, loose_lon, _loose_h) = ned_to_lla_exact(
                     loose_pos_ned[0],
                     loose_pos_ned[1],
@@ -945,7 +939,9 @@ pub fn build_ekf_compare_traces(
 
         let t_imu = rel_s(pkt.t_ms);
         let dt_safe = dt.max(1.0e-6);
-        if let Some(eskf_ref) = fusion_ref.eskf() && !eskf_initialized_this_pkt {
+        if let Some(eskf_ref) = fusion_ref.eskf()
+            && !eskf_initialized_this_pkt
+        {
             append_eskf_sample(
                 eskf_ref,
                 t_imu,
@@ -1862,54 +1858,26 @@ impl Lcg64 {
 
 fn initialize_loose_from_nav(
     nav: NavPvtObs,
-    _ned: [f64; 3],
     noise: LoosePredictNoise,
     cfg: EkfCompareConfig,
 ) -> CLooseWrapper {
     let mut loose = CLooseWrapper::new(noise);
     let gnss = fusion_gnss_sample(nav, cfg, 0.0);
     let p_diag = default_loose_reference_p_diag(gnss);
-    let q_ns = yaw_quat_f32(initial_yaw_from_nav(nav));
-    let q_es = quat_mul(quat_conj(quat_ecef_to_ned(nav.lat_deg, nav.lon_deg)), [
-        q_ns[0] as f64,
-        q_ns[1] as f64,
-        q_ns[2] as f64,
-        q_ns[3] as f64,
-    ]);
     let vel_ecef = mat_vec(
         transpose3(ecef_to_ned_matrix(nav.lat_deg, nav.lon_deg)),
         [nav.vel_n_mps, nav.vel_e_mps, nav.vel_d_mps],
     );
-    loose.init_from_reference_ecef_state(
-        [
-            q_es[0] as f32,
-            q_es[1] as f32,
-            q_es[2] as f32,
-            q_es[3] as f32,
-        ],
+    loose.init_seeded_vehicle_from_nav_ecef_state(
+        initial_yaw_from_nav(nav),
+        nav.lat_deg,
+        nav.lon_deg,
         lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m),
         [vel_ecef[0] as f32, vel_ecef[1] as f32, vel_ecef[2] as f32],
-        [0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0],
-        [1.0, 1.0, 1.0],
-        [1.0, 1.0, 1.0],
-        [1.0, 0.0, 0.0, 0.0],
         Some(p_diag),
+        None,
     );
     loose
-}
-
-fn tighten_seeded_loose_mount_cov(loose: &mut CLooseWrapper, sigma_deg: f32) {
-    let mut p = *loose.covariance();
-    let var = deg2rad(sigma_deg as f64).powi(2) as f32;
-    for i in 21..24 {
-        for j in 0..24 {
-            p[i][j] = 0.0;
-            p[j][i] = 0.0;
-        }
-        p[i][i] = var;
-    }
-    loose.set_covariance(p);
 }
 
 fn build_align_mount_events(
@@ -1964,11 +1932,6 @@ fn initial_yaw_from_nav(nav: NavPvtObs) -> f32 {
     }
 }
 
-fn yaw_quat_f32(yaw_rad: f32) -> [f32; 4] {
-    let half = 0.5 * yaw_rad;
-    [half.cos(), 0.0, 0.0, half.sin()]
-}
-
 fn default_loose_reference_p_diag(gnss: sensor_fusion::fusion::FusionGnssSample) -> [f32; 24] {
     const DEFAULT_GYRO_BIAS_SIGMA_DPS: f32 = 0.125;
     const DEFAULT_ACCEL_BIAS_SIGMA_MPS2: f32 = 0.075;
@@ -2018,7 +1981,11 @@ fn default_loose_reference_p_diag(gnss: sensor_fusion::fusion::FusionGnssSample)
     p_diag
 }
 
-fn fusion_gnss_sample(nav: NavPvtObs, cfg: EkfCompareConfig, t_s: f32) -> sensor_fusion::fusion::FusionGnssSample {
+fn fusion_gnss_sample(
+    nav: NavPvtObs,
+    cfg: EkfCompareConfig,
+    t_s: f32,
+) -> sensor_fusion::fusion::FusionGnssSample {
     let speed_h = nav.vel_n_mps.hypot(nav.vel_e_mps);
     let heading_rad = if nav.head_veh_valid {
         Some(deg2rad(nav.heading_vehicle_deg) as f32)
@@ -2219,20 +2186,25 @@ fn append_loose_sample(
     cmp_pos_n.push([t_imu, pos_ned[0]]);
     cmp_pos_e.push([t_imu, pos_ned[1]]);
     cmp_pos_d.push([t_imu, pos_ned[2]]);
-    let c_n_v = quat_to_rotmat_f64(q_ns);
-    let vel_vehicle = mat_vec(transpose3(c_n_v), vel_ned);
+    let q_cs = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
+    let q_nc = quat_mul(q_ns, quat_conj(q_cs));
+    let c_n_c = quat_to_rotmat_f64(q_nc);
+    let vel_vehicle = mat_vec(transpose3(c_n_c), vel_ned);
     cmp_vel_forward.push([t_imu, vel_vehicle[0]]);
     cmp_vel_lateral.push([t_imu, vel_vehicle[1]]);
     cmp_vel_vertical.push([t_imu, vel_vehicle[2]]);
-    let (roll, pitch, yaw) =
-        quat_rpy_deg(q_ns[0] as f32, q_ns[1] as f32, q_ns[2] as f32, q_ns[3] as f32);
+    let (roll, pitch, yaw) = quat_rpy_deg(
+        q_nc[0] as f32,
+        q_nc[1] as f32,
+        q_nc[2] as f32,
+        q_nc[3] as f32,
+    );
     cmp_att_roll.push([t_imu, roll]);
     cmp_att_pitch.push([t_imu, pitch]);
     cmp_att_yaw.push([t_imu, yaw]);
     let q_seed = seed_mount_q_vb
         .map(|q| [q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64])
         .unwrap_or([1.0, 0.0, 0.0, 0.0]);
-    let q_cs = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
     let q_total_vb = quat_mul(q_cs, q_seed);
     let q_total_flu = frd_mount_quat_to_esf_alg_flu_quat(q_total_vb);
     let (mount_r, mount_p, mount_y) = quat_rpy_alg_deg(
@@ -2246,9 +2218,9 @@ fn append_loose_sample(
     mount_yaw.push([t_imu, mount_y]);
 
     let gravity_v = [
-        c_n_v[2][0] * GRAVITY_MPS2 as f64,
-        c_n_v[2][1] * GRAVITY_MPS2 as f64,
-        c_n_v[2][2] * GRAVITY_MPS2 as f64,
+        c_n_c[2][0] * GRAVITY_MPS2 as f64,
+        c_n_c[2][1] * GRAVITY_MPS2 as f64,
+        c_n_c[2][2] * GRAVITY_MPS2 as f64,
     ];
     // The visualizer feeds loose with IMU samples already converted into the vehicle frame.
     // Mirror the runtime correction convention here: corrected = scale * raw + bias.
@@ -2344,10 +2316,6 @@ fn ecef_to_ned_matrix(lat_deg: f64, lon_deg: f64) -> [[f64; 3]; 3] {
     ]
 }
 
-fn quat_conj(q: [f64; 4]) -> [f64; 4] {
-    [q[0], -q[1], -q[2], -q[3]]
-}
-
 fn quat_mul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
     [
         a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
@@ -2355,6 +2323,10 @@ fn quat_mul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
         a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
         a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0],
     ]
+}
+
+fn quat_conj(q: [f64; 4]) -> [f64; 4] {
+    [q[0], -q[1], -q[2], -q[3]]
 }
 
 fn quat_ecef_to_ned(lat_deg: f64, lon_deg: f64) -> [f64; 4] {

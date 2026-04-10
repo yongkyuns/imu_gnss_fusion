@@ -40,6 +40,8 @@ struct Args {
     misalignment: EkfImuSource,
     #[arg(long)]
     dump_align_axis_time_s: Option<f64>,
+    #[arg(long)]
+    dump_loose_time_s: Option<f64>,
     #[arg(long, default_value_t = 3.0)]
     dump_window_s: f64,
     #[arg(long, default_value_t = 0)]
@@ -52,6 +54,8 @@ struct Args {
     ekf_predict_imu_decimation: usize,
     #[arg(long)]
     ekf_predict_imu_lpf_cutoff_hz: Option<f64>,
+    #[arg(long)]
+    gnss_vel_r_scale: Option<f64>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -68,6 +72,9 @@ fn main() -> Result<()> {
     let ekf_cfg = EkfCompareConfig {
         predict_imu_decimation: args.ekf_predict_imu_decimation.max(1),
         predict_imu_lpf_cutoff_hz: args.ekf_predict_imu_lpf_cutoff_hz,
+        gnss_vel_r_scale: args
+            .gnss_vel_r_scale
+            .unwrap_or(EkfCompareConfig::default().gnss_vel_r_scale),
         ..EkfCompareConfig::default()
     };
 
@@ -97,12 +104,13 @@ fn main() -> Result<()> {
         tmax
     );
     eprintln!(
-        "[profile] ekf-only predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={}",
+        "[profile] ekf-only predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} gnss_vel_r_scale={:.3}",
         ekf_cfg.predict_imu_decimation,
         ekf_cfg
             .predict_imu_lpf_cutoff_hz
             .map(|v| format!("{v:.3}"))
-            .unwrap_or_else(|| "off".to_string())
+            .unwrap_or_else(|| "off".to_string()),
+        ekf_cfg.gnss_vel_r_scale,
     );
     for (name, nt, np) in [
         group_stats("speed", &data.speed),
@@ -206,6 +214,32 @@ fn main() -> Result<()> {
         dump_traces_near_time(
             "align_axis_err",
             &data.align_axis_err,
+            t_s,
+            args.dump_window_s,
+        );
+    }
+    if let Some(t_s) = args.dump_loose_time_s {
+        dump_traces_near_time(
+            "loose_cmp_vel",
+            &data.loose_cmp_vel,
+            t_s,
+            args.dump_window_s,
+        );
+        dump_traces_near_time(
+            "loose_cmp_att",
+            &data.loose_cmp_att,
+            t_s,
+            args.dump_window_s,
+        );
+        dump_traces_near_time(
+            "loose_misalignment",
+            &data.loose_misalignment,
+            t_s,
+            args.dump_window_s,
+        );
+        dump_traces_near_time(
+            "loose_bias_accel",
+            &data.loose_bias_accel,
             t_s,
             args.dump_window_s,
         );
