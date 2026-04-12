@@ -346,6 +346,21 @@ The corrected vehicle-frame velocity is:
   v_c = C_{cs}(q_{cs}) v_s.
 \]
 
+Because the runtime pre-rotates raw IMU samples by the frozen coarse seed
+\(q_{vb}^{0}\) before ESKF prediction, \(q_{cs}\) is a seeded-frame-to-vehicle
+correction. The physical vehicle-to-body mount reported for comparison is
+therefore
+\[
+  q_{vb}
+  =
+  q_{vb}^{0}
+  \otimes
+  q_{cs}^{-1},
+\]
+not \(q_{cs} \otimes q_{vb}^{0}\). The latter composition is only a legacy
+diagnostic and will appear with the wrong sign when the seed yaw error is
+absorbed by \(q_{cs}\).
+
 The body/vehicle speed measurement along \(x\) is:
 \[
   h_{\text{speed},x}(x) = e_x^T v_c.
@@ -474,7 +489,10 @@ The residual mount error is left-injected:
 \]
 followed by normalization.
 
-This is intentionally the same injection side as loose currently uses for its residual mount state.
+The injection side is the same as loose currently uses for its residual mount
+state, but the ESKF residual has a different reporting composition because the
+runtime has already applied the frozen coarse mount to the IMU before ESKF
+propagation.
 
 \subsection{Covariance Reset}
 
@@ -694,21 +712,36 @@ This points to a shared NHC/covariance/convention issue rather than a single bad
 \]
 For \(v_x>0\), a negative lateral innovation would normally produce a negative direct yaw correction if the direct mount-yaw gain dominates. In the replay, however, both NHC innovation sums are negative while the cumulative residual mount-yaw increments are positive. Therefore the effective replay gain from NHC innovation to residual mount yaw is negative. The practical conclusion is that the real log is being driven by coupled covariance structure and/or residual-mount convention, not by the simple direct lateral Jacobian term alone.
 
-\subsection{Recommended Next Experiments}
+\subsection{Convention Check Result}
 
-The next step should be a convention A/B test, not process-noise tuning.
+The convention A/B test showed that \(q_{vb}^{0}\otimes q_{cs}^{-1}\) is the
+correct physical ESKF mount composition for the current runtime. In noisy
+gnss-ins-sim replay, the old plotted composition made the ESKF yaw appear to
+move in the wrong direction, while the corrected composition tracks the true
+mount much better:
+\[
+  q_{\text{full}} = q_{vb}^{0}\otimes q_{cs}^{-1}.
+\]
+
+This means the lateral NHC row was not necessarily pushing the physical mount
+the wrong way in the simulation runs; the main error was the diagnostic/reporting
+composition. The inverse-residual NHC model remains a useful diagnostic only if
+future real-log replays still show disagreement after plotting and evaluation
+use the corrected composition.
+
+\subsection{Remaining Experiments}
 
 \begin{enumerate}[leftmargin=1.5em]
-\item \textbf{Plot both full-mount compositions.}
-Keep the current plotted composition,
+\item \textbf{Keep both full-mount compositions visible during debug.}
+Use the physical ESKF composition,
 \[
-  q_{\text{plot,A}} = q_{cs} \otimes q_{vb}^{0},
+  q_{\text{full}} = q_{vb}^{0} \otimes q_{cs}^{-1},
 \]
-and add the physically motivated OAN-style composition,
+as the primary trace, and retain the legacy composition,
 \[
-  q_{\text{plot,B}} = q_{vb}^{0} \otimes q_{cs}^{-1}.
+  q_{\text{legacy}} = q_{cs} \otimes q_{vb}^{0},
 \]
-If \(q_{\text{plot,B}}\) tracks ESF-ALG better, the main error may be comparison convention rather than filter convergence.
+only as a sign/convention diagnostic.
 
 \item \textbf{Test inverse residual mount in the NHC measurement model.}
 Compare the current prediction

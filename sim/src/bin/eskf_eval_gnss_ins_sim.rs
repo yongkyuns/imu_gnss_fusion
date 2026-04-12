@@ -210,8 +210,11 @@ fn main() -> Result<()> {
                     eskf.nominal.qcs2,
                     eskf.nominal.qcs3,
                 ]);
-                let q_full_a = quat_mul(q_cs, seed_q);
-                let q_full_b = quat_mul(seed_q, quat_conj(q_cs));
+                // ESKF pre-rotates IMU samples by the frozen seed mount before
+                // prediction. q_cs maps that seeded frame back to vehicle, so the
+                // physical vehicle-to-body mount is seed * inv(q_cs).
+                let q_full_a_legacy = quat_mul(q_cs, seed_q);
+                let q_full = quat_mul(seed_q, quat_conj(q_cs));
                 let speed_mps = horiz_speed(s.vel_ned_mps);
                 let course_rate_dps = prev_gnss
                     .map(|prev| course_rate_deg(prev, s))
@@ -234,18 +237,18 @@ fn main() -> Result<()> {
                     qcs_q1: q_cs[1],
                     qcs_q2: q_cs[2],
                     qcs_q3: q_cs[3],
-                    full_a_q0: q_full_a[0],
-                    full_a_q1: q_full_a[1],
-                    full_a_q2: q_full_a[2],
-                    full_a_q3: q_full_a[3],
-                    full_b_q0: q_full_b[0],
-                    full_b_q1: q_full_b[1],
-                    full_b_q2: q_full_b[2],
-                    full_b_q3: q_full_b[3],
+                    full_a_q0: q_full_a_legacy[0],
+                    full_a_q1: q_full_a_legacy[1],
+                    full_a_q2: q_full_a_legacy[2],
+                    full_a_q3: q_full_a_legacy[3],
+                    full_b_q0: q_full[0],
+                    full_b_q1: q_full[1],
+                    full_b_q2: q_full[2],
+                    full_b_q3: q_full[3],
                     seed_err_deg: quat_angle_deg(seed_q, q_truth),
                     align_err_deg: quat_angle_deg(q_align, q_truth),
-                    full_a_err_deg: quat_angle_deg(q_full_a, q_truth),
-                    full_b_err_deg: quat_angle_deg(q_full_b, q_truth),
+                    full_a_err_deg: quat_angle_deg(q_full_a_legacy, q_truth),
+                    full_b_err_deg: quat_angle_deg(q_full, q_truth),
                     qcs_angle_deg: quat_angle_deg(q_cs, [1.0, 0.0, 0.0, 0.0]),
                     speed_mps,
                     course_rate_dps,
@@ -285,22 +288,22 @@ fn main() -> Result<()> {
             .unwrap_or_else(|| "none".to_string())
     );
     println!(
-        "final_quat_err_deg seed={:.3} align={:.3} full_A={:.3} full_B={:.3}",
-        last.seed_err_deg, last.align_err_deg, last.full_a_err_deg, last.full_b_err_deg
+        "final_quat_err_deg seed={:.3} align={:.3} full(seed*inv_qcs)={:.3} legacy(qcs*seed)={:.3}",
+        last.seed_err_deg, last.align_err_deg, last.full_b_err_deg, last.full_a_err_deg
     );
     println!(
-        "tail60_mean_quat_err_deg seed={:.3} align={:.3} full_A={:.3} full_B={:.3}",
+        "tail60_mean_quat_err_deg seed={:.3} align={:.3} full(seed*inv_qcs)={:.3} legacy(qcs*seed)={:.3}",
         mean_of(tail.iter().map(|s| s.seed_err_deg)),
         mean_of(tail.iter().map(|s| s.align_err_deg)),
-        mean_of(tail.iter().map(|s| s.full_a_err_deg)),
         mean_of(tail.iter().map(|s| s.full_b_err_deg)),
+        mean_of(tail.iter().map(|s| s.full_a_err_deg)),
     );
     println!(
-        "tail60_max_quat_err_deg seed={:.3} align={:.3} full_A={:.3} full_B={:.3}",
+        "tail60_max_quat_err_deg seed={:.3} align={:.3} full(seed*inv_qcs)={:.3} legacy(qcs*seed)={:.3}",
         max_of(tail.iter().map(|s| s.seed_err_deg)),
         max_of(tail.iter().map(|s| s.align_err_deg)),
-        max_of(tail.iter().map(|s| s.full_a_err_deg)),
         max_of(tail.iter().map(|s| s.full_b_err_deg)),
+        max_of(tail.iter().map(|s| s.full_a_err_deg)),
     );
 
     if let Some(path) = &args.residual_csv {
@@ -314,10 +317,7 @@ fn main() -> Result<()> {
 fn tail_window(samples: &[ResidualSample], window_s: f64) -> &[ResidualSample] {
     let end_t = samples.last().map(|s| s.t_s).unwrap_or(0.0);
     let start_t = end_t - window_s;
-    let start_idx = samples
-        .iter()
-        .position(|s| s.t_s >= start_t)
-        .unwrap_or(0);
+    let start_idx = samples.iter().position(|s| s.t_s >= start_t).unwrap_or(0);
     &samples[start_idx..]
 }
 
@@ -367,7 +367,8 @@ fn load_imu_samples(args: &Args) -> Result<Vec<ImuSample>> {
         SignalSource::Meas => format!("accel-{}.csv", args.data_key),
     };
     let gyro_path = args.data_dir.join(&gyro_name);
-    let gyro = read_matrix3_csv(&gyro_path).with_context(|| format!("failed to load {}", gyro_name))?;
+    let gyro =
+        read_matrix3_csv(&gyro_path).with_context(|| format!("failed to load {}", gyro_name))?;
     let accel = read_matrix3_csv(&args.data_dir.join(&accel_name))
         .with_context(|| format!("failed to load {}", accel_name))?;
     if time.len() != gyro.len() || time.len() != accel.len() {
@@ -566,21 +567,44 @@ fn write_residual_csv(path: &Path, samples: &[ResidualSample]) -> Result<()> {
     let mut w = BufWriter::new(file);
     writeln!(
         w,
-        "t_s,truth_q0,truth_q1,truth_q2,truth_q3,seed_q0,seed_q1,seed_q2,seed_q3,align_q0,align_q1,align_q2,align_q3,qcs_q0,qcs_q1,qcs_q2,qcs_q3,full_a_q0,full_a_q1,full_a_q2,full_a_q3,full_b_q0,full_b_q1,full_b_q2,full_b_q3,seed_err_deg,align_err_deg,full_a_err_deg,full_b_err_deg,qcs_angle_deg,speed_mps,course_rate_dps"
+        "t_s,truth_q0,truth_q1,truth_q2,truth_q3,seed_q0,seed_q1,seed_q2,seed_q3,align_q0,align_q1,align_q2,align_q3,qcs_q0,qcs_q1,qcs_q2,qcs_q3,legacy_full_a_q0,legacy_full_a_q1,legacy_full_a_q2,legacy_full_a_q3,full_seed_inv_qcs_q0,full_seed_inv_qcs_q1,full_seed_inv_qcs_q2,full_seed_inv_qcs_q3,seed_err_deg,align_err_deg,legacy_full_a_err_deg,full_seed_inv_qcs_err_deg,qcs_angle_deg,speed_mps,course_rate_dps"
     )?;
     for s in samples {
         writeln!(
             w,
             "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             s.t_s,
-            s.truth_q0, s.truth_q1, s.truth_q2, s.truth_q3,
-            s.seed_q0, s.seed_q1, s.seed_q2, s.seed_q3,
-            s.align_q0, s.align_q1, s.align_q2, s.align_q3,
-            s.qcs_q0, s.qcs_q1, s.qcs_q2, s.qcs_q3,
-            s.full_a_q0, s.full_a_q1, s.full_a_q2, s.full_a_q3,
-            s.full_b_q0, s.full_b_q1, s.full_b_q2, s.full_b_q3,
-            s.seed_err_deg, s.align_err_deg, s.full_a_err_deg, s.full_b_err_deg,
-            s.qcs_angle_deg, s.speed_mps, s.course_rate_dps,
+            s.truth_q0,
+            s.truth_q1,
+            s.truth_q2,
+            s.truth_q3,
+            s.seed_q0,
+            s.seed_q1,
+            s.seed_q2,
+            s.seed_q3,
+            s.align_q0,
+            s.align_q1,
+            s.align_q2,
+            s.align_q3,
+            s.qcs_q0,
+            s.qcs_q1,
+            s.qcs_q2,
+            s.qcs_q3,
+            s.full_a_q0,
+            s.full_a_q1,
+            s.full_a_q2,
+            s.full_a_q3,
+            s.full_b_q0,
+            s.full_b_q1,
+            s.full_b_q2,
+            s.full_b_q3,
+            s.seed_err_deg,
+            s.align_err_deg,
+            s.full_a_err_deg,
+            s.full_b_err_deg,
+            s.qcs_angle_deg,
+            s.speed_mps,
+            s.course_rate_dps,
         )?;
     }
     Ok(())

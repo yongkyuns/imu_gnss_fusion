@@ -66,12 +66,12 @@ fn main() -> Result<()> {
 
     println!("final_mount_yaw_deg:");
     println!(
-        "  comp_A={:.6}",
-        trace_last(eskf, "ESKF full mount A yaw [deg]")?
+        "  full_seed_inv_qcs={:.6}",
+        trace_last(eskf, "ESKF full mount yaw [deg]")?
     );
     println!(
-        "  comp_B={:.6}",
-        trace_last(eskf, "ESKF full mount B yaw [deg]")?
+        "  legacy_qcs_seed={:.6}",
+        trace_last(eskf, "ESKF legacy qcs*seed yaw [deg]")?
     );
     println!(
         "  esf_alg_ref={:.6}",

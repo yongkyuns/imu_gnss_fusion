@@ -369,10 +369,8 @@ pub fn build_ekf_compare_traces(
     let eskf_stationary_p_theta_y_bay = Vec::<[f64; 2]>::new();
     let mut eskf_yaw_cue_sum: [Vec<[f64; 2]>; 11] = std::array::from_fn(|_| Vec::new());
     let mut eskf_yaw_cue_abs: [Vec<[f64; 2]>; 11] = std::array::from_fn(|_| Vec::new());
-    let mut eskf_yaw_cue_innov_sum: [Vec<[f64; 2]>; 11] =
-        std::array::from_fn(|_| Vec::new());
-    let mut eskf_yaw_cue_innov_abs: [Vec<[f64; 2]>; 11] =
-        std::array::from_fn(|_| Vec::new());
+    let mut eskf_yaw_cue_innov_sum: [Vec<[f64; 2]>; 11] = std::array::from_fn(|_| Vec::new());
+    let mut eskf_yaw_cue_innov_abs: [Vec<[f64; 2]>; 11] = std::array::from_fn(|_| Vec::new());
     let mut loose_cmp_pos_n = Vec::<[f64; 2]>::new();
     let mut loose_cmp_pos_e = Vec::<[f64; 2]>::new();
     let mut loose_cmp_pos_d = Vec::<[f64; 2]>::new();
@@ -1481,27 +1479,27 @@ pub fn build_ekf_compare_traces(
     ];
     let mut eskf_misalignment = vec![
         Trace {
-            name: "ESKF full mount A roll [deg]".to_string(),
+            name: "ESKF full mount roll [deg]".to_string(),
             points: eskf_mount_roll,
         },
         Trace {
-            name: "ESKF full mount A pitch [deg]".to_string(),
+            name: "ESKF full mount pitch [deg]".to_string(),
             points: eskf_mount_pitch,
         },
         Trace {
-            name: "ESKF full mount A yaw [deg]".to_string(),
+            name: "ESKF full mount yaw [deg]".to_string(),
             points: eskf_mount_yaw,
         },
         Trace {
-            name: "ESKF full mount B roll [deg]".to_string(),
+            name: "ESKF legacy qcs*seed roll [deg]".to_string(),
             points: eskf_mount_roll_alt,
         },
         Trace {
-            name: "ESKF full mount B pitch [deg]".to_string(),
+            name: "ESKF legacy qcs*seed pitch [deg]".to_string(),
             points: eskf_mount_pitch_alt,
         },
         Trace {
-            name: "ESKF full mount B yaw [deg]".to_string(),
+            name: "ESKF legacy qcs*seed yaw [deg]".to_string(),
             points: eskf_mount_yaw_alt,
         },
     ];
@@ -2232,7 +2230,10 @@ fn append_eskf_sample(
         .map(|q| [q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64])
         .unwrap_or([1.0, 0.0, 0.0, 0.0]);
     let q_cs = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
-    let q_total_vb = quat_mul(q_cs, q_seed);
+    // Runtime prediction pre-rotates raw IMU by q_seed before the ESKF sees it.
+    // q_cs maps that seed frame back to vehicle for NHC, so the physical
+    // vehicle-to-body mount is q_seed * inv(q_cs).
+    let q_total_vb = quat_mul(q_seed, quat_conj(q_cs));
     let q_total_flu = frd_mount_quat_to_esf_alg_flu_quat(q_total_vb);
     let (mount_r, mount_p, mount_y) = quat_rpy_alg_deg(
         q_total_flu[0],
@@ -2240,7 +2241,7 @@ fn append_eskf_sample(
         q_total_flu[2],
         q_total_flu[3],
     );
-    let q_total_vb_alt = quat_mul(q_seed, quat_conj(q_cs));
+    let q_total_vb_alt = quat_mul(q_cs, q_seed);
     let q_total_flu_alt = frd_mount_quat_to_esf_alg_flu_quat(q_total_vb_alt);
     let (mount_r_alt, mount_p_alt, mount_y_alt) = quat_rpy_alg_deg(
         q_total_flu_alt[0],

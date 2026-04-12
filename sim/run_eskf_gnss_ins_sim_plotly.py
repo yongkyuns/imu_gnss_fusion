@@ -164,6 +164,13 @@ def read_series(path: Path) -> dict[str, list[float]]:
     return out
 
 
+def quat_prefix(series: dict[str, list[float]], *candidates: str) -> str:
+    for prefix in candidates:
+        if all(f"{prefix}_q{j}" in series for j in range(4)):
+            return prefix
+    raise KeyError(f"missing quaternion prefix; tried {candidates}")
+
+
 def align_quat_signs(series: dict[str, list[float]], prefix: str, ref_prefix: str = "truth") -> list[list[float]]:
     out = []
     for i in range(len(series["t_s"])):
@@ -175,7 +182,7 @@ def align_quat_signs(series: dict[str, list[float]], prefix: str, ref_prefix: st
     return out
 
 
-def add_component_traces(fig, row: int, col: int, t, truth, seed, full_a, full_b, idx: int) -> None:
+def add_component_traces(fig, row: int, col: int, t, truth, seed, legacy_full, full, idx: int) -> None:
     fig.add_trace(
         go.Scatter(x=t, y=[q[idx] for q in truth], name=f"truth q{idx}", mode="lines", line={"color": "#4ea1ff", "width": 2}),
         row=row,
@@ -187,12 +194,12 @@ def add_component_traces(fig, row: int, col: int, t, truth, seed, full_a, full_b
         col=col,
     )
     fig.add_trace(
-        go.Scatter(x=t, y=[q[idx] for q in full_a], name=f"full A q{idx}", mode="lines", line={"color": "#ff6b6b", "width": 2}),
+        go.Scatter(x=t, y=[q[idx] for q in full], name=f"full seed*inv(qcs) q{idx}", mode="lines", line={"color": "#00d1b2", "width": 2}),
         row=row,
         col=col,
     )
     fig.add_trace(
-        go.Scatter(x=t, y=[q[idx] for q in full_b], name=f"full B q{idx}", mode="lines", line={"color": "#00d1b2", "width": 2}),
+        go.Scatter(x=t, y=[q[idx] for q in legacy_full], name=f"legacy qcs*seed q{idx}", mode="lines", line={"color": "#ff6b6b", "width": 2}),
         row=row,
         col=col,
     )
@@ -202,8 +209,12 @@ def make_plot(series: dict[str, list[float]], title: str):
     t = series["t_s"]
     truth = align_quat_signs(series, "truth", "truth")
     seed = align_quat_signs(series, "seed")
-    full_a = align_quat_signs(series, "full_a")
-    full_b = align_quat_signs(series, "full_b")
+    legacy_prefix = quat_prefix(series, "legacy_full_a", "full_a")
+    full_prefix = quat_prefix(series, "full_seed_inv_qcs", "full_b")
+    legacy_full = align_quat_signs(series, legacy_prefix)
+    full = align_quat_signs(series, full_prefix)
+    legacy_err_key = "legacy_full_a_err_deg" if "legacy_full_a_err_deg" in series else "full_a_err_deg"
+    full_err_key = "full_seed_inv_qcs_err_deg" if "full_seed_inv_qcs_err_deg" in series else "full_b_err_deg"
 
     fig = make_subplots(
         rows=3,
@@ -232,12 +243,12 @@ def make_plot(series: dict[str, list[float]], title: str):
         col=1,
     )
     fig.add_trace(
-        go.Scatter(x=t, y=series["full_a_err_deg"], name="full A err [deg]", mode="lines", line={"color": "#ff6b6b", "width": 2}),
+        go.Scatter(x=t, y=series[full_err_key], name="full seed*inv(qcs) err [deg]", mode="lines", line={"color": "#00d1b2", "width": 2}),
         row=1,
         col=1,
     )
     fig.add_trace(
-        go.Scatter(x=t, y=series["full_b_err_deg"], name="full B err [deg]", mode="lines", line={"color": "#00d1b2", "width": 2}),
+        go.Scatter(x=t, y=series[legacy_err_key], name="legacy qcs*seed err [deg]", mode="lines", line={"color": "#ff6b6b", "width": 2}),
         row=1,
         col=1,
     )
@@ -258,10 +269,10 @@ def make_plot(series: dict[str, list[float]], title: str):
         col=2,
     )
 
-    add_component_traces(fig, 2, 1, t, truth, seed, full_a, full_b, 0)
-    add_component_traces(fig, 2, 2, t, truth, seed, full_a, full_b, 1)
-    add_component_traces(fig, 3, 1, t, truth, seed, full_a, full_b, 2)
-    add_component_traces(fig, 3, 2, t, truth, seed, full_a, full_b, 3)
+    add_component_traces(fig, 2, 1, t, truth, seed, legacy_full, full, 0)
+    add_component_traces(fig, 2, 2, t, truth, seed, legacy_full, full, 1)
+    add_component_traces(fig, 3, 1, t, truth, seed, legacy_full, full, 2)
+    add_component_traces(fig, 3, 2, t, truth, seed, legacy_full, full, 3)
 
     fig.update_layout(
         template="plotly_dark",
