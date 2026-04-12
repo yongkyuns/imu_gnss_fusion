@@ -986,8 +986,8 @@ impl CEskfWrapper {
         self.raw.p[12][12] = accel_bias_sigma_mps2 * accel_bias_sigma_mps2;
         self.raw.p[13][13] = accel_bias_sigma_mps2 * accel_bias_sigma_mps2;
         self.raw.p[14][14] = accel_bias_sigma_mps2 * accel_bias_sigma_mps2;
-        let mount_residual_sigma_rad = 5.0f32 * core::f32::consts::PI / 180.0;
-        self.raw.p[15][15] = 0.0;
+        let mount_residual_sigma_rad = 10.0f32 * core::f32::consts::PI / 180.0;
+        self.raw.p[15][15] = mount_residual_sigma_rad * mount_residual_sigma_rad;
         self.raw.p[16][16] = mount_residual_sigma_rad * mount_residual_sigma_rad;
         self.raw.p[17][17] = mount_residual_sigma_rad * mount_residual_sigma_rad;
     }

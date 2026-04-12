@@ -20,11 +20,8 @@
 static void sf_eskf_normalize_quat(float q[4]);
 static void sf_eskf_normalize_nominal_quat(sf_eskf_t *eskf);
 static void sf_eskf_normalize_nominal_mount_quat(sf_eskf_t *eskf);
-static float sf_eskf_mount_roll_rad(const sf_eskf_t *eskf);
-static void sf_eskf_project_mount_roll(sf_eskf_t *eskf, float roll_rad);
 static void
 sf_eskf_symmetrize_p(float p[SF_ESKF_ERROR_STATES][SF_ESKF_ERROR_STATES]);
-static void sf_eskf_zero_mount_roll_covariance(sf_eskf_t *eskf);
 static void sf_eskf_quat_multiply(const float p[4], const float q[4],
                                   float out[4]);
 static void sf_eskf_nominal_vehicle_velocity(const sf_eskf_t *eskf,
@@ -42,10 +39,11 @@ static void
 sf_eskf_fuse_measurement(sf_eskf_t *eskf, float innovation_var,
                          const float k[SF_ESKF_ERROR_STATES],
                          const float dx_injected[SF_ESKF_ERROR_STATES]);
-static void sf_eskf_record_update_diag(
-    sf_eskf_t *eskf, sf_eskf_update_diag_type_t type, float innovation,
-    float innovation_var, const float k[SF_ESKF_ERROR_STATES],
-    const float dx[SF_ESKF_ERROR_STATES]);
+static void sf_eskf_record_update_diag(sf_eskf_t *eskf,
+                                       sf_eskf_update_diag_type_t type,
+                                       float innovation, float innovation_var,
+                                       const float k[SF_ESKF_ERROR_STATES],
+                                       const float dx[SF_ESKF_ERROR_STATES]);
 static void sf_eskf_block_mount_injection(float dx[SF_ESKF_ERROR_STATES]);
 static void sf_eskf_fuse_gps_pos_n(sf_eskf_t *eskf, float pos_n, float r_pos_n);
 static void sf_eskf_fuse_gps_pos_e(sf_eskf_t *eskf, float pos_e, float r_pos_e);
@@ -80,7 +78,7 @@ static void sf_eskf_predict_noise_default(sf_predict_noise_t *cfg) {
   sf_predict_noise_default(cfg);
   cfg->gyro_var = 2.2873113e-7f;
   cfg->accel_var = 2.4504214e-5f;
-  cfg->mount_align_rw_var = 1.0e-8f;
+  cfg->mount_align_rw_var = 1.0e-6f;
 }
 
 static void sf_eskf_normalize_nominal_quat(sf_eskf_t *eskf) {
@@ -109,42 +107,6 @@ static void sf_eskf_normalize_nominal_mount_quat(sf_eskf_t *eskf) {
   eskf->nominal.qcs1 = q[1];
   eskf->nominal.qcs2 = q[2];
   eskf->nominal.qcs3 = q[3];
-}
-
-static float sf_eskf_mount_roll_rad(const sf_eskf_t *eskf) {
-  const float q0 = eskf->nominal.qcs0;
-  const float q1 = eskf->nominal.qcs1;
-  const float q2 = eskf->nominal.qcs2;
-  const float q3 = eskf->nominal.qcs3;
-  return atan2f(2.0f * (q0 * q1 + q2 * q3),
-                1.0f - 2.0f * (q1 * q1 + q2 * q2));
-}
-
-static void sf_eskf_project_mount_roll(sf_eskf_t *eskf, float roll_rad) {
-  sf_eskf_normalize_nominal_mount_quat(eskf);
-
-  const float q0 = eskf->nominal.qcs0;
-  const float q1 = eskf->nominal.qcs1;
-  const float q2 = eskf->nominal.qcs2;
-  const float q3 = eskf->nominal.qcs3;
-  const float sin_pitch_raw = 2.0f * (q0 * q2 - q3 * q1);
-  const float sin_pitch =
-      fminf(1.0f, fmaxf(-1.0f, sin_pitch_raw));
-  const float pitch_rad = asinf(sin_pitch);
-  const float yaw_rad = atan2f(2.0f * (q0 * q3 + q1 * q2),
-                               1.0f - 2.0f * (q2 * q2 + q3 * q3));
-  const float cr = cosf(0.5f * roll_rad);
-  const float sr = sinf(0.5f * roll_rad);
-  const float cp = cosf(0.5f * pitch_rad);
-  const float sp = sinf(0.5f * pitch_rad);
-  const float cy = cosf(0.5f * yaw_rad);
-  const float sy = sinf(0.5f * yaw_rad);
-
-  eskf->nominal.qcs0 = cr * cp * cy + sr * sp * sy;
-  eskf->nominal.qcs1 = sr * cp * cy - cr * sp * sy;
-  eskf->nominal.qcs2 = cr * sp * cy + sr * cp * sy;
-  eskf->nominal.qcs3 = cr * cp * sy - sr * sp * cy;
-  sf_eskf_normalize_nominal_mount_quat(eskf);
 }
 
 static void sf_eskf_predict_covariance_dense(
@@ -208,7 +170,6 @@ void sf_eskf_init(sf_eskf_t *eskf, const float p_diag[SF_ESKF_ERROR_STATES],
       eskf->p[i][i] = 1.0f;
     }
   }
-  sf_eskf_zero_mount_roll_covariance(eskf);
 }
 
 void sf_eskf_predict_nominal(sf_eskf_t *eskf, const sf_eskf_imu_delta_t *imu) {
@@ -273,7 +234,7 @@ void sf_eskf_predict(sf_eskf_t *eskf, const sf_eskf_imu_delta_t *imu) {
   Q[11] = Q[9];
 
   memset(nextP, 0, sizeof(nextP));
-  Q[12] = 0.0f;
+  Q[12] = eskf->noise.mount_align_rw_var * dt;
   Q[13] = eskf->noise.mount_align_rw_var * dt;
   Q[14] = Q[13];
 
@@ -281,15 +242,12 @@ void sf_eskf_predict(sf_eskf_t *eskf, const sf_eskf_imu_delta_t *imu) {
 
   memcpy(eskf->p, nextP, sizeof(eskf->p));
   sf_eskf_symmetrize_p(eskf->p);
-  sf_eskf_zero_mount_roll_covariance(eskf);
 }
 
 void sf_eskf_fuse_gps(sf_eskf_t *eskf, const sf_gnss_ned_sample_t *gps) {
   if (eskf == NULL || gps == NULL) {
     return;
   }
-  sf_eskf_zero_mount_roll_covariance(eskf);
-
   sf_eskf_fuse_gps_pos_n(eskf, gps->pos_ned_m[0],
                          gps->pos_std_m[0] * gps->pos_std_m[0]);
   sf_eskf_fuse_gps_pos_e(eskf, gps->pos_ned_m[1],
@@ -309,7 +267,6 @@ void sf_eskf_fuse_body_speed_x(sf_eskf_t *eskf, float speed_mps,
   if (eskf == NULL) {
     return;
   }
-  sf_eskf_zero_mount_roll_covariance(eskf);
   sf_eskf_fuse_body_speed_x_impl(eskf, speed_mps, r_speed);
 }
 
@@ -317,7 +274,6 @@ void sf_eskf_fuse_body_vel(sf_eskf_t *eskf, float r_body_vel) {
   if (eskf == NULL) {
     return;
   }
-  sf_eskf_zero_mount_roll_covariance(eskf);
   sf_eskf_fuse_body_vel_yz_batch(eskf, r_body_vel);
 }
 
@@ -325,7 +281,6 @@ void sf_eskf_fuse_zero_vel(sf_eskf_t *eskf, float r_zero_vel) {
   if (eskf == NULL) {
     return;
   }
-  sf_eskf_zero_mount_roll_covariance(eskf);
   sf_eskf_fuse_gps_vel_n(eskf, 0.0f, r_zero_vel);
   sf_eskf_fuse_gps_vel_e(eskf, 0.0f, r_zero_vel);
   sf_eskf_fuse_gps_vel_d(eskf, 0.0f, r_zero_vel);
@@ -337,7 +292,6 @@ void sf_eskf_fuse_stationary_gravity(sf_eskf_t *eskf,
   if (eskf == NULL || accel_body_mps2 == NULL) {
     return;
   }
-  sf_eskf_zero_mount_roll_covariance(eskf);
   sf_eskf_fuse_stationary_gravity_x(eskf, accel_body_mps2[0],
                                     r_stationary_accel);
   sf_eskf_fuse_stationary_gravity_y(eskf, accel_body_mps2[1],
@@ -431,16 +385,6 @@ sf_eskf_symmetrize_p(float p[SF_ESKF_ERROR_STATES][SF_ESKF_ERROR_STATES]) {
   }
 }
 
-static void sf_eskf_zero_mount_roll_covariance(sf_eskf_t *eskf) {
-  if (eskf == NULL) {
-    return;
-  }
-  for (int j = 0; j < SF_ESKF_ERROR_STATES; ++j) {
-    eskf->p[15][j] = 0.0f;
-    eskf->p[j][15] = 0.0f;
-  }
-}
-
 static void sf_eskf_quat_multiply(const float p[4], const float q[4],
                                   float out[4]) {
   out[0] = p[0] * q[0] - p[1] * q[1] - p[2] * q[2] - p[3] * q[3];
@@ -518,8 +462,7 @@ static void sf_eskf_inject_error_state(sf_eskf_t *eskf,
   eskf->nominal.baz += dx[14];
 
   {
-    const float frozen_mount_roll_rad = sf_eskf_mount_roll_rad(eskf);
-    float dqcs[4] = {1.0f, 0.0f, 0.5f * dx[16], 0.5f * dx[17]};
+    float dqcs[4] = {1.0f, 0.5f * dx[15], 0.5f * dx[16], 0.5f * dx[17]};
     float qcs_old[4] = {
         eskf->nominal.qcs0,
         eskf->nominal.qcs1,
@@ -532,14 +475,14 @@ static void sf_eskf_inject_error_state(sf_eskf_t *eskf,
     eskf->nominal.qcs1 = qcs_new[1];
     eskf->nominal.qcs2 = qcs_new[2];
     eskf->nominal.qcs3 = qcs_new[3];
-    sf_eskf_project_mount_roll(eskf, frozen_mount_roll_rad);
+    sf_eskf_normalize_nominal_mount_quat(eskf);
   }
 }
 
 static void
 sf_eskf_apply_reset(float p[SF_ESKF_ERROR_STATES][SF_ESKF_ERROR_STATES],
                     const float dx[SF_ESKF_ERROR_STATES]) {
-  const float dx_mount[3] = {0.0f, dx[16], dx[17]};
+  const float dx_mount[3] = {dx[15], dx[16], dx[17]};
   sf_eskf_apply_reset_block(p, 0, dx);
   sf_eskf_apply_reset_block(p, 15, dx_mount);
   sf_eskf_symmetrize_p(p);
@@ -626,13 +569,13 @@ sf_eskf_fuse_measurement(sf_eskf_t *eskf, float innovation_var,
 
   sf_eskf_inject_error_state(eskf, dx_injected);
   sf_eskf_apply_reset(eskf->p, dx_injected);
-  sf_eskf_zero_mount_roll_covariance(eskf);
 }
 
-static void sf_eskf_record_update_diag(
-    sf_eskf_t *eskf, sf_eskf_update_diag_type_t type, float innovation,
-    float innovation_var, const float k[SF_ESKF_ERROR_STATES],
-    const float dx[SF_ESKF_ERROR_STATES]) {
+static void sf_eskf_record_update_diag(sf_eskf_t *eskf,
+                                       sf_eskf_update_diag_type_t type,
+                                       float innovation, float innovation_var,
+                                       const float k[SF_ESKF_ERROR_STATES],
+                                       const float dx[SF_ESKF_ERROR_STATES]) {
   sf_eskf_update_diag_t *diag;
   const unsigned int idx = (unsigned int)type;
 
@@ -720,8 +663,8 @@ static void sf_eskf_fuse_gps_pos_d(sf_eskf_t *eskf, float pos_d,
     dx[i] = K[i] * innovation;
   }
   sf_eskf_block_mount_injection(dx);
-  sf_eskf_record_update_diag(eskf, SF_ESKF_UPDATE_DIAG_GPS_POS_D, innovation,
-                             S, K, dx);
+  sf_eskf_record_update_diag(eskf, SF_ESKF_UPDATE_DIAG_GPS_POS_D, innovation, S,
+                             K, dx);
   sf_eskf_fuse_measurement(eskf, S, K, dx);
 }
 
@@ -744,9 +687,10 @@ static void sf_eskf_fuse_gps_vel_n(sf_eskf_t *eskf, float vel_n,
   if (r_vel_n != SF_ESKF_RUNTIME_ZERO_VEL_R_DIAG) {
     sf_eskf_block_mount_injection(dx);
   }
-  sf_eskf_record_update_diag(eskf, r_vel_n == SF_ESKF_RUNTIME_ZERO_VEL_R_DIAG
-                                       ? SF_ESKF_UPDATE_DIAG_ZERO_VEL
-                                       : SF_ESKF_UPDATE_DIAG_GPS_VEL,
+  sf_eskf_record_update_diag(eskf,
+                             r_vel_n == SF_ESKF_RUNTIME_ZERO_VEL_R_DIAG
+                                 ? SF_ESKF_UPDATE_DIAG_ZERO_VEL
+                                 : SF_ESKF_UPDATE_DIAG_GPS_VEL,
                              innovation, S, K, dx);
   sf_eskf_fuse_measurement(eskf, S, K, dx);
 }
@@ -770,9 +714,10 @@ static void sf_eskf_fuse_gps_vel_e(sf_eskf_t *eskf, float vel_e,
   if (r_vel_e != SF_ESKF_RUNTIME_ZERO_VEL_R_DIAG) {
     sf_eskf_block_mount_injection(dx);
   }
-  sf_eskf_record_update_diag(eskf, r_vel_e == SF_ESKF_RUNTIME_ZERO_VEL_R_DIAG
-                                       ? SF_ESKF_UPDATE_DIAG_ZERO_VEL
-                                       : SF_ESKF_UPDATE_DIAG_GPS_VEL,
+  sf_eskf_record_update_diag(eskf,
+                             r_vel_e == SF_ESKF_RUNTIME_ZERO_VEL_R_DIAG
+                                 ? SF_ESKF_UPDATE_DIAG_ZERO_VEL
+                                 : SF_ESKF_UPDATE_DIAG_GPS_VEL,
                              innovation, S, K, dx);
   sf_eskf_fuse_measurement(eskf, S, K, dx);
 }
@@ -796,9 +741,10 @@ static void sf_eskf_fuse_gps_vel_d(sf_eskf_t *eskf, float vel_d,
   if (r_vel_d != SF_ESKF_RUNTIME_ZERO_VEL_R_DIAG) {
     sf_eskf_block_mount_injection(dx);
   }
-  sf_eskf_record_update_diag(eskf, r_vel_d == SF_ESKF_RUNTIME_ZERO_VEL_R_DIAG
-                                       ? SF_ESKF_UPDATE_DIAG_ZERO_VEL_D
-                                       : SF_ESKF_UPDATE_DIAG_GPS_VEL_D,
+  sf_eskf_record_update_diag(eskf,
+                             r_vel_d == SF_ESKF_RUNTIME_ZERO_VEL_R_DIAG
+                                 ? SF_ESKF_UPDATE_DIAG_ZERO_VEL_D
+                                 : SF_ESKF_UPDATE_DIAG_GPS_VEL_D,
                              innovation, S, K, dx);
   sf_eskf_fuse_measurement(eskf, S, K, dx);
 }
@@ -840,8 +786,8 @@ static void sf_eskf_fuse_stationary_gravity_x(sf_eskf_t *eskf, float accel_x,
   for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
     dx[i] = K[i] * innovation;
   }
-  sf_eskf_record_update_diag(eskf, SF_ESKF_UPDATE_DIAG_STATIONARY_X,
-                             innovation, S, K, dx);
+  sf_eskf_record_update_diag(eskf, SF_ESKF_UPDATE_DIAG_STATIONARY_X, innovation,
+                             S, K, dx);
   sf_eskf_fuse_measurement(eskf, S, K, dx);
 }
 
@@ -883,8 +829,8 @@ static void sf_eskf_fuse_stationary_gravity_y(sf_eskf_t *eskf, float accel_y,
   for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
     dx[i] = K[i] * innovation;
   }
-  sf_eskf_record_update_diag(eskf, SF_ESKF_UPDATE_DIAG_STATIONARY_Y,
-                             innovation, S, K, dx);
+  sf_eskf_record_update_diag(eskf, SF_ESKF_UPDATE_DIAG_STATIONARY_Y, innovation,
+                             S, K, dx);
   sf_eskf_fuse_measurement(eskf, S, K, dx);
 }
 
@@ -1054,7 +1000,6 @@ static void sf_eskf_fuse_body_vel_yz_batch(sf_eskf_t *eskf, float r_body_vel) {
     }
     sf_eskf_inject_error_state(eskf, dx_f32);
     sf_eskf_apply_reset(eskf->p, dx_f32);
-    sf_eskf_zero_mount_roll_covariance(eskf);
   }
 
   (void)k_scalar;
@@ -1095,7 +1040,7 @@ static void sf_eskf_fuse_body_speed_x_impl(sf_eskf_t *eskf, float speed_mps,
   for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
     dx[i] = K[i] * innovation;
   }
-  sf_eskf_record_update_diag(eskf, SF_ESKF_UPDATE_DIAG_BODY_SPEED_X,
-                             innovation, S, K, dx);
+  sf_eskf_record_update_diag(eskf, SF_ESKF_UPDATE_DIAG_BODY_SPEED_X, innovation,
+                             S, K, dx);
   sf_eskf_fuse_measurement(eskf, S, K, dx);
 }

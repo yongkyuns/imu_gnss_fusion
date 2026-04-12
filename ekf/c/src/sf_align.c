@@ -3,7 +3,7 @@
 #include <math.h>
 #include <string.h>
 
-#define SF_ALIGN_SIGMA_READY_DEG 0.05f
+#define SF_ALIGN_SIGMA_READY_DEG 0.15f
 
 static void sf_diag3(const float d[3], float out[3][3]);
 static float sf_wrap_angle_rad(float x);
