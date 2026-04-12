@@ -19,6 +19,9 @@ H[11] = 0;
 H[12] = 0;
 H[13] = 0;
 H[14] = 0;
+H[15] = 0;
+H[16] = 0;
+H[17] = 0;
 
 
 // Kalman gains
@@ -37,6 +40,9 @@ K[11] = ESKF_HK_VEL_E1*P[4][11];
 K[12] = ESKF_HK_VEL_E1*P[4][12];
 K[13] = ESKF_HK_VEL_E1*P[4][13];
 K[14] = ESKF_HK_VEL_E1*P[4][14];
+K[15] = ESKF_HK_VEL_E1*P[4][15];
+K[16] = ESKF_HK_VEL_E1*P[4][16];
+K[17] = ESKF_HK_VEL_E1*P[4][17];
 
 
 // Innovation Variance

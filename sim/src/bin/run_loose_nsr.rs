@@ -3,7 +3,9 @@ use clap::Parser;
 use sensor_fusion::c_api::{CLooseImuDelta, CLooseWrapper};
 use sensor_fusion::loose::LoosePredictNoise;
 use serde::{Deserialize, Serialize};
-use sim::visualizer::math::{ecef_to_lla, ecef_to_ned, lla_to_ecef, ned_to_lla_exact, quat_rpy_deg};
+use sim::visualizer::math::{
+    ecef_to_lla, ecef_to_ned, lla_to_ecef, ned_to_lla_exact, quat_rpy_deg,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -240,11 +242,21 @@ fn main() -> Result<()> {
             c_ne[1][0] * vel_ecef[0] + c_ne[1][1] * vel_ecef[1] + c_ne[1][2] * vel_ecef[2],
             c_ne[2][0] * vel_ecef[0] + c_ne[2][1] * vel_ecef[1] + c_ne[2][2] * vel_ecef[2],
         ];
-        let (lat, lon, h) =
-            ned_to_lla_exact(pos[0], pos[1], pos[2], init.ref_lat_deg, init.ref_lon_deg, init.ref_h_m);
+        let (lat, lon, h) = ned_to_lla_exact(
+            pos[0],
+            pos[1],
+            pos[2],
+            init.ref_lat_deg,
+            init.ref_lon_deg,
+            init.ref_h_m,
+        );
         let q_ns = quat_mul(q_ne, [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64]);
-        let (roll, pitch, yaw) =
-            quat_rpy_deg(q_ns[0] as f32, q_ns[1] as f32, q_ns[2] as f32, q_ns[3] as f32);
+        let (roll, pitch, yaw) = quat_rpy_deg(
+            q_ns[0] as f32,
+            q_ns[1] as f32,
+            q_ns[2] as f32,
+            q_ns[3] as f32,
+        );
         let mis = quat_mul(
             [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64],
             quat_conj([
@@ -334,7 +346,8 @@ fn main() -> Result<()> {
                         dt_since_last_gnss = if last_gnss_used_ttag == i64::MIN {
                             1.0
                         } else {
-                            ((curr.ttag_us - last_gnss_used_ttag) as f32 * 1.0e-6).clamp(1.0e-3, 1.0)
+                            ((curr.ttag_us - last_gnss_used_ttag) as f32 * 1.0e-6)
+                                .clamp(1.0e-3, 1.0)
                         };
                         last_gnss_used_ttag = g.ttag_us;
                     }
@@ -345,12 +358,15 @@ fn main() -> Result<()> {
                     .map(|s| s.accel_mps2)
                     .with_context(|| format!("missing latest accel at {}", curr.ttag_us))?;
 
-                let nhc_active = !args.disable_nhc && nhc_gate(loose.nominal(), curr, &latest_accel);
+                let nhc_active =
+                    !args.disable_nhc && nhc_gate(loose.nominal(), curr, &latest_accel);
                 let t = (curr.ttag_us - init.start_ttag_us) as f64 * 1.0e-6;
                 let trace_match = args
                     .trace_time_s
                     .is_some_and(|target| (t - target).abs() <= 5.0e-7);
-                if (args.diag_json.is_some() && t <= args.diag_until_s && (gps_pos_ecef.is_some() || nhc_active))
+                if (args.diag_json.is_some()
+                    && t <= args.diag_until_s
+                    && (gps_pos_ecef.is_some() || nhc_active))
                     || trace_match
                 {
                     let p = loose.covariance();
@@ -376,8 +392,14 @@ fn main() -> Result<()> {
                     let h_rows = nhc_h_rows(c_ce, vel_ecef_pre, v_c_pre);
                     let omega_norm_pre = norm3(omega_is_pre);
                     let f_s_norm_pre = norm3(f_s_pre);
-                    let (gps_h_rows_pre, gps_residual_pre, gps_variance_pre) =
-                        gps_diag_inputs(pos_ecef_pre, init.ref_lat_deg, init.ref_lon_deg, gps_pos_ecef, gps_h_acc_m, dt_since_last_gnss);
+                    let (gps_h_rows_pre, gps_residual_pre, gps_variance_pre) = gps_diag_inputs(
+                        pos_ecef_pre,
+                        init.ref_lat_deg,
+                        init.ref_lon_deg,
+                        gps_pos_ecef,
+                        gps_h_acc_m,
+                        dt_since_last_gnss,
+                    );
                     let mut p_pos_psi_cc_pre = [[0.0; 3]; 3];
                     let mut p_vel_psi_cc_pre = [[0.0; 3]; 3];
                     let mut p_psiee_psi_cc_pre = [[0.0; 3]; 3];
@@ -471,7 +493,8 @@ fn main() -> Result<()> {
                         }
                         row.pos_ecef_post = loose.shadow_pos_ecef();
                         row.q_es_post = [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64];
-                        row.q_cs_post = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
+                        row.q_cs_post =
+                            [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
                     } else {
                         row.p_post_full = row.p_pre_full;
                         row.p_pos_psi_cc_post = row.p_pos_psi_cc_pre;
@@ -482,7 +505,10 @@ fn main() -> Result<()> {
                         row.q_es_post = row.q_es_pre;
                         row.q_cs_post = row.q_cs_pre;
                     }
-                    if args.diag_json.is_some() && t <= args.diag_until_s && (gps_pos_ecef.is_some() || nhc_active) {
+                    if args.diag_json.is_some()
+                        && t <= args.diag_until_s
+                        && (gps_pos_ecef.is_some() || nhc_active)
+                    {
                         diag_rows.push(DiagRow {
                             time_s: row.time_s,
                             ttag_us: row.ttag_us,
@@ -560,10 +586,21 @@ fn main() -> Result<()> {
                     init.ref_lat_deg,
                     init.ref_lon_deg,
                 );
-                let (lat, lon, h) = ned_to_lla_exact(pos[0], pos[1], pos[2], init.ref_lat_deg, init.ref_lon_deg, init.ref_h_m);
+                let (lat, lon, h) = ned_to_lla_exact(
+                    pos[0],
+                    pos[1],
+                    pos[2],
+                    init.ref_lat_deg,
+                    init.ref_lon_deg,
+                    init.ref_h_m,
+                );
                 let q_ns = quat_mul(q_ne, [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64]);
-                let (roll, pitch, yaw) =
-                    quat_rpy_deg(q_ns[0] as f32, q_ns[1] as f32, q_ns[2] as f32, q_ns[3] as f32);
+                let (roll, pitch, yaw) = quat_rpy_deg(
+                    q_ns[0] as f32,
+                    q_ns[1] as f32,
+                    q_ns[2] as f32,
+                    q_ns[3] as f32,
+                );
                 let mis = quat_mul(
                     [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64],
                     quat_conj([
@@ -616,10 +653,7 @@ fn main() -> Result<()> {
     }
     if let Some(trace_json) = &args.trace_json {
         let row = trace_row.with_context(|| {
-            format!(
-                "failed to find trace row at time {:?} s",
-                args.trace_time_s
-            )
+            format!("failed to find trace row at time {:?} s", args.trace_time_s)
         })?;
         fs::write(trace_json, serde_json::to_vec(&row)?)?;
     }
@@ -650,8 +684,14 @@ fn resolve_single_file(input_dir: &Path, suffix: &str) -> Result<PathBuf> {
     matches.sort();
     match matches.len() {
         1 => Ok(matches.remove(0)),
-        0 => bail!("missing file with suffix {suffix} in {}", input_dir.display()),
-        _ => bail!("multiple files with suffix {suffix} in {}", input_dir.display()),
+        0 => bail!(
+            "missing file with suffix {suffix} in {}",
+            input_dir.display()
+        ),
+        _ => bail!(
+            "multiple files with suffix {suffix} in {}",
+            input_dir.display()
+        ),
     }
 }
 
@@ -755,7 +795,11 @@ fn accel_at(ttag_us: i64, accel: &[AccelSample]) -> Option<[f64; 3]> {
     }
 }
 
-fn nhc_gate(n: &sensor_fusion::c_api::CLooseNominalState, gyro: &GyroSample, accel: &[f64; 3]) -> bool {
+fn nhc_gate(
+    n: &sensor_fusion::c_api::CLooseNominalState,
+    gyro: &GyroSample,
+    accel: &[f64; 3],
+) -> bool {
     let omega = [
         n.sgx as f64 * gyro.omega_radps[0] + n.bgx as f64,
         n.sgy as f64 * gyro.omega_radps[1] + n.bgy as f64,
@@ -825,11 +869,7 @@ fn mat3_vec_mul(a: [[f64; 3]; 3], x: [f64; 3]) -> [f64; 3] {
 }
 
 fn skew(v: [f64; 3]) -> [[f64; 3]; 3] {
-    [
-        [0.0, -v[2], v[1]],
-        [v[2], 0.0, -v[0]],
-        [-v[1], v[0], 0.0],
-    ]
+    [[0.0, -v[2], v[1]], [v[2], 0.0, -v[0]], [-v[1], v[0], 0.0]]
 }
 
 fn nhc_h_rows(c_ce: [[f64; 3]; 3], vel_e: [f64; 3], v_c: [f64; 3]) -> [[f64; 24]; 3] {
@@ -902,7 +942,11 @@ fn gps_diag_inputs(
     let t = [
         [1.0 / u11, 0.0, 0.0],
         [-u12 / (u11 * u22), 1.0 / u22, 0.0],
-        [(u12 * u23 - u13 * u22) / (u11 * u22 * u33), -u23 / (u22 * u33), 1.0 / u33],
+        [
+            (u12 * u23 - u13 * u22) / (u11 * u22 * u33),
+            -u23 / (u22 * u33),
+            1.0 / u33,
+        ],
     ];
     let x_meas = mat3_vec_mul(t, gps_pos_ecef);
     let x_est = mat3_vec_mul(t, pos_ecef_pre);

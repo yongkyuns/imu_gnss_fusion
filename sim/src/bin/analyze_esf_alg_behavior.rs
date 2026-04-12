@@ -321,10 +321,7 @@ fn build_motion_windows(nav_events: &[(f64, NavPvtObs)]) -> Vec<MotionWindow> {
         let course_prev = v_prev[1].atan2(v_prev[0]);
         let course_curr = v_curr[1].atan2(v_curr[0]);
         let course_rate_dps = wrap_rad_pi(course_curr - course_prev).to_degrees() / dt;
-        let a_n = [
-            (v_curr[0] - v_prev[0]) / dt,
-            (v_curr[1] - v_prev[1]) / dt,
-        ];
+        let a_n = [(v_curr[0] - v_prev[0]) / dt, (v_curr[1] - v_prev[1]) / dt];
         let v_mid = [0.5 * (v_prev[0] + v_curr[0]), 0.5 * (v_prev[1] + v_curr[1])];
         let (a_long, a_lat) = if let Some(t_hat) = normalize2(v_mid) {
             let lat_hat = [-t_hat[1], t_hat[0]];
@@ -335,9 +332,8 @@ fn build_motion_windows(nav_events: &[(f64, NavPvtObs)]) -> Vec<MotionWindow> {
         } else {
             (0.0, 0.0)
         };
-        let turn_valid = speed_mid > (0.833_f64)
-            && course_rate_dps.abs() > 2.0
-            && a_lat.abs() > 0.1;
+        let turn_valid =
+            speed_mid > (0.833_f64) && course_rate_dps.abs() > 2.0 && a_lat.abs() > 0.1;
         let straight_valid = speed_mid > (0.833_f64)
             && a_long.abs() > 0.18
             && a_lat.abs() < (0.5_f64).max(0.6 * a_long.abs())
@@ -462,7 +458,10 @@ fn print_motion_summary(windows: &[MotionWindow]) {
         .iter()
         .map(|w| w.course_rate_dps.abs())
         .fold(0.0, f64::max);
-    let max_abs_lat = windows.iter().map(|w| w.a_lat_mps2.abs()).fold(0.0, f64::max);
+    let max_abs_lat = windows
+        .iter()
+        .map(|w| w.a_lat_mps2.abs())
+        .fold(0.0, f64::max);
     let max_abs_long = windows
         .iter()
         .map(|w| w.a_long_mps2.abs())
@@ -471,7 +470,12 @@ fn print_motion_summary(windows: &[MotionWindow]) {
     let first_straight = windows.iter().find(|w| w.straight_valid).map(|w| w.tc_s);
     println!(
         "  windows={} turn_valid={} straight_valid={} max|course_rate|={:.2} dps max|a_lat|={:.3} max|a_long|={:.3}",
-        windows.len(), n_turn, n_straight, max_abs_course_rate, max_abs_lat, max_abs_long
+        windows.len(),
+        n_turn,
+        n_straight,
+        max_abs_course_rate,
+        max_abs_lat,
+        max_abs_long
     );
     println!(
         "  first turn={} first straight={}",

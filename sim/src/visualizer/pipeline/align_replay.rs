@@ -50,6 +50,7 @@ pub struct AlgEvent {
 
 #[derive(Clone, Copy, Default)]
 pub struct AlignEulerContrib {
+    pub gravity: [f64; 3],
     pub horiz_accel: [f64; 3],
     pub turn_gyro: [f64; 3],
     pub lateral_accel: [f64; 3],
@@ -248,7 +249,9 @@ pub fn build_fusion_align_replay(
 
     for (tn, nav) in &nav_events {
         while scan_idx < imu_packets.len() && imu_packets[scan_idx].t_ms <= *tn {
-            while alg_idx < alg_events.len() && alg_events[alg_idx].t_ms <= imu_packets[scan_idx].t_ms {
+            while alg_idx < alg_events.len()
+                && alg_events[alg_idx].t_ms <= imu_packets[scan_idx].t_ms
+            {
                 alg_idx += 1;
             }
             while alg_status_idx < alg_status_events.len()
@@ -311,7 +314,9 @@ pub fn build_fusion_align_replay(
                 nav.s_acc_mps as f32,
                 nav.s_acc_mps as f32,
             ],
-            heading_rad: nav.head_veh_valid.then_some(nav.heading_vehicle_deg.to_radians() as f32),
+            heading_rad: nav
+                .head_veh_valid
+                .then_some(nav.heading_vehicle_deg.to_radians() as f32),
         });
         let t_s = (*tn - tl.t0_master_ms) * 1.0e-3;
         if update.mount_ready_changed && update.mount_ready {
@@ -336,93 +341,92 @@ pub fn build_fusion_align_replay(
             long_valid,
             trace_opt,
             mean_accel_b,
-        ) =
-            if let Some(debug) = debug {
-                let window = debug.window;
-                let trace = debug.trace;
-                let dt = window.dt as f64;
-                let v_prev = [
-                    window.gnss_vel_prev_n[0] as f64,
-                    window.gnss_vel_prev_n[1] as f64,
-                ];
-                let v_curr = [
-                    window.gnss_vel_curr_n[0] as f64,
-                    window.gnss_vel_curr_n[1] as f64,
-                ];
-                let course_prev = v_prev[1].atan2(v_prev[0]);
-                let course_curr = v_curr[1].atan2(v_curr[0]);
-                let course_rate_dps = if dt > 0.0 {
-                    wrap_rad_pi(course_curr - course_prev).to_degrees() / dt
-                } else {
-                    0.0
-                };
-                let a_n = if dt > 0.0 {
-                    [
-                        (window.gnss_vel_curr_n[0] - window.gnss_vel_prev_n[0]) as f64 / dt,
-                        (window.gnss_vel_curr_n[1] - window.gnss_vel_prev_n[1]) as f64 / dt,
-                    ]
-                } else {
-                    [0.0, 0.0]
-                };
-                let v_mid = [0.5 * (v_prev[0] + v_curr[0]), 0.5 * (v_prev[1] + v_curr[1])];
-                let (a_long, a_lat) = if let Some(t_hat) = normalize2(v_mid) {
-                    let lat_hat = [-t_hat[1], t_hat[0]];
-                    (
-                        t_hat[0] * a_n[0] + t_hat[1] * a_n[1],
-                        lat_hat[0] * a_n[0] + lat_hat[1] * a_n[1],
-                    )
-                } else {
-                    (0.0, 0.0)
-                };
-                let mean_gyro_b = window.mean_gyro_b;
-                let mean_accel_b = window.mean_accel_b;
-                let gyro_norm = (mean_gyro_b[0] * mean_gyro_b[0]
-                    + mean_gyro_b[1] * mean_gyro_b[1]
-                    + mean_gyro_b[2] * mean_gyro_b[2])
-                    .sqrt();
-                let accel_norm = (mean_accel_b[0] * mean_accel_b[0]
-                    + mean_accel_b[1] * mean_accel_b[1]
-                    + mean_accel_b[2] * mean_accel_b[2])
-                    .sqrt();
-                let speed_prev = (v_prev[0] * v_prev[0] + v_prev[1] * v_prev[1]).sqrt() as f32;
-                let speed_curr = (v_curr[0] * v_curr[0] + v_curr[1] * v_curr[1]).sqrt() as f32;
-                let speed_mid = 0.5_f32 * (speed_prev + speed_curr);
-                let stationary = gyro_norm <= cfg.max_stationary_gyro_radps
-                    && (accel_norm - GRAVITY_MPS2).abs() <= cfg.max_stationary_accel_norm_err_mps2
-                    && speed_mid < 0.5;
-                let turn_valid = speed_mid > cfg.min_speed_mps
-                    && course_rate_dps.abs() > cfg.min_turn_rate_radps.to_degrees() as f64
-                    && a_lat.abs() > cfg.min_lat_acc_mps2 as f64;
-                let long_valid = speed_mid > cfg.min_speed_mps
-                    && (a_long.abs() > cfg.min_long_acc_mps2 as f64)
-                    && (a_lat.abs() < (0.5_f64).max(0.6 * a_long.abs()))
-                    && (a_long * a_long + a_lat * a_lat).sqrt() > cfg.min_long_acc_mps2 as f64;
+        ) = if let Some(debug) = debug {
+            let window = debug.window;
+            let trace = debug.trace;
+            let dt = window.dt as f64;
+            let v_prev = [
+                window.gnss_vel_prev_n[0] as f64,
+                window.gnss_vel_prev_n[1] as f64,
+            ];
+            let v_curr = [
+                window.gnss_vel_curr_n[0] as f64,
+                window.gnss_vel_curr_n[1] as f64,
+            ];
+            let course_prev = v_prev[1].atan2(v_prev[0]);
+            let course_curr = v_curr[1].atan2(v_curr[0]);
+            let course_rate_dps = if dt > 0.0 {
+                wrap_rad_pi(course_curr - course_prev).to_degrees() / dt
+            } else {
+                0.0
+            };
+            let a_n = if dt > 0.0 {
+                [
+                    (window.gnss_vel_curr_n[0] - window.gnss_vel_prev_n[0]) as f64 / dt,
+                    (window.gnss_vel_curr_n[1] - window.gnss_vel_prev_n[1]) as f64 / dt,
+                ]
+            } else {
+                [0.0, 0.0]
+            };
+            let v_mid = [0.5 * (v_prev[0] + v_curr[0]), 0.5 * (v_prev[1] + v_curr[1])];
+            let (a_long, a_lat) = if let Some(t_hat) = normalize2(v_mid) {
+                let lat_hat = [-t_hat[1], t_hat[0]];
                 (
-                    dt,
-                    speed_mid,
-                    course_rate_dps,
-                    a_long,
-                    a_lat,
-                    stationary,
-                    turn_valid,
-                    long_valid,
-                    Some(trace),
-                    mean_accel_b,
+                    t_hat[0] * a_n[0] + t_hat[1] * a_n[1],
+                    lat_hat[0] * a_n[0] + lat_hat[1] * a_n[1],
                 )
             } else {
-                (
-                    0.0,
-                    f32::NAN,
-                    f64::NAN,
-                    f64::NAN,
-                    f64::NAN,
-                    false,
-                    false,
-                    false,
-                    None,
-                    [f32::NAN; 3],
-                )
+                (0.0, 0.0)
             };
+            let mean_gyro_b = window.mean_gyro_b;
+            let mean_accel_b = window.mean_accel_b;
+            let gyro_norm = (mean_gyro_b[0] * mean_gyro_b[0]
+                + mean_gyro_b[1] * mean_gyro_b[1]
+                + mean_gyro_b[2] * mean_gyro_b[2])
+                .sqrt();
+            let accel_norm = (mean_accel_b[0] * mean_accel_b[0]
+                + mean_accel_b[1] * mean_accel_b[1]
+                + mean_accel_b[2] * mean_accel_b[2])
+                .sqrt();
+            let speed_prev = (v_prev[0] * v_prev[0] + v_prev[1] * v_prev[1]).sqrt() as f32;
+            let speed_curr = (v_curr[0] * v_curr[0] + v_curr[1] * v_curr[1]).sqrt() as f32;
+            let speed_mid = 0.5_f32 * (speed_prev + speed_curr);
+            let stationary = gyro_norm <= cfg.max_stationary_gyro_radps
+                && (accel_norm - GRAVITY_MPS2).abs() <= cfg.max_stationary_accel_norm_err_mps2
+                && speed_mid < 0.5;
+            let turn_valid = speed_mid > cfg.min_speed_mps
+                && course_rate_dps.abs() > cfg.min_turn_rate_radps.to_degrees() as f64
+                && a_lat.abs() > cfg.min_lat_acc_mps2 as f64;
+            let long_valid = speed_mid > cfg.min_speed_mps
+                && (a_long.abs() > cfg.min_long_acc_mps2 as f64)
+                && (a_lat.abs() < (0.5_f64).max(0.6 * a_long.abs()))
+                && (a_long * a_long + a_lat * a_lat).sqrt() > cfg.min_long_acc_mps2 as f64;
+            (
+                dt,
+                speed_mid,
+                course_rate_dps,
+                a_long,
+                a_lat,
+                stationary,
+                turn_valid,
+                long_valid,
+                Some(trace),
+                mean_accel_b,
+            )
+        } else {
+            (
+                0.0,
+                f32::NAN,
+                f64::NAN,
+                f64::NAN,
+                f64::NAN,
+                false,
+                false,
+                false,
+                None,
+                [f32::NAN; 3],
+            )
+        };
 
         let q_align = [
             align.q_vb[0] as f64,
@@ -461,9 +465,7 @@ pub fn build_fusion_align_replay(
             turn_q: trace.and_then(|t| t.horiz_turn_q).unwrap_or(f32::NAN) as f64,
             dominance_q: trace.and_then(|t| t.horiz_dominance_q).unwrap_or(f32::NAN) as f64,
             turn_core_valid: trace.map(|t| t.horiz_turn_core_valid).unwrap_or(false),
-            straight_core_valid: trace
-                .map(|t| t.horiz_straight_core_valid)
-                .unwrap_or(false),
+            straight_core_valid: trace.map(|t| t.horiz_straight_core_valid).unwrap_or(false),
             applied: trace.and_then(|t| t.after_horiz_accel).is_some(),
         };
         let g_norm = (align.gravity_lp_b[0] * align.gravity_lp_b[0]
@@ -507,9 +509,7 @@ pub fn build_fusion_align_replay(
             turn_valid,
             long_valid,
             upd_gravity: trace.and_then(|t| t.after_gravity).is_some(),
-            upd_gravity_quasi_static: trace
-                .map(|t| t.after_gravity_quasi_static)
-                .unwrap_or(false),
+            upd_gravity_quasi_static: trace.map(|t| t.after_gravity_quasi_static).unwrap_or(false),
             upd_turn_gyro: trace.and_then(|t| t.after_turn_gyro).is_some(),
             upd_lat: trace.and_then(|t| t.after_horiz_accel).is_some(),
             yaw_initialized: update.mount_ready_changed && update.mount_ready,
@@ -669,10 +669,9 @@ pub fn build_align_replay(
                     speed_mps,
                     speed_rate_mps2,
                     course_rate_radps,
-                )
-                    && align
-                        .initialize_from_stationary(&bootstrap.stationary_accel, 0.0)
-                        .is_ok()
+                ) && align
+                    .initialize_from_stationary(&bootstrap.stationary_accel, 0.0)
+                    .is_ok()
                 {
                     align_initialized = true;
                 }
@@ -996,8 +995,7 @@ impl BootstrapDetector {
                 .course_rate_ema
                 .or(course_rate_radps.map(f32::abs))
                 .is_none_or(|v| v <= self.cfg.max_course_rate_radps);
-        let stationary = low_dynamic
-            && (low_speed || steady_motion);
+        let stationary = low_dynamic && (low_speed || steady_motion);
 
         if stationary {
             self.stationary_accel.push(accel_b);
@@ -1229,6 +1227,7 @@ fn align_update_contrib_deg(trace: AlignUpdateTrace) -> AlignEulerContrib {
     let mut out = AlignEulerContrib::default();
     let mut prev_q = trace.q_start;
     if let Some(q) = trace.after_gravity {
+        out.gravity = local_rotation_delta_deg(prev_q, q);
         prev_q = q;
     }
     if let Some(q) = trace.after_horiz_accel {

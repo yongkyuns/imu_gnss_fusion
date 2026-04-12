@@ -13,6 +13,11 @@ static float quat_yaw_rad(float q0, float q1, float q2, float q3) {
                 1.0f - 2.0f * (q2 * q2 + q3 * q3));
 }
 
+static float quat_roll_rad(float q0, float q1, float q2, float q3) {
+  return atan2f(2.0f * (q0 * q1 + q2 * q3),
+                1.0f - 2.0f * (q1 * q1 + q2 * q2));
+}
+
 static void test_transpose3(const float in[3][3], float out[3][3]) {
   for (int i = 0; i < 3; ++i) {
     for (int j = 0; j < 3; ++j) {
@@ -173,6 +178,7 @@ static void test_predict_noise_defaults(void) {
   TEST_ASSERT_FLOAT_WITHIN(1.0e-9f, 2.4504214e-5f * 15.0f, noise.accel_var);
   TEST_ASSERT_FLOAT_WITHIN(1.0e-15f, 0.0002e-9f, noise.gyro_bias_rw_var);
   TEST_ASSERT_FLOAT_WITHIN(1.0e-15f, 0.002e-9f, noise.accel_bias_rw_var);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-12f, 1.0e-8f, noise.mount_align_rw_var);
 }
 
 static void test_external_misalignment_sets_mount_ready(void) {
@@ -437,6 +443,45 @@ static void test_eskf_fuse_gps_moves_nominal_state_toward_measurement(void) {
   TEST_ASSERT_TRUE(eskf.p[3][3] < p_vel_before);
 }
 
+static void test_eskf_gps_does_not_update_residual_mount_yaw(void) {
+  sf_eskf_t eskf;
+  sf_gnss_ned_sample_t gps = {
+      .pos_ned_m = {0.0f, 0.0f, 0.0f},
+      .vel_ned_mps = {8.0f, 0.0f, 0.0f},
+      .pos_std_m = {100.0f, 100.0f, 100.0f},
+      .vel_std_mps = {0.2f, 100.0f, 100.0f},
+  };
+  const float yaw_before = 10.0f * 3.1415927f / 180.0f;
+  const float half_yaw = 0.5f * yaw_before;
+  float yaw_after;
+
+  sf_eskf_init(&eskf, NULL, NULL);
+  eskf.nominal.vn = 0.0f;
+  eskf.nominal.ve = 0.0f;
+  eskf.nominal.vd = 0.0f;
+  eskf.nominal.qcs0 = cosf(half_yaw);
+  eskf.nominal.qcs1 = 0.0f;
+  eskf.nominal.qcs2 = 0.0f;
+  eskf.nominal.qcs3 = sinf(half_yaw);
+  for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
+    eskf.p[i][i] = 1.0e-6f;
+  }
+  eskf.p[3][3] = 1.0f;
+  eskf.p[17][17] = 1.0f;
+  eskf.p[3][17] = 0.5f;
+  eskf.p[17][3] = 0.5f;
+
+  sf_eskf_fuse_gps(&eskf, &gps);
+  yaw_after = quat_yaw_rad(eskf.nominal.qcs0, eskf.nominal.qcs1,
+                           eskf.nominal.qcs2, eskf.nominal.qcs3);
+
+  TEST_ASSERT_TRUE(eskf.nominal.vn > 0.0f);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-7f, yaw_before, yaw_after);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-9f, 0.0f,
+                           eskf.update_diag
+                               .sum_dx_mount_yaw[SF_ESKF_UPDATE_DIAG_GPS_VEL]);
+}
+
 static void test_eskf_fuse_body_vel_reduces_lateral_and_vertical_velocity(void) {
   sf_eskf_t eskf;
   float py_before;
@@ -481,6 +526,94 @@ static void test_eskf_body_vel_y_reduces_small_yaw_error_on_forward_motion(void)
   yaw_after = quat_yaw_rad(eskf.nominal.q0, eskf.nominal.q1, eskf.nominal.q2, eskf.nominal.q3);
 
   TEST_ASSERT_TRUE(fabsf(yaw_after) < fabsf(yaw_before));
+}
+
+static void test_eskf_body_vel_y_updates_residual_mount_yaw(void) {
+  sf_eskf_t eskf;
+  const float yaw_before = 10.0f * 3.1415927f / 180.0f;
+  const float half_yaw = 0.5f * yaw_before;
+  float yaw_after;
+
+  sf_eskf_init(&eskf, NULL, NULL);
+  eskf.nominal.vn = 5.0f;
+  eskf.nominal.ve = 0.0f;
+  eskf.nominal.vd = 0.0f;
+  eskf.nominal.qcs0 = cosf(half_yaw);
+  eskf.nominal.qcs1 = 0.0f;
+  eskf.nominal.qcs2 = 0.0f;
+  eskf.nominal.qcs3 = sinf(half_yaw);
+  for (int i = 0; i < 15; ++i) {
+    eskf.p[i][i] = 1.0e-6f;
+  }
+  eskf.p[15][15] = 1.0f;
+  eskf.p[16][16] = 1.0f;
+  eskf.p[17][17] = 1.0f;
+
+  sf_eskf_fuse_body_vel(&eskf, 0.05f);
+  yaw_after = quat_yaw_rad(eskf.nominal.qcs0, eskf.nominal.qcs1,
+                           eskf.nominal.qcs2, eskf.nominal.qcs3);
+
+  TEST_ASSERT_TRUE(fabsf(yaw_after) < fabsf(yaw_before));
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-9f, 0.0f, eskf.p[15][15]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, 0.0f,
+                           quat_roll_rad(eskf.nominal.qcs0,
+                                         eskf.nominal.qcs1,
+                                         eskf.nominal.qcs2,
+                                         eskf.nominal.qcs3));
+}
+
+static void test_eskf_body_vel_does_not_update_residual_mount_roll(void) {
+  sf_eskf_t eskf;
+  const float roll_before = 10.0f * 3.1415927f / 180.0f;
+  const float half_roll = 0.5f * roll_before;
+
+  sf_eskf_init(&eskf, NULL, NULL);
+  eskf.nominal.vn = 0.0f;
+  eskf.nominal.ve = 5.0f;
+  eskf.nominal.vd = 1.0f;
+  eskf.nominal.qcs0 = cosf(half_roll);
+  eskf.nominal.qcs1 = sinf(half_roll);
+  eskf.nominal.qcs2 = 0.0f;
+  eskf.nominal.qcs3 = 0.0f;
+  for (int i = 0; i < 15; ++i) {
+    eskf.p[i][i] = 1.0e-6f;
+  }
+  eskf.p[15][15] = 1.0f;
+  eskf.p[16][16] = 0.0f;
+  eskf.p[17][17] = 0.0f;
+
+  sf_eskf_fuse_body_vel(&eskf, 0.05f);
+
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-7f, cosf(half_roll), eskf.nominal.qcs0);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-7f, sinf(half_roll), eskf.nominal.qcs1);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-7f, 0.0f, eskf.nominal.qcs2);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-7f, 0.0f, eskf.nominal.qcs3);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-9f, 0.0f, eskf.p[15][15]);
+}
+
+static void test_eskf_zero_vel_does_not_update_residual_mount(void) {
+  sf_eskf_t eskf;
+  const float yaw_before = 10.0f * 3.1415927f / 180.0f;
+  const float half_yaw = 0.5f * yaw_before;
+
+  sf_eskf_init(&eskf, NULL, NULL);
+  eskf.nominal.vn = 0.3f;
+  eskf.nominal.ve = -0.2f;
+  eskf.nominal.vd = 0.1f;
+  eskf.nominal.qcs0 = cosf(half_yaw);
+  eskf.nominal.qcs1 = 0.0f;
+  eskf.nominal.qcs2 = 0.0f;
+  eskf.nominal.qcs3 = sinf(half_yaw);
+  eskf.p[15][15] = 1.0f;
+  eskf.p[16][16] = 1.0f;
+  eskf.p[17][17] = 1.0f;
+
+  sf_eskf_fuse_zero_vel(&eskf, 0.01f);
+
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-7f, cosf(half_yaw), eskf.nominal.qcs0);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-7f, 0.0f, eskf.nominal.qcs1);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-7f, 0.0f, eskf.nominal.qcs2);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-7f, sinf(half_yaw), eskf.nominal.qcs3);
 }
 
 static void test_eskf_zero_vel_reduces_forward_velocity_when_stopped(void) {
@@ -1157,8 +1290,12 @@ int main(void) {
   RUN_TEST(test_eskf_error_transition_has_expected_rest_structure);
   RUN_TEST(test_eskf_predict_updates_covariance_symmetrically);
   RUN_TEST(test_eskf_fuse_gps_moves_nominal_state_toward_measurement);
+  RUN_TEST(test_eskf_gps_does_not_update_residual_mount_yaw);
   RUN_TEST(test_eskf_fuse_body_vel_reduces_lateral_and_vertical_velocity);
   RUN_TEST(test_eskf_body_vel_y_reduces_small_yaw_error_on_forward_motion);
+  RUN_TEST(test_eskf_body_vel_y_updates_residual_mount_yaw);
+  RUN_TEST(test_eskf_body_vel_does_not_update_residual_mount_roll);
+  RUN_TEST(test_eskf_zero_vel_does_not_update_residual_mount);
   RUN_TEST(test_eskf_zero_vel_reduces_forward_velocity_when_stopped);
   RUN_TEST(test_eskf_fuse_body_speed_x_moves_forward_velocity_toward_measurement);
   RUN_TEST(test_loose_init_copies_all_noise_fields_and_covariance_diag);

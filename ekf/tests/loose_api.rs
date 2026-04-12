@@ -40,12 +40,7 @@ fn assert_nominal_close(
     assert_close(lhs.qcs3, rhs.qcs3, tol, &format!("{ctx}.qcs3"));
 }
 
-fn assert_covariance_close(
-    lhs: &[[f32; 24]; 24],
-    rhs: &[[f32; 24]; 24],
-    tol: f32,
-    ctx: &str,
-) {
+fn assert_covariance_close(lhs: &[[f32; 24]; 24], rhs: &[[f32; 24]; 24], tol: f32, ctx: &str) {
     for i in 0..24 {
         for j in 0..24 {
             assert_close(lhs[i][j], rhs[i][j], tol, &format!("{ctx}.p[{i}][{j}]"));
@@ -127,11 +122,7 @@ fn quat_to_dcm(q: [f32; 4]) -> [[f32; 3]; 3] {
 }
 
 fn skew(v: [f32; 3]) -> [[f32; 3]; 3] {
-    [
-        [0.0, -v[2], v[1]],
-        [v[2], 0.0, -v[0]],
-        [-v[1], v[0], 0.0],
-    ]
+    [[0.0, -v[2], v[1]], [v[2], 0.0, -v[0]], [-v[1], v[0], 0.0]]
 }
 
 fn mat3_mul(a: [[f32; 3]; 3], b: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
@@ -178,9 +169,7 @@ fn ecef_to_llh(x_ecef: [f32; 3]) -> [f32; 3] {
     let p = f / (3.0 * (s + 1.0 / s + 1.0).powi(2) * g * g);
     let q = (1.0 + 2.0 * tmp * p).sqrt();
     let r0 = -p * wgs84_e2 * r / (1.0 + q)
-        + (0.5 * a2 * (1.0 + 1.0 / q)
-            - p * (1.0 - wgs84_e2) * z2 / (q * (1.0 + q))
-            - 0.5 * p * r2)
+        + (0.5 * a2 * (1.0 + 1.0 / q) - p * (1.0 - wgs84_e2) * z2 / (q * (1.0 + q)) - 0.5 * p * r2)
             .sqrt();
     let tmp2 = (r - wgs84_e2 * r0).powi(2);
     let u = (tmp2 + z2).sqrt();
@@ -334,7 +323,12 @@ fn reference_batch_update(
             x_meas[1] - x_est[1],
             x_meas[2] - x_est[2],
         ];
-        if !chi2_vec3(residual, &p_in, &h_tmp, [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]) {
+        if !chi2_vec3(
+            residual,
+            &p_in,
+            &h_tmp,
+            [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        ) {
             let d_ttag_s = if dt_since_last_gnss_s == 0.0 || dt_since_last_gnss_s >= 1.0 {
                 1.0
             } else {
@@ -539,8 +533,10 @@ fn gravity_ecef_j2(x_e: [f32; 3]) -> [f32; 3] {
     let tmp2 = 1.5 * (WGS84_A * (WGS84_A * WGS84_J2)) / r2;
     let tmp3 = 5.0 * x_e[2] * x_e[2] / r2;
     [
-        tmp1 * (-x_e[0] - tmp2 * (x_e[0] - tmp3 * x_e[0])) + WGS84_OMEGA_IE * WGS84_OMEGA_IE * x_e[0],
-        tmp1 * (-x_e[1] - tmp2 * (x_e[1] - tmp3 * x_e[1])) + WGS84_OMEGA_IE * WGS84_OMEGA_IE * x_e[1],
+        tmp1 * (-x_e[0] - tmp2 * (x_e[0] - tmp3 * x_e[0]))
+            + WGS84_OMEGA_IE * WGS84_OMEGA_IE * x_e[0],
+        tmp1 * (-x_e[1] - tmp2 * (x_e[1] - tmp3 * x_e[1]))
+            + WGS84_OMEGA_IE * WGS84_OMEGA_IE * x_e[1],
         tmp1 * (-x_e[2] - tmp2 * (3.0 * x_e[2] - tmp3 * x_e[2])),
     ]
 }
@@ -743,7 +739,11 @@ fn loose_single_delta_predict_matches_reference_two_sample_heun_for_constant_imu
 
     loose.init_from_reference_ecef_state(
         state.q_es,
-        [state.pos_e[0] as f64, state.pos_e[1] as f64, state.pos_e[2] as f64],
+        [
+            state.pos_e[0] as f64,
+            state.pos_e[1] as f64,
+            state.pos_e[2] as f64,
+        ],
         state.vel_e,
         state.b_w,
         state.b_f,
@@ -802,7 +802,11 @@ fn loose_two_sample_predict_matches_reference_when_imu_changes_within_step() {
     let expected = ref_two_sample_heun_step(state, omega_1, omega_2, accel_1, accel_2, dt);
     loose.init_from_reference_ecef_state(
         state.q_es,
-        [state.pos_e[0] as f64, state.pos_e[1] as f64, state.pos_e[2] as f64],
+        [
+            state.pos_e[0] as f64,
+            state.pos_e[1] as f64,
+            state.pos_e[2] as f64,
+        ],
         state.vel_e,
         state.b_w,
         state.b_f,
@@ -859,7 +863,11 @@ fn loose_predict_includes_vertical_specific_force_in_velocity_update() {
     let expected = ref_two_sample_heun_step(state, [0.0; 3], [0.0; 3], accel_1, accel_2, dt);
     loose.init_from_reference_ecef_state(
         state.q_es,
-        [state.pos_e[0] as f64, state.pos_e[1] as f64, state.pos_e[2] as f64],
+        [
+            state.pos_e[0] as f64,
+            state.pos_e[1] as f64,
+            state.pos_e[2] as f64,
+        ],
         state.vel_e,
         state.b_w,
         state.b_f,
@@ -883,7 +891,12 @@ fn loose_predict_includes_vertical_specific_force_in_velocity_update() {
         dvz_2: accel_2[2] * dt,
         dt,
     });
-    assert_close(loose.nominal().vd, expected.vel_e[2], 1.0e-5, "vertical specific force");
+    assert_close(
+        loose.nominal().vd,
+        expected.vel_e[2],
+        1.0e-5,
+        "vertical specific force",
+    );
 }
 
 #[test]
@@ -932,9 +945,23 @@ fn loose_reference_batch_matches_gps_only_reference_update() {
     );
 
     gps_only.fuse_gps_reference(pos_meas, None, 1.8, 0.0, 0.5);
-    batch.fuse_reference_batch(Some(pos_meas), None, 1.8, 0.0, 0.5, gyro_radps, accel_mps2, 0.01);
+    batch.fuse_reference_batch(
+        Some(pos_meas),
+        None,
+        1.8,
+        0.0,
+        0.5,
+        gyro_radps,
+        accel_mps2,
+        0.01,
+    );
 
-    assert_nominal_close(batch.nominal(), gps_only.nominal(), 1.0e-6, "gps_only_batch");
+    assert_nominal_close(
+        batch.nominal(),
+        gps_only.nominal(),
+        1.0e-6,
+        "gps_only_batch",
+    );
     let batch_p = batch.covariance();
     let gps_p = gps_only.covariance();
     assert_covariance_close(&batch_p, &gps_p, 1.0e-6, "gps_only_batch");
@@ -983,7 +1010,12 @@ fn loose_reference_batch_matches_nhc_only_reference_update() {
     nhc_only.fuse_nhc_reference(gyro_radps, accel_mps2, 0.01);
     batch.fuse_reference_batch(None, None, 0.0, 0.0, 1.0, gyro_radps, accel_mps2, 0.01);
 
-    assert_nominal_close(batch.nominal(), nhc_only.nominal(), 1.0e-6, "nhc_only_batch");
+    assert_nominal_close(
+        batch.nominal(),
+        nhc_only.nominal(),
+        1.0e-6,
+        "nhc_only_batch",
+    );
     let batch_p = batch.covariance();
     let nhc_p = nhc_only.covariance();
     assert_covariance_close(&batch_p, &nhc_p, 1.0e-6, "nhc_only_batch");
@@ -1048,7 +1080,16 @@ fn loose_reference_batch_matches_reference_combined_gps_nhc_update() {
         0.01,
     );
 
-    batch.fuse_reference_batch(Some(pos_meas), None, 1.4, 0.0, 0.4, gyro_radps, accel_mps2, 0.01);
+    batch.fuse_reference_batch(
+        Some(pos_meas),
+        None,
+        1.4,
+        0.0,
+        0.4,
+        gyro_radps,
+        accel_mps2,
+        0.01,
+    );
 
     let x_actual = batch.nominal();
     assert_close(x_actual.q0, x_expected.q_es[0], 2.0e-4, "combined.q0");
@@ -1136,7 +1177,12 @@ fn loose_error_transition_matches_reference_formula() {
     assert_covariance_close(&f_actual, &f_expected, 1.0e-5, "transition_F");
     for i in 0..24 {
         for j in 0..21 {
-            assert_close(g_actual[i][j], g_expected[i][j], 1.0e-5, &format!("transition_G[{i}][{j}]"));
+            assert_close(
+                g_actual[i][j],
+                g_expected[i][j],
+                1.0e-5,
+                &format!("transition_G[{i}][{j}]"),
+            );
         }
     }
 }

@@ -28,7 +28,11 @@ struct Args {
     #[arg(long, default_value_t = 44)]
     gnss_outage_seed: u64,
 
-    #[arg(long = "misalignment", alias = "ekf-imu-source", default_value = "manual")]
+    #[arg(
+        long = "misalignment",
+        alias = "ekf-imu-source",
+        default_value = "manual"
+    )]
     misalignment: String,
 
     #[arg(long, default_value_t = 1)]

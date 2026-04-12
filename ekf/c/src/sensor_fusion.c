@@ -20,25 +20,30 @@ static void sf_rotmat_to_quat(const float r[3][3], float q[4]);
 static void sf_transpose3(const float in[3][3], float out[3][3]);
 static void sf_mat3_vec(const float m[3][3], const float v[3], float out[3]);
 static float sf_norm3(const float v[3]);
-static void sf_mat3_mul(const float a[3][3], const float b[3][3], float out[3][3]);
+static void sf_mat3_mul(const float a[3][3], const float b[3][3],
+                        float out[3][3]);
 static void sf_lla_to_ecef(double lat_deg, double lon_deg, double height_m,
                            double out_ecef_m[3]);
-static void sf_ecef_to_ned_matrix(float lat_deg, float lon_deg, float out[3][3]);
+static void sf_ecef_to_ned_matrix(float lat_deg, float lon_deg,
+                                  float out[3][3]);
 static void sf_anchor_set_from_lla(sf_internal_anchor_state_t *anchor,
-                                   float lat_deg, float lon_deg, float height_m);
+                                   float lat_deg, float lon_deg,
+                                   float height_m);
 static void sf_ecef_to_anchor_ned(const sf_internal_anchor_state_t *anchor,
                                   const double ecef_m[3], float out_ned_m[3]);
 static void sf_velocity_local_ned_to_anchor_ned(
     const sf_internal_anchor_state_t *anchor, float lat_deg, float lon_deg,
     const float vel_local_ned_mps[3], float out_anchor_ned_mps[3]);
-static float sf_heading_local_to_anchor(const sf_internal_anchor_state_t *anchor,
-                                        float lat_deg, float lon_deg,
-                                        float heading_local_rad);
+static float
+sf_heading_local_to_anchor(const sf_internal_anchor_state_t *anchor,
+                           float lat_deg, float lon_deg,
+                           float heading_local_rad);
 static float sf_body_speed_x_estimate(const sf_eskf_t *eskf);
-static void sf_rotate_nav_state_to_new_anchor(sf_sensor_fusion_impl_t *impl,
-                                              const sf_internal_anchor_state_t *new_anchor);
-static void sf_rotate_eskf_covariance_nav_blocks(
-    sf_eskf_t *eskf, const float r_n1_n0[3][3]);
+static void
+sf_rotate_nav_state_to_new_anchor(sf_sensor_fusion_impl_t *impl,
+                                  const sf_internal_anchor_state_t *new_anchor);
+static void sf_rotate_eskf_covariance_nav_blocks(sf_eskf_t *eskf,
+                                                 const float r_n1_n0[3][3]);
 static bool sf_prepare_local_gnss_sample(sf_sensor_fusion_impl_t *impl,
                                          const sf_gnss_sample_t *sample_in,
                                          sf_gnss_ned_sample_t *sample_out);
@@ -77,6 +82,10 @@ void sf_init(sf_t *sf, const float *q_vb_or_null) {
   } else {
     sf_fusion_init_external((sf_sensor_fusion_t *)sf, NULL, q_vb_or_null);
   }
+}
+
+void sf_set_r_body_vel(sf_t *sf, float r_body_vel) {
+  sf_fusion_set_r_body_vel((sf_sensor_fusion_t *)sf, r_body_vel);
 }
 
 sf_update_t sf_process_imu(sf_t *sf, const sf_imu_sample_t *sample) {
@@ -173,8 +182,9 @@ bool sf_get_lla(const sf_t *sf, float out_lla[3]) {
     const double p = sqrt(x * x + y * y);
     const double th = atan2(SF_WGS84_A_M * z, b * p);
     const double lon = atan2(y, x);
-    const double lat = atan2(z + ep2 * b * pow(sin(th), 3.0),
-                             p - SF_WGS84_E2 * SF_WGS84_A_M * pow(cos(th), 3.0));
+    const double lat =
+        atan2(z + ep2 * b * pow(sin(th), 3.0),
+              p - SF_WGS84_E2 * SF_WGS84_A_M * pow(cos(th), 3.0));
     const double sin_lat = sin(lat);
     const double n = SF_WGS84_A_M / sqrt(1.0 - SF_WGS84_E2 * sin_lat * sin_lat);
     const double h = p / cos(lat) - n;
@@ -238,6 +248,7 @@ void sf_predict_noise_default(sf_predict_noise_t *cfg) {
   cfg->accel_var = 2.4504214e-5f * 15.0f;
   cfg->gyro_bias_rw_var = 0.0002e-9f;
   cfg->accel_bias_rw_var = 0.002e-9f;
+  cfg->mount_align_rw_var = 1.0e-8f;
 }
 
 void sf_fusion_config_default(sf_fusion_config_t *cfg) {
@@ -283,6 +294,8 @@ void sf_fusion_init_external(sf_sensor_fusion_t *fusion,
   impl->mount_ready = true;
   impl->mount_q_vb_valid = true;
   memcpy(impl->mount_q_vb, q_vb, sizeof(impl->mount_q_vb));
+  impl->eskf_mount_q_vb_valid = true;
+  memcpy(impl->eskf_mount_q_vb, q_vb, sizeof(impl->eskf_mount_q_vb));
 }
 
 void sf_fusion_set_misalignment(sf_sensor_fusion_t *fusion,
@@ -296,6 +309,21 @@ void sf_fusion_set_misalignment(sf_sensor_fusion_t *fusion,
   impl->mount_ready = true;
   impl->mount_q_vb_valid = true;
   memcpy(impl->mount_q_vb, q_vb, sizeof(impl->mount_q_vb));
+  impl->eskf_mount_q_vb_valid = true;
+  memcpy(impl->eskf_mount_q_vb, q_vb, sizeof(impl->eskf_mount_q_vb));
+  impl->eskf.nominal.qcs0 = 1.0f;
+  impl->eskf.nominal.qcs1 = 0.0f;
+  impl->eskf.nominal.qcs2 = 0.0f;
+  impl->eskf.nominal.qcs3 = 0.0f;
+}
+
+void sf_fusion_set_r_body_vel(sf_sensor_fusion_t *fusion, float r_body_vel) {
+  sf_sensor_fusion_impl_t *impl;
+  if (fusion == NULL || !isfinite(r_body_vel) || r_body_vel < 0.0f) {
+    return;
+  }
+  impl = sf_impl(fusion);
+  impl->cfg.r_body_vel = r_body_vel;
 }
 
 bool sf_fusion_get_debug(const sf_sensor_fusion_t *fusion,
@@ -362,6 +390,7 @@ sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
   uint32_t t0_us;
   uint32_t elapsed_us;
   bool zero_vel_active;
+  const float *predict_mount_q_vb;
 
   if (fusion == NULL) {
     sf_update_t empty = {0};
@@ -434,7 +463,9 @@ sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
   }
 
   t0_us = sf_profile_stamp(impl);
-  sf_quat_to_rotmat(impl->mount_q_vb, c_bv);
+  predict_mount_q_vb =
+      impl->eskf_mount_q_vb_valid ? impl->eskf_mount_q_vb : impl->mount_q_vb;
+  sf_quat_to_rotmat(predict_mount_q_vb, c_bv);
   sf_transpose3((const float (*)[3])c_bv, c_vb);
   sf_mat3_vec((const float (*)[3])c_vb, sample->gyro_radps, gyro_vehicle);
   sf_mat3_vec((const float (*)[3])c_vb, sample->accel_mps2, accel_vehicle);
@@ -470,9 +501,8 @@ sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
                           &impl->profile.imu_clamp_max_us, elapsed_us);
   }
   if (impl->cfg.r_body_vel > 0.0f) {
-    zero_vel_active =
-        sf_runtime_zero_velocity_active(impl, sample->accel_mps2,
-                                        sample->gyro_radps);
+    zero_vel_active = sf_runtime_zero_velocity_active(impl, sample->accel_mps2,
+                                                      sample->gyro_radps);
     t0_us = sf_profile_stamp(impl);
     if (zero_vel_active) {
       sf_eskf_fuse_zero_vel(&impl->eskf, SF_RUNTIME_R_ZERO_VEL);
@@ -576,6 +606,11 @@ sf_update_t sf_fusion_process_gnss(sf_sensor_fusion_t *fusion,
   }
 
   if (!impl->ekf_initialized) {
+    if (impl->mount_q_vb_valid) {
+      memcpy(impl->eskf_mount_q_vb, impl->mount_q_vb,
+             sizeof(impl->eskf_mount_q_vb));
+      impl->eskf_mount_q_vb_valid = true;
+    }
     t0_us = sf_profile_stamp(impl);
     sf_initialize_eskf_from_gnss(&impl->eskf, &local_sample,
                                  impl->cfg.yaw_init_speed_mps);
@@ -602,8 +637,9 @@ sf_update_t sf_fusion_process_gnss(sf_sensor_fusion_t *fusion,
                                ekf_initialized_now);
 }
 
-sf_update_t sf_fusion_process_vehicle_speed(
-    sf_sensor_fusion_t *fusion, const sf_vehicle_speed_sample_t *sample) {
+sf_update_t
+sf_fusion_process_vehicle_speed(sf_sensor_fusion_t *fusion,
+                                const sf_vehicle_speed_sample_t *sample) {
   sf_sensor_fusion_impl_t *impl;
   float signed_speed_mps;
   float vbx_pred_mps;
@@ -719,6 +755,7 @@ static void sf_initialize_eskf_from_gnss(sf_eskf_t *eskf,
   float yaw_rad;
   const float gyro_bias_sigma_radps = 0.125f * 3.1415927f / 180.0f;
   const float accel_bias_sigma_mps2 = 0.20f;
+  const float mount_residual_sigma_rad = 5.0f * 3.1415927f / 180.0f;
   sf_predict_noise_t noise = eskf->noise;
 
   sf_eskf_init(eskf, NULL, &noise);
@@ -777,6 +814,9 @@ static void sf_initialize_eskf_from_gnss(sf_eskf_t *eskf,
   eskf->p[12][12] = accel_bias_sigma_mps2 * accel_bias_sigma_mps2;
   eskf->p[13][13] = accel_bias_sigma_mps2 * accel_bias_sigma_mps2;
   eskf->p[14][14] = accel_bias_sigma_mps2 * accel_bias_sigma_mps2;
+  eskf->p[15][15] = 0.0f;
+  eskf->p[16][16] = mount_residual_sigma_rad * mount_residual_sigma_rad;
+  eskf->p[17][17] = mount_residual_sigma_rad * mount_residual_sigma_rad;
 }
 
 static void sf_set_nominal_yaw_only(sf_eskf_nominal_state_t *state,
@@ -904,7 +944,8 @@ static void sf_rotmat_to_quat(const float r[3][3], float q[4]) {
   sf_quat_normalize(q);
 }
 
-static void sf_mat3_mul(const float a[3][3], const float b[3][3], float out[3][3]) {
+static void sf_mat3_mul(const float a[3][3], const float b[3][3],
+                        float out[3][3]) {
   float tmp[3][3];
   for (int i = 0; i < 3; ++i) {
     for (int j = 0; j < 3; ++j) {
@@ -928,7 +969,8 @@ static void sf_lla_to_ecef(double lat_deg, double lon_deg, double height_m,
   out_ecef_m[2] = (n * (1.0 - SF_WGS84_E2) + height_m) * slat;
 }
 
-static void sf_ecef_to_ned_matrix(float lat_deg, float lon_deg, float out[3][3]) {
+static void sf_ecef_to_ned_matrix(float lat_deg, float lon_deg,
+                                  float out[3][3]) {
   float lat = lat_deg * 3.1415927f / 180.0f;
   float lon = lon_deg * 3.1415927f / 180.0f;
   float slat = sinf(lat), clat = cosf(lat);
@@ -945,7 +987,8 @@ static void sf_ecef_to_ned_matrix(float lat_deg, float lon_deg, float out[3][3])
 }
 
 static void sf_anchor_set_from_lla(sf_internal_anchor_state_t *anchor,
-                                   float lat_deg, float lon_deg, float height_m) {
+                                   float lat_deg, float lon_deg,
+                                   float height_m) {
   if (anchor == NULL) {
     return;
   }
@@ -953,7 +996,8 @@ static void sf_anchor_set_from_lla(sf_internal_anchor_state_t *anchor,
   anchor->lat_deg = lat_deg;
   anchor->lon_deg = lon_deg;
   anchor->height_m = height_m;
-  sf_lla_to_ecef((double)lat_deg, (double)lon_deg, (double)height_m, anchor->ecef_m);
+  sf_lla_to_ecef((double)lat_deg, (double)lon_deg, (double)height_m,
+                 anchor->ecef_m);
   sf_ecef_to_ned_matrix(lat_deg, lon_deg, anchor->c_ne);
 }
 
@@ -978,10 +1022,12 @@ static void sf_velocity_local_ned_to_anchor_ned(
   sf_mat3_vec(anchor->c_ne, vel_ecef, out_anchor_ned_mps);
 }
 
-static float sf_heading_local_to_anchor(const sf_internal_anchor_state_t *anchor,
-                                        float lat_deg, float lon_deg,
-                                        float heading_local_rad) {
-  float forward_local[3] = {cosf(heading_local_rad), sinf(heading_local_rad), 0.0f};
+static float
+sf_heading_local_to_anchor(const sf_internal_anchor_state_t *anchor,
+                           float lat_deg, float lon_deg,
+                           float heading_local_rad) {
+  float forward_local[3] = {cosf(heading_local_rad), sinf(heading_local_rad),
+                            0.0f};
   float c_ne_local[3][3];
   float c_en_local[3][3];
   float forward_ecef[3];
@@ -993,8 +1039,8 @@ static float sf_heading_local_to_anchor(const sf_internal_anchor_state_t *anchor
   return atan2f(forward_anchor[1], forward_anchor[0]);
 }
 
-static void sf_rotate_eskf_covariance_nav_blocks(
-    sf_eskf_t *eskf, const float r_n1_n0[3][3]) {
+static void sf_rotate_eskf_covariance_nav_blocks(sf_eskf_t *eskf,
+                                                 const float r_n1_n0[3][3]) {
   float t[SF_ESKF_ERROR_STATES][SF_ESKF_ERROR_STATES];
   float tmp[SF_ESKF_ERROR_STATES][SF_ESKF_ERROR_STATES];
   float out[SF_ESKF_ERROR_STATES][SF_ESKF_ERROR_STATES];
@@ -1029,8 +1075,9 @@ static void sf_rotate_eskf_covariance_nav_blocks(
   memcpy(eskf->p, out, sizeof(out));
 }
 
-static void sf_rotate_nav_state_to_new_anchor(sf_sensor_fusion_impl_t *impl,
-                                              const sf_internal_anchor_state_t *new_anchor) {
+static void sf_rotate_nav_state_to_new_anchor(
+    sf_sensor_fusion_impl_t *impl,
+    const sf_internal_anchor_state_t *new_anchor) {
   float c_en_old[3][3];
   float r_n1_n0[3][3];
   double p_ecef[3];
@@ -1040,20 +1087,23 @@ static void sf_rotate_nav_state_to_new_anchor(sf_sensor_fusion_impl_t *impl,
   float q_n1_n0[4];
   float q_old[4];
   float q_new[4];
-  if (impl == NULL || !impl->anchor.valid || new_anchor == NULL || !new_anchor->valid) {
+  if (impl == NULL || !impl->anchor.valid || new_anchor == NULL ||
+      !new_anchor->valid) {
     return;
   }
   sf_transpose3(impl->anchor.c_ne, c_en_old);
   sf_mat3_mul(new_anchor->c_ne, c_en_old, r_n1_n0);
   if (impl->ekf_initialized) {
-    float p_n0[3] = {impl->eskf.nominal.pn, impl->eskf.nominal.pe, impl->eskf.nominal.pd};
-    float v_old[3] = {impl->eskf.nominal.vn, impl->eskf.nominal.ve, impl->eskf.nominal.vd};
-    p_ecef[0] = impl->anchor.ecef_m[0] + c_en_old[0][0] * p_n0[0] + c_en_old[0][1] * p_n0[1] +
-                c_en_old[0][2] * p_n0[2];
-    p_ecef[1] = impl->anchor.ecef_m[1] + c_en_old[1][0] * p_n0[0] + c_en_old[1][1] * p_n0[1] +
-                c_en_old[1][2] * p_n0[2];
-    p_ecef[2] = impl->anchor.ecef_m[2] + c_en_old[2][0] * p_n0[0] + c_en_old[2][1] * p_n0[1] +
-                c_en_old[2][2] * p_n0[2];
+    float p_n0[3] = {impl->eskf.nominal.pn, impl->eskf.nominal.pe,
+                     impl->eskf.nominal.pd};
+    float v_old[3] = {impl->eskf.nominal.vn, impl->eskf.nominal.ve,
+                      impl->eskf.nominal.vd};
+    p_ecef[0] = impl->anchor.ecef_m[0] + c_en_old[0][0] * p_n0[0] +
+                c_en_old[0][1] * p_n0[1] + c_en_old[0][2] * p_n0[2];
+    p_ecef[1] = impl->anchor.ecef_m[1] + c_en_old[1][0] * p_n0[0] +
+                c_en_old[1][1] * p_n0[1] + c_en_old[1][2] * p_n0[2];
+    p_ecef[2] = impl->anchor.ecef_m[2] + c_en_old[2][0] * p_n0[0] +
+                c_en_old[2][1] * p_n0[1] + c_en_old[2][2] * p_n0[2];
     sf_ecef_to_anchor_ned(new_anchor, p_ecef, p_n1);
     sf_mat3_vec(r_n1_n0, v_old, v_n1);
     impl->eskf.nominal.pn = p_n1[0];
@@ -1077,16 +1127,18 @@ static void sf_rotate_nav_state_to_new_anchor(sf_sensor_fusion_impl_t *impl,
   }
   if (impl->last_gnss_valid) {
     double last_ecef[3];
-    float pos_old[3] = {impl->last_gnss.pos_ned_m[0], impl->last_gnss.pos_ned_m[1], impl->last_gnss.pos_ned_m[2]};
+    float pos_old[3] = {impl->last_gnss.pos_ned_m[0],
+                        impl->last_gnss.pos_ned_m[1],
+                        impl->last_gnss.pos_ned_m[2]};
     v_n0[0] = impl->last_gnss.vel_ned_mps[0];
     v_n0[1] = impl->last_gnss.vel_ned_mps[1];
     v_n0[2] = impl->last_gnss.vel_ned_mps[2];
-    last_ecef[0] = impl->anchor.ecef_m[0] + c_en_old[0][0] * pos_old[0] + c_en_old[0][1] * pos_old[1] +
-                   c_en_old[0][2] * pos_old[2];
-    last_ecef[1] = impl->anchor.ecef_m[1] + c_en_old[1][0] * pos_old[0] + c_en_old[1][1] * pos_old[1] +
-                   c_en_old[1][2] * pos_old[2];
-    last_ecef[2] = impl->anchor.ecef_m[2] + c_en_old[2][0] * pos_old[0] + c_en_old[2][1] * pos_old[1] +
-                   c_en_old[2][2] * pos_old[2];
+    last_ecef[0] = impl->anchor.ecef_m[0] + c_en_old[0][0] * pos_old[0] +
+                   c_en_old[0][1] * pos_old[1] + c_en_old[0][2] * pos_old[2];
+    last_ecef[1] = impl->anchor.ecef_m[1] + c_en_old[1][0] * pos_old[0] +
+                   c_en_old[1][1] * pos_old[1] + c_en_old[1][2] * pos_old[2];
+    last_ecef[2] = impl->anchor.ecef_m[2] + c_en_old[2][0] * pos_old[0] +
+                   c_en_old[2][1] * pos_old[1] + c_en_old[2][2] * pos_old[2];
     sf_ecef_to_anchor_ned(new_anchor, last_ecef, p_n1);
     sf_mat3_vec(r_n1_n0, v_n0, v_n1);
     impl->last_gnss.pos_ned_m[0] = p_n1[0];
@@ -1117,13 +1169,14 @@ static bool sf_prepare_local_gnss_sample(sf_sensor_fusion_impl_t *impl,
     return false;
   }
   if (!impl->anchor.valid) {
-    sf_anchor_set_from_lla(&impl->anchor, sample_in->lat_deg, sample_in->lon_deg,
-                           sample_in->height_m);
+    sf_anchor_set_from_lla(&impl->anchor, sample_in->lat_deg,
+                           sample_in->lon_deg, sample_in->height_m);
   }
   sf_lla_to_ecef((double)sample_in->lat_deg, (double)sample_in->lon_deg,
                  (double)sample_in->height_m, ecef_m);
   sf_ecef_to_anchor_ned(&impl->anchor, ecef_m, pos_ned_m);
-  horiz_dist_m = sqrtf(pos_ned_m[0] * pos_ned_m[0] + pos_ned_m[1] * pos_ned_m[1]);
+  horiz_dist_m =
+      sqrtf(pos_ned_m[0] * pos_ned_m[0] + pos_ned_m[1] * pos_ned_m[1]);
   if (horiz_dist_m > SF_REANCHOR_DISTANCE_M) {
     sf_internal_anchor_state_t new_anchor;
     memset(&new_anchor, 0, sizeof(new_anchor));
@@ -1143,21 +1196,25 @@ static bool sf_prepare_local_gnss_sample(sf_sensor_fusion_impl_t *impl,
     impl->bootstrap_prev_gnss_valid = false;
     pos_ned_m[0] = pos_ned_m[1] = pos_ned_m[2] = 0.0f;
   }
-  sf_velocity_local_ned_to_anchor_ned(&impl->anchor, sample_in->lat_deg,
-                                      sample_in->lon_deg, sample_in->vel_ned_mps,
-                                      vel_anchor_ned_mps);
+  sf_velocity_local_ned_to_anchor_ned(
+      &impl->anchor, sample_in->lat_deg, sample_in->lon_deg,
+      sample_in->vel_ned_mps, vel_anchor_ned_mps);
   memset(sample_out, 0, sizeof(*sample_out));
   sample_out->t_s = sample_in->t_s;
   memcpy(sample_out->pos_ned_m, pos_ned_m, sizeof(pos_ned_m));
-  memcpy(sample_out->vel_ned_mps, vel_anchor_ned_mps, sizeof(vel_anchor_ned_mps));
-  memcpy(sample_out->pos_std_m, sample_in->pos_std_m, sizeof(sample_out->pos_std_m));
-  memcpy(sample_out->vel_std_mps, sample_in->vel_std_mps, sizeof(sample_out->vel_std_mps));
+  memcpy(sample_out->vel_ned_mps, vel_anchor_ned_mps,
+         sizeof(vel_anchor_ned_mps));
+  memcpy(sample_out->pos_std_m, sample_in->pos_std_m,
+         sizeof(sample_out->pos_std_m));
+  memcpy(sample_out->vel_std_mps, sample_in->vel_std_mps,
+         sizeof(sample_out->vel_std_mps));
   sample_out->heading_valid = sample_in->heading_valid;
-  sample_out->heading_rad = sample_in->heading_valid
-                                ? sf_heading_local_to_anchor(&impl->anchor, sample_in->lat_deg,
-                                                             sample_in->lon_deg,
-                                                             sample_in->heading_rad)
-                                : 0.0f;
+  sample_out->heading_rad =
+      sample_in->heading_valid
+          ? sf_heading_local_to_anchor(&impl->anchor, sample_in->lat_deg,
+                                       sample_in->lon_deg,
+                                       sample_in->heading_rad)
+          : 0.0f;
   return true;
 }
 
@@ -1215,12 +1272,25 @@ static float sf_body_speed_x_estimate(const sf_eskf_t *eskf) {
   const float q1 = eskf->nominal.q1;
   const float q2 = eskf->nominal.q2;
   const float q3 = eskf->nominal.q3;
+  const float qcs0 = eskf->nominal.qcs0;
+  const float qcs1 = eskf->nominal.qcs1;
+  const float qcs2 = eskf->nominal.qcs2;
+  const float qcs3 = eskf->nominal.qcs3;
   const float vn = eskf->nominal.vn;
   const float ve = eskf->nominal.ve;
   const float vd = eskf->nominal.vd;
-  return (1.0f - 2.0f * q2 * q2 - 2.0f * q3 * q3) * vn +
-         2.0f * (q1 * q2 + q0 * q3) * ve +
-         2.0f * (q1 * q3 - q0 * q2) * vd;
+  const float vs0 = (1.0f - 2.0f * q2 * q2 - 2.0f * q3 * q3) * vn +
+                    2.0f * (q1 * q2 + q0 * q3) * ve +
+                    2.0f * (q1 * q3 - q0 * q2) * vd;
+  const float vs1 = 2.0f * (q1 * q2 - q0 * q3) * vn +
+                    (1.0f - 2.0f * q1 * q1 - 2.0f * q3 * q3) * ve +
+                    2.0f * (q2 * q3 + q0 * q1) * vd;
+  const float vs2 = 2.0f * (q1 * q3 + q0 * q2) * vn +
+                    2.0f * (q2 * q3 - q0 * q1) * ve +
+                    (1.0f - 2.0f * q1 * q1 - 2.0f * q2 * q2) * vd;
+  return (1.0f - 2.0f * qcs2 * qcs2 - 2.0f * qcs3 * qcs3) * vs0 +
+         2.0f * (qcs1 * qcs2 - qcs0 * qcs3) * vs1 +
+         2.0f * (qcs1 * qcs3 + qcs0 * qcs2) * vs2;
 }
 
 static void sf_bootstrap_update_gnss_hints(sf_sensor_fusion_impl_t *impl,
@@ -1331,8 +1401,9 @@ static bool sf_runtime_zero_velocity_active(sf_sensor_fusion_impl_t *impl,
                             impl->cfg.bootstrap.ema_alpha);
   low_dynamic = gyro_ema <= impl->cfg.bootstrap.max_gyro_radps &&
                 accel_ema <= impl->cfg.bootstrap.max_accel_norm_err_mps2;
-  speed_mps = impl->last_gnss_valid ? sf_horiz_speed(impl->last_gnss.vel_ned_mps)
-                                    : 0.0f;
+  speed_mps = impl->last_gnss_valid
+                  ? sf_horiz_speed(impl->last_gnss.vel_ned_mps)
+                  : 0.0f;
   low_speed = impl->last_gnss_valid && speed_mps <= SF_RUNTIME_ZERO_SPEED_MPS;
   return low_dynamic && low_speed;
 }

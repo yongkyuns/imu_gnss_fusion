@@ -14,8 +14,7 @@ use sim::visualizer::math::nearest_master_ms;
 use sim::visualizer::model::{EkfImuSource, ImuPacket};
 use sim::visualizer::pipeline::align_replay::{
     AlignReplayData, BootstrapConfig, ImuReplayConfig, axis_angle_deg, build_align_replay,
-    build_fusion_align_replay, quat_rotate,
-    signed_projected_axis_angle_deg,
+    build_fusion_align_replay, quat_rotate, signed_projected_axis_angle_deg,
 };
 use sim::visualizer::pipeline::timebase::{MasterTimeline, build_master_timeline};
 
@@ -42,6 +41,12 @@ struct Args {
 
     #[arg(long, default_value_t = 0.2)]
     horiz_accel_min_norm_mps2: f64,
+
+    #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
+    straight_bias_report: bool,
+
+    #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
+    pitch_branch_report: bool,
 
     #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     alg_valid_only: bool,
@@ -252,6 +257,35 @@ struct HorizAccelQualityReport {
     median_dt_s: f64,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct StraightBiasFitReport {
+    n_total: usize,
+    n_accel: usize,
+    n_brake: usize,
+    fitted_bias_mean_mps2: f64,
+    fitted_bias_median_mps2: f64,
+    fitted_bias_std_mps2: f64,
+    implied_pitch_mean_deg: f64,
+    implied_pitch_median_deg: f64,
+    raw_rmse_mps2: f64,
+    debiased_rmse_mps2: f64,
+    accel_mean_bias_mps2: f64,
+    brake_mean_bias_mps2: f64,
+    accel_brake_gap_mps2: f64,
+    bin_mean_min_mps2: f64,
+    bin_mean_max_mps2: f64,
+    bin_mean_span_mps2: f64,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct PitchDeltaStats {
+    n: usize,
+    mean_deg: f64,
+    mean_abs_deg: f64,
+    sum_deg: f64,
+    pos_frac: f64,
+}
+
 #[derive(Clone, Copy)]
 enum TuneParam {
     BootstrapEmaAlpha,
@@ -378,6 +412,32 @@ fn main() -> Result<()> {
             write_horiz_accel_csv(path, &quality_samples)?;
             eprintln!("wrote horizontal accel CSV: {}", path.display());
         }
+
+        if args.straight_bias_report {
+            let straight_samples: Vec<_> = quality_samples
+                .iter()
+                .copied()
+                .filter(|s| s.straight_core_valid)
+                .collect();
+            let report = summarize_straight_bias_fit(&straight_samples);
+            print_straight_bias_fit_report("straight-bias", &report);
+        }
+    } else if args.straight_bias_report {
+        let replay = build_replay_for_mode(filter_mode, &dataset, &cfg, &bootstrap_cfg);
+        let quality_samples =
+            build_horiz_accel_quality_samples(&replay, args.horiz_accel_min_norm_mps2);
+        let straight_samples: Vec<_> = quality_samples
+            .iter()
+            .copied()
+            .filter(|s| s.straight_core_valid)
+            .collect();
+        let report = summarize_straight_bias_fit(&straight_samples);
+        print_straight_bias_fit_report("straight-bias", &report);
+    }
+
+    if args.pitch_branch_report {
+        let replay = build_replay_for_mode(filter_mode, &dataset, &cfg, &bootstrap_cfg);
+        print_pitch_branch_report("pitch-branch", &replay);
     }
 
     let mut best = base;
@@ -700,10 +760,7 @@ impl BootstrapDetector {
             speed_mps: speed_mps as f64,
             speed_ema_mps: self.speed_ema.unwrap_or(speed_mps) as f64,
             speed_rate_mps2: speed_rate as f64,
-            speed_rate_ema_mps2: self
-                .speed_rate_ema
-                .unwrap_or(speed_rate.abs())
-                as f64,
+            speed_rate_ema_mps2: self.speed_rate_ema.unwrap_or(speed_rate.abs()) as f64,
             course_rate_dps: course_rate.to_degrees() as f64,
             course_rate_ema_dps: self
                 .course_rate_ema
@@ -717,12 +774,12 @@ impl BootstrapDetector {
                 .unwrap_or((norm3(accel_b) - GRAVITY_MPS2).abs())
                 as f64,
             stationary: {
-                let low_dynamic =
-                    self.gyro_ema.unwrap_or(norm3(gyro_radps)) <= self.cfg.max_gyro_radps
-                        && self
-                            .accel_err_ema
-                            .unwrap_or((norm3(accel_b) - GRAVITY_MPS2).abs())
-                            <= self.cfg.max_accel_norm_err_mps2;
+                let low_dynamic = self.gyro_ema.unwrap_or(norm3(gyro_radps))
+                    <= self.cfg.max_gyro_radps
+                    && self
+                        .accel_err_ema
+                        .unwrap_or((norm3(accel_b) - GRAVITY_MPS2).abs())
+                        <= self.cfg.max_accel_norm_err_mps2;
                 let low_speed = self.speed_ema.unwrap_or(speed_mps) <= self.cfg.max_speed_mps;
                 let steady_motion = self
                     .speed_rate_ema
@@ -1167,6 +1224,245 @@ fn print_horiz_accel_quality_report(label: &str, report: &HorizAccelQualityRepor
         report.long_best_lag_windows,
         report.lat_best_corr,
         report.lat_best_lag_windows
+    );
+}
+
+fn summarize_straight_bias_fit(samples: &[HorizAccelQualitySample]) -> StraightBiasFitReport {
+    if samples.is_empty() {
+        return StraightBiasFitReport::default();
+    }
+
+    let mut residuals: Vec<f64> = samples.iter().map(|s| s.long_resid_mps2).collect();
+    residuals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+
+    let n = samples.len() as f64;
+    let fitted_bias_mean_mps2 = residuals.iter().sum::<f64>() / n;
+    let fitted_bias_median_mps2 = residuals[residuals.len() / 2];
+    let fitted_bias_std_mps2 = (residuals
+        .iter()
+        .map(|r| {
+            let d = *r - fitted_bias_mean_mps2;
+            d * d
+        })
+        .sum::<f64>()
+        / n)
+        .sqrt();
+    let raw_rmse_mps2 = (residuals.iter().map(|r| r * r).sum::<f64>() / n).sqrt();
+    let debiased_rmse_mps2 = (residuals
+        .iter()
+        .map(|r| {
+            let d = *r - fitted_bias_mean_mps2;
+            d * d
+        })
+        .sum::<f64>()
+        / n)
+        .sqrt();
+
+    let implied_pitch_mean_deg = bias_to_pitch_deg(fitted_bias_mean_mps2);
+    let implied_pitch_median_deg = bias_to_pitch_deg(fitted_bias_median_mps2);
+
+    let accel: Vec<f64> = samples
+        .iter()
+        .filter(|s| s.gnss_long_mps2 > 0.0)
+        .map(|s| s.long_resid_mps2)
+        .collect();
+    let brake: Vec<f64> = samples
+        .iter()
+        .filter(|s| s.gnss_long_mps2 < 0.0)
+        .map(|s| s.long_resid_mps2)
+        .collect();
+
+    let accel_mean_bias_mps2 = if accel.is_empty() {
+        f64::NAN
+    } else {
+        accel.iter().sum::<f64>() / accel.len() as f64
+    };
+    let brake_mean_bias_mps2 = if brake.is_empty() {
+        f64::NAN
+    } else {
+        brake.iter().sum::<f64>() / brake.len() as f64
+    };
+    let accel_brake_gap_mps2 =
+        if accel_mean_bias_mps2.is_finite() && brake_mean_bias_mps2.is_finite() {
+            accel_mean_bias_mps2 - brake_mean_bias_mps2
+        } else {
+            f64::NAN
+        };
+
+    let nbins = 8usize.min(samples.len());
+    let mut bin_means = Vec::new();
+    for b in 0..nbins {
+        let lo = b * samples.len() / nbins;
+        let hi = (b + 1) * samples.len() / nbins;
+        let bin = &samples[lo..hi];
+        if !bin.is_empty() {
+            bin_means.push(bin.iter().map(|s| s.long_resid_mps2).sum::<f64>() / bin.len() as f64);
+        }
+    }
+    let (bin_mean_min_mps2, bin_mean_max_mps2) = if bin_means.is_empty() {
+        (f64::NAN, f64::NAN)
+    } else {
+        (
+            bin_means.iter().copied().fold(f64::INFINITY, f64::min),
+            bin_means.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+        )
+    };
+    let bin_mean_span_mps2 = if bin_mean_min_mps2.is_finite() && bin_mean_max_mps2.is_finite() {
+        bin_mean_max_mps2 - bin_mean_min_mps2
+    } else {
+        f64::NAN
+    };
+
+    StraightBiasFitReport {
+        n_total: samples.len(),
+        n_accel: accel.len(),
+        n_brake: brake.len(),
+        fitted_bias_mean_mps2,
+        fitted_bias_median_mps2,
+        fitted_bias_std_mps2,
+        implied_pitch_mean_deg,
+        implied_pitch_median_deg,
+        raw_rmse_mps2,
+        debiased_rmse_mps2,
+        accel_mean_bias_mps2,
+        brake_mean_bias_mps2,
+        accel_brake_gap_mps2,
+        bin_mean_min_mps2,
+        bin_mean_max_mps2,
+        bin_mean_span_mps2,
+    }
+}
+
+fn print_straight_bias_fit_report(label: &str, report: &StraightBiasFitReport) {
+    eprintln!(
+        "[{}] n_total={} n_accel={} n_brake={}",
+        label, report.n_total, report.n_accel, report.n_brake
+    );
+    eprintln!(
+        "[{}] fitted_bias_mps2 mean={:.3} median={:.3} std={:.3} | implied_pitch_deg mean={:.3} median={:.3}",
+        label,
+        report.fitted_bias_mean_mps2,
+        report.fitted_bias_median_mps2,
+        report.fitted_bias_std_mps2,
+        report.implied_pitch_mean_deg,
+        report.implied_pitch_median_deg
+    );
+    eprintln!(
+        "[{}] rmse_mps2 raw={:.3} debiased={:.3}",
+        label, report.raw_rmse_mps2, report.debiased_rmse_mps2
+    );
+    eprintln!(
+        "[{}] accel_vs_brake_bias_mps2 accel={:.3} brake={:.3} gap={:.3}",
+        label,
+        report.accel_mean_bias_mps2,
+        report.brake_mean_bias_mps2,
+        report.accel_brake_gap_mps2
+    );
+    eprintln!(
+        "[{}] time_bin_bias_mps2 min={:.3} max={:.3} span={:.3}",
+        label, report.bin_mean_min_mps2, report.bin_mean_max_mps2, report.bin_mean_span_mps2
+    );
+}
+
+fn bias_to_pitch_deg(bias_mps2: f64) -> f64 {
+    let x = (bias_mps2 / GRAVITY_MPS2 as f64).clamp(-1.0, 1.0);
+    x.asin().to_degrees()
+}
+
+fn print_pitch_branch_report(label: &str, replay: &AlignReplayData) {
+    let all = &replay.samples;
+    let gravity = pitch_stats(
+        all.iter()
+            .filter(|s| s.upd_gravity)
+            .map(|s| s.contrib.gravity[1]),
+    );
+    let gravity_qs = pitch_stats(
+        all.iter()
+            .filter(|s| s.upd_gravity && s.upd_gravity_quasi_static)
+            .map(|s| s.contrib.gravity[1]),
+    );
+    let gravity_stat = pitch_stats(
+        all.iter()
+            .filter(|s| s.upd_gravity && !s.upd_gravity_quasi_static)
+            .map(|s| s.contrib.gravity[1]),
+    );
+    let horiz = pitch_stats(
+        all.iter()
+            .filter(|s| s.upd_lat)
+            .map(|s| s.contrib.horiz_accel[1]),
+    );
+    let turn_gyro = pitch_stats(
+        all.iter()
+            .filter(|s| s.upd_turn_gyro)
+            .map(|s| s.contrib.turn_gyro[1]),
+    );
+    let straight_accel = pitch_stats(
+        all.iter()
+            .filter(|s| s.horiz_trace.straight_core_valid && s.upd_lat && s.a_long_mps2 > 0.0)
+            .map(|s| s.contrib.horiz_accel[1]),
+    );
+    let straight_brake = pitch_stats(
+        all.iter()
+            .filter(|s| s.horiz_trace.straight_core_valid && s.upd_lat && s.a_long_mps2 < 0.0)
+            .map(|s| s.contrib.horiz_accel[1]),
+    );
+    let turn_left = pitch_stats(
+        all.iter()
+            .filter(|s| s.horiz_trace.turn_core_valid && s.upd_lat && s.a_lat_mps2 > 0.0)
+            .map(|s| s.contrib.horiz_accel[1]),
+    );
+    let turn_right = pitch_stats(
+        all.iter()
+            .filter(|s| s.horiz_trace.turn_core_valid && s.upd_lat && s.a_lat_mps2 < 0.0)
+            .map(|s| s.contrib.horiz_accel[1]),
+    );
+    eprintln!("[{}] branch pitch delta stats (deg/update)", label);
+    print_pitch_stats("gravity_all", &gravity);
+    print_pitch_stats("gravity_stationary", &gravity_stat);
+    print_pitch_stats("gravity_quasi_static", &gravity_qs);
+    print_pitch_stats("horiz_all", &horiz);
+    print_pitch_stats("turn_gyro", &turn_gyro);
+    print_pitch_stats("horiz_straight_accel", &straight_accel);
+    print_pitch_stats("horiz_straight_brake", &straight_brake);
+    print_pitch_stats("horiz_turn_left", &turn_left);
+    print_pitch_stats("horiz_turn_right", &turn_right);
+}
+
+fn pitch_stats<I>(vals: I) -> PitchDeltaStats
+where
+    I: Iterator<Item = f64>,
+{
+    let mut n = 0usize;
+    let mut sum = 0.0;
+    let mut sum_abs = 0.0;
+    let mut n_pos = 0usize;
+    for v in vals {
+        if !v.is_finite() {
+            continue;
+        }
+        n += 1;
+        sum += v;
+        sum_abs += v.abs();
+        if v > 0.0 {
+            n_pos += 1;
+        }
+    }
+    if n == 0 {
+        return PitchDeltaStats::default();
+    }
+    PitchDeltaStats {
+        n,
+        mean_deg: sum / n as f64,
+        mean_abs_deg: sum_abs / n as f64,
+        sum_deg: sum,
+        pos_frac: n_pos as f64 / n as f64,
+    }
+}
+
+fn print_pitch_stats(name: &str, s: &PitchDeltaStats) {
+    eprintln!(
+        "  {:>22}: n={} mean={:+.4} mean_abs={:.4} sum={:+.3} pos_frac={:.3}",
+        name, s.n, s.mean_deg, s.mean_abs_deg, s.sum_deg, s.pos_frac
     );
 }
 

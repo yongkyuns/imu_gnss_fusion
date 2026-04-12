@@ -5,6 +5,7 @@ pub struct PredictNoise {
     pub accel_var: f32,
     pub gyro_bias_rw_var: f32,
     pub accel_bias_rw_var: f32,
+    pub mount_align_rw_var: f32,
 }
 
 impl Default for PredictNoise {
@@ -14,6 +15,7 @@ impl Default for PredictNoise {
             accel_var: 12.0,
             gyro_bias_rw_var: 0.002e-9,
             accel_bias_rw_var: 0.2e-9,
+            mount_align_rw_var: 1.0e-8,
         }
     }
 }
@@ -25,6 +27,7 @@ impl PredictNoise {
             accel_var: 2.450_421_4e-5 * 15.0_f32,
             gyro_bias_rw_var: 0.0002e-9,
             accel_bias_rw_var: 0.002e-9,
+            mount_align_rw_var: 1.0e-8,
         }
     }
 }

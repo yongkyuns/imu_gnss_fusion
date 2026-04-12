@@ -353,6 +353,13 @@ impl eframe::App for App {
                         );
                         draw_plot(
                             ui,
+                            "ESKF Misalignment Estimates",
+                            self.data.eskf_misalignment.iter(),
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
                             "ESKF Gyro Bias Estimates",
                             self.data.eskf_bias_gyro.iter(),
                             true,

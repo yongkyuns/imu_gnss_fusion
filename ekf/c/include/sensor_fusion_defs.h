@@ -12,6 +12,7 @@ typedef struct {
   float accel_var;
   float gyro_bias_rw_var;
   float accel_bias_rw_var;
+  float mount_align_rw_var;
 } sf_predict_noise_t;
 
 typedef struct {

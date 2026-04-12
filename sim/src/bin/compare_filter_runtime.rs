@@ -1,6 +1,8 @@
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use sensor_fusion::c_api::{CEskfImuDelta, CEskfWrapper, CLooseImuDelta, CLooseWrapper, EskfGnssSample};
+use sensor_fusion::c_api::{
+    CEskfImuDelta, CEskfWrapper, CLooseImuDelta, CLooseWrapper, EskfGnssSample,
+};
 use sensor_fusion::ekf::PredictNoise;
 use sensor_fusion::loose::LoosePredictNoise;
 use serde::Deserialize;
@@ -243,7 +245,8 @@ fn build_replay_steps(
                     let age_us = curr.ttag_us - g.ttag_us;
                     if age_us >= 0 && age_us < 50_000 && g.ttag_us != last_gnss_used_ttag {
                         let pos_ecef = lla_to_ecef(g.lat_deg, g.lon_deg, g.height_m);
-                        let pos_ned = ecef_to_ned(pos_ecef, ref_ecef, init.ref_lat_deg, init.ref_lon_deg);
+                        let pos_ned =
+                            ecef_to_ned(pos_ecef, ref_ecef, init.ref_lat_deg, init.ref_lon_deg);
                         let heading_rad = g.heading_deg.to_radians();
                         let vel_ned = [
                             (g.speed_mps * heading_rad.cos()) as f32,
@@ -257,20 +260,29 @@ fn build_replay_steps(
                         let dt_since_last_gnss_s = if last_gnss_used_ttag == i64::MIN {
                             1.0
                         } else {
-                            ((curr.ttag_us - last_gnss_used_ttag) as f32 * 1.0e-6).clamp(1.0e-3, 1.0)
+                            ((curr.ttag_us - last_gnss_used_ttag) as f32 * 1.0e-6)
+                                .clamp(1.0e-3, 1.0)
                         };
                         last_gnss_used_ttag = g.ttag_us;
                         Some(GpsUpdate {
                             eskf: EskfGnssSample {
                                 t_s: ((curr.ttag_us - init.start_ttag_us) as f64 * 1.0e-6) as f32,
-                                pos_ned_m: [pos_ned[0] as f32, pos_ned[1] as f32, pos_ned[2] as f32],
+                                pos_ned_m: [
+                                    pos_ned[0] as f32,
+                                    pos_ned[1] as f32,
+                                    pos_ned[2] as f32,
+                                ],
                                 vel_ned_mps: vel_ned,
                                 pos_std_m: [g.h_acc_m as f32, g.h_acc_m as f32, g.v_acc_m as f32],
                                 vel_std_mps: [g.speed_acc_mps as f32; 3],
                                 heading_rad: None,
                             },
                             pos_ecef_m: pos_ecef,
-                            vel_ecef_mps: [vel_ecef[0] as f32, vel_ecef[1] as f32, vel_ecef[2] as f32],
+                            vel_ecef_mps: [
+                                vel_ecef[0] as f32,
+                                vel_ecef[1] as f32,
+                                vel_ecef[2] as f32,
+                            ],
                             h_acc_m: g.h_acc_m as f32,
                             speed_acc_mps: g.speed_acc_mps as f32,
                             dt_since_last_gnss_s,
@@ -409,7 +421,10 @@ fn print_report(name: &str, total: FilterStats, timed_runs: usize, data_span_s: 
     let avg = total / timed_runs as u32;
     let predict_ns = nanos_per(avg.timing.predict, avg.counts.predict_steps);
     let gps_us = nanos_per(avg.timing.gps_update, avg.counts.gps_updates) / 1_000.0;
-    let constrained_us = nanos_per(avg.timing.constrained_update, avg.counts.constrained_updates) / 1_000.0;
+    let constrained_us = nanos_per(
+        avg.timing.constrained_update,
+        avg.counts.constrained_updates,
+    ) / 1_000.0;
     let obs_us = nanos_per(avg.timing.constrained_update, avg.counts.observation_rows) / 1_000.0;
     let realtime = if avg.total.as_secs_f64() > 0.0 {
         data_span_s / avg.total.as_secs_f64()
@@ -424,23 +439,19 @@ fn print_report(name: &str, total: FilterStats, timed_runs: usize, data_span_s: 
     );
     println!(
         "  predict:      {:8} steps {:10.1} ns/step",
-        avg.counts.predict_steps,
-        predict_ns
+        avg.counts.predict_steps, predict_ns
     );
     println!(
         "  gps update:   {:8} calls {:10.3} us/call",
-        avg.counts.gps_updates,
-        gps_us
+        avg.counts.gps_updates, gps_us
     );
     println!(
         "  constrained:  {:8} calls {:10.3} us/call",
-        avg.counts.constrained_updates,
-        constrained_us
+        avg.counts.constrained_updates, constrained_us
     );
     println!(
         "  obs rows:     {:8} rows  {:10.3} us/row",
-        avg.counts.observation_rows,
-        obs_us
+        avg.counts.observation_rows, obs_us
     );
 }
 
@@ -476,8 +487,14 @@ fn resolve_single_file(input_dir: &Path, suffix: &str) -> Result<PathBuf> {
     matches.sort();
     match matches.len() {
         1 => Ok(matches.remove(0)),
-        0 => bail!("missing file with suffix {suffix} in {}", input_dir.display()),
-        _ => bail!("multiple files with suffix {suffix} in {}", input_dir.display()),
+        0 => bail!(
+            "missing file with suffix {suffix} in {}",
+            input_dir.display()
+        ),
+        _ => bail!(
+            "multiple files with suffix {suffix} in {}",
+            input_dir.display()
+        ),
     }
 }
 
@@ -487,7 +504,11 @@ fn import_gyro_data(path: &Path) -> Result<Vec<GyroSample>> {
     for row in rows {
         out.push(GyroSample {
             ttag_us: (parse_f64(&row[0])? / 1000.0).floor() as i64,
-            omega_radps: [parse_f64(&row[1])?, parse_f64(&row[2])?, parse_f64(&row[3])?],
+            omega_radps: [
+                parse_f64(&row[1])?,
+                parse_f64(&row[2])?,
+                parse_f64(&row[3])?,
+            ],
         });
     }
     Ok(out)
@@ -499,7 +520,11 @@ fn import_accel_data(path: &Path) -> Result<Vec<AccelSample>> {
     for row in rows {
         out.push(AccelSample {
             ttag_us: (parse_f64(&row[0])? / 1000.0).floor() as i64,
-            accel_mps2: [parse_f64(&row[1])?, parse_f64(&row[2])?, parse_f64(&row[3])?],
+            accel_mps2: [
+                parse_f64(&row[1])?,
+                parse_f64(&row[2])?,
+                parse_f64(&row[3])?,
+            ],
         });
     }
     Ok(out)
@@ -635,7 +660,8 @@ impl core::ops::Div<u32> for FilterStats {
             counts: FilterCounts {
                 predict_steps: (self.counts.predict_steps as f64 / div).round() as usize,
                 gps_updates: (self.counts.gps_updates as f64 / div).round() as usize,
-                constrained_updates: (self.counts.constrained_updates as f64 / div).round() as usize,
+                constrained_updates: (self.counts.constrained_updates as f64 / div).round()
+                    as usize,
                 observation_rows: (self.counts.observation_rows as f64 / div).round() as usize,
             },
         }

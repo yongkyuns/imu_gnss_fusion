@@ -224,12 +224,8 @@ fn convert_trace(trace: CAlignUpdateTrace) -> AlignUpdateTrace {
         horiz_obs_accel_vy: trace
             .horiz_obs_accel_vy_valid
             .then_some(trace.horiz_obs_accel_vy),
-        horiz_accel_bx: trace
-            .horiz_accel_bx_valid
-            .then_some(trace.horiz_accel_bx),
-        horiz_accel_by: trace
-            .horiz_accel_by_valid
-            .then_some(trace.horiz_accel_by),
+        horiz_accel_bx: trace.horiz_accel_bx_valid.then_some(trace.horiz_accel_bx),
+        horiz_accel_by: trace.horiz_accel_by_valid.then_some(trace.horiz_accel_by),
         horiz_speed_q: trace.horiz_speed_q_valid.then_some(trace.horiz_speed_q),
         horiz_accel_q: trace.horiz_accel_q_valid.then_some(trace.horiz_accel_q),
         horiz_straight_q: trace

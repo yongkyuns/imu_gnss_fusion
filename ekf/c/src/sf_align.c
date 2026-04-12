@@ -3,7 +3,7 @@
 #include <math.h>
 #include <string.h>
 
-#define SF_ALIGN_SIGMA_READY_DEG 0.15f
+#define SF_ALIGN_SIGMA_READY_DEG 0.05f
 
 static void sf_diag3(const float d[3], float out[3][3]);
 static float sf_wrap_angle_rad(float x);
@@ -27,48 +27,32 @@ static void sf_quat_to_rotmat(const float q[4], float out[3][3]);
 static void sf_quat_from_rotmat(float (*c)[3], float out[4]);
 static void sf_gravity_dir_body_from_q_vb(const float q_vb[4], float out[3]);
 static void sf_transpose3x3(float (*a)[3], float (*out)[3]);
-static void sf_align_obs(const float q_vb[4],
-                         const float gyro_b[3],
-                         const float accel_b[3],
-                         float out[6]);
-static void sf_align_obs_jacobian(const float q_vb[4],
-                                  const float gyro_b[3],
-                                  const float accel_b[3],
-                                  float out[6][3]);
+static void sf_align_obs(const float q_vb[4], const float gyro_b[3],
+                         const float accel_b[3], float out[6]);
+static void sf_align_obs_jacobian(const float q_vb[4], const float gyro_b[3],
+                                  const float accel_b[3], float out[6][3]);
 static bool sf_turn_consistency_update(sf_align_runtime_t *align_rt,
                                        const sf_align_config_t *cfg,
-                                       bool turn_valid,
-                                       float speed_mps,
+                                       bool turn_valid, float speed_mps,
                                        float course_rate_radps,
                                        float a_lat_mps2);
 static void sf_turn_consistency_reset(sf_align_runtime_t *align_rt);
 static void sf_align_predict_covariance(float p[3][3],
-                                        const sf_align_config_t *cfg,
-                                        float dt);
+                                        const sf_align_config_t *cfg, float dt);
 static void sf_align_inject_small_angle(float q_vb[4], const float dtheta[3]);
 static void sf_align_inject_vehicle_yaw(float q_vb[4], float dpsi);
-static float sf_apply_update1_masked(float q_vb[4],
-                                     float p[3][3],
-                                     float z,
-                                     int obs_idx,
-                                     const float accel_b[3],
-                                     const float gyro_b[3],
-                                     float r_var,
+static float sf_apply_update1_masked(float q_vb[4], float p[3][3], float z,
+                                     int obs_idx, const float accel_b[3],
+                                     const float gyro_b[3], float r_var,
                                      const bool state_mask[3]);
-static float sf_apply_update2_scaled_masked(float q_vb[4],
-                                            float p[3][3],
-                                            const float z[2],
-                                            const int obs_idx[2],
-                                            const float accel_b[3],
-                                            const float gyro_b[3],
-                                            const float r_var[2],
-                                            const bool state_mask[3],
-                                            const float state_scale[3]);
-static float sf_apply_vehicle_yaw_angle(float q_vb[4],
-                                        float p[3][3],
-                                        float angle_err_rad,
-                                        float r_var);
-static bool sf_compute_coarse_alignment_ready(const sf_align_runtime_t *align_rt);
+static float sf_apply_update2_scaled_masked(
+    float q_vb[4], float p[3][3], const float z[2], const int obs_idx[2],
+    const float accel_b[3], const float gyro_b[3], const float r_var[2],
+    const bool state_mask[3], const float state_scale[3]);
+static float sf_apply_vehicle_yaw_angle(float q_vb[4], float p[3][3],
+                                        float angle_err_rad, float r_var);
+static bool
+sf_compute_coarse_alignment_ready(const sf_align_runtime_t *align_rt);
 
 void sf_align_init(sf_align_runtime_t *align_rt, const sf_align_config_t *cfg) {
   float d[3];
@@ -109,10 +93,12 @@ bool sf_align_initialize_from_stationary(sf_align_runtime_t *align_rt,
   d[1] = d[0];
   d[2] = (60.0f * 3.1415927f / 180.0f) * (60.0f * 3.1415927f / 180.0f);
   sf_diag3(d, align_rt->state.p);
-  memcpy(align_rt->state.gravity_lp_b, init.mean_accel_b, sizeof(init.mean_accel_b));
+  memcpy(align_rt->state.gravity_lp_b, init.mean_accel_b,
+         sizeof(init.mean_accel_b));
   sf_turn_consistency_reset(align_rt);
   align_rt->yaw_observed = false;
-  align_rt->state.coarse_alignment_ready = sf_compute_coarse_alignment_ready(align_rt);
+  align_rt->state.coarse_alignment_ready =
+      sf_compute_coarse_alignment_ready(align_rt);
   return true;
 }
 
@@ -155,10 +141,12 @@ float sf_align_update_window_with_trace(sf_align_runtime_t *align_rt,
 
   if (trace_out != NULL) {
     memset(trace_out, 0, sizeof(*trace_out));
-    memcpy(trace_out->q_start, align_rt->state.q_vb, sizeof(trace_out->q_start));
+    memcpy(trace_out->q_start, align_rt->state.q_vb,
+           sizeof(trace_out->q_start));
   }
 
-  sf_align_predict_covariance(align_rt->state.p, cfg, window->dt > 1.0e-3f ? window->dt : 1.0e-3f);
+  sf_align_predict_covariance(align_rt->state.p, cfg,
+                              window->dt > 1.0e-3f ? window->dt : 1.0e-3f);
 
   memcpy(v_prev, window->gnss_vel_prev_n, sizeof(v_prev));
   memcpy(v_curr, window->gnss_vel_curr_n, sizeof(v_curr));
@@ -193,10 +181,12 @@ float sf_align_update_window_with_trace(sf_align_runtime_t *align_rt,
   } else {
     memcpy(horiz_accel_b, window->mean_accel_b, sizeof(horiz_accel_b));
   }
-  sf_align_obs(align_rt->state.q_vb, window->mean_gyro_b, horiz_accel_b, horiz_obs);
+  sf_align_obs(align_rt->state.q_vb, window->mean_gyro_b, horiz_accel_b,
+               horiz_obs);
 
   stationary = gyro_norm <= cfg->max_stationary_gyro_radps &&
-               fabsf(accel_norm - SF_GRAVITY_MSS) <= cfg->max_stationary_accel_norm_err_mps2 &&
+               fabsf(accel_norm - SF_GRAVITY_MSS) <=
+                   cfg->max_stationary_accel_norm_err_mps2 &&
                speed_mid < 0.5f;
   turn_valid = speed_mid > cfg->min_speed_mps &&
                fabsf(course_rate) > cfg->min_turn_rate_radps &&
@@ -211,7 +201,8 @@ float sf_align_update_window_with_trace(sf_align_runtime_t *align_rt,
 
   if (stationary) {
     float a[3];
-    sf_vec3_scale(align_rt->state.gravity_lp_b, 1.0f - cfg->gravity_lpf_alpha, a);
+    sf_vec3_scale(align_rt->state.gravity_lp_b, 1.0f - cfg->gravity_lpf_alpha,
+                  a);
     sf_vec3_scale(window->mean_accel_b, cfg->gravity_lpf_alpha, g_hat_b);
     sf_vec3_add(a, g_hat_b, align_rt->state.gravity_lp_b);
   }
@@ -224,21 +215,23 @@ float sf_align_update_window_with_trace(sf_align_runtime_t *align_rt,
                    cfg->r_gravity_std_mps2 * cfg->r_gravity_std_mps2},
         gravity_state_mask, (float[3]){1.0f, 1.0f, 1.0f});
     score += sf_apply_update1_masked(
-        align_rt->state.q_vb, align_rt->state.p, -sf_vec3_norm(align_rt->state.gravity_lp_b), 5,
+        align_rt->state.q_vb, align_rt->state.p,
+        -sf_vec3_norm(align_rt->state.gravity_lp_b), 5,
         align_rt->state.gravity_lp_b, window->mean_gyro_b,
         cfg->r_gravity_std_mps2 * cfg->r_gravity_std_mps2, gravity_state_mask);
     if (trace_out != NULL) {
       trace_out->after_gravity_valid = true;
       trace_out->after_gravity_quasi_static = false;
-      memcpy(trace_out->after_gravity, align_rt->state.q_vb, sizeof(trace_out->after_gravity));
+      memcpy(trace_out->after_gravity, align_rt->state.q_vb,
+             sizeof(trace_out->after_gravity));
     }
   }
 
   {
-    float horiz_imu_norm = sqrtf(horiz_obs[3] * horiz_obs[3] + horiz_obs[4] * horiz_obs[4]);
+    float horiz_imu_norm =
+        sqrtf(horiz_obs[3] * horiz_obs[3] + horiz_obs[4] * horiz_obs[4]);
     bool straight_core_valid = long_valid;
-    bool turn_core_valid = turn_heading_valid &&
-                           speed_mid > (10.0f / 3.6f) &&
+    bool turn_core_valid = turn_heading_valid && speed_mid > (10.0f / 3.6f) &&
                            fabsf(a_lat) > fmaxf(cfg->min_lat_acc_mps2, 0.7f) &&
                            fabsf(a_lat) > 1.5f * fmaxf(fabsf(a_long), 0.2f);
     bool horiz_vector_valid = speed_mid > cfg->min_speed_mps &&
@@ -250,8 +243,8 @@ float sf_align_update_window_with_trace(sf_align_runtime_t *align_rt,
       trace_out->horiz_turn_core_valid = turn_core_valid;
     }
     if (horiz_vector_valid) {
-      float speed_q = ((speed_mid - (10.0f / 3.6f)) /
-                       (20.0f / 3.6f - 10.0f / 3.6f));
+      float speed_q =
+          ((speed_mid - (10.0f / 3.6f)) / (20.0f / 3.6f - 10.0f / 3.6f));
       float accel_q = ((fminf(horiz_gnss_norm, horiz_imu_norm) - 0.5f) / 1.0f);
       float effective_std;
       speed_q = fminf(fmaxf(speed_q, 0.0f), 1.0f);
@@ -275,8 +268,10 @@ float sf_align_update_window_with_trace(sf_align_runtime_t *align_rt,
         trace_out->horiz_accel_q = accel_q;
       }
       if (turn_core_valid) {
-        float dominance = ((fabsf(a_lat) / (fabsf(a_long) + 0.2f)) - 1.5f) / 1.5f;
-        float lat_q = ((fabsf(a_lat) - fmaxf(cfg->min_lat_acc_mps2, 0.7f)) / 1.0f);
+        float dominance =
+            ((fabsf(a_lat) / (fabsf(a_long) + 0.2f)) - 1.5f) / 1.5f;
+        float lat_q =
+            ((fabsf(a_lat) - fmaxf(cfg->min_lat_acc_mps2, 0.7f)) / 1.0f);
         float turn_q;
         dominance = fminf(fmaxf(dominance, 0.0f), 1.0f);
         lat_q = fminf(fmaxf(lat_q, 0.0f), 1.0f);
@@ -292,7 +287,8 @@ float sf_align_update_window_with_trace(sf_align_runtime_t *align_rt,
       } else {
         float lat_ratio = fabsf(a_lat) / (0.5f + 0.6f * fabsf(a_long));
         float long_q = ((fabsf(a_long) - cfg->min_long_acc_mps2) / 0.8f);
-        float straight_q = speed_q * accel_q * fminf(fmaxf(long_q, 0.0f), 1.0f) *
+        float straight_q = speed_q * accel_q *
+                           fminf(fmaxf(long_q, 0.0f), 1.0f) *
                            (1.0f - fminf(fmaxf(lat_ratio, 0.0f), 1.0f));
         straight_q = fminf(fmaxf(straight_q, 0.2f), 1.0f);
         effective_std = cfg->r_horiz_heading_std_rad / straight_q;
@@ -300,7 +296,6 @@ float sf_align_update_window_with_trace(sf_align_runtime_t *align_rt,
           trace_out->horiz_straight_q_valid = true;
           trace_out->horiz_straight_q = straight_q;
         }
-
       }
       {
         float cross = horiz_obs[3] * a_lat - horiz_obs[4] * a_long;
@@ -312,13 +307,13 @@ float sf_align_update_window_with_trace(sf_align_runtime_t *align_rt,
           trace_out->horiz_effective_std_rad_valid = true;
           trace_out->horiz_effective_std_rad = effective_std;
         }
-        score += sf_apply_vehicle_yaw_angle(
-            align_rt->state.q_vb, align_rt->state.p, angle_err, effective_std * effective_std);
+        score += sf_apply_vehicle_yaw_angle(align_rt->state.q_vb,
+                                            align_rt->state.p, angle_err,
+                                            effective_std * effective_std);
         align_rt->yaw_observed = true;
         if (trace_out != NULL) {
           trace_out->after_horiz_accel_valid = true;
-          memcpy(trace_out->after_horiz_accel,
-                 align_rt->state.q_vb,
+          memcpy(trace_out->after_horiz_accel, align_rt->state.q_vb,
                  sizeof(trace_out->after_horiz_accel));
         }
       }
@@ -342,11 +337,13 @@ float sf_align_update_window_with_trace(sf_align_runtime_t *align_rt,
     }
     if (trace_out != NULL) {
       trace_out->after_turn_gyro_valid = true;
-      memcpy(trace_out->after_turn_gyro, align_rt->state.q_vb, sizeof(trace_out->after_turn_gyro));
+      memcpy(trace_out->after_turn_gyro, align_rt->state.q_vb,
+             sizeof(trace_out->after_turn_gyro));
     }
   }
 
-  align_rt->state.coarse_alignment_ready = sf_compute_coarse_alignment_ready(align_rt);
+  align_rt->state.coarse_alignment_ready =
+      sf_compute_coarse_alignment_ready(align_rt);
   if (trace_out != NULL) {
     trace_out->coarse_alignment_ready = align_rt->state.coarse_alignment_ready;
   }
@@ -359,8 +356,7 @@ bool sf_align_coarse_alignment_ready(const sf_align_runtime_t *align_rt) {
 
 static bool sf_turn_consistency_update(sf_align_runtime_t *align_rt,
                                        const sf_align_config_t *cfg,
-                                       bool turn_valid,
-                                       float speed_mps,
+                                       bool turn_valid, float speed_mps,
                                        float course_rate_radps,
                                        float a_lat_mps2) {
   uint32_t min_windows;
@@ -379,12 +375,13 @@ static bool sf_turn_consistency_update(sf_align_runtime_t *align_rt,
     align_rt->samples[align_rt->count].a_lat_mps2 = a_lat_mps2;
     align_rt->count++;
   } else {
-    memmove(&align_rt->samples[0],
-            &align_rt->samples[1],
+    memmove(&align_rt->samples[0], &align_rt->samples[1],
             sizeof(align_rt->samples[0]) * (SF_TURN_CONSISTENCY_CAPACITY - 1U));
     align_rt->samples[SF_TURN_CONSISTENCY_CAPACITY - 1U].speed_mps = speed_mps;
-    align_rt->samples[SF_TURN_CONSISTENCY_CAPACITY - 1U].course_rate_radps = course_rate_radps;
-    align_rt->samples[SF_TURN_CONSISTENCY_CAPACITY - 1U].a_lat_mps2 = a_lat_mps2;
+    align_rt->samples[SF_TURN_CONSISTENCY_CAPACITY - 1U].course_rate_radps =
+        course_rate_radps;
+    align_rt->samples[SF_TURN_CONSISTENCY_CAPACITY - 1U].a_lat_mps2 =
+        a_lat_mps2;
   }
 
   min_windows = cfg->turn_consistency_min_windows > 1U
@@ -397,9 +394,10 @@ static bool sf_turn_consistency_update(sf_align_runtime_t *align_rt,
   for (uint32_t i = 0; i < align_rt->count; ++i) {
     float a_lat_pred =
         align_rt->samples[i].speed_mps * align_rt->samples[i].course_rate_radps;
-    float tol = fmaxf(cfg->turn_consistency_max_abs_lat_err_mps2,
-                      cfg->turn_consistency_max_rel_lat_err *
-                          fmaxf(fabsf(a_lat_pred), fabsf(align_rt->samples[i].a_lat_mps2)));
+    float tol = fmaxf(
+        cfg->turn_consistency_max_abs_lat_err_mps2,
+        cfg->turn_consistency_max_rel_lat_err *
+            fmaxf(fabsf(a_lat_pred), fabsf(align_rt->samples[i].a_lat_mps2)));
     if (a_lat_pred * align_rt->samples[i].a_lat_mps2 > 0.0f) {
       sign_ok++;
     }
@@ -408,8 +406,9 @@ static bool sf_turn_consistency_update(sf_align_runtime_t *align_rt,
     }
   }
 
-  min_ok = (uint32_t)ceilf(fminf(fmaxf(cfg->turn_consistency_min_fraction, 0.0f), 1.0f) *
-                           (float)align_rt->count);
+  min_ok = (uint32_t)ceilf(
+      fminf(fmaxf(cfg->turn_consistency_min_fraction, 0.0f), 1.0f) *
+      (float)align_rt->count);
   return sign_ok >= min_ok && model_ok >= min_ok;
 }
 
@@ -417,13 +416,17 @@ static void sf_turn_consistency_reset(sf_align_runtime_t *align_rt) {
   align_rt->count = 0U;
 }
 
-static bool sf_compute_coarse_alignment_ready(const sf_align_runtime_t *align_rt) {
+static bool
+sf_compute_coarse_alignment_ready(const sf_align_runtime_t *align_rt) {
   if (align_rt == NULL || !align_rt->yaw_observed) {
     return false;
   }
-  float sigma_roll_deg = sqrtf(fmaxf(align_rt->state.p[0][0], 0.0f)) * 180.0f / 3.1415927f;
-  float sigma_pitch_deg = sqrtf(fmaxf(align_rt->state.p[1][1], 0.0f)) * 180.0f / 3.1415927f;
-  float sigma_yaw_deg = sqrtf(fmaxf(align_rt->state.p[2][2], 0.0f)) * 180.0f / 3.1415927f;
+  float sigma_roll_deg =
+      sqrtf(fmaxf(align_rt->state.p[0][0], 0.0f)) * 180.0f / 3.1415927f;
+  float sigma_pitch_deg =
+      sqrtf(fmaxf(align_rt->state.p[1][1], 0.0f)) * 180.0f / 3.1415927f;
+  float sigma_yaw_deg =
+      sqrtf(fmaxf(align_rt->state.p[2][2], 0.0f)) * 180.0f / 3.1415927f;
   return sigma_roll_deg <= SF_ALIGN_SIGMA_READY_DEG &&
          sigma_pitch_deg <= SF_ALIGN_SIGMA_READY_DEG &&
          sigma_yaw_deg <= SF_ALIGN_SIGMA_READY_DEG;
@@ -437,13 +440,9 @@ static void sf_align_predict_covariance(float p[3][3],
   p[2][2] += cfg->q_mount_std_rad[2] * cfg->q_mount_std_rad[2] * dt;
 }
 
-static float sf_apply_update1_masked(float q_vb[4],
-                                     float p[3][3],
-                                     float z,
-                                     int obs_idx,
-                                     const float accel_b[3],
-                                     const float gyro_b[3],
-                                     float r_var,
+static float sf_apply_update1_masked(float q_vb[4], float p[3][3], float z,
+                                     int obs_idx, const float accel_b[3],
+                                     const float gyro_b[3], float r_var,
                                      const bool state_mask[3]) {
   float obs[6];
   float H_full[6][3];
@@ -483,15 +482,10 @@ static float sf_apply_update1_masked(float q_vb[4],
   return y * y * s_inv;
 }
 
-static float sf_apply_update2_scaled_masked(float q_vb[4],
-                                            float p[3][3],
-                                            const float z[2],
-                                            const int obs_idx[2],
-                                            const float accel_b[3],
-                                            const float gyro_b[3],
-                                            const float r_var[2],
-                                            const bool state_mask[3],
-                                            const float state_scale[3]) {
+static float sf_apply_update2_scaled_masked(
+    float q_vb[4], float p[3][3], const float z[2], const int obs_idx[2],
+    const float accel_b[3], const float gyro_b[3], const float r_var[2],
+    const bool state_mask[3], const float state_scale[3]) {
   float obs[6];
   float H_full[6][3];
   float h0[3];
@@ -560,10 +554,8 @@ static float sf_apply_update2_scaled_masked(float q_vb[4],
          y[1] * (s_inv10 * y[0] + s_inv11 * y[1]);
 }
 
-static float sf_apply_vehicle_yaw_angle(float q_vb[4],
-                                        float p[3][3],
-                                        float angle_err_rad,
-                                        float r_var) {
+static float sf_apply_vehicle_yaw_angle(float q_vb[4], float p[3][3],
+                                        float angle_err_rad, float r_var) {
   float pzz = fmaxf(p[2][2], 0.0f);
   float s = pzz + fmaxf(r_var, 1.0e-9f);
   float k = s > 1.0e-9f ? pzz / s : 0.0f;
@@ -595,10 +587,8 @@ static void sf_align_inject_vehicle_yaw(float q_vb[4], float dpsi) {
   sf_quat_normalize(q_vb);
 }
 
-static void sf_align_obs(const float q_vb[4],
-                         const float gyro_b[3],
-                         const float accel_b[3],
-                         float out[6]) {
+static void sf_align_obs(const float q_vb[4], const float gyro_b[3],
+                         const float accel_b[3], float out[6]) {
   float c_bv[3][3];
   float c_vb[3][3];
   float gyro_v[3];
@@ -615,10 +605,8 @@ static void sf_align_obs(const float q_vb[4],
   out[5] = accel_v[2];
 }
 
-static void sf_align_obs_jacobian(const float q_vb[4],
-                                  const float gyro_b[3],
-                                  const float accel_b[3],
-                                  float out[6][3]) {
+static void sf_align_obs_jacobian(const float q_vb[4], const float gyro_b[3],
+                                  const float accel_b[3], float out[6][3]) {
   float c_bv[3][3];
   float c_vb[3][3];
   float gyro_skew[3][3];
@@ -677,9 +665,7 @@ static float sf_vec3_dot(const float a[3], const float b[3]) {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
-static float sf_vec3_norm(const float v[3]) {
-  return sqrtf(sf_vec3_dot(v, v));
-}
+static float sf_vec3_norm(const float v[3]) { return sqrtf(sf_vec3_dot(v, v)); }
 
 static float sf_vec2_norm(const float v[2]) {
   return sqrtf(v[0] * v[0] + v[1] * v[1]);

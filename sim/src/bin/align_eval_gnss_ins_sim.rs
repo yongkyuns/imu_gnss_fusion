@@ -28,6 +28,13 @@ struct Args {
     #[arg(long, default_value_t = 0.0)]
     mount_yaw_deg: f64,
 
+    #[arg(long, default_value_t = 0.0)]
+    accel_bias_x_mps2: f64,
+    #[arg(long, default_value_t = 0.0)]
+    accel_bias_y_mps2: f64,
+    #[arg(long, default_value_t = 0.0)]
+    accel_bias_z_mps2: f64,
+
     #[arg(long, default_value_t = 0.5)]
     gnss_pos_std_m: f32,
     #[arg(long, default_value_t = 0.2)]
@@ -114,7 +121,11 @@ fn main() -> Result<()> {
         bail!("need both IMU and GNSS samples");
     }
 
-    let q_truth = quat_from_rpy_alg_deg(args.mount_roll_deg, args.mount_pitch_deg, args.mount_yaw_deg);
+    let q_truth = quat_from_rpy_alg_deg(
+        args.mount_roll_deg,
+        args.mount_pitch_deg,
+        args.mount_yaw_deg,
+    );
     let truth_rpy = quat_rpy_alg_deg(q_truth[0], q_truth[1], q_truth[2], q_truth[3]);
 
     let mut fusion = SensorFusion::new();
@@ -136,11 +147,24 @@ fn main() -> Result<()> {
         if take_imu {
             let s = imu[imu_idx];
             let gyro_body = quat_rotate(q_truth, s.gyro_vehicle_radps);
-            let accel_body = quat_rotate(q_truth, s.accel_vehicle_mps2);
+            let accel_vehicle_biased = [
+                s.accel_vehicle_mps2[0] + args.accel_bias_x_mps2,
+                s.accel_vehicle_mps2[1] + args.accel_bias_y_mps2,
+                s.accel_vehicle_mps2[2] + args.accel_bias_z_mps2,
+            ];
+            let accel_body = quat_rotate(q_truth, accel_vehicle_biased);
             let _ = fusion.process_imu(FusionImuSample {
                 t_s: s.t_s as f32,
-                gyro_radps: [gyro_body[0] as f32, gyro_body[1] as f32, gyro_body[2] as f32],
-                accel_mps2: [accel_body[0] as f32, accel_body[1] as f32, accel_body[2] as f32],
+                gyro_radps: [
+                    gyro_body[0] as f32,
+                    gyro_body[1] as f32,
+                    gyro_body[2] as f32,
+                ],
+                accel_mps2: [
+                    accel_body[0] as f32,
+                    accel_body[1] as f32,
+                    accel_body[2] as f32,
+                ],
             });
             imu_idx += 1;
         } else {
@@ -155,8 +179,16 @@ fn main() -> Result<()> {
                     s.vel_ned_mps[1] as f32,
                     s.vel_ned_mps[2] as f32,
                 ],
-                pos_std_m: [args.gnss_pos_std_m, args.gnss_pos_std_m, args.gnss_pos_std_m],
-                vel_std_mps: [args.gnss_vel_std_mps, args.gnss_vel_std_mps, args.gnss_vel_std_mps],
+                pos_std_m: [
+                    args.gnss_pos_std_m,
+                    args.gnss_pos_std_m,
+                    args.gnss_pos_std_m,
+                ],
+                vel_std_mps: [
+                    args.gnss_vel_std_mps,
+                    args.gnss_vel_std_mps,
+                    args.gnss_vel_std_mps,
+                ],
                 heading_rad: None,
             });
             if update.mount_ready_changed && update.mount_ready && mount_ready_s.is_none() {
@@ -172,47 +204,61 @@ fn main() -> Result<()> {
                 ];
                 let align_rpy = quat_rpy_alg_deg(q_align[0], q_align[1], q_align[2], q_align[3]);
                 let debug = fusion.align_debug();
-                let (speed_mps, course_rate_dps, a_lat_mps2, a_long_mps2, gravity_applied, horiz_applied, turn_core_valid, straight_core_valid) =
-                    if let Some(debug) = debug {
-                        let dt = debug.window.dt as f64;
-                        let v_prev = [debug.window.gnss_vel_prev_n[0] as f64, debug.window.gnss_vel_prev_n[1] as f64];
-                        let v_curr = [debug.window.gnss_vel_curr_n[0] as f64, debug.window.gnss_vel_curr_n[1] as f64];
-                        let course_prev = v_prev[1].atan2(v_prev[0]);
-                        let course_curr = v_curr[1].atan2(v_curr[0]);
-                        let course_rate_dps = if dt > 1.0e-9 {
-                            wrap_rad_pi(course_curr - course_prev).to_degrees() / dt
-                        } else {
-                            0.0
-                        };
-                        let a_n = [
-                            (v_curr[0] - v_prev[0]) / dt.max(1.0e-3),
-                            (v_curr[1] - v_prev[1]) / dt.max(1.0e-3),
-                        ];
-                        let v_mid = [0.5 * (v_prev[0] + v_curr[0]), 0.5 * (v_prev[1] + v_curr[1])];
-                        let speed = (v_mid[0] * v_mid[0] + v_mid[1] * v_mid[1]).sqrt();
-                        let (a_long, a_lat) = if speed > 1.0e-9 {
-                            let t_hat = [v_mid[0] / speed, v_mid[1] / speed];
-                            let lat_hat = [-t_hat[1], t_hat[0]];
-                            (
-                                t_hat[0] * a_n[0] + t_hat[1] * a_n[1],
-                                lat_hat[0] * a_n[0] + lat_hat[1] * a_n[1],
-                            )
-                        } else {
-                            (0.0, 0.0)
-                        };
+                let (
+                    speed_mps,
+                    course_rate_dps,
+                    a_lat_mps2,
+                    a_long_mps2,
+                    gravity_applied,
+                    horiz_applied,
+                    turn_core_valid,
+                    straight_core_valid,
+                ) = if let Some(debug) = debug {
+                    let dt = debug.window.dt as f64;
+                    let v_prev = [
+                        debug.window.gnss_vel_prev_n[0] as f64,
+                        debug.window.gnss_vel_prev_n[1] as f64,
+                    ];
+                    let v_curr = [
+                        debug.window.gnss_vel_curr_n[0] as f64,
+                        debug.window.gnss_vel_curr_n[1] as f64,
+                    ];
+                    let course_prev = v_prev[1].atan2(v_prev[0]);
+                    let course_curr = v_curr[1].atan2(v_curr[0]);
+                    let course_rate_dps = if dt > 1.0e-9 {
+                        wrap_rad_pi(course_curr - course_prev).to_degrees() / dt
+                    } else {
+                        0.0
+                    };
+                    let a_n = [
+                        (v_curr[0] - v_prev[0]) / dt.max(1.0e-3),
+                        (v_curr[1] - v_prev[1]) / dt.max(1.0e-3),
+                    ];
+                    let v_mid = [0.5 * (v_prev[0] + v_curr[0]), 0.5 * (v_prev[1] + v_curr[1])];
+                    let speed = (v_mid[0] * v_mid[0] + v_mid[1] * v_mid[1]).sqrt();
+                    let (a_long, a_lat) = if speed > 1.0e-9 {
+                        let t_hat = [v_mid[0] / speed, v_mid[1] / speed];
+                        let lat_hat = [-t_hat[1], t_hat[0]];
                         (
-                            speed,
-                            course_rate_dps,
-                            a_lat,
-                            a_long,
-                            debug.trace.after_gravity.is_some(),
-                            debug.trace.after_horiz_accel.is_some(),
-                            debug.trace.horiz_turn_core_valid,
-                            debug.trace.horiz_straight_core_valid,
+                            t_hat[0] * a_n[0] + t_hat[1] * a_n[1],
+                            lat_hat[0] * a_n[0] + lat_hat[1] * a_n[1],
                         )
                     } else {
-                        (0.0, 0.0, 0.0, 0.0, false, false, false, false)
+                        (0.0, 0.0)
                     };
+                    (
+                        speed,
+                        course_rate_dps,
+                        a_lat,
+                        a_long,
+                        debug.trace.after_gravity.is_some(),
+                        debug.trace.after_horiz_accel.is_some(),
+                        debug.trace.horiz_turn_core_valid,
+                        debug.trace.horiz_straight_core_valid,
+                    )
+                } else {
+                    (0.0, 0.0, 0.0, 0.0, false, false, false, false)
+                };
                 let (
                     yaw_start_deg,
                     yaw_after_gravity_deg,
@@ -230,18 +276,20 @@ fn main() -> Result<()> {
                     horiz_accel_by,
                 ) = if let Some(debug) = debug {
                     let yaw_of = |q: [f32; 4]| {
-                        let (_, _, y) = quat_rpy_alg_deg(
-                            q[0] as f64,
-                            q[1] as f64,
-                            q[2] as f64,
-                            q[3] as f64,
-                        );
+                        let (_, _, y) =
+                            quat_rpy_alg_deg(q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64);
                         y
                     };
                     let yaw_start = yaw_of(debug.trace.q_start);
-                    let yaw_after_gravity = debug.trace.after_gravity.map(yaw_of).unwrap_or(f64::NAN);
-                    let yaw_after_horiz = debug.trace.after_horiz_accel.map(yaw_of).unwrap_or(f64::NAN);
-                    let yaw_after_turn_gyro = debug.trace.after_turn_gyro.map(yaw_of).unwrap_or(f64::NAN);
+                    let yaw_after_gravity =
+                        debug.trace.after_gravity.map(yaw_of).unwrap_or(f64::NAN);
+                    let yaw_after_horiz = debug
+                        .trace
+                        .after_horiz_accel
+                        .map(yaw_of)
+                        .unwrap_or(f64::NAN);
+                    let yaw_after_turn_gyro =
+                        debug.trace.after_turn_gyro.map(yaw_of).unwrap_or(f64::NAN);
                     let yaw_delta_gravity = debug
                         .trace
                         .after_gravity
@@ -277,15 +325,36 @@ fn main() -> Result<()> {
                         yaw_delta_horiz,
                         yaw_delta_turn_gyro,
                         debug.trace.coarse_alignment_ready,
-                        debug.trace.horiz_angle_err_rad.map(|x| (x as f64).to_degrees()).unwrap_or(f64::NAN),
-                        debug.trace
+                        debug
+                            .trace
+                            .horiz_angle_err_rad
+                            .map(|x| (x as f64).to_degrees())
+                            .unwrap_or(f64::NAN),
+                        debug
+                            .trace
                             .horiz_effective_std_rad
                             .map(|x| (x as f64).to_degrees())
                             .unwrap_or(f64::NAN),
-                        debug.trace.horiz_obs_accel_vx.map(|x| x as f64).unwrap_or(f64::NAN),
-                        debug.trace.horiz_obs_accel_vy.map(|x| x as f64).unwrap_or(f64::NAN),
-                        debug.trace.horiz_accel_bx.map(|x| x as f64).unwrap_or(f64::NAN),
-                        debug.trace.horiz_accel_by.map(|x| x as f64).unwrap_or(f64::NAN),
+                        debug
+                            .trace
+                            .horiz_obs_accel_vx
+                            .map(|x| x as f64)
+                            .unwrap_or(f64::NAN),
+                        debug
+                            .trace
+                            .horiz_obs_accel_vy
+                            .map(|x| x as f64)
+                            .unwrap_or(f64::NAN),
+                        debug
+                            .trace
+                            .horiz_accel_bx
+                            .map(|x| x as f64)
+                            .unwrap_or(f64::NAN),
+                        debug
+                            .trace
+                            .horiz_accel_by
+                            .map(|x| x as f64)
+                            .unwrap_or(f64::NAN),
                     )
                 } else {
                     (
@@ -339,8 +408,14 @@ fn main() -> Result<()> {
                     horiz_accel_bx,
                     horiz_accel_by,
                     rot_err_deg: quat_angle_deg(q_align, q_truth),
-                    fwd_err_deg: axis_angle_deg(quat_rotate(q_align, [1.0, 0.0, 0.0]), quat_rotate(q_truth, [1.0, 0.0, 0.0])),
-                    down_err_deg: axis_angle_deg(quat_rotate(q_align, [0.0, 0.0, 1.0]), quat_rotate(q_truth, [0.0, 0.0, 1.0])),
+                    fwd_err_deg: axis_angle_deg(
+                        quat_rotate(q_align, [1.0, 0.0, 0.0]),
+                        quat_rotate(q_truth, [1.0, 0.0, 0.0]),
+                    ),
+                    down_err_deg: axis_angle_deg(
+                        quat_rotate(q_align, [0.0, 0.0, 1.0]),
+                        quat_rotate(q_truth, [0.0, 0.0, 1.0]),
+                    ),
                     fwd_err_signed_deg: signed_projected_axis_angle_deg(
                         quat_rotate(q_align, [1.0, 0.0, 0.0]),
                         quat_rotate(q_truth, [1.0, 0.0, 0.0]),
@@ -376,14 +451,27 @@ fn main() -> Result<()> {
     let mean_rot = residuals.iter().map(|s| s.rot_err_deg).sum::<f64>() / n;
     let mean_abs_roll = residuals.iter().map(|s| s.err_roll_deg.abs()).sum::<f64>() / n;
     let mean_abs_pitch = residuals.iter().map(|s| s.err_pitch_deg.abs()).sum::<f64>() / n;
-    let turn_mean_down_signed = mean_of(residuals.iter().filter(|s| s.turn_core_valid).map(|s| s.down_err_signed_deg.abs()));
-    let straight_mean_down_signed =
-        mean_of(residuals.iter().filter(|s| s.straight_core_valid).map(|s| s.down_err_signed_deg.abs()));
+    let turn_mean_down_signed = mean_of(
+        residuals
+            .iter()
+            .filter(|s| s.turn_core_valid)
+            .map(|s| s.down_err_signed_deg.abs()),
+    );
+    let straight_mean_down_signed = mean_of(
+        residuals
+            .iter()
+            .filter(|s| s.straight_core_valid)
+            .map(|s| s.down_err_signed_deg.abs()),
+    );
 
     println!("input={}", args.data_dir.display());
     println!(
         "source={:?} key={} truth_mount_deg=({:.3},{:.3},{:.3})",
-        args.signal_source, args.data_key, args.mount_roll_deg, args.mount_pitch_deg, args.mount_yaw_deg
+        args.signal_source,
+        args.data_key,
+        args.mount_roll_deg,
+        args.mount_pitch_deg,
+        args.mount_yaw_deg
     );
     println!(
         "n={} align_init={:.3}s mount_ready={}",
@@ -426,14 +514,14 @@ fn load_imu_samples(args: &Args) -> Result<Vec<ImuSample>> {
         SignalSource::Ref => "ref_accel.csv".to_string(),
         SignalSource::Meas => format!("accel-{}.csv", args.data_key),
     };
-    let gyro = read_matrix3_csv(&args.data_dir.join(&gyro_name))
-        .with_context(|| format!("failed to load {}", gyro_name))?;
+    let gyro_path = args.data_dir.join(&gyro_name);
+    let gyro = read_matrix3_csv(&gyro_path).with_context(|| format!("failed to load {}", gyro_name))?;
     let accel = read_matrix3_csv(&args.data_dir.join(&accel_name))
         .with_context(|| format!("failed to load {}", accel_name))?;
     if time.len() != gyro.len() || time.len() != accel.len() {
         bail!("IMU files have inconsistent lengths");
     }
-    let gyro_is_deg = !matches!(args.signal_source, SignalSource::Ref);
+    let gyro_is_deg = csv_header_contains(&gyro_path, "deg/s")?;
     let mut out = Vec::with_capacity(time.len());
     for i in 0..time.len() {
         let gyro_vehicle_radps = if gyro_is_deg {
@@ -506,7 +594,8 @@ fn read_matrix_csv(path: &Path, cols: usize) -> Result<Vec<Vec<f64>>> {
 }
 
 fn read_csv_rows(path: &Path) -> Result<Vec<Vec<f64>>> {
-    let text = fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let text =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
     let mut out = Vec::new();
     for (i, line) in text.lines().enumerate() {
         if i == 0 || line.trim().is_empty() {
@@ -515,12 +604,23 @@ fn read_csv_rows(path: &Path) -> Result<Vec<Vec<f64>>> {
         let mut row = Vec::new();
         for part in line.split(',') {
             row.push(part.trim().parse::<f64>().with_context(|| {
-                format!("failed to parse numeric field in {}: {}", path.display(), line)
+                format!(
+                    "failed to parse numeric field in {}: {}",
+                    path.display(),
+                    line
+                )
             })?);
         }
         out.push(row);
     }
     Ok(out)
+}
+
+fn csv_header_contains(path: &Path, needle: &str) -> Result<bool> {
+    let text =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let header = text.lines().next().unwrap_or_default().to_ascii_lowercase();
+    Ok(header.contains(&needle.to_ascii_lowercase()))
 }
 
 fn quat_from_rpy_alg_deg(roll_deg: f64, pitch_deg: f64, yaw_deg: f64) -> [f64; 4] {
@@ -545,7 +645,9 @@ fn quat_normalize(q: [f64; 4]) -> [f64; 4] {
 }
 
 fn quat_angle_deg(a: [f64; 4], b: [f64; 4]) -> f64 {
-    let dot = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]).abs().clamp(0.0, 1.0);
+    let dot = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3])
+        .abs()
+        .clamp(0.0, 1.0);
     2.0 * dot.acos().to_degrees()
 }
 
@@ -583,11 +685,13 @@ where
 }
 
 fn fmt_opt(v: Option<f64>) -> String {
-    v.map(|x| format!("{:.3}", x)).unwrap_or_else(|| "none".to_string())
+    v.map(|x| format!("{:.3}", x))
+        .unwrap_or_else(|| "none".to_string())
 }
 
 fn write_residual_csv(path: &Path, samples: &[ResidualSample]) -> Result<()> {
-    let file = fs::File::create(path).with_context(|| format!("failed to create {}", path.display()))?;
+    let file =
+        fs::File::create(path).with_context(|| format!("failed to create {}", path.display()))?;
     let mut w = BufWriter::new(file);
     writeln!(
         w,

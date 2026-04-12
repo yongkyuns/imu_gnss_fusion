@@ -187,6 +187,10 @@ pub struct CEskfNominalState {
     pub bax: f32,
     pub bay: f32,
     pub baz: f32,
+    pub qcs0: f32,
+    pub qcs1: f32,
+    pub qcs2: f32,
+    pub qcs3: f32,
 }
 
 #[repr(C)]
@@ -211,13 +215,32 @@ pub struct CEskfStationaryDiag {
     pub updates: u32,
 }
 
+pub const C_ESKF_UPDATE_DIAG_TYPES: usize = 11;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CEskfUpdateDiag {
+    pub total_updates: u32,
+    pub type_counts: [u32; C_ESKF_UPDATE_DIAG_TYPES],
+    pub sum_dx_mount_yaw: [f32; C_ESKF_UPDATE_DIAG_TYPES],
+    pub sum_abs_dx_mount_yaw: [f32; C_ESKF_UPDATE_DIAG_TYPES],
+    pub sum_innovation: [f32; C_ESKF_UPDATE_DIAG_TYPES],
+    pub sum_abs_innovation: [f32; C_ESKF_UPDATE_DIAG_TYPES],
+    pub last_dx_mount_yaw: f32,
+    pub last_k_mount_yaw: f32,
+    pub last_innovation: f32,
+    pub last_innovation_var: f32,
+    pub last_type: u32,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct CEskf {
     pub nominal: CEskfNominalState,
-    pub p: [[f32; 15]; 15],
+    pub p: [[f32; 18]; 18],
     pub noise: PredictNoise,
     pub stationary_diag: CEskfStationaryDiag,
+    pub update_diag: CEskfUpdateDiag,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -233,10 +256,14 @@ pub struct EskfGnssSample {
 impl Default for CEskf {
     fn default() -> Self {
         Self {
-            nominal: CEskfNominalState::default(),
-            p: [[0.0; 15]; 15],
+            nominal: CEskfNominalState {
+                qcs0: 1.0,
+                ..CEskfNominalState::default()
+            },
+            p: [[0.0; 18]; 18],
             noise: PredictNoise::lsm6dso_typical_104hz(),
             stationary_diag: CEskfStationaryDiag::default(),
+            update_diag: CEskfUpdateDiag::default(),
         }
     }
 }
@@ -405,6 +432,7 @@ pub struct CAlignRuntime {
     pub state: CAlignState,
     pub samples: [CTurnConsistencySample; 16],
     pub count: u32,
+    pub yaw_observed: bool,
 }
 
 impl Default for CAlignRuntime {
@@ -413,6 +441,7 @@ impl Default for CAlignRuntime {
             state: CAlignState::default(),
             samples: [CTurnConsistencySample::default(); 16],
             count: 0,
+            yaw_observed: false,
         }
     }
 }
@@ -442,6 +471,7 @@ unsafe extern "C" {
     fn sf_align_coarse_alignment_ready(align_rt: *const CAlignRuntime) -> bool;
 
     fn sf_init(fusion: *mut CSensorFusion, q_vb_or_null: *const f32);
+    fn sf_set_r_body_vel(fusion: *mut CSensorFusion, r_body_vel: f32);
     fn sf_process_imu(fusion: *mut CSensorFusion, sample: *const CImuSample) -> CUpdate;
     fn sf_process_gnss(fusion: *mut CSensorFusion, sample: *const CGnssSample) -> CUpdate;
     fn sf_process_vehicle_speed(
@@ -695,6 +725,11 @@ impl CSensorFusionWrapper {
         self.refresh_state();
     }
 
+    pub fn set_r_body_vel(&mut self, r_body_vel: f32) {
+        unsafe { sf_set_r_body_vel(&mut self.raw as *mut CSensorFusion, r_body_vel) }
+        self.refresh_state();
+    }
+
     pub fn process_imu(&mut self, sample: FusionImuSample) -> FusionUpdate {
         let c_sample = CImuSample {
             t_s: sample.t_s,
@@ -702,8 +737,12 @@ impl CSensorFusionWrapper {
             accel_mps2: sample.accel_mps2,
         };
         // SAFETY: valid pointers, C returns by value.
-        let update =
-            unsafe { sf_process_imu(&mut self.raw as *mut CSensorFusion, &c_sample as *const CImuSample) };
+        let update = unsafe {
+            sf_process_imu(
+                &mut self.raw as *mut CSensorFusion,
+                &c_sample as *const CImuSample,
+            )
+        };
         self.refresh_state();
         let mount_q_vb = self.mount_q_vb();
         c_update_to_rust(update, mount_q_vb)
@@ -781,27 +820,30 @@ impl CSensorFusionWrapper {
     }
 
     pub fn last_reanchor_info(&self) -> Option<(f32, f32)> {
-        self.debug
-            .last_reanchor_valid
-            .then_some((self.debug.last_reanchor_t_s, self.debug.last_reanchor_distance_m))
+        self.debug.last_reanchor_valid.then_some((
+            self.debug.last_reanchor_t_s,
+            self.debug.last_reanchor_distance_m,
+        ))
     }
 
     pub fn anchor_lla_debug(&self) -> Option<[f32; 3]> {
-        self.debug
-            .anchor_valid
-            .then_some([
-                self.debug.anchor_lat_deg,
-                self.debug.anchor_lon_deg,
-                self.debug.anchor_height_m,
-            ])
+        self.debug.anchor_valid.then_some([
+            self.debug.anchor_lat_deg,
+            self.debug.anchor_lon_deg,
+            self.debug.anchor_height_m,
+        ])
     }
 
     pub fn align_window_debug(&self) -> Option<&CAlignWindowSummary> {
-        self.debug.align_window_valid.then_some(&self.debug.align_window)
+        self.debug
+            .align_window_valid
+            .then_some(&self.debug.align_window)
     }
 
     pub fn align_trace_debug(&self) -> Option<&CAlignUpdateTrace> {
-        self.debug.align_trace_valid.then_some(&self.debug.align_trace)
+        self.debug
+            .align_trace_valid
+            .then_some(&self.debug.align_trace)
     }
 
     fn refresh_state(&mut self) {
@@ -861,6 +903,7 @@ impl CSensorFusionWrapper {
             eskf.nominal.bax = state.accel_bias_mps2[0];
             eskf.nominal.bay = state.accel_bias_mps2[1];
             eskf.nominal.baz = state.accel_bias_mps2[2];
+            eskf.nominal.qcs0 = 1.0;
             Some(eskf)
         } else {
             None
@@ -885,7 +928,7 @@ impl CEskfWrapper {
         &self.raw.nominal
     }
 
-    pub fn covariance(&self) -> &[[f32; 15]; 15] {
+    pub fn covariance(&self) -> &[[f32; 18]; 18] {
         &self.raw.p
     }
 
@@ -907,6 +950,10 @@ impl CEskfWrapper {
         self.raw.nominal.pn = gnss.pos_ned_m[0];
         self.raw.nominal.pe = gnss.pos_ned_m[1];
         self.raw.nominal.pd = gnss.pos_ned_m[2];
+        self.raw.nominal.qcs0 = 1.0;
+        self.raw.nominal.qcs1 = 0.0;
+        self.raw.nominal.qcs2 = 0.0;
+        self.raw.nominal.qcs3 = 0.0;
         let att_sigma_rad = 2.0f32 * core::f32::consts::PI / 180.0;
         let att_var = att_sigma_rad * att_sigma_rad;
         self.raw.p[0][0] = att_var;
@@ -939,6 +986,10 @@ impl CEskfWrapper {
         self.raw.p[12][12] = accel_bias_sigma_mps2 * accel_bias_sigma_mps2;
         self.raw.p[13][13] = accel_bias_sigma_mps2 * accel_bias_sigma_mps2;
         self.raw.p[14][14] = accel_bias_sigma_mps2 * accel_bias_sigma_mps2;
+        let mount_residual_sigma_rad = 5.0f32 * core::f32::consts::PI / 180.0;
+        self.raw.p[15][15] = 0.0;
+        self.raw.p[16][16] = mount_residual_sigma_rad * mount_residual_sigma_rad;
+        self.raw.p[17][17] = mount_residual_sigma_rad * mount_residual_sigma_rad;
     }
 
     pub fn predict(&mut self, imu: CEskfImuDelta) {
@@ -956,7 +1007,10 @@ impl CEskfWrapper {
             heading_rad: sample.heading_rad.unwrap_or(0.0),
         };
         unsafe {
-            sf_eskf_fuse_gps(&mut self.raw as *mut CEskf, &c_sample as *const CGnssNedSample)
+            sf_eskf_fuse_gps(
+                &mut self.raw as *mut CEskf,
+                &c_sample as *const CGnssNedSample,
+            )
         };
     }
 
@@ -1018,12 +1072,41 @@ impl CLooseWrapper {
     }
 
     pub fn last_obs_types(&self) -> &[i32] {
-        let count = self.raw.last_obs_count.clamp(0, self.raw.last_obs_types.len() as i32) as usize;
+        let count = self
+            .raw
+            .last_obs_count
+            .clamp(0, self.raw.last_obs_types.len() as i32) as usize;
         &self.raw.last_obs_types[..count]
     }
 
     pub fn last_dx(&self) -> &[f32; 24] {
         &self.raw.last_dx
+    }
+
+    pub fn set_mount_quat(&mut self, q_cs: [f32; 4]) {
+        self.raw.nominal.qcs0 = q_cs[0];
+        self.raw.nominal.qcs1 = q_cs[1];
+        self.raw.nominal.qcs2 = q_cs[2];
+        self.raw.nominal.qcs3 = q_cs[3];
+        self.raw.qcs64 = [
+            q_cs[0] as f64,
+            q_cs[1] as f64,
+            q_cs[2] as f64,
+            q_cs[3] as f64,
+        ];
+    }
+
+    pub fn tighten_mount_covariance_deg(&mut self, sigma_deg: f32) {
+        let mut p = self.raw.p;
+        let var = (sigma_deg as f64).to_radians().powi(2) as f32;
+        for i in 21..24 {
+            for j in 0..24 {
+                p[i][j] = 0.0;
+                p[j][i] = 0.0;
+            }
+            p[i][i] = var;
+        }
+        self.set_covariance(p);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1049,7 +1132,11 @@ impl CLooseWrapper {
         self.raw.nominal.pn = pos_ned_m[0];
         self.raw.nominal.pe = pos_ned_m[1];
         self.raw.nominal.pd = pos_ned_m[2];
-        self.raw.pos_e64 = [pos_ned_m[0] as f64, pos_ned_m[1] as f64, pos_ned_m[2] as f64];
+        self.raw.pos_e64 = [
+            pos_ned_m[0] as f64,
+            pos_ned_m[1] as f64,
+            pos_ned_m[2] as f64,
+        ];
         self.raw.nominal.bgx = gyro_bias_radps[0];
         self.raw.nominal.bgy = gyro_bias_radps[1];
         self.raw.nominal.bgz = gyro_bias_radps[2];
@@ -1066,7 +1153,12 @@ impl CLooseWrapper {
         self.raw.nominal.qcs1 = q_cs[1];
         self.raw.nominal.qcs2 = q_cs[2];
         self.raw.nominal.qcs3 = q_cs[3];
-        self.raw.qcs64 = [q_cs[0] as f64, q_cs[1] as f64, q_cs[2] as f64, q_cs[3] as f64];
+        self.raw.qcs64 = [
+            q_cs[0] as f64,
+            q_cs[1] as f64,
+            q_cs[2] as f64,
+            q_cs[3] as f64,
+        ];
         if let Some(p_diag) = p_diag {
             for (i, value) in p_diag.into_iter().enumerate() {
                 self.raw.p[i][i] = value;
@@ -1108,6 +1200,33 @@ impl CLooseWrapper {
             p_diag,
         );
         self.raw.pos_e64 = pos_ecef_m;
+    }
+
+    pub fn init_seeded_vehicle_from_nav_ecef_state(
+        &mut self,
+        yaw_rad: f32,
+        lat_deg: f64,
+        lon_deg: f64,
+        pos_ecef_m: [f64; 3],
+        vel_ecef_mps: [f32; 3],
+        p_diag: Option<[f32; 24]>,
+        residual_mount_sigma_deg: Option<f32>,
+    ) {
+        let (q_es, q_cs) = loose_seeded_vehicle_ecef_split(yaw_rad, lat_deg, lon_deg);
+        self.init_from_reference_ecef_state(
+            q_es,
+            pos_ecef_m,
+            vel_ecef_mps,
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [1.0, 1.0, 1.0],
+            [1.0, 1.0, 1.0],
+            q_cs,
+            p_diag,
+        );
+        if let Some(sigma_deg) = residual_mount_sigma_deg {
+            self.tighten_mount_covariance_deg(sigma_deg);
+        }
     }
 
     pub fn predict(&mut self, imu: CLooseImuDelta) {
@@ -1249,7 +1368,10 @@ impl CLooseWrapper {
         };
     }
 
-    pub fn compute_error_transition(&self, imu: CLooseImuDelta) -> ([[f32; 24]; 24], [[f32; 21]; 24]) {
+    pub fn compute_error_transition(
+        &self,
+        imu: CLooseImuDelta,
+    ) -> ([[f32; 24]; 24], [[f32; 21]; 24]) {
         let mut f = [[0.0_f32; 24]; 24];
         let mut g = [[0.0_f32; 21]; 24];
         unsafe {
@@ -1264,6 +1386,48 @@ impl CLooseWrapper {
     }
 }
 
+pub fn loose_seeded_vehicle_ecef_split(
+    yaw_rad: f32,
+    lat_deg: f64,
+    lon_deg: f64,
+) -> ([f32; 4], [f32; 4]) {
+    let half_yaw = 0.5 * yaw_rad as f64;
+    let q_ns = [half_yaw.cos(), 0.0, 0.0, half_yaw.sin()];
+    let q_es = quat_mul_f64(quat_conj_f64(quat_ecef_to_ned_f64(lat_deg, lon_deg)), q_ns);
+    (
+        [
+            q_es[0] as f32,
+            q_es[1] as f32,
+            q_es[2] as f32,
+            q_es[3] as f32,
+        ],
+        [1.0, 0.0, 0.0, 0.0],
+    )
+}
+
+fn quat_conj_f64(q: [f64; 4]) -> [f64; 4] {
+    [q[0], -q[1], -q[2], -q[3]]
+}
+
+fn quat_mul_f64(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
+    [
+        a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
+        a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
+        a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
+        a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0],
+    ]
+}
+
+fn quat_ecef_to_ned_f64(lat_deg: f64, lon_deg: f64) -> [f64; 4] {
+    let lon = lon_deg.to_radians();
+    let lat = lat_deg.to_radians();
+    let half_lon = 0.5 * lon;
+    let q_lon = [half_lon.cos(), 0.0, 0.0, -half_lon.sin()];
+    let half_lat = 0.5 * (lat + 0.5 * core::f64::consts::PI);
+    let q_lat = [half_lat.cos(), 0.0, half_lat.sin(), 0.0];
+    quat_mul_f64(q_lat, q_lon)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1273,6 +1437,35 @@ mod tests {
     fn loose_predict_noise_ffi_layout_is_seven_f32s() {
         assert_eq!(size_of::<LoosePredictNoise>(), 7 * size_of::<f32>());
         assert_eq!(align_of::<LoosePredictNoise>(), align_of::<f32>());
+    }
+
+    #[test]
+    fn eskf_predict_noise_ffi_layout_is_five_f32s() {
+        assert_eq!(size_of::<PredictNoise>(), 5 * size_of::<f32>());
+        assert_eq!(align_of::<PredictNoise>(), align_of::<f32>());
+    }
+
+    #[test]
+    fn eskf_wrapper_passes_mount_noise_to_c_state() {
+        let noise = PredictNoise {
+            gyro_var: 0.11,
+            accel_var: 0.22,
+            gyro_bias_rw_var: 0.33,
+            accel_bias_rw_var: 0.44,
+            mount_align_rw_var: 0.55,
+        };
+
+        let wrapper = CEskfWrapper::new(noise);
+
+        assert_eq!(wrapper.raw.noise.gyro_var, noise.gyro_var);
+        assert_eq!(wrapper.raw.noise.accel_var, noise.accel_var);
+        assert_eq!(wrapper.raw.noise.gyro_bias_rw_var, noise.gyro_bias_rw_var);
+        assert_eq!(wrapper.raw.noise.accel_bias_rw_var, noise.accel_bias_rw_var);
+        assert_eq!(
+            wrapper.raw.noise.mount_align_rw_var,
+            noise.mount_align_rw_var
+        );
+        assert_eq!(wrapper.raw.nominal.qcs0, 1.0);
     }
 
     #[test]
@@ -1294,7 +1487,13 @@ mod tests {
         assert_eq!(wrapper.raw.noise.gyro_bias_rw_var, noise.gyro_bias_rw_var);
         assert_eq!(wrapper.raw.noise.accel_bias_rw_var, noise.accel_bias_rw_var);
         assert_eq!(wrapper.raw.noise.gyro_scale_rw_var, noise.gyro_scale_rw_var);
-        assert_eq!(wrapper.raw.noise.accel_scale_rw_var, noise.accel_scale_rw_var);
-        assert_eq!(wrapper.raw.noise.mount_align_rw_var, noise.mount_align_rw_var);
+        assert_eq!(
+            wrapper.raw.noise.accel_scale_rw_var,
+            noise.accel_scale_rw_var
+        );
+        assert_eq!(
+            wrapper.raw.noise.mount_align_rw_var,
+            noise.mount_align_rw_var
+        );
     }
 }

@@ -7,9 +7,24 @@
 extern "C" {
 #endif
 
-#define SF_ESKF_NOMINAL_STATES 16
-#define SF_ESKF_ERROR_STATES 15
-#define SF_ESKF_NOISE_STATES 12
+#define SF_ESKF_NOMINAL_STATES 20
+#define SF_ESKF_ERROR_STATES 18
+#define SF_ESKF_NOISE_STATES 15
+#define SF_ESKF_UPDATE_DIAG_TYPES 11
+
+typedef enum {
+  SF_ESKF_UPDATE_DIAG_GPS_POS = 0,
+  SF_ESKF_UPDATE_DIAG_GPS_VEL = 1,
+  SF_ESKF_UPDATE_DIAG_ZERO_VEL = 2,
+  SF_ESKF_UPDATE_DIAG_BODY_SPEED_X = 3,
+  SF_ESKF_UPDATE_DIAG_BODY_VEL_Y = 4,
+  SF_ESKF_UPDATE_DIAG_BODY_VEL_Z = 5,
+  SF_ESKF_UPDATE_DIAG_STATIONARY_X = 6,
+  SF_ESKF_UPDATE_DIAG_STATIONARY_Y = 7,
+  SF_ESKF_UPDATE_DIAG_GPS_POS_D = 8,
+  SF_ESKF_UPDATE_DIAG_GPS_VEL_D = 9,
+  SF_ESKF_UPDATE_DIAG_ZERO_VEL_D = 10,
+} sf_eskf_update_diag_type_t;
 
 typedef struct {
   float q0, q1, q2, q3;
@@ -17,6 +32,7 @@ typedef struct {
   float pn, pe, pd;
   float bgx, bgy, bgz;
   float bax, bay, baz;
+  float qcs0, qcs1, qcs2, qcs3;
 } sf_eskf_nominal_state_t;
 
 typedef struct {
@@ -25,6 +41,7 @@ typedef struct {
   float dp_n, dp_e, dp_d;
   float dbg_x, dbg_y, dbg_z;
   float dba_x, dba_y, dba_z;
+  float dpsi_cs_x, dpsi_cs_y, dpsi_cs_z;
 } sf_eskf_error_state_t;
 
 typedef struct {
@@ -47,11 +64,26 @@ typedef struct {
   unsigned int updates;
 } sf_eskf_stationary_diag_t;
 
+typedef struct {
+  unsigned int total_updates;
+  unsigned int type_counts[SF_ESKF_UPDATE_DIAG_TYPES];
+  float sum_dx_mount_yaw[SF_ESKF_UPDATE_DIAG_TYPES];
+  float sum_abs_dx_mount_yaw[SF_ESKF_UPDATE_DIAG_TYPES];
+  float sum_innovation[SF_ESKF_UPDATE_DIAG_TYPES];
+  float sum_abs_innovation[SF_ESKF_UPDATE_DIAG_TYPES];
+  float last_dx_mount_yaw;
+  float last_k_mount_yaw;
+  float last_innovation;
+  float last_innovation_var;
+  unsigned int last_type;
+} sf_eskf_update_diag_t;
+
 typedef struct sf_eskf {
   sf_eskf_nominal_state_t nominal;
   float p[SF_ESKF_ERROR_STATES][SF_ESKF_ERROR_STATES];
   sf_predict_noise_t noise;
   sf_eskf_stationary_diag_t stationary_diag;
+  sf_eskf_update_diag_t update_diag;
 } sf_eskf_t;
 
 typedef struct {

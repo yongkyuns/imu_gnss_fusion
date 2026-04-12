@@ -283,6 +283,7 @@ pub fn build_signal_traces(
     out.eskf_bias_accel = ekf.eskf_bias_accel;
     out.eskf_cov_bias = ekf.eskf_cov_bias;
     out.eskf_cov_nonbias = ekf.eskf_cov_nonbias;
+    out.eskf_misalignment = ekf.eskf_misalignment;
     out.eskf_stationary_diag = ekf.eskf_stationary_diag;
     out.eskf_bump_pitch_speed = ekf.eskf_bump_pitch_speed;
     out.eskf_bump_diag = ekf.eskf_bump_diag;
@@ -362,6 +363,7 @@ pub fn build_signal_traces(
         &mut out.eskf_bias_accel,
         &mut out.eskf_cov_bias,
         &mut out.eskf_cov_nonbias,
+        &mut out.eskf_misalignment,
         &mut out.eskf_stationary_diag,
         &mut out.eskf_bump_pitch_speed,
         &mut out.eskf_bump_diag,

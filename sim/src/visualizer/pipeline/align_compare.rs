@@ -111,7 +111,14 @@ pub fn build_align_compare_traces(
                 0.0
             },
         ]);
-        turn_core_trace.push([t, if sample.horiz_trace.turn_core_valid { 1.0 } else { 0.0 }]);
+        turn_core_trace.push([
+            t,
+            if sample.horiz_trace.turn_core_valid {
+                1.0
+            } else {
+                0.0
+            },
+        ]);
         straight_core_trace.push([
             t,
             if sample.horiz_trace.straight_core_valid {
@@ -217,17 +224,20 @@ pub fn build_align_compare_traces(
                 points: yaw_init,
             },
         ],
-        motion: vec![Trace {
-            name: "final ESF-ALG heading [deg]".to_string(),
-            points: final_alg_heading,
-        }, Trace {
-            name: "mount ready".to_string(),
-            points: mount_ready_markers,
-        },
-        Trace {
-            name: "EKF initialized".to_string(),
-            points: ekf_initialized_markers,
-        }],
+        motion: vec![
+            Trace {
+                name: "final ESF-ALG heading [deg]".to_string(),
+                points: final_alg_heading,
+            },
+            Trace {
+                name: "mount ready".to_string(),
+                points: mount_ready_markers,
+            },
+            Trace {
+                name: "EKF initialized".to_string(),
+                points: ekf_initialized_markers,
+            },
+        ],
         flags: vec![
             Trace {
                 name: "stationary".to_string(),

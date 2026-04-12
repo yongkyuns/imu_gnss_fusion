@@ -132,6 +132,7 @@ fn main() -> Result<()> {
         group_stats("eskf_bias_accel", &data.eskf_bias_accel),
         group_stats("eskf_cov_bias", &data.eskf_cov_bias),
         group_stats("eskf_cov_nonbias", &data.eskf_cov_nonbias),
+        group_stats("eskf_misalignment", &data.eskf_misalignment),
         group_stats("eskf_stationary_diag", &data.eskf_stationary_diag),
         group_stats("eskf_bump_pitch_speed", &data.eskf_bump_pitch_speed),
         group_stats("eskf_bump_diag", &data.eskf_bump_diag),
@@ -177,6 +178,7 @@ fn main() -> Result<()> {
         ("align_motion", &data.align_motion),
         ("eskf_meas_gyro", &data.eskf_meas_gyro),
         ("eskf_meas_accel", &data.eskf_meas_accel),
+        ("eskf_misalignment", &data.eskf_misalignment),
         ("eskf_bump_pitch_speed", &data.eskf_bump_pitch_speed),
         ("eskf_bump_diag", &data.eskf_bump_diag),
         ("loose_meas_gyro", &data.loose_meas_gyro),
@@ -234,6 +236,18 @@ fn main() -> Result<()> {
         dump_traces_near_time(
             "loose_misalignment",
             &data.loose_misalignment,
+            t_s,
+            args.dump_window_s,
+        );
+        dump_traces_near_time(
+            "eskf_misalignment",
+            &data.eskf_misalignment,
+            t_s,
+            args.dump_window_s,
+        );
+        dump_traces_near_time(
+            "eskf_stationary_diag",
+            &data.eskf_stationary_diag,
             t_s,
             args.dump_window_s,
         );

@@ -4,9 +4,10 @@ use sensor_fusion::c_api::{CLooseImuDelta, CLooseWrapper};
 use sensor_fusion::fusion::{FusionImuSample, SensorFusion};
 use sensor_fusion::loose::LoosePredictNoise;
 use sim::ubxlog::{
-    NavPvtObs, UbxFrame, extract_esf_alg, extract_nav2_pvt_obs, extract_nav_pvt_obs,
+    NavPvtObs, UbxFrame, extract_esf_alg, extract_nav_pvt_obs, extract_nav2_pvt_obs,
     parse_ubx_frames,
 };
+use sim::ubxlog::{extract_esf_raw_samples, sensor_meta};
 use sim::visualizer::math::{deg2rad, ecef_to_ned, lla_to_ecef, mat_vec, nearest_master_ms};
 use sim::visualizer::pipeline::align_replay::{
     BootstrapConfig as AlignBootstrapConfig, ImuReplayConfig, build_align_replay,
@@ -14,7 +15,6 @@ use sim::visualizer::pipeline::align_replay::{
 };
 use sim::visualizer::pipeline::ekf_compare::EkfCompareConfig;
 use sim::visualizer::pipeline::timebase::{MasterTimeline, build_master_timeline};
-use sim::ubxlog::{extract_esf_raw_samples, sensor_meta};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -123,12 +123,18 @@ fn main() -> Result<()> {
     if let Some((t_s, q)) = first_yaw_init {
         let q_flu = frd_mount_quat_to_esf_alg_flu_quat(q);
         let (r, p, y) = quat_rpy_alg_deg(q_flu[0], q_flu[1], q_flu[2], q_flu[3]);
-        println!("standalone align first yaw_init at t={:.3}s mount=[{:.2},{:.2},{:.2}]", t_s, r, p, y);
+        println!(
+            "standalone align first yaw_init at t={:.3}s mount=[{:.2},{:.2},{:.2}]",
+            t_s, r, p, y
+        );
     }
     if let Some((t_s, q)) = first_mount_ready {
         let q_flu = frd_mount_quat_to_esf_alg_flu_quat(q);
         let (r, p, y) = quat_rpy_alg_deg(q_flu[0], q_flu[1], q_flu[2], q_flu[3]);
-        println!("standalone align first sigma_yaw<0.05deg at t={:.3}s mount=[{:.2},{:.2},{:.2}]", t_s, r, p, y);
+        println!(
+            "standalone align first sigma_yaw<0.05deg at t={:.3}s mount=[{:.2},{:.2},{:.2}]",
+            t_s, r, p, y
+        );
     }
 
     let nav_events = collect_nav_events(&frames, &tl);
@@ -316,13 +322,21 @@ fn main() -> Result<()> {
                         q_vb[2] as f64,
                         q_vb[3] as f64,
                     ]);
-                    let (fr, fp, fy) =
-                        quat_rpy_alg_deg(q_flu[0], q_flu[1], q_flu[2], q_flu[3]);
-                    let qc = quat_conj([q_vb[0] as f64, q_vb[1] as f64, q_vb[2] as f64, q_vb[3] as f64]);
+                    let (fr, fp, fy) = quat_rpy_alg_deg(q_flu[0], q_flu[1], q_flu[2], q_flu[3]);
+                    let qc = quat_conj([
+                        q_vb[0] as f64,
+                        q_vb[1] as f64,
+                        q_vb[2] as f64,
+                        q_vb[3] as f64,
+                    ]);
                     let (fcr, fcp, fcy) = quat_rpy_alg_deg(qc[0], qc[1], qc[2], qc[3]);
                     let q_flu_conj = frd_mount_quat_to_esf_alg_flu_quat(qc);
-                    let (frr2, fpp2, fyy2) =
-                        quat_rpy_alg_deg(q_flu_conj[0], q_flu_conj[1], q_flu_conj[2], q_flu_conj[3]);
+                    let (frr2, fpp2, fyy2) = quat_rpy_alg_deg(
+                        q_flu_conj[0],
+                        q_flu_conj[1],
+                        q_flu_conj[2],
+                        q_flu_conj[3],
+                    );
                     println!(
                         "fusion mount at loose init t={:.3}s mount_conv=[{:.2},{:.2},{:.2}] raw_conj=[{:.2},{:.2},{:.2}] conv_conj=[{:.2},{:.2},{:.2}]",
                         rel_s(&tl, t_ms),
@@ -360,8 +374,12 @@ fn main() -> Result<()> {
                         q_vb[3] as f64,
                     ]);
                     let (sr, sp, sy) = quat_rpy_alg_deg(q_flu[0], q_flu[1], q_flu[2], q_flu[3]);
-                    let (raw_r, raw_p, raw_y) =
-                        quat_rpy_alg_deg(q_vb[0] as f64, q_vb[1] as f64, q_vb[2] as f64, q_vb[3] as f64);
+                    let (raw_r, raw_p, raw_y) = quat_rpy_alg_deg(
+                        q_vb[0] as f64,
+                        q_vb[1] as f64,
+                        q_vb[2] as f64,
+                        q_vb[3] as f64,
+                    );
                     let speed_h = nav.vel_n_mps.hypot(nav.vel_e_mps);
                     let vel_course_deg = nav.vel_e_mps.atan2(nav.vel_n_mps).to_degrees();
                     let chosen_yaw_deg = initial_yaw_from_nav(nav).to_degrees() as f64;
@@ -374,7 +392,11 @@ fn main() -> Result<()> {
                         raw_r,
                         raw_p,
                         raw_y,
-                        if cur_align_q_vb.is_some() { "align_events" } else { "fusion_mount_q_vb" }
+                        if cur_align_q_vb.is_some() {
+                            "align_events"
+                        } else {
+                            "fusion_mount_q_vb"
+                        }
                     );
                     println!(
                         "loose init nav at t={:.3}s vel_ned=[{:.3},{:.3},{:.3}] speed_h={:.3} head_veh_valid={} heading_vehicle={:.2} heading_motion={:.2} vel_course={:.2} chosen_yaw={:.2}",
@@ -398,12 +420,30 @@ fn main() -> Result<()> {
                                 eskf.nominal.q3 as f64,
                             ];
                             if args.raw_imu_full_qcs {
-                                [q_nb[0] as f32, q_nb[1] as f32, q_nb[2] as f32, q_nb[3] as f32]
+                                [
+                                    q_nb[0] as f32,
+                                    q_nb[1] as f32,
+                                    q_nb[2] as f32,
+                                    q_nb[3] as f32,
+                                ]
                             } else {
-                                let q_seed = [q_vb[0] as f64, q_vb[1] as f64, q_vb[2] as f64, q_vb[3] as f64];
+                                let q_seed = [
+                                    q_vb[0] as f64,
+                                    q_vb[1] as f64,
+                                    q_vb[2] as f64,
+                                    q_vb[3] as f64,
+                                ];
                                 let q_nv = quat_mul(q_nb, quat_conj(q_seed));
-                                let q_es = quat_mul(quat_conj(quat_ecef_to_ned(nav.lat_deg, nav.lon_deg)), q_nv);
-                                [q_es[0] as f32, q_es[1] as f32, q_es[2] as f32, q_es[3] as f32]
+                                let q_es = quat_mul(
+                                    quat_conj(quat_ecef_to_ned(nav.lat_deg, nav.lon_deg)),
+                                    q_nv,
+                                );
+                                [
+                                    q_es[0] as f32,
+                                    q_es[1] as f32,
+                                    q_es[2] as f32,
+                                    q_es[3] as f32,
+                                ]
                             }
                         })
                     } else {
@@ -441,12 +481,20 @@ fn main() -> Result<()> {
                         nav.heading_motion_deg
                     };
                     let heading_rad = deg2rad(heading_deg);
-                    Some([speed_h * heading_rad.cos(), speed_h * heading_rad.sin(), 0.0])
+                    Some([
+                        speed_h * heading_rad.cos(),
+                        speed_h * heading_rad.sin(),
+                        0.0,
+                    ])
                 } else {
                     Some([
                         nav.vel_n_mps,
                         nav.vel_e_mps,
-                        if args.zero_gps_down_vel { 0.0 } else { nav.vel_d_mps },
+                        if args.zero_gps_down_vel {
+                            0.0
+                        } else {
+                            nav.vel_d_mps
+                        },
                     ])
                 };
                 let vel_ecef = if let Some(v_ned) = vel_ned_for_loose {
@@ -478,11 +526,22 @@ fn main() -> Result<()> {
                 );
                 let pre_q_ns = quat_mul(
                     quat_ecef_to_ned(ref_lat, ref_lon),
-                    [pre_nom.q0 as f64, pre_nom.q1 as f64, pre_nom.q2 as f64, pre_nom.q3 as f64],
+                    [
+                        pre_nom.q0 as f64,
+                        pre_nom.q1 as f64,
+                        pre_nom.q2 as f64,
+                        pre_nom.q3 as f64,
+                    ],
                 );
-                let pre_q_cs = [pre_nom.qcs0 as f64, pre_nom.qcs1 as f64, pre_nom.qcs2 as f64, pre_nom.qcs3 as f64];
+                let pre_q_cs = [
+                    pre_nom.qcs0 as f64,
+                    pre_nom.qcs1 as f64,
+                    pre_nom.qcs2 as f64,
+                    pre_nom.qcs3 as f64,
+                ];
                 let pre_q_nc = quat_mul(pre_q_ns, quat_conj(pre_q_cs));
-                let pre_vel_vehicle = mat_vec(transpose3(quat_to_rotmat_f64(pre_q_nc)), pre_vel_ned);
+                let pre_vel_vehicle =
+                    mat_vec(transpose3(quat_to_rotmat_f64(pre_q_nc)), pre_vel_ned);
                 let (pre_roll, pre_pitch, pre_yaw) = quat_rpy_deg(pre_q_nc);
                 if args.disable_nhc {
                     // Keep the same GPS pos+vel batch path, but force the internal
@@ -552,15 +611,33 @@ fn main() -> Result<()> {
                         "t={:.3}s obs={:?} veh_att_pre=[{:.2},{:.2},{:.2}] vel_vehicle_pre=[{:.3},{:.3},{:.3}] full_mount_pre=[{:.2},{:.2},{:.2}] post=[{:.2},{:.2},{:.2}] dpsi_cc=[{:.3},{:.3},{:.3}] dtheta_e=[{:.3},{:.3},{:.3}] dv_e=[{:.3},{:.3},{:.3}] dba=[{:.3},{:.3},{:.3}] v_e_pre=[{:.3},{:.3},{:.3}] baz_pre={:.3}",
                         t_s,
                         obs_names(loose_ref.last_obs_types()),
-                        pre_roll, pre_pitch, pre_yaw,
-                        pre_vel_vehicle[0], pre_vel_vehicle[1], pre_vel_vehicle[2],
-                        pre_qcs[0], pre_qcs[1], pre_qcs[2],
-                        post_qcs[0], post_qcs[1], post_qcs[2],
-                        dx[21].to_degrees(), dx[22].to_degrees(), dx[23].to_degrees(),
-                        dx[6].to_degrees(), dx[7].to_degrees(), dx[8].to_degrees(),
-                        dx[3], dx[4], dx[5],
-                        dx[9], dx[10], dx[11],
-                        pre_nom.vn, pre_nom.ve, pre_nom.vd,
+                        pre_roll,
+                        pre_pitch,
+                        pre_yaw,
+                        pre_vel_vehicle[0],
+                        pre_vel_vehicle[1],
+                        pre_vel_vehicle[2],
+                        pre_qcs[0],
+                        pre_qcs[1],
+                        pre_qcs[2],
+                        post_qcs[0],
+                        post_qcs[1],
+                        post_qcs[2],
+                        dx[21].to_degrees(),
+                        dx[22].to_degrees(),
+                        dx[23].to_degrees(),
+                        dx[6].to_degrees(),
+                        dx[7].to_degrees(),
+                        dx[8].to_degrees(),
+                        dx[3],
+                        dx[4],
+                        dx[5],
+                        dx[9],
+                        dx[10],
+                        dx[11],
+                        pre_nom.vn,
+                        pre_nom.ve,
+                        pre_nom.vd,
                         pre_nom.baz,
                     );
                 }
@@ -581,14 +658,30 @@ fn main() -> Result<()> {
             t_s,
             jump,
             obs,
-            pre[0], pre[1], pre[2],
-            post[0], post[1], post[2],
-            alg[0], alg[1], alg[2],
-            err[0], err[1], err[2],
-            dx[21].to_degrees(), dx[22].to_degrees(), dx[23].to_degrees(),
-            dx[6].to_degrees(), dx[7].to_degrees(), dx[8].to_degrees(),
-            dx[3], dx[4], dx[5],
-            dx[9], dx[10], dx[11],
+            pre[0],
+            pre[1],
+            pre[2],
+            post[0],
+            post[1],
+            post[2],
+            alg[0],
+            alg[1],
+            alg[2],
+            err[0],
+            err[1],
+            err[2],
+            dx[21].to_degrees(),
+            dx[22].to_degrees(),
+            dx[23].to_degrees(),
+            dx[6].to_degrees(),
+            dx[7].to_degrees(),
+            dx[8].to_degrees(),
+            dx[3],
+            dx[4],
+            dx[5],
+            dx[9],
+            dx[10],
+            dx[11],
         );
     }
 
@@ -598,9 +691,10 @@ fn main() -> Result<()> {
             ecef_to_ned_matrix(ref_lat, ref_lon),
             [n.vn as f64, n.ve as f64, n.vd as f64],
         );
-        let q_ns = quat_mul(quat_ecef_to_ned(ref_lat, ref_lon), [
-            n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64,
-        ]);
+        let q_ns = quat_mul(
+            quat_ecef_to_ned(ref_lat, ref_lon),
+            [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64],
+        );
         let q_cs = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
         let q_nc = quat_mul(q_ns, quat_conj(q_cs));
         let vel_vehicle = mat_vec(transpose3(quat_to_rotmat_f64(q_nc)), vel_ned);
@@ -609,12 +703,24 @@ fn main() -> Result<()> {
         let mount = qcs_rpy(loose_ref, loose_seed_mount_q_vb);
         println!(
             "\nFinal loose state: veh_att=[{:.2},{:.2},{:.2}] seeded_att=[{:.2},{:.2},{:.2}] vel_vehicle=[{:.2},{:.2},{:.2}] vel_ned=[{:.2},{:.2},{:.2}] accel_bias=[{:.3},{:.3},{:.3}] mount=[{:.2},{:.2},{:.2}]",
-            att_r, att_p, att_y,
-            seed_r, seed_p, seed_y,
-            vel_vehicle[0], vel_vehicle[1], vel_vehicle[2],
-            vel_ned[0], vel_ned[1], vel_ned[2],
-            n.bax, n.bay, n.baz,
-            mount[0], mount[1], mount[2],
+            att_r,
+            att_p,
+            att_y,
+            seed_r,
+            seed_p,
+            seed_y,
+            vel_vehicle[0],
+            vel_vehicle[1],
+            vel_vehicle[2],
+            vel_ned[0],
+            vel_ned[1],
+            vel_ned[2],
+            n.bax,
+            n.bay,
+            n.baz,
+            mount[0],
+            mount[1],
+            mount[2],
         );
     }
 
@@ -738,7 +844,15 @@ fn build_imu_packets(frames: &[UbxFrame], tl: &MasterTimeline) -> Result<Vec<Imu
             if let (Some(gxv), Some(gyv), Some(gzv), Some(axv), Some(ayv), Some(azv)) =
                 (gx, gy, gz, ax, ay, az)
             {
-                imu_packets.push(ImuPacket { t_ms, gx_dps: gxv, gy_dps: gyv, gz_dps: gzv, ax_mps2: axv, ay_mps2: ayv, az_mps2: azv });
+                imu_packets.push(ImuPacket {
+                    t_ms,
+                    gx_dps: gxv,
+                    gy_dps: gyv,
+                    gz_dps: gzv,
+                    ax_mps2: axv,
+                    ay_mps2: ayv,
+                    az_mps2: azv,
+                });
             }
             gx = None;
             gy = None;
@@ -761,8 +875,18 @@ fn build_imu_packets(frames: &[UbxFrame], tl: &MasterTimeline) -> Result<Vec<Imu
             _ => {}
         }
     }
-    if let (Some(gxv), Some(gyv), Some(gzv), Some(axv), Some(ayv), Some(azv)) = (gx, gy, gz, ax, ay, az) {
-        imu_packets.push(ImuPacket { t_ms, gx_dps: gxv, gy_dps: gyv, gz_dps: gzv, ax_mps2: axv, ay_mps2: ayv, az_mps2: azv });
+    if let (Some(gxv), Some(gyv), Some(gzv), Some(axv), Some(ayv), Some(azv)) =
+        (gx, gy, gz, ax, ay, az)
+    {
+        imu_packets.push(ImuPacket {
+            t_ms,
+            gx_dps: gxv,
+            gy_dps: gyv,
+            gz_dps: gzv,
+            ax_mps2: axv,
+            ay_mps2: ayv,
+            az_mps2: azv,
+        });
     }
     imu_packets.sort_by(|a, b| a.t_ms.partial_cmp(&b.t_ms).unwrap());
     Ok(imu_packets)
@@ -806,9 +930,7 @@ fn yaw_quat_f32(yaw_rad: f32) -> [f32; 4] {
     [half.cos(), 0.0, 0.0, half.sin()]
 }
 
-fn default_loose_reference_p_diag(
-    gnss: sensor_fusion::fusion::FusionGnssSample,
-) -> [f32; 24] {
+fn default_loose_reference_p_diag(gnss: sensor_fusion::fusion::FusionGnssSample) -> [f32; 24] {
     const DEFAULT_GYRO_BIAS_SIGMA_DPS: f32 = 0.125;
     const DEFAULT_ACCEL_BIAS_SIGMA_MPS2: f32 = 0.075;
     const DEFAULT_GYRO_SCALE_SIGMA: f32 = 0.02;
@@ -885,15 +1007,23 @@ fn initialize_loose_from_nav(
             [q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64]
         } else {
             let q_ns = yaw_quat_f32(initial_yaw_from_nav(nav));
-            quat_mul(quat_conj(quat_ecef_to_ned(nav.lat_deg, nav.lon_deg)), [
-                q_ns[0] as f64,
-                q_ns[1] as f64,
-                q_ns[2] as f64,
-                q_ns[3] as f64,
-            ])
+            quat_mul(
+                quat_conj(quat_ecef_to_ned(nav.lat_deg, nav.lon_deg)),
+                [
+                    q_ns[0] as f64,
+                    q_ns[1] as f64,
+                    q_ns[2] as f64,
+                    q_ns[3] as f64,
+                ],
+            )
         };
         loose.init_from_reference_ecef_state(
-            [q_es[0] as f32, q_es[1] as f32, q_es[2] as f32, q_es[3] as f32],
+            [
+                q_es[0] as f32,
+                q_es[1] as f32,
+                q_es[2] as f32,
+                q_es[3] as f32,
+            ],
             lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m),
             [vel_ecef[0] as f32, vel_ecef[1] as f32, vel_ecef[2] as f32],
             [0.0, 0.0, 0.0],
@@ -925,7 +1055,11 @@ fn fusion_gnss_sample(
         lat_deg: nav.lat_deg as f32,
         lon_deg: nav.lon_deg as f32,
         height_m: nav.height_m as f32,
-        vel_ned_mps: [nav.vel_n_mps as f32, nav.vel_e_mps as f32, nav.vel_d_mps as f32],
+        vel_ned_mps: [
+            nav.vel_n_mps as f32,
+            nav.vel_e_mps as f32,
+            nav.vel_d_mps as f32,
+        ],
         pos_std_m: [
             (nav.h_acc_m * cfg.gnss_pos_r_scale.sqrt()) as f32,
             (nav.h_acc_m * cfg.gnss_pos_r_scale.sqrt()) as f32,
@@ -947,7 +1081,11 @@ fn vehicle_measurements_from_mount(
 ) -> ([f64; 3], [f64; 3]) {
     let Some(q_vb) = q_vb else {
         return (
-            [raw_gyro_radps[0].to_degrees(), raw_gyro_radps[1].to_degrees(), raw_gyro_radps[2].to_degrees()],
+            [
+                raw_gyro_radps[0].to_degrees(),
+                raw_gyro_radps[1].to_degrees(),
+                raw_gyro_radps[2].to_degrees(),
+            ],
             raw_accel_mps2,
         );
     };
@@ -960,7 +1098,11 @@ fn vehicle_measurements_from_mount(
     let gyro_vehicle_radps = mat_vec(c_bv, raw_gyro_radps);
     let accel_vehicle_mps2 = mat_vec(c_bv, raw_accel_mps2);
     (
-        [gyro_vehicle_radps[0].to_degrees(), gyro_vehicle_radps[1].to_degrees(), gyro_vehicle_radps[2].to_degrees()],
+        [
+            gyro_vehicle_radps[0].to_degrees(),
+            gyro_vehicle_radps[1].to_degrees(),
+            gyro_vehicle_radps[2].to_degrees(),
+        ],
         accel_vehicle_mps2,
     )
 }
@@ -973,7 +1115,12 @@ fn qcs_rpy(loose: &CLooseWrapper, seed_mount_q_vb: Option<[f32; 4]>) -> [f64; 3]
     let q_cs = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
     let q_total_vb = quat_mul(q_cs, q_seed);
     let q_total_flu = frd_mount_quat_to_esf_alg_flu_quat(q_total_vb);
-    let (r, p, y) = quat_rpy_alg_deg(q_total_flu[0], q_total_flu[1], q_total_flu[2], q_total_flu[3]);
+    let (r, p, y) = quat_rpy_alg_deg(
+        q_total_flu[0],
+        q_total_flu[1],
+        q_total_flu[2],
+        q_total_flu[3],
+    );
     [r, p, y]
 }
 
@@ -1028,9 +1175,21 @@ fn quat_to_rotmat_f64(q: [f64; 4]) -> [[f64; 3]; 3] {
         (1.0, 0.0, 0.0, 0.0)
     };
     [
-        [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - w * z), 2.0 * (x * z + w * y)],
-        [2.0 * (x * y + w * z), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - w * x)],
-        [2.0 * (x * z - w * y), 2.0 * (y * z + w * x), 1.0 - 2.0 * (x * x + y * y)],
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y - w * z),
+            2.0 * (x * z + w * y),
+        ],
+        [
+            2.0 * (x * y + w * z),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z - w * x),
+        ],
+        [
+            2.0 * (x * z - w * y),
+            2.0 * (y * z + w * x),
+            1.0 - 2.0 * (x * x + y * y),
+        ],
     ]
 }
 

@@ -26,7 +26,7 @@ extern "C" {
 #endif
 
 #define SF_ALIGN_N_STATES 3
-#define SF_ESKF_ERROR_STATES 15
+#define SF_ESKF_ERROR_STATES 18
 #define SF_GRAVITY_MSS 9.80665f
 #define SF_SENSOR_FUSION_STORAGE_BYTES 32768u
 
@@ -97,6 +97,7 @@ typedef union {
 } sf_t;
 
 void sf_init(sf_t *sf, const float *q_vb_or_null);
+void sf_set_r_body_vel(sf_t *sf, float r_body_vel);
 sf_update_t sf_process_imu(sf_t *sf, const sf_imu_sample_t *sample);
 sf_update_t sf_process_gnss(sf_t *sf, const sf_gnss_sample_t *sample);
 sf_update_t sf_process_vehicle_speed(sf_t *sf,

@@ -1,0 +1,239 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{hyperref}
+\usepackage{enumitem}
+
+\title{Align Pitch Observability: Current Model and Proposed Direction}
+\author{Codex}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Problem}
+On real log \texttt{ubx\_raw\_20260328\_153757.bin}, the align filter shows a persistent down/pitch-like error of about \(3^\circ\). The current filter can initialize and refine yaw reasonably, but pitch has very weak online observability after bootstrap. The result is:
+\begin{itemize}[leftmargin=1.5em]
+\item pitch/down error can persist for long periods,
+\item gravity updates are too sparse to remove it,
+\item direct longitudinal scalar pitch corrections are unstable.
+\end{itemize}
+
+\section{Notation}
+\begin{itemize}[leftmargin=1.5em]
+\item \(b\): body / IMU sensor frame.
+\item \(v\): vehicle frame.
+\item \(q_{vb}\): quaternion mapping vehicle frame to body frame.
+\item \(C_{bv}(q_{vb})\): rotation matrix mapping vehicle-frame vectors into body frame.
+\item \(f_b\): accelerometer specific-force measurement in body frame, i.e. the body-frame accelerometer vector used by align.
+\item \(a_{\text{long}}\): longitudinal acceleration inferred from GNSS velocity change in vehicle coordinates.
+\item \(a_{\text{lat}}\): lateral acceleration inferred from GNSS velocity change in vehicle coordinates.
+\item \(g\): gravity magnitude.
+\item \(\delta\phi,\delta\theta_p,\delta\psi\): small roll, pitch, and yaw misalignment errors.
+\item \(b_a\): accelerometer bias term.
+\end{itemize}
+
+\section{Current Align State}
+The align state is a small mount-misalignment error state
+\[
+\delta \theta =
+\begin{bmatrix}
+\delta \phi & \delta \theta_p & \delta \psi
+\end{bmatrix}^T
+\]
+with covariance \(P \in \mathbb{R}^{3 \times 3}\), where:
+\begin{itemize}[leftmargin=1.5em]
+\item \(\delta \phi\): roll misalignment,
+\item \(\delta \theta_p\): pitch misalignment,
+\item \(\delta \psi\): yaw misalignment.
+\end{itemize}
+
+The nominal mount quaternion is \(q_{vb}\), mapping vehicle frame \(v\) to body/IMU frame \(b\).
+
+\section{Current Observation Model}
+\subsection{Stationary gravity}
+During stationary windows, the filter low-pass filters gravity in body frame and applies gravity observations on the accelerometer channels:
+\[
+f_b \approx C_{bv}(q_{vb}) \begin{bmatrix} 0 \\ 0 \\ -g \end{bmatrix}
+\]
+with yaw masked out. This gives roll/pitch observability from gravity.
+
+This is mathematically sound, but only when the vehicle is quasi-static and the gravity direction is representative of the vehicle frame.
+
+\subsection{Dynamic horizontal motion}
+For each GNSS interval, the code computes GNSS horizontal acceleration in vehicle coordinates:
+\[
+a_n = \frac{v_{n,k} - v_{n,k-1}}{\Delta t},
+\quad
+a_{\text{long}} = \hat t^T a_n,
+\quad
+a_{\text{lat}} = \hat \ell^T a_n
+\]
+where \(\hat t\) is the unit tangent from midpoint GNSS velocity and \(\hat \ell\) is the lateral unit vector.
+
+It also computes a body-side horizontal specific-force vector by removing gravity projection:
+\[
+f^{\text{horiz}}_b
+=
+\bar f_b - (\bar f_b^T \hat g_b)\hat g_b
+\]
+then rotates that into vehicle frame:
+\[
+f^{\text{horiz}}_v = C_{vb}(q_{vb})^T f^{\text{horiz}}_b
+\]
+
+The current dynamic residual is then reduced to a signed horizontal heading error:
+\[
+e_\psi
+=
+\operatorname{atan2}
+\left(
+f^{\text{horiz}}_{v,x} a_{\text{lat}} - f^{\text{horiz}}_{v,y} a_{\text{long}},
+\;
+f^{\text{horiz}}_{v,x} a_{\text{long}} + f^{\text{horiz}}_{v,y} a_{\text{lat}}
+\right)
+\]
+and applied as a yaw-only correction:
+\[
+\delta \psi \leftarrow \delta \psi - K_\psi e_\psi
+\]
+
+\subsection{Turn gyro}
+During turn-valid windows, gyro residuals provide some additional tilt support. In practice this contributes a small amount to pitch, but not enough to remove the persistent \(3^\circ\) offset.
+
+\section{Why Pitch is Weakly Observable in the Current Design}
+The current dynamic branch is designed primarily for yaw:
+\begin{itemize}[leftmargin=1.5em]
+\item gravity updates affect roll/pitch only,
+\item horizontal dynamic updates affect yaw only,
+\item turn-gyro gives a small secondary tilt correction.
+\end{itemize}
+
+So after bootstrap, pitch has no real drive-time correction path except:
+\begin{itemize}[leftmargin=1.5em]
+\item sparse stationary gravity updates,
+\item small turn-gyro effects.
+\end{itemize}
+
+That matches the observed diagnostics on \texttt{153757}: horizontal updates contribute essentially zero pitch correction, while gravity contributes very little total pitch correction over the whole drive.
+
+\section{Why the Simple Scalar Pitch Fix Failed}
+The attempted scalar idea was effectively:
+\[
+r_{\text{long}} = a_{\text{long,gnss}} - a_{\text{long,imu}}
+\]
+with a small-angle interpretation
+\[
+r_{\text{long}} \approx g \, \delta \theta_p + b_{a,x}
+\]
+
+If that model were valid and the sign were consistent, then a slow per-window correction and a batch estimate would converge to the same answer.
+
+But on the real log, the residual is not consistent:
+\begin{itemize}[leftmargin=1.5em]
+\item straight accel windows have one mean sign,
+\item straight brake windows have the opposite mean sign,
+\item a single constant longitudinal bias does not fit the data.
+\end{itemize}
+
+So the residual is not a stable signed measurement of pitch. It is maneuver-dependent. Because of that:
+\begin{itemize}[leftmargin=1.5em]
+\item per-window updates chase inconsistent residuals,
+\item batching only averages inconsistent residuals,
+\item lowering gain only slows the wrong result.
+\end{itemize}
+
+\section{Proper Mathematical Direction}
+The correct way to introduce dynamic pitch observability is to use the full specific-force vector model, not a scalar heuristic.
+
+\subsection{Vector specific-force model}
+For straight longitudinal motion, the ideal vehicle-frame specific force is approximately
+\[
+f_v^{\star}
+\approx
+\begin{bmatrix}
+a_{\text{long}} \\
+0 \\
+-g
+\end{bmatrix}
+\]
+and the measured body-frame force is
+\[
+f_b
+\approx
+C_{bv}(q_{vb}) f_v^{\star} + b_a + \eta
+\]
+where \(b_a\) is accelerometer bias and \(\eta\) is noise/model error.
+
+This is the right measurement equation because pitch changes the \emph{vector geometry}, not just the scalar longitudinal component.
+
+\subsection{Linearized residual}
+Define
+\[
+r_f = f_b - C_{bv}(q_{vb}) f_v^{\star}
+\]
+Then linearize with respect to small misalignment:
+\[
+r_f \approx H_f \, \delta\theta + b_a + \eta
+\]
+where \(H_f\) comes from the skew-symmetric Jacobian of the rotated vector.
+
+For straight-line windows, the most useful component is the part of \(H_f\) that makes pitch observable. This should be used with:
+\begin{itemize}[leftmargin=1.5em]
+\item strong gating on straightness and low lateral contamination,
+\item explicit handling of maneuver phase,
+\item either an estimated bias term or a nuisance-robust weighting scheme.
+\end{itemize}
+
+\section{Recommended Estimator Structure}
+The next version should not do ``one window \(\rightarrow\) one pitch correction.'' Instead:
+
+\subsection{1. Build a buffered straight-motion pitch estimator}
+Accumulate a buffer of straight accel/brake windows and solve a small weighted least-squares problem over the vector residual:
+\[
+\min_{\delta \theta_p}
+\sum_{i \in \mathcal{S}}
+w_i
+\left\|
+f_{b,i} - C_{bv}(q_{vb} \oplus \delta \theta_p)
+\begin{bmatrix}
+a_{\text{long},i} \\
+0 \\
+-g
+\end{bmatrix}
+\right\|^2
+\]
+or its linearized equivalent.
+
+\subsection{2. Use conservative gating}
+Only include windows with:
+\begin{itemize}[leftmargin=1.5em]
+\item low course rate,
+\item low lateral acceleration,
+\item sufficient speed,
+\item sufficient longitudinal acceleration magnitude,
+\item stable sign/consistency over the buffer.
+\end{itemize}
+
+\subsection{3. Feed only a small bounded correction into align}
+Once the buffered estimate is consistent, inject only a small pitch correction step into the align state. This preserves smoothness and avoids sharp maneuver-to-maneuver flips.
+
+\subsection{4. Keep yaw and pitch logically separated}
+Yaw should still be primarily turn-observed. Pitch should be straight-motion observed. The current formulation mixes dynamic cues in a way that is good for yaw but too weak for pitch.
+
+\section{Summary}
+The current align formulation is mathematically suited for:
+\begin{itemize}[leftmargin=1.5em]
+\item gravity-based roll/pitch initialization and maintenance,
+\item dynamic yaw correction from horizontal motion,
+\item small additional tilt support from turn gyro.
+\end{itemize}
+
+It is \emph{not} designed to provide strong dynamic pitch correction during normal driving.
+
+The proper fix is not to increase gain on the current scalar longitudinal residual. The proper fix is to add a new vector-based straight-motion pitch observation model, buffered and heavily gated, so that pitch becomes observable without destabilizing the filter.
+
+\end{document}

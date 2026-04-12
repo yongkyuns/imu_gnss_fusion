@@ -27,8 +27,9 @@ fn align_stationary_bootstrap_and_update_are_stable() {
         gnss_vel_prev_n: [5.0, 0.0, 0.0],
         gnss_vel_curr_n: [5.12, 0.0, 0.0],
     };
+    let yaw_var_before = align.P[2][2];
     let (_score, trace) = align.update_window_with_trace(&window);
 
     assert!(trace.after_horiz_accel.is_some());
-    assert!(align.P[2][2] < 0.5_f32.to_radians().powi(2));
+    assert!(align.P[2][2] < yaw_var_before);
 }

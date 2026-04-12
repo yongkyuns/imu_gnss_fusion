@@ -152,6 +152,8 @@ typedef struct {
   bool ekf_initialized;
   bool mount_q_vb_valid;
   float mount_q_vb[4];
+  bool eskf_mount_q_vb_valid;
+  float eskf_mount_q_vb[4];
   float last_imu_t_s;
   bool last_imu_t_valid;
   sf_gnss_ned_sample_t last_gnss;
@@ -227,6 +229,7 @@ void sf_fusion_init_external(sf_sensor_fusion_t *fusion,
                              const sf_fusion_config_t *cfg,
                              const float q_vb[4]);
 void sf_fusion_set_misalignment(sf_sensor_fusion_t *fusion, const float q_vb[4]);
+void sf_fusion_set_r_body_vel(sf_sensor_fusion_t *fusion, float r_body_vel);
 sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
                                   const sf_imu_sample_t *sample);
 sf_update_t sf_fusion_process_gnss(sf_sensor_fusion_t *fusion,

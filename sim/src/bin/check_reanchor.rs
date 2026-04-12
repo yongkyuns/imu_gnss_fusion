@@ -86,7 +86,11 @@ fn main() -> Result<()> {
                     obs.vel_d_mps as f32,
                 ],
                 pos_std_m: [obs.h_acc_m as f32, obs.h_acc_m as f32, obs.v_acc_m as f32],
-                vel_std_mps: [obs.s_acc_mps as f32, obs.s_acc_mps as f32, obs.s_acc_mps as f32],
+                vel_std_mps: [
+                    obs.s_acc_mps as f32,
+                    obs.s_acc_mps as f32,
+                    obs.s_acc_mps as f32,
+                ],
                 heading_rad: obs
                     .head_veh_valid
                     .then_some((obs.heading_vehicle_deg as f32).to_radians()),
@@ -110,7 +114,13 @@ fn main() -> Result<()> {
             if let Some(anchor_lla) = anchor {
                 println!(
                     "reanchor #{}: loop_t_s={:.3} debug_t_s={:.3} distance_m={:.1} anchor=({:.7},{:.7},{:.2})",
-                    count, t_s, reported_t_s, distance_m, anchor_lla[0], anchor_lla[1], anchor_lla[2]
+                    count,
+                    t_s,
+                    reported_t_s,
+                    distance_m,
+                    anchor_lla[0],
+                    anchor_lla[1],
+                    anchor_lla[2]
                 );
             } else {
                 println!(
@@ -144,7 +154,8 @@ fn build_imu_packets(frames: &[UbxFrame], timeline: &MasterTimeline) -> Result<V
         bail!("no ESF-RAW samples found");
     }
 
-    let (raw_tag_u, a_raw, b_raw) = fit_tag_ms_map(&raw_seq, &raw_tag, &timeline.masters, Some(1 << 16));
+    let (raw_tag_u, a_raw, b_raw) =
+        fit_tag_ms_map(&raw_seq, &raw_tag, &timeline.masters, Some(1 << 16));
     let mut imu_packets = Vec::<ImuPacket>::new();
     let mut current_tag: Option<u64> = None;
     let mut t_ms = 0.0_f64;

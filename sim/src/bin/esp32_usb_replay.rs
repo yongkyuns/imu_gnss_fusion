@@ -268,11 +268,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn run_host_reference(
-    events: &[ReplayEvent],
-    mode: u8,
-    q_vb: [f32; 4],
-) -> HostSummary {
+fn run_host_reference(events: &[ReplayEvent], mode: u8, q_vb: [f32; 4]) -> HostSummary {
     let mut fusion = if mode == MODE_EXTERNAL_QVB {
         SensorFusion::with_misalignment(q_vb)
     } else {

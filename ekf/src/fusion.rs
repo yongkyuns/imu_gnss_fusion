@@ -89,6 +89,11 @@ impl SensorFusion {
         self.refresh_align_snapshot();
     }
 
+    pub fn set_r_body_vel(&mut self, r_body_vel: f32) {
+        self.raw.set_r_body_vel(r_body_vel);
+        self.refresh_align_snapshot();
+    }
+
     pub fn process_imu(&mut self, sample: FusionImuSample) -> FusionUpdate {
         let update = self.raw.process_imu(sample);
         self.refresh_align_snapshot();
@@ -177,12 +182,8 @@ fn convert_align_trace(trace: CAlignUpdateTrace) -> AlignUpdateTrace {
         horiz_obs_accel_vy: trace
             .horiz_obs_accel_vy_valid
             .then_some(trace.horiz_obs_accel_vy),
-        horiz_accel_bx: trace
-            .horiz_accel_bx_valid
-            .then_some(trace.horiz_accel_bx),
-        horiz_accel_by: trace
-            .horiz_accel_by_valid
-            .then_some(trace.horiz_accel_by),
+        horiz_accel_bx: trace.horiz_accel_bx_valid.then_some(trace.horiz_accel_bx),
+        horiz_accel_by: trace.horiz_accel_by_valid.then_some(trace.horiz_accel_by),
         horiz_speed_q: trace.horiz_speed_q_valid.then_some(trace.horiz_speed_q),
         horiz_accel_q: trace.horiz_accel_q_valid.then_some(trace.horiz_accel_q),
         horiz_straight_q: trace
@@ -194,8 +195,6 @@ fn convert_align_trace(trace: CAlignUpdateTrace) -> AlignUpdateTrace {
             .then_some(trace.horiz_dominance_q),
         horiz_turn_core_valid: trace.horiz_turn_core_valid,
         horiz_straight_core_valid: trace.horiz_straight_core_valid,
-        after_turn_gyro: trace
-            .after_turn_gyro_valid
-            .then_some(trace.after_turn_gyro),
+        after_turn_gyro: trace.after_turn_gyro_valid.then_some(trace.after_turn_gyro),
     }
 }

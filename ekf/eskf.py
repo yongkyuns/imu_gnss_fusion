@@ -36,7 +36,7 @@ def generate_observation_equations(p_cov, state, observation, variance, varname,
     return expr
 
 
-def write_observation_equations(path, equations):
+def write_observation_equations(path, equations, state_dim):
     gen = CodeGenerator(str(path))
     gen.print_string("Sub Expressions")
     gen.write_subexpressions(equations[0])
@@ -44,11 +44,11 @@ def write_observation_equations(path, equations):
     if len(values) == 1 and isinstance(values[0], Matrix):
         values = values[0]
     gen.print_string("Observation Jacobians")
-    gen.write_matrix(Matrix(values[0:15]), "H")
+    gen.write_matrix(Matrix(values[0:state_dim]), "H")
     gen.print_string("Kalman gains")
-    gen.write_matrix(Matrix(values[15:30]), "K")
+    gen.write_matrix(Matrix(values[state_dim:2 * state_dim]), "K")
     gen.print_string("Innovation Variance")
-    gen.file.write(f"S = {gen.get_ccode(values[30])};\n")
+    gen.file.write(f"S = {gen.get_ccode(values[2 * state_dim])};\n")
     gen.close()
 
 
@@ -112,23 +112,26 @@ def propagate_nominal(q, v, p, bg, ba, d_ang, d_vel, dt, g_n):
     return q_new, v_new, p_new, bg_new, ba_new
 
 
-def inject_true_state(q, v, p, bg, ba, dtheta, dv, dp, dbg, dba):
+def inject_true_state(q, v, p, bg, ba, qcs, dtheta, dv, dp, dbg, dba, dpsi_cs):
     q_true = quat_mult(q, delta_quat(dtheta))
     v_true = v + dv
     p_true = p + dp
     bg_true = bg + dbg
     ba_true = ba + dba
-    return q_true, v_true, p_true, bg_true, ba_true
+    qcs_true = quat_mult(delta_quat(dpsi_cs), qcs)
+    return q_true, v_true, p_true, bg_true, ba_true, qcs_true
 
 
-def extract_error_state(q_nom, v_nom, p_nom, bg_nom, ba_nom, q_true, v_true, p_true, bg_true, ba_true):
+def extract_error_state(q_nom, v_nom, p_nom, bg_nom, ba_nom, qcs_nom, q_true, v_true, p_true, bg_true, ba_true, qcs_true):
     dq = quat_mult(quat_conj(q_nom), q_true)
     dtheta = Matrix([2 * dq[1], 2 * dq[2], 2 * dq[3]])
     dv = v_true - v_nom
     dp = p_true - p_nom
     dbg = bg_true - bg_nom
     dba = ba_true - ba_nom
-    return Matrix.vstack(dtheta, dv, dp, dbg, dba)
+    dqcs = quat_mult(qcs_true, quat_conj(qcs_nom))
+    dpsi_cs = Matrix([2 * dqcs[1], 2 * dqcs[2], 2 * dqcs[3]])
+    return Matrix.vstack(dtheta, dv, dp, dbg, dba, dpsi_cs)
 
 
 def build_symbolic_model():
@@ -140,12 +143,14 @@ def build_symbolic_model():
     p = Matrix(symbols("pn pe pd", real=True))
     bg = Matrix(symbols("bgx bgy bgz", real=True))
     ba = Matrix(symbols("bax bay baz", real=True))
+    qcs = Matrix(symbols("qcs0 qcs1 qcs2 qcs3", real=True))
 
     dtheta = Matrix(symbols("dtheta_x dtheta_y dtheta_z", real=True))
     dv = Matrix(symbols("dv_n dv_e dv_d", real=True))
     dp = Matrix(symbols("dp_n dp_e dp_d", real=True))
     dbg = Matrix(symbols("dbg_x dbg_y dbg_z", real=True))
     dba = Matrix(symbols("dba_x dba_y dba_z", real=True))
+    dpsi_cs = Matrix(symbols("dpsi_cs_x dpsi_cs_y dpsi_cs_z", real=True))
 
     d_ang = Matrix(symbols("dax day daz", real=True))
     d_vel = Matrix(symbols("dvx dvy dvz", real=True))
@@ -155,9 +160,9 @@ def build_symbolic_model():
         q, v, p, bg, ba, d_ang, d_vel, dt, g_n
     )
 
-    x_nom = Matrix.vstack(q, v, p, bg, ba)
-    x_nom_new = Matrix.vstack(q_new, v_new, p_new, bg_new, ba_new)
-    dx = Matrix.vstack(dtheta, dv, dp, dbg, dba)
+    x_nom = Matrix.vstack(q, v, p, bg, ba, qcs)
+    x_nom_new = Matrix.vstack(q_new, v_new, p_new, bg_new, ba_new, qcs)
+    dx = Matrix.vstack(dtheta, dv, dp, dbg, dba, dpsi_cs)
 
     return {
         "dt": dt,
@@ -166,11 +171,13 @@ def build_symbolic_model():
         "p": p,
         "bg": bg,
         "ba": ba,
+        "qcs": qcs,
         "dtheta": dtheta,
         "dv": dv,
         "dp": dp,
         "dbg": dbg,
         "dba": dba,
+        "dpsi_cs": dpsi_cs,
         "d_ang": d_ang,
         "d_vel": d_vel,
         "g_n": g_n,
@@ -187,9 +194,6 @@ def derive_error_dynamics():
     model = build_symbolic_model()
 
     dt = model["dt"]
-    q = model["q"]
-    v = model["v"]
-    p = model["p"]
     bg = model["bg"]
     ba = model["ba"]
     dx = model["dx"]
@@ -198,6 +202,7 @@ def derive_error_dynamics():
     dp = model["dp"]
     dbg = model["dbg"]
     dba = model["dba"]
+    dpsi_cs = model["dpsi_cs"]
     d_ang = model["d_ang"]
     d_vel = model["d_vel"]
     g_n = model["g_n"]
@@ -206,14 +211,26 @@ def derive_error_dynamics():
     n_dvel = Matrix(symbols("n_dvx n_dvy n_dvz", real=True))
     n_dbg = Matrix(symbols("n_dbg_x n_dbg_y n_dbg_z", real=True))
     n_dba = Matrix(symbols("n_dba_x n_dba_y n_dba_z", real=True))
-    w = Matrix.vstack(n_dang, n_dvel, n_dbg, n_dba)
+    n_mount = Matrix(symbols("n_mount_x n_mount_y n_mount_z", real=True))
+    w = Matrix.vstack(n_dang, n_dvel, n_dbg, n_dba, n_mount)
 
-    q_true, v_true, p_true, bg_true, ba_true = inject_true_state(
-        q, v, p, bg, ba, dtheta, dv, dp, dbg, dba
+    q_true, v_true, p_true, bg_true, ba_true, qcs_true = inject_true_state(
+        model["q"],
+        model["v"],
+        model["p"],
+        bg,
+        ba,
+        model["qcs"],
+        dtheta,
+        dv,
+        dp,
+        dbg,
+        dba,
+        dpsi_cs,
     )
 
     q_nom_new, v_nom_new, p_nom_new, bg_nom_new, ba_nom_new = propagate_nominal(
-        q, v, p, bg, ba, d_ang, d_vel, dt, g_n
+        model["q"], model["v"], model["p"], bg, ba, d_ang, d_vel, dt, g_n
     )
     q_true_new, v_true_new, p_true_new, bg_true_new, ba_true_new = propagate_nominal(
         q_true,
@@ -228,6 +245,8 @@ def derive_error_dynamics():
     )
     bg_true_new += n_dbg * dt
     ba_true_new += n_dba * dt
+    qcs_nom_new = model["qcs"]
+    qcs_true_new = quat_mult(delta_quat(n_mount), qcs_true)
 
     dx_next = extract_error_state(
         q_nom_new,
@@ -235,11 +254,13 @@ def derive_error_dynamics():
         p_nom_new,
         bg_nom_new,
         ba_nom_new,
+        qcs_nom_new,
         q_true_new,
         v_true_new,
         p_true_new,
         bg_true_new,
         ba_true_new,
+        qcs_true_new,
     )
 
     zero_subs = {symbol: 0 for symbol in list(dx) + list(w)}
@@ -259,20 +280,23 @@ def derive_measurement_model():
     model = build_symbolic_model()
     p_cov = create_symmetric_cov_matrix(model["state_dim_error"])
     zero_error_subs = {symbol: 0 for symbol in list(model["dx"])}
-    q_true, v_true, p_true, bg_true, ba_true = inject_true_state(
+    q_true, v_true, p_true, bg_true, ba_true, qcs_true = inject_true_state(
         model["q"],
         model["v"],
         model["p"],
         model["bg"],
         model["ba"],
+        model["qcs"],
         model["dtheta"],
         model["dv"],
         model["dp"],
         model["dbg"],
         model["dba"],
+        model["dpsi_cs"],
     )
     r_true_to_n = quat_to_rot(q_true)
     v_true_b = r_true_to_n.T * v_true
+    v_true_c = quat_to_rot(qcs_true) * v_true_b
     g_true_b = r_true_to_n.T * model["g_n"]
     stationary_gravity_b = -g_true_b
     return {
@@ -286,9 +310,9 @@ def derive_measurement_model():
         "gps_vel_d": generate_observation_equations(p_cov, model["dx"], v_true[2], Symbol("R_VEL_D", real=True), "ESKF_HK_VEL_D", zero_error_subs),
         "stationary_accel_x": generate_observation_equations(p_cov, model["dx"], stationary_gravity_b[0], Symbol("R_STATIONARY_ACCEL", real=True), "ESKF_HK_STAT_AX", zero_error_subs),
         "stationary_accel_y": generate_observation_equations(p_cov, model["dx"], stationary_gravity_b[1], Symbol("R_STATIONARY_ACCEL", real=True), "ESKF_HK_STAT_AY", zero_error_subs),
-        "body_vel_x": generate_observation_equations(p_cov, model["dx"], v_true_b[0], Symbol("R_BODY_VEL", real=True), "ESKF_HK_BODY_X", zero_error_subs),
-        "body_vel_y": generate_observation_equations(p_cov, model["dx"], v_true_b[1], Symbol("R_BODY_VEL", real=True), "ESKF_HK_BODY_Y", zero_error_subs),
-        "body_vel_z": generate_observation_equations(p_cov, model["dx"], v_true_b[2], Symbol("R_BODY_VEL", real=True), "ESKF_HK_BODY_Z", zero_error_subs),
+        "body_vel_x": generate_observation_equations(p_cov, model["dx"], v_true_c[0], Symbol("R_BODY_VEL", real=True), "ESKF_HK_BODY_X", zero_error_subs),
+        "body_vel_y": generate_observation_equations(p_cov, model["dx"], v_true_c[1], Symbol("R_BODY_VEL", real=True), "ESKF_HK_BODY_Y", zero_error_subs),
+        "body_vel_z": generate_observation_equations(p_cov, model["dx"], v_true_c[2], Symbol("R_BODY_VEL", real=True), "ESKF_HK_BODY_Z", zero_error_subs),
     }
 
 
@@ -370,17 +394,18 @@ def emit_generated_c():
         "G_reset_theta",
         "ESKF_RESET",
     )
-    write_observation_equations(gps_pos_n_path, meas["gps_pos_n"])
-    write_observation_equations(gps_pos_e_path, meas["gps_pos_e"])
-    write_observation_equations(gps_pos_d_path, meas["gps_pos_d"])
-    write_observation_equations(gps_vel_n_path, meas["gps_vel_n"])
-    write_observation_equations(gps_vel_e_path, meas["gps_vel_e"])
-    write_observation_equations(gps_vel_d_path, meas["gps_vel_d"])
-    write_observation_equations(stationary_accel_x_path, meas["stationary_accel_x"])
-    write_observation_equations(stationary_accel_y_path, meas["stationary_accel_y"])
-    write_observation_equations(body_vel_x_path, meas["body_vel_x"])
-    write_observation_equations(body_vel_y_path, meas["body_vel_y"])
-    write_observation_equations(body_vel_z_path, meas["body_vel_z"])
+    state_dim = model["state_dim_error"]
+    write_observation_equations(gps_pos_n_path, meas["gps_pos_n"], state_dim)
+    write_observation_equations(gps_pos_e_path, meas["gps_pos_e"], state_dim)
+    write_observation_equations(gps_pos_d_path, meas["gps_pos_d"], state_dim)
+    write_observation_equations(gps_vel_n_path, meas["gps_vel_n"], state_dim)
+    write_observation_equations(gps_vel_e_path, meas["gps_vel_e"], state_dim)
+    write_observation_equations(gps_vel_d_path, meas["gps_vel_d"], state_dim)
+    write_observation_equations(stationary_accel_x_path, meas["stationary_accel_x"], state_dim)
+    write_observation_equations(stationary_accel_y_path, meas["stationary_accel_y"], state_dim)
+    write_observation_equations(body_vel_x_path, meas["body_vel_x"], state_dim)
+    write_observation_equations(body_vel_y_path, meas["body_vel_y"], state_dim)
+    write_observation_equations(body_vel_z_path, meas["body_vel_z"], state_dim)
 
     print("Wrote:", pred_path)
     print("Wrote:", f_path)

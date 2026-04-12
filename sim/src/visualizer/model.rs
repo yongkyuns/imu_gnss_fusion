@@ -25,6 +25,7 @@ pub struct PlotData {
     pub eskf_bias_accel: Vec<Trace>,
     pub eskf_cov_bias: Vec<Trace>,
     pub eskf_cov_nonbias: Vec<Trace>,
+    pub eskf_misalignment: Vec<Trace>,
     pub eskf_stationary_diag: Vec<Trace>,
     pub eskf_bump_pitch_speed: Vec<Trace>,
     pub eskf_bump_diag: Vec<Trace>,

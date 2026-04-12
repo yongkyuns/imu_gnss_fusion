@@ -1,6 +1,6 @@
 use sensor_fusion::eskf::{
-    ERROR_STATE_DIM, ErrorState, IDX_DBA_X, IDX_DBG_X, IDX_DPOS_N, IDX_DTHETA_Z, IDX_DVEL_N,
-    ImuDelta, NominalState, error_reset_jacobian,
+    ERROR_STATE_DIM, ErrorState, IDX_DBA_X, IDX_DBG_X, IDX_DPOS_N, IDX_DPSI_CS_X, IDX_DTHETA_Z,
+    IDX_DVEL_N, ImuDelta, NominalState, error_reset_jacobian,
 };
 
 fn quat_norm(q: [f32; 4]) -> f32 {
@@ -30,6 +30,7 @@ fn inject_error_updates_nominal_translational_and_bias_states() {
         dpos_n: [4.0, -5.0, 6.0],
         dgyro_bias_b: [0.01, -0.02, 0.03],
         daccel_bias_b: [0.04, -0.05, 0.06],
+        dpsi_cs: [0.0, 0.0, 0.0],
     });
 
     assert_eq!(x.vel_n, [1.0, -2.0, 3.0]);
@@ -76,6 +77,7 @@ fn error_state_array_round_trip_preserves_layout() {
         dpos_n: [7.0, 8.0, 9.0],
         dgyro_bias_b: [10.0, 11.0, 12.0],
         daccel_bias_b: [13.0, 14.0, 15.0],
+        dpsi_cs: [16.0, 17.0, 18.0],
     };
     let flat = dx.to_array();
     assert_eq!(flat.len(), ERROR_STATE_DIM);
@@ -84,7 +86,21 @@ fn error_state_array_round_trip_preserves_layout() {
     assert_eq!(flat[IDX_DPOS_N], 7.0);
     assert_eq!(flat[IDX_DBG_X], 10.0);
     assert_eq!(flat[IDX_DBA_X], 13.0);
+    assert_eq!(flat[IDX_DPSI_CS_X], 16.0);
     assert_eq!(ErrorState::from_array(flat), dx);
+}
+
+#[test]
+fn inject_small_mount_error_rotates_residual_mount_quaternion() {
+    let mut x = NominalState::identity();
+    x.inject_error(ErrorState {
+        dpsi_cs: [0.0, 0.0, 0.1],
+        ..ErrorState::default()
+    });
+
+    assert!(x.q_cs[3] > 0.0);
+    assert!((quat_norm(x.q_cs) - 1.0).abs() < 1.0e-6);
+    assert_eq!(x.q_bn, [1.0, 0.0, 0.0, 0.0]);
 }
 
 #[test]

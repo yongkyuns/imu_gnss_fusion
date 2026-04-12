@@ -47,6 +47,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mount-roll-deg", type=float, default=0.0)
     parser.add_argument("--mount-pitch-deg", type=float, default=0.0)
     parser.add_argument("--mount-yaw-deg", type=float, default=0.0)
+    parser.add_argument("--accel-bias-x-mps2", type=float, default=0.0)
+    parser.add_argument("--accel-bias-y-mps2", type=float, default=0.0)
+    parser.add_argument("--accel-bias-z-mps2", type=float, default=0.0)
     parser.add_argument("--imu-hz", type=float, default=100.0)
     parser.add_argument("--gnss-hz", type=float, default=10.0)
     parser.add_argument(
@@ -125,6 +128,12 @@ def run_align_eval(args: argparse.Namespace, data_dir: Path, residual_csv: Path)
         str(args.mount_pitch_deg),
         "--mount-yaw-deg",
         str(args.mount_yaw_deg),
+        "--accel-bias-x-mps2",
+        str(args.accel_bias_x_mps2),
+        "--accel-bias-y-mps2",
+        str(args.accel_bias_y_mps2),
+        "--accel-bias-z-mps2",
+        str(args.accel_bias_z_mps2),
         "--residual-csv",
         str(residual_csv),
     ]
@@ -308,6 +317,7 @@ def main() -> int:
     title = (
         f"align_eval_gnss_ins_sim | {args.signal_source} | "
         f"mount=({args.mount_roll_deg:.2f},{args.mount_pitch_deg:.2f},{args.mount_yaw_deg:.2f}) deg | "
+        f"ab=({args.accel_bias_x_mps2:.3f},{args.accel_bias_y_mps2:.3f},{args.accel_bias_z_mps2:.3f}) m/s^2 | "
         f"{args.motion_def}"
     )
     fig = make_plot(series, title)

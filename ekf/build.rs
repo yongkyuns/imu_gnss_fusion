@@ -41,6 +41,9 @@ fn llvm_tool(name: &str) -> Option<PathBuf> {
 }
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=SF_ESKF_BODY_VEL_USE_QCS_CONJ");
+    println!("cargo:rerun-if-env-changed=SF_ESKF_DIAG_DISABLE_BODY_VEL_Y_MOUNT");
+    println!("cargo:rerun-if-env-changed=SF_ESKF_DIAG_DISABLE_BODY_VEL_Z_MOUNT");
     println!("cargo:rerun-if-changed=c/Makefile");
     println!("cargo:rerun-if-changed=c/generated");
     println!("cargo:rerun-if-changed=c/generated_eskf");
@@ -77,6 +80,25 @@ fn main() {
                 "cargo:warning=WASI sysroot not found; set WASI_SYSROOT or WASI_SDK_PATH for wasm32-wasip1 builds"
             );
         }
+    }
+
+    if env::var("SF_ESKF_BODY_VEL_USE_QCS_CONJ")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        build.define("SF_ESKF_BODY_VEL_USE_QCS_CONJ", Some("1"));
+    }
+    if env::var("SF_ESKF_DIAG_DISABLE_BODY_VEL_Y_MOUNT")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        build.define("SF_ESKF_DIAG_DISABLE_BODY_VEL_Y_MOUNT", Some("1"));
+    }
+    if env::var("SF_ESKF_DIAG_DISABLE_BODY_VEL_Z_MOUNT")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        build.define("SF_ESKF_DIAG_DISABLE_BODY_VEL_Z_MOUNT", Some("1"));
     }
 
     build.compile("sensor_fusion_c_impl");
