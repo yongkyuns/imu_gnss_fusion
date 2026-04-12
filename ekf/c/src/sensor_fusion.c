@@ -55,6 +55,8 @@ static void sf_bootstrap_update_gnss_hints(sf_sensor_fusion_impl_t *impl,
 static bool sf_runtime_zero_velocity_active(sf_sensor_fusion_impl_t *impl,
                                             const float accel_b[3],
                                             const float gyro_radps[3]);
+static bool sf_runtime_nhc_active(const float accel_b[3],
+                                  const float gyro_radps[3]);
 static bool sf_bootstrap_update(sf_sensor_fusion_impl_t *impl,
                                 const float accel_b[3],
                                 const float gyro_radps[3]);
@@ -73,6 +75,8 @@ static void sf_profile_accumulate(uint32_t *count, uint64_t *total_us,
 #define SF_RUNTIME_ZERO_SPEED_MPS 0.80f
 #define SF_RUNTIME_R_ZERO_VEL 0.01f
 #define SF_RUNTIME_R_STATIONARY_ACCEL 0.05f
+#define SF_RUNTIME_NHC_MAX_GYRO_RADPS 0.03f
+#define SF_RUNTIME_NHC_MAX_ACCEL_NORM_ERR_MPS2 0.2f
 #define SF_CAN_SPEED_ZERO_MPS 0.15f
 #define SF_CAN_SPEED_SIGN_INFER_MIN_MPS 1.0f
 
@@ -508,7 +512,7 @@ sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
       sf_eskf_fuse_zero_vel(&impl->eskf, SF_RUNTIME_R_ZERO_VEL);
       sf_eskf_fuse_stationary_gravity(&impl->eskf, accel_vehicle,
                                       SF_RUNTIME_R_STATIONARY_ACCEL);
-    } else {
+    } else if (sf_runtime_nhc_active(accel_vehicle, gyro_vehicle)) {
       sf_eskf_fuse_body_vel(&impl->eskf, impl->cfg.r_body_vel);
     }
     if (impl->profile_now_us != NULL) {
@@ -1406,6 +1410,16 @@ static bool sf_runtime_zero_velocity_active(sf_sensor_fusion_impl_t *impl,
                   : 0.0f;
   low_speed = impl->last_gnss_valid && speed_mps <= SF_RUNTIME_ZERO_SPEED_MPS;
   return low_dynamic && low_speed;
+}
+
+static bool sf_runtime_nhc_active(const float accel_b[3],
+                                  const float gyro_radps[3]) {
+  if (accel_b == NULL || gyro_radps == NULL) {
+    return false;
+  }
+  return sf_norm3(gyro_radps) < SF_RUNTIME_NHC_MAX_GYRO_RADPS &&
+         fabsf(sf_norm3(accel_b) - SF_GRAVITY_MSS) <
+             SF_RUNTIME_NHC_MAX_ACCEL_NORM_ERR_MPS2;
 }
 
 static bool sf_take_interval_summary(sf_sensor_fusion_impl_t *impl, float t0_s,

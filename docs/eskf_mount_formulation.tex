@@ -729,6 +729,27 @@ composition. The inverse-residual NHC model remains a useful diagnostic only if
 future real-log replays still show disagreement after plotting and evaluation
 use the corrected composition.
 
+A subsequent replay on \path{logger/data/ubx_raw_20260328_153757.bin} showed
+that real experimental data can still destabilize the residual mount if every
+non-zero-velocity IMU sample is allowed to apply NHC mount updates. With
+ungated, scalar-by-scalar NHC updates and the corrected reporting convention,
+the final physical ESKF mount yaw wrapped to about \(358.44^\circ\), while
+ESF-ALG ended near \(190.37^\circ\) and loose ended near \(171.19^\circ\).
+The implementation now matches loose more closely in two places:
+\begin{enumerate}[leftmargin=1.5em]
+\item the lateral and vertical NHC rows are evaluated from the same nominal
+state, processed as a delayed-injection scalar batch, and injected into
+\(q_{cs}\) only once; and
+\item runtime NHC admission uses the same loose-style low-dynamic cue,
+\(\|\omega\| < 0.03\,\mathrm{rad/s}\) and
+\(|\|f\|-g| < 0.2\,\mathrm{m/s^2}\).
+\end{enumerate}
+With those changes and mount updates enabled, the same replay ended with ESKF
+physical mount yaw \(190.20^\circ\), close to ESF-ALG \(190.37^\circ\). The
+remaining loose difference is expected because loose applies its NHC rows inside
+the GNSS/reference batch schedule, while the runtime ESKF applies admitted NHC
+at IMU rate.
+
 \subsection{Remaining Experiments}
 
 \begin{enumerate}[leftmargin=1.5em]

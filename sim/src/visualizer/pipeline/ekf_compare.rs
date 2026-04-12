@@ -350,9 +350,6 @@ pub fn build_ekf_compare_traces(
     let mut eskf_mount_roll = Vec::<[f64; 2]>::new();
     let mut eskf_mount_pitch = Vec::<[f64; 2]>::new();
     let mut eskf_mount_yaw = Vec::<[f64; 2]>::new();
-    let mut eskf_mount_roll_alt = Vec::<[f64; 2]>::new();
-    let mut eskf_mount_pitch_alt = Vec::<[f64; 2]>::new();
-    let mut eskf_mount_yaw_alt = Vec::<[f64; 2]>::new();
     let eskf_stationary_innov_x = Vec::<[f64; 2]>::new();
     let eskf_stationary_innov_y = Vec::<[f64; 2]>::new();
     let eskf_stationary_k_theta_x_from_x = Vec::<[f64; 2]>::new();
@@ -839,9 +836,6 @@ pub fn build_ekf_compare_traces(
                             &mut eskf_mount_roll,
                             &mut eskf_mount_pitch,
                             &mut eskf_mount_yaw,
-                            &mut eskf_mount_roll_alt,
-                            &mut eskf_mount_pitch_alt,
-                            &mut eskf_mount_yaw_alt,
                             &mut eskf_meas_gyro_x,
                             &mut eskf_meas_gyro_y,
                             &mut eskf_meas_gyro_z,
@@ -1010,9 +1004,6 @@ pub fn build_ekf_compare_traces(
                 &mut eskf_mount_roll,
                 &mut eskf_mount_pitch,
                 &mut eskf_mount_yaw,
-                &mut eskf_mount_roll_alt,
-                &mut eskf_mount_pitch_alt,
-                &mut eskf_mount_yaw_alt,
                 &mut eskf_meas_gyro_x,
                 &mut eskf_meas_gyro_y,
                 &mut eskf_meas_gyro_z,
@@ -1489,18 +1480,6 @@ pub fn build_ekf_compare_traces(
         Trace {
             name: "ESKF full mount yaw [deg]".to_string(),
             points: eskf_mount_yaw,
-        },
-        Trace {
-            name: "ESKF legacy qcs*seed roll [deg]".to_string(),
-            points: eskf_mount_roll_alt,
-        },
-        Trace {
-            name: "ESKF legacy qcs*seed pitch [deg]".to_string(),
-            points: eskf_mount_pitch_alt,
-        },
-        Trace {
-            name: "ESKF legacy qcs*seed yaw [deg]".to_string(),
-            points: eskf_mount_yaw_alt,
         },
     ];
     eskf_misalignment.extend(esf_alg_mount_ref.clone());
@@ -2189,9 +2168,6 @@ fn append_eskf_sample(
     mount_roll: &mut Vec<[f64; 2]>,
     mount_pitch: &mut Vec<[f64; 2]>,
     mount_yaw: &mut Vec<[f64; 2]>,
-    mount_roll_alt: &mut Vec<[f64; 2]>,
-    mount_pitch_alt: &mut Vec<[f64; 2]>,
-    mount_yaw_alt: &mut Vec<[f64; 2]>,
     meas_gyro_x: &mut Vec<[f64; 2]>,
     meas_gyro_y: &mut Vec<[f64; 2]>,
     meas_gyro_z: &mut Vec<[f64; 2]>,
@@ -2241,14 +2217,6 @@ fn append_eskf_sample(
         q_total_flu[2],
         q_total_flu[3],
     );
-    let q_total_vb_alt = quat_mul(q_cs, q_seed);
-    let q_total_flu_alt = frd_mount_quat_to_esf_alg_flu_quat(q_total_vb_alt);
-    let (mount_r_alt, mount_p_alt, mount_y_alt) = quat_rpy_alg_deg(
-        q_total_flu_alt[0],
-        q_total_flu_alt[1],
-        q_total_flu_alt[2],
-        q_total_flu_alt[3],
-    );
     let mount_r_plot = if eskf.p[15][15].abs() <= 1.0e-12 {
         let q_seed_flu = frd_mount_quat_to_esf_alg_flu_quat(q_seed);
         quat_rpy_alg_deg(q_seed_flu[0], q_seed_flu[1], q_seed_flu[2], q_seed_flu[3]).0
@@ -2258,9 +2226,6 @@ fn append_eskf_sample(
     mount_roll.push([t_imu, mount_r_plot]);
     mount_pitch.push([t_imu, mount_p]);
     mount_yaw.push([t_imu, mount_y]);
-    mount_roll_alt.push([t_imu, mount_r_alt]);
-    mount_pitch_alt.push([t_imu, mount_p_alt]);
-    mount_yaw_alt.push([t_imu, mount_y_alt]);
 
     let gravity_b = [
         c_n_b[2][0] * GRAVITY_MPS2 as f64,

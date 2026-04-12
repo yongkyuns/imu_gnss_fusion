@@ -13,6 +13,9 @@
 #ifndef SF_ESKF_BODY_VEL_USE_QCS_CONJ
 #define SF_ESKF_BODY_VEL_USE_QCS_CONJ 0
 #endif
+#ifndef SF_ESKF_ENABLE_BODY_VEL_MOUNT_UPDATE
+#define SF_ESKF_ENABLE_BODY_VEL_MOUNT_UPDATE 1
+#endif
 
 static void sf_eskf_normalize_quat(float q[4]);
 static void sf_eskf_normalize_nominal_quat(sf_eskf_t *eskf);
@@ -56,8 +59,15 @@ static void sf_eskf_fuse_stationary_gravity_y(sf_eskf_t *eskf, float accel_y,
                                               float r_stationary_accel);
 static void sf_eskf_fuse_body_speed_x_impl(sf_eskf_t *eskf, float speed_mps,
                                            float r_speed);
-static void sf_eskf_fuse_body_vel_y(sf_eskf_t *eskf, float r_body_vel);
-static void sf_eskf_fuse_body_vel_z(sf_eskf_t *eskf, float r_body_vel);
+static void sf_eskf_body_vel_y_observation(sf_eskf_t *eskf, float r_body_vel,
+                                           float h[SF_ESKF_ERROR_STATES],
+                                           float k[SF_ESKF_ERROR_STATES],
+                                           float *innovation, float *s);
+static void sf_eskf_body_vel_z_observation(sf_eskf_t *eskf, float r_body_vel,
+                                           float h[SF_ESKF_ERROR_STATES],
+                                           float k[SF_ESKF_ERROR_STATES],
+                                           float *innovation, float *s);
+static void sf_eskf_fuse_body_vel_yz_batch(sf_eskf_t *eskf, float r_body_vel);
 static void sf_eskf_predict_noise_default(sf_predict_noise_t *cfg);
 static void sf_eskf_predict_covariance_dense(
     float nextP[SF_ESKF_ERROR_STATES][SF_ESKF_ERROR_STATES],
@@ -308,8 +318,7 @@ void sf_eskf_fuse_body_vel(sf_eskf_t *eskf, float r_body_vel) {
     return;
   }
   sf_eskf_zero_mount_roll_covariance(eskf);
-  sf_eskf_fuse_body_vel_y(eskf, r_body_vel);
-  sf_eskf_fuse_body_vel_z(eskf, r_body_vel);
+  sf_eskf_fuse_body_vel_yz_batch(eskf, r_body_vel);
 }
 
 void sf_eskf_fuse_zero_vel(sf_eskf_t *eskf, float r_zero_vel) {
@@ -879,7 +888,10 @@ static void sf_eskf_fuse_stationary_gravity_y(sf_eskf_t *eskf, float accel_y,
   sf_eskf_fuse_measurement(eskf, S, K, dx);
 }
 
-static void sf_eskf_fuse_body_vel_y(sf_eskf_t *eskf, float r_body_vel) {
+static void sf_eskf_body_vel_y_observation(sf_eskf_t *eskf, float r_body_vel,
+                                           float h[SF_ESKF_ERROR_STATES],
+                                           float k[SF_ESKF_ERROR_STATES],
+                                           float *innovation, float *s) {
   float v_vehicle[3];
   const float q0 = eskf->nominal.q0;
   const float q1 = eskf->nominal.q1;
@@ -900,24 +912,153 @@ static void sf_eskf_fuse_body_vel_y(sf_eskf_t *eskf, float r_body_vel) {
   const float vd = eskf->nominal.vd;
   float (*P)[SF_ESKF_ERROR_STATES] = eskf->p;
   sf_eskf_nominal_vehicle_velocity(eskf, v_vehicle);
-  const float innovation = -v_vehicle[1];
-  float H[SF_ESKF_ERROR_STATES];
-  float K[SF_ESKF_ERROR_STATES];
-  float S;
-  float dx[SF_ESKF_ERROR_STATES];
+  *innovation = -v_vehicle[1];
+#define H h
+#define K k
+#define S (*s)
 #define R_BODY_VEL r_body_vel
 #include "../generated_eskf/body_vel_y_generated.c"
 #undef R_BODY_VEL
-  (void)H;
-  for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
-    dx[i] = K[i] * innovation;
-  }
-#if SF_ESKF_DIAG_DISABLE_BODY_VEL_Y_MOUNT
-  sf_eskf_block_mount_injection(dx);
+#undef S
+#undef K
+#undef H
+}
+
+static void sf_eskf_body_vel_z_observation(sf_eskf_t *eskf, float r_body_vel,
+                                           float h[SF_ESKF_ERROR_STATES],
+                                           float k[SF_ESKF_ERROR_STATES],
+                                           float *innovation, float *s) {
+  float v_vehicle[3];
+  const float q0 = eskf->nominal.q0;
+  const float q1 = eskf->nominal.q1;
+  const float q2 = eskf->nominal.q2;
+  const float q3 = eskf->nominal.q3;
+  const float qcs0 = eskf->nominal.qcs0;
+#if SF_ESKF_BODY_VEL_USE_QCS_CONJ
+  const float qcs1 = -eskf->nominal.qcs1;
+  const float qcs2 = -eskf->nominal.qcs2;
+  const float qcs3 = -eskf->nominal.qcs3;
+#else
+  const float qcs1 = eskf->nominal.qcs1;
+  const float qcs2 = eskf->nominal.qcs2;
+  const float qcs3 = eskf->nominal.qcs3;
 #endif
-  sf_eskf_record_update_diag(eskf, SF_ESKF_UPDATE_DIAG_BODY_VEL_Y, innovation,
-                             S, K, dx);
-  sf_eskf_fuse_measurement(eskf, S, K, dx);
+  const float vn = eskf->nominal.vn;
+  const float ve = eskf->nominal.ve;
+  const float vd = eskf->nominal.vd;
+  float (*P)[SF_ESKF_ERROR_STATES] = eskf->p;
+  sf_eskf_nominal_vehicle_velocity(eskf, v_vehicle);
+  *innovation = -v_vehicle[2];
+#define H h
+#define K k
+#define S (*s)
+#define R_BODY_VEL r_body_vel
+#include "../generated_eskf/body_vel_z_generated.c"
+#undef R_BODY_VEL
+#undef S
+#undef K
+#undef H
+}
+
+static void sf_eskf_fuse_body_vel_yz_batch(sf_eskf_t *eskf, float r_body_vel) {
+  float h_rows[2][SF_ESKF_ERROR_STATES];
+  float k_scalar[2][SF_ESKF_ERROR_STATES];
+  float residuals[2];
+  float scalar_s[2];
+  double p[SF_ESKF_ERROR_STATES][SF_ESKF_ERROR_STATES];
+  double dx[SF_ESKF_ERROR_STATES] = {0.0};
+
+  sf_eskf_body_vel_y_observation(eskf, r_body_vel, h_rows[0], k_scalar[0],
+                                 &residuals[0], &scalar_s[0]);
+  sf_eskf_body_vel_z_observation(eskf, r_body_vel, h_rows[1], k_scalar[1],
+                                 &residuals[1], &scalar_s[1]);
+
+  for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
+    for (int j = 0; j < SF_ESKF_ERROR_STATES; ++j) {
+      p[i][j] = (double)eskf->p[i][j];
+    }
+  }
+
+  for (int obs = 0; obs < 2; ++obs) {
+    double ph[SF_ESKF_ERROR_STATES] = {0.0};
+    double s = (double)r_body_vel;
+    double hd = 0.0;
+    double alpha;
+    float diag_k[SF_ESKF_ERROR_STATES];
+    float diag_dx[SF_ESKF_ERROR_STATES];
+    const sf_eskf_update_diag_type_t diag_type =
+        obs == 0 ? SF_ESKF_UPDATE_DIAG_BODY_VEL_Y
+                 : SF_ESKF_UPDATE_DIAG_BODY_VEL_Z;
+
+    for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
+      for (int j = 0; j < SF_ESKF_ERROR_STATES; ++j) {
+        ph[i] += p[i][j] * (double)h_rows[obs][j];
+      }
+    }
+    for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
+      s += (double)h_rows[obs][i] * ph[i];
+      hd += (double)h_rows[obs][i] * dx[i];
+    }
+    if (!(s > 0.0) || !isfinite(s)) {
+      continue;
+    }
+
+    alpha = ((double)residuals[obs] - hd) / s;
+    for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
+      const double gain = ph[i] / s;
+      const double contribution = ph[i] * alpha;
+      diag_k[i] = (float)gain;
+      diag_dx[i] = (float)contribution;
+    }
+
+#if !SF_ESKF_ENABLE_BODY_VEL_MOUNT_UPDATE
+    sf_eskf_block_mount_injection(diag_dx);
+#endif
+#if SF_ESKF_DIAG_DISABLE_BODY_VEL_Y_MOUNT
+    if (obs == 0) {
+      sf_eskf_block_mount_injection(diag_dx);
+    }
+#endif
+#if SF_ESKF_DIAG_DISABLE_BODY_VEL_Z_MOUNT
+    if (obs == 1) {
+      sf_eskf_block_mount_injection(diag_dx);
+    }
+#endif
+
+    for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
+      dx[i] += (double)diag_dx[i];
+    }
+
+    sf_eskf_record_update_diag(eskf, diag_type, residuals[obs], (float)s,
+                               diag_k, diag_dx);
+
+    for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
+      for (int j = i; j < SF_ESKF_ERROR_STATES; ++j) {
+        const double updated = p[i][j] - (ph[i] * ph[j]) / s;
+        p[i][j] = updated;
+        p[j][i] = updated;
+      }
+    }
+  }
+
+  for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
+    for (int j = 0; j < SF_ESKF_ERROR_STATES; ++j) {
+      eskf->p[i][j] = (float)p[i][j];
+    }
+  }
+
+  {
+    float dx_f32[SF_ESKF_ERROR_STATES];
+    for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
+      dx_f32[i] = (float)dx[i];
+    }
+    sf_eskf_inject_error_state(eskf, dx_f32);
+    sf_eskf_apply_reset(eskf->p, dx_f32);
+    sf_eskf_zero_mount_roll_covariance(eskf);
+  }
+
+  (void)k_scalar;
+  (void)scalar_s;
 }
 
 static void sf_eskf_fuse_body_speed_x_impl(sf_eskf_t *eskf, float speed_mps,
@@ -956,46 +1097,5 @@ static void sf_eskf_fuse_body_speed_x_impl(sf_eskf_t *eskf, float speed_mps,
   }
   sf_eskf_record_update_diag(eskf, SF_ESKF_UPDATE_DIAG_BODY_SPEED_X,
                              innovation, S, K, dx);
-  sf_eskf_fuse_measurement(eskf, S, K, dx);
-}
-
-static void sf_eskf_fuse_body_vel_z(sf_eskf_t *eskf, float r_body_vel) {
-  float v_vehicle[3];
-  const float q0 = eskf->nominal.q0;
-  const float q1 = eskf->nominal.q1;
-  const float q2 = eskf->nominal.q2;
-  const float q3 = eskf->nominal.q3;
-  const float qcs0 = eskf->nominal.qcs0;
-#if SF_ESKF_BODY_VEL_USE_QCS_CONJ
-  const float qcs1 = -eskf->nominal.qcs1;
-  const float qcs2 = -eskf->nominal.qcs2;
-  const float qcs3 = -eskf->nominal.qcs3;
-#else
-  const float qcs1 = eskf->nominal.qcs1;
-  const float qcs2 = eskf->nominal.qcs2;
-  const float qcs3 = eskf->nominal.qcs3;
-#endif
-  const float vn = eskf->nominal.vn;
-  const float ve = eskf->nominal.ve;
-  const float vd = eskf->nominal.vd;
-  float (*P)[SF_ESKF_ERROR_STATES] = eskf->p;
-  sf_eskf_nominal_vehicle_velocity(eskf, v_vehicle);
-  const float innovation = -v_vehicle[2];
-  float H[SF_ESKF_ERROR_STATES];
-  float K[SF_ESKF_ERROR_STATES];
-  float S;
-  float dx[SF_ESKF_ERROR_STATES];
-#define R_BODY_VEL r_body_vel
-#include "../generated_eskf/body_vel_z_generated.c"
-#undef R_BODY_VEL
-  (void)H;
-  for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
-    dx[i] = K[i] * innovation;
-  }
-#if SF_ESKF_DIAG_DISABLE_BODY_VEL_Z_MOUNT
-  sf_eskf_block_mount_injection(dx);
-#endif
-  sf_eskf_record_update_diag(eskf, SF_ESKF_UPDATE_DIAG_BODY_VEL_Z, innovation,
-                             S, K, dx);
   sf_eskf_fuse_measurement(eskf, S, K, dx);
 }
