@@ -118,6 +118,12 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_OUTPUT_DIR / "seeded_loose_stress_mc_summary.csv",
         help="Per-run Monte Carlo summary CSV output path.",
     )
+    parser.add_argument(
+        "--mc-output-html",
+        type=Path,
+        default=DEFAULT_OUTPUT_DIR / "seeded_loose_stress_mc_dark.html",
+        help="Plotly dark HTML dashboard for Monte Carlo dispersion and observability plots.",
+    )
     return parser.parse_args()
 
 
@@ -634,6 +640,227 @@ def write_monte_carlo_summary(rows: list[dict[str, float | str]], output_csv: Pa
         writer.writerows(rows)
 
 
+def safe_corrcoef(x: np.ndarray, y: np.ndarray) -> float:
+    if x.size == 0 or y.size == 0:
+        return float("nan")
+    if np.allclose(x, x[0]) or np.allclose(y, y[0]):
+        return float("nan")
+    return float(np.corrcoef(x, y)[0, 1])
+
+
+def write_monte_carlo_plot(rows: list[dict[str, float | str]], output_html: Path) -> None:
+    if not rows or go is None or make_subplots is None:
+        return
+
+    seed_roll = np.asarray([float(row["seed_roll_deg"]) for row in rows], dtype=float)
+    seed_pitch = np.asarray([float(row["seed_pitch_deg"]) for row in rows], dtype=float)
+    seed_yaw = np.asarray([float(row["seed_yaw_deg"]) for row in rows], dtype=float)
+    seed_norm = np.sqrt(seed_roll * seed_roll + seed_pitch * seed_pitch + seed_yaw * seed_yaw)
+    gps_vd_bias = np.asarray([float(row["gps_vd_bias_mps"]) for row in rows], dtype=float)
+    gps_vd_bias_duration = np.asarray([float(row["gps_vd_bias_duration_s"]) for row in rows], dtype=float)
+    vel_std_scale = np.asarray([float(row["vel_std_scale"]) for row in rows], dtype=float)
+    accel_z_bias = np.asarray([float(row["accel_z_bias_mps2"]) for row in rows], dtype=float)
+    jump_time = np.asarray([float(row["first_jump_time_s"]) for row in rows], dtype=float)
+    jump_mag = np.asarray([float(row["first_jump_mag_deg"]) for row in rows], dtype=float)
+    has_jump = np.asarray([float(row["has_jump"]) for row in rows], dtype=float)
+    wrong_basin = np.asarray([float(row["wrong_basin"]) for row in rows], dtype=float)
+    final_mount_err_norm = np.asarray([float(row["final_mount_err_norm_deg"]) for row in rows], dtype=float)
+    final_car_pitch_err = np.asarray([float(row["final_car_pitch_err_deg"]) for row in rows], dtype=float)
+    final_accel_bias_z = np.asarray([float(row["final_accel_bias_z"]) for row in rows], dtype=float)
+    labels = [str(row["label"]) for row in rows]
+    jump_time_plot = np.where(np.isnan(jump_time), -1.0, jump_time)
+
+    corr_inputs = {
+        "seed_roll_deg": seed_roll,
+        "seed_pitch_deg": seed_pitch,
+        "seed_yaw_deg": seed_yaw,
+        "seed_norm_deg": seed_norm,
+        "gps_vd_bias_mps": gps_vd_bias,
+        "gps_vd_bias_duration_s": gps_vd_bias_duration,
+        "vel_std_scale": vel_std_scale,
+        "accel_z_bias_mps2": accel_z_bias,
+    }
+    corr_to_mount = {name: safe_corrcoef(values, final_mount_err_norm) for name, values in corr_inputs.items()}
+    corr_to_pitch = {name: safe_corrcoef(values, np.abs(final_car_pitch_err)) for name, values in corr_inputs.items()}
+
+    colorscale = [
+        [0.0, "#4cc9f0"],
+        [0.5, "#fca311"],
+        [1.0, "#f72585"],
+    ]
+    hover_text = [
+        (
+            f"{label}<br>"
+            f"seed=[{sr:.2f}, {sp:.2f}, {sy:.2f}] deg<br>"
+            f"gps_vd_bias={vd:.2f} m/s for {dur:.2f} s<br>"
+            f"vel_std_scale={vss:.2f}<br>"
+            f"accel_z_bias={az:.3f} m/s^2<br>"
+            f"mount_err_norm={men:.2f} deg<br>"
+            f"car_pitch_err={cpe:.2f} deg<br>"
+            f"jump_time={'none' if np.isnan(jt) else f'{jt:.2f} s'}"
+        )
+        for label, sr, sp, sy, vd, dur, vss, az, men, cpe, jt in zip(
+            labels,
+            seed_roll,
+            seed_pitch,
+            seed_yaw,
+            gps_vd_bias,
+            gps_vd_bias_duration,
+            vel_std_scale,
+            accel_z_bias,
+            final_mount_err_norm,
+            final_car_pitch_err,
+            jump_time,
+            strict=False,
+        )
+    ]
+
+    fig = make_subplots(
+        rows=3,
+        cols=2,
+        subplot_titles=[
+            "Seed Error Dispersion vs Final Mount Error",
+            "GNSS Down-Velocity Bias vs Car Pitch Error",
+            "Velocity Trust vs Final Mount Error",
+            "Jump Timing Dispersion",
+            "Input Correlation to Final Mount Error",
+            "Input Correlation to |Car Pitch Error|",
+        ],
+        vertical_spacing=0.10,
+        horizontal_spacing=0.10,
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=seed_norm,
+            y=final_mount_err_norm,
+            mode="markers",
+            name="seed_norm vs mount_err",
+            marker=dict(
+                size=10,
+                color=wrong_basin,
+                colorscale=colorscale,
+                cmin=0,
+                cmax=1,
+                line=dict(color="#d9d9d9", width=0.5),
+                colorbar=dict(title="wrong_basin", x=0.46),
+            ),
+            text=hover_text,
+            hovertemplate="%{text}<extra></extra>",
+        ),
+        row=1,
+        col=1,
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=gps_vd_bias,
+            y=final_car_pitch_err,
+            mode="markers",
+            name="gps_vd_bias vs pitch_err",
+            marker=dict(
+                size=np.clip(6.0 + 0.8 * gps_vd_bias_duration, 6.0, 24.0),
+                color=vel_std_scale,
+                colorscale="Viridis",
+                line=dict(color="#d9d9d9", width=0.5),
+                colorbar=dict(title="vel_std_scale", x=1.02),
+            ),
+            text=hover_text,
+            hovertemplate="%{text}<extra></extra>",
+        ),
+        row=1,
+        col=2,
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=vel_std_scale,
+            y=final_mount_err_norm,
+            mode="markers",
+            name="vel_trust vs mount_err",
+            marker=dict(
+                size=10,
+                color=np.abs(gps_vd_bias),
+                colorscale="Turbo",
+                line=dict(color="#d9d9d9", width=0.5),
+                colorbar=dict(title="|gps_vd_bias|", x=0.46, y=0.36),
+            ),
+            text=hover_text,
+            hovertemplate="%{text}<extra></extra>",
+        ),
+        row=2,
+        col=1,
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=jump_time_plot,
+            y=jump_mag,
+            mode="markers",
+            name="jump timing",
+            marker=dict(
+                size=10,
+                color=final_mount_err_norm,
+                colorscale="Magma",
+                line=dict(color="#d9d9d9", width=0.5),
+                colorbar=dict(title="mount_err_norm", x=1.02, y=0.36),
+            ),
+            text=hover_text,
+            hovertemplate="%{text}<extra></extra>",
+        ),
+        row=2,
+        col=2,
+    )
+
+    fig.add_trace(
+        go.Bar(
+            x=list(corr_to_mount.keys()),
+            y=list(corr_to_mount.values()),
+            name="corr -> mount_err",
+            marker=dict(color="#80ed99"),
+        ),
+        row=3,
+        col=1,
+    )
+
+    fig.add_trace(
+        go.Bar(
+            x=list(corr_to_pitch.keys()),
+            y=list(corr_to_pitch.values()),
+            name="corr -> |pitch_err|",
+            marker=dict(color="#ff9f1c"),
+        ),
+        row=3,
+        col=2,
+    )
+
+    fig.update_xaxes(title_text="seed error norm [deg]", row=1, col=1)
+    fig.update_yaxes(title_text="final mount err norm [deg]", row=1, col=1)
+    fig.update_xaxes(title_text="gps v_d bias [m/s]", row=1, col=2)
+    fig.update_yaxes(title_text="final car pitch err [deg]", row=1, col=2)
+    fig.update_xaxes(title_text="vel std scale", row=2, col=1)
+    fig.update_yaxes(title_text="final mount err norm [deg]", row=2, col=1)
+    fig.update_xaxes(title_text="first jump time [s], -1 means none", row=2, col=2)
+    fig.update_yaxes(title_text="first jump magnitude [deg]", row=2, col=2)
+    fig.update_xaxes(title_text="sampled input", tickangle=-30, row=3, col=1)
+    fig.update_yaxes(title_text="Pearson r", range=[-1.0, 1.0], row=3, col=1)
+    fig.update_xaxes(title_text="sampled input", tickangle=-30, row=3, col=2)
+    fig.update_yaxes(title_text="Pearson r", range=[-1.0, 1.0], row=3, col=2)
+
+    fig.update_layout(
+        template="plotly_dark",
+        title=(
+            "Seeded Loose Monte Carlo Dispersion / Observability Dashboard"
+            f"<br><sup>runs={len(rows)}, jump_rate={100.0 * float(np.mean(has_jump)):.1f}%, "
+            f"wrong_basin_rate={100.0 * float(np.mean(wrong_basin)):.1f}%</sup>"
+        ),
+        height=1250,
+        legend=dict(orientation="h", yanchor="bottom", y=1.03, xanchor="left", x=0.0),
+    )
+    output_html.parent.mkdir(parents=True, exist_ok=True)
+    fig.write_html(output_html)
+
+
 def print_monte_carlo_summary(rows: list[dict[str, float | str]]) -> None:
     if not rows:
         return
@@ -698,7 +925,9 @@ def main() -> int:
         ]
         mc_rows = [monte_carlo_row(result, args) for result in mc_results]
         write_monte_carlo_summary(mc_rows, args.mc_summary_csv)
+        write_monte_carlo_plot(mc_rows, args.mc_output_html)
         print(f"monte_carlo_summary_csv={args.mc_summary_csv}")
+        print(f"monte_carlo_html={args.mc_output_html}")
         print_monte_carlo_summary(mc_rows)
     return 0
 
