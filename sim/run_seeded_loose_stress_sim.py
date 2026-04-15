@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import ctypes
 import math
 import sys
@@ -75,6 +76,48 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--jump-threshold-deg", type=float, default=5.0)
     parser.add_argument("--truth-misalignment-deg", type=float, nargs=3, default=[0.0, 0.0, 0.0])
     parser.add_argument("--seed", type=int, default=11)
+    parser.add_argument(
+        "--skip-default-cases",
+        action="store_true",
+        help="Skip the fixed hand-picked stress cases and run only Monte Carlo, if requested.",
+    )
+    parser.add_argument(
+        "--monte-carlo-runs",
+        type=int,
+        default=0,
+        help="Number of randomized stress runs to execute against the same generated dataset.",
+    )
+    parser.add_argument(
+        "--monte-carlo-seed",
+        type=int,
+        default=1234,
+        help="RNG seed for Monte Carlo stress sampling.",
+    )
+    parser.add_argument("--mc-seed-roll-range-deg", type=float, nargs=2, default=[-4.0, 4.0])
+    parser.add_argument("--mc-seed-pitch-range-deg", type=float, nargs=2, default=[-4.0, 4.0])
+    parser.add_argument("--mc-seed-yaw-range-deg", type=float, nargs=2, default=[-6.0, 6.0])
+    parser.add_argument("--mc-gps-vd-bias-range-mps", type=float, nargs=2, default=[-2.5, 0.0])
+    parser.add_argument("--mc-gps-vd-bias-duration-range-s", type=float, nargs=2, default=[0.0, 20.0])
+    parser.add_argument("--mc-vel-std-scale-range", type=float, nargs=2, default=[0.1, 1.0])
+    parser.add_argument("--mc-accel-z-bias-range-mps2", type=float, nargs=2, default=[-0.15, 0.15])
+    parser.add_argument(
+        "--mc-mount-err-threshold-deg",
+        type=float,
+        default=5.0,
+        help="Classify a run as wrong-basin if the final mount error norm exceeds this threshold.",
+    )
+    parser.add_argument(
+        "--mc-car-pitch-err-threshold-deg",
+        type=float,
+        default=3.0,
+        help="Classify a run as wrong-basin if the final car pitch error exceeds this threshold.",
+    )
+    parser.add_argument(
+        "--mc-summary-csv",
+        type=Path,
+        default=DEFAULT_OUTPUT_DIR / "seeded_loose_stress_mc_summary.csv",
+        help="Per-run Monte Carlo summary CSV output path.",
+    )
     return parser.parse_args()
 
 
@@ -86,6 +129,33 @@ def default_cases() -> list[StressCase]:
         StressCase("combined", (3.0, -2.0, 3.0), -1.5, 12.0, 0.3),
         StressCase("combined_aggressive", (3.0, -2.0, 3.0), -2.0, 20.0, 0.1),
     ]
+
+
+def sample_uniform(rng: np.random.Generator, bounds: tuple[float, float] | list[float]) -> float:
+    lo = float(min(bounds[0], bounds[1]))
+    hi = float(max(bounds[0], bounds[1]))
+    return float(rng.uniform(lo, hi))
+
+
+def monte_carlo_cases(args: argparse.Namespace) -> list[StressCase]:
+    rng = np.random.default_rng(args.monte_carlo_seed)
+    cases: list[StressCase] = []
+    for idx in range(args.monte_carlo_runs):
+        cases.append(
+            StressCase(
+                label=f"mc_{idx:04d}",
+                seed_mount_error_deg=(
+                    sample_uniform(rng, args.mc_seed_roll_range_deg),
+                    sample_uniform(rng, args.mc_seed_pitch_range_deg),
+                    sample_uniform(rng, args.mc_seed_yaw_range_deg),
+                ),
+                gps_vd_bias_mps=sample_uniform(rng, args.mc_gps_vd_bias_range_mps),
+                gps_vd_bias_duration_s=sample_uniform(rng, args.mc_gps_vd_bias_duration_range_s),
+                vel_std_scale=sample_uniform(rng, args.mc_vel_std_scale_range),
+                accel_z_bias_mps2=sample_uniform(rng, args.mc_accel_z_bias_range_mps2),
+            )
+        )
+    return cases
 
 
 def yaw_quat(yaw_rad: float) -> np.ndarray:
@@ -290,10 +360,14 @@ def run_seeded_case(
         "mount_roll_deg": [],
         "mount_pitch_deg": [],
         "mount_yaw_deg": [],
+        "mount_err_roll_deg": [],
+        "mount_err_pitch_deg": [],
+        "mount_err_yaw_deg": [],
         "car_roll_deg": [],
         "car_pitch_deg": [],
         "car_yaw_deg": [],
         "car_pitch_truth_deg": [],
+        "car_pitch_err_deg": [],
         "accel_bias_z": [],
         "vel_down_ecef": [],
         "vel_down_car": [],
@@ -403,10 +477,15 @@ def run_seeded_case(
         history["mount_roll_deg"].append(float(full_mount_mis_deg[0]))
         history["mount_pitch_deg"].append(float(full_mount_mis_deg[1]))
         history["mount_yaw_deg"].append(float(full_mount_mis_deg[2]))
+        history["mount_err_roll_deg"].append(float(mount_err_deg[0]))
+        history["mount_err_pitch_deg"].append(float(mount_err_deg[1]))
+        history["mount_err_yaw_deg"].append(float(mount_err_deg[2]))
         history["car_roll_deg"].append(float(car_euler_deg[0]))
         history["car_pitch_deg"].append(float(car_euler_deg[1]))
         history["car_yaw_deg"].append(float(car_euler_deg[2]))
-        history["car_pitch_truth_deg"].append(float(np.interp(curr_gyro.ttag, truth_nav["TimeUS"], truth_nav["PitchCarDeg"])))
+        truth_car_pitch = float(np.interp(curr_gyro.ttag, truth_nav["TimeUS"], truth_nav["PitchCarDeg"]))
+        history["car_pitch_truth_deg"].append(truth_car_pitch)
+        history["car_pitch_err_deg"].append(float(car_euler_deg[1] - truth_car_pitch))
         history["accel_bias_z"].append(float(loose.nominal.baz))
         history["vel_down_ecef"].append(float(vel_e[2]))
         history["vel_down_car"].append(float(vel_car[2]))
@@ -423,13 +502,36 @@ def run_seeded_case(
         "label": case.label,
         "history": {k: np.asarray(v, dtype=float) for k, v in history.items()},
         "seed_mount_error_deg": np.asarray(case.seed_mount_error_deg, dtype=float),
+        "gps_vd_bias_mps": float(case.gps_vd_bias_mps),
+        "gps_vd_bias_duration_s": float(case.gps_vd_bias_duration_s),
+        "vel_std_scale": float(case.vel_std_scale),
+        "accel_z_bias_mps2": float(case.accel_z_bias_mps2),
         "first_jump_time_s": float("nan") if first_jump_time_s is None else first_jump_time_s,
         "first_jump_mag_deg": first_jump_mag_deg,
         "final_mount_deg": np.array(
             [history["mount_roll_deg"][-1], history["mount_pitch_deg"][-1], history["mount_yaw_deg"][-1]],
             dtype=float,
         ),
+        "final_mount_err_deg": np.array(
+            [history["mount_err_roll_deg"][-1], history["mount_err_pitch_deg"][-1], history["mount_err_yaw_deg"][-1]],
+            dtype=float,
+        ),
+        "final_mount_err_norm_deg": float(
+            np.linalg.norm(
+                wrap_deg180(
+                    np.array(
+                        [
+                            history["mount_err_roll_deg"][-1],
+                            history["mount_err_pitch_deg"][-1],
+                            history["mount_err_yaw_deg"][-1],
+                        ],
+                        dtype=float,
+                    )
+                )
+            )
+        ),
         "final_car_pitch_deg": float(history["car_pitch_deg"][-1]),
+        "final_car_pitch_err_deg": float(history["car_pitch_err_deg"][-1]),
         "final_accel_bias_z": float(history["accel_bias_z"][-1]),
         "true_car_roll_deg_at_init": float(true_car_roll),
         "truth_mount_deg": truth_states["misalignment_deg"].astype(float),
@@ -485,16 +587,98 @@ def write_plot(results: list[dict[str, np.ndarray | float | str]], output_html: 
     fig.write_html(output_html)
 
 
+def monte_carlo_row(result: dict[str, np.ndarray | float | str], args: argparse.Namespace) -> dict[str, float | str]:
+    final_mount = np.asarray(result["final_mount_deg"], dtype=float)
+    final_mount_err = np.asarray(result["final_mount_err_deg"], dtype=float)
+    final_mount_err_norm_deg = float(result["final_mount_err_norm_deg"])
+    final_car_pitch_err_deg = float(result["final_car_pitch_err_deg"])
+    first_jump_time_s = float(result["first_jump_time_s"])
+    has_jump = not math.isnan(first_jump_time_s)
+    wrong_basin = (
+        final_mount_err_norm_deg >= args.mc_mount_err_threshold_deg
+        or abs(final_car_pitch_err_deg) >= args.mc_car_pitch_err_threshold_deg
+    )
+    return {
+        "label": str(result["label"]),
+        "seed_roll_deg": float(np.asarray(result["seed_mount_error_deg"], dtype=float)[0]),
+        "seed_pitch_deg": float(np.asarray(result["seed_mount_error_deg"], dtype=float)[1]),
+        "seed_yaw_deg": float(np.asarray(result["seed_mount_error_deg"], dtype=float)[2]),
+        "gps_vd_bias_mps": float(result["gps_vd_bias_mps"]),
+        "gps_vd_bias_duration_s": float(result["gps_vd_bias_duration_s"]),
+        "vel_std_scale": float(result["vel_std_scale"]),
+        "accel_z_bias_mps2": float(result["accel_z_bias_mps2"]),
+        "first_jump_time_s": first_jump_time_s,
+        "first_jump_mag_deg": float(result["first_jump_mag_deg"]),
+        "has_jump": int(has_jump),
+        "final_mount_roll_deg": float(final_mount[0]),
+        "final_mount_pitch_deg": float(final_mount[1]),
+        "final_mount_yaw_deg": float(final_mount[2]),
+        "final_mount_err_roll_deg": float(final_mount_err[0]),
+        "final_mount_err_pitch_deg": float(final_mount_err[1]),
+        "final_mount_err_yaw_deg": float(final_mount_err[2]),
+        "final_mount_err_norm_deg": final_mount_err_norm_deg,
+        "final_car_pitch_deg": float(result["final_car_pitch_deg"]),
+        "final_car_pitch_err_deg": final_car_pitch_err_deg,
+        "final_accel_bias_z": float(result["final_accel_bias_z"]),
+        "wrong_basin": int(wrong_basin),
+    }
+
+
+def write_monte_carlo_summary(rows: list[dict[str, float | str]], output_csv: Path) -> None:
+    if not rows:
+        return
+    output_csv.parent.mkdir(parents=True, exist_ok=True)
+    with output_csv.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def print_monte_carlo_summary(rows: list[dict[str, float | str]]) -> None:
+    if not rows:
+        return
+    jump_flags = np.asarray([float(row["has_jump"]) for row in rows], dtype=float)
+    wrong_flags = np.asarray([float(row["wrong_basin"]) for row in rows], dtype=float)
+    mount_err_norm = np.asarray([float(row["final_mount_err_norm_deg"]) for row in rows], dtype=float)
+    car_pitch_err = np.asarray([abs(float(row["final_car_pitch_err_deg"])) for row in rows], dtype=float)
+    print(
+        "mc_summary: "
+        f"runs={len(rows)} "
+        f"jump_rate={100.0 * float(np.mean(jump_flags)):.1f}% "
+        f"wrong_basin_rate={100.0 * float(np.mean(wrong_flags)):.1f}% "
+        f"mount_err_p50={float(np.percentile(mount_err_norm, 50.0)):.2f}deg "
+        f"mount_err_p95={float(np.percentile(mount_err_norm, 95.0)):.2f}deg "
+        f"car_pitch_err_p50={float(np.percentile(car_pitch_err, 50.0)):.2f}deg "
+        f"car_pitch_err_p95={float(np.percentile(car_pitch_err, 95.0)):.2f}deg"
+    )
+    worst_rows = sorted(rows, key=lambda row: float(row["final_mount_err_norm_deg"]), reverse=True)[:5]
+    for row in worst_rows:
+        print(
+            "mc_worst: "
+            f"{row['label']} "
+            f"mount_err_norm={float(row['final_mount_err_norm_deg']):.2f}deg "
+            f"car_pitch_err={float(row['final_car_pitch_err_deg']):.2f}deg "
+            f"seed=[{float(row['seed_roll_deg']):.2f},{float(row['seed_pitch_deg']):.2f},{float(row['seed_yaw_deg']):.2f}]deg "
+            f"gps_vd_bias={float(row['gps_vd_bias_mps']):.2f}mps "
+            f"gps_vd_bias_duration={float(row['gps_vd_bias_duration_s']):.2f}s "
+            f"vel_std_scale={float(row['vel_std_scale']):.2f} "
+            f"accel_z_bias={float(row['accel_z_bias_mps2']):.3f}mps2"
+        )
+
+
 def main() -> int:
     args = parse_args()
     case_dir = generate_dataset(args)
-    results = [
-        run_seeded_case(case_dir, args.oan_root, case, args.init_time_s, args.jump_threshold_deg)
-        for case in default_cases()
-    ]
-    write_plot(results, args.output_html)
+    results = []
+    if not args.skip_default_cases:
+        results = [
+            run_seeded_case(case_dir, args.oan_root, case, args.init_time_s, args.jump_threshold_deg)
+            for case in default_cases()
+        ]
+        write_plot(results, args.output_html)
     print(f"dataset={case_dir}")
-    print(f"html={args.output_html}")
+    if results:
+        print(f"html={args.output_html}")
     for result in results:
         jump_time = result["first_jump_time_s"]
         jump_text = "none" if math.isnan(jump_time) else f"{jump_time:.2f}s / {result['first_jump_mag_deg']:.2f}deg"
@@ -505,6 +689,17 @@ def main() -> int:
             f"final_car_pitch_deg={float(result['final_car_pitch_deg']):.2f} "
             f"final_baz={float(result['final_accel_bias_z']):.3f}"
         )
+
+    mc_rows: list[dict[str, float | str]] = []
+    if args.monte_carlo_runs > 0:
+        mc_results = [
+            run_seeded_case(case_dir, args.oan_root, case, args.init_time_s, args.jump_threshold_deg)
+            for case in monte_carlo_cases(args)
+        ]
+        mc_rows = [monte_carlo_row(result, args) for result in mc_results]
+        write_monte_carlo_summary(mc_rows, args.mc_summary_csv)
+        print(f"monte_carlo_summary_csv={args.mc_summary_csv}")
+        print_monte_carlo_summary(mc_rows)
     return 0
 
 
