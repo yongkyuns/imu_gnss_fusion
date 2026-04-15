@@ -6,12 +6,12 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, ValueEnum};
 use sensor_fusion::fusion::{FusionGnssSample, FusionImuSample, SensorFusion};
 use sim::datasets::gnss_ins_sim::{
-    GnssSample as DatasetGnssSample, ImuSample as DatasetImuSample,
+    GnssSample as DatasetGnssSample,
     load_gnss_samples as load_dataset_gnss_samples, load_imu_samples as load_dataset_imu_samples,
 };
 use sim::eval::gnss_ins::{
-    as_q64, course_rate_deg, horiz_speed, quat_angle_deg, quat_conj, quat_from_rpy_alg_deg,
-    quat_mul, quat_rotate,
+    SignalSource, as_q64, course_rate_deg, horiz_speed, quat_angle_deg, quat_conj,
+    quat_from_rpy_alg_deg, quat_mul, quat_rotate,
 };
 
 #[derive(Parser, Debug)]
@@ -49,18 +49,11 @@ struct Args {
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
-enum SignalSource {
-    Ref,
-    Meas,
-}
-
-#[derive(Clone, Copy, Debug, ValueEnum)]
 enum SeedSource {
     InternalAlign,
     ExternalTruth,
 }
 
-type ImuSample = DatasetImuSample;
 type GnssSample = DatasetGnssSample;
 
 #[derive(Clone, Copy, Debug)]
@@ -101,8 +94,16 @@ struct ResidualSample {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let imu = load_imu_samples(&args)?;
-    let gnss = load_gnss_samples(&args)?;
+    let imu = load_dataset_imu_samples(
+        &args.data_dir,
+        args.signal_source.use_ref_signals(),
+        args.data_key,
+    )?;
+    let gnss = load_dataset_gnss_samples(
+        &args.data_dir,
+        args.signal_source.use_ref_signals(),
+        args.data_key,
+    )?;
     if imu.is_empty() || gnss.is_empty() {
         bail!("need both IMU and GNSS samples");
     }
@@ -334,22 +335,6 @@ where
     I: Iterator<Item = f64>,
 {
     iter.fold(0.0, f64::max)
-}
-
-fn load_imu_samples(args: &Args) -> Result<Vec<ImuSample>> {
-    load_dataset_imu_samples(
-        &args.data_dir,
-        matches!(args.signal_source, SignalSource::Ref),
-        args.data_key,
-    )
-}
-
-fn load_gnss_samples(args: &Args) -> Result<Vec<GnssSample>> {
-    load_dataset_gnss_samples(
-        &args.data_dir,
-        matches!(args.signal_source, SignalSource::Ref),
-        args.data_key,
-    )
 }
 
 fn write_residual_csv(path: &Path, samples: &[ResidualSample]) -> Result<()> {

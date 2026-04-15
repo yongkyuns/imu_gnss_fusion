@@ -3,14 +3,13 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use sensor_fusion::fusion::{FusionGnssSample, FusionImuSample, SensorFusion};
 use sim::datasets::gnss_ins_sim::{
-    GnssSample as DatasetGnssSample, ImuSample as DatasetImuSample,
     load_gnss_samples as load_dataset_gnss_samples, load_imu_samples as load_dataset_imu_samples,
 };
 use sim::eval::gnss_ins::{
-    quat_angle_deg, quat_from_rpy_alg_deg, quat_rotate, wrap_deg180, wrap_rad_pi,
+    SignalSource, quat_angle_deg, quat_from_rpy_alg_deg, quat_rotate, wrap_deg180, wrap_rad_pi,
 };
 use sim::visualizer::pipeline::align_replay::{
     axis_angle_deg, quat_rpy_alg_deg, signed_projected_axis_angle_deg,
@@ -50,15 +49,6 @@ struct Args {
     #[arg(long)]
     residual_csv: Option<PathBuf>,
 }
-
-#[derive(Clone, Copy, Debug, ValueEnum)]
-enum SignalSource {
-    Ref,
-    Meas,
-}
-
-type ImuSample = DatasetImuSample;
-type GnssSample = DatasetGnssSample;
 
 #[derive(Clone, Copy, Debug)]
 struct ResidualSample {
@@ -109,8 +99,16 @@ struct ResidualSample {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let imu = load_imu_samples(&args)?;
-    let gnss = load_gnss_samples(&args)?;
+    let imu = load_dataset_imu_samples(
+        &args.data_dir,
+        args.signal_source.use_ref_signals(),
+        args.data_key,
+    )?;
+    let gnss = load_dataset_gnss_samples(
+        &args.data_dir,
+        args.signal_source.use_ref_signals(),
+        args.data_key,
+    )?;
     if imu.is_empty() || gnss.is_empty() {
         bail!("need both IMU and GNSS samples");
     }
@@ -496,22 +494,6 @@ fn main() -> Result<()> {
     }
 
     Ok(())
-}
-
-fn load_imu_samples(args: &Args) -> Result<Vec<ImuSample>> {
-    load_dataset_imu_samples(
-        &args.data_dir,
-        matches!(args.signal_source, SignalSource::Ref),
-        args.data_key,
-    )
-}
-
-fn load_gnss_samples(args: &Args) -> Result<Vec<GnssSample>> {
-    load_dataset_gnss_samples(
-        &args.data_dir,
-        matches!(args.signal_source, SignalSource::Ref),
-        args.data_key,
-    )
 }
 
 fn mean_of<I>(iter: I) -> Option<f64>

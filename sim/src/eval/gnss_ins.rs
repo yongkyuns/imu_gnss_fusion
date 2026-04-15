@@ -1,4 +1,18 @@
+use clap::ValueEnum;
+
 use crate::datasets::gnss_ins_sim::GnssSample;
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum SignalSource {
+    Ref,
+    Meas,
+}
+
+impl SignalSource {
+    pub fn use_ref_signals(self) -> bool {
+        matches!(self, Self::Ref)
+    }
+}
 
 pub fn quat_from_rpy_alg_deg(roll_deg: f64, pitch_deg: f64, yaw_deg: f64) -> [f64; 4] {
     let (sr, cr) = (0.5 * roll_deg.to_radians()).sin_cos();
