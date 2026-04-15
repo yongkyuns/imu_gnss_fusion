@@ -59,6 +59,12 @@ typedef struct {
   sf_bootstrap_config_t bootstrap;
   sf_predict_noise_t predict_noise;
   float r_body_vel;
+  float gnss_vel_xy_update_min_scale;
+  float gnss_vel_update_ramp_time_s;
+  float ekf_mount_seed_blend_time_s;
+  float mount_update_min_scale;
+  float mount_update_ramp_time_s;
+  float mount_update_innovation_gate_mps;
   float r_vehicle_speed;
   float yaw_init_speed_mps;
 } sf_fusion_config_t;

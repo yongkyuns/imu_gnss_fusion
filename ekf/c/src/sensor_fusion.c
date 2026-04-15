@@ -57,6 +57,11 @@ static bool sf_runtime_zero_velocity_active(sf_sensor_fusion_impl_t *impl,
                                             const float gyro_radps[3]);
 static bool sf_runtime_nhc_active(const float accel_b[3],
                                   const float gyro_radps[3]);
+static float sf_gnss_vel_update_scale_xy(const sf_sensor_fusion_impl_t *impl,
+                                         float t_s);
+static void sf_blend_eskf_mount_seed(sf_sensor_fusion_impl_t *impl, float t_s);
+static float sf_mount_update_scale(const sf_sensor_fusion_impl_t *impl,
+                                   float t_s);
 static bool sf_bootstrap_update(sf_sensor_fusion_impl_t *impl,
                                 const float accel_b[3],
                                 const float gyro_radps[3]);
@@ -252,7 +257,7 @@ void sf_predict_noise_default(sf_predict_noise_t *cfg) {
   cfg->accel_var = 2.4504214e-5f * 15.0f;
   cfg->gyro_bias_rw_var = 0.0002e-9f;
   cfg->accel_bias_rw_var = 0.002e-9f;
-  cfg->mount_align_rw_var = 1.0e-8f;
+  cfg->mount_align_rw_var = 1.0e-4f;
 }
 
 void sf_fusion_config_default(sf_fusion_config_t *cfg) {
@@ -263,6 +268,12 @@ void sf_fusion_config_default(sf_fusion_config_t *cfg) {
   sf_bootstrap_config_default(&cfg->bootstrap);
   sf_predict_noise_default(&cfg->predict_noise);
   cfg->r_body_vel = 0.2f;
+  cfg->gnss_vel_xy_update_min_scale = 0.25f;
+  cfg->gnss_vel_update_ramp_time_s = 20.0f;
+  cfg->ekf_mount_seed_blend_time_s = 120.0f;
+  cfg->mount_update_min_scale = 0.10f;
+  cfg->mount_update_ramp_time_s = 30.0f;
+  cfg->mount_update_innovation_gate_mps = 0.5f;
   cfg->r_vehicle_speed = 0.04f;
   cfg->yaw_init_speed_mps = 0.0f;
 }
@@ -300,6 +311,7 @@ void sf_fusion_init_external(sf_sensor_fusion_t *fusion,
   memcpy(impl->mount_q_vb, q_vb, sizeof(impl->mount_q_vb));
   impl->eskf_mount_q_vb_valid = true;
   memcpy(impl->eskf_mount_q_vb, q_vb, sizeof(impl->eskf_mount_q_vb));
+  impl->ekf_mount_handoff_valid = false;
 }
 
 void sf_fusion_set_misalignment(sf_sensor_fusion_t *fusion,
@@ -315,6 +327,7 @@ void sf_fusion_set_misalignment(sf_sensor_fusion_t *fusion,
   memcpy(impl->mount_q_vb, q_vb, sizeof(impl->mount_q_vb));
   impl->eskf_mount_q_vb_valid = true;
   memcpy(impl->eskf_mount_q_vb, q_vb, sizeof(impl->eskf_mount_q_vb));
+  impl->ekf_mount_handoff_valid = false;
   impl->eskf.nominal.qcs0 = 1.0f;
   impl->eskf.nominal.qcs1 = 0.0f;
   impl->eskf.nominal.qcs2 = 0.0f;
@@ -513,7 +526,14 @@ sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
       sf_eskf_fuse_stationary_gravity(&impl->eskf, accel_vehicle,
                                       SF_RUNTIME_R_STATIONARY_ACCEL);
     } else if (sf_runtime_nhc_active(accel_vehicle, gyro_vehicle)) {
-      sf_eskf_fuse_body_vel(&impl->eskf, impl->cfg.r_body_vel);
+      const float body_update_scale =
+          sf_mount_update_scale(impl, sample->t_s);
+      const float effective_r_body_vel =
+          impl->cfg.r_body_vel /
+          ((body_update_scale > 1.0e-3f) ? body_update_scale : 1.0e-3f);
+      sf_eskf_fuse_body_vel_scaled(
+          &impl->eskf, effective_r_body_vel, body_update_scale,
+          impl->cfg.mount_update_innovation_gate_mps);
     }
     if (impl->profile_now_us != NULL) {
       elapsed_us = sf_profile_stamp(impl) - t0_us;
@@ -555,6 +575,14 @@ sf_update_t sf_fusion_process_gnss(sf_sensor_fusion_t *fusion,
   }
   if (!sf_prepare_local_gnss_sample(impl, sample, &local_sample)) {
     return sf_update_from_fusion(impl, false, false);
+  }
+
+  {
+    const float vel_scale_xy =
+        sf_gnss_vel_update_scale_xy(impl, local_sample.t_s);
+    const float vel_std_scale_xy = sqrtf(vel_scale_xy);
+    local_sample.vel_std_mps[0] *= vel_std_scale_xy;
+    local_sample.vel_std_mps[1] *= vel_std_scale_xy;
   }
 
   impl->last_gnss = local_sample;
@@ -604,6 +632,8 @@ sf_update_t sf_fusion_process_gnss(sf_sensor_fusion_t *fusion,
     impl->interval_imu_count = 0U;
   }
 
+  sf_blend_eskf_mount_seed(impl, local_sample.t_s);
+
   if (!impl->mount_ready) {
     return sf_update_from_fusion(impl, prev_mount_ready != impl->mount_ready,
                                  false);
@@ -626,6 +656,8 @@ sf_update_t sf_fusion_process_gnss(sf_sensor_fusion_t *fusion,
     }
     impl->ekf_initialized = true;
     ekf_initialized_now = true;
+    impl->ekf_mount_handoff_valid = true;
+    impl->ekf_mount_handoff_t_s = local_sample.t_s;
   } else {
     t0_us = sf_profile_stamp(impl);
     sf_eskf_fuse_gps(&impl->eskf, &local_sample);
@@ -667,13 +699,31 @@ sf_fusion_process_vehicle_speed(sf_sensor_fusion_t *fusion,
   switch (sample->direction) {
   case SF_VEHICLE_SPEED_DIRECTION_FORWARD:
     signed_speed_mps = sample->speed_mps;
-    sf_eskf_fuse_body_speed_x(&impl->eskf, signed_speed_mps,
-                              impl->cfg.r_vehicle_speed);
+    {
+      const float body_update_scale =
+          sf_mount_update_scale(impl, sample->t_s);
+      const float effective_r_vehicle_speed =
+          impl->cfg.r_vehicle_speed /
+          ((body_update_scale > 1.0e-3f) ? body_update_scale : 1.0e-3f);
+    sf_eskf_fuse_body_speed_x_scaled(
+        &impl->eskf, signed_speed_mps, effective_r_vehicle_speed,
+        body_update_scale,
+        impl->cfg.mount_update_innovation_gate_mps);
+    }
     break;
   case SF_VEHICLE_SPEED_DIRECTION_REVERSE:
     signed_speed_mps = -sample->speed_mps;
-    sf_eskf_fuse_body_speed_x(&impl->eskf, signed_speed_mps,
-                              impl->cfg.r_vehicle_speed);
+    {
+      const float body_update_scale =
+          sf_mount_update_scale(impl, sample->t_s);
+      const float effective_r_vehicle_speed =
+          impl->cfg.r_vehicle_speed /
+          ((body_update_scale > 1.0e-3f) ? body_update_scale : 1.0e-3f);
+    sf_eskf_fuse_body_speed_x_scaled(
+        &impl->eskf, signed_speed_mps, effective_r_vehicle_speed,
+        body_update_scale,
+        impl->cfg.mount_update_innovation_gate_mps);
+    }
     break;
   case SF_VEHICLE_SPEED_DIRECTION_UNKNOWN:
   default:
@@ -684,8 +734,17 @@ sf_fusion_process_vehicle_speed(sf_sensor_fusion_t *fusion,
     vbx_pred_mps = sf_body_speed_x_estimate(&impl->eskf);
     if (fabsf(vbx_pred_mps) >= SF_CAN_SPEED_SIGN_INFER_MIN_MPS) {
       signed_speed_mps = copysignf(sample->speed_mps, vbx_pred_mps);
-      sf_eskf_fuse_body_speed_x(&impl->eskf, signed_speed_mps,
-                                impl->cfg.r_vehicle_speed);
+      {
+        const float body_update_scale =
+            sf_mount_update_scale(impl, sample->t_s);
+        const float effective_r_vehicle_speed =
+            impl->cfg.r_vehicle_speed /
+            ((body_update_scale > 1.0e-3f) ? body_update_scale : 1.0e-3f);
+      sf_eskf_fuse_body_speed_x_scaled(
+          &impl->eskf, signed_speed_mps, effective_r_vehicle_speed,
+          body_update_scale,
+          impl->cfg.mount_update_innovation_gate_mps);
+      }
     }
     break;
   }
@@ -916,6 +975,36 @@ static void sf_quat_normalize(float q[4]) {
   q[1] *= inv;
   q[2] *= inv;
   q[3] *= inv;
+}
+
+static void sf_quat_nlerp_shortest(const float a[4], const float b[4],
+                                   float alpha, float out[4]) {
+  float bb[4];
+
+  if (a == NULL || b == NULL || out == NULL) {
+    return;
+  }
+
+  if (!(alpha >= 0.0f) || !isfinite(alpha)) {
+    alpha = 0.0f;
+  }
+  if (alpha > 1.0f) {
+    alpha = 1.0f;
+  }
+
+  memcpy(bb, b, sizeof(bb));
+  if (a[0] * bb[0] + a[1] * bb[1] + a[2] * bb[2] + a[3] * bb[3] < 0.0f) {
+    bb[0] = -bb[0];
+    bb[1] = -bb[1];
+    bb[2] = -bb[2];
+    bb[3] = -bb[3];
+  }
+
+  out[0] = (1.0f - alpha) * a[0] + alpha * bb[0];
+  out[1] = (1.0f - alpha) * a[1] + alpha * bb[1];
+  out[2] = (1.0f - alpha) * a[2] + alpha * bb[2];
+  out[3] = (1.0f - alpha) * a[3] + alpha * bb[3];
+  sf_quat_normalize(out);
 }
 
 static void sf_rotmat_to_quat(const float r[3][3], float q[4]) {
@@ -1269,6 +1358,121 @@ static float sf_wrap_pi(float rad) {
 static float sf_horiz_speed(const float vel_ned_mps[3]) {
   return sqrtf(vel_ned_mps[0] * vel_ned_mps[0] +
                vel_ned_mps[1] * vel_ned_mps[1]);
+}
+
+static float sf_gnss_vel_update_scale_xy(const sf_sensor_fusion_impl_t *impl,
+                                         float t_s) {
+  float min_scale;
+  float ramp_time_s;
+  float age_s;
+  float ramp;
+
+  if (impl == NULL) {
+    return 1.0f;
+  }
+
+  min_scale = impl->cfg.gnss_vel_xy_update_min_scale;
+  if (!(min_scale > 0.0f) || !isfinite(min_scale)) {
+    min_scale = 1.0f;
+  }
+  if (min_scale > 1.0f) {
+    min_scale = 1.0f;
+  }
+
+  ramp_time_s = impl->cfg.gnss_vel_update_ramp_time_s;
+  if (!(ramp_time_s > 0.0f) || !isfinite(ramp_time_s) ||
+      !impl->ekf_mount_handoff_valid) {
+    return 1.0f;
+  }
+
+  age_s = t_s - impl->ekf_mount_handoff_t_s;
+  if (!(age_s > 0.0f)) {
+    return min_scale;
+  }
+
+  ramp = age_s / ramp_time_s;
+  if (ramp < 0.0f) {
+    ramp = 0.0f;
+  }
+  if (ramp > 1.0f) {
+    ramp = 1.0f;
+  }
+  return min_scale + (1.0f - min_scale) * ramp;
+}
+
+static void sf_blend_eskf_mount_seed(sf_sensor_fusion_impl_t *impl, float t_s) {
+  float blend_time_s;
+  float age_s;
+  float alpha;
+  float blended[4];
+
+  if (impl == NULL || !impl->internal_align_enabled || !impl->ekf_initialized ||
+      !impl->mount_q_vb_valid || !impl->eskf_mount_q_vb_valid ||
+      !impl->ekf_mount_handoff_valid) {
+    return;
+  }
+
+  blend_time_s = impl->cfg.ekf_mount_seed_blend_time_s;
+  if (!(blend_time_s > 0.0f) || !isfinite(blend_time_s)) {
+    return;
+  }
+
+  age_s = t_s - impl->ekf_mount_handoff_t_s;
+  if (!(age_s >= 0.0f) || age_s >= blend_time_s) {
+    return;
+  }
+
+  alpha = 1.0f - age_s / blend_time_s;
+  if (alpha < 0.0f) {
+    alpha = 0.0f;
+  }
+  if (alpha > 1.0f) {
+    alpha = 1.0f;
+  }
+
+  sf_quat_nlerp_shortest(impl->eskf_mount_q_vb, impl->mount_q_vb, alpha,
+                         blended);
+  memcpy(impl->eskf_mount_q_vb, blended, sizeof(blended));
+}
+
+static float sf_mount_update_scale(const sf_sensor_fusion_impl_t *impl,
+                                   float t_s) {
+  float min_scale;
+  float ramp_time_s;
+  float age_s;
+  float ramp;
+
+  if (impl == NULL) {
+    return 1.0f;
+  }
+
+  min_scale = impl->cfg.mount_update_min_scale;
+  if (!(min_scale >= 0.0f) || !isfinite(min_scale)) {
+    min_scale = 0.0f;
+  }
+  if (min_scale > 1.0f) {
+    min_scale = 1.0f;
+  }
+
+  ramp_time_s = impl->cfg.mount_update_ramp_time_s;
+  if (!(ramp_time_s > 0.0f) || !isfinite(ramp_time_s) ||
+      !impl->ekf_mount_handoff_valid) {
+    return 1.0f;
+  }
+
+  age_s = t_s - impl->ekf_mount_handoff_t_s;
+  if (!(age_s > 0.0f)) {
+    return min_scale;
+  }
+
+  ramp = age_s / ramp_time_s;
+  if (ramp < 0.0f) {
+    ramp = 0.0f;
+  }
+  if (ramp > 1.0f) {
+    ramp = 1.0f;
+  }
+  return min_scale + (1.0f - min_scale) * ramp;
 }
 
 static float sf_body_speed_x_estimate(const sf_eskf_t *eskf) {

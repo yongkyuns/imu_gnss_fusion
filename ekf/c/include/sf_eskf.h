@@ -107,7 +107,13 @@ void sf_eskf_predict(sf_eskf_t *eskf, const sf_eskf_imu_delta_t *imu);
 void sf_eskf_predict_nominal(sf_eskf_t *eskf, const sf_eskf_imu_delta_t *imu);
 void sf_eskf_fuse_gps(sf_eskf_t *eskf, const sf_gnss_ned_sample_t *gps);
 void sf_eskf_fuse_body_speed_x(sf_eskf_t *eskf, float speed_mps, float r_speed);
+void sf_eskf_fuse_body_speed_x_scaled(sf_eskf_t *eskf, float speed_mps,
+                                      float r_speed, float mount_update_scale,
+                                      float mount_update_innovation_gate_mps);
 void sf_eskf_fuse_body_vel(sf_eskf_t *eskf, float r_body_vel);
+void sf_eskf_fuse_body_vel_scaled(sf_eskf_t *eskf, float r_body_vel,
+                                  float mount_update_scale,
+                                  float mount_update_innovation_gate_mps);
 void sf_eskf_fuse_zero_vel(sf_eskf_t *eskf, float r_zero_vel);
 void sf_eskf_fuse_stationary_gravity(sf_eskf_t *eskf,
                                      const float accel_body_mps2[3],

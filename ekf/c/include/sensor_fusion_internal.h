@@ -150,6 +150,8 @@ typedef struct {
   bool align_initialized;
   bool mount_ready;
   bool ekf_initialized;
+  bool ekf_mount_handoff_valid;
+  float ekf_mount_handoff_t_s;
   bool mount_q_vb_valid;
   float mount_q_vb[4];
   bool eskf_mount_q_vb_valid;

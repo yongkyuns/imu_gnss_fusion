@@ -10,6 +10,9 @@
 #ifndef SF_ESKF_DIAG_DISABLE_BODY_VEL_Z_MOUNT
 #define SF_ESKF_DIAG_DISABLE_BODY_VEL_Z_MOUNT 0
 #endif
+#ifndef SF_ESKF_DIAG_DISABLE_BODY_VEL_Z
+#define SF_ESKF_DIAG_DISABLE_BODY_VEL_Z 0
+#endif
 #ifndef SF_ESKF_BODY_VEL_USE_QCS_CONJ
 #define SF_ESKF_BODY_VEL_USE_QCS_CONJ 0
 #endif
@@ -55,8 +58,9 @@ static void sf_eskf_fuse_stationary_gravity_x(sf_eskf_t *eskf, float accel_x,
                                               float r_stationary_accel);
 static void sf_eskf_fuse_stationary_gravity_y(sf_eskf_t *eskf, float accel_y,
                                               float r_stationary_accel);
-static void sf_eskf_fuse_body_speed_x_impl(sf_eskf_t *eskf, float speed_mps,
-                                           float r_speed);
+static void sf_eskf_fuse_body_speed_x_impl(
+    sf_eskf_t *eskf, float speed_mps, float r_speed,
+    float mount_update_scale, float mount_update_innovation_gate_mps);
 static void sf_eskf_body_vel_y_observation(sf_eskf_t *eskf, float r_body_vel,
                                            float h[SF_ESKF_ERROR_STATES],
                                            float k[SF_ESKF_ERROR_STATES],
@@ -65,7 +69,9 @@ static void sf_eskf_body_vel_z_observation(sf_eskf_t *eskf, float r_body_vel,
                                            float h[SF_ESKF_ERROR_STATES],
                                            float k[SF_ESKF_ERROR_STATES],
                                            float *innovation, float *s);
-static void sf_eskf_fuse_body_vel_yz_batch(sf_eskf_t *eskf, float r_body_vel);
+static void sf_eskf_fuse_body_vel_yz_batch(sf_eskf_t *eskf, float r_body_vel,
+                                           float mount_update_scale,
+                                           float mount_update_innovation_gate_mps);
 static void sf_eskf_predict_noise_default(sf_predict_noise_t *cfg);
 static void sf_eskf_predict_covariance_dense(
     float nextP[SF_ESKF_ERROR_STATES][SF_ESKF_ERROR_STATES],
@@ -264,17 +270,33 @@ void sf_eskf_fuse_gps(sf_eskf_t *eskf, const sf_gnss_ned_sample_t *gps) {
 
 void sf_eskf_fuse_body_speed_x(sf_eskf_t *eskf, float speed_mps,
                                float r_speed) {
+  sf_eskf_fuse_body_speed_x_scaled(eskf, speed_mps, r_speed, 1.0f, 0.0f);
+}
+
+void sf_eskf_fuse_body_speed_x_scaled(sf_eskf_t *eskf, float speed_mps,
+                                      float r_speed,
+                                      float mount_update_scale,
+                                      float mount_update_innovation_gate_mps) {
   if (eskf == NULL) {
     return;
   }
-  sf_eskf_fuse_body_speed_x_impl(eskf, speed_mps, r_speed);
+  sf_eskf_fuse_body_speed_x_impl(eskf, speed_mps, r_speed,
+                                 mount_update_scale,
+                                 mount_update_innovation_gate_mps);
 }
 
 void sf_eskf_fuse_body_vel(sf_eskf_t *eskf, float r_body_vel) {
+  sf_eskf_fuse_body_vel_scaled(eskf, r_body_vel, 1.0f, 0.0f);
+}
+
+void sf_eskf_fuse_body_vel_scaled(sf_eskf_t *eskf, float r_body_vel,
+                                  float mount_update_scale,
+                                  float mount_update_innovation_gate_mps) {
   if (eskf == NULL) {
     return;
   }
-  sf_eskf_fuse_body_vel_yz_batch(eskf, r_body_vel);
+  sf_eskf_fuse_body_vel_yz_batch(eskf, r_body_vel, mount_update_scale,
+                                 mount_update_innovation_gate_mps);
 }
 
 void sf_eskf_fuse_zero_vel(sf_eskf_t *eskf, float r_zero_vel) {
@@ -906,7 +928,9 @@ static void sf_eskf_body_vel_z_observation(sf_eskf_t *eskf, float r_body_vel,
 #undef H
 }
 
-static void sf_eskf_fuse_body_vel_yz_batch(sf_eskf_t *eskf, float r_body_vel) {
+static void sf_eskf_fuse_body_vel_yz_batch(
+    sf_eskf_t *eskf, float r_body_vel, float mount_update_scale,
+    float mount_update_innovation_gate_mps) {
   float h_rows[2][SF_ESKF_ERROR_STATES];
   float k_scalar[2][SF_ESKF_ERROR_STATES];
   float residuals[2];
@@ -916,8 +940,15 @@ static void sf_eskf_fuse_body_vel_yz_batch(sf_eskf_t *eskf, float r_body_vel) {
 
   sf_eskf_body_vel_y_observation(eskf, r_body_vel, h_rows[0], k_scalar[0],
                                  &residuals[0], &scalar_s[0]);
+#if SF_ESKF_DIAG_DISABLE_BODY_VEL_Z
+  memset(h_rows[1], 0, sizeof(h_rows[1]));
+  memset(k_scalar[1], 0, sizeof(k_scalar[1]));
+  residuals[1] = 0.0f;
+  scalar_s[1] = 0.0f;
+#else
   sf_eskf_body_vel_z_observation(eskf, r_body_vel, h_rows[1], k_scalar[1],
                                  &residuals[1], &scalar_s[1]);
+#endif
 
   for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
     for (int j = 0; j < SF_ESKF_ERROR_STATES; ++j) {
@@ -926,10 +957,16 @@ static void sf_eskf_fuse_body_vel_yz_batch(sf_eskf_t *eskf, float r_body_vel) {
   }
 
   for (int obs = 0; obs < 2; ++obs) {
+#if SF_ESKF_DIAG_DISABLE_BODY_VEL_Z
+    if (obs == 1) {
+      continue;
+    }
+#endif
     double ph[SF_ESKF_ERROR_STATES] = {0.0};
     double s = (double)r_body_vel;
     double hd = 0.0;
     double alpha;
+    float obs_mount_scale = mount_update_scale;
     float diag_k[SF_ESKF_ERROR_STATES];
     float diag_dx[SF_ESKF_ERROR_STATES];
     const sf_eskf_update_diag_type_t diag_type =
@@ -955,6 +992,24 @@ static void sf_eskf_fuse_body_vel_yz_batch(sf_eskf_t *eskf, float r_body_vel) {
       const double contribution = ph[i] * alpha;
       diag_k[i] = (float)gain;
       diag_dx[i] = (float)contribution;
+    }
+
+    if (!(obs_mount_scale >= 0.0f) || !isfinite(obs_mount_scale)) {
+      obs_mount_scale = 0.0f;
+    }
+    if (obs_mount_scale > 1.0f) {
+      obs_mount_scale = 1.0f;
+    }
+    if (mount_update_innovation_gate_mps > 0.0f) {
+      const float innov_abs = fabsf(residuals[obs]);
+      if (innov_abs > mount_update_innovation_gate_mps) {
+        obs_mount_scale *= mount_update_innovation_gate_mps / innov_abs;
+      }
+    }
+    if (obs_mount_scale < 1.0f) {
+      diag_dx[15] *= obs_mount_scale;
+      diag_dx[16] *= obs_mount_scale;
+      diag_dx[17] *= obs_mount_scale;
     }
 
 #if !SF_ESKF_ENABLE_BODY_VEL_MOUNT_UPDATE
@@ -1006,8 +1061,9 @@ static void sf_eskf_fuse_body_vel_yz_batch(sf_eskf_t *eskf, float r_body_vel) {
   (void)scalar_s;
 }
 
-static void sf_eskf_fuse_body_speed_x_impl(sf_eskf_t *eskf, float speed_mps,
-                                           float r_speed) {
+static void sf_eskf_fuse_body_speed_x_impl(
+    sf_eskf_t *eskf, float speed_mps, float r_speed,
+    float mount_update_scale, float mount_update_innovation_gate_mps) {
   float v_vehicle[3];
   const float q0 = eskf->nominal.q0;
   const float q1 = eskf->nominal.q1;
@@ -1039,6 +1095,26 @@ static void sf_eskf_fuse_body_speed_x_impl(sf_eskf_t *eskf, float speed_mps,
   (void)H;
   for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
     dx[i] = K[i] * innovation;
+  }
+  {
+    float obs_mount_scale = mount_update_scale;
+    if (!(obs_mount_scale >= 0.0f) || !isfinite(obs_mount_scale)) {
+      obs_mount_scale = 0.0f;
+    }
+    if (obs_mount_scale > 1.0f) {
+      obs_mount_scale = 1.0f;
+    }
+    if (mount_update_innovation_gate_mps > 0.0f) {
+      const float innov_abs = fabsf(innovation);
+      if (innov_abs > mount_update_innovation_gate_mps) {
+        obs_mount_scale *= mount_update_innovation_gate_mps / innov_abs;
+      }
+    }
+    if (obs_mount_scale < 1.0f) {
+      dx[15] *= obs_mount_scale;
+      dx[16] *= obs_mount_scale;
+      dx[17] *= obs_mount_scale;
+    }
   }
   sf_eskf_record_update_diag(eskf, SF_ESKF_UPDATE_DIAG_BODY_SPEED_X, innovation,
                              S, K, dx);
