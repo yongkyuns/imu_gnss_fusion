@@ -777,6 +777,21 @@ bool sf_fusion_mount_q_vb(const sf_sensor_fusion_t *fusion, float out_q_vb[4]) {
   return true;
 }
 
+bool sf_fusion_eskf_mount_q_vb(const sf_sensor_fusion_t *fusion,
+                               float out_q_vb[4]) {
+  const sf_sensor_fusion_impl_t *impl;
+
+  if (fusion == NULL || out_q_vb == NULL) {
+    return false;
+  }
+  impl = sf_impl_const(fusion);
+  if (!impl->eskf_mount_q_vb_valid) {
+    return false;
+  }
+  memcpy(out_q_vb, impl->eskf_mount_q_vb, sizeof(impl->eskf_mount_q_vb));
+  return true;
+}
+
 static sf_update_t sf_update_from_fusion(const sf_sensor_fusion_impl_t *fusion,
                                          bool mount_ready_changed,
                                          bool ekf_initialized_now) {

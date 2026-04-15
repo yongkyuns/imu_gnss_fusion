@@ -45,5 +45,36 @@ Current shared modules worth expanding instead of duplicating in more bins:
 - `src/datasets/seeded_loose.rs`: semicolon-delimited seeded-loose dataset parsing
 - `src/datasets/gnss_ins_sim.rs`: `gnss-ins-sim` CSV parsing and sample loading
 - `src/eval/gnss_ins.rs`: shared quaternion and simple GNSS kinematic helpers for the `gnss-ins-sim` evaluators
+- `src/eval/state_summary.rs`: shared convergence/fluctuation/final-error summaries for scalar state traces with optional references
 - `src/ubxlog.rs`: UBX log loading
 - `src/visualizer/`: shared math and replay/pipeline pieces
+
+## Shared state summaries
+
+The first shared summary path is wired into:
+
+- `analyze_eskf_mount_ab --summary-csv ...`
+- `eskf_eval_gnss_ins_sim --summary-csv ...`
+
+For `eskf_eval_gnss_ins_sim`, the summary now covers:
+
+- position N/E/D against truth
+- velocity N/E/D against truth
+- attitude roll/pitch/yaw against truth
+- direct attitude quaternion-angle error against truth
+- direct attitude forward-axis and down-axis errors against truth
+- full mount roll/pitch/yaw against the configured truth mount
+- direct mount quaternion-angle error against truth
+- direct mount forward-axis and down-axis errors against truth
+- full mount error magnitude
+- gyro and accel bias states
+- legacy seed/align/qcs mount diagnostics
+
+The shared summary schema captures, per state:
+
+- initial/final value
+- duration and sample count
+- early/tail fluctuation (`stddev`, `span`)
+- tail drift
+- optional reference-based error metrics (`final_error`, `MAE`, `RMSE`, `max_abs_error`, `p95_abs_error`)
+- optional threshold-based settle time

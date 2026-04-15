@@ -14,7 +14,7 @@ impl SignalSource {
     }
 }
 
-pub fn quat_from_rpy_alg_deg(roll_deg: f64, pitch_deg: f64, yaw_deg: f64) -> [f64; 4] {
+pub fn quat_from_rpy_deg(roll_deg: f64, pitch_deg: f64, yaw_deg: f64) -> [f64; 4] {
     let (sr, cr) = (0.5 * roll_deg.to_radians()).sin_cos();
     let (sp, cp) = (0.5 * pitch_deg.to_radians()).sin_cos();
     let (sy, cy) = (0.5 * yaw_deg.to_radians()).sin_cos();
@@ -24,6 +24,10 @@ pub fn quat_from_rpy_alg_deg(roll_deg: f64, pitch_deg: f64, yaw_deg: f64) -> [f6
         cr * sp * cy + sr * cp * sy,
         cr * cp * sy - sr * sp * cy,
     ])
+}
+
+pub fn quat_from_rpy_alg_deg(roll_deg: f64, pitch_deg: f64, yaw_deg: f64) -> [f64; 4] {
+    quat_from_rpy_deg(roll_deg, pitch_deg, yaw_deg)
 }
 
 pub fn quat_normalize(q: [f64; 4]) -> [f64; 4] {
@@ -62,6 +66,20 @@ pub fn quat_angle_deg(a: [f64; 4], b: [f64; 4]) -> f64 {
         .abs()
         .clamp(0.0, 1.0);
     2.0 * dot.acos().to_degrees()
+}
+
+pub fn axis_angle_deg(a: [f64; 3], b: [f64; 3]) -> f64 {
+    let na = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+    let nb = (b[0] * b[0] + b[1] * b[1] + b[2] * b[2]).sqrt();
+    if na <= 1.0e-12 || nb <= 1.0e-12 {
+        return f64::NAN;
+    }
+    let dot = ((a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (na * nb)).clamp(-1.0, 1.0);
+    dot.acos().to_degrees()
+}
+
+pub fn quat_axis_angle_deg(q_est: [f64; 4], q_ref: [f64; 4], axis: [f64; 3]) -> f64 {
+    axis_angle_deg(quat_rotate(q_est, axis), quat_rotate(q_ref, axis))
 }
 
 pub fn wrap_deg180(mut deg: f64) -> f64 {

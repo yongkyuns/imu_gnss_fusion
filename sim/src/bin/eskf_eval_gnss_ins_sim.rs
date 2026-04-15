@@ -6,12 +6,21 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, ValueEnum};
 use sensor_fusion::fusion::{FusionGnssSample, FusionImuSample, SensorFusion};
 use sim::datasets::gnss_ins_sim::{
-    GnssSample as DatasetGnssSample,
-    load_gnss_samples as load_dataset_gnss_samples, load_imu_samples as load_dataset_imu_samples,
+    GnssSample as DatasetGnssSample, load_gnss_samples as load_dataset_gnss_samples,
+    load_imu_samples as load_dataset_imu_samples,
+    load_truth_samples as load_dataset_truth_samples,
 };
 use sim::eval::gnss_ins::{
-    SignalSource, as_q64, course_rate_deg, horiz_speed, quat_angle_deg, quat_conj,
-    quat_from_rpy_alg_deg, quat_mul, quat_rotate,
+    SignalSource, as_q64, course_rate_deg, horiz_speed, quat_angle_deg, quat_axis_angle_deg,
+    quat_conj, quat_from_rpy_alg_deg, quat_mul, quat_rotate,
+};
+use sim::eval::state_summary::{
+    SummaryMode, print_summary_table, summarize_trace_pair, write_summary_csv,
+};
+use sim::visualizer::model::Trace;
+use sim::visualizer::math::{ecef_to_ned, lla_to_ecef, quat_rpy_deg};
+use sim::visualizer::pipeline::align_replay::{
+    frd_mount_quat_to_esf_alg_flu_quat, quat_rpy_alg_deg,
 };
 
 #[derive(Parser, Debug)]
@@ -46,6 +55,8 @@ struct Args {
 
     #[arg(long)]
     residual_csv: Option<PathBuf>,
+    #[arg(long)]
+    summary_csv: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -92,6 +103,48 @@ struct ResidualSample {
     course_rate_dps: f64,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct StateSample {
+    t_s: f64,
+    pos_n_m: f64,
+    pos_e_m: f64,
+    pos_d_m: f64,
+    truth_pos_n_m: f64,
+    truth_pos_e_m: f64,
+    truth_pos_d_m: f64,
+    vel_n_mps: f64,
+    vel_e_mps: f64,
+    vel_d_mps: f64,
+    truth_vel_n_mps: f64,
+    truth_vel_e_mps: f64,
+    truth_vel_d_mps: f64,
+    att_roll_deg: f64,
+    att_pitch_deg: f64,
+    att_yaw_deg: f64,
+    truth_att_roll_deg: f64,
+    truth_att_pitch_deg: f64,
+    truth_att_yaw_deg: f64,
+    att_quat_err_deg: f64,
+    att_fwd_err_deg: f64,
+    att_down_err_deg: f64,
+    mount_roll_deg: f64,
+    mount_pitch_deg: f64,
+    mount_yaw_deg: f64,
+    truth_mount_roll_deg: f64,
+    truth_mount_pitch_deg: f64,
+    truth_mount_yaw_deg: f64,
+    mount_quat_err_deg: f64,
+    mount_fwd_err_deg: f64,
+    mount_down_err_deg: f64,
+    full_mount_err_deg: f64,
+    gyro_bias_x_dps: f64,
+    gyro_bias_y_dps: f64,
+    gyro_bias_z_dps: f64,
+    accel_bias_x_mps2: f64,
+    accel_bias_y_mps2: f64,
+    accel_bias_z_mps2: f64,
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
     let imu = load_dataset_imu_samples(
@@ -99,13 +152,17 @@ fn main() -> Result<()> {
         args.signal_source.use_ref_signals(),
         args.data_key,
     )?;
+    let truth = load_dataset_truth_samples(&args.data_dir)?;
     let gnss = load_dataset_gnss_samples(
         &args.data_dir,
         args.signal_source.use_ref_signals(),
         args.data_key,
     )?;
-    if imu.is_empty() || gnss.is_empty() {
-        bail!("need both IMU and GNSS samples");
+    if imu.is_empty() || gnss.is_empty() || truth.is_empty() {
+        bail!("need IMU, GNSS, and truth samples");
+    }
+    if imu.len() != truth.len() {
+        bail!("IMU and truth files have inconsistent lengths");
     }
 
     let q_truth = quat_from_rpy_alg_deg(
@@ -129,10 +186,12 @@ fn main() -> Result<()> {
     let mut imu_idx = 0usize;
     let mut gnss_idx = 0usize;
     let mut residuals = Vec::<ResidualSample>::new();
+    let mut state_samples = Vec::<StateSample>::new();
     let mut mount_ready_s = None::<f64>;
     let mut ekf_init_s = None::<f64>;
     let mut seed_q_vb = None::<[f64; 4]>;
     let mut prev_gnss = None::<GnssSample>;
+    let ref_ecef = lla_to_ecef(truth[0].lat_deg, truth[0].lon_deg, truth[0].height_m);
 
     while imu_idx < imu.len() || gnss_idx < gnss.len() {
         let next_imu_t = imu.get(imu_idx).map(|s| s.t_s);
@@ -146,6 +205,15 @@ fn main() -> Result<()> {
 
         if take_imu {
             let s = imu[imu_idx];
+            let truth_s = truth[imu_idx];
+            if (s.t_s - truth_s.t_s).abs() > 1.0e-6 {
+                bail!(
+                    "IMU/truth timestamp mismatch at index {}: imu={} truth={}",
+                    imu_idx,
+                    s.t_s,
+                    truth_s.t_s
+                );
+            }
             let gyro_body = quat_rotate(q_truth, s.gyro_vehicle_radps);
             let accel_body = quat_rotate(q_truth, s.accel_vehicle_mps2);
             let _ = fusion.process_imu(FusionImuSample {
@@ -161,6 +229,90 @@ fn main() -> Result<()> {
                     accel_body[2] as f32,
                 ],
             });
+            if ekf_init_s.is_some()
+                && let Some(eskf) = fusion.eskf()
+            {
+                let truth_ecef = lla_to_ecef(truth_s.lat_deg, truth_s.lon_deg, truth_s.height_m);
+                let truth_pos_ned = ecef_to_ned(
+                    truth_ecef,
+                    ref_ecef,
+                    truth[0].lat_deg,
+                    truth[0].lon_deg,
+                );
+                let (att_roll_deg, att_pitch_deg, att_yaw_deg) = quat_rpy_deg(
+                    eskf.nominal.q0,
+                    eskf.nominal.q1,
+                    eskf.nominal.q2,
+                    eskf.nominal.q3,
+                );
+                let (truth_att_roll_deg, truth_att_pitch_deg, truth_att_yaw_deg) = quat_rpy_deg(
+                    truth_s.q_bn[0] as f32,
+                    truth_s.q_bn[1] as f32,
+                    truth_s.q_bn[2] as f32,
+                    truth_s.q_bn[3] as f32,
+                );
+                let q_predict_seed = fusion
+                    .eskf_mount_q_vb()
+                    .or_else(|| fusion.mount_q_vb())
+                    .map(as_q64)
+                    .or(seed_q_vb)
+                    .unwrap_or(q_truth);
+                let q_est_att = as_q64([eskf.nominal.q0, eskf.nominal.q1, eskf.nominal.q2, eskf.nominal.q3]);
+                let q_cs = as_q64([
+                    eskf.nominal.qcs0,
+                    eskf.nominal.qcs1,
+                    eskf.nominal.qcs2,
+                    eskf.nominal.qcs3,
+                ]);
+                let q_full_mount = quat_mul(q_predict_seed, quat_conj(q_cs));
+                let q_full_mount_flu = frd_mount_quat_to_esf_alg_flu_quat(q_full_mount);
+                let (mount_roll_deg, mount_pitch_deg, mount_yaw_deg) = quat_rpy_alg_deg(
+                    q_full_mount_flu[0],
+                    q_full_mount_flu[1],
+                    q_full_mount_flu[2],
+                    q_full_mount_flu[3],
+                );
+                state_samples.push(StateSample {
+                    t_s: s.t_s,
+                    pos_n_m: eskf.nominal.pn as f64,
+                    pos_e_m: eskf.nominal.pe as f64,
+                    pos_d_m: eskf.nominal.pd as f64,
+                    truth_pos_n_m: truth_pos_ned[0],
+                    truth_pos_e_m: truth_pos_ned[1],
+                    truth_pos_d_m: truth_pos_ned[2],
+                    vel_n_mps: eskf.nominal.vn as f64,
+                    vel_e_mps: eskf.nominal.ve as f64,
+                    vel_d_mps: eskf.nominal.vd as f64,
+                    truth_vel_n_mps: truth_s.vel_ned_mps[0],
+                    truth_vel_e_mps: truth_s.vel_ned_mps[1],
+                    truth_vel_d_mps: truth_s.vel_ned_mps[2],
+                    att_roll_deg,
+                    att_pitch_deg,
+                    att_yaw_deg,
+                    truth_att_roll_deg,
+                    truth_att_pitch_deg,
+                    truth_att_yaw_deg,
+                    att_quat_err_deg: quat_angle_deg(q_est_att, truth_s.q_bn),
+                    att_fwd_err_deg: quat_axis_angle_deg(q_est_att, truth_s.q_bn, [1.0, 0.0, 0.0]),
+                    att_down_err_deg: quat_axis_angle_deg(q_est_att, truth_s.q_bn, [0.0, 0.0, 1.0]),
+                    mount_roll_deg,
+                    mount_pitch_deg,
+                    mount_yaw_deg,
+                    truth_mount_roll_deg: args.mount_roll_deg,
+                    truth_mount_pitch_deg: args.mount_pitch_deg,
+                    truth_mount_yaw_deg: args.mount_yaw_deg,
+                    mount_quat_err_deg: quat_angle_deg(q_full_mount, q_truth),
+                    mount_fwd_err_deg: quat_axis_angle_deg(q_full_mount, q_truth, [1.0, 0.0, 0.0]),
+                    mount_down_err_deg: quat_axis_angle_deg(q_full_mount, q_truth, [0.0, 0.0, 1.0]),
+                    full_mount_err_deg: quat_angle_deg(q_full_mount, q_truth),
+                    gyro_bias_x_dps: eskf.nominal.bgx as f64 * 180.0 / std::f64::consts::PI,
+                    gyro_bias_y_dps: eskf.nominal.bgy as f64 * 180.0 / std::f64::consts::PI,
+                    gyro_bias_z_dps: eskf.nominal.bgz as f64 * 180.0 / std::f64::consts::PI,
+                    accel_bias_x_mps2: eskf.nominal.bax as f64,
+                    accel_bias_y_mps2: eskf.nominal.bay as f64,
+                    accel_bias_z_mps2: eskf.nominal.baz as f64,
+                });
+            }
             imu_idx += 1;
         } else {
             let s = gnss[gnss_idx];
@@ -191,7 +343,10 @@ fn main() -> Result<()> {
             }
             if update.ekf_initialized_now && ekf_init_s.is_none() {
                 ekf_init_s = Some(s.t_s);
-                seed_q_vb = fusion.mount_q_vb().map(as_q64);
+                seed_q_vb = fusion
+                    .eskf_mount_q_vb()
+                    .or_else(|| fusion.mount_q_vb())
+                    .map(as_q64);
             }
             let align_q_opt = fusion
                 .align()
@@ -255,7 +410,7 @@ fn main() -> Result<()> {
         }
     }
 
-    if residuals.is_empty() {
+    if residuals.is_empty() || state_samples.is_empty() {
         bail!("no ESKF samples produced");
     }
 
@@ -302,9 +457,16 @@ fn main() -> Result<()> {
         max_of(tail.iter().map(|s| s.full_a_err_deg)),
     );
 
+    let summaries = build_state_summaries(&residuals, &state_samples);
+    print_summary_table(&summaries);
+
     if let Some(path) = &args.residual_csv {
         write_residual_csv(path, &residuals)?;
         println!("wrote residual CSV: {}", path.display());
+    }
+    if let Some(path) = &args.summary_csv {
+        write_summary_csv(path, &summaries)?;
+        println!("state_summary_csv={}", path.display());
     }
 
     Ok(())
@@ -384,4 +546,398 @@ fn write_residual_csv(path: &Path, samples: &[ResidualSample]) -> Result<()> {
         )?;
     }
     Ok(())
+}
+
+fn build_state_summaries(
+    residuals: &[ResidualSample],
+    states: &[StateSample],
+) -> Vec<sim::eval::state_summary::StateSummary> {
+    let trace = |name: &str, values: Vec<[f64; 2]>| Trace {
+        name: name.to_string(),
+        points: values,
+    };
+    let zero_trace = |name: &str, times: &[f64]| Trace {
+        name: name.to_string(),
+        points: times.iter().map(|t_s| [*t_s, 0.0]).collect(),
+    };
+
+    struct Spec<'a> {
+        state: &'a str,
+        trace: Trace,
+        reference: Option<Trace>,
+        mode: SummaryMode,
+        settle_threshold: Option<f64>,
+    }
+
+    let state_times: Vec<f64> = states.iter().map(|sample| sample.t_s).collect();
+    let residual_times: Vec<f64> = residuals.iter().map(|sample| sample.t_s).collect();
+    let specs = vec![
+        Spec {
+            state: "pos_n_m",
+            trace: trace("pos_n [m]", states.iter().map(|s| [s.t_s, s.pos_n_m]).collect()),
+            reference: Some(trace(
+                "truth pos_n [m]",
+                states.iter().map(|s| [s.t_s, s.truth_pos_n_m]).collect(),
+            )),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(2.0),
+        },
+        Spec {
+            state: "pos_e_m",
+            trace: trace("pos_e [m]", states.iter().map(|s| [s.t_s, s.pos_e_m]).collect()),
+            reference: Some(trace(
+                "truth pos_e [m]",
+                states.iter().map(|s| [s.t_s, s.truth_pos_e_m]).collect(),
+            )),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(2.0),
+        },
+        Spec {
+            state: "pos_d_m",
+            trace: trace("pos_d [m]", states.iter().map(|s| [s.t_s, s.pos_d_m]).collect()),
+            reference: Some(trace(
+                "truth pos_d [m]",
+                states.iter().map(|s| [s.t_s, s.truth_pos_d_m]).collect(),
+            )),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(2.0),
+        },
+        Spec {
+            state: "vel_n_mps",
+            trace: trace("vel_n [m/s]", states.iter().map(|s| [s.t_s, s.vel_n_mps]).collect()),
+            reference: Some(trace(
+                "truth vel_n [m/s]",
+                states.iter().map(|s| [s.t_s, s.truth_vel_n_mps]).collect(),
+            )),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(0.5),
+        },
+        Spec {
+            state: "vel_e_mps",
+            trace: trace("vel_e [m/s]", states.iter().map(|s| [s.t_s, s.vel_e_mps]).collect()),
+            reference: Some(trace(
+                "truth vel_e [m/s]",
+                states.iter().map(|s| [s.t_s, s.truth_vel_e_mps]).collect(),
+            )),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(0.5),
+        },
+        Spec {
+            state: "vel_d_mps",
+            trace: trace("vel_d [m/s]", states.iter().map(|s| [s.t_s, s.vel_d_mps]).collect()),
+            reference: Some(trace(
+                "truth vel_d [m/s]",
+                states.iter().map(|s| [s.t_s, s.truth_vel_d_mps]).collect(),
+            )),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(0.5),
+        },
+        Spec {
+            state: "att_roll_deg",
+            trace: trace(
+                "att_roll [deg]",
+                states.iter().map(|s| [s.t_s, s.att_roll_deg]).collect(),
+            ),
+            reference: Some(trace(
+                "truth att_roll [deg]",
+                states
+                    .iter()
+                    .map(|s| [s.t_s, s.truth_att_roll_deg])
+                    .collect(),
+            )),
+            mode: SummaryMode::AngleDeg,
+            settle_threshold: Some(3.0),
+        },
+        Spec {
+            state: "att_pitch_deg",
+            trace: trace(
+                "att_pitch [deg]",
+                states.iter().map(|s| [s.t_s, s.att_pitch_deg]).collect(),
+            ),
+            reference: Some(trace(
+                "truth att_pitch [deg]",
+                states
+                    .iter()
+                    .map(|s| [s.t_s, s.truth_att_pitch_deg])
+                    .collect(),
+            )),
+            mode: SummaryMode::AngleDeg,
+            settle_threshold: Some(3.0),
+        },
+        Spec {
+            state: "att_yaw_deg",
+            trace: trace(
+                "att_yaw [deg]",
+                states.iter().map(|s| [s.t_s, s.att_yaw_deg]).collect(),
+            ),
+            reference: Some(trace(
+                "truth att_yaw [deg]",
+                states.iter().map(|s| [s.t_s, s.truth_att_yaw_deg]).collect(),
+            )),
+            mode: SummaryMode::AngleDeg,
+            settle_threshold: Some(5.0),
+        },
+        Spec {
+            state: "att_quat_err_deg",
+            trace: trace(
+                "att quat err [deg]",
+                states
+                    .iter()
+                    .map(|s| [s.t_s, s.att_quat_err_deg])
+                    .collect(),
+            ),
+            reference: Some(zero_trace("zero", &state_times)),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(5.0),
+        },
+        Spec {
+            state: "att_fwd_err_deg",
+            trace: trace(
+                "att fwd err [deg]",
+                states
+                    .iter()
+                    .map(|s| [s.t_s, s.att_fwd_err_deg])
+                    .collect(),
+            ),
+            reference: Some(zero_trace("zero", &state_times)),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(5.0),
+        },
+        Spec {
+            state: "att_down_err_deg",
+            trace: trace(
+                "att down err [deg]",
+                states
+                    .iter()
+                    .map(|s| [s.t_s, s.att_down_err_deg])
+                    .collect(),
+            ),
+            reference: Some(zero_trace("zero", &state_times)),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(5.0),
+        },
+        Spec {
+            state: "mount_roll_deg",
+            trace: trace(
+                "mount_roll [deg]",
+                states.iter().map(|s| [s.t_s, s.mount_roll_deg]).collect(),
+            ),
+            reference: Some(trace(
+                "truth mount_roll [deg]",
+                states
+                    .iter()
+                    .map(|s| [s.t_s, s.truth_mount_roll_deg])
+                    .collect(),
+            )),
+            mode: SummaryMode::AngleDeg,
+            settle_threshold: Some(5.0),
+        },
+        Spec {
+            state: "mount_pitch_deg",
+            trace: trace(
+                "mount_pitch [deg]",
+                states.iter().map(|s| [s.t_s, s.mount_pitch_deg]).collect(),
+            ),
+            reference: Some(trace(
+                "truth mount_pitch [deg]",
+                states
+                    .iter()
+                    .map(|s| [s.t_s, s.truth_mount_pitch_deg])
+                    .collect(),
+            )),
+            mode: SummaryMode::AngleDeg,
+            settle_threshold: Some(5.0),
+        },
+        Spec {
+            state: "mount_yaw_deg",
+            trace: trace(
+                "mount_yaw [deg]",
+                states.iter().map(|s| [s.t_s, s.mount_yaw_deg]).collect(),
+            ),
+            reference: Some(trace(
+                "truth mount_yaw [deg]",
+                states.iter().map(|s| [s.t_s, s.truth_mount_yaw_deg]).collect(),
+            )),
+            mode: SummaryMode::AngleDeg,
+            settle_threshold: Some(5.0),
+        },
+        Spec {
+            state: "mount_quat_err_deg",
+            trace: trace(
+                "mount quat err [deg]",
+                states
+                    .iter()
+                    .map(|s| [s.t_s, s.mount_quat_err_deg])
+                    .collect(),
+            ),
+            reference: Some(zero_trace("zero", &state_times)),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(5.0),
+        },
+        Spec {
+            state: "mount_fwd_err_deg",
+            trace: trace(
+                "mount fwd err [deg]",
+                states
+                    .iter()
+                    .map(|s| [s.t_s, s.mount_fwd_err_deg])
+                    .collect(),
+            ),
+            reference: Some(zero_trace("zero", &state_times)),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(5.0),
+        },
+        Spec {
+            state: "mount_down_err_deg",
+            trace: trace(
+                "mount down err [deg]",
+                states
+                    .iter()
+                    .map(|s| [s.t_s, s.mount_down_err_deg])
+                    .collect(),
+            ),
+            reference: Some(zero_trace("zero", &state_times)),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(5.0),
+        },
+        Spec {
+            state: "full_mount_err_deg",
+            trace: trace(
+                "full mount err [deg]",
+                states
+                    .iter()
+                    .map(|s| [s.t_s, s.full_mount_err_deg])
+                    .collect(),
+            ),
+            reference: Some(zero_trace("zero", &state_times)),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(5.0),
+        },
+        Spec {
+            state: "gyro_bias_x_dps",
+            trace: trace(
+                "gyro bias x [deg/s]",
+                states.iter().map(|s| [s.t_s, s.gyro_bias_x_dps]).collect(),
+            ),
+            reference: Some(zero_trace("zero", &state_times)),
+            mode: SummaryMode::Linear,
+            settle_threshold: None,
+        },
+        Spec {
+            state: "gyro_bias_y_dps",
+            trace: trace(
+                "gyro bias y [deg/s]",
+                states.iter().map(|s| [s.t_s, s.gyro_bias_y_dps]).collect(),
+            ),
+            reference: Some(zero_trace("zero", &state_times)),
+            mode: SummaryMode::Linear,
+            settle_threshold: None,
+        },
+        Spec {
+            state: "gyro_bias_z_dps",
+            trace: trace(
+                "gyro bias z [deg/s]",
+                states.iter().map(|s| [s.t_s, s.gyro_bias_z_dps]).collect(),
+            ),
+            reference: Some(zero_trace("zero", &state_times)),
+            mode: SummaryMode::Linear,
+            settle_threshold: None,
+        },
+        Spec {
+            state: "accel_bias_x_mps2",
+            trace: trace(
+                "accel bias x [m/s^2]",
+                states.iter().map(|s| [s.t_s, s.accel_bias_x_mps2]).collect(),
+            ),
+            reference: Some(zero_trace("zero", &state_times)),
+            mode: SummaryMode::Linear,
+            settle_threshold: None,
+        },
+        Spec {
+            state: "accel_bias_y_mps2",
+            trace: trace(
+                "accel bias y [m/s^2]",
+                states.iter().map(|s| [s.t_s, s.accel_bias_y_mps2]).collect(),
+            ),
+            reference: Some(zero_trace("zero", &state_times)),
+            mode: SummaryMode::Linear,
+            settle_threshold: None,
+        },
+        Spec {
+            state: "accel_bias_z_mps2",
+            trace: trace(
+                "accel bias z [m/s^2]",
+                states.iter().map(|s| [s.t_s, s.accel_bias_z_mps2]).collect(),
+            ),
+            reference: Some(zero_trace("zero", &state_times)),
+            mode: SummaryMode::Linear,
+            settle_threshold: None,
+        },
+        Spec {
+            state: "seed_mount_err_deg",
+            trace: trace(
+                "seed mount err [deg]",
+                residuals
+                    .iter()
+                    .map(|sample| [sample.t_s, sample.seed_err_deg])
+                    .collect(),
+            ),
+            reference: Some(zero_trace("zero", &residual_times)),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(5.0),
+        },
+        Spec {
+            state: "align_mount_err_deg",
+            trace: trace(
+                "align mount err [deg]",
+                residuals
+                    .iter()
+                    .map(|sample| [sample.t_s, sample.align_err_deg])
+                    .collect(),
+            ),
+            reference: Some(zero_trace("zero", &residual_times)),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(5.0),
+        },
+        Spec {
+            state: "legacy_mount_err_deg",
+            trace: trace(
+                "legacy mount err [deg]",
+                residuals
+                    .iter()
+                    .map(|sample| [sample.t_s, sample.full_a_err_deg])
+                    .collect(),
+            ),
+            reference: Some(zero_trace("zero", &residual_times)),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(5.0),
+        },
+        Spec {
+            state: "qcs_angle_deg",
+            trace: trace(
+                "qcs angle [deg]",
+                residuals
+                    .iter()
+                    .map(|sample| [sample.t_s, sample.qcs_angle_deg])
+                    .collect(),
+            ),
+            reference: Some(zero_trace("zero", &residual_times)),
+            mode: SummaryMode::Linear,
+            settle_threshold: None,
+        },
+    ];
+
+    specs
+        .into_iter()
+        .filter_map(|spec| {
+            summarize_trace_pair(
+                "eskf_gnss_ins",
+                spec.state,
+                &spec.trace,
+                spec.reference.as_ref(),
+                spec.mode,
+                spec.settle_threshold,
+            )
+        })
+        .collect()
 }

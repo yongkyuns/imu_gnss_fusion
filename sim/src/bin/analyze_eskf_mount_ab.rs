@@ -2,6 +2,10 @@ use std::{fs::File, io::Read, path::PathBuf};
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use sim::eval::gnss_ins::{quat_angle_deg, quat_axis_angle_deg, quat_from_rpy_alg_deg, quat_from_rpy_deg};
+use sim::eval::state_summary::{
+    StateSummary, SummaryMode, print_summary_table, summarize_trace_pair, write_summary_csv,
+};
 use sim::visualizer::model::{EkfImuSource, Trace};
 use sim::visualizer::pipeline::build_plot_data;
 use sim::visualizer::pipeline::ekf_compare::{EkfCompareConfig, GnssOutageConfig};
@@ -27,6 +31,8 @@ struct Args {
     ekf_predict_imu_decimation: usize,
     #[arg(long)]
     ekf_predict_imu_lpf_cutoff_hz: Option<f64>,
+    #[arg(long)]
+    summary_csv: Option<PathBuf>,
 }
 
 fn parse_misalignment(s: &str) -> Result<EkfImuSource, String> {
@@ -54,6 +60,128 @@ fn trace_by_name<'a>(traces: &'a [Trace], name: &str) -> Result<&'a Trace> {
         .iter()
         .find(|t| t.name == name)
         .with_context(|| format!("missing trace `{name}`"))
+}
+
+fn trace_by_name_opt<'a>(traces: &'a [Trace], name: &str) -> Option<&'a Trace> {
+    traces.iter().find(|t| t.name == name)
+}
+
+fn sample_trace_value(trace: &Trace, t_s: f64) -> Option<f64> {
+    if trace.points.is_empty() {
+        return None;
+    }
+    let idx = trace.points.partition_point(|point| point[0] < t_s);
+    let left = trace
+        .points
+        .get(idx.saturating_sub(1))
+        .map(|point| ((point[0] - t_s).abs(), point[1]));
+    let right = trace
+        .points
+        .get(idx)
+        .map(|point| ((point[0] - t_s).abs(), point[1]));
+    match (left, right) {
+        (Some((left_dt, left_value)), Some((right_dt, right_value))) => {
+            if right_dt < left_dt {
+                Some(right_value)
+            } else {
+                Some(left_value)
+            }
+        }
+        (Some((_, value)), None) | (None, Some((_, value))) => Some(value),
+        (None, None) => None,
+    }
+}
+
+#[derive(Clone, Copy)]
+enum EulerConvention {
+    Standard,
+    AlgMount,
+}
+
+fn quat_from_euler_deg(
+    convention: EulerConvention,
+    roll_deg: f64,
+    pitch_deg: f64,
+    yaw_deg: f64,
+) -> [f64; 4] {
+    match convention {
+        EulerConvention::Standard => quat_from_rpy_deg(roll_deg, pitch_deg, yaw_deg),
+        EulerConvention::AlgMount => quat_from_rpy_alg_deg(roll_deg, pitch_deg, yaw_deg),
+    }
+}
+
+fn build_quat_error_trace(
+    name: &str,
+    estimate_rpy: [&Trace; 3],
+    reference_rpy: [&Trace; 3],
+    convention: EulerConvention,
+) -> Trace {
+    let mut points = Vec::with_capacity(estimate_rpy[0].points.len());
+    for [t_s, roll_deg] in &estimate_rpy[0].points {
+        let Some(pitch_deg) = sample_trace_value(estimate_rpy[1], *t_s) else {
+            continue;
+        };
+        let Some(yaw_deg) = sample_trace_value(estimate_rpy[2], *t_s) else {
+            continue;
+        };
+        let Some(ref_roll_deg) = sample_trace_value(reference_rpy[0], *t_s) else {
+            continue;
+        };
+        let Some(ref_pitch_deg) = sample_trace_value(reference_rpy[1], *t_s) else {
+            continue;
+        };
+        let Some(ref_yaw_deg) = sample_trace_value(reference_rpy[2], *t_s) else {
+            continue;
+        };
+        let q_est = quat_from_euler_deg(convention, *roll_deg, pitch_deg, yaw_deg);
+        let q_ref = quat_from_euler_deg(convention, ref_roll_deg, ref_pitch_deg, ref_yaw_deg);
+        points.push([*t_s, quat_angle_deg(q_est, q_ref)]);
+    }
+    Trace {
+        name: name.to_string(),
+        points,
+    }
+}
+
+fn build_axis_error_trace(
+    name: &str,
+    estimate_rpy: [&Trace; 3],
+    reference_rpy: [&Trace; 3],
+    convention: EulerConvention,
+    axis: [f64; 3],
+) -> Trace {
+    let mut points = Vec::with_capacity(estimate_rpy[0].points.len());
+    for [t_s, roll_deg] in &estimate_rpy[0].points {
+        let Some(pitch_deg) = sample_trace_value(estimate_rpy[1], *t_s) else {
+            continue;
+        };
+        let Some(yaw_deg) = sample_trace_value(estimate_rpy[2], *t_s) else {
+            continue;
+        };
+        let Some(ref_roll_deg) = sample_trace_value(reference_rpy[0], *t_s) else {
+            continue;
+        };
+        let Some(ref_pitch_deg) = sample_trace_value(reference_rpy[1], *t_s) else {
+            continue;
+        };
+        let Some(ref_yaw_deg) = sample_trace_value(reference_rpy[2], *t_s) else {
+            continue;
+        };
+        let q_est = quat_from_euler_deg(convention, *roll_deg, pitch_deg, yaw_deg);
+        let q_ref = quat_from_euler_deg(convention, ref_roll_deg, ref_pitch_deg, ref_yaw_deg);
+        points.push([*t_s, quat_axis_angle_deg(q_est, q_ref, axis)]);
+    }
+    Trace {
+        name: name.to_string(),
+        points,
+    }
+}
+
+fn zero_trace(name: &str, trace: &Trace) -> Trace {
+    Trace {
+        name: name.to_string(),
+        points: trace.points.iter().map(|point| [point[0], 0.0]).collect(),
+    }
 }
 
 fn wrap_deg180(mut deg: f64) -> f64 {
@@ -137,6 +265,7 @@ fn main() -> Result<()> {
 
     let eskf = &data.eskf_misalignment;
     let diag = &data.eskf_stationary_diag;
+    let summaries = build_state_summaries(&data);
 
     println!(
         "config: misalignment={:?} decimation={} lpf_hz={} gnss_vel_r_scale={:.3} outage_count={} outage_duration_s={:.3} outage_seed={}",
@@ -217,5 +346,487 @@ fn main() -> Result<()> {
         print_trace_summary("eskf_cmp_att", trace_by_name(&data.eskf_cmp_att, name)?);
     }
 
+    print_summary_table(&summaries);
+    if let Some(path) = &args.summary_csv {
+        write_summary_csv(path, &summaries)?;
+        println!("state_summary_csv={}", path.display());
+    }
+
     Ok(())
+}
+
+fn build_state_summaries(data: &sim::visualizer::model::PlotData) -> Vec<StateSummary> {
+    struct TraceSpec<'a> {
+        system: &'a str,
+        state: &'a str,
+        trace_name: &'a str,
+        reference_name: Option<&'a str>,
+        mode: SummaryMode,
+        settle_threshold: Option<f64>,
+        traces: &'a [Trace],
+        references: &'a [Trace],
+    }
+
+    let specs = [
+        TraceSpec {
+            system: "eskf",
+            state: "pos_n_m",
+            trace_name: "ESKF posN [m]",
+            reference_name: Some("UBX posN [m]"),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(5.0),
+            traces: &data.eskf_cmp_pos,
+            references: &data.eskf_cmp_pos,
+        },
+        TraceSpec {
+            system: "eskf",
+            state: "pos_e_m",
+            trace_name: "ESKF posE [m]",
+            reference_name: Some("UBX posE [m]"),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(5.0),
+            traces: &data.eskf_cmp_pos,
+            references: &data.eskf_cmp_pos,
+        },
+        TraceSpec {
+            system: "eskf",
+            state: "pos_d_m",
+            trace_name: "ESKF posD [m]",
+            reference_name: Some("UBX posD [m]"),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(5.0),
+            traces: &data.eskf_cmp_pos,
+            references: &data.eskf_cmp_pos,
+        },
+        TraceSpec {
+            system: "eskf",
+            state: "vel_forward_mps",
+            trace_name: "ESKF forward vel [m/s]",
+            reference_name: Some("u-blox forward vel [m/s]"),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(0.5),
+            traces: &data.eskf_cmp_vel,
+            references: &data.eskf_cmp_vel,
+        },
+        TraceSpec {
+            system: "eskf",
+            state: "vel_lateral_mps",
+            trace_name: "ESKF lateral vel [m/s]",
+            reference_name: Some("u-blox lateral vel [m/s]"),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(0.5),
+            traces: &data.eskf_cmp_vel,
+            references: &data.eskf_cmp_vel,
+        },
+        TraceSpec {
+            system: "eskf",
+            state: "vel_vertical_mps",
+            trace_name: "ESKF vertical vel [m/s]",
+            reference_name: Some("u-blox vertical vel [m/s]"),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(0.5),
+            traces: &data.eskf_cmp_vel,
+            references: &data.eskf_cmp_vel,
+        },
+        TraceSpec {
+            system: "eskf",
+            state: "att_roll_deg",
+            trace_name: "ESKF roll [deg]",
+            reference_name: Some("NAV-ATT roll [deg]"),
+            mode: SummaryMode::AngleDeg,
+            settle_threshold: Some(3.0),
+            traces: &data.eskf_cmp_att,
+            references: &data.eskf_cmp_att,
+        },
+        TraceSpec {
+            system: "eskf",
+            state: "att_pitch_deg",
+            trace_name: "ESKF pitch [deg]",
+            reference_name: Some("NAV-ATT pitch [deg]"),
+            mode: SummaryMode::AngleDeg,
+            settle_threshold: Some(3.0),
+            traces: &data.eskf_cmp_att,
+            references: &data.eskf_cmp_att,
+        },
+        TraceSpec {
+            system: "eskf",
+            state: "att_yaw_deg",
+            trace_name: "ESKF yaw [deg]",
+            reference_name: Some("NAV-ATT heading [deg]"),
+            mode: SummaryMode::AngleDeg,
+            settle_threshold: Some(5.0),
+            traces: &data.eskf_cmp_att,
+            references: &data.eskf_cmp_att,
+        },
+        TraceSpec {
+            system: "eskf",
+            state: "mount_roll_deg",
+            trace_name: "ESKF full mount roll [deg]",
+            reference_name: Some("ESF-ALG mount roll [deg]"),
+            mode: SummaryMode::AngleDeg,
+            settle_threshold: Some(5.0),
+            traces: &data.eskf_misalignment,
+            references: &data.eskf_misalignment,
+        },
+        TraceSpec {
+            system: "eskf",
+            state: "mount_pitch_deg",
+            trace_name: "ESKF full mount pitch [deg]",
+            reference_name: Some("ESF-ALG mount pitch [deg]"),
+            mode: SummaryMode::AngleDeg,
+            settle_threshold: Some(5.0),
+            traces: &data.eskf_misalignment,
+            references: &data.eskf_misalignment,
+        },
+        TraceSpec {
+            system: "eskf",
+            state: "mount_yaw_deg",
+            trace_name: "ESKF full mount yaw [deg]",
+            reference_name: Some("ESF-ALG mount yaw [deg]"),
+            mode: SummaryMode::AngleDeg,
+            settle_threshold: Some(5.0),
+            traces: &data.eskf_misalignment,
+            references: &data.eskf_misalignment,
+        },
+        TraceSpec {
+            system: "eskf",
+            state: "gyro_bias_x_dps",
+            trace_name: "ESKF gyro bias x [deg/s]",
+            reference_name: None,
+            mode: SummaryMode::Linear,
+            settle_threshold: None,
+            traces: &data.eskf_bias_gyro,
+            references: &[],
+        },
+        TraceSpec {
+            system: "eskf",
+            state: "gyro_bias_y_dps",
+            trace_name: "ESKF gyro bias y [deg/s]",
+            reference_name: None,
+            mode: SummaryMode::Linear,
+            settle_threshold: None,
+            traces: &data.eskf_bias_gyro,
+            references: &[],
+        },
+        TraceSpec {
+            system: "eskf",
+            state: "gyro_bias_z_dps",
+            trace_name: "ESKF gyro bias z [deg/s]",
+            reference_name: None,
+            mode: SummaryMode::Linear,
+            settle_threshold: None,
+            traces: &data.eskf_bias_gyro,
+            references: &[],
+        },
+        TraceSpec {
+            system: "eskf",
+            state: "accel_bias_x_mps2",
+            trace_name: "ESKF accel bias x [m/s^2]",
+            reference_name: None,
+            mode: SummaryMode::Linear,
+            settle_threshold: None,
+            traces: &data.eskf_bias_accel,
+            references: &[],
+        },
+        TraceSpec {
+            system: "eskf",
+            state: "accel_bias_y_mps2",
+            trace_name: "ESKF accel bias y [m/s^2]",
+            reference_name: None,
+            mode: SummaryMode::Linear,
+            settle_threshold: None,
+            traces: &data.eskf_bias_accel,
+            references: &[],
+        },
+        TraceSpec {
+            system: "eskf",
+            state: "accel_bias_z_mps2",
+            trace_name: "ESKF accel bias z [m/s^2]",
+            reference_name: None,
+            mode: SummaryMode::Linear,
+            settle_threshold: None,
+            traces: &data.eskf_bias_accel,
+            references: &[],
+        },
+        TraceSpec {
+            system: "loose",
+            state: "pos_n_m",
+            trace_name: "Loose posN [m]",
+            reference_name: Some("UBX posN [m]"),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(5.0),
+            traces: &data.loose_cmp_pos,
+            references: &data.loose_cmp_pos,
+        },
+        TraceSpec {
+            system: "loose",
+            state: "pos_e_m",
+            trace_name: "Loose posE [m]",
+            reference_name: Some("UBX posE [m]"),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(5.0),
+            traces: &data.loose_cmp_pos,
+            references: &data.loose_cmp_pos,
+        },
+        TraceSpec {
+            system: "loose",
+            state: "pos_d_m",
+            trace_name: "Loose posD [m]",
+            reference_name: Some("UBX posD [m]"),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(5.0),
+            traces: &data.loose_cmp_pos,
+            references: &data.loose_cmp_pos,
+        },
+        TraceSpec {
+            system: "loose",
+            state: "vel_forward_mps",
+            trace_name: "Loose forward vel [m/s]",
+            reference_name: Some("u-blox forward vel [m/s]"),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(0.5),
+            traces: &data.loose_cmp_vel,
+            references: &data.loose_cmp_vel,
+        },
+        TraceSpec {
+            system: "loose",
+            state: "vel_lateral_mps",
+            trace_name: "Loose lateral vel [m/s]",
+            reference_name: Some("u-blox lateral vel [m/s]"),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(0.5),
+            traces: &data.loose_cmp_vel,
+            references: &data.loose_cmp_vel,
+        },
+        TraceSpec {
+            system: "loose",
+            state: "vel_vertical_mps",
+            trace_name: "Loose vertical vel [m/s]",
+            reference_name: Some("u-blox vertical vel [m/s]"),
+            mode: SummaryMode::Linear,
+            settle_threshold: Some(0.5),
+            traces: &data.loose_cmp_vel,
+            references: &data.loose_cmp_vel,
+        },
+        TraceSpec {
+            system: "loose",
+            state: "att_roll_deg",
+            trace_name: "Loose roll [deg]",
+            reference_name: Some("NAV-ATT roll [deg]"),
+            mode: SummaryMode::AngleDeg,
+            settle_threshold: Some(3.0),
+            traces: &data.loose_cmp_att,
+            references: &data.loose_cmp_att,
+        },
+        TraceSpec {
+            system: "loose",
+            state: "att_pitch_deg",
+            trace_name: "Loose pitch [deg]",
+            reference_name: Some("NAV-ATT pitch [deg]"),
+            mode: SummaryMode::AngleDeg,
+            settle_threshold: Some(3.0),
+            traces: &data.loose_cmp_att,
+            references: &data.loose_cmp_att,
+        },
+        TraceSpec {
+            system: "loose",
+            state: "att_yaw_deg",
+            trace_name: "Loose yaw [deg]",
+            reference_name: Some("NAV-ATT heading [deg]"),
+            mode: SummaryMode::AngleDeg,
+            settle_threshold: Some(5.0),
+            traces: &data.loose_cmp_att,
+            references: &data.loose_cmp_att,
+        },
+        TraceSpec {
+            system: "loose",
+            state: "mount_roll_deg",
+            trace_name: "Loose full mount roll [deg]",
+            reference_name: Some("ESF-ALG mount roll [deg]"),
+            mode: SummaryMode::AngleDeg,
+            settle_threshold: Some(5.0),
+            traces: &data.loose_misalignment,
+            references: &data.loose_misalignment,
+        },
+        TraceSpec {
+            system: "loose",
+            state: "mount_pitch_deg",
+            trace_name: "Loose full mount pitch [deg]",
+            reference_name: Some("ESF-ALG mount pitch [deg]"),
+            mode: SummaryMode::AngleDeg,
+            settle_threshold: Some(5.0),
+            traces: &data.loose_misalignment,
+            references: &data.loose_misalignment,
+        },
+        TraceSpec {
+            system: "loose",
+            state: "mount_yaw_deg",
+            trace_name: "Loose full mount yaw [deg]",
+            reference_name: Some("ESF-ALG mount yaw [deg]"),
+            mode: SummaryMode::AngleDeg,
+            settle_threshold: Some(5.0),
+            traces: &data.loose_misalignment,
+            references: &data.loose_misalignment,
+        },
+    ];
+
+    let mut summaries: Vec<StateSummary> = specs
+        .iter()
+        .filter_map(|spec| {
+            let trace = trace_by_name_opt(spec.traces, spec.trace_name)?;
+            let reference = spec
+                .reference_name
+                .and_then(|name| trace_by_name_opt(spec.references, name));
+            summarize_trace_pair(
+                spec.system,
+                spec.state,
+                trace,
+                reference,
+                spec.mode,
+                spec.settle_threshold,
+            )
+        })
+        .collect();
+
+    for (system, att_traces, mount_traces, mount_ref_name_prefix) in [
+        (
+            "eskf",
+            &data.eskf_cmp_att,
+            &data.eskf_misalignment,
+            "ESKF",
+        ),
+        (
+            "loose",
+            &data.loose_cmp_att,
+            &data.loose_misalignment,
+            "Loose",
+        ),
+    ] {
+        if let (
+            Some(est_roll),
+            Some(est_pitch),
+            Some(est_yaw),
+            Some(ref_roll),
+            Some(ref_pitch),
+            Some(ref_yaw),
+        ) = (
+            trace_by_name_opt(att_traces, &format!("{mount_ref_name_prefix} roll [deg]")),
+            trace_by_name_opt(att_traces, &format!("{mount_ref_name_prefix} pitch [deg]")),
+            trace_by_name_opt(att_traces, &format!("{mount_ref_name_prefix} yaw [deg]")),
+            trace_by_name_opt(att_traces, "NAV-ATT roll [deg]"),
+            trace_by_name_opt(att_traces, "NAV-ATT pitch [deg]"),
+            trace_by_name_opt(att_traces, "NAV-ATT heading [deg]"),
+        ) {
+            let att_error_trace = build_quat_error_trace(
+                &format!("{system} attitude quat err [deg]"),
+                [est_roll, est_pitch, est_yaw],
+                [ref_roll, ref_pitch, ref_yaw],
+                EulerConvention::Standard,
+            );
+            let att_zero = zero_trace("zero", &att_error_trace);
+            if let Some(summary) = summarize_trace_pair(
+                system,
+                "att_quat_err_deg",
+                &att_error_trace,
+                Some(&att_zero),
+                SummaryMode::Linear,
+                Some(5.0),
+            ) {
+                summaries.push(summary);
+            }
+
+            for (state, name, axis) in [
+                ("att_fwd_err_deg", "attitude forward err", [1.0, 0.0, 0.0]),
+                ("att_down_err_deg", "attitude down err", [0.0, 0.0, 1.0]),
+            ] {
+                let axis_trace = build_axis_error_trace(
+                    &format!("{system} {name} [deg]"),
+                    [est_roll, est_pitch, est_yaw],
+                    [ref_roll, ref_pitch, ref_yaw],
+                    EulerConvention::Standard,
+                    axis,
+                );
+                let axis_zero = zero_trace("zero", &axis_trace);
+                if let Some(summary) = summarize_trace_pair(
+                    system,
+                    state,
+                    &axis_trace,
+                    Some(&axis_zero),
+                    SummaryMode::Linear,
+                    Some(5.0),
+                ) {
+                    summaries.push(summary);
+                }
+            }
+        }
+
+        if let (
+            Some(est_roll),
+            Some(est_pitch),
+            Some(est_yaw),
+            Some(ref_roll),
+            Some(ref_pitch),
+            Some(ref_yaw),
+        ) = (
+            trace_by_name_opt(
+                mount_traces,
+                &format!("{mount_ref_name_prefix} full mount roll [deg]"),
+            ),
+            trace_by_name_opt(
+                mount_traces,
+                &format!("{mount_ref_name_prefix} full mount pitch [deg]"),
+            ),
+            trace_by_name_opt(
+                mount_traces,
+                &format!("{mount_ref_name_prefix} full mount yaw [deg]"),
+            ),
+            trace_by_name_opt(mount_traces, "ESF-ALG mount roll [deg]"),
+            trace_by_name_opt(mount_traces, "ESF-ALG mount pitch [deg]"),
+            trace_by_name_opt(mount_traces, "ESF-ALG mount yaw [deg]"),
+        ) {
+            let mount_error_trace = build_quat_error_trace(
+                &format!("{system} mount quat err [deg]"),
+                [est_roll, est_pitch, est_yaw],
+                [ref_roll, ref_pitch, ref_yaw],
+                EulerConvention::AlgMount,
+            );
+            let mount_zero = zero_trace("zero", &mount_error_trace);
+            if let Some(summary) = summarize_trace_pair(
+                system,
+                "mount_quat_err_deg",
+                &mount_error_trace,
+                Some(&mount_zero),
+                SummaryMode::Linear,
+                Some(5.0),
+            ) {
+                summaries.push(summary);
+            }
+
+            for (state, name, axis) in [
+                ("mount_fwd_err_deg", "mount forward err", [1.0, 0.0, 0.0]),
+                ("mount_down_err_deg", "mount down err", [0.0, 0.0, 1.0]),
+            ] {
+                let axis_trace = build_axis_error_trace(
+                    &format!("{system} {name} [deg]"),
+                    [est_roll, est_pitch, est_yaw],
+                    [ref_roll, ref_pitch, ref_yaw],
+                    EulerConvention::AlgMount,
+                    axis,
+                );
+                let axis_zero = zero_trace("zero", &axis_trace);
+                if let Some(summary) = summarize_trace_pair(
+                    system,
+                    state,
+                    &axis_trace,
+                    Some(&axis_zero),
+                    SummaryMode::Linear,
+                    Some(5.0),
+                ) {
+                    summaries.push(summary);
+                }
+            }
+        }
+    }
+
+    summaries
 }

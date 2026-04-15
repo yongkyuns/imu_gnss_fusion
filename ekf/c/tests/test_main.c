@@ -186,14 +186,18 @@ static void test_external_misalignment_sets_mount_ready(void) {
   sf_fusion_config_t cfg;
   float q_vb[4] = {0.9238795f, 0.0f, 0.0f, 0.3826834f};
   float out_q_vb[4] = {0};
+  float out_eskf_q_vb[4] = {0};
 
   sf_fusion_config_default(&cfg);
   sf_fusion_init_external(&fusion, &cfg, q_vb);
 
   TEST_ASSERT_TRUE(sf_fusion_mount_ready(&fusion));
   TEST_ASSERT_TRUE(sf_fusion_mount_q_vb(&fusion, out_q_vb));
+  TEST_ASSERT_TRUE(sf_fusion_eskf_mount_q_vb(&fusion, out_eskf_q_vb));
   TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, q_vb[0], out_q_vb[0]);
   TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, q_vb[3], out_q_vb[3]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, q_vb[0], out_eskf_q_vb[0]);
+  TEST_ASSERT_FLOAT_WITHIN(1.0e-6f, q_vb[3], out_eskf_q_vb[3]);
 }
 
 static void test_sensor_fusion_external_mode_initializes_and_predicts(void) {

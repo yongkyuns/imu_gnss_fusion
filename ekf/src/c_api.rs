@@ -481,6 +481,7 @@ unsafe extern "C" {
     fn sf_get_state(fusion: *const CSensorFusion, out: *mut CFusionState) -> bool;
     fn sf_get_lla(fusion: *const CSensorFusion, out_lla: *mut f32) -> bool;
     fn sf_fusion_get_debug(fusion: *const CSensorFusion, out: *mut CFusionDebug) -> bool;
+    fn sf_fusion_eskf_mount_q_vb(fusion: *const CSensorFusion, out_q_vb: *mut f32) -> bool;
 
     fn sf_fusion_set_misalignment(fusion: *mut CSensorFusion, q_vb: *const f32);
 
@@ -807,6 +808,14 @@ impl CSensorFusionWrapper {
 
     pub fn mount_q_vb(&self) -> Option<[f32; 4]> {
         self.state.mount_q_vb_valid.then_some(self.state.mount_q_vb)
+    }
+
+    pub fn eskf_mount_q_vb(&self) -> Option<[f32; 4]> {
+        let mut out = [0.0_f32; 4];
+        let ok = unsafe {
+            sf_fusion_eskf_mount_q_vb(&self.raw as *const CSensorFusion, out.as_mut_ptr())
+        };
+        ok.then_some(out)
     }
 
     pub fn position_lla(&self) -> Option<[f32; 3]> {

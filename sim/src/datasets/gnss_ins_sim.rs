@@ -18,6 +18,16 @@ pub struct GnssSample {
     pub vel_ned_mps: [f64; 3],
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct TruthSample {
+    pub t_s: f64,
+    pub lat_deg: f64,
+    pub lon_deg: f64,
+    pub height_m: f64,
+    pub vel_ned_mps: [f64; 3],
+    pub q_bn: [f64; 4],
+}
+
 pub fn load_imu_samples(
     data_dir: &Path,
     use_ref_signals: bool,
@@ -87,6 +97,31 @@ pub fn load_gnss_samples(
             lon_deg: gps[i][1],
             height_m: gps[i][2],
             vel_ned_mps: [gps[i][3], gps[i][4], gps[i][5]],
+        });
+    }
+    Ok(out)
+}
+
+pub fn load_truth_samples(data_dir: &Path) -> Result<Vec<TruthSample>> {
+    let time = read_time_csv(&data_dir.join("time.csv"))?;
+    let pos = read_matrix_csv(&data_dir.join("ref_pos.csv"), 3)
+        .context("failed to load ref_pos.csv")?;
+    let vel = read_matrix_csv(&data_dir.join("ref_vel.csv"), 3)
+        .context("failed to load ref_vel.csv")?;
+    let quat = read_matrix_csv(&data_dir.join("ref_att_quat.csv"), 4)
+        .context("failed to load ref_att_quat.csv")?;
+    if time.len() != pos.len() || time.len() != vel.len() || time.len() != quat.len() {
+        bail!("truth files have inconsistent lengths");
+    }
+    let mut out = Vec::with_capacity(time.len());
+    for i in 0..time.len() {
+        out.push(TruthSample {
+            t_s: time[i],
+            lat_deg: pos[i][0],
+            lon_deg: pos[i][1],
+            height_m: pos[i][2],
+            vel_ned_mps: [vel[i][0], vel[i][1], vel[i][2]],
+            q_bn: [quat[i][0], quat[i][1], quat[i][2], quat[i][3]],
         });
     }
     Ok(out)

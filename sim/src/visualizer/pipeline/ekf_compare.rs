@@ -425,7 +425,6 @@ pub fn build_ekf_compare_traces(
     let mut cur_align_q_vb: Option<[f32; 4]> = None;
 
     let mut origin_set = false;
-    let mut eskf_seed_mount_q_vb: Option<[f32; 4]> = None;
     let mut loose_seed_mount_q_vb: Option<[f32; 4]> = None;
     let mut ref_lat = 0.0_f64;
     let mut ref_lon = 0.0_f64;
@@ -564,8 +563,11 @@ pub fn build_ekf_compare_traces(
             accel_mps2: raw_accel_mps2,
         });
 
+        let eskf_predict_mount_q_vb = fusion_ref
+            .eskf_mount_q_vb()
+            .or_else(|| fusion_ref.mount_q_vb());
         let (gyro, accel) = vehicle_measurements_from_mount(
-            fusion_ref.mount_q_vb(),
+            eskf_predict_mount_q_vb,
             [
                 raw_gyro_radps[0] as f64,
                 raw_gyro_radps[1] as f64,
@@ -720,14 +722,6 @@ pub fn build_ekf_compare_traces(
                 }
                 if update.ekf_initialized_now {
                     fusion_ekf_init_marker.push([t, nav.heading_vehicle_deg]);
-                    if eskf_seed_mount_q_vb.is_none() {
-                        eskf_seed_mount_q_vb = match ekf_imu_source {
-                            EkfImuSource::Align => {
-                                cur_align_q_vb.or_else(|| fusion_ref.mount_q_vb())
-                            }
-                            EkfImuSource::EsfAlg => fusion_ref.mount_q_vb(),
-                        };
-                    }
                 }
                 if loose.is_none() {
                     match ekf_imu_source {
@@ -820,7 +814,7 @@ pub fn build_ekf_compare_traces(
                             gyro,
                             accel,
                             dt,
-                            eskf_seed_mount_q_vb,
+                            fusion_ref.eskf_mount_q_vb().or(eskf_predict_mount_q_vb),
                             cfg.vehicle_meas_lpf_cutoff_hz,
                             &mut filt_eskf_meas_gyro,
                             &mut filt_eskf_meas_accel,
@@ -988,7 +982,7 @@ pub fn build_ekf_compare_traces(
                 gyro,
                 accel,
                 dt_safe,
-                eskf_seed_mount_q_vb,
+                fusion_ref.eskf_mount_q_vb().or(eskf_predict_mount_q_vb),
                 cfg.vehicle_meas_lpf_cutoff_hz,
                 &mut filt_eskf_meas_gyro,
                 &mut filt_eskf_meas_accel,
@@ -2152,7 +2146,7 @@ fn append_eskf_sample(
     gyro: [f64; 3],
     accel: [f64; 3],
     dt_safe: f64,
-    seed_mount_q_vb: Option<[f32; 4]>,
+    predict_mount_q_vb: Option<[f32; 4]>,
     vehicle_meas_lpf_cutoff_hz: f64,
     filt_meas_gyro: &mut Option<[f64; 3]>,
     filt_meas_accel: &mut Option<[f64; 3]>,
@@ -2202,7 +2196,7 @@ fn append_eskf_sample(
     cmp_att_pitch.push([t_imu, pitch]);
     cmp_att_yaw.push([t_imu, yaw]);
 
-    let q_seed = seed_mount_q_vb
+    let q_seed = predict_mount_q_vb
         .map(|q| [q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64])
         .unwrap_or([1.0, 0.0, 0.0, 0.0]);
     let q_cs = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];

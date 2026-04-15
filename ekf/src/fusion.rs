@@ -120,6 +120,10 @@ impl SensorFusion {
         self.raw.mount_q_vb()
     }
 
+    pub fn eskf_mount_q_vb(&self) -> Option<[f32; 4]> {
+        self.raw.eskf_mount_q_vb()
+    }
+
     pub fn mount_ready(&self) -> bool {
         self.raw.mount_ready()
     }
