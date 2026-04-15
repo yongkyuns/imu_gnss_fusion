@@ -5,6 +5,10 @@ use rand::{Rng, SeedableRng};
 use rayon::prelude::*;
 use sensor_fusion::c_api::{CLooseImuDelta, CLooseWrapper};
 use sensor_fusion::loose::LoosePredictNoise;
+use sim::datasets::seeded_loose::{
+    AccelSample, GnssSample, GyroSample, TruthNavSample, import_accel_data, import_gnss_data,
+    import_gnss_velocity_map, import_gyro_data, import_truth_misalignment, import_truth_nav,
+};
 use sim::visualizer::math::{ecef_to_lla, lla_to_ecef};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -59,42 +63,6 @@ struct Args {
     mc_car_pitch_err_threshold_deg: f64,
     #[arg(long)]
     summary_csv: Option<PathBuf>,
-}
-
-#[derive(Clone, Debug)]
-struct GyroSample {
-    ttag_us: i64,
-    omega_radps: [f64; 3],
-}
-
-#[derive(Clone, Debug)]
-struct AccelSample {
-    accel_mps2: [f64; 3],
-}
-
-#[derive(Clone, Debug)]
-struct GnssVelocity {
-    vel_n: [f64; 3],
-    vel_acc_n: [f64; 3],
-}
-
-#[derive(Clone, Debug)]
-struct GnssSample {
-    ttag_us: i64,
-    lat_deg: f64,
-    lon_deg: f64,
-    height_m: f64,
-    speed_mps: f64,
-    heading_deg: f64,
-    h_acc_m: f64,
-    v_acc_m: f64,
-    velocity: Option<GnssVelocity>,
-}
-
-#[derive(Clone, Debug)]
-struct TruthNavSample {
-    ttag_us: i64,
-    pitch_car_deg: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -176,7 +144,11 @@ fn monte_carlo_cases(args: &Args) -> Vec<StressCase> {
         .map(|idx| StressCase {
             label: format!("mc_{idx:04}"),
             seed_mount_error_deg: [
-                sample_uniform(&mut rng, args.mc_seed_roll_min_deg, args.mc_seed_roll_max_deg),
+                sample_uniform(
+                    &mut rng,
+                    args.mc_seed_roll_min_deg,
+                    args.mc_seed_roll_max_deg,
+                ),
                 sample_uniform(
                     &mut rng,
                     args.mc_seed_pitch_min_deg,
@@ -330,7 +302,9 @@ fn run_case(dataset: &Dataset, case: &StressCase, args: &Args) -> Result<CaseRes
         };
         loose.predict(imu);
 
-        while gnss_index + 1 < dataset.gnss.len() && dataset.gnss[gnss_index + 1].ttag_us <= curr_gyro.ttag_us {
+        while gnss_index + 1 < dataset.gnss.len()
+            && dataset.gnss[gnss_index + 1].ttag_us <= curr_gyro.ttag_us
+        {
             gnss_index += 1;
         }
 
@@ -360,7 +334,11 @@ fn run_case(dataset: &Dataset, case: &StressCase, args: &Args) -> Result<CaseRes
                 }
                 h_acc_m = gnss.h_acc_m as f32;
                 let dt = 1.0e-6 * (curr_gyro.ttag_us - last_used_gnss_ttag) as f64;
-                dt_since_last_gnss_s = if dt == 0.0 || dt >= 1.0 { 1.0 } else { dt as f32 };
+                dt_since_last_gnss_s = if dt == 0.0 || dt >= 1.0 {
+                    1.0
+                } else {
+                    dt as f32
+                };
                 last_used_gnss_ttag = gnss.ttag_us;
             }
         }
@@ -514,11 +492,7 @@ fn build_default_p_diag(gnss: &GnssSample) -> [f32; 24] {
 }
 
 fn nominal_mount_quat() -> [f64; 4] {
-    euler_to_quat_rad([
-        -0.5 * std::f64::consts::PI,
-        0.0,
-        0.5 * std::f64::consts::PI,
-    ])
+    euler_to_quat_rad([-0.5 * std::f64::consts::PI, 0.0, 0.5 * std::f64::consts::PI])
 }
 
 fn yaw_quat(yaw_rad: f64) -> [f64; 4] {
@@ -711,8 +685,7 @@ fn write_summary_csv(path: &Path, results: &[CaseResult]) -> Result<()> {
 
 fn print_summary(results: &[CaseResult], elapsed: std::time::Duration) {
     let runs = results.len().max(1);
-    let jump_rate =
-        100.0 * results.iter().map(|r| r.has_jump as f64).sum::<f64>() / runs as f64;
+    let jump_rate = 100.0 * results.iter().map(|r| r.has_jump as f64).sum::<f64>() / runs as f64;
     let wrong_rate =
         100.0 * results.iter().map(|r| r.wrong_basin as f64).sum::<f64>() / runs as f64;
     let mut mount_err: Vec<f64> = results.iter().map(|r| r.final_mount_err_norm_deg).collect();
@@ -739,7 +712,10 @@ fn print_summary(results: &[CaseResult], elapsed: std::time::Duration) {
         runs as f64 / elapsed.as_secs_f64().max(1.0e-9)
     );
     let mut worst = results.to_vec();
-    worst.sort_by(|a, b| b.final_mount_err_norm_deg.total_cmp(&a.final_mount_err_norm_deg));
+    worst.sort_by(|a, b| {
+        b.final_mount_err_norm_deg
+            .total_cmp(&a.final_mount_err_norm_deg)
+    });
     for row in worst.into_iter().take(5) {
         println!(
             "mc_worst: {} mount_err_norm={:.2}deg car_pitch_err={:.2}deg seed=[{:.2},{:.2},{:.2}]deg gps_vd_bias={:.2}mps gps_vd_bias_duration={:.2}s vel_std_scale={:.2} accel_z_bias={:.3}mps2",
@@ -763,107 +739,4 @@ fn percentile_sorted(values: &[f64], q: f64) -> f64 {
     }
     let pos = ((values.len() - 1) as f64 * q.clamp(0.0, 1.0)).round() as usize;
     values[pos]
-}
-
-fn import_gyro_data(path: &Path) -> Result<Vec<GyroSample>> {
-    let rows = semicolon_rows(path, 3)?;
-    rows.into_iter()
-        .map(|row| {
-            Ok(GyroSample {
-                ttag_us: (parse_f64(&row[0])? / 1000.0).floor() as i64,
-                omega_radps: [parse_f64(&row[1])?, parse_f64(&row[2])?, parse_f64(&row[3])?],
-            })
-        })
-        .collect()
-}
-
-fn import_accel_data(path: &Path) -> Result<Vec<AccelSample>> {
-    let rows = semicolon_rows(path, 3)?;
-    rows.into_iter()
-        .map(|row| {
-            Ok(AccelSample {
-                accel_mps2: [parse_f64(&row[1])?, parse_f64(&row[2])?, parse_f64(&row[3])?],
-            })
-        })
-        .collect()
-}
-
-fn import_gnss_data(path: &Path) -> Result<Vec<GnssSample>> {
-    let rows = semicolon_rows(path, 1)?;
-    rows.into_iter()
-        .map(|row| {
-            Ok(GnssSample {
-                ttag_us: (parse_f64(&row[0])? / 1000.0).floor() as i64,
-                lat_deg: parse_f64(&row[2])?,
-                lon_deg: parse_f64(&row[3])?,
-                height_m: parse_f64(&row[4])?,
-                speed_mps: parse_f64(&row[5])?,
-                heading_deg: parse_f64(&row[6])?,
-                h_acc_m: parse_f64(&row[7])?,
-                v_acc_m: parse_f64(&row[8])?,
-                velocity: None,
-            })
-        })
-        .collect()
-}
-
-fn import_gnss_velocity_map(path: &Path) -> Result<Vec<(i64, GnssVelocity)>> {
-    let rows = semicolon_rows(path, 1)?;
-    rows.into_iter()
-        .map(|row| {
-            Ok((
-                parse_f64(&row[0])?.round() as i64,
-                GnssVelocity {
-                    vel_n: [parse_f64(&row[1])?, parse_f64(&row[2])?, parse_f64(&row[3])?],
-                    vel_acc_n: [parse_f64(&row[4])?, parse_f64(&row[5])?, parse_f64(&row[6])?],
-                },
-            ))
-        })
-        .collect()
-}
-
-fn import_truth_nav(path: &Path) -> Result<Vec<TruthNavSample>> {
-    let rows = semicolon_rows(path, 1)?;
-    rows.into_iter()
-        .map(|row| {
-            Ok(TruthNavSample {
-                ttag_us: parse_f64(&row[0])?.round() as i64,
-                pitch_car_deg: parse_f64(&row[11])?,
-            })
-        })
-        .collect()
-}
-
-fn import_truth_misalignment(path: &Path) -> Result<[f64; 3]> {
-    for row in semicolon_rows(path, 1)? {
-        if row.first().is_some_and(|name| name == "misalignment_deg") {
-            return Ok([parse_f64(&row[1])?, parse_f64(&row[2])?, parse_f64(&row[3])?]);
-        }
-    }
-    bail!("misalignment_deg row not found in {}", path.display())
-}
-
-fn semicolon_rows(path: &Path, skip_rows: usize) -> Result<Vec<Vec<String>>> {
-    let text = fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
-    let mut out = Vec::new();
-    for (index, line) in text.lines().enumerate() {
-        if index < skip_rows {
-            continue;
-        }
-        let row: Vec<String> = line
-            .split(';')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(ToOwned::to_owned)
-            .collect();
-        if !row.is_empty() {
-            out.push(row);
-        }
-    }
-    Ok(out)
-}
-
-fn parse_f64(s: &str) -> Result<f64> {
-    s.parse::<f64>()
-        .with_context(|| format!("failed to parse float: {s}"))
 }

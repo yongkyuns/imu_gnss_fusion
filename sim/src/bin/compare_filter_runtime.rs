@@ -6,9 +6,13 @@ use sensor_fusion::c_api::{
 use sensor_fusion::ekf::PredictNoise;
 use sensor_fusion::loose::LoosePredictNoise;
 use serde::Deserialize;
+use sim::datasets::seeded_loose::{
+    AccelSample, GnssSample, GyroSample, import_accel_data, import_gnss_data, import_gyro_data,
+    resolve_single_file,
+};
 use sim::visualizer::math::{ecef_to_ned, lla_to_ecef};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 #[derive(Parser, Debug)]
@@ -21,31 +25,6 @@ struct Args {
     warmup_runs: usize,
     #[arg(long, default_value_t = 20)]
     timed_runs: usize,
-}
-
-#[derive(Debug, Clone)]
-struct GyroSample {
-    ttag_us: i64,
-    omega_radps: [f64; 3],
-}
-
-#[derive(Debug, Clone)]
-struct AccelSample {
-    ttag_us: i64,
-    accel_mps2: [f64; 3],
-}
-
-#[derive(Debug, Clone)]
-struct GnssSample {
-    ttag_us: i64,
-    lat_deg: f64,
-    lon_deg: f64,
-    height_m: f64,
-    speed_mps: f64,
-    heading_deg: f64,
-    h_acc_m: f64,
-    v_acc_m: f64,
-    speed_acc_mps: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -469,109 +448,6 @@ fn event_rank(event_type: EventType) -> u8 {
         EventType::Accel => 2,
         EventType::Gnss => 4,
     }
-}
-
-fn resolve_single_file(input_dir: &Path, suffix: &str) -> Result<PathBuf> {
-    let mut matches = Vec::new();
-    for entry in fs::read_dir(input_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.ends_with(suffix))
-        {
-            matches.push(path);
-        }
-    }
-    matches.sort();
-    match matches.len() {
-        1 => Ok(matches.remove(0)),
-        0 => bail!(
-            "missing file with suffix {suffix} in {}",
-            input_dir.display()
-        ),
-        _ => bail!(
-            "multiple files with suffix {suffix} in {}",
-            input_dir.display()
-        ),
-    }
-}
-
-fn import_gyro_data(path: &Path) -> Result<Vec<GyroSample>> {
-    let rows = semicolon_rows(path, 3)?;
-    let mut out = Vec::with_capacity(rows.len());
-    for row in rows {
-        out.push(GyroSample {
-            ttag_us: (parse_f64(&row[0])? / 1000.0).floor() as i64,
-            omega_radps: [
-                parse_f64(&row[1])?,
-                parse_f64(&row[2])?,
-                parse_f64(&row[3])?,
-            ],
-        });
-    }
-    Ok(out)
-}
-
-fn import_accel_data(path: &Path) -> Result<Vec<AccelSample>> {
-    let rows = semicolon_rows(path, 3)?;
-    let mut out = Vec::with_capacity(rows.len());
-    for row in rows {
-        out.push(AccelSample {
-            ttag_us: (parse_f64(&row[0])? / 1000.0).floor() as i64,
-            accel_mps2: [
-                parse_f64(&row[1])?,
-                parse_f64(&row[2])?,
-                parse_f64(&row[3])?,
-            ],
-        });
-    }
-    Ok(out)
-}
-
-fn import_gnss_data(path: &Path) -> Result<Vec<GnssSample>> {
-    let rows = semicolon_rows(path, 1)?;
-    let mut out = Vec::with_capacity(rows.len());
-    for row in rows {
-        out.push(GnssSample {
-            ttag_us: (parse_f64(&row[0])? / 1000.0).floor() as i64,
-            lat_deg: parse_f64(&row[2])?,
-            lon_deg: parse_f64(&row[3])?,
-            height_m: parse_f64(&row[4])?,
-            speed_mps: parse_f64(&row[5])?,
-            heading_deg: parse_f64(&row[6])?,
-            h_acc_m: parse_f64(&row[7])?,
-            v_acc_m: parse_f64(&row[8])?,
-            speed_acc_mps: parse_f64(&row[9])?,
-        });
-    }
-    Ok(out)
-}
-
-fn semicolon_rows(path: &Path, skip_rows: usize) -> Result<Vec<Vec<String>>> {
-    let text = fs::read_to_string(path)?;
-    let mut out = Vec::new();
-    for (index, line) in text.lines().enumerate() {
-        if index < skip_rows {
-            continue;
-        }
-        let row: Vec<String> = line
-            .split(';')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(ToOwned::to_owned)
-            .collect();
-        if !row.is_empty() {
-            out.push(row);
-        }
-    }
-    Ok(out)
-}
-
-fn parse_f64(s: &str) -> Result<f64> {
-    s.parse::<f64>()
-        .with_context(|| format!("failed to parse float: {s}"))
 }
 
 fn accel_at(ttag_us: i64, accel: &[AccelSample]) -> Option<[f64; 3]> {
