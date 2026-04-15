@@ -55,6 +55,16 @@ class StressCase:
     accel_z_bias_mps2: float = 0.0
 
 
+@dataclass(frozen=True)
+class LoadedDataset:
+    mods: dict
+    gyro_data: object
+    accel_data: object
+    gnss_data: object
+    truth_nav: dict[str, np.ndarray]
+    truth_states: dict[str, np.ndarray]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -69,6 +79,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--case-dir", type=Path, default=DEFAULT_OUTPUT_DIR / "dataset")
     parser.add_argument("--output-html", type=Path, default=DEFAULT_OUTPUT_DIR / "seeded_loose_stress_dark.html")
     parser.add_argument("--init-time-s", type=float, default=100.0)
+    parser.add_argument(
+        "--replay-duration-s",
+        type=float,
+        default=60.0,
+        help="Only replay this many seconds after init. This is the main speed/coverage tradeoff.",
+    )
     parser.add_argument("--imu-freq-hz", type=float, default=100.0)
     parser.add_argument("--gnss-freq-hz", type=float, default=10.0)
     parser.add_argument("--gps-horizontal-std", type=float, default=3.0)
@@ -311,19 +327,36 @@ def generate_dataset(args: argparse.Namespace) -> Path:
     return args.case_dir
 
 
-def run_seeded_case(
-    input_dir: Path,
-    oan_root: Path,
-    case: StressCase,
-    init_time_s: float,
-    jump_threshold_deg: float,
-) -> dict[str, np.ndarray | float | str]:
+def load_dataset(input_dir: Path, oan_root: Path) -> LoadedDataset:
     mods = _ensure_oan_imports(oan_root)
     gyro_data, accel_data = mods["import_imu_data"](input_dir)
     gnss_data = mods["import_gnss_data"](input_dir)
     _attach_gnss_velocity(gnss_data, _load_gnss_velocity_map(input_dir))
     truth_nav = _load_truth_nav(input_dir)
     truth_states = _load_truth_states(input_dir)
+    return LoadedDataset(
+        mods=mods,
+        gyro_data=gyro_data,
+        accel_data=accel_data,
+        gnss_data=gnss_data,
+        truth_nav=truth_nav,
+        truth_states=truth_states,
+    )
+
+
+def run_seeded_case(
+    dataset: LoadedDataset,
+    case: StressCase,
+    init_time_s: float,
+    jump_threshold_deg: float,
+    replay_duration_s: float,
+) -> dict[str, np.ndarray | float | str]:
+    mods = dataset.mods
+    gyro_data = dataset.gyro_data
+    accel_data = dataset.accel_data
+    gnss_data = dataset.gnss_data
+    truth_nav = dataset.truth_nav
+    truth_states = dataset.truth_states
 
     q_cs_true = qcs_truth_from_truth_states(mods, truth_states)
     q_seed_err = np.asarray(mods["euler_to_quat"](*np.deg2rad(np.asarray(case.seed_mount_error_deg, dtype=float))), dtype=float)
@@ -478,6 +511,8 @@ def run_seeded_case(
         c_ce = rotmat_from_quat(mods, q_cs_resid) @ rotmat_from_quat(mods, q_es_hat).T
         vel_car = c_ce @ vel_e
         t_rel_s = 1e-6 * float(curr_gyro.ttag - init_ttag)
+        if replay_duration_s > 0.0 and t_rel_s > replay_duration_s:
+            break
 
         history["time_s"].append(t_rel_s)
         history["mount_roll_deg"].append(float(full_mount_mis_deg[0]))
@@ -896,10 +931,11 @@ def print_monte_carlo_summary(rows: list[dict[str, float | str]]) -> None:
 def main() -> int:
     args = parse_args()
     case_dir = generate_dataset(args)
+    dataset = load_dataset(case_dir, args.oan_root)
     results = []
     if not args.skip_default_cases:
         results = [
-            run_seeded_case(case_dir, args.oan_root, case, args.init_time_s, args.jump_threshold_deg)
+            run_seeded_case(dataset, case, args.init_time_s, args.jump_threshold_deg, args.replay_duration_s)
             for case in default_cases()
         ]
         write_plot(results, args.output_html)
@@ -920,7 +956,7 @@ def main() -> int:
     mc_rows: list[dict[str, float | str]] = []
     if args.monte_carlo_runs > 0:
         mc_results = [
-            run_seeded_case(case_dir, args.oan_root, case, args.init_time_s, args.jump_threshold_deg)
+            run_seeded_case(dataset, case, args.init_time_s, args.jump_threshold_deg, args.replay_duration_s)
             for case in monte_carlo_cases(args)
         ]
         mc_rows = [monte_carlo_row(result, args) for result in mc_results]
