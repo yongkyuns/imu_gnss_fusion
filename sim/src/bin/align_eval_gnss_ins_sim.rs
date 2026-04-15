@@ -2,9 +2,13 @@ use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, ValueEnum};
 use sensor_fusion::fusion::{FusionGnssSample, FusionImuSample, SensorFusion};
+use sim::datasets::gnss_ins_sim::{
+    load_gnss_samples as load_dataset_gnss_samples, load_imu_samples as load_dataset_imu_samples,
+    GnssSample as DatasetGnssSample, ImuSample as DatasetImuSample,
+};
 use sim::visualizer::pipeline::align_replay::{
     axis_angle_deg, quat_rotate, quat_rpy_alg_deg, signed_projected_axis_angle_deg,
 };
@@ -50,21 +54,8 @@ enum SignalSource {
     Meas,
 }
 
-#[derive(Clone, Copy, Debug)]
-struct ImuSample {
-    t_s: f64,
-    gyro_vehicle_radps: [f64; 3],
-    accel_vehicle_mps2: [f64; 3],
-}
-
-#[derive(Clone, Copy, Debug)]
-struct GnssSample {
-    t_s: f64,
-    lat_deg: f64,
-    lon_deg: f64,
-    height_m: f64,
-    vel_ned_mps: [f64; 3],
-}
+type ImuSample = DatasetImuSample;
+type GnssSample = DatasetGnssSample;
 
 #[derive(Clone, Copy, Debug)]
 struct ResidualSample {
@@ -505,122 +496,19 @@ fn main() -> Result<()> {
 }
 
 fn load_imu_samples(args: &Args) -> Result<Vec<ImuSample>> {
-    let time = read_time_csv(&args.data_dir.join("time.csv"))?;
-    let gyro_name = match args.signal_source {
-        SignalSource::Ref => "ref_gyro.csv".to_string(),
-        SignalSource::Meas => format!("gyro-{}.csv", args.data_key),
-    };
-    let accel_name = match args.signal_source {
-        SignalSource::Ref => "ref_accel.csv".to_string(),
-        SignalSource::Meas => format!("accel-{}.csv", args.data_key),
-    };
-    let gyro_path = args.data_dir.join(&gyro_name);
-    let gyro = read_matrix3_csv(&gyro_path).with_context(|| format!("failed to load {}", gyro_name))?;
-    let accel = read_matrix3_csv(&args.data_dir.join(&accel_name))
-        .with_context(|| format!("failed to load {}", accel_name))?;
-    if time.len() != gyro.len() || time.len() != accel.len() {
-        bail!("IMU files have inconsistent lengths");
-    }
-    let gyro_is_deg = csv_header_contains(&gyro_path, "deg/s")?;
-    let mut out = Vec::with_capacity(time.len());
-    for i in 0..time.len() {
-        let gyro_vehicle_radps = if gyro_is_deg {
-            [
-                gyro[i][0].to_radians(),
-                gyro[i][1].to_radians(),
-                gyro[i][2].to_radians(),
-            ]
-        } else {
-            gyro[i]
-        };
-        out.push(ImuSample {
-            t_s: time[i],
-            gyro_vehicle_radps,
-            accel_vehicle_mps2: accel[i],
-        });
-    }
-    Ok(out)
+    load_dataset_imu_samples(
+        &args.data_dir,
+        matches!(args.signal_source, SignalSource::Ref),
+        args.data_key,
+    )
 }
 
 fn load_gnss_samples(args: &Args) -> Result<Vec<GnssSample>> {
-    let gps_time = read_time_csv(&args.data_dir.join("gps_time.csv"))?;
-    let gps_name = match args.signal_source {
-        SignalSource::Ref => "ref_gps.csv".to_string(),
-        SignalSource::Meas => format!("gps-{}.csv", args.data_key),
-    };
-    let gps = read_matrix_csv(&args.data_dir.join(&gps_name), 6)
-        .with_context(|| format!("failed to load {}", gps_name))?;
-    if gps_time.len() != gps.len() {
-        bail!("GNSS files have inconsistent lengths");
-    }
-    let mut out = Vec::with_capacity(gps.len());
-    for i in 0..gps.len() {
-        out.push(GnssSample {
-            t_s: gps_time[i],
-            lat_deg: gps[i][0],
-            lon_deg: gps[i][1],
-            height_m: gps[i][2],
-            vel_ned_mps: [gps[i][3], gps[i][4], gps[i][5]],
-        });
-    }
-    Ok(out)
-}
-
-fn read_time_csv(path: &Path) -> Result<Vec<f64>> {
-    let rows = read_csv_rows(path)?;
-    let mut out = Vec::with_capacity(rows.len());
-    for row in rows {
-        if row.len() != 1 {
-            bail!("{} expected 1 column per row", path.display());
-        }
-        out.push(row[0]);
-    }
-    Ok(out)
-}
-
-fn read_matrix3_csv(path: &Path) -> Result<Vec<[f64; 3]>> {
-    let rows = read_matrix_csv(path, 3)?;
-    Ok(rows.into_iter().map(|r| [r[0], r[1], r[2]]).collect())
-}
-
-fn read_matrix_csv(path: &Path, cols: usize) -> Result<Vec<Vec<f64>>> {
-    let rows = read_csv_rows(path)?;
-    for row in &rows {
-        if row.len() != cols {
-            bail!("{} expected {} columns per row", path.display(), cols);
-        }
-    }
-    Ok(rows)
-}
-
-fn read_csv_rows(path: &Path) -> Result<Vec<Vec<f64>>> {
-    let text =
-        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
-    let mut out = Vec::new();
-    for (i, line) in text.lines().enumerate() {
-        if i == 0 || line.trim().is_empty() {
-            continue;
-        }
-        let mut row = Vec::new();
-        for part in line.split(',') {
-            row.push(part.trim().parse::<f64>().with_context(|| {
-                format!(
-                    "failed to parse numeric field in {}: {}",
-                    path.display(),
-                    line
-                )
-            })?);
-        }
-        out.push(row);
-    }
-    Ok(out)
-}
-
-fn csv_header_contains(path: &Path, needle: &str) -> Result<bool> {
-    let text =
-        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
-    let header = text.lines().next().unwrap_or_default().to_ascii_lowercase();
-    Ok(header.contains(&needle.to_ascii_lowercase()))
+    load_dataset_gnss_samples(
+        &args.data_dir,
+        matches!(args.signal_source, SignalSource::Ref),
+        args.data_key,
+    )
 }
 
 fn quat_from_rpy_alg_deg(roll_deg: f64, pitch_deg: f64, yaw_deg: f64) -> [f64; 4] {

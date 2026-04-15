@@ -43,5 +43,6 @@ Replay-critical paths should prefer Rust. The seeded loose Monte Carlo path now 
 Current shared modules worth expanding instead of duplicating in more bins:
 
 - `src/datasets/seeded_loose.rs`: semicolon-delimited seeded-loose dataset parsing
+- `src/datasets/gnss_ins_sim.rs`: `gnss-ins-sim` CSV parsing and sample loading
 - `src/ubxlog.rs`: UBX log loading
 - `src/visualizer/`: shared math and replay/pipeline pieces
