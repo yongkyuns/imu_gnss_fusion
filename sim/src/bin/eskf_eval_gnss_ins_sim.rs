@@ -4,7 +4,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, ValueEnum};
-use sensor_fusion::fusion::{FusionGnssSample, FusionImuSample, SensorFusion};
+use sensor_fusion::fusion::SensorFusion;
+use sim::datasets::generic_replay::{
+    GenericGnssSample, GenericImuSample, fusion_gnss_sample as to_fusion_gnss,
+    fusion_imu_sample as to_fusion_imu, write_samples as write_generic_samples,
+};
 use sim::datasets::gnss_ins_sim::{
     GnssSample as DatasetGnssSample, load_gnss_samples as load_dataset_gnss_samples,
     load_imu_samples as load_dataset_imu_samples,
@@ -14,6 +18,7 @@ use sim::eval::gnss_ins::{
     SignalSource, as_q64, course_rate_deg, horiz_speed, quat_angle_deg, quat_axis_angle_deg,
     quat_conj, quat_from_rpy_alg_deg, quat_mul, quat_rotate,
 };
+use sim::eval::replay::{ReplayEvent, for_each_event};
 use sim::eval::state_summary::{
     SummaryMode, print_summary_table, summarize_trace_pair, write_summary_csv,
 };
@@ -52,11 +57,17 @@ struct Args {
     gnss_pos_std_m: f32,
     #[arg(long, default_value_t = 0.2)]
     gnss_vel_std_mps: f32,
+    #[arg(long, default_value_t = 0.0)]
+    gps_vd_bias_mps: f64,
+    #[arg(long, default_value_t = 0.0)]
+    gps_vd_bias_duration_s: f64,
 
     #[arg(long)]
     residual_csv: Option<PathBuf>,
     #[arg(long)]
     summary_csv: Option<PathBuf>,
+    #[arg(long)]
+    generic_out_dir: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -170,6 +181,12 @@ fn main() -> Result<()> {
         args.mount_pitch_deg,
         args.mount_yaw_deg,
     );
+    let generic_imu = build_generic_imu_samples(&imu, q_truth);
+    let generic_gnss = build_generic_gnss_samples(&gnss, args.gnss_pos_std_m, args.gnss_vel_std_mps);
+    if let Some(dir) = &args.generic_out_dir {
+        write_generic_samples(dir, &generic_imu, &generic_gnss)?;
+        println!("generic_replay_dir={}", dir.display());
+    }
     let mut fusion = match args.seed_source {
         SeedSource::InternalAlign => SensorFusion::new(),
         SeedSource::ExternalTruth => SensorFusion::with_misalignment([
@@ -183,8 +200,6 @@ fn main() -> Result<()> {
         fusion.set_r_body_vel(r_body_vel);
     }
 
-    let mut imu_idx = 0usize;
-    let mut gnss_idx = 0usize;
     let mut residuals = Vec::<ResidualSample>::new();
     let mut state_samples = Vec::<StateSample>::new();
     let mut mount_ready_s = None::<f64>;
@@ -193,42 +208,14 @@ fn main() -> Result<()> {
     let mut prev_gnss = None::<GnssSample>;
     let ref_ecef = lla_to_ecef(truth[0].lat_deg, truth[0].lon_deg, truth[0].height_m);
 
-    while imu_idx < imu.len() || gnss_idx < gnss.len() {
-        let next_imu_t = imu.get(imu_idx).map(|s| s.t_s);
-        let next_gnss_t = gnss.get(gnss_idx).map(|s| s.t_s);
-        let take_imu = match (next_imu_t, next_gnss_t) {
-            (Some(ti), Some(tg)) => ti <= tg,
-            (Some(_), None) => true,
-            (None, Some(_)) => false,
-            (None, None) => break,
-        };
-
-        if take_imu {
+    for_each_event(&generic_imu, &generic_gnss, |event| match event {
+        ReplayEvent::Imu(imu_idx, sample) => {
             let s = imu[imu_idx];
             let truth_s = truth[imu_idx];
             if (s.t_s - truth_s.t_s).abs() > 1.0e-6 {
-                bail!(
-                    "IMU/truth timestamp mismatch at index {}: imu={} truth={}",
-                    imu_idx,
-                    s.t_s,
-                    truth_s.t_s
-                );
+                return;
             }
-            let gyro_body = quat_rotate(q_truth, s.gyro_vehicle_radps);
-            let accel_body = quat_rotate(q_truth, s.accel_vehicle_mps2);
-            let _ = fusion.process_imu(FusionImuSample {
-                t_s: s.t_s as f32,
-                gyro_radps: [
-                    gyro_body[0] as f32,
-                    gyro_body[1] as f32,
-                    gyro_body[2] as f32,
-                ],
-                accel_mps2: [
-                    accel_body[0] as f32,
-                    accel_body[1] as f32,
-                    accel_body[2] as f32,
-                ],
-            });
+            let _ = fusion.process_imu(to_fusion_imu(*sample));
             if ekf_init_s.is_some()
                 && let Some(eskf) = fusion.eskf()
             {
@@ -273,7 +260,7 @@ fn main() -> Result<()> {
                     q_full_mount_flu[3],
                 );
                 state_samples.push(StateSample {
-                    t_s: s.t_s,
+                    t_s: sample.t_s,
                     pos_n_m: eskf.nominal.pn as f64,
                     pos_e_m: eskf.nominal.pe as f64,
                     pos_d_m: eskf.nominal.pd as f64,
@@ -313,36 +300,25 @@ fn main() -> Result<()> {
                     accel_bias_z_mps2: eskf.nominal.baz as f64,
                 });
             }
-            imu_idx += 1;
-        } else {
+        }
+        ReplayEvent::Gnss(gnss_idx, sample) => {
             let s = gnss[gnss_idx];
-            let update = fusion.process_gnss(FusionGnssSample {
-                t_s: s.t_s as f32,
-                lat_deg: s.lat_deg as f32,
-                lon_deg: s.lon_deg as f32,
-                height_m: s.height_m as f32,
-                vel_ned_mps: [
-                    s.vel_ned_mps[0] as f32,
-                    s.vel_ned_mps[1] as f32,
-                    s.vel_ned_mps[2] as f32,
-                ],
-                pos_std_m: [
-                    args.gnss_pos_std_m,
-                    args.gnss_pos_std_m,
-                    args.gnss_pos_std_m,
-                ],
-                vel_std_mps: [
-                    args.gnss_vel_std_mps,
-                    args.gnss_vel_std_mps,
-                    args.gnss_vel_std_mps,
-                ],
-                heading_rad: None,
-            });
+            let rel_gnss_s = ekf_init_s.map(|t0| s.t_s - t0).unwrap_or(0.0);
+            let mut vel_ned_mps = sample.vel_ned_mps;
+            if args.gps_vd_bias_duration_s > 0.0
+                && (0.0..=args.gps_vd_bias_duration_s).contains(&rel_gnss_s)
+            {
+                vel_ned_mps[2] += args.gps_vd_bias_mps;
+            }
+            let update = fusion.process_gnss(to_fusion_gnss(GenericGnssSample {
+                vel_ned_mps,
+                ..*sample
+            }));
             if update.mount_ready_changed && update.mount_ready && mount_ready_s.is_none() {
-                mount_ready_s = Some(s.t_s);
+                mount_ready_s = Some(sample.t_s);
             }
             if update.ekf_initialized_now && ekf_init_s.is_none() {
-                ekf_init_s = Some(s.t_s);
+                ekf_init_s = Some(sample.t_s);
                 seed_q_vb = fusion
                     .eskf_mount_q_vb()
                     .or_else(|| fusion.mount_q_vb())
@@ -371,7 +347,7 @@ fn main() -> Result<()> {
                     .map(|prev| course_rate_deg(prev, s))
                     .unwrap_or(0.0);
                 residuals.push(ResidualSample {
-                    t_s: s.t_s,
+                    t_s: sample.t_s,
                     truth_q0: q_truth[0],
                     truth_q1: q_truth[1],
                     truth_q2: q_truth[2],
@@ -406,9 +382,8 @@ fn main() -> Result<()> {
                 });
             }
             prev_gnss = Some(s);
-            gnss_idx += 1;
         }
-    }
+    });
 
     if residuals.is_empty() || state_samples.is_empty() {
         bail!("no ESKF samples produced");
@@ -428,6 +403,12 @@ fn main() -> Result<()> {
         args.mount_roll_deg,
         args.mount_pitch_deg,
         args.mount_yaw_deg
+    );
+    println!(
+        "gps_vd_bias_mps={:.3} gps_vd_bias_duration_s={:.3} gnss_vel_std_mps={:.3}",
+        args.gps_vd_bias_mps,
+        args.gps_vd_bias_duration_s,
+        args.gnss_vel_std_mps
     );
     println!(
         "mount_ready={} ekf_init={}",
@@ -470,6 +451,48 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn build_generic_imu_samples(
+    imu_samples: &[sim::datasets::gnss_ins_sim::ImuSample],
+    q_truth: [f64; 4],
+) -> Vec<GenericImuSample> {
+    imu_samples
+        .iter()
+        .map(|s| GenericImuSample {
+            t_s: s.t_s,
+            gyro_radps: quat_rotate(q_truth, s.gyro_vehicle_radps),
+            accel_mps2: quat_rotate(q_truth, s.accel_vehicle_mps2),
+        })
+        .collect()
+}
+
+fn build_generic_gnss_samples(
+    gnss_samples: &[GnssSample],
+    gnss_pos_std_m: f32,
+    gnss_vel_std_mps: f32,
+) -> Vec<GenericGnssSample> {
+    gnss_samples
+        .iter()
+        .map(|s| GenericGnssSample {
+            t_s: s.t_s,
+            lat_deg: s.lat_deg,
+            lon_deg: s.lon_deg,
+            height_m: s.height_m,
+            vel_ned_mps: s.vel_ned_mps,
+            pos_std_m: [
+                gnss_pos_std_m as f64,
+                gnss_pos_std_m as f64,
+                gnss_pos_std_m as f64,
+            ],
+            vel_std_mps: [
+                gnss_vel_std_mps as f64,
+                gnss_vel_std_mps as f64,
+                gnss_vel_std_mps as f64,
+            ],
+            heading_rad: None,
+        })
+        .collect()
 }
 
 fn tail_window(samples: &[ResidualSample], window_s: f64) -> &[ResidualSample] {

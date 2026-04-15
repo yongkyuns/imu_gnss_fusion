@@ -44,10 +44,50 @@ Current shared modules worth expanding instead of duplicating in more bins:
 
 - `src/datasets/seeded_loose.rs`: semicolon-delimited seeded-loose dataset parsing
 - `src/datasets/gnss_ins_sim.rs`: `gnss-ins-sim` CSV parsing and sample loading
+- `src/datasets/generic_replay.rs`: shared hardware-agnostic IMU/GNSS replay schema (`imu.csv`, `gnss.csv`)
+- `src/datasets/ubx_replay.rs`: UBX-to-generic replay extraction using the same real-log timing / GNSS construction path
 - `src/eval/gnss_ins.rs`: shared quaternion and simple GNSS kinematic helpers for the `gnss-ins-sim` evaluators
+- `src/eval/replay.rs`: shared IMU/GNSS merge order for feeding `SensorFusion`
 - `src/eval/state_summary.rs`: shared convergence/fluctuation/final-error summaries for scalar state traces with optional references
 - `src/ubxlog.rs`: UBX log loading
 - `src/visualizer/`: shared math and replay/pipeline pieces
+
+## Generic replay format
+
+The first common replay format is now:
+
+- `imu.csv`
+  - columns: `t_s,gx_radps,gy_radps,gz_radps,ax_mps2,ay_mps2,az_mps2`
+- `gnss.csv`
+  - columns: `t_s,lat_deg,lon_deg,height_m,vn_mps,ve_mps,vd_mps,pos_std_n_m,pos_std_e_m,pos_std_d_m,vel_std_n_mps,vel_std_e_mps,vel_std_d_mps,heading_rad`
+  - `heading_rad` may be `NaN` when heading is unavailable / intentionally omitted
+
+Current producers:
+
+- `export_gnss_ins_sim_generic`: export `gnss-ins-sim` datasets into the generic replay format
+- `convert_ubx_to_generic_replay`: export UBX logs into the same generic replay format
+
+Current consumers using the shared replay path:
+
+- `eskf_eval_gnss_ins_sim`
+- `eval_real_mount_reseed`
+- `visualizer` / `ekf_compare` for the main real-log ESKF + loose injection path
+- `analyze_eskf_transition`
+- `analyze_loose_jump`
+- `check_reanchor`
+- `analyze_mount_recovery` indirectly via `build_plot_data(...)`
+
+Still on older direct parsing / one-off replay glue:
+
+- `align_eval`
+- `esp32_usb_replay`
+- `esf_alg_convention`
+- `analyze_nav_grade`
+- `analyze_esf_alg_behavior`
+- `analyze_esf_alg_transition_speeds`
+- `sweep_mapping`
+
+This does not unify every real-log tool yet, but the primary synthetic evaluator, the main real-log visualizer path, and the main ESKF/loose debug analyzers now share one canonical injection format and one canonical IMU/GNSS merge order.
 
 ## Shared state summaries
 

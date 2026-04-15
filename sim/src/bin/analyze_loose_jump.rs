@@ -1,13 +1,13 @@
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use sensor_fusion::c_api::{CLooseImuDelta, CLooseWrapper};
-use sensor_fusion::fusion::{FusionImuSample, SensorFusion};
+use sensor_fusion::fusion::SensorFusion;
 use sensor_fusion::loose::LoosePredictNoise;
-use sim::ubxlog::{
-    NavPvtObs, UbxFrame, extract_esf_alg, extract_nav_pvt_obs, extract_nav2_pvt_obs,
-    parse_ubx_frames,
+use sim::datasets::generic_replay::{
+    GenericGnssSample, fusion_gnss_sample as to_fusion_gnss, fusion_imu_sample as to_fusion_imu,
 };
-use sim::ubxlog::{extract_esf_raw_samples, sensor_meta};
+use sim::datasets::ubx_replay::{UbxReplayConfig, build_generic_replay_from_frames};
+use sim::ubxlog::{NavPvtObs, UbxFrame, extract_esf_alg, parse_ubx_frames};
 use sim::visualizer::math::{deg2rad, ecef_to_ned, lla_to_ecef, mat_vec, nearest_master_ms};
 use sim::visualizer::pipeline::align_replay::{
     BootstrapConfig as AlignBootstrapConfig, ImuReplayConfig, build_align_replay,
@@ -46,17 +46,6 @@ struct Args {
     ground_speed_vel: bool,
     #[arg(long, default_value_t = false)]
     init_qes_from_fusion: bool,
-}
-
-#[derive(Clone, Copy)]
-struct ImuPacket {
-    t_ms: f64,
-    gx_dps: f64,
-    gy_dps: f64,
-    gz_dps: f64,
-    ax_mps2: f64,
-    ay_mps2: f64,
-    az_mps2: f64,
 }
 
 fn main() -> Result<()> {
@@ -137,13 +126,20 @@ fn main() -> Result<()> {
         );
     }
 
-    let nav_events = collect_nav_events(&frames, &tl);
+    let replay = build_generic_replay_from_frames(
+        &frames,
+        &tl,
+        UbxReplayConfig {
+            gnss_pos_r_scale: cfg.gnss_pos_r_scale,
+            gnss_vel_r_scale: cfg.gnss_vel_r_scale,
+        },
+    )?;
+    let nav_events = replay.nav_events.clone();
     let alg_events = collect_alg_events(&frames, &tl);
     if nav_events.is_empty() {
         bail!("no nav events");
     }
-    let imu_packets = build_imu_packets(&frames, &tl)?;
-    if imu_packets.is_empty() {
+    if replay.imu_samples.is_empty() {
         bail!("no imu packets");
     }
 
@@ -155,10 +151,10 @@ fn main() -> Result<()> {
     let mut align_idx = 0usize;
     let mut nav_idx = 0usize;
     let mut cur_align_q_vb: Option<[f32; 4]> = None;
-    let mut ref_lat = nav_events[0].1.lat_deg;
-    let mut ref_lon = nav_events[0].1.lon_deg;
-    let mut ref_h = nav_events[0].1.height_m;
-    let mut ref_ecef = lla_to_ecef(ref_lat, ref_lon, ref_h);
+    let ref_lat = nav_events[0].1.lat_deg;
+    let ref_lon = nav_events[0].1.lon_deg;
+    let ref_h = nav_events[0].1.height_m;
+    let ref_ecef = lla_to_ecef(ref_lat, ref_lon, ref_h);
     let mut filt_predict_gyro: Option<[f64; 3]> = None;
     let mut filt_predict_accel: Option<[f64; 3]> = None;
     let mut predict_gyro_sum = [0.0_f64; 3];
@@ -168,34 +164,35 @@ fn main() -> Result<()> {
     let mut prev_post_mount: Option<[f64; 3]> = None;
     let mut top_jumps: Vec<(f64, f64, [f64; 3], [f64; 3], Vec<String>, [f32; 24])> = Vec::new();
 
-    for pkt in &imu_packets {
-        while align_idx < align_events.len() && align_events[align_idx].0 <= pkt.t_ms {
+    for imu_sample in &replay.imu_samples {
+        let pkt_t_ms = tl.t0_master_ms + imu_sample.t_s * 1.0e3;
+        while align_idx < align_events.len() && align_events[align_idx].0 <= pkt_t_ms {
             cur_align_q_vb = Some(align_events[align_idx].1);
             align_idx += 1;
         }
         let dt = match prev_imu_t {
-            Some(prev) => (pkt.t_ms - prev) * 1e-3,
+            Some(prev) => imu_sample.t_s - prev,
             None => {
-                prev_imu_t = Some(pkt.t_ms);
+                prev_imu_t = Some(imu_sample.t_s);
                 continue;
             }
         };
-        prev_imu_t = Some(pkt.t_ms);
+        prev_imu_t = Some(imu_sample.t_s);
         if !(0.001..=0.05).contains(&dt) {
             continue;
         }
 
         let raw_gyro_radps = [
-            pkt.gx_dps.to_radians() as f32,
-            pkt.gy_dps.to_radians() as f32,
-            pkt.gz_dps.to_radians() as f32,
+            imu_sample.gyro_radps[0] as f32,
+            imu_sample.gyro_radps[1] as f32,
+            imu_sample.gyro_radps[2] as f32,
         ];
-        let raw_accel_mps2 = [pkt.ax_mps2 as f32, pkt.ay_mps2 as f32, pkt.az_mps2 as f32];
-        fusion.process_imu(FusionImuSample {
-            t_s: rel_s(&tl, pkt.t_ms) as f32,
-            gyro_radps: raw_gyro_radps,
-            accel_mps2: raw_accel_mps2,
-        });
+        let raw_accel_mps2 = [
+            imu_sample.accel_mps2[0] as f32,
+            imu_sample.accel_mps2[1] as f32,
+            imu_sample.accel_mps2[2] as f32,
+        ];
+        fusion.process_imu(to_fusion_imu(*imu_sample));
 
         let (loose_gyro_deg, loose_accel) = if let Some(q_vb) = loose_seed_mount_q_vb {
             vehicle_measurements_from_mount(
@@ -298,13 +295,13 @@ fn main() -> Result<()> {
             avg_predict_accel[2] as f32,
         ];
 
-        while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
+        while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt_t_ms {
             let (t_ms, nav) = nav_events[nav_idx];
+            let gnss_sample = replay.gnss_samples[nav_idx];
             nav_idx += 1;
             let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
             let _ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
-            let fusion_gnss = fusion_gnss_sample(nav, cfg, rel_s(&tl, t_ms) as f32);
-            let update = fusion.process_gnss(fusion_gnss);
+            let update = fusion.process_gnss(to_fusion_gnss(gnss_sample));
             if !loose.is_some() && update.mount_ready {
                 if let Some(alg) = nearest_alg(&alg_events, t_ms) {
                     println!(
@@ -449,7 +446,8 @@ fn main() -> Result<()> {
                     } else {
                         None
                     };
-                    let mut loose_init = initialize_loose_from_nav(nav, cfg, init_q_cs, q_es_init);
+                    let mut loose_init =
+                        initialize_loose_from_nav(nav, gnss_sample, init_q_cs, q_es_init);
                     if !args.raw_imu_full_qcs {
                         if let Some(sigma_deg) = args.seeded_qcs_sigma_deg {
                             loose_init.tighten_mount_covariance_deg(sigma_deg as f32);
@@ -765,31 +763,6 @@ fn rel_s(tl: &MasterTimeline, t_ms: f64) -> f64 {
     (t_ms - tl.t0_master_ms) * 1.0e-3
 }
 
-fn collect_nav_events(frames: &[UbxFrame], tl: &MasterTimeline) -> Vec<(f64, NavPvtObs)> {
-    let mut nav_events_pvt = Vec::<(f64, NavPvtObs)>::new();
-    let mut nav_events_nav2 = Vec::<(f64, NavPvtObs)>::new();
-    for f in frames {
-        if let Some(t_ms) = nearest_master_ms(f.seq, &tl.masters) {
-            if let Some(obs) = extract_nav2_pvt_obs(f) {
-                if obs.fix_ok && !obs.invalid_llh {
-                    nav_events_nav2.push((t_ms, obs));
-                }
-            } else if let Some(obs) = extract_nav_pvt_obs(f) {
-                if obs.fix_ok && !obs.invalid_llh {
-                    nav_events_pvt.push((t_ms, obs));
-                }
-            }
-        }
-    }
-    nav_events_nav2.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-    nav_events_pvt.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-    if !nav_events_nav2.is_empty() {
-        nav_events_nav2
-    } else {
-        nav_events_pvt
-    }
-}
-
 fn collect_alg_events(frames: &[UbxFrame], tl: &MasterTimeline) -> Vec<(f64, [f64; 3])> {
     let mut out = Vec::new();
     for f in frames {
@@ -808,110 +781,6 @@ fn nearest_alg(events: &[(f64, [f64; 3])], t_ms: f64) -> Option<[f64; 3]> {
         .iter()
         .min_by(|a, b| (a.0 - t_ms).abs().partial_cmp(&(b.0 - t_ms).abs()).unwrap())
         .map(|x| x.1)
-}
-
-fn build_imu_packets(frames: &[UbxFrame], tl: &MasterTimeline) -> Result<Vec<ImuPacket>> {
-    let mut raw_seq = Vec::<u64>::new();
-    let mut raw_tag = Vec::<u64>::new();
-    let mut raw_dtype = Vec::<u8>::new();
-    let mut raw_val = Vec::<f64>::new();
-    for f in frames {
-        for (tag, sw) in extract_esf_raw_samples(f) {
-            let (_name, _unit, scale) = sensor_meta(sw.dtype);
-            raw_seq.push(f.seq);
-            raw_tag.push(tag);
-            raw_dtype.push(sw.dtype);
-            raw_val.push(sw.value_i24 as f64 * scale);
-        }
-    }
-    let (raw_tag_u, a_raw, b_raw) = fit_tag_ms_map(&raw_seq, &raw_tag, &tl.masters, Some(1 << 16));
-    let mut imu_packets = Vec::<ImuPacket>::new();
-    let mut current_tag: Option<u64> = None;
-    let mut t_ms = 0.0_f64;
-    let mut gx: Option<f64> = None;
-    let mut gy: Option<f64> = None;
-    let mut gz: Option<f64> = None;
-    let mut ax: Option<f64> = None;
-    let mut ay: Option<f64> = None;
-    let mut az: Option<f64> = None;
-    for (((seq, tag_u), dtype), val) in raw_seq
-        .iter()
-        .zip(raw_tag_u.iter())
-        .zip(raw_dtype.iter())
-        .zip(raw_val.iter())
-    {
-        if current_tag != Some(*tag_u) {
-            if let (Some(gxv), Some(gyv), Some(gzv), Some(axv), Some(ayv), Some(azv)) =
-                (gx, gy, gz, ax, ay, az)
-            {
-                imu_packets.push(ImuPacket {
-                    t_ms,
-                    gx_dps: gxv,
-                    gy_dps: gyv,
-                    gz_dps: gzv,
-                    ax_mps2: axv,
-                    ay_mps2: ayv,
-                    az_mps2: azv,
-                });
-            }
-            gx = None;
-            gy = None;
-            gz = None;
-            ax = None;
-            ay = None;
-            az = None;
-            current_tag = Some(*tag_u);
-            if let Some(mapped_ms) = tl.map_tag_ms(a_raw, b_raw, *tag_u as f64, *seq) {
-                t_ms = mapped_ms;
-            }
-        }
-        match *dtype {
-            14 => gx = Some(*val),
-            13 => gy = Some(*val),
-            5 => gz = Some(*val),
-            16 => ax = Some(*val),
-            17 => ay = Some(*val),
-            18 => az = Some(*val),
-            _ => {}
-        }
-    }
-    if let (Some(gxv), Some(gyv), Some(gzv), Some(axv), Some(ayv), Some(azv)) =
-        (gx, gy, gz, ax, ay, az)
-    {
-        imu_packets.push(ImuPacket {
-            t_ms,
-            gx_dps: gxv,
-            gy_dps: gyv,
-            gz_dps: gzv,
-            ax_mps2: axv,
-            ay_mps2: ayv,
-            az_mps2: azv,
-        });
-    }
-    imu_packets.sort_by(|a, b| a.t_ms.partial_cmp(&b.t_ms).unwrap());
-    Ok(imu_packets)
-}
-
-fn fit_tag_ms_map(
-    seqs: &[u64],
-    tags: &[u64],
-    masters: &[(u64, f64)],
-    unwrap_modulus: Option<u64>,
-) -> (Vec<u64>, f64, f64) {
-    let mapped_tags = match unwrap_modulus {
-        Some(m) => sim::ubxlog::unwrap_counter(tags, m),
-        None => tags.to_vec(),
-    };
-    let mut x = Vec::<f64>::new();
-    let mut y = Vec::<f64>::new();
-    for (seq, tag_u) in seqs.iter().zip(mapped_tags.iter()) {
-        if let Some(ms) = nearest_master_ms(*seq, masters) {
-            x.push(*tag_u as f64);
-            y.push(ms);
-        }
-    }
-    let (a, b) = sim::ubxlog::fit_linear_map(&x, &y, 1e-3);
-    (mapped_tags, a, b)
 }
 
 fn initial_yaw_from_nav(nav: NavPvtObs) -> f32 {
@@ -981,20 +850,23 @@ fn default_loose_reference_p_diag(gnss: sensor_fusion::fusion::FusionGnssSample)
 
 fn initialize_loose_from_nav(
     nav: NavPvtObs,
-    cfg: EkfCompareConfig,
+    gnss: GenericGnssSample,
     q_cs_init: [f32; 4],
     q_es_init: Option<[f32; 4]>,
 ) -> CLooseWrapper {
     let mut loose = CLooseWrapper::new(LoosePredictNoise::lsm6dso_loose_104hz());
-    let gnss = fusion_gnss_sample(nav, cfg, 0.0);
-    let p_diag = default_loose_reference_p_diag(gnss);
+    let p_diag = default_loose_reference_p_diag(to_fusion_gnss(gnss));
+    let heading_rad = gnss
+        .heading_rad
+        .map(|x| x as f32)
+        .unwrap_or_else(|| initial_yaw_from_nav(nav));
     let vel_ecef = mat_vec(
         transpose3(ecef_to_ned_matrix(nav.lat_deg, nav.lon_deg)),
         [nav.vel_n_mps, nav.vel_e_mps, nav.vel_d_mps],
     );
     if q_es_init.is_none() && q_cs_init == [1.0, 0.0, 0.0, 0.0] {
         loose.init_seeded_vehicle_from_nav_ecef_state(
-            initial_yaw_from_nav(nav),
+            heading_rad,
             nav.lat_deg,
             nav.lon_deg,
             lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m),
@@ -1006,7 +878,7 @@ fn initialize_loose_from_nav(
         let q_es = if let Some(q) = q_es_init {
             [q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64]
         } else {
-            let q_ns = yaw_quat_f32(initial_yaw_from_nav(nav));
+            let q_ns = yaw_quat_f32(heading_rad);
             quat_mul(
                 quat_conj(quat_ecef_to_ned(nav.lat_deg, nav.lon_deg)),
                 [
@@ -1035,43 +907,6 @@ fn initialize_loose_from_nav(
         );
     }
     loose
-}
-
-fn fusion_gnss_sample(
-    nav: NavPvtObs,
-    cfg: EkfCompareConfig,
-    t_s: f32,
-) -> sensor_fusion::fusion::FusionGnssSample {
-    let speed_h = nav.vel_n_mps.hypot(nav.vel_e_mps);
-    let heading_rad = if nav.head_veh_valid {
-        Some(deg2rad(nav.heading_vehicle_deg) as f32)
-    } else if speed_h >= cfg.yaw_init_speed_mps.max(1.0) {
-        Some(nav.vel_e_mps.atan2(nav.vel_n_mps) as f32)
-    } else {
-        Some(deg2rad(nav.heading_motion_deg) as f32)
-    };
-    sensor_fusion::fusion::FusionGnssSample {
-        t_s,
-        lat_deg: nav.lat_deg as f32,
-        lon_deg: nav.lon_deg as f32,
-        height_m: nav.height_m as f32,
-        vel_ned_mps: [
-            nav.vel_n_mps as f32,
-            nav.vel_e_mps as f32,
-            nav.vel_d_mps as f32,
-        ],
-        pos_std_m: [
-            (nav.h_acc_m * cfg.gnss_pos_r_scale.sqrt()) as f32,
-            (nav.h_acc_m * cfg.gnss_pos_r_scale.sqrt()) as f32,
-            (nav.h_acc_m * 2.5 * cfg.gnss_pos_r_scale.sqrt()) as f32,
-        ],
-        vel_std_mps: [
-            (nav.s_acc_mps * cfg.gnss_vel_r_scale.sqrt()) as f32,
-            (nav.s_acc_mps * cfg.gnss_vel_r_scale.sqrt()) as f32,
-            (nav.s_acc_mps * cfg.gnss_vel_r_scale.sqrt()) as f32,
-        ],
-        heading_rad,
-    }
 }
 
 fn vehicle_measurements_from_mount(

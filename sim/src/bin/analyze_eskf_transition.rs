@@ -1,12 +1,12 @@
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use sensor_fusion::fusion::{FusionGnssSample, FusionImuSample, SensorFusion};
-use sim::ubxlog::{
-    NavPvtObs, UbxFrame, extract_esf_raw_samples, extract_nav_pvt_obs, parse_ubx_frames,
-    sensor_meta,
+use sensor_fusion::fusion::SensorFusion;
+use sim::datasets::generic_replay::{
+    fusion_gnss_sample as to_fusion_gnss, fusion_imu_sample as to_fusion_imu,
 };
-use sim::visualizer::math::{deg2rad, nearest_master_ms};
-use sim::visualizer::pipeline::timebase::{MasterTimeline, build_master_timeline};
+use sim::datasets::ubx_replay::{UbxReplayConfig, build_generic_replay_from_frames};
+use sim::ubxlog::parse_ubx_frames;
+use sim::visualizer::pipeline::timebase::build_master_timeline;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -28,17 +28,6 @@ struct Args {
     disable_gps_vel_all: bool,
 }
 
-#[derive(Clone, Copy)]
-struct ImuPacket {
-    t_ms: f64,
-    gx_dps: f64,
-    gy_dps: f64,
-    gz_dps: f64,
-    ax_mps2: f64,
-    ay_mps2: f64,
-    az_mps2: f64,
-}
-
 fn main() -> Result<()> {
     let args = Args::parse();
     let bytes = std::fs::read(&args.logfile)
@@ -49,29 +38,35 @@ fn main() -> Result<()> {
         bail!("no master timeline");
     }
 
-    let nav_events = collect_nav_events(&frames, &tl);
-    let imu_packets = build_imu_packets(&frames, &tl)?;
-    if nav_events.is_empty() || imu_packets.is_empty() {
+    let replay = build_generic_replay_from_frames(
+        &frames,
+        &tl,
+        UbxReplayConfig {
+            gnss_pos_r_scale: 1.0,
+            gnss_vel_r_scale: args.gnss_vel_r_scale,
+        },
+    )?;
+    let nav_events = replay.nav_events.clone();
+    if nav_events.is_empty() || replay.imu_samples.is_empty() {
         bail!("missing nav or imu events");
     }
 
     let mut fusion = SensorFusion::new();
-    let mut prev_imu_t: Option<f64> = None;
     let mut nav_idx = 0usize;
     let mut prev_update_count = 0u32;
 
-    for pkt in &imu_packets {
-        let t_s = rel_s(&tl, pkt.t_ms);
-        while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
-            let nav = nav_events[nav_idx].1;
+    for imu_sample in &replay.imu_samples {
+        let pkt_t_ms = tl.t0_master_ms + imu_sample.t_s * 1.0e3;
+        let t_s = imu_sample.t_s;
+        while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt_t_ms {
+            let mut gnss_sample = replay.gnss_samples[nav_idx];
             let pre = fusion.eskf().copied();
-            let update = fusion.process_gnss(fusion_gnss_sample(
-                nav,
-                args.gnss_vel_r_scale,
-                t_s as f32,
-                args.disable_gps_vel_all,
-                args.disable_gps_vel_d,
-            ));
+            if args.disable_gps_vel_all {
+                gnss_sample.vel_std_mps = [1.0e6; 3];
+            } else if args.disable_gps_vel_d {
+                gnss_sample.vel_std_mps[2] = 1.0e6;
+            }
+            let update = fusion.process_gnss(to_fusion_gnss(gnss_sample));
             let post = fusion.eskf().copied();
             log_transition_if_needed(
                 "GNSS",
@@ -86,28 +81,8 @@ fn main() -> Result<()> {
             nav_idx += 1;
         }
 
-        let dt = match prev_imu_t {
-            Some(prev) => (pkt.t_ms - prev) * 1e-3,
-            None => {
-                prev_imu_t = Some(pkt.t_ms);
-                continue;
-            }
-        };
-        prev_imu_t = Some(pkt.t_ms);
-        if !(0.001..=0.05).contains(&dt) {
-            continue;
-        }
-
         let pre = fusion.eskf().copied();
-        let update = fusion.process_imu(FusionImuSample {
-            t_s: t_s as f32,
-            gyro_radps: [
-                pkt.gx_dps.to_radians() as f32,
-                pkt.gy_dps.to_radians() as f32,
-                pkt.gz_dps.to_radians() as f32,
-            ],
-            accel_mps2: [pkt.ax_mps2 as f32, pkt.ay_mps2 as f32, pkt.az_mps2 as f32],
-        });
+        let update = fusion.process_imu(to_fusion_imu(*imu_sample));
         let post = fusion.eskf().copied();
         log_transition_if_needed(
             "IMU",
@@ -293,172 +268,4 @@ fn transpose3(a: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
         [a[0][1], a[1][1], a[2][1]],
         [a[0][2], a[1][2], a[2][2]],
     ]
-}
-
-fn rel_s(tl: &MasterTimeline, t_ms: f64) -> f64 {
-    (t_ms - tl.masters.first().map(|(_, ms)| *ms).unwrap_or(t_ms)) * 1.0e-3
-}
-
-fn collect_nav_events(frames: &[UbxFrame], tl: &MasterTimeline) -> Vec<(f64, NavPvtObs)> {
-    let mut out = Vec::<(f64, NavPvtObs)>::new();
-    for f in frames {
-        if let Some(nav) = extract_nav_pvt_obs(f) {
-            if !nav.fix_ok || nav.invalid_llh {
-                continue;
-            }
-            if let Some(t_ms) = nearest_master_ms(f.seq, &tl.masters) {
-                out.push((t_ms, nav));
-            }
-        }
-    }
-    out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-    out
-}
-
-fn build_imu_packets(frames: &[UbxFrame], tl: &MasterTimeline) -> Result<Vec<ImuPacket>> {
-    let mut raw_seq = Vec::<u64>::new();
-    let mut raw_tag = Vec::<u64>::new();
-    let mut raw_dtype = Vec::<u8>::new();
-    let mut raw_val = Vec::<f64>::new();
-    for f in frames {
-        for (tag, sw) in extract_esf_raw_samples(f) {
-            let tag = tag as u64;
-            let (_name, _unit, scale) = sensor_meta(sw.dtype);
-            raw_seq.push(f.seq);
-            raw_tag.push(tag);
-            raw_dtype.push(sw.dtype);
-            raw_val.push(sw.value_i24 as f64 * scale);
-        }
-    }
-    let (raw_tag_u, a_raw, b_raw) = fit_tag_ms_map(&raw_seq, &raw_tag, &tl.masters, Some(1 << 16));
-    let mut imu_packets = Vec::<ImuPacket>::new();
-    let mut current_tag: Option<u64> = None;
-    let mut t_ms = 0.0_f64;
-    let mut gx: Option<f64> = None;
-    let mut gy: Option<f64> = None;
-    let mut gz: Option<f64> = None;
-    let mut ax: Option<f64> = None;
-    let mut ay: Option<f64> = None;
-    let mut az: Option<f64> = None;
-    for (((seq, tag_u), dtype), val) in raw_seq
-        .iter()
-        .zip(raw_tag_u.iter())
-        .zip(raw_dtype.iter())
-        .zip(raw_val.iter())
-    {
-        if current_tag != Some(*tag_u) {
-            if let (Some(gxv), Some(gyv), Some(gzv), Some(axv), Some(ayv), Some(azv)) =
-                (gx, gy, gz, ax, ay, az)
-            {
-                imu_packets.push(ImuPacket {
-                    t_ms,
-                    gx_dps: gxv,
-                    gy_dps: gyv,
-                    gz_dps: gzv,
-                    ax_mps2: axv,
-                    ay_mps2: ayv,
-                    az_mps2: azv,
-                });
-            }
-            gx = None;
-            gy = None;
-            gz = None;
-            ax = None;
-            ay = None;
-            az = None;
-            current_tag = Some(*tag_u);
-            if let Some(mapped_ms) = tl.map_tag_ms(a_raw, b_raw, *tag_u as f64, *seq) {
-                t_ms = mapped_ms;
-            }
-        }
-        match *dtype {
-            14 => gx = Some(*val),
-            13 => gy = Some(*val),
-            5 => gz = Some(*val),
-            16 => ax = Some(*val),
-            17 => ay = Some(*val),
-            18 => az = Some(*val),
-            _ => {}
-        }
-    }
-    if let (Some(gxv), Some(gyv), Some(gzv), Some(axv), Some(ayv), Some(azv)) =
-        (gx, gy, gz, ax, ay, az)
-    {
-        imu_packets.push(ImuPacket {
-            t_ms,
-            gx_dps: gxv,
-            gy_dps: gyv,
-            gz_dps: gzv,
-            ax_mps2: axv,
-            ay_mps2: ayv,
-            az_mps2: azv,
-        });
-    }
-    imu_packets.sort_by(|a, b| a.t_ms.partial_cmp(&b.t_ms).unwrap());
-    Ok(imu_packets)
-}
-
-fn fit_tag_ms_map(
-    seqs: &[u64],
-    tags: &[u64],
-    masters: &[(u64, f64)],
-    unwrap_modulus: Option<u64>,
-) -> (Vec<u64>, f64, f64) {
-    let mapped_tags = match unwrap_modulus {
-        Some(m) => sim::ubxlog::unwrap_counter(tags, m),
-        None => tags.to_vec(),
-    };
-    let mut x = Vec::<f64>::new();
-    let mut y = Vec::<f64>::new();
-    for (seq, tag_u) in seqs.iter().zip(mapped_tags.iter()) {
-        if let Some(ms) = nearest_master_ms(*seq, masters) {
-            x.push(*tag_u as f64);
-            y.push(ms);
-        }
-    }
-    let (a, b) = sim::ubxlog::fit_linear_map(&x, &y, 1e-3);
-    (mapped_tags, a, b)
-}
-
-fn fusion_gnss_sample(
-    nav: NavPvtObs,
-    gnss_vel_r_scale: f64,
-    t_s: f32,
-    disable_gps_vel_all: bool,
-    disable_gps_vel_d: bool,
-) -> FusionGnssSample {
-    let speed_h = nav.vel_n_mps.hypot(nav.vel_e_mps);
-    let heading_rad = if nav.head_veh_valid {
-        Some(deg2rad(nav.heading_vehicle_deg) as f32)
-    } else if speed_h >= 1.0 {
-        Some(nav.vel_e_mps.atan2(nav.vel_n_mps) as f32)
-    } else {
-        Some(deg2rad(nav.heading_motion_deg) as f32)
-    };
-    FusionGnssSample {
-        t_s,
-        lat_deg: nav.lat_deg as f32,
-        lon_deg: nav.lon_deg as f32,
-        height_m: nav.height_m as f32,
-        vel_ned_mps: [nav.vel_n_mps as f32, nav.vel_e_mps as f32, nav.vel_d_mps as f32],
-        pos_std_m: [nav.h_acc_m as f32, nav.h_acc_m as f32, (nav.v_acc_m * 2.5) as f32],
-        vel_std_mps: [
-            if disable_gps_vel_all {
-                1.0e6_f32
-            } else {
-                (nav.s_acc_mps * gnss_vel_r_scale.sqrt()) as f32
-            },
-            if disable_gps_vel_all {
-                1.0e6_f32
-            } else {
-                (nav.s_acc_mps * gnss_vel_r_scale.sqrt()) as f32
-            },
-            if disable_gps_vel_all || disable_gps_vel_d {
-                1.0e6_f32
-            } else {
-                (nav.s_acc_mps * gnss_vel_r_scale.sqrt()) as f32
-            },
-        ],
-        heading_rad,
-    }
 }

@@ -3,24 +3,25 @@ use std::collections::VecDeque;
 use sensor_fusion::align::GRAVITY_MPS2;
 use sensor_fusion::c_api::{CEskf, CLooseImuDelta, CLooseWrapper};
 use sensor_fusion::ekf::PredictNoise;
-use sensor_fusion::fusion::{FusionImuSample, SensorFusion};
+use sensor_fusion::fusion::SensorFusion;
 use sensor_fusion::loose::LoosePredictNoise;
 
+use crate::datasets::generic_replay::{fusion_gnss_sample as to_fusion_gnss, fusion_imu_sample as to_fusion_imu};
+use crate::datasets::ubx_replay::{UbxReplayConfig, build_generic_replay_from_frames};
 use crate::ubxlog::{
-    NavPvtObs, UbxFrame, extract_esf_alg, extract_esf_alg_status, extract_esf_raw_samples,
-    extract_nav_att, extract_nav_pvt_obs, extract_nav2_pvt_obs, sensor_meta,
+    NavPvtObs, UbxFrame, extract_esf_alg, extract_esf_alg_status, extract_nav_att,
+    extract_nav_pvt_obs, extract_nav2_pvt_obs,
 };
 
 use super::super::math::{
     deg2rad, ecef_to_ned, lla_to_ecef, mat_vec, ned_to_lla_exact, normalize_heading_deg,
     quat_rpy_deg, rad2deg, rot_zyx,
 };
-use super::super::model::{AlgEvent, EkfImuSource, HeadingSample, ImuPacket, NavAttEvent, Trace};
+use super::super::model::{AlgEvent, EkfImuSource, HeadingSample, NavAttEvent, Trace};
 use super::align_replay::{
     BootstrapConfig as AlignBootstrapConfig, ImuReplayConfig, build_align_replay,
     esf_alg_flu_to_frd_mount_quat, frd_mount_quat_to_esf_alg_flu_quat, quat_rpy_alg_deg,
 };
-use super::tag_time::fit_tag_ms_map;
 use super::timebase::MasterTimeline;
 
 pub struct EkfCompareData {
@@ -219,99 +220,23 @@ pub fn build_ekf_compare_traces(
     } else {
         Vec::new()
     };
-    let (nav_events, use_nav2_for_ekf) = if !nav_events_nav2.is_empty() {
-        (nav_events_nav2, true)
-    } else {
+    let replay = build_generic_replay_from_frames(
+        frames,
+        tl,
+        UbxReplayConfig {
+            gnss_pos_r_scale: cfg.gnss_pos_r_scale,
+            gnss_vel_r_scale: cfg.gnss_vel_r_scale,
+        },
+    )
+    .expect("failed to build generic replay from UBX frames");
+    let nav_events = replay.nav_events.clone();
+    let use_nav2_for_ekf = replay.used_nav2;
+    if !use_nav2_for_ekf {
         eprintln!(
             "WARNING: NAV2-PVT not found; falling back to NAV-PVT downsampled to 2 Hz for EKF GNSS observations."
         );
-        (nav_events_pvt, false)
-    };
+    }
     let outage_windows_ms = sample_gnss_outage_windows(&nav_events, gnss_outages);
-
-    let mut raw_seq = Vec::<u64>::new();
-    let mut raw_tag = Vec::<u64>::new();
-    let mut raw_dtype = Vec::<u8>::new();
-    let mut raw_val = Vec::<f64>::new();
-    for f in frames {
-        for (tag, sw) in extract_esf_raw_samples(f) {
-            let (_name, _unit, scale) = sensor_meta(sw.dtype);
-            raw_seq.push(f.seq);
-            raw_tag.push(tag);
-            raw_dtype.push(sw.dtype);
-            raw_val.push(sw.value_i24 as f64 * scale);
-        }
-    }
-    let (raw_tag_u, a_raw, b_raw) = fit_tag_ms_map(&raw_seq, &raw_tag, &tl.masters, Some(1 << 16));
-
-    let mut imu_packets = Vec::<ImuPacket>::new();
-    let mut current_tag: Option<u64> = None;
-    let mut t_ms = 0.0_f64;
-    let mut gx: Option<f64> = None;
-    let mut gy: Option<f64> = None;
-    let mut gz: Option<f64> = None;
-    let mut ax: Option<f64> = None;
-    let mut ay: Option<f64> = None;
-    let mut az: Option<f64> = None;
-    for (((seq, tag_u), dtype), val) in raw_seq
-        .iter()
-        .zip(raw_tag_u.iter())
-        .zip(raw_dtype.iter())
-        .zip(raw_val.iter())
-    {
-        if current_tag != Some(*tag_u) {
-            if let (Some(gxv), Some(gyv), Some(gzv), Some(axv), Some(ayv), Some(azv)) =
-                (gx, gy, gz, ax, ay, az)
-            {
-                imu_packets.push(ImuPacket {
-                    t_ms,
-                    gx_dps: gxv,
-                    gy_dps: gyv,
-                    gz_dps: gzv,
-                    ax_mps2: axv,
-                    ay_mps2: ayv,
-                    az_mps2: azv,
-                });
-            }
-            gx = None;
-            gy = None;
-            gz = None;
-            ax = None;
-            ay = None;
-            az = None;
-            current_tag = Some(*tag_u);
-            if let Some(mapped_ms) = tl.map_tag_ms(a_raw, b_raw, *tag_u as f64, *seq) {
-                t_ms = mapped_ms;
-            }
-        }
-        match *dtype {
-            14 => gx = Some(*val),
-            13 => gy = Some(*val),
-            5 => gz = Some(*val),
-            16 => ax = Some(*val),
-            17 => ay = Some(*val),
-            18 => az = Some(*val),
-            _ => {}
-        }
-    }
-    if let (Some(gxv), Some(gyv), Some(gzv), Some(axv), Some(ayv), Some(azv)) =
-        (gx, gy, gz, ax, ay, az)
-    {
-        imu_packets.push(ImuPacket {
-            t_ms,
-            gx_dps: gxv,
-            gy_dps: gyv,
-            gz_dps: gzv,
-            ax_mps2: axv,
-            ay_mps2: ayv,
-            az_mps2: azv,
-        });
-    }
-    imu_packets.sort_by(|a, b| {
-        a.t_ms
-            .partial_cmp(&b.t_ms)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
     let mut ubx_pos_n = Vec::<[f64; 2]>::new();
     let mut ubx_pos_e = Vec::<[f64; 2]>::new();
     let mut ubx_pos_d = Vec::<[f64; 2]>::new();
@@ -502,32 +427,31 @@ pub fn build_ekf_compare_traces(
         map_nav2.push([nav2.lon_deg, nav2.lat_deg]);
     }
 
-    let mut next_gps_update_ms = f64::NEG_INFINITY;
     let mut loose_last_gps_update_ms: Option<f64> = None;
-    let gps_period_ms = 500.0_f64;
-    for pkt in &imu_packets {
-        while alg_idx < alg_events.len() && alg_events[alg_idx].t_ms <= pkt.t_ms {
+    for imu_sample in &replay.imu_samples {
+        let pkt_t_ms = tl.t0_master_ms + imu_sample.t_s * 1.0e3;
+        while alg_idx < alg_events.len() && alg_events[alg_idx].t_ms <= pkt_t_ms {
             cur_alg = Some(alg_events[alg_idx]);
             alg_idx += 1;
         }
         while alg_status_idx < alg_status_events.len()
-            && alg_status_events[alg_status_idx].0 <= pkt.t_ms
+            && alg_status_events[alg_status_idx].0 <= pkt_t_ms
         {
             cur_alg_status = alg_status_events[alg_status_idx].1;
             alg_status_idx += 1;
         }
-        while align_idx < align_events.len() && align_events[align_idx].0 <= pkt.t_ms {
+        while align_idx < align_events.len() && align_events[align_idx].0 <= pkt_t_ms {
             cur_align_q_vb = Some(align_events[align_idx].1);
             align_idx += 1;
         }
         let dt = match prev_imu_t {
-            Some(prev) => (pkt.t_ms - prev) * 1e-3,
+            Some(prev) => imu_sample.t_s - prev,
             None => {
-                prev_imu_t = Some(pkt.t_ms);
+                prev_imu_t = Some(imu_sample.t_s);
                 continue;
             }
         };
-        prev_imu_t = Some(pkt.t_ms);
+        prev_imu_t = Some(imu_sample.t_s);
         if !(0.001..=0.05).contains(&dt) {
             continue;
         }
@@ -544,24 +468,29 @@ pub fn build_ekf_compare_traces(
             ]));
         }
         let Some(fusion_ref) = fusion.as_mut() else {
-            while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
+            while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt_t_ms {
                 nav_idx += 1;
             }
             continue;
         };
-        let outage_active = in_gnss_outage(pkt.t_ms, &outage_windows_ms);
+        let outage_active = in_gnss_outage(pkt_t_ms, &outage_windows_ms);
 
         let raw_gyro_radps = [
-            pkt.gx_dps.to_radians() as f32,
-            pkt.gy_dps.to_radians() as f32,
-            pkt.gz_dps.to_radians() as f32,
+            imu_sample.gyro_radps[0] as f32,
+            imu_sample.gyro_radps[1] as f32,
+            imu_sample.gyro_radps[2] as f32,
         ];
-        let raw_accel_mps2 = [pkt.ax_mps2 as f32, pkt.ay_mps2 as f32, pkt.az_mps2 as f32];
-        fusion_ref.process_imu(FusionImuSample {
-            t_s: rel_s(pkt.t_ms) as f32,
-            gyro_radps: raw_gyro_radps,
-            accel_mps2: raw_accel_mps2,
-        });
+        let raw_accel_mps2 = [
+            imu_sample.accel_mps2[0] as f32,
+            imu_sample.accel_mps2[1] as f32,
+            imu_sample.accel_mps2[2] as f32,
+        ];
+        fusion_ref.process_imu(to_fusion_imu(*imu_sample));
+        let raw_gyro_deg = [
+            imu_sample.gyro_radps[0].to_degrees(),
+            imu_sample.gyro_radps[1].to_degrees(),
+            imu_sample.gyro_radps[2].to_degrees(),
+        ];
 
         let eskf_predict_mount_q_vb = fusion_ref
             .eskf_mount_q_vb()
@@ -596,10 +525,7 @@ pub fn build_ekf_compare_traces(
                         ],
                     )
                 } else {
-                    (
-                        [pkt.gx_dps, pkt.gy_dps, pkt.gz_dps],
-                        [pkt.ax_mps2, pkt.ay_mps2, pkt.az_mps2],
-                    )
+                    (raw_gyro_deg, imu_sample.accel_mps2)
                 }
             }
             EkfImuSource::EsfAlg => {
@@ -609,18 +535,15 @@ pub fn build_ekf_compare_traces(
                         deg2rad(alg.pitch_deg),
                         deg2rad(alg.roll_deg),
                     );
-                    let mut loose_gyro = mat_vec(r_sb, [pkt.gx_dps, pkt.gy_dps, pkt.gz_dps]);
-                    let mut loose_accel = mat_vec(r_sb, [pkt.ax_mps2, pkt.ay_mps2, pkt.az_mps2]);
+                    let mut loose_gyro = mat_vec(r_sb, raw_gyro_deg);
+                    let mut loose_accel = mat_vec(r_sb, imu_sample.accel_mps2);
                     loose_gyro[1] = -loose_gyro[1];
                     loose_gyro[2] = -loose_gyro[2];
                     loose_accel[1] = -loose_accel[1];
                     loose_accel[2] = -loose_accel[2];
                     (loose_gyro, loose_accel)
                 } else {
-                    (
-                        [pkt.gx_dps, pkt.gy_dps, pkt.gz_dps],
-                        [pkt.ax_mps2, pkt.ay_mps2, pkt.az_mps2],
-                    )
+                    (raw_gyro_deg, imu_sample.accel_mps2)
                 }
             }
         };
@@ -690,20 +613,12 @@ pub fn build_ekf_compare_traces(
             ];
             let mut loose_batch_applied = false;
 
-            while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
+            while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt_t_ms {
                 let (t_ms, nav) = nav_events[nav_idx];
+                let gnss_sample = replay.gnss_samples[nav_idx];
                 nav_idx += 1;
                 if in_gnss_outage(t_ms, &outage_windows_ms) {
                     continue;
-                }
-                if !use_nav2_for_ekf {
-                    if !next_gps_update_ms.is_finite() {
-                        next_gps_update_ms = t_ms;
-                    }
-                    if t_ms + 1e-6 < next_gps_update_ms {
-                        continue;
-                    }
-                    next_gps_update_ms += gps_period_ms;
                 }
 
                 if !origin_set {
@@ -715,8 +630,7 @@ pub fn build_ekf_compare_traces(
                 }
                 let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
                 let t = rel_s(t_ms);
-                let fusion_gnss = fusion_gnss_sample(nav, cfg, rel_s(t_ms) as f32);
-                let update = fusion_ref.process_gnss(fusion_gnss);
+                let update = fusion_ref.process_gnss(to_fusion_gnss(gnss_sample));
                 if update.mount_ready_changed && update.mount_ready {
                     fusion_mount_ready_marker.push([t, nav.heading_vehicle_deg]);
                 }
@@ -733,8 +647,8 @@ pub fn build_ekf_compare_traces(
                                     loose_seed_mount_q_vb = Some(q_vb);
                                     let loose_init = initialize_loose_from_nav(
                                         nav,
+                                        gnss_sample,
                                         base_loose_predict_noise,
-                                        cfg,
                                     );
                                     loose = Some(loose_init);
                                     loose_last_gps_update_ms = Some(t_ms);
@@ -752,7 +666,11 @@ pub fn build_ekf_compare_traces(
                                     [q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32]
                                 });
                                 let loose_init =
-                                    initialize_loose_from_nav(nav, base_loose_predict_noise, cfg);
+                                    initialize_loose_from_nav(
+                                        nav,
+                                        gnss_sample,
+                                        base_loose_predict_noise,
+                                    );
                                 loose = Some(loose_init);
                                 loose_last_gps_update_ms = Some(t_ms);
                             }
@@ -971,7 +889,7 @@ pub fn build_ekf_compare_traces(
         }
         prev_outage_active = outage_active;
 
-        let t_imu = rel_s(pkt.t_ms);
+        let t_imu = imu_sample.t_s;
         let dt_safe = dt.max(1.0e-6);
         if let Some(eskf_ref) = fusion_ref.eskf()
             && !eskf_initialized_this_pkt
@@ -1946,18 +1864,17 @@ impl Lcg64 {
 
 fn initialize_loose_from_nav(
     nav: NavPvtObs,
+    gnss: crate::datasets::generic_replay::GenericGnssSample,
     noise: LoosePredictNoise,
-    cfg: EkfCompareConfig,
 ) -> CLooseWrapper {
     let mut loose = CLooseWrapper::new(noise);
-    let gnss = fusion_gnss_sample(nav, cfg, 0.0);
-    let p_diag = default_loose_reference_p_diag(gnss);
+    let p_diag = default_loose_reference_p_diag(to_fusion_gnss(gnss));
     let vel_ecef = mat_vec(
         transpose3(ecef_to_ned_matrix(nav.lat_deg, nav.lon_deg)),
         [nav.vel_n_mps, nav.vel_e_mps, nav.vel_d_mps],
     );
     loose.init_seeded_vehicle_from_nav_ecef_state(
-        initial_yaw_from_nav(nav),
+        gnss.heading_rad.unwrap_or(0.0) as f32,
         nav.lat_deg,
         nav.lon_deg,
         lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m),
@@ -2009,17 +1926,6 @@ fn build_align_mount_events(
     out
 }
 
-fn initial_yaw_from_nav(nav: NavPvtObs) -> f32 {
-    let speed_h = nav.vel_n_mps.hypot(nav.vel_e_mps);
-    if nav.head_veh_valid {
-        deg2rad(nav.heading_vehicle_deg) as f32
-    } else if speed_h >= 1.0 {
-        nav.vel_e_mps.atan2(nav.vel_n_mps) as f32
-    } else {
-        deg2rad(nav.heading_motion_deg) as f32
-    }
-}
-
 fn default_loose_reference_p_diag(gnss: sensor_fusion::fusion::FusionGnssSample) -> [f32; 24] {
     const DEFAULT_GYRO_BIAS_SIGMA_DPS: f32 = 0.125;
     const DEFAULT_ACCEL_BIAS_SIGMA_MPS2: f32 = 0.075;
@@ -2067,43 +1973,6 @@ fn default_loose_reference_p_diag(gnss: sensor_fusion::fusion::FusionGnssSample)
     p_diag[22] = att_var;
     p_diag[23] = att_var;
     p_diag
-}
-
-fn fusion_gnss_sample(
-    nav: NavPvtObs,
-    cfg: EkfCompareConfig,
-    t_s: f32,
-) -> sensor_fusion::fusion::FusionGnssSample {
-    let speed_h = nav.vel_n_mps.hypot(nav.vel_e_mps);
-    let heading_rad = if nav.head_veh_valid {
-        Some(deg2rad(nav.heading_vehicle_deg) as f32)
-    } else if speed_h >= cfg.yaw_init_speed_mps.max(1.0) {
-        Some(nav.vel_e_mps.atan2(nav.vel_n_mps) as f32)
-    } else {
-        Some(deg2rad(nav.heading_motion_deg) as f32)
-    };
-    sensor_fusion::fusion::FusionGnssSample {
-        t_s,
-        lat_deg: nav.lat_deg as f32,
-        lon_deg: nav.lon_deg as f32,
-        height_m: nav.height_m as f32,
-        vel_ned_mps: [
-            nav.vel_n_mps as f32,
-            nav.vel_e_mps as f32,
-            nav.vel_d_mps as f32,
-        ],
-        pos_std_m: [
-            (nav.h_acc_m * cfg.gnss_pos_r_scale.sqrt()) as f32,
-            (nav.h_acc_m * cfg.gnss_pos_r_scale.sqrt()) as f32,
-            (nav.v_acc_m * cfg.gnss_pos_r_scale.sqrt()) as f32,
-        ],
-        vel_std_mps: [
-            (nav.s_acc_mps * cfg.gnss_vel_r_scale.sqrt()) as f32,
-            (nav.s_acc_mps * cfg.gnss_vel_r_scale.sqrt()) as f32,
-            (nav.s_acc_mps * cfg.gnss_vel_r_scale.sqrt()) as f32,
-        ],
-        heading_rad,
-    }
 }
 
 fn vehicle_measurements_from_mount(
