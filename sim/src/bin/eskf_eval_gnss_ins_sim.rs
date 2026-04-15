@@ -2,12 +2,16 @@ use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, ValueEnum};
 use sensor_fusion::fusion::{FusionGnssSample, FusionImuSample, SensorFusion};
 use sim::datasets::gnss_ins_sim::{
-    load_gnss_samples as load_dataset_gnss_samples, load_imu_samples as load_dataset_imu_samples,
     GnssSample as DatasetGnssSample, ImuSample as DatasetImuSample,
+    load_gnss_samples as load_dataset_gnss_samples, load_imu_samples as load_dataset_imu_samples,
+};
+use sim::eval::gnss_ins::{
+    as_q64, course_rate_deg, horiz_speed, quat_angle_deg, quat_conj, quat_from_rpy_alg_deg,
+    quat_mul, quat_rotate,
 };
 
 #[derive(Parser, Debug)]
@@ -322,11 +326,7 @@ where
         sum += v;
         n += 1;
     }
-    if n == 0 {
-        0.0
-    } else {
-        sum / n as f64
-    }
+    if n == 0 { 0.0 } else { sum / n as f64 }
 }
 
 fn max_of<I>(iter: I) -> f64
@@ -334,21 +334,6 @@ where
     I: Iterator<Item = f64>,
 {
     iter.fold(0.0, f64::max)
-}
-
-fn horiz_speed(v_ned_mps: [f64; 3]) -> f64 {
-    (v_ned_mps[0] * v_ned_mps[0] + v_ned_mps[1] * v_ned_mps[1]).sqrt()
-}
-
-fn course_rate_deg(prev: GnssSample, curr: GnssSample) -> f64 {
-    let dt = (curr.t_s - prev.t_s).max(1.0e-6);
-    let course_prev = prev.vel_ned_mps[1].atan2(prev.vel_ned_mps[0]);
-    let course_curr = curr.vel_ned_mps[1].atan2(curr.vel_ned_mps[0]);
-    wrap_deg180((course_curr - course_prev).to_degrees()) / dt
-}
-
-fn as_q64(q: [f32; 4]) -> [f64; 4] {
-    quat_normalize([q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64])
 }
 
 fn load_imu_samples(args: &Args) -> Result<Vec<ImuSample>> {
@@ -365,91 +350,6 @@ fn load_gnss_samples(args: &Args) -> Result<Vec<GnssSample>> {
         matches!(args.signal_source, SignalSource::Ref),
         args.data_key,
     )
-}
-
-fn quat_from_rpy_alg_deg(roll_deg: f64, pitch_deg: f64, yaw_deg: f64) -> [f64; 4] {
-    let (sr, cr) = (0.5 * roll_deg.to_radians()).sin_cos();
-    let (sp, cp) = (0.5 * pitch_deg.to_radians()).sin_cos();
-    let (sy, cy) = (0.5 * yaw_deg.to_radians()).sin_cos();
-    quat_normalize([
-        cr * cp * cy + sr * sp * sy,
-        sr * cp * cy - cr * sp * sy,
-        cr * sp * cy + sr * cp * sy,
-        cr * cp * sy - sr * sp * cy,
-    ])
-}
-
-fn quat_normalize(q: [f64; 4]) -> [f64; 4] {
-    let n = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
-    if n <= 1.0e-12 {
-        [1.0, 0.0, 0.0, 0.0]
-    } else {
-        [q[0] / n, q[1] / n, q[2] / n, q[3] / n]
-    }
-}
-
-fn quat_conj(q: [f64; 4]) -> [f64; 4] {
-    [q[0], -q[1], -q[2], -q[3]]
-}
-
-fn quat_mul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
-    quat_normalize([
-        a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
-        a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
-        a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
-        a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0],
-    ])
-}
-
-fn quat_rotate(q: [f64; 4], v: [f64; 3]) -> [f64; 3] {
-    let r = quat_to_rotmat(q);
-    [
-        r[0][0] * v[0] + r[0][1] * v[1] + r[0][2] * v[2],
-        r[1][0] * v[0] + r[1][1] * v[1] + r[1][2] * v[2],
-        r[2][0] * v[0] + r[2][1] * v[1] + r[2][2] * v[2],
-    ]
-}
-
-fn quat_angle_deg(a: [f64; 4], b: [f64; 4]) -> f64 {
-    let dot = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3])
-        .abs()
-        .clamp(0.0, 1.0);
-    2.0 * dot.acos().to_degrees()
-}
-
-fn wrap_deg180(mut deg: f64) -> f64 {
-    while deg > 180.0 {
-        deg -= 360.0;
-    }
-    while deg <= -180.0 {
-        deg += 360.0;
-    }
-    deg
-}
-
-fn quat_to_rotmat(q: [f64; 4]) -> [[f64; 3]; 3] {
-    let q = quat_normalize(q);
-    let q0 = q[0];
-    let q1 = q[1];
-    let q2 = q[2];
-    let q3 = q[3];
-    [
-        [
-            1.0 - 2.0 * q2 * q2 - 2.0 * q3 * q3,
-            2.0 * (q1 * q2 - q0 * q3),
-            2.0 * (q1 * q3 + q0 * q2),
-        ],
-        [
-            2.0 * (q1 * q2 + q0 * q3),
-            1.0 - 2.0 * q1 * q1 - 2.0 * q3 * q3,
-            2.0 * (q2 * q3 - q0 * q1),
-        ],
-        [
-            2.0 * (q1 * q3 - q0 * q2),
-            2.0 * (q2 * q3 + q0 * q1),
-            1.0 - 2.0 * q1 * q1 - 2.0 * q2 * q2,
-        ],
-    ]
 }
 
 fn write_residual_csv(path: &Path, samples: &[ResidualSample]) -> Result<()> {

@@ -2,15 +2,18 @@ use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, ValueEnum};
 use sensor_fusion::fusion::{FusionGnssSample, FusionImuSample, SensorFusion};
 use sim::datasets::gnss_ins_sim::{
-    load_gnss_samples as load_dataset_gnss_samples, load_imu_samples as load_dataset_imu_samples,
     GnssSample as DatasetGnssSample, ImuSample as DatasetImuSample,
+    load_gnss_samples as load_dataset_gnss_samples, load_imu_samples as load_dataset_imu_samples,
+};
+use sim::eval::gnss_ins::{
+    quat_angle_deg, quat_from_rpy_alg_deg, quat_rotate, wrap_deg180, wrap_rad_pi,
 };
 use sim::visualizer::pipeline::align_replay::{
-    axis_angle_deg, quat_rotate, quat_rpy_alg_deg, signed_projected_axis_angle_deg,
+    axis_angle_deg, quat_rpy_alg_deg, signed_projected_axis_angle_deg,
 };
 
 #[derive(Parser, Debug)]
@@ -509,54 +512,6 @@ fn load_gnss_samples(args: &Args) -> Result<Vec<GnssSample>> {
         matches!(args.signal_source, SignalSource::Ref),
         args.data_key,
     )
-}
-
-fn quat_from_rpy_alg_deg(roll_deg: f64, pitch_deg: f64, yaw_deg: f64) -> [f64; 4] {
-    let (sr, cr) = (0.5 * roll_deg.to_radians()).sin_cos();
-    let (sp, cp) = (0.5 * pitch_deg.to_radians()).sin_cos();
-    let (sy, cy) = (0.5 * yaw_deg.to_radians()).sin_cos();
-    quat_normalize([
-        cr * cp * cy + sr * sp * sy,
-        sr * cp * cy - cr * sp * sy,
-        cr * sp * cy + sr * cp * sy,
-        cr * cp * sy - sr * sp * cy,
-    ])
-}
-
-fn quat_normalize(q: [f64; 4]) -> [f64; 4] {
-    let n = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
-    if n <= 1.0e-12 {
-        [1.0, 0.0, 0.0, 0.0]
-    } else {
-        [q[0] / n, q[1] / n, q[2] / n, q[3] / n]
-    }
-}
-
-fn quat_angle_deg(a: [f64; 4], b: [f64; 4]) -> f64 {
-    let dot = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3])
-        .abs()
-        .clamp(0.0, 1.0);
-    2.0 * dot.acos().to_degrees()
-}
-
-fn wrap_deg180(mut deg: f64) -> f64 {
-    while deg > 180.0 {
-        deg -= 360.0;
-    }
-    while deg <= -180.0 {
-        deg += 360.0;
-    }
-    deg
-}
-
-fn wrap_rad_pi(mut rad: f64) -> f64 {
-    while rad > std::f64::consts::PI {
-        rad -= 2.0 * std::f64::consts::PI;
-    }
-    while rad <= -std::f64::consts::PI {
-        rad += 2.0 * std::f64::consts::PI;
-    }
-    rad
 }
 
 fn mean_of<I>(iter: I) -> Option<f64>
