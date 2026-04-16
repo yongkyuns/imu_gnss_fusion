@@ -114,7 +114,6 @@ fn main() {
     {
         build.define("SF_ESKF_DIAG_DISABLE_BODY_VEL_Z_MOUNT", Some("1"));
     }
-
     build.compile("sensor_fusion_c_impl");
 
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {

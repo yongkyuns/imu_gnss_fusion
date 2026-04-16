@@ -191,6 +191,10 @@ impl SensorFusion {
         self.raw.eskf_mount_q_vb()
     }
 
+    pub fn anchor_lla_debug(&self) -> Option<[f32; 3]> {
+        self.raw.anchor_lla_debug()
+    }
+
     pub fn mount_ready(&self) -> bool {
         self.raw.mount_ready()
     }

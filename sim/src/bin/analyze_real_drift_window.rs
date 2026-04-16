@@ -139,6 +139,22 @@ struct Stats {
     max: f64,
 }
 
+#[derive(Default)]
+struct GnssTrackPitchSplit {
+    pos_along_innov_m: Stats,
+    pos_cross_innov_m: Stats,
+    vel_along_innov_mps: Stats,
+    vel_cross_innov_mps: Stats,
+    pos_along_pitch_dx_deg: Stats,
+    pos_cross_pitch_dx_deg: Stats,
+    vel_along_pitch_dx_deg: Stats,
+    vel_cross_pitch_dx_deg: Stats,
+    pos_along_bax_dx_mps2: Stats,
+    pos_cross_bax_dx_mps2: Stats,
+    vel_along_bax_dx_mps2: Stats,
+    vel_cross_bax_dx_mps2: Stats,
+}
+
 impl Stats {
     fn push(&mut self, v: f64) {
         if self.n == 0 {
@@ -252,12 +268,33 @@ fn main() -> Result<()> {
     let mut mount_quat_err = Stats::default();
     let mut theta_z_var = Stats::default();
     let mut mount_z_var = Stats::default();
+    let mut p_theta_y = Stats::default();
+    let mut p_bax = Stats::default();
+    let mut p_theta_y_vn = Stats::default();
+    let mut p_theta_y_ve = Stats::default();
+    let mut p_bax_vn = Stats::default();
+    let mut p_bax_ve = Stats::default();
+    let mut gnss_track_pitch = GnssTrackPitchSplit::default();
 
     for_each_event(&replay.imu_samples, &replay.gnss_samples, |event| match event {
         ReplayEvent::Imu(_, sample) => {
             let _ = fusion.process_imu(to_fusion_imu(*sample));
         }
         ReplayEvent::Gnss(_, sample) => {
+            if sample.t_s >= args.start_s
+                && sample.t_s <= args.end_s
+                && let Some(eskf) = fusion.eskf()
+                && let Some(nav_att) = sample_nearest_nav_att(&nav_att_events, sample.t_s)
+                && let Some(anchor_lla) = fusion.anchor_lla_debug()
+            {
+                accumulate_gnss_track_pitch_split(
+                    &mut gnss_track_pitch,
+                    eskf,
+                    sample,
+                    nav_att.heading_deg,
+                    anchor_lla.map(|v| v as f64),
+                );
+            }
             let _ = fusion.process_gnss(to_fusion_gnss(*sample));
             if args.fuse_gnss_speed_as_vehicle_speed {
                 let speed_mps = sample.vel_ned_mps[0].hypot(sample.vel_ned_mps[1]) as f32;
@@ -297,6 +334,12 @@ fn main() -> Result<()> {
             mount_quat_err.push(snap.mount_quat_err_deg);
             theta_z_var.push(snap.theta_z_var);
             mount_z_var.push(snap.mount_z_var);
+            p_theta_y.push(eskf.p[1][1] as f64);
+            p_bax.push(eskf.p[12][12] as f64);
+            p_theta_y_vn.push(eskf.p[1][3] as f64);
+            p_theta_y_ve.push(eskf.p[1][4] as f64);
+            p_bax_vn.push(eskf.p[12][3] as f64);
+            p_bax_ve.push(eskf.p[12][4] as f64);
             first_snapshot.get_or_insert(snap);
             last_snapshot = Some(snap);
         }
@@ -351,6 +394,49 @@ fn main() -> Result<()> {
     mount_quat_err.print("mount_quat_err_deg", false);
     theta_z_var.print("theta_z_var", false);
     mount_z_var.print("mount_z_var", false);
+    p_theta_y.print("p_theta_y", false);
+    p_bax.print("p_bax", false);
+    p_theta_y_vn.print("p_theta_y_vn", false);
+    p_theta_y_ve.print("p_theta_y_ve", false);
+    p_bax_vn.print("p_bax_vn", false);
+    p_bax_ve.print("p_bax_ve", false);
+    println!("gnss_track_pitch_split:");
+    gnss_track_pitch
+        .pos_along_innov_m
+        .print("  pos_along_innov_m", false);
+    gnss_track_pitch
+        .pos_cross_innov_m
+        .print("  pos_cross_innov_m", false);
+    gnss_track_pitch
+        .vel_along_innov_mps
+        .print("  vel_along_innov_mps", false);
+    gnss_track_pitch
+        .vel_cross_innov_mps
+        .print("  vel_cross_innov_mps", false);
+    gnss_track_pitch
+        .pos_along_pitch_dx_deg
+        .print("  pos_along_pitch_dx_deg", false);
+    gnss_track_pitch
+        .pos_cross_pitch_dx_deg
+        .print("  pos_cross_pitch_dx_deg", false);
+    gnss_track_pitch
+        .vel_along_pitch_dx_deg
+        .print("  vel_along_pitch_dx_deg", false);
+    gnss_track_pitch
+        .vel_cross_pitch_dx_deg
+        .print("  vel_cross_pitch_dx_deg", false);
+    gnss_track_pitch
+        .pos_along_bax_dx_mps2
+        .print("  pos_along_bax_dx_mps2", false);
+    gnss_track_pitch
+        .pos_cross_bax_dx_mps2
+        .print("  pos_cross_bax_dx_mps2", false);
+    gnss_track_pitch
+        .vel_along_bax_dx_mps2
+        .print("  vel_along_bax_dx_mps2", false);
+    gnss_track_pitch
+        .vel_cross_bax_dx_mps2
+        .print("  vel_cross_bax_dx_mps2", false);
 
     println!("snapshot_drift:");
     print_snapshot_delta("pitch_deg", first.pitch_deg, last.pitch_deg, true);
@@ -561,6 +647,92 @@ fn print_snapshot_delta(name: &str, start: f64, end: f64, is_angle: bool) {
     );
 }
 
+fn accumulate_gnss_track_pitch_split(
+    stats: &mut GnssTrackPitchSplit,
+    eskf: &sensor_fusion::c_api::CEskf,
+    gnss: &sim::datasets::generic_replay::GenericGnssSample,
+    heading_deg: f64,
+    anchor_lla: [f64; 3],
+) {
+    let pos_anchor_ned = lla_to_anchor_ned(anchor_lla, [gnss.lat_deg, gnss.lon_deg, gnss.height_m]);
+    let vel_anchor_ned =
+        velocity_local_ned_to_anchor_ned(anchor_lla, [gnss.lat_deg, gnss.lon_deg], gnss.vel_ned_mps);
+    let pos_innov_ne = [
+        pos_anchor_ned[0] - eskf.nominal.pn as f64,
+        pos_anchor_ned[1] - eskf.nominal.pe as f64,
+    ];
+    let vel_innov_ne = [
+        vel_anchor_ned[0] - eskf.nominal.vn as f64,
+        vel_anchor_ned[1] - eskf.nominal.ve as f64,
+    ];
+    let psi = heading_deg.to_radians();
+    let along = [psi.cos(), psi.sin()];
+    let cross = [-psi.sin(), psi.cos()];
+
+    let r_pos_n = gnss.pos_std_m[0] * gnss.pos_std_m[0];
+    let r_pos_e = gnss.pos_std_m[1] * gnss.pos_std_m[1];
+    let r_vel_n = gnss.vel_std_mps[0] * gnss.vel_std_mps[0];
+    let r_vel_e = gnss.vel_std_mps[1] * gnss.vel_std_mps[1];
+    let k_pitch_pos = [
+        (eskf.p[1][6] as f64) / ((eskf.p[6][6] as f64) + r_pos_n),
+        (eskf.p[1][7] as f64) / ((eskf.p[7][7] as f64) + r_pos_e),
+    ];
+    let k_pitch_vel = [
+        (eskf.p[1][3] as f64) / ((eskf.p[3][3] as f64) + r_vel_n),
+        (eskf.p[1][4] as f64) / ((eskf.p[4][4] as f64) + r_vel_e),
+    ];
+    let k_bax_pos = [
+        (eskf.p[12][6] as f64) / ((eskf.p[6][6] as f64) + r_pos_n),
+        (eskf.p[12][7] as f64) / ((eskf.p[7][7] as f64) + r_pos_e),
+    ];
+    let k_bax_vel = [
+        (eskf.p[12][3] as f64) / ((eskf.p[3][3] as f64) + r_vel_n),
+        (eskf.p[12][4] as f64) / ((eskf.p[4][4] as f64) + r_vel_e),
+    ];
+
+    let pos_along = dot2(pos_innov_ne, along);
+    let pos_cross = dot2(pos_innov_ne, cross);
+    let vel_along = dot2(vel_innov_ne, along);
+    let vel_cross = dot2(vel_innov_ne, cross);
+    let k_pos_along = dot2(k_pitch_pos, along);
+    let k_pos_cross = dot2(k_pitch_pos, cross);
+    let k_vel_along = dot2(k_pitch_vel, along);
+    let k_vel_cross = dot2(k_pitch_vel, cross);
+    let k_bax_pos_along = dot2(k_bax_pos, along);
+    let k_bax_pos_cross = dot2(k_bax_pos, cross);
+    let k_bax_vel_along = dot2(k_bax_vel, along);
+    let k_bax_vel_cross = dot2(k_bax_vel, cross);
+
+    stats.pos_along_innov_m.push(pos_along);
+    stats.pos_cross_innov_m.push(pos_cross);
+    stats.vel_along_innov_mps.push(vel_along);
+    stats.vel_cross_innov_mps.push(vel_cross);
+    stats
+        .pos_along_pitch_dx_deg
+        .push(rad2deg(k_pos_along * pos_along));
+    stats
+        .pos_cross_pitch_dx_deg
+        .push(rad2deg(k_pos_cross * pos_cross));
+    stats
+        .vel_along_pitch_dx_deg
+        .push(rad2deg(k_vel_along * vel_along));
+    stats
+        .vel_cross_pitch_dx_deg
+        .push(rad2deg(k_vel_cross * vel_cross));
+    stats
+        .pos_along_bax_dx_mps2
+        .push(k_bax_pos_along * pos_along);
+    stats
+        .pos_cross_bax_dx_mps2
+        .push(k_bax_pos_cross * pos_cross);
+    stats
+        .vel_along_bax_dx_mps2
+        .push(k_bax_vel_along * vel_along);
+    stats
+        .vel_cross_bax_dx_mps2
+        .push(k_bax_vel_cross * vel_cross);
+}
+
 fn collect_nav_att_events(frames: &[UbxFrame], tl: &MasterTimeline) -> Vec<NavAttEvent> {
     let mut out = Vec::new();
     let t0_ms = tl.masters.first().map(|(_, t)| *t).unwrap_or(0.0);
@@ -635,6 +807,62 @@ fn wrap_deg180(mut deg: f64) -> f64 {
         deg += 360.0;
     }
     deg
+}
+
+fn dot2(a: [f64; 2], b: [f64; 2]) -> f64 {
+    a[0] * b[0] + a[1] * b[1]
+}
+
+fn lla_to_anchor_ned(anchor_lla: [f64; 3], sample_lla: [f64; 3]) -> [f64; 3] {
+    let anchor_ecef = lla_to_ecef(anchor_lla[0], anchor_lla[1], anchor_lla[2]);
+    let sample_ecef = lla_to_ecef(sample_lla[0], sample_lla[1], sample_lla[2]);
+    let diff = [
+        sample_ecef[0] - anchor_ecef[0],
+        sample_ecef[1] - anchor_ecef[1],
+        sample_ecef[2] - anchor_ecef[2],
+    ];
+    mat_vec(ecef_to_ned_matrix(anchor_lla[0], anchor_lla[1]), diff)
+}
+
+fn velocity_local_ned_to_anchor_ned(
+    anchor_lla: [f64; 3],
+    sample_lat_lon: [f64; 2],
+    vel_local_ned_mps: [f64; 3],
+) -> [f64; 3] {
+    let c_ne_local = ecef_to_ned_matrix(sample_lat_lon[0], sample_lat_lon[1]);
+    let vel_ecef = mat_vec(transpose3(c_ne_local), vel_local_ned_mps);
+    mat_vec(ecef_to_ned_matrix(anchor_lla[0], anchor_lla[1]), vel_ecef)
+}
+
+fn lla_to_ecef(lat_deg: f64, lon_deg: f64, height_m: f64) -> [f64; 3] {
+    const A_M: f64 = 6_378_137.0;
+    const E2: f64 = 6.69437999014e-3;
+    let lat = lat_deg.to_radians();
+    let lon = lon_deg.to_radians();
+    let slat = lat.sin();
+    let clat = lat.cos();
+    let slon = lon.sin();
+    let clon = lon.cos();
+    let n = A_M / (1.0 - E2 * slat * slat).sqrt();
+    [
+        (n + height_m) * clat * clon,
+        (n + height_m) * clat * slon,
+        (n * (1.0 - E2) + height_m) * slat,
+    ]
+}
+
+fn ecef_to_ned_matrix(lat_deg: f64, lon_deg: f64) -> [[f64; 3]; 3] {
+    let lat = lat_deg.to_radians();
+    let lon = lon_deg.to_radians();
+    let slat = lat.sin();
+    let clat = lat.cos();
+    let slon = lon.sin();
+    let clon = lon.cos();
+    [
+        [-slat * clon, -slat * slon, clat],
+        [-slon, clon, 0.0],
+        [-clat * clon, -clat * slon, -slat],
+    ]
 }
 
 fn quat_mul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {

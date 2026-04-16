@@ -59,6 +59,8 @@ static bool sf_runtime_zero_velocity_active(sf_sensor_fusion_impl_t *impl,
                                             const float gyro_radps[3]);
 static bool sf_runtime_nhc_active(const float accel_b[3],
                                   const float gyro_radps[3]);
+static float
+sf_runtime_nhc_speed_scale(const sf_sensor_fusion_impl_t *impl);
 static float sf_gnss_vel_update_scale_xy(const sf_sensor_fusion_impl_t *impl,
                                          float t_s);
 static void sf_blend_eskf_mount_seed(sf_sensor_fusion_impl_t *impl, float t_s);
@@ -327,7 +329,7 @@ void sf_fusion_config_default(sf_fusion_config_t *cfg) {
   sf_predict_noise_default(&cfg->predict_noise);
   cfg->gyro_bias_init_sigma_radps = 0.125f * 3.1415927f / 180.0f;
   cfg->accel_bias_init_sigma_mps2 = 0.20f;
-  cfg->r_body_vel = 2.0f;
+  cfg->r_body_vel = 0.01f;
   cfg->gnss_pos_mount_scale = 0.0f;
   cfg->gnss_vel_mount_scale = 0.0f;
   cfg->gnss_vel_xy_update_min_scale = 0.25f;
@@ -726,12 +728,17 @@ sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
       }
     } else if (sf_runtime_nhc_active(accel_vehicle, gyro_vehicle)) {
       const float body_update_scale = sf_mount_update_scale(impl, sample->t_s);
-      const float effective_r_body_vel =
-          impl->cfg.r_body_vel /
-          ((body_update_scale > 1.0e-3f) ? body_update_scale : 1.0e-3f);
-      sf_eskf_fuse_body_vel_scaled(&impl->eskf, effective_r_body_vel,
-                                   body_update_scale,
-                                   impl->cfg.mount_update_innovation_gate_mps);
+      const float nhc_speed_scale = sf_runtime_nhc_speed_scale(impl);
+      if (nhc_speed_scale > 0.0f) {
+        const float fused_body_update_scale = body_update_scale * nhc_speed_scale;
+        const float effective_r_body_vel =
+            impl->cfg.r_body_vel /
+            ((fused_body_update_scale > 1.0e-3f) ? fused_body_update_scale
+                                                 : 1.0e-3f);
+        sf_eskf_fuse_body_vel_scaled(&impl->eskf, effective_r_body_vel,
+                                     fused_body_update_scale,
+                                     impl->cfg.mount_update_innovation_gate_mps);
+      }
     }
     if (impl->profile_now_us != NULL) {
       elapsed_us = sf_profile_stamp(impl) - t0_us;
@@ -1836,6 +1843,25 @@ static bool sf_runtime_nhc_active(const float accel_b[3],
   return sf_norm3(gyro_radps) < SF_RUNTIME_NHC_MAX_GYRO_RADPS &&
          fabsf(sf_norm3(accel_b) - SF_GRAVITY_MSS) <
              SF_RUNTIME_NHC_MAX_ACCEL_NORM_ERR_MPS2;
+}
+
+static float
+sf_runtime_nhc_speed_scale(const sf_sensor_fusion_impl_t *impl) {
+  const float full_speed_mps = 15.0f / 3.6f;
+  float speed_mps;
+
+  if (impl == NULL || !impl->last_gnss_valid) {
+    return 0.0f;
+  }
+
+  speed_mps = sf_horiz_speed(impl->last_gnss.vel_ned_mps);
+  if (!(speed_mps > 0.0f)) {
+    return 0.0f;
+  }
+  if (speed_mps >= full_speed_mps) {
+    return 1.0f;
+  }
+  return speed_mps / full_speed_mps;
 }
 
 static bool sf_take_interval_summary(sf_sensor_fusion_impl_t *impl, float t0_s,

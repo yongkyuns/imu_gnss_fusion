@@ -82,7 +82,7 @@ pub struct EkfCompareConfig {
 impl Default for EkfCompareConfig {
     fn default() -> Self {
         Self {
-            r_body_vel: 2.0,
+            r_body_vel: 0.01,
             gnss_pos_mount_scale: 0.0,
             gnss_vel_mount_scale: 0.0,
             gyro_bias_init_sigma_dps: 0.125,
@@ -98,7 +98,7 @@ impl Default for EkfCompareConfig {
             predict_imu_decimation: 1,
             yaw_init_speed_mps: 0.0 / 3.6,
             gnss_pos_r_scale: 0.1,
-            gnss_vel_r_scale: 3.0,
+            gnss_vel_r_scale: 1.0,
             predict_noise: None,
             loose_predict_noise: None,
         }
