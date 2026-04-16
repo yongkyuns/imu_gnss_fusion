@@ -744,10 +744,12 @@ pub fn build_ekf_compare_traces(
                         eskf_ref.nominal.q2,
                         eskf_ref.nominal.q3,
                     );
-                    let [eskf_lat, eskf_lon, _eskf_h] = fusion_ref
-                        .position_lla()
-                        .map(|x| [x[0] as f64, x[1] as f64, x[2] as f64])
-                        .unwrap_or([nav.lat_deg, nav.lon_deg, nav.height_m]);
+                    let (eskf_lat, eskf_lon, _eskf_h) =
+                        eskf_display_lla(&fusion_ref).unwrap_or((
+                            nav.lat_deg,
+                            nav.lon_deg,
+                            nav.height_m,
+                        ));
                     map_eskf_heading.push(HeadingSample {
                         t_s: t,
                         lon_deg: eskf_lon,
@@ -893,10 +895,8 @@ pub fn build_ekf_compare_traces(
 
         if origin_set {
             if let Some(_eskf_ref) = fusion_ref.eskf() {
-                let [eskf_lat, eskf_lon, _eskf_h] = fusion_ref
-                    .position_lla()
-                    .map(|x| [x[0] as f64, x[1] as f64, x[2] as f64])
-                    .unwrap_or([ref_lat, ref_lon, ref_h]);
+                let (eskf_lat, eskf_lon, _eskf_h) =
+                    eskf_display_lla(&fusion_ref).unwrap_or((ref_lat, ref_lon, ref_h));
                 map_eskf.push([eskf_lon, eskf_lat]);
                 if outage_active {
                     if !prev_outage_active && !map_eskf_outage.is_empty() {
@@ -2335,6 +2335,19 @@ fn loose_display_state(
         mat_vec(ecef_to_ned_matrix(ref_lat, ref_lon), vel_ecef),
         quat_mul(q_ne, [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64]),
     )
+}
+
+fn eskf_display_lla(fusion: &SensorFusion) -> Option<(f64, f64, f64)> {
+    let eskf = fusion.eskf()?;
+    let anchor = fusion.anchor_lla_debug()?;
+    Some(ned_to_lla_exact(
+        eskf.nominal.pn as f64,
+        eskf.nominal.pe as f64,
+        eskf.nominal.pd as f64,
+        anchor[0] as f64,
+        anchor[1] as f64,
+        anchor[2] as f64,
+    ))
 }
 
 fn ecef_to_ned_matrix(lat_deg: f64, lon_deg: f64) -> [[f64; 3]; 3] {
