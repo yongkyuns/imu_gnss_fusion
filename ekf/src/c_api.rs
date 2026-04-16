@@ -508,6 +508,12 @@ unsafe extern "C" {
     fn sf_get_lla(fusion: *const CSensorFusion, out_lla: *mut f32) -> bool;
     fn sf_fusion_get_debug(fusion: *const CSensorFusion, out: *mut CFusionDebug) -> bool;
     fn sf_fusion_eskf_mount_q_vb(fusion: *const CSensorFusion, out_q_vb: *mut f32) -> bool;
+    fn sf_analysis_set_eskf_mount_quat(fusion: *mut CSensorFusion, q_cs: *const f32);
+    fn sf_analysis_set_eskf_mount_covariance(
+        fusion: *mut CSensorFusion,
+        sigma_rad: f32,
+        zero_cross: bool,
+    );
 
     fn sf_fusion_set_misalignment(fusion: *mut CSensorFusion, q_vb: *const f32);
 
@@ -987,6 +993,24 @@ impl CSensorFusionWrapper {
         self.debug
             .align_trace_valid
             .then_some(&self.debug.align_trace)
+    }
+
+    pub fn analysis_set_eskf_mount_quat(&mut self, q_cs: [f32; 4]) {
+        unsafe {
+            sf_analysis_set_eskf_mount_quat(&mut self.raw as *mut CSensorFusion, q_cs.as_ptr())
+        };
+        self.refresh_state();
+    }
+
+    pub fn analysis_set_eskf_mount_covariance(&mut self, sigma_rad: f32, zero_cross: bool) {
+        unsafe {
+            sf_analysis_set_eskf_mount_covariance(
+                &mut self.raw as *mut CSensorFusion,
+                sigma_rad,
+                zero_cross,
+            )
+        };
+        self.refresh_state();
     }
 
     fn refresh_state(&mut self) {

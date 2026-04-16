@@ -76,6 +76,12 @@ struct Args {
     mount_update_ramp_time_s: f32,
     #[arg(long, default_value_t = 0.05)]
     mount_update_innovation_gate_mps: f32,
+    #[arg(long, default_value_t = false)]
+    analysis_zero_mount_cross_cov: bool,
+    #[arg(long, default_value_t = false)]
+    analysis_freeze_mount: bool,
+    #[arg(long, default_value_t = 0.001)]
+    analysis_mount_sigma_deg: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -280,6 +286,7 @@ fn main() -> Result<()> {
     let mut p_bax_vn = Stats::default();
     let mut p_bax_ve = Stats::default();
     let mut gnss_track_pitch = GnssTrackPitchSplit::default();
+    let mut latched_mount_qcs: Option<[f32; 4]> = None;
 
     let mut prev_imu_t_s: Option<f64> = None;
     for_each_event(&replay.imu_samples, &replay.gnss_samples, |event| match event {
@@ -315,6 +322,7 @@ fn main() -> Result<()> {
                 }
             }
             let _ = fusion.process_imu(to_fusion_imu(*sample));
+            apply_mount_ablation(&args, &mut fusion, &mut latched_mount_qcs);
             prev_imu_t_s = Some(sample.t_s);
         }
         ReplayEvent::Gnss(_, sample) => {
@@ -333,6 +341,7 @@ fn main() -> Result<()> {
                 );
             }
             let _ = fusion.process_gnss(to_fusion_gnss(*sample));
+            apply_mount_ablation(&args, &mut fusion, &mut latched_mount_qcs);
             if args.fuse_gnss_speed_as_vehicle_speed {
                 let speed_mps = sample.vel_ned_mps[0].hypot(sample.vel_ned_mps[1]) as f32;
                 let _ = fusion.process_vehicle_speed(FusionVehicleSpeedSample {
@@ -340,6 +349,7 @@ fn main() -> Result<()> {
                     speed_mps,
                     direction: FusionVehicleSpeedDirection::Forward,
                 });
+                apply_mount_ablation(&args, &mut fusion, &mut latched_mount_qcs);
             }
             let t_s = sample.t_s;
             if t_s < args.start_s || t_s > args.end_s {
@@ -390,7 +400,7 @@ fn main() -> Result<()> {
     };
 
     println!(
-        "window=[{:.3}, {:.3}] config: gnss_pos_r_scale={:.3} gnss_vel_r_scale={:.3} gnss_time_shift_ms={:.1} r_body_vel={:.3} gnss_pos_mount_scale={:.3} gnss_vel_mount_scale={:.3} gyro_bias_init_sigma_dps={:.3} accel_bias_init_sigma_mps2={:.3} accel_bias_rw_var={:.6e} r_vehicle_speed={:.3} fuse_gnss_speed_as_vehicle_speed={} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} mount_update_min_scale={:.3} mount_update_ramp_time_s={:.3} mount_update_innovation_gate_mps={:.3}",
+        "window=[{:.3}, {:.3}] config: gnss_pos_r_scale={:.3} gnss_vel_r_scale={:.3} gnss_time_shift_ms={:.1} r_body_vel={:.3} gnss_pos_mount_scale={:.3} gnss_vel_mount_scale={:.3} gyro_bias_init_sigma_dps={:.3} accel_bias_init_sigma_mps2={:.3} accel_bias_rw_var={:.6e} r_vehicle_speed={:.3} fuse_gnss_speed_as_vehicle_speed={} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} mount_update_min_scale={:.3} mount_update_ramp_time_s={:.3} mount_update_innovation_gate_mps={:.3} analysis_zero_mount_cross_cov={} analysis_freeze_mount={} analysis_mount_sigma_deg={:.6}",
         args.start_s,
         args.end_s,
         args.gnss_pos_r_scale,
@@ -410,6 +420,9 @@ fn main() -> Result<()> {
         args.mount_update_min_scale,
         args.mount_update_ramp_time_s,
         args.mount_update_innovation_gate_mps,
+        args.analysis_zero_mount_cross_cov,
+        args.analysis_freeze_mount,
+        args.analysis_mount_sigma_deg,
     );
     println!(
         "window_endpoints: start_t={:.3} end_t={:.3}",
@@ -817,6 +830,32 @@ fn sample_nearest_nav_att(events: &[NavAttEvent], t_s: f64) -> Option<NavAttEven
 
 fn sample_nearest_alg_mount(events: &[AlgMountEvent], t_s: f64) -> Option<AlgMountEvent> {
     sample_nearest(events, t_s, |event| event.t_s)
+}
+
+fn apply_mount_ablation(
+    args: &Args,
+    fusion: &mut SensorFusion,
+    latched_mount_qcs: &mut Option<[f32; 4]>,
+) {
+    let sigma_rad = args.analysis_mount_sigma_deg.to_radians() as f32;
+    let Some(eskf) = fusion.eskf() else {
+        return;
+    };
+
+    if args.analysis_freeze_mount {
+        let current_qcs = [
+            eskf.nominal.qcs0,
+            eskf.nominal.qcs1,
+            eskf.nominal.qcs2,
+            eskf.nominal.qcs3,
+        ];
+        let qcs = *latched_mount_qcs.get_or_insert(current_qcs);
+        fusion.analysis_set_eskf_mount_quat(qcs);
+    }
+
+    if args.analysis_zero_mount_cross_cov || args.analysis_freeze_mount {
+        fusion.analysis_set_eskf_mount_covariance(sigma_rad, true);
+    }
 }
 
 fn sample_nearest<T: Copy>(events: &[T], t_s: f64, time_of: impl Fn(&T) -> f64) -> Option<T> {

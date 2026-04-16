@@ -118,6 +118,12 @@ sf_update_t sf_process_vehicle_speed(sf_t *sf,
 bool sf_get_state(const sf_t *sf, sf_state_t *out);
 bool sf_get_lla(const sf_t *sf, float out_lla[3]);
 
+/* Analysis-only helpers for mutating the internal ESKF mount state. */
+void sf_analysis_set_eskf_mount_quat(sf_t *sf, const float q_cs[4]);
+void sf_analysis_set_eskf_mount_covariance(sf_t *sf,
+                                           float sigma_rad,
+                                           bool zero_cross);
+
 #ifdef __cplusplus
 }
 #endif

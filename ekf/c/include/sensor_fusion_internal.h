@@ -268,6 +268,11 @@ bool sf_fusion_mount_q_vb(const sf_sensor_fusion_t *fusion, float out_q_vb[4]);
 bool sf_fusion_eskf_mount_q_vb(const sf_sensor_fusion_t *fusion,
                                float out_q_vb[4]);
 bool sf_fusion_get_debug(const sf_sensor_fusion_t *fusion, sf_fusion_debug_t *out);
+void sf_fusion_analysis_set_eskf_mount_quat(sf_sensor_fusion_t *fusion,
+                                            const float q_cs[4]);
+void sf_fusion_analysis_set_eskf_mount_covariance(sf_sensor_fusion_t *fusion,
+                                                  float sigma_rad,
+                                                  bool zero_cross);
 
 void sf_fusion_set_profile_now_us(sf_sensor_fusion_t *fusion,
                                   sf_profile_now_us_fn now_us,

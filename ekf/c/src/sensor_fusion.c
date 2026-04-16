@@ -265,6 +265,17 @@ bool sf_get_lla(const sf_t *sf, float out_lla[3]) {
   return true;
 }
 
+void sf_analysis_set_eskf_mount_quat(sf_t *sf, const float q_cs[4]) {
+  sf_fusion_analysis_set_eskf_mount_quat((sf_sensor_fusion_t *)sf, q_cs);
+}
+
+void sf_analysis_set_eskf_mount_covariance(sf_t *sf,
+                                           float sigma_rad,
+                                           bool zero_cross) {
+  sf_fusion_analysis_set_eskf_mount_covariance((sf_sensor_fusion_t *)sf,
+                                               sigma_rad, zero_cross);
+}
+
 void sf_align_config_default(sf_align_config_t *cfg) {
   if (cfg == NULL) {
     return;
@@ -996,6 +1007,53 @@ bool sf_fusion_eskf_mount_q_vb(const sf_sensor_fusion_t *fusion,
   }
   memcpy(out_q_vb, impl->eskf_mount_q_vb, sizeof(impl->eskf_mount_q_vb));
   return true;
+}
+
+void sf_fusion_analysis_set_eskf_mount_quat(sf_sensor_fusion_t *fusion,
+                                            const float q_cs[4]) {
+  sf_sensor_fusion_impl_t *impl;
+  float q[4];
+
+  if (fusion == NULL || q_cs == NULL) {
+    return;
+  }
+  impl = sf_impl(fusion);
+  if (!impl->ekf_initialized) {
+    return;
+  }
+  memcpy(q, q_cs, sizeof(q));
+  sf_quat_normalize(q);
+  impl->eskf.nominal.qcs0 = q[0];
+  impl->eskf.nominal.qcs1 = q[1];
+  impl->eskf.nominal.qcs2 = q[2];
+  impl->eskf.nominal.qcs3 = q[3];
+}
+
+void sf_fusion_analysis_set_eskf_mount_covariance(sf_sensor_fusion_t *fusion,
+                                                  float sigma_rad,
+                                                  bool zero_cross) {
+  sf_sensor_fusion_impl_t *impl;
+  float var;
+  size_t i;
+  size_t j;
+
+  if (fusion == NULL || !isfinite(sigma_rad) || sigma_rad < 0.0f) {
+    return;
+  }
+  impl = sf_impl(fusion);
+  if (!impl->ekf_initialized) {
+    return;
+  }
+  var = sigma_rad * sigma_rad;
+  for (i = 15U; i < 18U; ++i) {
+    if (zero_cross) {
+      for (j = 0U; j < SF_ESKF_ERROR_STATES; ++j) {
+        impl->eskf.p[i][j] = 0.0f;
+        impl->eskf.p[j][i] = 0.0f;
+      }
+    }
+    impl->eskf.p[i][i] = var;
+  }
 }
 
 static sf_update_t sf_update_from_fusion(const sf_sensor_fusion_impl_t *fusion,

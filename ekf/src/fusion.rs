@@ -222,6 +222,17 @@ impl SensorFusion {
         })
     }
 
+    pub fn analysis_set_eskf_mount_quat(&mut self, q_cs: [f32; 4]) {
+        self.raw.analysis_set_eskf_mount_quat(q_cs);
+        self.refresh_align_snapshot();
+    }
+
+    pub fn analysis_set_eskf_mount_covariance(&mut self, sigma_rad: f32, zero_cross: bool) {
+        self.raw
+            .analysis_set_eskf_mount_covariance(sigma_rad, zero_cross);
+        self.refresh_align_snapshot();
+    }
+
     fn refresh_align_snapshot(&mut self) {
         self.cached_align = self
             .raw
