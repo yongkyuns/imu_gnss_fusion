@@ -113,6 +113,15 @@ void sf_set_gyro_bias_init_sigma_radps(sf_t *sf,
                                            gyro_bias_init_sigma_radps);
 }
 
+void sf_set_accel_bias_init_sigma_mps2(sf_t *sf, float accel_bias_init_sigma_mps2) {
+  sf_fusion_set_accel_bias_init_sigma_mps2((sf_sensor_fusion_t *)sf,
+                                           accel_bias_init_sigma_mps2);
+}
+
+void sf_set_accel_bias_rw_var(sf_t *sf, float accel_bias_rw_var) {
+  sf_fusion_set_accel_bias_rw_var((sf_sensor_fusion_t *)sf, accel_bias_rw_var);
+}
+
 void sf_set_mount_align_rw_var(sf_t *sf, float mount_align_rw_var) {
   sf_fusion_set_mount_align_rw_var((sf_sensor_fusion_t *)sf, mount_align_rw_var);
 }
@@ -429,6 +438,29 @@ void sf_fusion_set_gyro_bias_init_sigma_radps(sf_sensor_fusion_t *fusion,
   }
   impl = sf_impl(fusion);
   impl->cfg.gyro_bias_init_sigma_radps = gyro_bias_init_sigma_radps;
+}
+
+void sf_fusion_set_accel_bias_init_sigma_mps2(sf_sensor_fusion_t *fusion,
+                                              float accel_bias_init_sigma_mps2) {
+  sf_sensor_fusion_impl_t *impl;
+  if (fusion == NULL || !isfinite(accel_bias_init_sigma_mps2) ||
+      accel_bias_init_sigma_mps2 < 0.0f) {
+    return;
+  }
+  impl = sf_impl(fusion);
+  impl->cfg.accel_bias_init_sigma_mps2 = accel_bias_init_sigma_mps2;
+}
+
+void sf_fusion_set_accel_bias_rw_var(sf_sensor_fusion_t *fusion,
+                                     float accel_bias_rw_var) {
+  sf_sensor_fusion_impl_t *impl;
+  if (fusion == NULL || !isfinite(accel_bias_rw_var) ||
+      accel_bias_rw_var < 0.0f) {
+    return;
+  }
+  impl = sf_impl(fusion);
+  impl->cfg.predict_noise.accel_bias_rw_var = accel_bias_rw_var;
+  impl->eskf.noise.accel_bias_rw_var = accel_bias_rw_var;
 }
 
 void sf_fusion_set_mount_align_rw_var(sf_sensor_fusion_t *fusion,

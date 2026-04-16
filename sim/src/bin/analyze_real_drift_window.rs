@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use sensor_fusion::fusion::SensorFusion;
+use sensor_fusion::fusion::{
+    FusionVehicleSpeedDirection, FusionVehicleSpeedSample, SensorFusion,
+};
 use sim::datasets::generic_replay::{
     fusion_gnss_sample as to_fusion_gnss, fusion_imu_sample as to_fusion_imu,
 };
@@ -43,6 +45,8 @@ struct Args {
     gnss_pos_r_scale: f64,
     #[arg(long, default_value_t = 3.0)]
     gnss_vel_r_scale: f64,
+    #[arg(long, default_value_t = 0.0)]
+    gnss_time_shift_ms: f64,
     #[arg(long, default_value_t = 2.0)]
     r_body_vel: f32,
     #[arg(long, default_value_t = 0.0)]
@@ -51,8 +55,14 @@ struct Args {
     gnss_vel_mount_scale: f32,
     #[arg(long, default_value_t = 0.125)]
     gyro_bias_init_sigma_dps: f32,
+    #[arg(long, default_value_t = 0.20)]
+    accel_bias_init_sigma_mps2: f32,
+    #[arg(long, default_value_t = 0.002e-9)]
+    accel_bias_rw_var: f32,
     #[arg(long, default_value_t = 0.04)]
     r_vehicle_speed: f32,
+    #[arg(long, default_value_t = false)]
+    fuse_gnss_speed_as_vehicle_speed: bool,
     #[arg(long, default_value_t = 0.0)]
     r_zero_vel: f32,
     #[arg(long, default_value_t = 0.0)]
@@ -70,6 +80,7 @@ struct Args {
 #[derive(Clone, Copy)]
 struct NavAttEvent {
     t_s: f64,
+    pitch_deg: f64,
     heading_deg: f64,
 }
 
@@ -77,21 +88,27 @@ struct NavAttEvent {
 struct AlgMountEvent {
     t_s: f64,
     q_vb: [f64; 4],
+    pitch_deg: f64,
     yaw_deg: f64,
 }
 
 #[derive(Clone, Copy, Default)]
 struct WindowSnapshot {
     t_s: f64,
+    pitch_deg: f64,
     yaw_deg: f64,
     course_deg: f64,
+    pitch_minus_nav_att_deg: f64,
     yaw_minus_nav_att_deg: f64,
     yaw_minus_course_deg: f64,
     course_minus_course_deg: f64,
     vel_vehicle_y_mps: f64,
+    vel_vehicle_z_mps: f64,
     vn_err_mps: f64,
     ve_err_mps: f64,
+    vd_err_mps: f64,
     speed_err_mps: f64,
+    mount_pitch_err_deg: f64,
     mount_yaw_err_deg: f64,
     mount_quat_err_deg: f64,
     bgx_dps: f64,
@@ -105,6 +122,7 @@ struct WindowSnapshot {
     v_e_var: f64,
     mount_z_var: f64,
     type_counts: [u32; 11],
+    sum_abs_dx_pitch_deg: [f64; 11],
     sum_abs_innovation: [f64; 11],
     sum_abs_dx_mount_yaw_deg: [f64; 11],
 }
@@ -176,7 +194,7 @@ fn main() -> Result<()> {
 
     let nav_att_events = collect_nav_att_events(&frames, &tl);
     let alg_events = collect_alg_mount_events(&frames, &tl);
-    let replay = load_generic_replay_with_nav(
+    let mut replay = load_generic_replay_with_nav(
         &args.logfile,
         UbxReplayConfig {
             gnss_pos_r_scale: args.gnss_pos_r_scale,
@@ -184,12 +202,29 @@ fn main() -> Result<()> {
             ..UbxReplayConfig::default()
         },
     )?;
+    if args.gnss_time_shift_ms != 0.0 {
+        let dt_s = args.gnss_time_shift_ms * 1.0e-3;
+        replay.gnss_samples.retain_mut(|sample| {
+            let shifted_t = sample.t_s + dt_s;
+            if shifted_t.is_finite() && shifted_t >= 0.0 {
+                sample.t_s = shifted_t;
+                true
+            } else {
+                false
+            }
+        });
+        replay
+            .gnss_samples
+            .sort_by(|a, b| a.t_s.total_cmp(&b.t_s));
+    }
 
     let mut fusion = SensorFusion::new();
     fusion.set_r_body_vel(args.r_body_vel);
     fusion.set_gnss_pos_mount_scale(args.gnss_pos_mount_scale);
     fusion.set_gnss_vel_mount_scale(args.gnss_vel_mount_scale);
     fusion.set_gyro_bias_init_sigma_radps(args.gyro_bias_init_sigma_dps.to_radians());
+    fusion.set_accel_bias_init_sigma_mps2(args.accel_bias_init_sigma_mps2);
+    fusion.set_accel_bias_rw_var(args.accel_bias_rw_var);
     fusion.set_r_vehicle_speed(args.r_vehicle_speed);
     fusion.set_r_zero_vel(args.r_zero_vel);
     fusion.set_r_stationary_accel(args.r_stationary_accel);
@@ -201,14 +236,18 @@ fn main() -> Result<()> {
     let mut first_snapshot = None::<WindowSnapshot>;
     let mut last_snapshot = None::<WindowSnapshot>;
 
+    let mut pitch_vs_nav_att = Stats::default();
     let mut yaw_vs_nav_att = Stats::default();
     let mut yaw_vs_course = Stats::default();
     let mut course_vs_course = Stats::default();
     let mut yaw_minus_course = Stats::default();
     let mut vel_vehicle_y = Stats::default();
+    let mut vel_vehicle_z = Stats::default();
     let mut vn_err = Stats::default();
     let mut ve_err = Stats::default();
+    let mut vd_err = Stats::default();
     let mut speed_err = Stats::default();
+    let mut mount_pitch_err = Stats::default();
     let mut mount_yaw_err = Stats::default();
     let mut mount_quat_err = Stats::default();
     let mut theta_z_var = Stats::default();
@@ -220,6 +259,14 @@ fn main() -> Result<()> {
         }
         ReplayEvent::Gnss(_, sample) => {
             let _ = fusion.process_gnss(to_fusion_gnss(*sample));
+            if args.fuse_gnss_speed_as_vehicle_speed {
+                let speed_mps = sample.vel_ned_mps[0].hypot(sample.vel_ned_mps[1]) as f32;
+                let _ = fusion.process_vehicle_speed(FusionVehicleSpeedSample {
+                    t_s: sample.t_s as f32,
+                    speed_mps,
+                    direction: FusionVehicleSpeedDirection::Forward,
+                });
+            }
             let t_s = sample.t_s;
             if t_s < args.start_s || t_s > args.end_s {
                 return;
@@ -233,15 +280,19 @@ fn main() -> Result<()> {
             let Some(alg) = sample_nearest_alg_mount(&alg_events, t_s) else {
                 return;
             };
-            let snap = make_snapshot(t_s, sample, nav_att.heading_deg, alg, &fusion, eskf);
+            let snap = make_snapshot(t_s, sample, nav_att, alg, &fusion, eskf);
+            pitch_vs_nav_att.push(snap.pitch_minus_nav_att_deg);
             yaw_vs_nav_att.push(snap.yaw_minus_nav_att_deg);
             yaw_vs_course.push(snap.yaw_minus_course_deg);
             course_vs_course.push(snap.course_minus_course_deg);
             yaw_minus_course.push(wrap_deg180(snap.yaw_deg - snap.course_deg));
             vel_vehicle_y.push(snap.vel_vehicle_y_mps);
+            vel_vehicle_z.push(snap.vel_vehicle_z_mps);
             vn_err.push(snap.vn_err_mps);
             ve_err.push(snap.ve_err_mps);
+            vd_err.push(snap.vd_err_mps);
             speed_err.push(snap.speed_err_mps);
+            mount_pitch_err.push(snap.mount_pitch_err_deg);
             mount_yaw_err.push(snap.mount_yaw_err_deg);
             mount_quat_err.push(snap.mount_quat_err_deg);
             theta_z_var.push(snap.theta_z_var);
@@ -259,16 +310,20 @@ fn main() -> Result<()> {
     };
 
     println!(
-        "window=[{:.3}, {:.3}] config: gnss_pos_r_scale={:.3} gnss_vel_r_scale={:.3} r_body_vel={:.3} gnss_pos_mount_scale={:.3} gnss_vel_mount_scale={:.3} gyro_bias_init_sigma_dps={:.3} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} mount_update_min_scale={:.3} mount_update_ramp_time_s={:.3} mount_update_innovation_gate_mps={:.3}",
+        "window=[{:.3}, {:.3}] config: gnss_pos_r_scale={:.3} gnss_vel_r_scale={:.3} gnss_time_shift_ms={:.1} r_body_vel={:.3} gnss_pos_mount_scale={:.3} gnss_vel_mount_scale={:.3} gyro_bias_init_sigma_dps={:.3} accel_bias_init_sigma_mps2={:.3} accel_bias_rw_var={:.6e} r_vehicle_speed={:.3} fuse_gnss_speed_as_vehicle_speed={} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} mount_update_min_scale={:.3} mount_update_ramp_time_s={:.3} mount_update_innovation_gate_mps={:.3}",
         args.start_s,
         args.end_s,
         args.gnss_pos_r_scale,
         args.gnss_vel_r_scale,
+        args.gnss_time_shift_ms,
         args.r_body_vel,
         args.gnss_pos_mount_scale,
         args.gnss_vel_mount_scale,
         args.gyro_bias_init_sigma_dps,
+        args.accel_bias_init_sigma_mps2,
+        args.accel_bias_rw_var,
         args.r_vehicle_speed,
+        args.fuse_gnss_speed_as_vehicle_speed,
         args.r_zero_vel,
         args.r_stationary_accel,
         args.mount_align_rw_var,
@@ -280,22 +335,33 @@ fn main() -> Result<()> {
         "window_endpoints: start_t={:.3} end_t={:.3}",
         first.t_s, last.t_s
     );
+    pitch_vs_nav_att.print("pitch_minus_nav_att_deg", true);
     yaw_vs_nav_att.print("yaw_minus_nav_att_deg", true);
     yaw_vs_course.print("yaw_minus_gnss_course_deg", true);
     course_vs_course.print("nominal_course_minus_gnss_course_deg", true);
     yaw_minus_course.print("yaw_minus_nominal_course_deg", true);
     vel_vehicle_y.print("vehicle_lateral_vel_mps", false);
+    vel_vehicle_z.print("vehicle_vertical_vel_mps", false);
     vn_err.print("vn_err_mps", false);
     ve_err.print("ve_err_mps", false);
+    vd_err.print("vd_err_mps", false);
     speed_err.print("horizontal_speed_err_mps", false);
+    mount_pitch_err.print("mount_pitch_err_deg", true);
     mount_yaw_err.print("mount_yaw_err_deg", true);
     mount_quat_err.print("mount_quat_err_deg", false);
     theta_z_var.print("theta_z_var", false);
     mount_z_var.print("mount_z_var", false);
 
     println!("snapshot_drift:");
+    print_snapshot_delta("pitch_deg", first.pitch_deg, last.pitch_deg, true);
     print_snapshot_delta("yaw_deg", first.yaw_deg, last.yaw_deg, true);
     print_snapshot_delta("course_deg", first.course_deg, last.course_deg, true);
+    print_snapshot_delta(
+        "pitch_minus_nav_att_deg",
+        first.pitch_minus_nav_att_deg,
+        last.pitch_minus_nav_att_deg,
+        true,
+    );
     print_snapshot_delta(
         "yaw_minus_nav_att_deg",
         first.yaw_minus_nav_att_deg,
@@ -320,13 +386,26 @@ fn main() -> Result<()> {
         last.vel_vehicle_y_mps,
         false,
     );
+    print_snapshot_delta(
+        "vehicle_vertical_vel_mps",
+        first.vel_vehicle_z_mps,
+        last.vel_vehicle_z_mps,
+        false,
+    );
     print_snapshot_delta("vn_err_mps", first.vn_err_mps, last.vn_err_mps, false);
     print_snapshot_delta("ve_err_mps", first.ve_err_mps, last.ve_err_mps, false);
+    print_snapshot_delta("vd_err_mps", first.vd_err_mps, last.vd_err_mps, false);
     print_snapshot_delta(
         "horizontal_speed_err_mps",
         first.speed_err_mps,
         last.speed_err_mps,
         false,
+    );
+    print_snapshot_delta(
+        "mount_pitch_err_deg",
+        first.mount_pitch_err_deg,
+        last.mount_pitch_err_deg,
+        true,
     );
     print_snapshot_delta(
         "mount_yaw_err_deg",
@@ -355,11 +434,13 @@ fn main() -> Result<()> {
     for (i, name) in CUE_NAMES.iter().enumerate() {
         let count_delta = last.type_counts[i].saturating_sub(first.type_counts[i]);
         let innov_abs_delta = last.sum_abs_innovation[i] - first.sum_abs_innovation[i];
+        let pitch_dx_abs_delta =
+            last.sum_abs_dx_pitch_deg[i] - first.sum_abs_dx_pitch_deg[i];
         let yaw_dx_abs_delta =
             last.sum_abs_dx_mount_yaw_deg[i] - first.sum_abs_dx_mount_yaw_deg[i];
         println!(
-            "  cue={} count_delta={} innov_abs_delta={:.6} mount_yaw_dx_abs_delta_deg={:.6}",
-            name, count_delta, innov_abs_delta, yaw_dx_abs_delta
+            "  cue={} count_delta={} innov_abs_delta={:.6} pitch_dx_abs_delta_deg={:.6} mount_yaw_dx_abs_delta_deg={:.6}",
+            name, count_delta, innov_abs_delta, pitch_dx_abs_delta, yaw_dx_abs_delta
         );
     }
 
@@ -369,12 +450,12 @@ fn main() -> Result<()> {
 fn make_snapshot(
     t_s: f64,
     gnss: &sim::datasets::generic_replay::GenericGnssSample,
-    nav_att_heading_deg: f64,
+    nav_att: NavAttEvent,
     alg: AlgMountEvent,
     fusion: &SensorFusion,
     eskf: &sensor_fusion::c_api::CEskf,
 ) -> WindowSnapshot {
-    let (_roll_deg, _pitch_deg, yaw_deg) = quat_rpy_deg(
+    let (_roll_deg, pitch_deg, yaw_deg) = quat_rpy_deg(
         eskf.nominal.q0,
         eskf.nominal.q1,
         eskf.nominal.q2,
@@ -417,7 +498,7 @@ fn make_snapshot(
     ];
     let q_full_vb = quat_mul(q_seed, quat_conj(q_cs));
     let q_full_flu = frd_mount_quat_to_esf_alg_flu_quat(q_full_vb);
-    let (_, _, mount_yaw_deg) = quat_rpy_alg_deg(
+    let (_, mount_pitch_deg, mount_yaw_deg) = quat_rpy_alg_deg(
         q_full_flu[0],
         q_full_flu[1],
         q_full_flu[2],
@@ -425,9 +506,11 @@ fn make_snapshot(
     );
     WindowSnapshot {
         t_s,
+        pitch_deg,
         yaw_deg,
         course_deg,
-        yaw_minus_nav_att_deg: wrap_deg180(yaw_deg - nav_att_heading_deg),
+        pitch_minus_nav_att_deg: wrap_deg180(pitch_deg - nav_att.pitch_deg),
+        yaw_minus_nav_att_deg: wrap_deg180(yaw_deg - nav_att.heading_deg),
         yaw_minus_course_deg: wrap_deg180(
             yaw_deg - normalize_heading_deg(rad2deg(gnss.vel_ned_mps[1].atan2(gnss.vel_ned_mps[0]))),
         ),
@@ -436,10 +519,13 @@ fn make_snapshot(
                 - normalize_heading_deg(rad2deg(gnss.vel_ned_mps[1].atan2(gnss.vel_ned_mps[0]))),
         ),
         vel_vehicle_y_mps: vel_vehicle[1],
+        vel_vehicle_z_mps: vel_vehicle[2],
         vn_err_mps: eskf.nominal.vn as f64 - gnss.vel_ned_mps[0],
         ve_err_mps: eskf.nominal.ve as f64 - gnss.vel_ned_mps[1],
+        vd_err_mps: eskf.nominal.vd as f64 - gnss.vel_ned_mps[2],
         speed_err_mps: (eskf.nominal.vn as f64).hypot(eskf.nominal.ve as f64)
             - gnss.vel_ned_mps[0].hypot(gnss.vel_ned_mps[1]),
+        mount_pitch_err_deg: wrap_deg180(mount_pitch_deg - alg.pitch_deg),
         mount_yaw_err_deg: wrap_deg180(mount_yaw_deg - alg.yaw_deg),
         mount_quat_err_deg: quat_angle_deg(q_full_vb, alg.q_vb),
         bgx_dps: rad2deg(eskf.nominal.bgx as f64),
@@ -453,6 +539,9 @@ fn make_snapshot(
         v_e_var: eskf.p[4][4] as f64,
         mount_z_var: eskf.p[17][17] as f64,
         type_counts: eskf.update_diag.type_counts,
+        sum_abs_dx_pitch_deg: std::array::from_fn(|i| {
+            rad2deg(eskf.update_diag.sum_abs_dx_pitch[i] as f64)
+        }),
         sum_abs_innovation: std::array::from_fn(|i| eskf.update_diag.sum_abs_innovation[i] as f64),
         sum_abs_dx_mount_yaw_deg: std::array::from_fn(|i| {
             rad2deg(eskf.update_diag.sum_abs_dx_mount_yaw[i] as f64)
@@ -476,11 +565,12 @@ fn collect_nav_att_events(frames: &[UbxFrame], tl: &MasterTimeline) -> Vec<NavAt
     let mut out = Vec::new();
     let t0_ms = tl.masters.first().map(|(_, t)| *t).unwrap_or(0.0);
     for frame in frames {
-        if let Some((_, _, _, heading_deg)) = extract_nav_att(frame)
+        if let Some((_, _, pitch_deg, heading_deg)) = extract_nav_att(frame)
             && let Some(t_ms) = nearest_master_ms(frame.seq, &tl.masters)
         {
             out.push(NavAttEvent {
                 t_s: (t_ms - t0_ms) * 1.0e-3,
+                pitch_deg,
                 heading_deg: normalize_heading_deg(heading_deg),
             });
         }
@@ -499,6 +589,7 @@ fn collect_alg_mount_events(frames: &[UbxFrame], tl: &MasterTimeline) -> Vec<Alg
             out.push(AlgMountEvent {
                 t_s: (t_ms - t0_ms) * 1.0e-3,
                 q_vb: esf_alg_flu_to_frd_mount_quat(roll_deg, pitch_deg, yaw_deg),
+                pitch_deg,
                 yaw_deg,
             });
         }

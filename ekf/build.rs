@@ -43,6 +43,8 @@ fn llvm_tool(name: &str) -> Option<PathBuf> {
 fn main() {
     println!("cargo:rerun-if-env-changed=SF_ESKF_BODY_VEL_USE_QCS_CONJ");
     println!("cargo:rerun-if-env-changed=SF_ESKF_DIAG_DISABLE_BODY_VEL_Y_MOUNT");
+    println!("cargo:rerun-if-env-changed=SF_ESKF_DIAG_DISABLE_GPS_VEL_D");
+    println!("cargo:rerun-if-env-changed=SF_ESKF_DIAG_DISABLE_BODY_VEL_Z");
     println!("cargo:rerun-if-env-changed=SF_ESKF_DIAG_DISABLE_BODY_VEL_Z_MOUNT");
     println!("cargo:rerun-if-changed=c/Makefile");
     println!("cargo:rerun-if-changed=c/generated");
@@ -93,6 +95,18 @@ fn main() {
         .unwrap_or(false)
     {
         build.define("SF_ESKF_DIAG_DISABLE_BODY_VEL_Y_MOUNT", Some("1"));
+    }
+    if env::var("SF_ESKF_DIAG_DISABLE_GPS_VEL_D")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        build.define("SF_ESKF_DIAG_DISABLE_GPS_VEL_D", Some("1"));
+    }
+    if env::var("SF_ESKF_DIAG_DISABLE_BODY_VEL_Z")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        build.define("SF_ESKF_DIAG_DISABLE_BODY_VEL_Z", Some("1"));
     }
     if env::var("SF_ESKF_DIAG_DISABLE_BODY_VEL_Z_MOUNT")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))

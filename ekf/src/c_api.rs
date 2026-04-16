@@ -222,6 +222,8 @@ pub const C_ESKF_UPDATE_DIAG_TYPES: usize = 11;
 pub struct CEskfUpdateDiag {
     pub total_updates: u32,
     pub type_counts: [u32; C_ESKF_UPDATE_DIAG_TYPES],
+    pub sum_dx_pitch: [f32; C_ESKF_UPDATE_DIAG_TYPES],
+    pub sum_abs_dx_pitch: [f32; C_ESKF_UPDATE_DIAG_TYPES],
     pub sum_dx_mount_yaw: [f32; C_ESKF_UPDATE_DIAG_TYPES],
     pub sum_abs_dx_mount_yaw: [f32; C_ESKF_UPDATE_DIAG_TYPES],
     pub sum_innovation: [f32; C_ESKF_UPDATE_DIAG_TYPES],
@@ -478,6 +480,11 @@ unsafe extern "C" {
         fusion: *mut CSensorFusion,
         gyro_bias_init_sigma_radps: f32,
     );
+    fn sf_set_accel_bias_init_sigma_mps2(
+        fusion: *mut CSensorFusion,
+        accel_bias_init_sigma_mps2: f32,
+    );
+    fn sf_set_accel_bias_rw_var(fusion: *mut CSensorFusion, accel_bias_rw_var: f32);
     fn sf_set_mount_align_rw_var(fusion: *mut CSensorFusion, mount_align_rw_var: f32);
     fn sf_set_mount_update_min_scale(fusion: *mut CSensorFusion, mount_update_min_scale: f32);
     fn sf_set_mount_update_ramp_time_s(
@@ -777,6 +784,21 @@ impl CSensorFusionWrapper {
                 gyro_bias_init_sigma_radps,
             )
         }
+        self.refresh_state();
+    }
+
+    pub fn set_accel_bias_init_sigma_mps2(&mut self, accel_bias_init_sigma_mps2: f32) {
+        unsafe {
+            sf_set_accel_bias_init_sigma_mps2(
+                &mut self.raw as *mut CSensorFusion,
+                accel_bias_init_sigma_mps2,
+            )
+        }
+        self.refresh_state();
+    }
+
+    pub fn set_accel_bias_rw_var(&mut self, accel_bias_rw_var: f32) {
+        unsafe { sf_set_accel_bias_rw_var(&mut self.raw as *mut CSensorFusion, accel_bias_rw_var) }
         self.refresh_state();
     }
 

@@ -110,6 +110,17 @@ impl SensorFusion {
         self.refresh_align_snapshot();
     }
 
+    pub fn set_accel_bias_init_sigma_mps2(&mut self, accel_bias_init_sigma_mps2: f32) {
+        self.raw
+            .set_accel_bias_init_sigma_mps2(accel_bias_init_sigma_mps2);
+        self.refresh_align_snapshot();
+    }
+
+    pub fn set_accel_bias_rw_var(&mut self, accel_bias_rw_var: f32) {
+        self.raw.set_accel_bias_rw_var(accel_bias_rw_var);
+        self.refresh_align_snapshot();
+    }
+
     pub fn set_mount_align_rw_var(&mut self, mount_align_rw_var: f32) {
         self.raw.set_mount_align_rw_var(mount_align_rw_var);
         self.refresh_align_snapshot();

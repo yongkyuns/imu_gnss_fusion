@@ -101,6 +101,8 @@ void sf_set_r_body_vel(sf_t *sf, float r_body_vel);
 void sf_set_gnss_pos_mount_scale(sf_t *sf, float gnss_pos_mount_scale);
 void sf_set_gnss_vel_mount_scale(sf_t *sf, float gnss_vel_mount_scale);
 void sf_set_gyro_bias_init_sigma_radps(sf_t *sf, float gyro_bias_init_sigma_radps);
+void sf_set_accel_bias_init_sigma_mps2(sf_t *sf, float accel_bias_init_sigma_mps2);
+void sf_set_accel_bias_rw_var(sf_t *sf, float accel_bias_rw_var);
 void sf_set_mount_align_rw_var(sf_t *sf, float mount_align_rw_var);
 void sf_set_mount_update_min_scale(sf_t *sf, float mount_update_min_scale);
 void sf_set_mount_update_ramp_time_s(sf_t *sf, float mount_update_ramp_time_s);

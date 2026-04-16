@@ -13,6 +13,9 @@
 #ifndef SF_ESKF_DIAG_DISABLE_BODY_VEL_Z
 #define SF_ESKF_DIAG_DISABLE_BODY_VEL_Z 0
 #endif
+#ifndef SF_ESKF_DIAG_DISABLE_GPS_VEL_D
+#define SF_ESKF_DIAG_DISABLE_GPS_VEL_D 0
+#endif
 #ifndef SF_ESKF_BODY_VEL_USE_QCS_CONJ
 #define SF_ESKF_BODY_VEL_USE_QCS_CONJ 0
 #endif
@@ -281,9 +284,11 @@ void sf_eskf_fuse_gps_scaled(sf_eskf_t *eskf, const sf_gnss_ned_sample_t *gps,
   sf_eskf_fuse_gps_vel_e(eskf, gps->vel_ned_mps[1],
                          gps->vel_std_mps[1] * gps->vel_std_mps[1],
                          gnss_vel_mount_scale);
+#if !SF_ESKF_DIAG_DISABLE_GPS_VEL_D
   sf_eskf_fuse_gps_vel_d(eskf, gps->vel_ned_mps[2],
                          gps->vel_std_mps[2] * gps->vel_std_mps[2],
                          gnss_vel_mount_scale);
+#endif
 }
 
 void sf_eskf_fuse_body_speed_x(sf_eskf_t *eskf, float speed_mps,
@@ -625,6 +630,8 @@ static void sf_eskf_record_update_diag(sf_eskf_t *eskf,
   diag = &eskf->update_diag;
   diag->total_updates += 1u;
   diag->type_counts[idx] += 1u;
+  diag->sum_dx_pitch[idx] += dx[1];
+  diag->sum_abs_dx_pitch[idx] += fabsf(dx[1]);
   diag->sum_dx_mount_yaw[idx] += dx[17];
   diag->sum_abs_dx_mount_yaw[idx] += fabsf(dx[17]);
   diag->sum_innovation[idx] += innovation;

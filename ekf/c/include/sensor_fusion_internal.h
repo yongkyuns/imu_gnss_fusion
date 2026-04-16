@@ -238,6 +238,10 @@ void sf_fusion_set_gnss_vel_mount_scale(sf_sensor_fusion_t *fusion,
                                         float gnss_vel_mount_scale);
 void sf_fusion_set_gyro_bias_init_sigma_radps(sf_sensor_fusion_t *fusion,
                                               float gyro_bias_init_sigma_radps);
+void sf_fusion_set_accel_bias_init_sigma_mps2(sf_sensor_fusion_t *fusion,
+                                              float accel_bias_init_sigma_mps2);
+void sf_fusion_set_accel_bias_rw_var(sf_sensor_fusion_t *fusion,
+                                     float accel_bias_rw_var);
 void sf_fusion_set_mount_align_rw_var(sf_sensor_fusion_t *fusion,
                                       float mount_align_rw_var);
 void sf_fusion_set_mount_update_min_scale(sf_sensor_fusion_t *fusion,

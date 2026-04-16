@@ -67,6 +67,8 @@ typedef struct {
 typedef struct {
   unsigned int total_updates;
   unsigned int type_counts[SF_ESKF_UPDATE_DIAG_TYPES];
+  float sum_dx_pitch[SF_ESKF_UPDATE_DIAG_TYPES];
+  float sum_abs_dx_pitch[SF_ESKF_UPDATE_DIAG_TYPES];
   float sum_dx_mount_yaw[SF_ESKF_UPDATE_DIAG_TYPES];
   float sum_abs_dx_mount_yaw[SF_ESKF_UPDATE_DIAG_TYPES];
   float sum_innovation[SF_ESKF_UPDATE_DIAG_TYPES];
