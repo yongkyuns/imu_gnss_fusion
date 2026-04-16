@@ -44,6 +44,7 @@ fn main() -> Result<()> {
         UbxReplayConfig {
             gnss_pos_r_scale: 1.0,
             gnss_vel_r_scale: args.gnss_vel_r_scale,
+            ..UbxReplayConfig::default()
         },
     )?;
     let nav_events = replay.nav_events.clone();

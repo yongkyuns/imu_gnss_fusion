@@ -56,6 +56,20 @@ struct Args {
     ekf_predict_imu_lpf_cutoff_hz: Option<f64>,
     #[arg(long)]
     gnss_vel_r_scale: Option<f64>,
+    #[arg(long)]
+    r_body_vel: Option<f32>,
+    #[arg(long)]
+    r_vehicle_speed: Option<f32>,
+    #[arg(long)]
+    mount_align_rw_var: Option<f32>,
+    #[arg(long)]
+    mount_update_min_scale: Option<f32>,
+    #[arg(long)]
+    mount_update_ramp_time_s: Option<f32>,
+    #[arg(long)]
+    mount_update_innovation_gate_mps: Option<f32>,
+    #[arg(long, default_value_t = 0.0)]
+    gnss_time_shift_ms: f64,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -70,11 +84,30 @@ fn main() -> Result<()> {
     let t_read = Instant::now();
 
     let ekf_cfg = EkfCompareConfig {
+        r_body_vel: args
+            .r_body_vel
+            .unwrap_or(EkfCompareConfig::default().r_body_vel),
+        r_vehicle_speed: args
+            .r_vehicle_speed
+            .unwrap_or(EkfCompareConfig::default().r_vehicle_speed),
+        mount_align_rw_var: args
+            .mount_align_rw_var
+            .unwrap_or(EkfCompareConfig::default().mount_align_rw_var),
+        mount_update_min_scale: args
+            .mount_update_min_scale
+            .unwrap_or(EkfCompareConfig::default().mount_update_min_scale),
+        mount_update_ramp_time_s: args
+            .mount_update_ramp_time_s
+            .unwrap_or(EkfCompareConfig::default().mount_update_ramp_time_s),
+        mount_update_innovation_gate_mps: args
+            .mount_update_innovation_gate_mps
+            .unwrap_or(EkfCompareConfig::default().mount_update_innovation_gate_mps),
         predict_imu_decimation: args.ekf_predict_imu_decimation.max(1),
         predict_imu_lpf_cutoff_hz: args.ekf_predict_imu_lpf_cutoff_hz,
         gnss_vel_r_scale: args
             .gnss_vel_r_scale
             .unwrap_or(EkfCompareConfig::default().gnss_vel_r_scale),
+        gnss_time_shift_ms: args.gnss_time_shift_ms,
         ..EkfCompareConfig::default()
     };
 
@@ -104,13 +137,20 @@ fn main() -> Result<()> {
         tmax
     );
     eprintln!(
-        "[profile] ekf-only predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} gnss_vel_r_scale={:.3}",
+        "[profile] ekf-only predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} gnss_vel_r_scale={:.3} gnss_time_shift_ms={:.1} r_body_vel={:.3} r_vehicle_speed={:.3} mount_align_rw_var={:.6e} mount_update_min_scale={:.3} mount_update_ramp_time_s={:.3} mount_update_innovation_gate_mps={:.3}",
         ekf_cfg.predict_imu_decimation,
         ekf_cfg
             .predict_imu_lpf_cutoff_hz
             .map(|v| format!("{v:.3}"))
             .unwrap_or_else(|| "off".to_string()),
         ekf_cfg.gnss_vel_r_scale,
+        ekf_cfg.gnss_time_shift_ms,
+        ekf_cfg.r_body_vel,
+        ekf_cfg.r_vehicle_speed,
+        ekf_cfg.mount_align_rw_var,
+        ekf_cfg.mount_update_min_scale,
+        ekf_cfg.mount_update_ramp_time_s,
+        ekf_cfg.mount_update_innovation_gate_mps,
     );
     for (name, nt, np) in [
         group_stats("speed", &data.speed),

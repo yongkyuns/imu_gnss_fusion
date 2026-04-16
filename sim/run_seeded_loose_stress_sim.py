@@ -86,7 +86,7 @@ def parse_args() -> argparse.Namespace:
         help="Only replay this many seconds after init. This is the main speed/coverage tradeoff.",
     )
     parser.add_argument("--imu-freq-hz", type=float, default=100.0)
-    parser.add_argument("--gnss-freq-hz", type=float, default=10.0)
+    parser.add_argument("--gnss-freq-hz", type=float, default=2.0)
     parser.add_argument("--gps-horizontal-std", type=float, default=3.0)
     parser.add_argument("--gps-vertical-std", type=float, default=5.0)
     parser.add_argument("--jump-threshold-deg", type=float, default=5.0)

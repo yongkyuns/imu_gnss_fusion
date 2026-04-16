@@ -98,6 +98,12 @@ typedef union {
 
 void sf_init(sf_t *sf, const float *q_vb_or_null);
 void sf_set_r_body_vel(sf_t *sf, float r_body_vel);
+void sf_set_mount_align_rw_var(sf_t *sf, float mount_align_rw_var);
+void sf_set_mount_update_min_scale(sf_t *sf, float mount_update_min_scale);
+void sf_set_mount_update_ramp_time_s(sf_t *sf, float mount_update_ramp_time_s);
+void sf_set_mount_update_innovation_gate_mps(
+    sf_t *sf, float mount_update_innovation_gate_mps);
+void sf_set_r_vehicle_speed(sf_t *sf, float r_vehicle_speed);
 sf_update_t sf_process_imu(sf_t *sf, const sf_imu_sample_t *sample);
 sf_update_t sf_process_gnss(sf_t *sf, const sf_gnss_sample_t *sample);
 sf_update_t sf_process_vehicle_speed(sf_t *sf,

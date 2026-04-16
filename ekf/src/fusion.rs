@@ -94,6 +94,36 @@ impl SensorFusion {
         self.refresh_align_snapshot();
     }
 
+    pub fn set_mount_align_rw_var(&mut self, mount_align_rw_var: f32) {
+        self.raw.set_mount_align_rw_var(mount_align_rw_var);
+        self.refresh_align_snapshot();
+    }
+
+    pub fn set_mount_update_min_scale(&mut self, mount_update_min_scale: f32) {
+        self.raw.set_mount_update_min_scale(mount_update_min_scale);
+        self.refresh_align_snapshot();
+    }
+
+    pub fn set_mount_update_ramp_time_s(&mut self, mount_update_ramp_time_s: f32) {
+        self.raw
+            .set_mount_update_ramp_time_s(mount_update_ramp_time_s);
+        self.refresh_align_snapshot();
+    }
+
+    pub fn set_mount_update_innovation_gate_mps(
+        &mut self,
+        mount_update_innovation_gate_mps: f32,
+    ) {
+        self.raw
+            .set_mount_update_innovation_gate_mps(mount_update_innovation_gate_mps);
+        self.refresh_align_snapshot();
+    }
+
+    pub fn set_r_vehicle_speed(&mut self, r_vehicle_speed: f32) {
+        self.raw.set_r_vehicle_speed(r_vehicle_speed);
+        self.refresh_align_snapshot();
+    }
+
     pub fn process_imu(&mut self, sample: FusionImuSample) -> FusionUpdate {
         let update = self.raw.process_imu(sample);
         self.refresh_align_snapshot();

@@ -97,6 +97,30 @@ void sf_set_r_body_vel(sf_t *sf, float r_body_vel) {
   sf_fusion_set_r_body_vel((sf_sensor_fusion_t *)sf, r_body_vel);
 }
 
+void sf_set_mount_align_rw_var(sf_t *sf, float mount_align_rw_var) {
+  sf_fusion_set_mount_align_rw_var((sf_sensor_fusion_t *)sf, mount_align_rw_var);
+}
+
+void sf_set_mount_update_min_scale(sf_t *sf, float mount_update_min_scale) {
+  sf_fusion_set_mount_update_min_scale((sf_sensor_fusion_t *)sf,
+                                       mount_update_min_scale);
+}
+
+void sf_set_mount_update_ramp_time_s(sf_t *sf, float mount_update_ramp_time_s) {
+  sf_fusion_set_mount_update_ramp_time_s((sf_sensor_fusion_t *)sf,
+                                         mount_update_ramp_time_s);
+}
+
+void sf_set_mount_update_innovation_gate_mps(
+    sf_t *sf, float mount_update_innovation_gate_mps) {
+  sf_fusion_set_mount_update_innovation_gate_mps(
+      (sf_sensor_fusion_t *)sf, mount_update_innovation_gate_mps);
+}
+
+void sf_set_r_vehicle_speed(sf_t *sf, float r_vehicle_speed) {
+  sf_fusion_set_r_vehicle_speed((sf_sensor_fusion_t *)sf, r_vehicle_speed);
+}
+
 sf_update_t sf_process_imu(sf_t *sf, const sf_imu_sample_t *sample) {
   return sf_fusion_process_imu((sf_sensor_fusion_t *)sf, sample);
 }
@@ -257,7 +281,7 @@ void sf_predict_noise_default(sf_predict_noise_t *cfg) {
   cfg->accel_var = 2.4504214e-5f * 15.0f;
   cfg->gyro_bias_rw_var = 0.0002e-9f;
   cfg->accel_bias_rw_var = 0.002e-9f;
-  cfg->mount_align_rw_var = 1.0e-4f;
+  cfg->mount_align_rw_var = 3.0e-5f;
 }
 
 void sf_fusion_config_default(sf_fusion_config_t *cfg) {
@@ -267,7 +291,7 @@ void sf_fusion_config_default(sf_fusion_config_t *cfg) {
   sf_align_config_default(&cfg->align);
   sf_bootstrap_config_default(&cfg->bootstrap);
   sf_predict_noise_default(&cfg->predict_noise);
-  cfg->r_body_vel = 0.2f;
+  cfg->r_body_vel = 300.0f;
   cfg->gnss_vel_xy_update_min_scale = 0.25f;
   cfg->gnss_vel_update_ramp_time_s = 20.0f;
   cfg->ekf_mount_seed_blend_time_s = 120.0f;
@@ -341,6 +365,61 @@ void sf_fusion_set_r_body_vel(sf_sensor_fusion_t *fusion, float r_body_vel) {
   }
   impl = sf_impl(fusion);
   impl->cfg.r_body_vel = r_body_vel;
+}
+
+void sf_fusion_set_mount_align_rw_var(sf_sensor_fusion_t *fusion,
+                                      float mount_align_rw_var) {
+  sf_sensor_fusion_impl_t *impl;
+  if (fusion == NULL || !isfinite(mount_align_rw_var) ||
+      mount_align_rw_var < 0.0f) {
+    return;
+  }
+  impl = sf_impl(fusion);
+  impl->cfg.predict_noise.mount_align_rw_var = mount_align_rw_var;
+  impl->eskf.noise.mount_align_rw_var = mount_align_rw_var;
+}
+
+void sf_fusion_set_mount_update_min_scale(sf_sensor_fusion_t *fusion,
+                                          float mount_update_min_scale) {
+  sf_sensor_fusion_impl_t *impl;
+  if (fusion == NULL || !isfinite(mount_update_min_scale) ||
+      mount_update_min_scale < 0.0f || mount_update_min_scale > 1.0f) {
+    return;
+  }
+  impl = sf_impl(fusion);
+  impl->cfg.mount_update_min_scale = mount_update_min_scale;
+}
+
+void sf_fusion_set_mount_update_ramp_time_s(sf_sensor_fusion_t *fusion,
+                                            float mount_update_ramp_time_s) {
+  sf_sensor_fusion_impl_t *impl;
+  if (fusion == NULL || !isfinite(mount_update_ramp_time_s) ||
+      mount_update_ramp_time_s < 0.0f) {
+    return;
+  }
+  impl = sf_impl(fusion);
+  impl->cfg.mount_update_ramp_time_s = mount_update_ramp_time_s;
+}
+
+void sf_fusion_set_mount_update_innovation_gate_mps(
+    sf_sensor_fusion_t *fusion, float mount_update_innovation_gate_mps) {
+  sf_sensor_fusion_impl_t *impl;
+  if (fusion == NULL || !isfinite(mount_update_innovation_gate_mps) ||
+      mount_update_innovation_gate_mps < 0.0f) {
+    return;
+  }
+  impl = sf_impl(fusion);
+  impl->cfg.mount_update_innovation_gate_mps = mount_update_innovation_gate_mps;
+}
+
+void sf_fusion_set_r_vehicle_speed(sf_sensor_fusion_t *fusion,
+                                   float r_vehicle_speed) {
+  sf_sensor_fusion_impl_t *impl;
+  if (fusion == NULL || !isfinite(r_vehicle_speed) || r_vehicle_speed < 0.0f) {
+    return;
+  }
+  impl = sf_impl(fusion);
+  impl->cfg.r_vehicle_speed = r_vehicle_speed;
 }
 
 bool sf_fusion_get_debug(const sf_sensor_fusion_t *fusion,
@@ -526,14 +605,13 @@ sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
       sf_eskf_fuse_stationary_gravity(&impl->eskf, accel_vehicle,
                                       SF_RUNTIME_R_STATIONARY_ACCEL);
     } else if (sf_runtime_nhc_active(accel_vehicle, gyro_vehicle)) {
-      const float body_update_scale =
-          sf_mount_update_scale(impl, sample->t_s);
+      const float body_update_scale = sf_mount_update_scale(impl, sample->t_s);
       const float effective_r_body_vel =
           impl->cfg.r_body_vel /
           ((body_update_scale > 1.0e-3f) ? body_update_scale : 1.0e-3f);
-      sf_eskf_fuse_body_vel_scaled(
-          &impl->eskf, effective_r_body_vel, body_update_scale,
-          impl->cfg.mount_update_innovation_gate_mps);
+      sf_eskf_fuse_body_vel_scaled(&impl->eskf, effective_r_body_vel,
+                                   body_update_scale,
+                                   impl->cfg.mount_update_innovation_gate_mps);
     }
     if (impl->profile_now_us != NULL) {
       elapsed_us = sf_profile_stamp(impl) - t0_us;
@@ -700,29 +778,25 @@ sf_fusion_process_vehicle_speed(sf_sensor_fusion_t *fusion,
   case SF_VEHICLE_SPEED_DIRECTION_FORWARD:
     signed_speed_mps = sample->speed_mps;
     {
-      const float body_update_scale =
-          sf_mount_update_scale(impl, sample->t_s);
+      const float body_update_scale = sf_mount_update_scale(impl, sample->t_s);
       const float effective_r_vehicle_speed =
           impl->cfg.r_vehicle_speed /
           ((body_update_scale > 1.0e-3f) ? body_update_scale : 1.0e-3f);
-    sf_eskf_fuse_body_speed_x_scaled(
-        &impl->eskf, signed_speed_mps, effective_r_vehicle_speed,
-        body_update_scale,
-        impl->cfg.mount_update_innovation_gate_mps);
+      sf_eskf_fuse_body_speed_x_scaled(
+          &impl->eskf, signed_speed_mps, effective_r_vehicle_speed,
+          body_update_scale, impl->cfg.mount_update_innovation_gate_mps);
     }
     break;
   case SF_VEHICLE_SPEED_DIRECTION_REVERSE:
     signed_speed_mps = -sample->speed_mps;
     {
-      const float body_update_scale =
-          sf_mount_update_scale(impl, sample->t_s);
+      const float body_update_scale = sf_mount_update_scale(impl, sample->t_s);
       const float effective_r_vehicle_speed =
           impl->cfg.r_vehicle_speed /
           ((body_update_scale > 1.0e-3f) ? body_update_scale : 1.0e-3f);
-    sf_eskf_fuse_body_speed_x_scaled(
-        &impl->eskf, signed_speed_mps, effective_r_vehicle_speed,
-        body_update_scale,
-        impl->cfg.mount_update_innovation_gate_mps);
+      sf_eskf_fuse_body_speed_x_scaled(
+          &impl->eskf, signed_speed_mps, effective_r_vehicle_speed,
+          body_update_scale, impl->cfg.mount_update_innovation_gate_mps);
     }
     break;
   case SF_VEHICLE_SPEED_DIRECTION_UNKNOWN:
@@ -740,10 +814,9 @@ sf_fusion_process_vehicle_speed(sf_sensor_fusion_t *fusion,
         const float effective_r_vehicle_speed =
             impl->cfg.r_vehicle_speed /
             ((body_update_scale > 1.0e-3f) ? body_update_scale : 1.0e-3f);
-      sf_eskf_fuse_body_speed_x_scaled(
-          &impl->eskf, signed_speed_mps, effective_r_vehicle_speed,
-          body_update_scale,
-          impl->cfg.mount_update_innovation_gate_mps);
+        sf_eskf_fuse_body_speed_x_scaled(
+            &impl->eskf, signed_speed_mps, effective_r_vehicle_speed,
+            body_update_scale, impl->cfg.mount_update_innovation_gate_mps);
       }
     }
     break;

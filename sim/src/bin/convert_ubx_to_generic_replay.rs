@@ -25,6 +25,7 @@ fn main() -> Result<()> {
         UbxReplayConfig {
             gnss_pos_r_scale: args.gnss_pos_r_scale,
             gnss_vel_r_scale: args.gnss_vel_r_scale,
+            ..UbxReplayConfig::default()
         },
     )?;
     write_samples(&args.out_dir, &imu_samples, &gnss_samples)?;

@@ -21,6 +21,20 @@ struct Args {
     max_records: Option<usize>,
     #[arg(long)]
     gnss_vel_r_scale: Option<f64>,
+    #[arg(long)]
+    r_body_vel: Option<f32>,
+    #[arg(long)]
+    r_vehicle_speed: Option<f32>,
+    #[arg(long)]
+    mount_align_rw_var: Option<f32>,
+    #[arg(long)]
+    mount_update_min_scale: Option<f32>,
+    #[arg(long)]
+    mount_update_ramp_time_s: Option<f32>,
+    #[arg(long)]
+    mount_update_innovation_gate_mps: Option<f32>,
+    #[arg(long, default_value_t = 0.0)]
+    gnss_time_shift_ms: f64,
     #[arg(long, default_value_t = 0)]
     gnss_outage_count: usize,
     #[arg(long, default_value_t = 0.0)]
@@ -244,11 +258,30 @@ fn main() -> Result<()> {
         .context("failed to read log")?;
 
     let ekf_cfg = EkfCompareConfig {
+        r_body_vel: args
+            .r_body_vel
+            .unwrap_or(EkfCompareConfig::default().r_body_vel),
+        r_vehicle_speed: args
+            .r_vehicle_speed
+            .unwrap_or(EkfCompareConfig::default().r_vehicle_speed),
+        mount_align_rw_var: args
+            .mount_align_rw_var
+            .unwrap_or(EkfCompareConfig::default().mount_align_rw_var),
+        mount_update_min_scale: args
+            .mount_update_min_scale
+            .unwrap_or(EkfCompareConfig::default().mount_update_min_scale),
+        mount_update_ramp_time_s: args
+            .mount_update_ramp_time_s
+            .unwrap_or(EkfCompareConfig::default().mount_update_ramp_time_s),
+        mount_update_innovation_gate_mps: args
+            .mount_update_innovation_gate_mps
+            .unwrap_or(EkfCompareConfig::default().mount_update_innovation_gate_mps),
         predict_imu_decimation: args.ekf_predict_imu_decimation.max(1),
         predict_imu_lpf_cutoff_hz: args.ekf_predict_imu_lpf_cutoff_hz,
         gnss_vel_r_scale: args
             .gnss_vel_r_scale
             .unwrap_or(EkfCompareConfig::default().gnss_vel_r_scale),
+        gnss_time_shift_ms: args.gnss_time_shift_ms,
         ..EkfCompareConfig::default()
     };
     let (data, _has_itow) = build_plot_data(
@@ -268,7 +301,7 @@ fn main() -> Result<()> {
     let summaries = build_state_summaries(&data);
 
     println!(
-        "config: misalignment={:?} decimation={} lpf_hz={} gnss_vel_r_scale={:.3} outage_count={} outage_duration_s={:.3} outage_seed={}",
+        "config: misalignment={:?} decimation={} lpf_hz={} gnss_vel_r_scale={:.3} gnss_time_shift_ms={:.1} r_body_vel={:.3} r_vehicle_speed={:.3} mount_align_rw_var={:.6e} mount_update_min_scale={:.3} mount_update_ramp_time_s={:.3} mount_update_innovation_gate_mps={:.3} outage_count={} outage_duration_s={:.3} outage_seed={}",
         args.misalignment,
         ekf_cfg.predict_imu_decimation,
         ekf_cfg
@@ -276,6 +309,13 @@ fn main() -> Result<()> {
             .map(|v| format!("{v:.3}"))
             .unwrap_or_else(|| "off".to_string()),
         ekf_cfg.gnss_vel_r_scale,
+        ekf_cfg.gnss_time_shift_ms,
+        ekf_cfg.r_body_vel,
+        ekf_cfg.r_vehicle_speed,
+        ekf_cfg.mount_align_rw_var,
+        ekf_cfg.mount_update_min_scale,
+        ekf_cfg.mount_update_ramp_time_s,
+        ekf_cfg.mount_update_innovation_gate_mps,
         args.gnss_outage_count,
         args.gnss_outage_duration_s,
         args.gnss_outage_seed,

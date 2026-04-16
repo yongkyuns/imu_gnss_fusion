@@ -15,6 +15,7 @@ use crate::visualizer::pipeline::timebase::{MasterTimeline, build_master_timelin
 pub struct UbxReplayConfig {
     pub gnss_pos_r_scale: f64,
     pub gnss_vel_r_scale: f64,
+    pub nav_pvt_fallback_midpoint_shift_ms: f64,
 }
 
 impl Default for UbxReplayConfig {
@@ -22,6 +23,7 @@ impl Default for UbxReplayConfig {
         Self {
             gnss_pos_r_scale: 0.1,
             gnss_vel_r_scale: 3.0,
+            nav_pvt_fallback_midpoint_shift_ms: 250.0,
         }
     }
 }
@@ -98,7 +100,12 @@ pub fn build_generic_replay_from_frames(
             }
             next_gps_update_ms += gps_period_ms;
         }
-        nav_events_used.push((t_ms, nav));
+        let effective_t_ms = if use_nav2 {
+            t_ms
+        } else {
+            t_ms + cfg.nav_pvt_fallback_midpoint_shift_ms
+        };
+        nav_events_used.push((effective_t_ms, nav));
         let speed_h = nav.vel_n_mps.hypot(nav.vel_e_mps);
         let heading_rad = if nav.head_veh_valid {
             Some(deg2rad(nav.heading_vehicle_deg))
@@ -108,7 +115,7 @@ pub fn build_generic_replay_from_frames(
             Some(deg2rad(nav.heading_motion_deg))
         };
         gnss_samples.push(GenericGnssSample {
-            t_s: (t_ms - t0_ms) * 1.0e-3,
+            t_s: (effective_t_ms - t0_ms) * 1.0e-3,
             lat_deg: nav.lat_deg,
             lon_deg: nav.lon_deg,
             height_m: nav.height_m,

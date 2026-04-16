@@ -132,6 +132,7 @@ fn main() -> Result<()> {
         UbxReplayConfig {
             gnss_pos_r_scale: cfg.gnss_pos_r_scale,
             gnss_vel_r_scale: cfg.gnss_vel_r_scale,
+            ..UbxReplayConfig::default()
         },
     )?;
     let nav_events = replay.nav_events.clone();

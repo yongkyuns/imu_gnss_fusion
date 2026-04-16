@@ -56,7 +56,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mount-pitch-deg", type=float, default=-5.0)
     parser.add_argument("--mount-yaw-deg", type=float, default=5.0)
     parser.add_argument("--imu-hz", type=float, default=100.0)
-    parser.add_argument("--gnss-hz", type=float, default=10.0)
+    parser.add_argument("--gnss-hz", type=float, default=2.0)
     parser.add_argument(
         "--imu-accuracy",
         default="mid-accuracy",

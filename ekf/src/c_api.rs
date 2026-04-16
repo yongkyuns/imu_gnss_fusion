@@ -472,6 +472,17 @@ unsafe extern "C" {
 
     fn sf_init(fusion: *mut CSensorFusion, q_vb_or_null: *const f32);
     fn sf_set_r_body_vel(fusion: *mut CSensorFusion, r_body_vel: f32);
+    fn sf_set_mount_align_rw_var(fusion: *mut CSensorFusion, mount_align_rw_var: f32);
+    fn sf_set_mount_update_min_scale(fusion: *mut CSensorFusion, mount_update_min_scale: f32);
+    fn sf_set_mount_update_ramp_time_s(
+        fusion: *mut CSensorFusion,
+        mount_update_ramp_time_s: f32,
+    );
+    fn sf_set_mount_update_innovation_gate_mps(
+        fusion: *mut CSensorFusion,
+        mount_update_innovation_gate_mps: f32,
+    );
+    fn sf_set_r_vehicle_speed(fusion: *mut CSensorFusion, r_vehicle_speed: f32);
     fn sf_process_imu(fusion: *mut CSensorFusion, sample: *const CImuSample) -> CUpdate;
     fn sf_process_gnss(fusion: *mut CSensorFusion, sample: *const CGnssSample) -> CUpdate;
     fn sf_process_vehicle_speed(
@@ -728,6 +739,51 @@ impl CSensorFusionWrapper {
 
     pub fn set_r_body_vel(&mut self, r_body_vel: f32) {
         unsafe { sf_set_r_body_vel(&mut self.raw as *mut CSensorFusion, r_body_vel) }
+        self.refresh_state();
+    }
+
+    pub fn set_mount_align_rw_var(&mut self, mount_align_rw_var: f32) {
+        unsafe {
+            sf_set_mount_align_rw_var(&mut self.raw as *mut CSensorFusion, mount_align_rw_var)
+        }
+        self.refresh_state();
+    }
+
+    pub fn set_mount_update_min_scale(&mut self, mount_update_min_scale: f32) {
+        unsafe {
+            sf_set_mount_update_min_scale(
+                &mut self.raw as *mut CSensorFusion,
+                mount_update_min_scale,
+            )
+        }
+        self.refresh_state();
+    }
+
+    pub fn set_mount_update_ramp_time_s(&mut self, mount_update_ramp_time_s: f32) {
+        unsafe {
+            sf_set_mount_update_ramp_time_s(
+                &mut self.raw as *mut CSensorFusion,
+                mount_update_ramp_time_s,
+            )
+        }
+        self.refresh_state();
+    }
+
+    pub fn set_mount_update_innovation_gate_mps(
+        &mut self,
+        mount_update_innovation_gate_mps: f32,
+    ) {
+        unsafe {
+            sf_set_mount_update_innovation_gate_mps(
+                &mut self.raw as *mut CSensorFusion,
+                mount_update_innovation_gate_mps,
+            )
+        }
+        self.refresh_state();
+    }
+
+    pub fn set_r_vehicle_speed(&mut self, r_vehicle_speed: f32) {
+        unsafe { sf_set_r_vehicle_speed(&mut self.raw as *mut CSensorFusion, r_vehicle_speed) }
         self.refresh_state();
     }
 

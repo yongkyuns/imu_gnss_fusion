@@ -232,6 +232,16 @@ void sf_fusion_init_external(sf_sensor_fusion_t *fusion,
                              const float q_vb[4]);
 void sf_fusion_set_misalignment(sf_sensor_fusion_t *fusion, const float q_vb[4]);
 void sf_fusion_set_r_body_vel(sf_sensor_fusion_t *fusion, float r_body_vel);
+void sf_fusion_set_mount_align_rw_var(sf_sensor_fusion_t *fusion,
+                                      float mount_align_rw_var);
+void sf_fusion_set_mount_update_min_scale(sf_sensor_fusion_t *fusion,
+                                          float mount_update_min_scale);
+void sf_fusion_set_mount_update_ramp_time_s(sf_sensor_fusion_t *fusion,
+                                            float mount_update_ramp_time_s);
+void sf_fusion_set_mount_update_innovation_gate_mps(
+    sf_sensor_fusion_t *fusion, float mount_update_innovation_gate_mps);
+void sf_fusion_set_r_vehicle_speed(sf_sensor_fusion_t *fusion,
+                                   float r_vehicle_speed);
 sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
                                   const sf_imu_sample_t *sample);
 sf_update_t sf_fusion_process_gnss(sf_sensor_fusion_t *fusion,

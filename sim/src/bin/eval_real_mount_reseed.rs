@@ -65,6 +65,7 @@ fn main() -> Result<()> {
         UbxReplayConfig {
             gnss_pos_r_scale: args.gnss_pos_r_scale,
             gnss_vel_r_scale: args.gnss_vel_r_scale,
+            ..UbxReplayConfig::default()
         },
     )?;
     if alg_events.is_empty() || gnss_samples.is_empty() || imu_samples.is_empty() {
