@@ -45,6 +45,12 @@ struct Args {
 
     #[arg(long)]
     r_body_vel: Option<f32>,
+    #[arg(long)]
+    gnss_pos_mount_scale: Option<f32>,
+    #[arg(long)]
+    gnss_vel_mount_scale: Option<f32>,
+    #[arg(long)]
+    gyro_bias_init_sigma_dps: Option<f32>,
 
     #[arg(long, default_value_t = 0.0)]
     mount_roll_deg: f64,
@@ -198,6 +204,15 @@ fn main() -> Result<()> {
     };
     if let Some(r_body_vel) = args.r_body_vel {
         fusion.set_r_body_vel(r_body_vel);
+    }
+    if let Some(gnss_pos_mount_scale) = args.gnss_pos_mount_scale {
+        fusion.set_gnss_pos_mount_scale(gnss_pos_mount_scale);
+    }
+    if let Some(gnss_vel_mount_scale) = args.gnss_vel_mount_scale {
+        fusion.set_gnss_vel_mount_scale(gnss_vel_mount_scale);
+    }
+    if let Some(gyro_bias_init_sigma_dps) = args.gyro_bias_init_sigma_dps {
+        fusion.set_gyro_bias_init_sigma_radps(gyro_bias_init_sigma_dps.to_radians() as f32);
     }
 
     let mut residuals = Vec::<ResidualSample>::new();
@@ -393,10 +408,19 @@ fn main() -> Result<()> {
     let tail = tail_window(&residuals, 60.0);
     println!("input={}", args.data_dir.display());
     println!(
-        "source={:?} seed={:?} r_body_vel={} key={} truth_mount_deg=({:.3},{:.3},{:.3})",
+        "source={:?} seed={:?} r_body_vel={} gnss_pos_mount_scale={} gnss_vel_mount_scale={} gyro_bias_init_sigma_dps={} key={} truth_mount_deg=({:.3},{:.3},{:.3})",
         args.signal_source,
         args.seed_source,
         args.r_body_vel
+            .map(|v| format!("{v:.3}"))
+            .unwrap_or_else(|| "default".to_string()),
+        args.gnss_pos_mount_scale
+            .map(|v| format!("{v:.3}"))
+            .unwrap_or_else(|| "default".to_string()),
+        args.gnss_vel_mount_scale
+            .map(|v| format!("{v:.3}"))
+            .unwrap_or_else(|| "default".to_string()),
+        args.gyro_bias_init_sigma_dps
             .map(|v| format!("{v:.3}"))
             .unwrap_or_else(|| "default".to_string()),
         args.data_key,

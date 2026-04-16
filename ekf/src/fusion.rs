@@ -94,6 +94,22 @@ impl SensorFusion {
         self.refresh_align_snapshot();
     }
 
+    pub fn set_gnss_pos_mount_scale(&mut self, gnss_pos_mount_scale: f32) {
+        self.raw.set_gnss_pos_mount_scale(gnss_pos_mount_scale);
+        self.refresh_align_snapshot();
+    }
+
+    pub fn set_gnss_vel_mount_scale(&mut self, gnss_vel_mount_scale: f32) {
+        self.raw.set_gnss_vel_mount_scale(gnss_vel_mount_scale);
+        self.refresh_align_snapshot();
+    }
+
+    pub fn set_gyro_bias_init_sigma_radps(&mut self, gyro_bias_init_sigma_radps: f32) {
+        self.raw
+            .set_gyro_bias_init_sigma_radps(gyro_bias_init_sigma_radps);
+        self.refresh_align_snapshot();
+    }
+
     pub fn set_mount_align_rw_var(&mut self, mount_align_rw_var: f32) {
         self.raw.set_mount_align_rw_var(mount_align_rw_var);
         self.refresh_align_snapshot();
@@ -121,6 +137,16 @@ impl SensorFusion {
 
     pub fn set_r_vehicle_speed(&mut self, r_vehicle_speed: f32) {
         self.raw.set_r_vehicle_speed(r_vehicle_speed);
+        self.refresh_align_snapshot();
+    }
+
+    pub fn set_r_zero_vel(&mut self, r_zero_vel: f32) {
+        self.raw.set_r_zero_vel(r_zero_vel);
+        self.refresh_align_snapshot();
+    }
+
+    pub fn set_r_stationary_accel(&mut self, r_stationary_accel: f32) {
+        self.raw.set_r_stationary_accel(r_stationary_accel);
         self.refresh_align_snapshot();
     }
 

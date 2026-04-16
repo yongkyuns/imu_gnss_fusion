@@ -48,12 +48,18 @@ static void sf_eskf_record_update_diag(sf_eskf_t *eskf,
                                        const float k[SF_ESKF_ERROR_STATES],
                                        const float dx[SF_ESKF_ERROR_STATES]);
 static void sf_eskf_block_mount_injection(float dx[SF_ESKF_ERROR_STATES]);
-static void sf_eskf_fuse_gps_pos_n(sf_eskf_t *eskf, float pos_n, float r_pos_n);
-static void sf_eskf_fuse_gps_pos_e(sf_eskf_t *eskf, float pos_e, float r_pos_e);
-static void sf_eskf_fuse_gps_pos_d(sf_eskf_t *eskf, float pos_d, float r_pos_d);
-static void sf_eskf_fuse_gps_vel_n(sf_eskf_t *eskf, float vel_n, float r_vel_n);
-static void sf_eskf_fuse_gps_vel_e(sf_eskf_t *eskf, float vel_e, float r_vel_e);
-static void sf_eskf_fuse_gps_vel_d(sf_eskf_t *eskf, float vel_d, float r_vel_d);
+static void sf_eskf_fuse_gps_pos_n(sf_eskf_t *eskf, float pos_n, float r_pos_n,
+                                   float gnss_pos_mount_scale);
+static void sf_eskf_fuse_gps_pos_e(sf_eskf_t *eskf, float pos_e, float r_pos_e,
+                                   float gnss_pos_mount_scale);
+static void sf_eskf_fuse_gps_pos_d(sf_eskf_t *eskf, float pos_d, float r_pos_d,
+                                   float gnss_pos_mount_scale);
+static void sf_eskf_fuse_gps_vel_n(sf_eskf_t *eskf, float vel_n, float r_vel_n,
+                                   float gnss_vel_mount_scale);
+static void sf_eskf_fuse_gps_vel_e(sf_eskf_t *eskf, float vel_e, float r_vel_e,
+                                   float gnss_vel_mount_scale);
+static void sf_eskf_fuse_gps_vel_d(sf_eskf_t *eskf, float vel_d, float r_vel_d,
+                                   float gnss_vel_mount_scale);
 static void sf_eskf_fuse_stationary_gravity_x(sf_eskf_t *eskf, float accel_x,
                                               float r_stationary_accel);
 static void sf_eskf_fuse_stationary_gravity_y(sf_eskf_t *eskf, float accel_y,
@@ -251,21 +257,33 @@ void sf_eskf_predict(sf_eskf_t *eskf, const sf_eskf_imu_delta_t *imu) {
 }
 
 void sf_eskf_fuse_gps(sf_eskf_t *eskf, const sf_gnss_ned_sample_t *gps) {
+  sf_eskf_fuse_gps_scaled(eskf, gps, 0.0f, 0.0f);
+}
+
+void sf_eskf_fuse_gps_scaled(sf_eskf_t *eskf, const sf_gnss_ned_sample_t *gps,
+                             float gnss_pos_mount_scale,
+                             float gnss_vel_mount_scale) {
   if (eskf == NULL || gps == NULL) {
     return;
   }
   sf_eskf_fuse_gps_pos_n(eskf, gps->pos_ned_m[0],
-                         gps->pos_std_m[0] * gps->pos_std_m[0]);
+                         gps->pos_std_m[0] * gps->pos_std_m[0],
+                         gnss_pos_mount_scale);
   sf_eskf_fuse_gps_pos_e(eskf, gps->pos_ned_m[1],
-                         gps->pos_std_m[1] * gps->pos_std_m[1]);
+                         gps->pos_std_m[1] * gps->pos_std_m[1],
+                         gnss_pos_mount_scale);
   sf_eskf_fuse_gps_pos_d(eskf, gps->pos_ned_m[2],
-                         gps->pos_std_m[2] * gps->pos_std_m[2]);
+                         gps->pos_std_m[2] * gps->pos_std_m[2],
+                         gnss_pos_mount_scale);
   sf_eskf_fuse_gps_vel_n(eskf, gps->vel_ned_mps[0],
-                         gps->vel_std_mps[0] * gps->vel_std_mps[0]);
+                         gps->vel_std_mps[0] * gps->vel_std_mps[0],
+                         gnss_vel_mount_scale);
   sf_eskf_fuse_gps_vel_e(eskf, gps->vel_ned_mps[1],
-                         gps->vel_std_mps[1] * gps->vel_std_mps[1]);
+                         gps->vel_std_mps[1] * gps->vel_std_mps[1],
+                         gnss_vel_mount_scale);
   sf_eskf_fuse_gps_vel_d(eskf, gps->vel_ned_mps[2],
-                         gps->vel_std_mps[2] * gps->vel_std_mps[2]);
+                         gps->vel_std_mps[2] * gps->vel_std_mps[2],
+                         gnss_vel_mount_scale);
 }
 
 void sf_eskf_fuse_body_speed_x(sf_eskf_t *eskf, float speed_mps,
@@ -303,9 +321,9 @@ void sf_eskf_fuse_zero_vel(sf_eskf_t *eskf, float r_zero_vel) {
   if (eskf == NULL) {
     return;
   }
-  sf_eskf_fuse_gps_vel_n(eskf, 0.0f, r_zero_vel);
-  sf_eskf_fuse_gps_vel_e(eskf, 0.0f, r_zero_vel);
-  sf_eskf_fuse_gps_vel_d(eskf, 0.0f, r_zero_vel);
+  sf_eskf_fuse_gps_vel_n(eskf, 0.0f, r_zero_vel, 0.0f);
+  sf_eskf_fuse_gps_vel_e(eskf, 0.0f, r_zero_vel, 0.0f);
+  sf_eskf_fuse_gps_vel_d(eskf, 0.0f, r_zero_vel, 0.0f);
 }
 
 void sf_eskf_fuse_stationary_gravity(sf_eskf_t *eskf,
@@ -624,8 +642,23 @@ static void sf_eskf_block_mount_injection(float dx[SF_ESKF_ERROR_STATES]) {
   dx[17] = 0.0f;
 }
 
+static void sf_eskf_scale_mount_injection(float dx[SF_ESKF_ERROR_STATES],
+                                          float mount_scale) {
+  if (mount_scale <= 0.0f) {
+    sf_eskf_block_mount_injection(dx);
+    return;
+  }
+  if (mount_scale >= 1.0f) {
+    return;
+  }
+  dx[15] *= mount_scale;
+  dx[16] *= mount_scale;
+  dx[17] *= mount_scale;
+}
+
 static void sf_eskf_fuse_gps_pos_n(sf_eskf_t *eskf, float pos_n,
-                                   float r_pos_n) {
+                                   float r_pos_n,
+                                   float gnss_pos_mount_scale) {
   const float pn = eskf->nominal.pn;
   float (*P)[SF_ESKF_ERROR_STATES] = eskf->p;
   const float innovation = pos_n - pn;
@@ -640,14 +673,15 @@ static void sf_eskf_fuse_gps_pos_n(sf_eskf_t *eskf, float pos_n,
   for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
     dx[i] = K[i] * innovation;
   }
-  sf_eskf_block_mount_injection(dx);
+  sf_eskf_scale_mount_injection(dx, gnss_pos_mount_scale);
   sf_eskf_record_update_diag(eskf, SF_ESKF_UPDATE_DIAG_GPS_POS, innovation, S,
                              K, dx);
   sf_eskf_fuse_measurement(eskf, S, K, dx);
 }
 
 static void sf_eskf_fuse_gps_pos_e(sf_eskf_t *eskf, float pos_e,
-                                   float r_pos_e) {
+                                   float r_pos_e,
+                                   float gnss_pos_mount_scale) {
   const float pe = eskf->nominal.pe;
   float (*P)[SF_ESKF_ERROR_STATES] = eskf->p;
   const float innovation = pos_e - pe;
@@ -662,14 +696,15 @@ static void sf_eskf_fuse_gps_pos_e(sf_eskf_t *eskf, float pos_e,
   for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
     dx[i] = K[i] * innovation;
   }
-  sf_eskf_block_mount_injection(dx);
+  sf_eskf_scale_mount_injection(dx, gnss_pos_mount_scale);
   sf_eskf_record_update_diag(eskf, SF_ESKF_UPDATE_DIAG_GPS_POS, innovation, S,
                              K, dx);
   sf_eskf_fuse_measurement(eskf, S, K, dx);
 }
 
 static void sf_eskf_fuse_gps_pos_d(sf_eskf_t *eskf, float pos_d,
-                                   float r_pos_d) {
+                                   float r_pos_d,
+                                   float gnss_pos_mount_scale) {
   const float pd = eskf->nominal.pd;
   float (*P)[SF_ESKF_ERROR_STATES] = eskf->p;
   const float innovation = pos_d - pd;
@@ -684,14 +719,15 @@ static void sf_eskf_fuse_gps_pos_d(sf_eskf_t *eskf, float pos_d,
   for (int i = 0; i < SF_ESKF_ERROR_STATES; ++i) {
     dx[i] = K[i] * innovation;
   }
-  sf_eskf_block_mount_injection(dx);
+  sf_eskf_scale_mount_injection(dx, gnss_pos_mount_scale);
   sf_eskf_record_update_diag(eskf, SF_ESKF_UPDATE_DIAG_GPS_POS_D, innovation, S,
                              K, dx);
   sf_eskf_fuse_measurement(eskf, S, K, dx);
 }
 
 static void sf_eskf_fuse_gps_vel_n(sf_eskf_t *eskf, float vel_n,
-                                   float r_vel_n) {
+                                   float r_vel_n,
+                                   float gnss_vel_mount_scale) {
   const float vn = eskf->nominal.vn;
   float (*P)[SF_ESKF_ERROR_STATES] = eskf->p;
   const float innovation = vel_n - vn;
@@ -707,7 +743,7 @@ static void sf_eskf_fuse_gps_vel_n(sf_eskf_t *eskf, float vel_n,
     dx[i] = K[i] * innovation;
   }
   if (r_vel_n != SF_ESKF_RUNTIME_ZERO_VEL_R_DIAG) {
-    sf_eskf_block_mount_injection(dx);
+    sf_eskf_scale_mount_injection(dx, gnss_vel_mount_scale);
   }
   sf_eskf_record_update_diag(eskf,
                              r_vel_n == SF_ESKF_RUNTIME_ZERO_VEL_R_DIAG
@@ -718,7 +754,8 @@ static void sf_eskf_fuse_gps_vel_n(sf_eskf_t *eskf, float vel_n,
 }
 
 static void sf_eskf_fuse_gps_vel_e(sf_eskf_t *eskf, float vel_e,
-                                   float r_vel_e) {
+                                   float r_vel_e,
+                                   float gnss_vel_mount_scale) {
   const float ve = eskf->nominal.ve;
   float (*P)[SF_ESKF_ERROR_STATES] = eskf->p;
   const float innovation = vel_e - ve;
@@ -734,7 +771,7 @@ static void sf_eskf_fuse_gps_vel_e(sf_eskf_t *eskf, float vel_e,
     dx[i] = K[i] * innovation;
   }
   if (r_vel_e != SF_ESKF_RUNTIME_ZERO_VEL_R_DIAG) {
-    sf_eskf_block_mount_injection(dx);
+    sf_eskf_scale_mount_injection(dx, gnss_vel_mount_scale);
   }
   sf_eskf_record_update_diag(eskf,
                              r_vel_e == SF_ESKF_RUNTIME_ZERO_VEL_R_DIAG
@@ -745,7 +782,8 @@ static void sf_eskf_fuse_gps_vel_e(sf_eskf_t *eskf, float vel_e,
 }
 
 static void sf_eskf_fuse_gps_vel_d(sf_eskf_t *eskf, float vel_d,
-                                   float r_vel_d) {
+                                   float r_vel_d,
+                                   float gnss_vel_mount_scale) {
   const float vd = eskf->nominal.vd;
   float (*P)[SF_ESKF_ERROR_STATES] = eskf->p;
   const float innovation = vel_d - vd;
@@ -761,7 +799,7 @@ static void sf_eskf_fuse_gps_vel_d(sf_eskf_t *eskf, float vel_d,
     dx[i] = K[i] * innovation;
   }
   if (r_vel_d != SF_ESKF_RUNTIME_ZERO_VEL_R_DIAG) {
-    sf_eskf_block_mount_injection(dx);
+    sf_eskf_scale_mount_injection(dx, gnss_vel_mount_scale);
   }
   sf_eskf_record_update_diag(eskf,
                              r_vel_d == SF_ESKF_RUNTIME_ZERO_VEL_R_DIAG

@@ -131,8 +131,10 @@ pub fn identity_from_class_id(class: u8, id: u8) -> String {
 }
 
 pub fn extract_itow_ms(frame: &UbxFrame) -> Option<i64> {
+    if let Some(PacketRef::NavPvt(pkt)) = decode_nav_pvt_like(frame) {
+        return Some(pkt.itow() as i64);
+    }
     match decode_packet(frame)? {
-        PacketRef::NavPvt(pkt) => Some(pkt.itow() as i64),
         PacketRef::NavAtt(pkt) => Some(pkt.itow() as i64),
         PacketRef::NavStatus(pkt) => Some(pkt.itow() as i64),
         PacketRef::NavSat(pkt) => Some(pkt.itow() as i64),

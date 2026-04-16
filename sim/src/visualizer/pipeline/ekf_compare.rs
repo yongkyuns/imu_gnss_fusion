@@ -59,6 +59,9 @@ pub struct EkfCompareData {
 #[derive(Clone, Copy, Debug)]
 pub struct EkfCompareConfig {
     pub r_body_vel: f32,
+    pub gnss_pos_mount_scale: f32,
+    pub gnss_vel_mount_scale: f32,
+    pub gyro_bias_init_sigma_dps: f32,
     pub r_vehicle_speed: f32,
     pub mount_align_rw_var: f32,
     pub mount_update_min_scale: f32,
@@ -72,7 +75,6 @@ pub struct EkfCompareConfig {
     pub yaw_init_speed_mps: f64,
     pub gnss_pos_r_scale: f64,
     pub gnss_vel_r_scale: f64,
-    pub gnss_time_shift_ms: f64,
     pub predict_noise: Option<PredictNoise>,
     pub loose_predict_noise: Option<LoosePredictNoise>,
 }
@@ -80,21 +82,23 @@ pub struct EkfCompareConfig {
 impl Default for EkfCompareConfig {
     fn default() -> Self {
         Self {
-            r_body_vel: 300.0,
+            r_body_vel: 2.0,
+            gnss_pos_mount_scale: 0.0,
+            gnss_vel_mount_scale: 0.0,
+            gyro_bias_init_sigma_dps: 0.125,
             r_vehicle_speed: 0.04,
-            mount_align_rw_var: 3.0e-5,
-            mount_update_min_scale: 0.10,
-            mount_update_ramp_time_s: 30.0,
-            mount_update_innovation_gate_mps: 0.5,
-            r_zero_vel: 0.25,
-            r_stationary_accel: 0.2,
+            mount_align_rw_var: 1.0e-6,
+            mount_update_min_scale: 0.01,
+            mount_update_ramp_time_s: 300.0,
+            mount_update_innovation_gate_mps: 0.05,
+            r_zero_vel: 0.0,
+            r_stationary_accel: 0.0,
             vehicle_meas_lpf_cutoff_hz: 35.0,
             predict_imu_lpf_cutoff_hz: None,
             predict_imu_decimation: 1,
             yaw_init_speed_mps: 0.0 / 3.6,
             gnss_pos_r_scale: 0.1,
             gnss_vel_r_scale: 3.0,
-            gnss_time_shift_ms: 0.0,
             predict_noise: None,
             loose_predict_noise: None,
         }
@@ -242,16 +246,8 @@ pub fn build_ekf_compare_traces(
         },
     )
     .expect("failed to build generic replay from UBX frames");
-    let mut nav_events = replay.nav_events.clone();
-    let mut gnss_samples = replay.gnss_samples.clone();
-    if cfg.gnss_time_shift_ms.is_finite() && cfg.gnss_time_shift_ms != 0.0 {
-        for (t_ms, _) in &mut nav_events {
-            *t_ms += cfg.gnss_time_shift_ms;
-        }
-        for sample in &mut gnss_samples {
-            sample.t_s += cfg.gnss_time_shift_ms * 1.0e-3;
-        }
-    }
+    let nav_events = replay.nav_events.clone();
+    let gnss_samples = replay.gnss_samples.clone();
     let use_nav2_for_ekf = replay.used_nav2;
     if !use_nav2_for_ekf {
         eprintln!(
@@ -360,7 +356,12 @@ pub fn build_ekf_compare_traces(
     };
     if let Some(fusion_ref) = fusion.as_mut() {
         fusion_ref.set_r_body_vel(cfg.r_body_vel);
+        fusion_ref.set_gnss_pos_mount_scale(cfg.gnss_pos_mount_scale);
+        fusion_ref.set_gnss_vel_mount_scale(cfg.gnss_vel_mount_scale);
+        fusion_ref.set_gyro_bias_init_sigma_radps(cfg.gyro_bias_init_sigma_dps.to_radians());
         fusion_ref.set_r_vehicle_speed(cfg.r_vehicle_speed);
+        fusion_ref.set_r_zero_vel(cfg.r_zero_vel);
+        fusion_ref.set_r_stationary_accel(cfg.r_stationary_accel);
         fusion_ref.set_mount_align_rw_var(cfg.mount_align_rw_var);
         fusion_ref.set_mount_update_min_scale(cfg.mount_update_min_scale);
         fusion_ref.set_mount_update_ramp_time_s(cfg.mount_update_ramp_time_s);

@@ -9,7 +9,9 @@
 
 static void sf_initialize_eskf_from_gnss(sf_eskf_t *eskf,
                                          const sf_gnss_ned_sample_t *gnss,
-                                         float yaw_init_speed_mps);
+                                         float yaw_init_speed_mps,
+                                         float gyro_bias_init_sigma_radps,
+                                         float accel_bias_init_sigma_mps2);
 static void sf_set_nominal_yaw_only(sf_eskf_nominal_state_t *state,
                                     float yaw_rad);
 static void sf_clamp_eskf_biases(sf_eskf_t *eskf);
@@ -78,8 +80,6 @@ static void sf_profile_accumulate(uint32_t *count, uint64_t *total_us,
                                   uint32_t *max_us, uint32_t elapsed_us);
 
 #define SF_RUNTIME_ZERO_SPEED_MPS 0.80f
-#define SF_RUNTIME_R_ZERO_VEL 0.01f
-#define SF_RUNTIME_R_STATIONARY_ACCEL 0.05f
 #define SF_RUNTIME_NHC_MAX_GYRO_RADPS 0.03f
 #define SF_RUNTIME_NHC_MAX_ACCEL_NORM_ERR_MPS2 0.2f
 #define SF_CAN_SPEED_ZERO_MPS 0.15f
@@ -95,6 +95,22 @@ void sf_init(sf_t *sf, const float *q_vb_or_null) {
 
 void sf_set_r_body_vel(sf_t *sf, float r_body_vel) {
   sf_fusion_set_r_body_vel((sf_sensor_fusion_t *)sf, r_body_vel);
+}
+
+void sf_set_gnss_pos_mount_scale(sf_t *sf, float gnss_pos_mount_scale) {
+  sf_fusion_set_gnss_pos_mount_scale((sf_sensor_fusion_t *)sf,
+                                     gnss_pos_mount_scale);
+}
+
+void sf_set_gnss_vel_mount_scale(sf_t *sf, float gnss_vel_mount_scale) {
+  sf_fusion_set_gnss_vel_mount_scale((sf_sensor_fusion_t *)sf,
+                                     gnss_vel_mount_scale);
+}
+
+void sf_set_gyro_bias_init_sigma_radps(sf_t *sf,
+                                       float gyro_bias_init_sigma_radps) {
+  sf_fusion_set_gyro_bias_init_sigma_radps((sf_sensor_fusion_t *)sf,
+                                           gyro_bias_init_sigma_radps);
 }
 
 void sf_set_mount_align_rw_var(sf_t *sf, float mount_align_rw_var) {
@@ -119,6 +135,15 @@ void sf_set_mount_update_innovation_gate_mps(
 
 void sf_set_r_vehicle_speed(sf_t *sf, float r_vehicle_speed) {
   sf_fusion_set_r_vehicle_speed((sf_sensor_fusion_t *)sf, r_vehicle_speed);
+}
+
+void sf_set_r_zero_vel(sf_t *sf, float r_zero_vel) {
+  sf_fusion_set_r_zero_vel((sf_sensor_fusion_t *)sf, r_zero_vel);
+}
+
+void sf_set_r_stationary_accel(sf_t *sf, float r_stationary_accel) {
+  sf_fusion_set_r_stationary_accel((sf_sensor_fusion_t *)sf,
+                                   r_stationary_accel);
 }
 
 sf_update_t sf_process_imu(sf_t *sf, const sf_imu_sample_t *sample) {
@@ -281,7 +306,7 @@ void sf_predict_noise_default(sf_predict_noise_t *cfg) {
   cfg->accel_var = 2.4504214e-5f * 15.0f;
   cfg->gyro_bias_rw_var = 0.0002e-9f;
   cfg->accel_bias_rw_var = 0.002e-9f;
-  cfg->mount_align_rw_var = 3.0e-5f;
+  cfg->mount_align_rw_var = 1.0e-6f;
 }
 
 void sf_fusion_config_default(sf_fusion_config_t *cfg) {
@@ -291,14 +316,20 @@ void sf_fusion_config_default(sf_fusion_config_t *cfg) {
   sf_align_config_default(&cfg->align);
   sf_bootstrap_config_default(&cfg->bootstrap);
   sf_predict_noise_default(&cfg->predict_noise);
-  cfg->r_body_vel = 300.0f;
+  cfg->gyro_bias_init_sigma_radps = 0.125f * 3.1415927f / 180.0f;
+  cfg->accel_bias_init_sigma_mps2 = 0.20f;
+  cfg->r_body_vel = 2.0f;
+  cfg->gnss_pos_mount_scale = 0.0f;
+  cfg->gnss_vel_mount_scale = 0.0f;
   cfg->gnss_vel_xy_update_min_scale = 0.25f;
   cfg->gnss_vel_update_ramp_time_s = 20.0f;
   cfg->ekf_mount_seed_blend_time_s = 120.0f;
-  cfg->mount_update_min_scale = 0.10f;
-  cfg->mount_update_ramp_time_s = 30.0f;
-  cfg->mount_update_innovation_gate_mps = 0.5f;
+  cfg->mount_update_min_scale = 0.01f;
+  cfg->mount_update_ramp_time_s = 300.0f;
+  cfg->mount_update_innovation_gate_mps = 0.05f;
   cfg->r_vehicle_speed = 0.04f;
+  cfg->r_zero_vel = 0.0f;
+  cfg->r_stationary_accel = 0.0f;
   cfg->yaw_init_speed_mps = 0.0f;
 }
 
@@ -367,6 +398,39 @@ void sf_fusion_set_r_body_vel(sf_sensor_fusion_t *fusion, float r_body_vel) {
   impl->cfg.r_body_vel = r_body_vel;
 }
 
+void sf_fusion_set_gnss_pos_mount_scale(sf_sensor_fusion_t *fusion,
+                                        float gnss_pos_mount_scale) {
+  sf_sensor_fusion_impl_t *impl;
+  if (fusion == NULL || !isfinite(gnss_pos_mount_scale) ||
+      gnss_pos_mount_scale < 0.0f || gnss_pos_mount_scale > 1.0f) {
+    return;
+  }
+  impl = sf_impl(fusion);
+  impl->cfg.gnss_pos_mount_scale = gnss_pos_mount_scale;
+}
+
+void sf_fusion_set_gnss_vel_mount_scale(sf_sensor_fusion_t *fusion,
+                                        float gnss_vel_mount_scale) {
+  sf_sensor_fusion_impl_t *impl;
+  if (fusion == NULL || !isfinite(gnss_vel_mount_scale) ||
+      gnss_vel_mount_scale < 0.0f || gnss_vel_mount_scale > 1.0f) {
+    return;
+  }
+  impl = sf_impl(fusion);
+  impl->cfg.gnss_vel_mount_scale = gnss_vel_mount_scale;
+}
+
+void sf_fusion_set_gyro_bias_init_sigma_radps(sf_sensor_fusion_t *fusion,
+                                              float gyro_bias_init_sigma_radps) {
+  sf_sensor_fusion_impl_t *impl;
+  if (fusion == NULL || !isfinite(gyro_bias_init_sigma_radps) ||
+      gyro_bias_init_sigma_radps < 0.0f) {
+    return;
+  }
+  impl = sf_impl(fusion);
+  impl->cfg.gyro_bias_init_sigma_radps = gyro_bias_init_sigma_radps;
+}
+
 void sf_fusion_set_mount_align_rw_var(sf_sensor_fusion_t *fusion,
                                       float mount_align_rw_var) {
   sf_sensor_fusion_impl_t *impl;
@@ -420,6 +484,26 @@ void sf_fusion_set_r_vehicle_speed(sf_sensor_fusion_t *fusion,
   }
   impl = sf_impl(fusion);
   impl->cfg.r_vehicle_speed = r_vehicle_speed;
+}
+
+void sf_fusion_set_r_zero_vel(sf_sensor_fusion_t *fusion, float r_zero_vel) {
+  sf_sensor_fusion_impl_t *impl;
+  if (fusion == NULL || !isfinite(r_zero_vel) || r_zero_vel < 0.0f) {
+    return;
+  }
+  impl = sf_impl(fusion);
+  impl->cfg.r_zero_vel = r_zero_vel;
+}
+
+void sf_fusion_set_r_stationary_accel(sf_sensor_fusion_t *fusion,
+                                      float r_stationary_accel) {
+  sf_sensor_fusion_impl_t *impl;
+  if (fusion == NULL || !isfinite(r_stationary_accel) ||
+      r_stationary_accel < 0.0f) {
+    return;
+  }
+  impl = sf_impl(fusion);
+  impl->cfg.r_stationary_accel = r_stationary_accel;
 }
 
 bool sf_fusion_get_debug(const sf_sensor_fusion_t *fusion,
@@ -601,9 +685,13 @@ sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
                                                       sample->gyro_radps);
     t0_us = sf_profile_stamp(impl);
     if (zero_vel_active) {
-      sf_eskf_fuse_zero_vel(&impl->eskf, SF_RUNTIME_R_ZERO_VEL);
-      sf_eskf_fuse_stationary_gravity(&impl->eskf, accel_vehicle,
-                                      SF_RUNTIME_R_STATIONARY_ACCEL);
+      if (impl->cfg.r_zero_vel > 0.0f) {
+        sf_eskf_fuse_zero_vel(&impl->eskf, impl->cfg.r_zero_vel);
+      }
+      if (impl->cfg.r_stationary_accel > 0.0f) {
+        sf_eskf_fuse_stationary_gravity(&impl->eskf, accel_vehicle,
+                                        impl->cfg.r_stationary_accel);
+      }
     } else if (sf_runtime_nhc_active(accel_vehicle, gyro_vehicle)) {
       const float body_update_scale = sf_mount_update_scale(impl, sample->t_s);
       const float effective_r_body_vel =
@@ -725,7 +813,9 @@ sf_update_t sf_fusion_process_gnss(sf_sensor_fusion_t *fusion,
     }
     t0_us = sf_profile_stamp(impl);
     sf_initialize_eskf_from_gnss(&impl->eskf, &local_sample,
-                                 impl->cfg.yaw_init_speed_mps);
+                                 impl->cfg.yaw_init_speed_mps,
+                                 impl->cfg.gyro_bias_init_sigma_radps,
+                                 impl->cfg.accel_bias_init_sigma_mps2);
     if (impl->profile_now_us != NULL) {
       elapsed_us = sf_profile_stamp(impl) - t0_us;
       sf_profile_accumulate(&impl->profile.gnss_init_count,
@@ -738,7 +828,9 @@ sf_update_t sf_fusion_process_gnss(sf_sensor_fusion_t *fusion,
     impl->ekf_mount_handoff_t_s = local_sample.t_s;
   } else {
     t0_us = sf_profile_stamp(impl);
-    sf_eskf_fuse_gps(&impl->eskf, &local_sample);
+    sf_eskf_fuse_gps_scaled(&impl->eskf, &local_sample,
+                            impl->cfg.gnss_pos_mount_scale,
+                            impl->cfg.gnss_vel_mount_scale);
     if (impl->profile_now_us != NULL) {
       elapsed_us = sf_profile_stamp(impl) - t0_us;
       sf_profile_accumulate(&impl->profile.gnss_fuse_count,
@@ -900,12 +992,12 @@ sf_align_state_from_impl(const sf_sensor_fusion_impl_t *impl) {
 
 static void sf_initialize_eskf_from_gnss(sf_eskf_t *eskf,
                                          const sf_gnss_ned_sample_t *gnss,
-                                         float yaw_init_speed_mps) {
+                                         float yaw_init_speed_mps,
+                                         float gyro_bias_sigma_radps,
+                                         float accel_bias_sigma_mps2) {
   float vel_var;
   float speed_h;
   float yaw_rad;
-  const float gyro_bias_sigma_radps = 0.125f * 3.1415927f / 180.0f;
-  const float accel_bias_sigma_mps2 = 0.20f;
   const float mount_residual_sigma_rad = 5.0f * 3.1415927f / 180.0f;
   sf_predict_noise_t noise = eskf->noise;
 
