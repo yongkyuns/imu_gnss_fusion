@@ -59,8 +59,7 @@ static bool sf_runtime_zero_velocity_active(sf_sensor_fusion_impl_t *impl,
                                             const float gyro_radps[3]);
 static bool sf_runtime_nhc_active(const float accel_b[3],
                                   const float gyro_radps[3]);
-static float
-sf_runtime_nhc_speed_scale(const sf_sensor_fusion_impl_t *impl);
+static float sf_runtime_nhc_speed_scale(const sf_sensor_fusion_impl_t *impl);
 static float sf_gnss_vel_update_scale_xy(const sf_sensor_fusion_impl_t *impl,
                                          float t_s);
 static void sf_blend_eskf_mount_seed(sf_sensor_fusion_impl_t *impl, float t_s);
@@ -115,7 +114,8 @@ void sf_set_gyro_bias_init_sigma_radps(sf_t *sf,
                                            gyro_bias_init_sigma_radps);
 }
 
-void sf_set_accel_bias_init_sigma_mps2(sf_t *sf, float accel_bias_init_sigma_mps2) {
+void sf_set_accel_bias_init_sigma_mps2(sf_t *sf,
+                                       float accel_bias_init_sigma_mps2) {
   sf_fusion_set_accel_bias_init_sigma_mps2((sf_sensor_fusion_t *)sf,
                                            accel_bias_init_sigma_mps2);
 }
@@ -125,7 +125,8 @@ void sf_set_accel_bias_rw_var(sf_t *sf, float accel_bias_rw_var) {
 }
 
 void sf_set_mount_align_rw_var(sf_t *sf, float mount_align_rw_var) {
-  sf_fusion_set_mount_align_rw_var((sf_sensor_fusion_t *)sf, mount_align_rw_var);
+  sf_fusion_set_mount_align_rw_var((sf_sensor_fusion_t *)sf,
+                                   mount_align_rw_var);
 }
 
 void sf_set_mount_update_min_scale(sf_t *sf, float mount_update_min_scale) {
@@ -313,8 +314,8 @@ void sf_predict_noise_default(sf_predict_noise_t *cfg) {
   if (cfg == NULL) {
     return;
   }
-  cfg->gyro_var = 2.2873113e-7f * 10.0f;
-  cfg->accel_var = 2.4504214e-5f * 15.0f;
+  cfg->gyro_var = 2.2873113e-7f * 1.0f;
+  cfg->accel_var = 2.4504214e-5f * 1.0f;
   cfg->gyro_bias_rw_var = 0.0002e-9f;
   cfg->accel_bias_rw_var = 0.002e-9f;
   cfg->mount_align_rw_var = 1.0e-6f;
@@ -431,8 +432,8 @@ void sf_fusion_set_gnss_vel_mount_scale(sf_sensor_fusion_t *fusion,
   impl->cfg.gnss_vel_mount_scale = gnss_vel_mount_scale;
 }
 
-void sf_fusion_set_gyro_bias_init_sigma_radps(sf_sensor_fusion_t *fusion,
-                                              float gyro_bias_init_sigma_radps) {
+void sf_fusion_set_gyro_bias_init_sigma_radps(
+    sf_sensor_fusion_t *fusion, float gyro_bias_init_sigma_radps) {
   sf_sensor_fusion_impl_t *impl;
   if (fusion == NULL || !isfinite(gyro_bias_init_sigma_radps) ||
       gyro_bias_init_sigma_radps < 0.0f) {
@@ -442,8 +443,8 @@ void sf_fusion_set_gyro_bias_init_sigma_radps(sf_sensor_fusion_t *fusion,
   impl->cfg.gyro_bias_init_sigma_radps = gyro_bias_init_sigma_radps;
 }
 
-void sf_fusion_set_accel_bias_init_sigma_mps2(sf_sensor_fusion_t *fusion,
-                                              float accel_bias_init_sigma_mps2) {
+void sf_fusion_set_accel_bias_init_sigma_mps2(
+    sf_sensor_fusion_t *fusion, float accel_bias_init_sigma_mps2) {
   sf_sensor_fusion_impl_t *impl;
   if (fusion == NULL || !isfinite(accel_bias_init_sigma_mps2) ||
       accel_bias_init_sigma_mps2 < 0.0f) {
@@ -730,14 +731,15 @@ sf_update_t sf_fusion_process_imu(sf_sensor_fusion_t *fusion,
       const float body_update_scale = sf_mount_update_scale(impl, sample->t_s);
       const float nhc_speed_scale = sf_runtime_nhc_speed_scale(impl);
       if (nhc_speed_scale > 0.0f) {
-        const float fused_body_update_scale = body_update_scale * nhc_speed_scale;
+        const float fused_body_update_scale =
+            body_update_scale * nhc_speed_scale;
         const float effective_r_body_vel =
-            impl->cfg.r_body_vel /
-            ((fused_body_update_scale > 1.0e-3f) ? fused_body_update_scale
-                                                 : 1.0e-3f);
-        sf_eskf_fuse_body_vel_scaled(&impl->eskf, effective_r_body_vel,
-                                     fused_body_update_scale,
-                                     impl->cfg.mount_update_innovation_gate_mps);
+            impl->cfg.r_body_vel / ((fused_body_update_scale > 1.0e-3f)
+                                        ? fused_body_update_scale
+                                        : 1.0e-3f);
+        sf_eskf_fuse_body_vel_scaled(
+            &impl->eskf, effective_r_body_vel, fused_body_update_scale,
+            impl->cfg.mount_update_innovation_gate_mps);
       }
     }
     if (impl->profile_now_us != NULL) {
@@ -1845,8 +1847,7 @@ static bool sf_runtime_nhc_active(const float accel_b[3],
              SF_RUNTIME_NHC_MAX_ACCEL_NORM_ERR_MPS2;
 }
 
-static float
-sf_runtime_nhc_speed_scale(const sf_sensor_fusion_impl_t *impl) {
+static float sf_runtime_nhc_speed_scale(const sf_sensor_fusion_impl_t *impl) {
   const float full_speed_mps = 15.0f / 3.6f;
   float speed_mps;
 

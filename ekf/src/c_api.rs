@@ -513,6 +513,12 @@ unsafe extern "C" {
 
     fn sf_eskf_init(eskf: *mut CEskf, p_diag: *const f32, noise: *const PredictNoise);
     fn sf_eskf_predict(eskf: *mut CEskf, imu: *const CEskfImuDelta);
+    fn sf_eskf_compute_error_transition(
+        f_out: *mut [[f32; 18]; 18],
+        g_out: *mut [[f32; 15]; 18],
+        eskf: *const CEskf,
+        imu: *const CEskfImuDelta,
+    );
     fn sf_eskf_fuse_gps(eskf: *mut CEskf, gps: *const CGnssNedSample);
     fn sf_eskf_fuse_body_speed_x(eskf: *mut CEskf, speed_mps: f32, r_speed: f32);
     fn sf_eskf_fuse_body_vel(eskf: *mut CEskf, r_body_vel: f32);
@@ -1133,6 +1139,20 @@ impl CEskfWrapper {
         unsafe { sf_eskf_predict(&mut self.raw as *mut CEskf, &imu as *const CEskfImuDelta) };
     }
 
+    pub fn compute_error_transition(&self, imu: CEskfImuDelta) -> [[f32; 18]; 18] {
+        let mut f = [[0.0f32; 18]; 18];
+        let mut g = [[0.0f32; 15]; 18];
+        unsafe {
+            sf_eskf_compute_error_transition(
+                &mut f as *mut [[f32; 18]; 18],
+                &mut g as *mut [[f32; 15]; 18],
+                &self.raw as *const CEskf,
+                &imu as *const CEskfImuDelta,
+            );
+        }
+        f
+    }
+
     pub fn fuse_gps(&mut self, sample: EskfGnssSample) {
         let c_sample = CGnssNedSample {
             t_s: sample.t_s,
@@ -1172,6 +1192,20 @@ impl CEskfWrapper {
             )
         };
     }
+}
+
+pub fn compute_eskf_error_transition(eskf: &CEskf, imu: CEskfImuDelta) -> [[f32; 18]; 18] {
+    let mut f = [[0.0f32; 18]; 18];
+    let mut g = [[0.0f32; 15]; 18];
+    unsafe {
+        sf_eskf_compute_error_transition(
+            &mut f as *mut [[f32; 18]; 18],
+            &mut g as *mut [[f32; 15]; 18],
+            eskf as *const CEskf,
+            &imu as *const CEskfImuDelta,
+        );
+    }
+    f
 }
 
 impl CLooseWrapper {

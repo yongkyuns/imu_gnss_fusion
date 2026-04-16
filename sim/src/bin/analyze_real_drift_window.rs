@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
+use sensor_fusion::c_api::{CEskfImuDelta, compute_eskf_error_transition};
 use sensor_fusion::fusion::{
     FusionVehicleSpeedDirection, FusionVehicleSpeedSample, SensorFusion,
 };
@@ -268,6 +269,10 @@ fn main() -> Result<()> {
     let mut mount_quat_err = Stats::default();
     let mut theta_z_var = Stats::default();
     let mut mount_z_var = Stats::default();
+    let mut f_vn_theta_y = Stats::default();
+    let mut f_ve_theta_y = Stats::default();
+    let mut f_vn_bax = Stats::default();
+    let mut f_ve_bax = Stats::default();
     let mut p_theta_y = Stats::default();
     let mut p_bax = Stats::default();
     let mut p_theta_y_vn = Stats::default();
@@ -276,9 +281,41 @@ fn main() -> Result<()> {
     let mut p_bax_ve = Stats::default();
     let mut gnss_track_pitch = GnssTrackPitchSplit::default();
 
+    let mut prev_imu_t_s: Option<f64> = None;
     for_each_event(&replay.imu_samples, &replay.gnss_samples, |event| match event {
         ReplayEvent::Imu(_, sample) => {
+            if sample.t_s >= args.start_s
+                && sample.t_s <= args.end_s
+                && let Some(prev_t_s) = prev_imu_t_s
+                && let Some(eskf) = fusion.eskf()
+                && let Some(q_vb) = fusion.eskf_mount_q_vb().or_else(|| fusion.mount_q_vb())
+            {
+                let dt_s = sample.t_s - prev_t_s;
+                if (0.001..=0.05).contains(&dt_s) {
+                    let c_bv = quat_to_rotmat_f64(q_vb.map(|v| v as f64));
+                    let c_vb = transpose3(c_bv);
+                    let gyro_vehicle = mat_vec(c_vb, sample.gyro_radps);
+                    let accel_vehicle = mat_vec(c_vb, sample.accel_mps2);
+                    let f = compute_eskf_error_transition(
+                        eskf,
+                        CEskfImuDelta {
+                            dax: (gyro_vehicle[0] * dt_s) as f32,
+                            day: (gyro_vehicle[1] * dt_s) as f32,
+                            daz: (gyro_vehicle[2] * dt_s) as f32,
+                            dvx: (accel_vehicle[0] * dt_s) as f32,
+                            dvy: (accel_vehicle[1] * dt_s) as f32,
+                            dvz: (accel_vehicle[2] * dt_s) as f32,
+                            dt: dt_s as f32,
+                        },
+                    );
+                    f_vn_theta_y.push(f[3][1] as f64);
+                    f_ve_theta_y.push(f[4][1] as f64);
+                    f_vn_bax.push(f[3][12] as f64);
+                    f_ve_bax.push(f[4][12] as f64);
+                }
+            }
             let _ = fusion.process_imu(to_fusion_imu(*sample));
+            prev_imu_t_s = Some(sample.t_s);
         }
         ReplayEvent::Gnss(_, sample) => {
             if sample.t_s >= args.start_s
@@ -394,6 +431,10 @@ fn main() -> Result<()> {
     mount_quat_err.print("mount_quat_err_deg", false);
     theta_z_var.print("theta_z_var", false);
     mount_z_var.print("mount_z_var", false);
+    f_vn_theta_y.print("f_vn_theta_y", false);
+    f_ve_theta_y.print("f_ve_theta_y", false);
+    f_vn_bax.print("f_vn_bax", false);
+    f_ve_bax.print("f_ve_bax", false);
     p_theta_y.print("p_theta_y", false);
     p_bax.print("p_bax", false);
     p_theta_y_vn.print("p_theta_y_vn", false);
