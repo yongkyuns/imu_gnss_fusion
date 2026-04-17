@@ -829,7 +829,7 @@ fn draw_plot<'a, I>(
     ui.vertical(|ui| {
         ui.label(title);
         let mut plot = Plot::new(title)
-            .height(220.0)
+            .height(200.0)
             .link_axis("shared_x", egui::Vec2b::new(true, false))
             .x_axis_formatter(|mark, _range| format!("{:.1}", mark.value))
             .allow_drag(true)

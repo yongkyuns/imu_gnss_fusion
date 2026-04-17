@@ -8,7 +8,6 @@ use sensor_fusion::loose::LoosePredictNoise;
 
 use crate::datasets::generic_replay::{fusion_gnss_sample as to_fusion_gnss, fusion_imu_sample as to_fusion_imu};
 use crate::datasets::ubx_replay::{UbxReplayConfig, build_generic_replay_from_frames};
-use crate::eval::gnss_ins::{quat_axis_angle_deg, quat_from_rpy_alg_deg};
 use crate::ubxlog::{
     NavPvtObs, UbxFrame, extract_esf_alg, extract_esf_alg_status, extract_nav_att,
     extract_nav_pvt_obs, extract_nav2_pvt_obs,
@@ -83,15 +82,15 @@ pub struct EkfCompareConfig {
 impl Default for EkfCompareConfig {
     fn default() -> Self {
         Self {
-            r_body_vel: 0.01,
+            r_body_vel: 0.005,
             gnss_pos_mount_scale: 0.0,
             gnss_vel_mount_scale: 0.0,
             gyro_bias_init_sigma_dps: 0.125,
             r_vehicle_speed: 0.04,
-            mount_align_rw_var: 5.0e-8,
-            mount_update_min_scale: 0.004,
-            mount_update_ramp_time_s: 1_200.0,
-            mount_update_innovation_gate_mps: 0.01,
+            mount_align_rw_var: 1.0e-7,
+            mount_update_min_scale: 0.008,
+            mount_update_ramp_time_s: 800.0,
+            mount_update_innovation_gate_mps: 0.02,
             r_zero_vel: 0.0,
             r_stationary_accel: 0.0,
             vehicle_meas_lpf_cutoff_hz: 35.0,
@@ -294,8 +293,6 @@ pub fn build_ekf_compare_traces(
     let mut eskf_mount_roll = Vec::<[f64; 2]>::new();
     let mut eskf_mount_pitch = Vec::<[f64; 2]>::new();
     let mut eskf_mount_yaw = Vec::<[f64; 2]>::new();
-    let mut eskf_mount_fwd_err_final = Vec::<[f64; 2]>::new();
-    let mut eskf_mount_down_err_final = Vec::<[f64; 2]>::new();
     let eskf_stationary_innov_x = Vec::<[f64; 2]>::new();
     let eskf_stationary_innov_y = Vec::<[f64; 2]>::new();
     let eskf_stationary_k_theta_x_from_x = Vec::<[f64; 2]>::new();
@@ -1389,30 +1386,6 @@ pub fn build_ekf_compare_traces(
             points: ubx_vel_vertical.clone(),
         },
     ];
-    if let Some(final_alg) = alg_events.last() {
-        let q_alg_final = quat_from_rpy_alg_deg(
-            final_alg.roll_deg,
-            final_alg.pitch_deg,
-            normalize_heading_deg(final_alg.yaw_deg),
-        );
-        for ((roll, pitch), yaw) in eskf_mount_roll
-            .iter()
-            .zip(eskf_mount_pitch.iter())
-            .zip(eskf_mount_yaw.iter())
-        {
-            let t = roll[0];
-            let q_est = quat_from_rpy_alg_deg(roll[1], pitch[1], yaw[1]);
-            eskf_mount_fwd_err_final.push([
-                t,
-                quat_axis_angle_deg(q_est, q_alg_final, [1.0, 0.0, 0.0]),
-            ]);
-            eskf_mount_down_err_final.push([
-                t,
-                quat_axis_angle_deg(q_est, q_alg_final, [0.0, 0.0, 1.0]),
-            ]);
-        }
-    }
-
     let loose_cmp_att = vec![
         Trace {
             name: "Loose roll [deg]".to_string(),
@@ -1451,14 +1424,6 @@ pub fn build_ekf_compare_traces(
         Trace {
             name: "ESKF full mount yaw [deg]".to_string(),
             points: eskf_mount_yaw,
-        },
-        Trace {
-            name: "ESKF full mount forward-axis err vs final ESF-ALG [deg]".to_string(),
-            points: eskf_mount_fwd_err_final,
-        },
-        Trace {
-            name: "ESKF full mount down-axis err vs final ESF-ALG [deg]".to_string(),
-            points: eskf_mount_down_err_final,
         },
     ];
     eskf_misalignment.extend(esf_alg_mount_ref.clone());

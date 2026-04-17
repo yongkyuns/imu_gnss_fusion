@@ -328,7 +328,7 @@ void sf_predict_noise_default(sf_predict_noise_t *cfg) {
   cfg->accel_var = 2.4504214e-5f * 1.0f;
   cfg->gyro_bias_rw_var = 0.0002e-9f;
   cfg->accel_bias_rw_var = 0.002e-9f;
-  cfg->mount_align_rw_var = 5.0e-8f;
+  cfg->mount_align_rw_var = 1.0e-7f;
 }
 
 void sf_fusion_config_default(sf_fusion_config_t *cfg) {
@@ -340,14 +340,14 @@ void sf_fusion_config_default(sf_fusion_config_t *cfg) {
   sf_predict_noise_default(&cfg->predict_noise);
   cfg->gyro_bias_init_sigma_radps = 0.125f * 3.1415927f / 180.0f;
   cfg->accel_bias_init_sigma_mps2 = 0.20f;
-  cfg->r_body_vel = 0.01f;
+  cfg->r_body_vel = 0.005f;
   cfg->gnss_pos_mount_scale = 0.0f;
   cfg->gnss_vel_mount_scale = 0.0f;
   cfg->gnss_vel_xy_update_min_scale = 0.25f;
   cfg->gnss_vel_update_ramp_time_s = 20.0f;
-  cfg->mount_update_min_scale = 0.004f;
-  cfg->mount_update_ramp_time_s = 1200.0f;
-  cfg->mount_update_innovation_gate_mps = 0.01f;
+  cfg->mount_update_min_scale = 0.008f;
+  cfg->mount_update_ramp_time_s = 800.0f;
+  cfg->mount_update_innovation_gate_mps = 0.02f;
   cfg->r_vehicle_speed = 0.04f;
   cfg->r_zero_vel = 0.0f;
   cfg->r_stationary_accel = 0.0f;
