@@ -65,7 +65,6 @@ typedef struct {
   float gnss_vel_mount_scale;
   float gnss_vel_xy_update_min_scale;
   float gnss_vel_update_ramp_time_s;
-  float ekf_mount_seed_blend_time_s;
   float mount_update_min_scale;
   float mount_update_ramp_time_s;
   float mount_update_innovation_gate_mps;

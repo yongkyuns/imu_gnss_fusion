@@ -62,7 +62,6 @@ static bool sf_runtime_nhc_active(const float accel_b[3],
 static float sf_runtime_nhc_speed_scale(const sf_sensor_fusion_impl_t *impl);
 static float sf_gnss_vel_update_scale_xy(const sf_sensor_fusion_impl_t *impl,
                                          float t_s);
-static void sf_blend_eskf_mount_seed(sf_sensor_fusion_impl_t *impl, float t_s);
 static float sf_mount_update_scale(const sf_sensor_fusion_impl_t *impl,
                                    float t_s);
 static bool sf_bootstrap_update(sf_sensor_fusion_impl_t *impl,
@@ -329,7 +328,7 @@ void sf_predict_noise_default(sf_predict_noise_t *cfg) {
   cfg->accel_var = 2.4504214e-5f * 1.0f;
   cfg->gyro_bias_rw_var = 0.0002e-9f;
   cfg->accel_bias_rw_var = 0.002e-9f;
-  cfg->mount_align_rw_var = 1.0e-6f;
+  cfg->mount_align_rw_var = 5.0e-8f;
 }
 
 void sf_fusion_config_default(sf_fusion_config_t *cfg) {
@@ -346,10 +345,9 @@ void sf_fusion_config_default(sf_fusion_config_t *cfg) {
   cfg->gnss_vel_mount_scale = 0.0f;
   cfg->gnss_vel_xy_update_min_scale = 0.25f;
   cfg->gnss_vel_update_ramp_time_s = 20.0f;
-  cfg->ekf_mount_seed_blend_time_s = 120.0f;
-  cfg->mount_update_min_scale = 0.01f;
-  cfg->mount_update_ramp_time_s = 300.0f;
-  cfg->mount_update_innovation_gate_mps = 0.05f;
+  cfg->mount_update_min_scale = 0.004f;
+  cfg->mount_update_ramp_time_s = 1200.0f;
+  cfg->mount_update_innovation_gate_mps = 0.01f;
   cfg->r_vehicle_speed = 0.04f;
   cfg->r_zero_vel = 0.0f;
   cfg->r_stationary_accel = 0.0f;
@@ -850,8 +848,6 @@ sf_update_t sf_fusion_process_gnss(sf_sensor_fusion_t *fusion,
     impl->interval_imu_count = 0U;
   }
 
-  sf_blend_eskf_mount_seed(impl, local_sample.t_s);
-
   if (!impl->mount_ready) {
     return sf_update_from_fusion(impl, prev_mount_ready != impl->mount_ready,
                                  false);
@@ -1256,36 +1252,6 @@ static void sf_quat_normalize(float q[4]) {
   q[3] *= inv;
 }
 
-static void sf_quat_nlerp_shortest(const float a[4], const float b[4],
-                                   float alpha, float out[4]) {
-  float bb[4];
-
-  if (a == NULL || b == NULL || out == NULL) {
-    return;
-  }
-
-  if (!(alpha >= 0.0f) || !isfinite(alpha)) {
-    alpha = 0.0f;
-  }
-  if (alpha > 1.0f) {
-    alpha = 1.0f;
-  }
-
-  memcpy(bb, b, sizeof(bb));
-  if (a[0] * bb[0] + a[1] * bb[1] + a[2] * bb[2] + a[3] * bb[3] < 0.0f) {
-    bb[0] = -bb[0];
-    bb[1] = -bb[1];
-    bb[2] = -bb[2];
-    bb[3] = -bb[3];
-  }
-
-  out[0] = (1.0f - alpha) * a[0] + alpha * bb[0];
-  out[1] = (1.0f - alpha) * a[1] + alpha * bb[1];
-  out[2] = (1.0f - alpha) * a[2] + alpha * bb[2];
-  out[3] = (1.0f - alpha) * a[3] + alpha * bb[3];
-  sf_quat_normalize(out);
-}
-
 static void sf_rotmat_to_quat(const float r[3][3], float q[4]) {
   float tr = r[0][0] + r[1][1] + r[2][2];
   if (tr > 0.0f) {
@@ -1677,41 +1643,6 @@ static float sf_gnss_vel_update_scale_xy(const sf_sensor_fusion_impl_t *impl,
     ramp = 1.0f;
   }
   return min_scale + (1.0f - min_scale) * ramp;
-}
-
-static void sf_blend_eskf_mount_seed(sf_sensor_fusion_impl_t *impl, float t_s) {
-  float blend_time_s;
-  float age_s;
-  float alpha;
-  float blended[4];
-
-  if (impl == NULL || !impl->internal_align_enabled || !impl->ekf_initialized ||
-      !impl->mount_q_vb_valid || !impl->eskf_mount_q_vb_valid ||
-      !impl->ekf_mount_handoff_valid) {
-    return;
-  }
-
-  blend_time_s = impl->cfg.ekf_mount_seed_blend_time_s;
-  if (!(blend_time_s > 0.0f) || !isfinite(blend_time_s)) {
-    return;
-  }
-
-  age_s = t_s - impl->ekf_mount_handoff_t_s;
-  if (!(age_s >= 0.0f) || age_s >= blend_time_s) {
-    return;
-  }
-
-  alpha = 1.0f - age_s / blend_time_s;
-  if (alpha < 0.0f) {
-    alpha = 0.0f;
-  }
-  if (alpha > 1.0f) {
-    alpha = 1.0f;
-  }
-
-  sf_quat_nlerp_shortest(impl->eskf_mount_q_vb, impl->mount_q_vb, alpha,
-                         blended);
-  memcpy(impl->eskf_mount_q_vb, blended, sizeof(blended));
 }
 
 static float sf_mount_update_scale(const sf_sensor_fusion_impl_t *impl,
