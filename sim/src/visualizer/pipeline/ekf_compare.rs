@@ -20,6 +20,7 @@ use super::super::math::{
 use super::super::model::{AlgEvent, EkfImuSource, HeadingSample, NavAttEvent, Trace};
 use super::align_replay::{
     BootstrapConfig as AlignBootstrapConfig, ImuReplayConfig, build_align_replay,
+    build_fusion_align_replay,
     esf_alg_flu_to_frd_mount_quat, frd_mount_quat_to_esf_alg_flu_quat, quat_rpy_alg_deg,
 };
 use super::timebase::MasterTimeline;
@@ -231,10 +232,19 @@ pub fn build_ekf_compare_traces(
     let final_alg_q = alg_events
         .last()
         .map(|alg| esf_alg_flu_to_frd_mount_quat(alg.roll_deg, alg.pitch_deg, alg.yaw_deg));
-    let align_events = if ekf_imu_source == EkfImuSource::Align {
-        build_align_mount_events(frames, tl, ImuReplayConfig::default())
+    let align_events = match ekf_imu_source {
+        EkfImuSource::Align | EkfImuSource::EsfAlg => {
+            build_align_mount_events(frames, tl, ImuReplayConfig::default())
+        }
+    };
+    let align_handoff_t_ms = if ekf_imu_source == EkfImuSource::EsfAlg {
+        build_fusion_align_replay(frames, tl, EkfImuSource::Align, ImuReplayConfig::default())
+            .ekf_initialized_times_s
+            .first()
+            .copied()
+            .map(|t_s| tl.t0_master_ms + t_s * 1000.0)
     } else {
-        Vec::new()
+        align_events.first().map(|(t_ms, _)| *t_ms)
     };
     let replay = build_generic_replay_from_frames(
         frames,
@@ -489,7 +499,7 @@ pub fn build_ekf_compare_traces(
         }
         if ekf_imu_source == EkfImuSource::EsfAlg
             && fusion.is_none()
-            && cur_alg_status >= 3
+            && align_handoff_t_ms.is_some_and(|t_handoff_ms| pkt_t_ms >= t_handoff_ms)
             && let Some(q_vb) = final_alg_q
         {
             fusion = Some(SensorFusion::with_misalignment([

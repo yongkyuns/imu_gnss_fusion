@@ -7,7 +7,9 @@ use walkers::sources::{Mapbox, MapboxStyle, OpenStreetMap};
 use walkers::{HttpTiles, Map, MapMemory, Plugin, lon_lat};
 
 use super::math::heading_endpoint;
-use super::model::{HeadingSample, Page, PlotData, Trace};
+use super::model::{EkfImuSource, HeadingSample, Page, PlotData, Trace};
+use super::pipeline::build_plot_data;
+use super::pipeline::ekf_compare::{EkfCompareConfig, GnssOutageConfig};
 use super::stats::map_center_from_traces;
 
 const MAPBOX_ACCESS_TOKEN: &str = "pk.eyJ1IjoieW9uZ2t5dW5zODciLCJhIjoiY21tNjB5NWt6MGJmOTJzcG02MmRvN3RnYiJ9.fu_66qb1G1cgrLzAE54E0w";
@@ -134,9 +136,25 @@ pub struct App {
     show_nav2_pvt: bool,
     show_eskf: bool,
     show_loose: bool,
+    replay: Option<ReplayState>,
+    replay_status: Option<String>,
 }
 
-fn create_app(cc: &eframe::CreationContext<'_>, data: PlotData, has_itow: bool) -> App {
+#[derive(Clone)]
+pub struct ReplayState {
+    pub bytes: Vec<u8>,
+    pub max_records: Option<usize>,
+    pub misalignment: EkfImuSource,
+    pub ekf_cfg: EkfCompareConfig,
+    pub gnss_outages: GnssOutageConfig,
+}
+
+fn create_app(
+    cc: &eframe::CreationContext<'_>,
+    data: PlotData,
+    has_itow: bool,
+    replay: Option<ReplayState>,
+) -> App {
     let map_center = map_center_from_traces(&data.eskf_map);
     let map_tiles = if MAPBOX_ACCESS_TOKEN.is_empty() {
         HttpTiles::new(OpenStreetMap, cc.egui_ctx.clone())
@@ -168,6 +186,26 @@ fn create_app(cc: &eframe::CreationContext<'_>, data: PlotData, has_itow: bool) 
         show_nav2_pvt: true,
         show_eskf: true,
         show_loose: true,
+        replay,
+        replay_status: None,
+    }
+}
+
+impl App {
+    fn refresh_from_replay(&mut self) {
+        let Some(replay) = self.replay.as_ref() else {
+            return;
+        };
+        let (data, has_itow) = build_plot_data(
+            &replay.bytes,
+            replay.max_records,
+            replay.misalignment,
+            replay.ekf_cfg,
+            replay.gnss_outages,
+        );
+        self.data = data;
+        self.has_itow = has_itow;
+        self.replay_status = Some("Replay refreshed".to_string());
     }
 }
 
@@ -183,6 +221,8 @@ impl eframe::App for App {
         }
 
         egui::TopBottomPanel::top("top_controls").show(ctx, |ui| {
+            let mut replay_changed = false;
+            let mut apply_replay = false;
             let fps = ctx.input(|i| {
                 if i.stable_dt > 0.0 {
                     1.0 / i.stable_dt
@@ -224,6 +264,244 @@ impl eframe::App for App {
                         "Show egui inspection/profiler",
                     );
                 });
+            if let Some(replay) = self.replay.as_mut() {
+                egui::CollapsingHeader::new("Replay Controls")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.label("Adjust controls, then click Apply to rebuild the replay.");
+                        ui.horizontal(|ui| {
+                            ui.label("Misalignment:");
+                            replay_changed |= ui
+                                .selectable_value(
+                                    &mut replay.misalignment,
+                                    EkfImuSource::Align,
+                                    "auto/align",
+                                )
+                                .changed();
+                            replay_changed |= ui
+                                .selectable_value(
+                                    &mut replay.misalignment,
+                                    EkfImuSource::EsfAlg,
+                                    "alg",
+                                )
+                                .changed();
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("GNSS pos R");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut replay.ekf_cfg.gnss_pos_r_scale,
+                                    )
+                                    .speed(0.01)
+                                    .range(0.001..=10.0),
+                                )
+                                .changed();
+                            ui.label("GNSS vel R");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut replay.ekf_cfg.gnss_vel_r_scale,
+                                    )
+                                    .speed(0.01)
+                                    .range(0.001..=10.0),
+                                )
+                                .changed();
+                            ui.label("NHC R");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut replay.ekf_cfg.r_body_vel)
+                                        .speed(0.001)
+                                        .range(0.0001..=1000.0),
+                                )
+                                .changed();
+                            ui.label("Yaw init m/s");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut replay.ekf_cfg.yaw_init_speed_mps,
+                                    )
+                                    .speed(0.1)
+                                    .range(0.0..=20.0),
+                                )
+                                .changed();
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("Mount RW");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut replay.ekf_cfg.mount_align_rw_var,
+                                    )
+                                    .speed(1.0e-8)
+                                    .range(0.0..=1.0e-3),
+                                )
+                                .changed();
+                            ui.label("Mount min scale");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut replay.ekf_cfg.mount_update_min_scale,
+                                    )
+                                    .speed(0.001)
+                                    .range(0.0..=1.0),
+                                )
+                                .changed();
+                            ui.label("Mount ramp s");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut replay.ekf_cfg.mount_update_ramp_time_s,
+                                    )
+                                    .speed(10.0)
+                                    .range(0.0..=20000.0),
+                                )
+                                .changed();
+                            ui.label("Mount gate m/s");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut replay.ekf_cfg.mount_update_innovation_gate_mps,
+                                    )
+                                    .speed(0.001)
+                                    .range(0.0..=10.0),
+                                )
+                                .changed();
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("GNSS pos->mount");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut replay.ekf_cfg.gnss_pos_mount_scale,
+                                    )
+                                    .speed(0.01)
+                                    .range(0.0..=1.0),
+                                )
+                                .changed();
+                            ui.label("GNSS vel->mount");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut replay.ekf_cfg.gnss_vel_mount_scale,
+                                    )
+                                    .speed(0.01)
+                                    .range(0.0..=1.0),
+                                )
+                                .changed();
+                            ui.label("Gyro bias init dps");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut replay.ekf_cfg.gyro_bias_init_sigma_dps,
+                                    )
+                                    .speed(0.01)
+                                    .range(0.0..=10.0),
+                                )
+                                .changed();
+                            ui.label("Vehicle speed R");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut replay.ekf_cfg.r_vehicle_speed,
+                                    )
+                                    .speed(0.01)
+                                    .range(0.0..=10.0),
+                                )
+                                .changed();
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("Zero vel R");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut replay.ekf_cfg.r_zero_vel)
+                                        .speed(0.01)
+                                        .range(0.0..=10.0),
+                                )
+                                .changed();
+                            ui.label("Stationary accel R");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut replay.ekf_cfg.r_stationary_accel,
+                                    )
+                                    .speed(0.01)
+                                    .range(0.0..=10.0),
+                                )
+                                .changed();
+                            ui.label("Predict decimation");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut replay.ekf_cfg.predict_imu_decimation,
+                                    )
+                                    .speed(1)
+                                    .range(1..=32),
+                                )
+                                .changed();
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            let mut lpf_on =
+                                replay.ekf_cfg.predict_imu_lpf_cutoff_hz.is_some();
+                            if ui.checkbox(&mut lpf_on, "Predict IMU LPF").changed() {
+                                replay.ekf_cfg.predict_imu_lpf_cutoff_hz = if lpf_on {
+                                    Some(
+                                        replay
+                                            .ekf_cfg
+                                            .predict_imu_lpf_cutoff_hz
+                                            .unwrap_or(150.0),
+                                    )
+                                } else {
+                                    None
+                                };
+                                replay_changed = true;
+                            }
+                            if let Some(cutoff_hz) =
+                                replay.ekf_cfg.predict_imu_lpf_cutoff_hz.as_mut()
+                            {
+                                replay_changed |= ui
+                                    .add(
+                                        egui::DragValue::new(cutoff_hz)
+                                            .speed(1.0)
+                                            .range(1.0..=500.0),
+                                    )
+                                    .changed();
+                            }
+                            ui.label("Outage count");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut replay.gnss_outages.count)
+                                        .speed(1)
+                                        .range(0..=20),
+                                )
+                                .changed();
+                            ui.label("Outage duration s");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut replay.gnss_outages.duration_s,
+                                    )
+                                    .speed(1.0)
+                                    .range(0.0..=300.0),
+                                )
+                                .changed();
+                            ui.label("Outage seed");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut replay.gnss_outages.seed)
+                                        .speed(1)
+                                        .range(0..=100000),
+                                )
+                                .changed();
+                        });
+                        ui.horizontal(|ui| {
+                            apply_replay = ui.button("Apply").clicked();
+                            if let Some(status) = &self.replay_status {
+                                ui.label(status);
+                            }
+                        });
+                    });
+            }
             ui.horizontal(|ui| {
                 ui.label("Page:");
                 ui.selectable_value(&mut self.page, Page::Signals, "Signals");
@@ -233,6 +511,12 @@ impl eframe::App for App {
                 ui.selectable_value(&mut self.page, Page::AlignCompare, "Align Compare");
                 ui.selectable_value(&mut self.page, Page::MapDark, "Map (Dark)");
             });
+            if replay_changed {
+                self.replay_status = Some("Pending changes".to_string());
+            }
+            if apply_replay {
+                self.refresh_from_replay();
+            }
         });
 
         let mut imu_gyro: Vec<&Trace> =
@@ -864,7 +1148,7 @@ fn draw_plot<'a, I>(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn run_visualizer(data: PlotData, has_itow: bool) -> Result<()> {
+pub fn run_visualizer(data: PlotData, has_itow: bool, replay: ReplayState) -> Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_maximized(true),
         ..Default::default()
@@ -872,7 +1156,7 @@ pub fn run_visualizer(data: PlotData, has_itow: bool) -> Result<()> {
     eframe::run_native(
         "visualizer",
         native_options,
-        Box::new(move |cc| Ok(Box::new(create_app(cc, data, has_itow)))),
+        Box::new(move |cc| Ok(Box::new(create_app(cc, data, has_itow, Some(replay))))),
     )
     .map_err(|e| anyhow::anyhow!("eframe error: {e}"))?;
     Ok(())
@@ -888,12 +1172,12 @@ pub async fn run_visualizer_web(
         .start(
             canvas,
             eframe::WebOptions::default(),
-            Box::new(move |cc| Ok(Box::new(create_app(cc, data, has_itow)))),
+            Box::new(move |cc| Ok(Box::new(create_app(cc, data, has_itow, None)))),
         )
         .await
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn run_visualizer(_data: PlotData, _has_itow: bool) -> Result<()> {
+pub fn run_visualizer(_data: PlotData, _has_itow: bool, _replay: ReplayState) -> Result<()> {
     anyhow::bail!("run_visualizer is native-only on wasm; use run_visualizer_web instead")
 }

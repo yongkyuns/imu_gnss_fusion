@@ -19,7 +19,7 @@ use sim::visualizer::stats::{
     trace_value_bounds,
 };
 #[cfg(not(target_arch = "wasm32"))]
-use sim::visualizer::ui::run_visualizer;
+use sim::visualizer::ui::{ReplayState, run_visualizer};
 
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Parser, Debug)]
@@ -334,7 +334,21 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    run_visualizer(data, has_itow)
+    run_visualizer(
+        data,
+        has_itow,
+        ReplayState {
+            bytes,
+            max_records: args.max_records,
+            misalignment: args.misalignment,
+            ekf_cfg,
+            gnss_outages: GnssOutageConfig {
+                count: args.gnss_outage_count,
+                duration_s: args.gnss_outage_duration_s,
+                seed: args.gnss_outage_seed,
+            },
+        },
+    )
 }
 
 #[cfg(target_arch = "wasm32")]
