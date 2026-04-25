@@ -256,15 +256,15 @@ impl RustEskf {
         let innovation = speed_mps - v_vehicle[0];
         let mut k = obs.k;
         let mut dx = gain_dx(k, innovation);
-        scale_mount_injection_gated(
-            &mut dx,
+        let mount_scale = gated_mount_update_scale(
             mount_update_scale,
             mount_update_innovation_gate_mps,
             innovation,
         );
+        scale_mount_update(&mut k, &mut dx, mount_scale);
         self.freeze_mount_update_if_needed(&mut k, &mut dx);
         self.record_update_diag(DIAG_BODY_SPEED_X, innovation, obs.s, &k, &dx);
-        self.fuse_measurement(obs.s, &k, &dx);
+        self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
     pub fn fuse_body_vel(&mut self, r_body_vel: f32) {
@@ -289,10 +289,10 @@ impl RustEskf {
         let innovation = pos_n - self.raw.nominal.pn;
         let mut k = obs.k;
         let mut dx = gain_dx(k, innovation);
-        scale_mount_injection(&mut dx, gnss_pos_mount_scale);
+        scale_mount_update(&mut k, &mut dx, gnss_pos_mount_scale);
         self.freeze_mount_update_if_needed(&mut k, &mut dx);
         self.record_update_diag(DIAG_GPS_POS, innovation, obs.s, &k, &dx);
-        self.fuse_measurement(obs.s, &k, &dx);
+        self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
     fn fuse_gps_pos_e(&mut self, pos_e: f32, r_pos_e: f32, gnss_pos_mount_scale: f32) {
@@ -300,10 +300,10 @@ impl RustEskf {
         let innovation = pos_e - self.raw.nominal.pe;
         let mut k = obs.k;
         let mut dx = gain_dx(k, innovation);
-        scale_mount_injection(&mut dx, gnss_pos_mount_scale);
+        scale_mount_update(&mut k, &mut dx, gnss_pos_mount_scale);
         self.freeze_mount_update_if_needed(&mut k, &mut dx);
         self.record_update_diag(DIAG_GPS_POS, innovation, obs.s, &k, &dx);
-        self.fuse_measurement(obs.s, &k, &dx);
+        self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
     fn fuse_gps_pos_d(&mut self, pos_d: f32, r_pos_d: f32, gnss_pos_mount_scale: f32) {
@@ -311,10 +311,10 @@ impl RustEskf {
         let innovation = pos_d - self.raw.nominal.pd;
         let mut k = obs.k;
         let mut dx = gain_dx(k, innovation);
-        scale_mount_injection(&mut dx, gnss_pos_mount_scale);
+        scale_mount_update(&mut k, &mut dx, gnss_pos_mount_scale);
         self.freeze_mount_update_if_needed(&mut k, &mut dx);
         self.record_update_diag(DIAG_GPS_POS_D, innovation, obs.s, &k, &dx);
-        self.fuse_measurement(obs.s, &k, &dx);
+        self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
     fn fuse_gps_vel_n(&mut self, vel_n: f32, r_vel_n: f32, gnss_vel_mount_scale: f32) {
@@ -323,7 +323,7 @@ impl RustEskf {
         let mut k = obs.k;
         let mut dx = gain_dx(k, innovation);
         if r_vel_n != RUNTIME_ZERO_VEL_R_DIAG {
-            scale_mount_injection(&mut dx, gnss_vel_mount_scale);
+            scale_mount_update(&mut k, &mut dx, gnss_vel_mount_scale);
         }
         self.freeze_mount_update_if_needed(&mut k, &mut dx);
         let diag = if r_vel_n == RUNTIME_ZERO_VEL_R_DIAG {
@@ -332,7 +332,7 @@ impl RustEskf {
             DIAG_GPS_VEL
         };
         self.record_update_diag(diag, innovation, obs.s, &k, &dx);
-        self.fuse_measurement(obs.s, &k, &dx);
+        self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
     fn fuse_gps_vel_e(&mut self, vel_e: f32, r_vel_e: f32, gnss_vel_mount_scale: f32) {
@@ -341,7 +341,7 @@ impl RustEskf {
         let mut k = obs.k;
         let mut dx = gain_dx(k, innovation);
         if r_vel_e != RUNTIME_ZERO_VEL_R_DIAG {
-            scale_mount_injection(&mut dx, gnss_vel_mount_scale);
+            scale_mount_update(&mut k, &mut dx, gnss_vel_mount_scale);
         }
         self.freeze_mount_update_if_needed(&mut k, &mut dx);
         let diag = if r_vel_e == RUNTIME_ZERO_VEL_R_DIAG {
@@ -350,7 +350,7 @@ impl RustEskf {
             DIAG_GPS_VEL
         };
         self.record_update_diag(diag, innovation, obs.s, &k, &dx);
-        self.fuse_measurement(obs.s, &k, &dx);
+        self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
     fn fuse_gps_vel_d(&mut self, vel_d: f32, r_vel_d: f32, gnss_vel_mount_scale: f32) {
@@ -359,7 +359,7 @@ impl RustEskf {
         let mut k = obs.k;
         let mut dx = gain_dx(k, innovation);
         if r_vel_d != RUNTIME_ZERO_VEL_R_DIAG {
-            scale_mount_injection(&mut dx, gnss_vel_mount_scale);
+            scale_mount_update(&mut k, &mut dx, gnss_vel_mount_scale);
         }
         self.freeze_mount_update_if_needed(&mut k, &mut dx);
         let diag = if r_vel_d == RUNTIME_ZERO_VEL_R_DIAG {
@@ -368,7 +368,7 @@ impl RustEskf {
             DIAG_GPS_VEL_D
         };
         self.record_update_diag(diag, innovation, obs.s, &k, &dx);
-        self.fuse_measurement(obs.s, &k, &dx);
+        self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
     fn fuse_stationary_gravity_x(&mut self, accel_x: f32, r_stationary_accel: f32) {
@@ -394,7 +394,7 @@ impl RustEskf {
         self.raw.stationary_diag.k_bay_from_x = k[13];
         self.copy_stationary_p_diag();
         self.record_update_diag(DIAG_STATIONARY_X, innovation, obs.s, &k, &dx);
-        self.fuse_measurement(obs.s, &k, &dx);
+        self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
     fn fuse_stationary_gravity_y(&mut self, accel_y: f32, r_stationary_accel: f32) {
@@ -421,7 +421,7 @@ impl RustEskf {
         self.copy_stationary_p_diag();
         self.raw.stationary_diag.updates += 1;
         self.record_update_diag(DIAG_STATIONARY_Y, innovation, obs.s, &k, &dx);
-        self.fuse_measurement(obs.s, &k, &dx);
+        self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
     fn fuse_body_vel_yz_batch(
@@ -470,12 +470,12 @@ impl RustEskf {
                 diag_k[i] = (ph[i] / s) as f32;
                 diag_dx[i] = (ph[i] * alpha) as f32;
             }
-            scale_mount_injection_gated(
-                &mut diag_dx,
+            let mount_scale = gated_mount_update_scale(
                 mount_update_scale,
                 mount_update_innovation_gate_mps,
                 residual,
             );
+            scale_mount_update(&mut diag_k, &mut diag_dx, mount_scale);
             self.freeze_mount_update_if_needed(&mut diag_k, &mut diag_dx);
             for i in 0..ERROR_STATES {
                 dx[i] += diag_dx[i] as f64;
@@ -483,7 +483,8 @@ impl RustEskf {
             self.record_update_diag(diag_type, residual, s as f32, &diag_k, &diag_dx);
             for i in 0..ERROR_STATES {
                 for j in i..ERROR_STATES {
-                    let updated = p[i][j] - (ph[i] * ph[j]) / s;
+                    let updated = p[i][j] - diag_k[i] as f64 * ph[j] - ph[i] * diag_k[j] as f64
+                        + s * diag_k[i] as f64 * diag_k[j] as f64;
                     p[i][j] = updated;
                     p[j][i] = updated;
                 }
@@ -510,16 +511,11 @@ impl RustEskf {
     fn fuse_measurement(
         &mut self,
         innovation_var: f32,
+        h: &[f32; ERROR_STATES],
         k: &[f32; ERROR_STATES],
         dx: &[f32; ERROR_STATES],
     ) {
-        for i in 0..ERROR_STATES {
-            for j in i..ERROR_STATES {
-                let updated = self.raw.p[i][j] - innovation_var * k[i] * k[j];
-                self.raw.p[i][j] = updated;
-                self.raw.p[j][i] = updated;
-            }
-        }
+        update_covariance_joseph_scalar(&mut self.raw.p, innovation_var, h, k);
         inject_error_state(&mut self.raw.nominal, dx);
         apply_reset(&mut self.raw.p, dx);
         if self.freeze_misalignment_states {
@@ -583,37 +579,40 @@ fn gain_dx(k: [f32; ERROR_STATES], innovation: f32) -> [f32; ERROR_STATES] {
     dx
 }
 
-fn scale_mount_injection(dx: &mut [f32; ERROR_STATES], mount_scale: f32) {
-    if mount_scale <= 0.0 {
+fn scale_mount_update(k: &mut [f32; ERROR_STATES], dx: &mut [f32; ERROR_STATES], mount_scale: f32) {
+    let scale = sanitized_mount_scale(mount_scale);
+    if scale <= 0.0 {
+        block_mount_injection(k);
         block_mount_injection(dx);
-    } else if mount_scale < 1.0 {
-        dx[15] *= mount_scale;
-        dx[16] *= mount_scale;
-        dx[17] *= mount_scale;
+    } else if scale < 1.0 {
+        for i in 15..18 {
+            k[i] *= scale;
+            dx[i] *= scale;
+        }
     }
 }
 
-fn scale_mount_injection_gated(
-    dx: &mut [f32; ERROR_STATES],
+fn sanitized_mount_scale(mount_scale: f32) -> f32 {
+    if mount_scale >= 0.0 && mount_scale.is_finite() {
+        mount_scale.min(1.0)
+    } else {
+        0.0
+    }
+}
+
+fn gated_mount_update_scale(
     mount_update_scale: f32,
     mount_update_innovation_gate_mps: f32,
     innovation: f32,
-) {
-    let mut obs_mount_scale = if mount_update_scale >= 0.0 && mount_update_scale.is_finite() {
-        mount_update_scale
-    } else {
-        0.0
-    };
-    if obs_mount_scale > 1.0 {
-        obs_mount_scale = 1.0;
-    }
+) -> f32 {
+    let mut obs_mount_scale = sanitized_mount_scale(mount_update_scale);
     if mount_update_innovation_gate_mps > 0.0 {
         let innov_abs = fabsf(innovation);
         if innov_abs > mount_update_innovation_gate_mps {
             obs_mount_scale *= mount_update_innovation_gate_mps / innov_abs;
         }
     }
-    scale_mount_injection(dx, obs_mount_scale);
+    obs_mount_scale
 }
 
 fn block_mount_injection(dx: &mut [f32; ERROR_STATES]) {
@@ -627,6 +626,27 @@ fn freeze_mount_covariance(p: &mut [[f32; ERROR_STATES]; ERROR_STATES]) {
         for j in 0..ERROR_STATES {
             p[i][j] = 0.0;
             p[j][i] = 0.0;
+        }
+    }
+}
+
+fn update_covariance_joseph_scalar(
+    p: &mut [[f32; ERROR_STATES]; ERROR_STATES],
+    innovation_var: f32,
+    h: &[f32; ERROR_STATES],
+    k: &[f32; ERROR_STATES],
+) {
+    let mut ph = [0.0; ERROR_STATES];
+    for i in 0..ERROR_STATES {
+        for a in 0..ERROR_STATES {
+            ph[i] += p[i][a] * h[a];
+        }
+    }
+    for i in 0..ERROR_STATES {
+        for j in i..ERROR_STATES {
+            let updated = p[i][j] - k[i] * ph[j] - ph[i] * k[j] + innovation_var * k[i] * k[j];
+            p[i][j] = updated;
+            p[j][i] = updated;
         }
     }
 }

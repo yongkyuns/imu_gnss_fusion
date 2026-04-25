@@ -47,6 +47,8 @@ struct Args {
     mount_update_ramp_time_s: Option<f32>,
     #[arg(long)]
     mount_update_innovation_gate_mps: Option<f32>,
+    #[arg(long)]
+    mount_update_yaw_rate_gate_dps: Option<f32>,
     #[arg(long, default_value_t = 0)]
     gnss_outage_count: usize,
     #[arg(long, default_value_t = 0.0)]
@@ -303,6 +305,9 @@ fn main() -> Result<()> {
         mount_update_innovation_gate_mps: args
             .mount_update_innovation_gate_mps
             .unwrap_or(EkfCompareConfig::default().mount_update_innovation_gate_mps),
+        mount_update_yaw_rate_gate_dps: args
+            .mount_update_yaw_rate_gate_dps
+            .unwrap_or(EkfCompareConfig::default().mount_update_yaw_rate_gate_dps),
         gnss_pos_r_scale: args
             .gnss_pos_r_scale
             .unwrap_or(EkfCompareConfig::default().gnss_pos_r_scale),
@@ -330,7 +335,7 @@ fn main() -> Result<()> {
     let summaries = build_state_summaries(&data);
 
     println!(
-        "config: misalignment={:?} decimation={} lpf_hz={} gnss_pos_r_scale={:.3} gnss_vel_r_scale={:.3} r_body_vel={:.3} gnss_pos_mount_scale={:.3} gnss_vel_mount_scale={:.3} gyro_bias_init_sigma_dps={:.3} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} mount_update_min_scale={:.3} mount_update_ramp_time_s={:.3} mount_update_innovation_gate_mps={:.3} outage_count={} outage_duration_s={:.3} outage_seed={}",
+        "config: misalignment={:?} decimation={} lpf_hz={} gnss_pos_r_scale={:.3} gnss_vel_r_scale={:.3} r_body_vel={:.3} gnss_pos_mount_scale={:.3} gnss_vel_mount_scale={:.3} gyro_bias_init_sigma_dps={:.3} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} mount_update_min_scale={:.3} mount_update_ramp_time_s={:.3} mount_update_innovation_gate_mps={:.3} mount_update_yaw_rate_gate_dps={:.3} outage_count={} outage_duration_s={:.3} outage_seed={}",
         args.misalignment,
         ekf_cfg.predict_imu_decimation,
         ekf_cfg
@@ -350,6 +355,7 @@ fn main() -> Result<()> {
         ekf_cfg.mount_update_min_scale,
         ekf_cfg.mount_update_ramp_time_s,
         ekf_cfg.mount_update_innovation_gate_mps,
+        ekf_cfg.mount_update_yaw_rate_gate_dps,
         args.gnss_outage_count,
         args.gnss_outage_duration_s,
         args.gnss_outage_seed,

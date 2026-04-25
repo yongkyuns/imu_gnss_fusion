@@ -19,6 +19,8 @@ struct Args {
     ekf_predict_imu_decimation: usize,
     #[arg(long)]
     ekf_predict_imu_lpf_cutoff_hz: Option<f64>,
+    #[arg(long)]
+    mount_update_yaw_rate_gate_dps: Option<f32>,
     #[arg(long, default_value_t = 0)]
     gnss_outage_count: usize,
     #[arg(long, default_value_t = 0.0)]
@@ -156,6 +158,9 @@ fn main() -> Result<()> {
     let ekf_cfg = EkfCompareConfig {
         predict_imu_decimation: args.ekf_predict_imu_decimation.max(1),
         predict_imu_lpf_cutoff_hz: args.ekf_predict_imu_lpf_cutoff_hz,
+        mount_update_yaw_rate_gate_dps: args
+            .mount_update_yaw_rate_gate_dps
+            .unwrap_or(EkfCompareConfig::default().mount_update_yaw_rate_gate_dps),
         ..EkfCompareConfig::default()
     };
     let (data, _has_itow) = build_plot_data(

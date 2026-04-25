@@ -2,6 +2,7 @@ use sensor_fusion::fusion::{
     FusionGnssSample, FusionImuSample, FusionVehicleSpeedDirection, FusionVehicleSpeedSample,
     SensorFusion,
 };
+use sensor_fusion::{ekf::PredictNoise, rust_eskf::RustEskf};
 
 fn gnss_sample(t_s: f32) -> FusionGnssSample {
     FusionGnssSample {
@@ -92,6 +93,46 @@ fn freeze_misalignment_states_blocks_mount_updates() {
             assert_eq!(eskf.p[j][i], 0.0);
         }
     }
+}
+
+#[test]
+fn zero_mount_update_scale_does_not_shrink_mount_covariance() {
+    let mut eskf = RustEskf::new(PredictNoise::default());
+    {
+        let raw = eskf.raw_mut();
+        raw.nominal.vn = 8.0;
+        raw.nominal.ve = 0.4;
+        raw.nominal.vd = -0.2;
+        raw.p = [[0.0; 18]; 18];
+        for i in 0..18 {
+            raw.p[i][i] = 1.0;
+        }
+    }
+
+    let qcs_before = {
+        let n = &eskf.raw().nominal;
+        [n.qcs0, n.qcs1, n.qcs2, n.qcs3]
+    };
+    let mount_cov_before = [
+        eskf.raw().p[15][15],
+        eskf.raw().p[16][16],
+        eskf.raw().p[17][17],
+    ];
+
+    eskf.fuse_body_vel_scaled(0.01, 0.0, 0.0);
+
+    let n = &eskf.raw().nominal;
+    assert_eq!([n.qcs0, n.qcs1, n.qcs2, n.qcs3], qcs_before);
+    assert_eq!(
+        [
+            eskf.raw().p[15][15],
+            eskf.raw().p[16][16],
+            eskf.raw().p[17][17],
+        ],
+        mount_cov_before
+    );
+    assert_eq!(eskf.raw().update_diag.sum_abs_dx_mount_yaw[4], 0.0);
+    assert_eq!(eskf.raw().update_diag.sum_abs_dx_mount_yaw[5], 0.0);
 }
 
 #[test]

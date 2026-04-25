@@ -359,6 +359,16 @@ impl eframe::App for App {
                                     .range(0.0..=10.0),
                                 )
                                 .changed();
+                            ui.label("Mount yaw gate deg/s");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut replay.ekf_cfg.mount_update_yaw_rate_gate_dps,
+                                    )
+                                    .speed(0.1)
+                                    .range(0.0..=90.0),
+                                )
+                                .changed();
                             replay_changed |= ui
                                 .checkbox(
                                     &mut replay.ekf_cfg.freeze_misalignment_states,

@@ -70,6 +70,7 @@ pub struct EkfCompareConfig {
     pub mount_update_min_scale: f32,
     pub mount_update_ramp_time_s: f32,
     pub mount_update_innovation_gate_mps: f32,
+    pub mount_update_yaw_rate_gate_dps: f32,
     pub freeze_misalignment_states: bool,
     pub r_zero_vel: f32,
     pub r_stationary_accel: f32,
@@ -95,6 +96,7 @@ impl Default for EkfCompareConfig {
             mount_update_min_scale: 0.008,
             mount_update_ramp_time_s: 800.0,
             mount_update_innovation_gate_mps: 0.02,
+            mount_update_yaw_rate_gate_dps: 0.0,
             freeze_misalignment_states: false,
             r_zero_vel: 0.0,
             r_stationary_accel: 0.0,
@@ -143,6 +145,7 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig) {
     fusion.set_mount_update_min_scale(cfg.mount_update_min_scale);
     fusion.set_mount_update_ramp_time_s(cfg.mount_update_ramp_time_s);
     fusion.set_mount_update_innovation_gate_mps(cfg.mount_update_innovation_gate_mps);
+    fusion.set_mount_update_yaw_rate_gate_radps(cfg.mount_update_yaw_rate_gate_dps.to_radians());
     fusion.set_freeze_misalignment_states(cfg.freeze_misalignment_states);
 }
 
@@ -2103,14 +2106,21 @@ fn append_eskf_sample(
     cmp_pos_n.push([t_imu, n.pn as f64]);
     cmp_pos_e.push([t_imu, n.pe as f64]);
     cmp_pos_d.push([t_imu, n.pd as f64]);
-    let c_n_b = quat_to_rotmat_f64([n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64]);
-    let c_c_s = quat_to_rotmat_f64([n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64]);
-    let vel_seed = mat_vec(transpose3(c_n_b), [n.vn as f64, n.ve as f64, n.vd as f64]);
-    let vel_vehicle = mat_vec(c_c_s, vel_seed);
+    let q_n_s = [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64];
+    let q_cs = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
+    let q_n_c = quat_mul(q_n_s, quat_conj(q_cs));
+    let c_n_b = quat_to_rotmat_f64(q_n_s);
+    let c_n_c = quat_to_rotmat_f64(q_n_c);
+    let vel_vehicle = mat_vec(transpose3(c_n_c), [n.vn as f64, n.ve as f64, n.vd as f64]);
     cmp_vel_forward.push([t_imu, vel_vehicle[0]]);
     cmp_vel_lateral.push([t_imu, vel_vehicle[1]]);
     cmp_vel_vertical.push([t_imu, vel_vehicle[2]]);
-    let (roll, pitch, yaw) = quat_rpy_deg(n.q0, n.q1, n.q2, n.q3);
+    let (roll, pitch, yaw) = quat_rpy_deg(
+        q_n_c[0] as f32,
+        q_n_c[1] as f32,
+        q_n_c[2] as f32,
+        q_n_c[3] as f32,
+    );
     cmp_att_roll.push([t_imu, roll]);
     cmp_att_pitch.push([t_imu, pitch]);
     cmp_att_yaw.push([t_imu, yaw]);
@@ -2118,7 +2128,6 @@ fn append_eskf_sample(
     let q_seed = predict_mount_q_vb
         .map(|q| [q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64])
         .unwrap_or([1.0, 0.0, 0.0, 0.0]);
-    let q_cs = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
     // Runtime prediction pre-rotates raw IMU by q_seed before the ESKF sees it.
     // q_cs maps that seed frame back to vehicle for NHC, so the physical
     // vehicle-to-body mount is q_seed * inv(q_cs).
