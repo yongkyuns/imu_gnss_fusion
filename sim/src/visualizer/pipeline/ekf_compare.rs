@@ -87,7 +87,7 @@ pub struct EkfCompareConfig {
 impl Default for EkfCompareConfig {
     fn default() -> Self {
         Self {
-            r_body_vel: 0.005,
+            r_body_vel: 0.001,
             gnss_pos_mount_scale: 0.0,
             gnss_vel_mount_scale: 0.0,
             gyro_bias_init_sigma_dps: 0.125,

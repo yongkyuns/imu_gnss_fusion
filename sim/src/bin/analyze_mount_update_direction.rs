@@ -129,6 +129,21 @@ fn main() -> Result<()> {
 
     let rows = collect_rows(&data)?;
     print_summary(&args, ekf_cfg, &rows);
+    print_bin_summary(
+        "body_vel_y_by_abs_course",
+        rows.iter().filter(|row| row.cue == "body_vel_y"),
+        |row| abs_course_bin(row.course_dps),
+    );
+    print_bin_summary(
+        "body_vel_y_by_abs_lateral_accel",
+        rows.iter().filter(|row| row.cue == "body_vel_y"),
+        |row| abs_lat_accel_bin(row.a_lat_mps2),
+    );
+    print_bin_summary(
+        "body_vel_y_by_time",
+        rows.iter().filter(|row| row.cue == "body_vel_y"),
+        |row| time_bin(row.t_s),
+    );
     print_top_rows("top_harmful_updates", &rows, args.top_k, |row| {
         row.delta_err_deg
     });
@@ -335,6 +350,114 @@ fn print_summary(args: &Args, cfg: EkfCompareConfig, rows: &[Row]) {
             dx_weighted,
             innov_weighted,
         );
+    }
+}
+
+fn print_bin_summary<'a>(
+    title: &str,
+    rows: impl Iterator<Item = &'a Row> + Clone,
+    label: impl Fn(&Row) -> &'static str,
+) {
+    let bins = [
+        "unknown",
+        "0",
+        "0..0.5",
+        "0.5..1",
+        "1..2",
+        "2..5",
+        "5+",
+        "t<600",
+        "600..900",
+        "900..1100",
+        "1100..1250",
+        "1250+",
+    ];
+    println!("{title}:");
+    println!(
+        "bin,count,helpful,harmful,helpful_frac,dx_abs_sum_deg,innov_abs_sum,mean_delta_err_deg,dx_weighted_delta_err_deg"
+    );
+    for bin in bins {
+        let mut stats = CueStats::default();
+        for row in rows.clone().filter(|row| label(row) == bin) {
+            stats.count += 1;
+            stats.dx_abs_sum += row.dx_yaw_abs_deg;
+            stats.innov_abs_sum += row.innovation_abs;
+            stats.delta_err_sum += row.delta_err_deg;
+            stats.dx_weighted_delta_sum += row.delta_err_deg * row.dx_yaw_abs_deg;
+            if row.delta_err_deg < -1.0e-6 {
+                stats.helpful += 1;
+            } else if row.delta_err_deg > 1.0e-6 {
+                stats.harmful += 1;
+            } else {
+                stats.neutral += 1;
+            }
+        }
+        if stats.count == 0 {
+            continue;
+        }
+        let dx_weighted = if stats.dx_abs_sum > 0.0 {
+            stats.dx_weighted_delta_sum / stats.dx_abs_sum
+        } else {
+            f64::NAN
+        };
+        println!(
+            "{},{},{},{},{:.3},{:.6},{:.3},{:.9},{:.9}",
+            bin,
+            stats.count,
+            stats.helpful,
+            stats.harmful,
+            stats.helpful as f64 / stats.count as f64,
+            stats.dx_abs_sum,
+            stats.innov_abs_sum,
+            stats.delta_err_sum / stats.count as f64,
+            dx_weighted,
+        );
+    }
+}
+
+fn abs_course_bin(course_dps: f64) -> &'static str {
+    if !course_dps.is_finite() {
+        "unknown"
+    } else {
+        value_bin(course_dps.abs())
+    }
+}
+
+fn abs_lat_accel_bin(a_lat_mps2: f64) -> &'static str {
+    if !a_lat_mps2.is_finite() {
+        "unknown"
+    } else {
+        value_bin(a_lat_mps2.abs())
+    }
+}
+
+fn value_bin(value: f64) -> &'static str {
+    if value <= 1.0e-9 {
+        "0"
+    } else if value < 0.5 {
+        "0..0.5"
+    } else if value < 1.0 {
+        "0.5..1"
+    } else if value < 2.0 {
+        "1..2"
+    } else if value < 5.0 {
+        "2..5"
+    } else {
+        "5+"
+    }
+}
+
+fn time_bin(t_s: f64) -> &'static str {
+    if t_s < 600.0 {
+        "t<600"
+    } else if t_s < 900.0 {
+        "600..900"
+    } else if t_s < 1100.0 {
+        "900..1100"
+    } else if t_s < 1250.0 {
+        "1100..1250"
+    } else {
+        "1250+"
     }
 }
 
