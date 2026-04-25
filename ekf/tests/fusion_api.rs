@@ -50,6 +50,51 @@ fn vehicle_speed_sample_pulls_forward_velocity_upward() {
 }
 
 #[test]
+fn freeze_misalignment_states_blocks_mount_updates() {
+    let mut system = SensorFusion::with_misalignment([1.0, 0.0, 0.0, 0.0]);
+    system.set_freeze_misalignment_states(true);
+    system.set_mount_update_min_scale(1.0);
+    system.set_mount_update_ramp_time_s(0.0);
+    system.set_mount_update_innovation_gate_mps(0.0);
+    system.set_r_vehicle_speed(0.001);
+
+    let upd = system.process_gnss(gnss_sample(1.0));
+    assert!(upd.ekf_initialized_now);
+    let qcs_before = {
+        let eskf = system.eskf().unwrap();
+        [
+            eskf.nominal.qcs0,
+            eskf.nominal.qcs1,
+            eskf.nominal.qcs2,
+            eskf.nominal.qcs3,
+        ]
+    };
+
+    let _ = system.process_vehicle_speed(FusionVehicleSpeedSample {
+        t_s: 1.1,
+        speed_mps: 7.0,
+        direction: FusionVehicleSpeedDirection::Forward,
+    });
+
+    let eskf = system.eskf().unwrap();
+    let qcs_after = [
+        eskf.nominal.qcs0,
+        eskf.nominal.qcs1,
+        eskf.nominal.qcs2,
+        eskf.nominal.qcs3,
+    ];
+    assert_eq!(qcs_after, qcs_before);
+    assert_eq!(eskf.update_diag.last_dx_mount_yaw, 0.0);
+    assert_eq!(eskf.update_diag.last_k_mount_yaw, 0.0);
+    for i in 15..18 {
+        for j in 0..18 {
+            assert_eq!(eskf.p[i][j], 0.0);
+            assert_eq!(eskf.p[j][i], 0.0);
+        }
+    }
+}
+
+#[test]
 fn unknown_direction_uses_predicted_sign_when_state_is_confident() {
     let mut system = SensorFusion::with_misalignment([1.0, 0.0, 0.0, 0.0]);
     let mut gnss = gnss_sample(1.0);

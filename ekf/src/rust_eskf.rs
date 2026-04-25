@@ -24,6 +24,7 @@ const DIAG_ZERO_VEL_D: usize = 10;
 #[derive(Debug, Clone)]
 pub struct RustEskf {
     raw: EskfState,
+    freeze_misalignment_states: bool,
 }
 
 impl RustEskf {
@@ -42,7 +43,10 @@ impl RustEskf {
         for i in 0..ERROR_STATES {
             raw.p[i][i] = 1.0;
         }
-        Self { raw }
+        Self {
+            raw,
+            freeze_misalignment_states: false,
+        }
     }
 
     pub fn raw(&self) -> &EskfState {
@@ -59,6 +63,17 @@ impl RustEskf {
 
     pub fn covariance(&self) -> &[[f32; ERROR_STATES]; ERROR_STATES] {
         &self.raw.p
+    }
+
+    pub fn set_freeze_misalignment_states(&mut self, freeze: bool) {
+        self.freeze_misalignment_states = freeze;
+        if freeze {
+            freeze_mount_covariance(&mut self.raw.p);
+        }
+    }
+
+    pub fn freeze_misalignment_states(&self) -> bool {
+        self.freeze_misalignment_states
     }
 
     pub fn init_nominal_from_gnss(&mut self, q_bn: [f32; 4], gnss: EskfGnssSample) {
@@ -111,10 +126,14 @@ impl RustEskf {
         self.raw.p[12][12] = accel_bias_sigma_mps2 * accel_bias_sigma_mps2;
         self.raw.p[13][13] = accel_bias_sigma_mps2 * accel_bias_sigma_mps2;
         self.raw.p[14][14] = accel_bias_sigma_mps2 * accel_bias_sigma_mps2;
-        let mount_residual_sigma_rad = 10.0 * core::f32::consts::PI / 180.0;
-        self.raw.p[15][15] = mount_residual_sigma_rad * mount_residual_sigma_rad;
-        self.raw.p[16][16] = mount_residual_sigma_rad * mount_residual_sigma_rad;
-        self.raw.p[17][17] = mount_residual_sigma_rad * mount_residual_sigma_rad;
+        if self.freeze_misalignment_states {
+            freeze_mount_covariance(&mut self.raw.p);
+        } else {
+            let mount_residual_sigma_rad = 10.0 * core::f32::consts::PI / 180.0;
+            self.raw.p[15][15] = mount_residual_sigma_rad * mount_residual_sigma_rad;
+            self.raw.p[16][16] = mount_residual_sigma_rad * mount_residual_sigma_rad;
+            self.raw.p[17][17] = mount_residual_sigma_rad * mount_residual_sigma_rad;
+        }
     }
 
     pub fn predict(&mut self, imu: EskfImuDelta) {
@@ -136,12 +155,19 @@ impl RustEskf {
         q[9] = self.raw.noise.accel_bias_rw_var * dt;
         q[10] = q[9];
         q[11] = q[9];
-        q[12] = self.raw.noise.mount_align_rw_var * dt;
+        q[12] = if self.freeze_misalignment_states {
+            0.0
+        } else {
+            self.raw.noise.mount_align_rw_var * dt
+        };
         q[13] = q[12];
         q[14] = q[12];
 
         self.raw.p = predict_covariance_dense(&f, &g, &self.raw.p, &q);
         symmetrize_p(&mut self.raw.p);
+        if self.freeze_misalignment_states {
+            freeze_mount_covariance(&mut self.raw.p);
+        }
     }
 
     pub fn compute_error_transition(
@@ -228,15 +254,17 @@ impl RustEskf {
         let obs = generated_eskf::body_vel_x_observation(&self.raw.nominal, &self.raw.p, r_speed);
         let v_vehicle = nominal_vehicle_velocity(&self.raw.nominal);
         let innovation = speed_mps - v_vehicle[0];
-        let mut dx = gain_dx(obs.k, innovation);
+        let mut k = obs.k;
+        let mut dx = gain_dx(k, innovation);
         scale_mount_injection_gated(
             &mut dx,
             mount_update_scale,
             mount_update_innovation_gate_mps,
             innovation,
         );
-        self.record_update_diag(DIAG_BODY_SPEED_X, innovation, obs.s, &obs.k, &dx);
-        self.fuse_measurement(obs.s, &obs.k, &dx);
+        self.freeze_mount_update_if_needed(&mut k, &mut dx);
+        self.record_update_diag(DIAG_BODY_SPEED_X, innovation, obs.s, &k, &dx);
+        self.fuse_measurement(obs.s, &k, &dx);
     }
 
     pub fn fuse_body_vel(&mut self, r_body_vel: f32) {
@@ -259,76 +287,88 @@ impl RustEskf {
     fn fuse_gps_pos_n(&mut self, pos_n: f32, r_pos_n: f32, gnss_pos_mount_scale: f32) {
         let obs = generated_eskf::gps_pos_n_observation(&self.raw.p, r_pos_n);
         let innovation = pos_n - self.raw.nominal.pn;
-        let mut dx = gain_dx(obs.k, innovation);
+        let mut k = obs.k;
+        let mut dx = gain_dx(k, innovation);
         scale_mount_injection(&mut dx, gnss_pos_mount_scale);
-        self.record_update_diag(DIAG_GPS_POS, innovation, obs.s, &obs.k, &dx);
-        self.fuse_measurement(obs.s, &obs.k, &dx);
+        self.freeze_mount_update_if_needed(&mut k, &mut dx);
+        self.record_update_diag(DIAG_GPS_POS, innovation, obs.s, &k, &dx);
+        self.fuse_measurement(obs.s, &k, &dx);
     }
 
     fn fuse_gps_pos_e(&mut self, pos_e: f32, r_pos_e: f32, gnss_pos_mount_scale: f32) {
         let obs = generated_eskf::gps_pos_e_observation(&self.raw.p, r_pos_e);
         let innovation = pos_e - self.raw.nominal.pe;
-        let mut dx = gain_dx(obs.k, innovation);
+        let mut k = obs.k;
+        let mut dx = gain_dx(k, innovation);
         scale_mount_injection(&mut dx, gnss_pos_mount_scale);
-        self.record_update_diag(DIAG_GPS_POS, innovation, obs.s, &obs.k, &dx);
-        self.fuse_measurement(obs.s, &obs.k, &dx);
+        self.freeze_mount_update_if_needed(&mut k, &mut dx);
+        self.record_update_diag(DIAG_GPS_POS, innovation, obs.s, &k, &dx);
+        self.fuse_measurement(obs.s, &k, &dx);
     }
 
     fn fuse_gps_pos_d(&mut self, pos_d: f32, r_pos_d: f32, gnss_pos_mount_scale: f32) {
         let obs = generated_eskf::gps_pos_d_observation(&self.raw.p, r_pos_d);
         let innovation = pos_d - self.raw.nominal.pd;
-        let mut dx = gain_dx(obs.k, innovation);
+        let mut k = obs.k;
+        let mut dx = gain_dx(k, innovation);
         scale_mount_injection(&mut dx, gnss_pos_mount_scale);
-        self.record_update_diag(DIAG_GPS_POS_D, innovation, obs.s, &obs.k, &dx);
-        self.fuse_measurement(obs.s, &obs.k, &dx);
+        self.freeze_mount_update_if_needed(&mut k, &mut dx);
+        self.record_update_diag(DIAG_GPS_POS_D, innovation, obs.s, &k, &dx);
+        self.fuse_measurement(obs.s, &k, &dx);
     }
 
     fn fuse_gps_vel_n(&mut self, vel_n: f32, r_vel_n: f32, gnss_vel_mount_scale: f32) {
         let obs = generated_eskf::gps_vel_n_observation(&self.raw.p, r_vel_n);
         let innovation = vel_n - self.raw.nominal.vn;
-        let mut dx = gain_dx(obs.k, innovation);
+        let mut k = obs.k;
+        let mut dx = gain_dx(k, innovation);
         if r_vel_n != RUNTIME_ZERO_VEL_R_DIAG {
             scale_mount_injection(&mut dx, gnss_vel_mount_scale);
         }
+        self.freeze_mount_update_if_needed(&mut k, &mut dx);
         let diag = if r_vel_n == RUNTIME_ZERO_VEL_R_DIAG {
             DIAG_ZERO_VEL
         } else {
             DIAG_GPS_VEL
         };
-        self.record_update_diag(diag, innovation, obs.s, &obs.k, &dx);
-        self.fuse_measurement(obs.s, &obs.k, &dx);
+        self.record_update_diag(diag, innovation, obs.s, &k, &dx);
+        self.fuse_measurement(obs.s, &k, &dx);
     }
 
     fn fuse_gps_vel_e(&mut self, vel_e: f32, r_vel_e: f32, gnss_vel_mount_scale: f32) {
         let obs = generated_eskf::gps_vel_e_observation(&self.raw.p, r_vel_e);
         let innovation = vel_e - self.raw.nominal.ve;
-        let mut dx = gain_dx(obs.k, innovation);
+        let mut k = obs.k;
+        let mut dx = gain_dx(k, innovation);
         if r_vel_e != RUNTIME_ZERO_VEL_R_DIAG {
             scale_mount_injection(&mut dx, gnss_vel_mount_scale);
         }
+        self.freeze_mount_update_if_needed(&mut k, &mut dx);
         let diag = if r_vel_e == RUNTIME_ZERO_VEL_R_DIAG {
             DIAG_ZERO_VEL
         } else {
             DIAG_GPS_VEL
         };
-        self.record_update_diag(diag, innovation, obs.s, &obs.k, &dx);
-        self.fuse_measurement(obs.s, &obs.k, &dx);
+        self.record_update_diag(diag, innovation, obs.s, &k, &dx);
+        self.fuse_measurement(obs.s, &k, &dx);
     }
 
     fn fuse_gps_vel_d(&mut self, vel_d: f32, r_vel_d: f32, gnss_vel_mount_scale: f32) {
         let obs = generated_eskf::gps_vel_d_observation(&self.raw.p, r_vel_d);
         let innovation = vel_d - self.raw.nominal.vd;
-        let mut dx = gain_dx(obs.k, innovation);
+        let mut k = obs.k;
+        let mut dx = gain_dx(k, innovation);
         if r_vel_d != RUNTIME_ZERO_VEL_R_DIAG {
             scale_mount_injection(&mut dx, gnss_vel_mount_scale);
         }
+        self.freeze_mount_update_if_needed(&mut k, &mut dx);
         let diag = if r_vel_d == RUNTIME_ZERO_VEL_R_DIAG {
             DIAG_ZERO_VEL_D
         } else {
             DIAG_GPS_VEL_D
         };
-        self.record_update_diag(diag, innovation, obs.s, &obs.k, &dx);
-        self.fuse_measurement(obs.s, &obs.k, &dx);
+        self.record_update_diag(diag, innovation, obs.s, &k, &dx);
+        self.fuse_measurement(obs.s, &k, &dx);
     }
 
     fn fuse_stationary_gravity_x(&mut self, accel_x: f32, r_stationary_accel: f32) {
@@ -344,15 +384,17 @@ impl RustEskf {
         let q3 = self.raw.nominal.q3;
         let gravity_x = 2.0 * (q1 * q3 - q0 * q2) * generated_eskf::GRAVITY_MSS;
         let innovation = (accel_x - self.raw.nominal.bax) - (-gravity_x);
-        let dx = gain_dx(obs.k, innovation);
+        let mut k = obs.k;
+        let mut dx = gain_dx(k, innovation);
+        self.freeze_mount_update_if_needed(&mut k, &mut dx);
         self.raw.stationary_diag.innovation_x = innovation;
-        self.raw.stationary_diag.k_theta_x_from_x = obs.k[0];
-        self.raw.stationary_diag.k_theta_y_from_x = obs.k[1];
-        self.raw.stationary_diag.k_bax_from_x = obs.k[12];
-        self.raw.stationary_diag.k_bay_from_x = obs.k[13];
+        self.raw.stationary_diag.k_theta_x_from_x = k[0];
+        self.raw.stationary_diag.k_theta_y_from_x = k[1];
+        self.raw.stationary_diag.k_bax_from_x = k[12];
+        self.raw.stationary_diag.k_bay_from_x = k[13];
         self.copy_stationary_p_diag();
-        self.record_update_diag(DIAG_STATIONARY_X, innovation, obs.s, &obs.k, &dx);
-        self.fuse_measurement(obs.s, &obs.k, &dx);
+        self.record_update_diag(DIAG_STATIONARY_X, innovation, obs.s, &k, &dx);
+        self.fuse_measurement(obs.s, &k, &dx);
     }
 
     fn fuse_stationary_gravity_y(&mut self, accel_y: f32, r_stationary_accel: f32) {
@@ -368,16 +410,18 @@ impl RustEskf {
         let q3 = self.raw.nominal.q3;
         let gravity_y = 2.0 * (q2 * q3 + q0 * q1) * generated_eskf::GRAVITY_MSS;
         let innovation = (accel_y - self.raw.nominal.bay) - (-gravity_y);
-        let dx = gain_dx(obs.k, innovation);
+        let mut k = obs.k;
+        let mut dx = gain_dx(k, innovation);
+        self.freeze_mount_update_if_needed(&mut k, &mut dx);
         self.raw.stationary_diag.innovation_y = innovation;
-        self.raw.stationary_diag.k_theta_x_from_y = obs.k[0];
-        self.raw.stationary_diag.k_theta_y_from_y = obs.k[1];
-        self.raw.stationary_diag.k_bax_from_y = obs.k[12];
-        self.raw.stationary_diag.k_bay_from_y = obs.k[13];
+        self.raw.stationary_diag.k_theta_x_from_y = k[0];
+        self.raw.stationary_diag.k_theta_y_from_y = k[1];
+        self.raw.stationary_diag.k_bax_from_y = k[12];
+        self.raw.stationary_diag.k_bay_from_y = k[13];
         self.copy_stationary_p_diag();
         self.raw.stationary_diag.updates += 1;
-        self.record_update_diag(DIAG_STATIONARY_Y, innovation, obs.s, &obs.k, &dx);
-        self.fuse_measurement(obs.s, &obs.k, &dx);
+        self.record_update_diag(DIAG_STATIONARY_Y, innovation, obs.s, &k, &dx);
+        self.fuse_measurement(obs.s, &k, &dx);
     }
 
     fn fuse_body_vel_yz_batch(
@@ -432,6 +476,7 @@ impl RustEskf {
                 mount_update_innovation_gate_mps,
                 residual,
             );
+            self.freeze_mount_update_if_needed(&mut diag_k, &mut diag_dx);
             for i in 0..ERROR_STATES {
                 dx[i] += diag_dx[i] as f64;
             }
@@ -457,6 +502,9 @@ impl RustEskf {
         }
         inject_error_state(&mut self.raw.nominal, &dx_f32);
         apply_reset(&mut self.raw.p, &dx_f32);
+        if self.freeze_misalignment_states {
+            freeze_mount_covariance(&mut self.raw.p);
+        }
     }
 
     fn fuse_measurement(
@@ -474,6 +522,20 @@ impl RustEskf {
         }
         inject_error_state(&mut self.raw.nominal, dx);
         apply_reset(&mut self.raw.p, dx);
+        if self.freeze_misalignment_states {
+            freeze_mount_covariance(&mut self.raw.p);
+        }
+    }
+
+    fn freeze_mount_update_if_needed(
+        &self,
+        k: &mut [f32; ERROR_STATES],
+        dx: &mut [f32; ERROR_STATES],
+    ) {
+        if self.freeze_misalignment_states {
+            block_mount_injection(k);
+            block_mount_injection(dx);
+        }
     }
 
     fn record_update_diag(
@@ -558,6 +620,15 @@ fn block_mount_injection(dx: &mut [f32; ERROR_STATES]) {
     dx[15] = 0.0;
     dx[16] = 0.0;
     dx[17] = 0.0;
+}
+
+fn freeze_mount_covariance(p: &mut [[f32; ERROR_STATES]; ERROR_STATES]) {
+    for i in 15..18 {
+        for j in 0..ERROR_STATES {
+            p[i][j] = 0.0;
+            p[j][i] = 0.0;
+        }
+    }
 }
 
 fn predict_covariance_dense(

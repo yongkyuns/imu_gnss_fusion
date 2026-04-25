@@ -108,6 +108,7 @@ struct FusionConfig {
     mount_update_min_scale: f32,
     mount_update_ramp_time_s: f32,
     mount_update_innovation_gate_mps: f32,
+    freeze_misalignment_states: bool,
     r_vehicle_speed: f32,
     r_zero_vel: f32,
     r_stationary_accel: f32,
@@ -136,6 +137,7 @@ impl Default for FusionConfig {
             mount_update_min_scale: 0.008,
             mount_update_ramp_time_s: 800.0,
             mount_update_innovation_gate_mps: 0.02,
+            freeze_misalignment_states: false,
             r_vehicle_speed: 0.04,
             r_zero_vel: 0.0,
             r_stationary_accel: 0.0,
@@ -306,6 +308,11 @@ impl SensorFusion {
         if mount_update_innovation_gate_mps.is_finite() && mount_update_innovation_gate_mps >= 0.0 {
             self.cfg.mount_update_innovation_gate_mps = mount_update_innovation_gate_mps;
         }
+    }
+
+    pub fn set_freeze_misalignment_states(&mut self, freeze: bool) {
+        self.cfg.freeze_misalignment_states = freeze;
+        self.eskf.set_freeze_misalignment_states(freeze);
     }
 
     pub fn set_r_vehicle_speed(&mut self, r_vehicle_speed: f32) {
@@ -576,6 +583,9 @@ impl SensorFusion {
             }
             self.eskf.raw_mut().p[i][i] = var;
         }
+        if self.cfg.freeze_misalignment_states {
+            self.eskf.set_freeze_misalignment_states(true);
+        }
     }
 
     fn update(&self, mount_ready_changed: bool, ekf_initialized_now: bool) -> FusionUpdate {
@@ -590,6 +600,8 @@ impl SensorFusion {
 
     fn initialize_eskf_from_gnss(&mut self, gnss: EskfGnssSample) {
         self.eskf = RustEskf::new(self.cfg.predict_noise);
+        self.eskf
+            .set_freeze_misalignment_states(self.cfg.freeze_misalignment_states);
         let speed_h = (gnss.vel_ned_mps[0] * gnss.vel_ned_mps[0]
             + gnss.vel_ned_mps[1] * gnss.vel_ned_mps[1])
             .sqrt();
@@ -612,6 +624,9 @@ impl SensorFusion {
         raw.p[15][15] = 0.0;
         raw.p[16][16] = mount_var;
         raw.p[17][17] = mount_var;
+        if self.cfg.freeze_misalignment_states {
+            self.eskf.set_freeze_misalignment_states(true);
+        }
     }
 
     fn fuse_signed_body_speed(&mut self, t_s: f32, signed_speed_mps: f32) {

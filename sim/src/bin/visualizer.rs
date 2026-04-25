@@ -80,6 +80,8 @@ struct Args {
     mount_update_ramp_time_s: Option<f32>,
     #[arg(long)]
     mount_update_innovation_gate_mps: Option<f32>,
+    #[arg(long)]
+    freeze_misalignment_states: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -127,6 +129,7 @@ fn main() -> Result<()> {
         mount_update_innovation_gate_mps: args
             .mount_update_innovation_gate_mps
             .unwrap_or(EkfCompareConfig::default().mount_update_innovation_gate_mps),
+        freeze_misalignment_states: args.freeze_misalignment_states,
         gnss_pos_r_scale: args
             .gnss_pos_r_scale
             .unwrap_or(EkfCompareConfig::default().gnss_pos_r_scale),
@@ -164,7 +167,7 @@ fn main() -> Result<()> {
         tmax
     );
     eprintln!(
-        "[profile] ekf-only predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} gnss_pos_r_scale={:.3} gnss_vel_r_scale={:.3} r_body_vel={:.3} gnss_pos_mount_scale={:.3} gnss_vel_mount_scale={:.3} gyro_bias_init_sigma_dps={:.3} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} mount_update_min_scale={:.3} mount_update_ramp_time_s={:.3} mount_update_innovation_gate_mps={:.3}",
+        "[profile] ekf-only predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} gnss_pos_r_scale={:.3} gnss_vel_r_scale={:.3} r_body_vel={:.3} gnss_pos_mount_scale={:.3} gnss_vel_mount_scale={:.3} gyro_bias_init_sigma_dps={:.3} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} mount_update_min_scale={:.3} mount_update_ramp_time_s={:.3} mount_update_innovation_gate_mps={:.3} freeze_misalignment_states={}",
         ekf_cfg.predict_imu_decimation,
         ekf_cfg
             .predict_imu_lpf_cutoff_hz
@@ -183,6 +186,7 @@ fn main() -> Result<()> {
         ekf_cfg.mount_update_min_scale,
         ekf_cfg.mount_update_ramp_time_s,
         ekf_cfg.mount_update_innovation_gate_mps,
+        ekf_cfg.freeze_misalignment_states,
     );
     for (name, nt, np) in [
         group_stats("speed", &data.speed),

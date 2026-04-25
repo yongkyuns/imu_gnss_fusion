@@ -359,6 +359,12 @@ impl eframe::App for App {
                                     .range(0.0..=10.0),
                                 )
                                 .changed();
+                            replay_changed |= ui
+                                .checkbox(
+                                    &mut replay.ekf_cfg.freeze_misalignment_states,
+                                    "Freeze mount states",
+                                )
+                                .changed();
                         });
                         ui.horizontal_wrapped(|ui| {
                             ui.label("GNSS pos->mount");
