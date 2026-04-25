@@ -65,6 +65,8 @@ struct Args {
     #[arg(long)]
     gnss_vel_mount_scale: Option<f32>,
     #[arg(long)]
+    yaw_init_sigma_deg: Option<f32>,
+    #[arg(long)]
     gyro_bias_init_sigma_dps: Option<f32>,
     #[arg(long)]
     r_vehicle_speed: Option<f32>,
@@ -82,6 +84,12 @@ struct Args {
     mount_update_innovation_gate_mps: Option<f32>,
     #[arg(long)]
     freeze_misalignment_states: bool,
+    #[arg(long)]
+    mount_settle_time_s: Option<f32>,
+    #[arg(long)]
+    mount_settle_release_sigma_deg: Option<f32>,
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    mount_settle_zero_cross_covariance: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -105,6 +113,9 @@ fn main() -> Result<()> {
         gnss_vel_mount_scale: args
             .gnss_vel_mount_scale
             .unwrap_or(EkfCompareConfig::default().gnss_vel_mount_scale),
+        yaw_init_sigma_deg: args
+            .yaw_init_sigma_deg
+            .unwrap_or(EkfCompareConfig::default().yaw_init_sigma_deg),
         gyro_bias_init_sigma_dps: args
             .gyro_bias_init_sigma_dps
             .unwrap_or(EkfCompareConfig::default().gyro_bias_init_sigma_dps),
@@ -130,6 +141,13 @@ fn main() -> Result<()> {
             .mount_update_innovation_gate_mps
             .unwrap_or(EkfCompareConfig::default().mount_update_innovation_gate_mps),
         freeze_misalignment_states: args.freeze_misalignment_states,
+        mount_settle_time_s: args
+            .mount_settle_time_s
+            .unwrap_or(EkfCompareConfig::default().mount_settle_time_s),
+        mount_settle_release_sigma_deg: args
+            .mount_settle_release_sigma_deg
+            .unwrap_or(EkfCompareConfig::default().mount_settle_release_sigma_deg),
+        mount_settle_zero_cross_covariance: args.mount_settle_zero_cross_covariance,
         gnss_pos_r_scale: args
             .gnss_pos_r_scale
             .unwrap_or(EkfCompareConfig::default().gnss_pos_r_scale),
@@ -167,7 +185,7 @@ fn main() -> Result<()> {
         tmax
     );
     eprintln!(
-        "[profile] ekf-only predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} gnss_pos_r_scale={:.3} gnss_vel_r_scale={:.3} r_body_vel={:.3} gnss_pos_mount_scale={:.3} gnss_vel_mount_scale={:.3} gyro_bias_init_sigma_dps={:.3} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} mount_update_min_scale={:.3} mount_update_ramp_time_s={:.3} mount_update_innovation_gate_mps={:.3} freeze_misalignment_states={}",
+        "[profile] ekf-only predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} gnss_pos_r_scale={:.3} gnss_vel_r_scale={:.3} r_body_vel={:.3} gnss_pos_mount_scale={:.3} gnss_vel_mount_scale={:.3} yaw_init_sigma_deg={:.3} gyro_bias_init_sigma_dps={:.3} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} mount_update_min_scale={:.3} mount_update_ramp_time_s={:.3} mount_update_innovation_gate_mps={:.3} freeze_misalignment_states={} mount_settle_time_s={:.3} mount_settle_release_sigma_deg={:.3} mount_settle_zero_cross_covariance={}",
         ekf_cfg.predict_imu_decimation,
         ekf_cfg
             .predict_imu_lpf_cutoff_hz
@@ -178,6 +196,7 @@ fn main() -> Result<()> {
         ekf_cfg.r_body_vel,
         ekf_cfg.gnss_pos_mount_scale,
         ekf_cfg.gnss_vel_mount_scale,
+        ekf_cfg.yaw_init_sigma_deg,
         ekf_cfg.gyro_bias_init_sigma_dps,
         ekf_cfg.r_vehicle_speed,
         ekf_cfg.r_zero_vel,
@@ -187,6 +206,9 @@ fn main() -> Result<()> {
         ekf_cfg.mount_update_ramp_time_s,
         ekf_cfg.mount_update_innovation_gate_mps,
         ekf_cfg.freeze_misalignment_states,
+        ekf_cfg.mount_settle_time_s,
+        ekf_cfg.mount_settle_release_sigma_deg,
+        ekf_cfg.mount_settle_zero_cross_covariance,
     );
     for (name, nt, np) in [
         group_stats("speed", &data.speed),

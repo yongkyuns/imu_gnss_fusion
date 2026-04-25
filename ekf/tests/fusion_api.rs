@@ -96,6 +96,37 @@ fn freeze_misalignment_states_blocks_mount_updates() {
 }
 
 #[test]
+fn mount_settle_phase_releases_with_configured_covariance() {
+    let mut system = SensorFusion::with_misalignment([1.0, 0.0, 0.0, 0.0]);
+    system.set_mount_settle_time_s(1.0);
+    system.set_mount_settle_release_sigma_rad(4.0_f32.to_radians());
+
+    let upd = system.process_gnss(gnss_sample(1.0));
+    assert!(upd.ekf_initialized_now);
+    for i in 15..18 {
+        assert_eq!(system.eskf().unwrap().p[i][i], 0.0);
+    }
+
+    let _ = system.process_gnss(gnss_sample(1.5));
+    for i in 15..18 {
+        assert_eq!(system.eskf().unwrap().p[i][i], 0.0);
+    }
+
+    let _ = system.process_gnss(gnss_sample(2.2));
+    let eskf = system.eskf().unwrap();
+    let release_var = 4.0_f32.to_radians().powi(2);
+    assert_eq!(eskf.p[15][15], 0.0);
+    assert!((eskf.p[16][16] - release_var).abs() < 1.0e-8);
+    assert!((eskf.p[17][17] - release_var).abs() < 1.0e-8);
+    for i in 15..18 {
+        for j in 0..15 {
+            assert_eq!(eskf.p[i][j], 0.0);
+            assert_eq!(eskf.p[j][i], 0.0);
+        }
+    }
+}
+
+#[test]
 fn zero_mount_update_scale_does_not_shrink_mount_covariance() {
     let mut eskf = RustEskf::new(PredictNoise::default());
     {

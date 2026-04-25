@@ -98,6 +98,7 @@ struct FusionConfig {
     align: AlignConfig,
     bootstrap: BootstrapConfig,
     predict_noise: PredictNoise,
+    yaw_init_sigma_rad: f32,
     gyro_bias_init_sigma_radps: f32,
     accel_bias_init_sigma_mps2: f32,
     r_body_vel: f32,
@@ -110,6 +111,9 @@ struct FusionConfig {
     mount_update_innovation_gate_mps: f32,
     mount_update_yaw_rate_gate_radps: f32,
     freeze_misalignment_states: bool,
+    mount_settle_time_s: f32,
+    mount_settle_release_sigma_rad: f32,
+    mount_settle_zero_cross_covariance: bool,
     r_vehicle_speed: f32,
     r_zero_vel: f32,
     r_stationary_accel: f32,
@@ -128,6 +132,7 @@ impl Default for FusionConfig {
                 accel_bias_rw_var: 0.002e-9,
                 mount_align_rw_var: 1.0e-7,
             },
+            yaw_init_sigma_rad: 2.0_f32.to_radians(),
             gyro_bias_init_sigma_radps: 0.125_f32.to_radians(),
             accel_bias_init_sigma_mps2: 0.20,
             r_body_vel: 0.001,
@@ -140,6 +145,9 @@ impl Default for FusionConfig {
             mount_update_innovation_gate_mps: 0.02,
             mount_update_yaw_rate_gate_radps: 0.0,
             freeze_misalignment_states: false,
+            mount_settle_time_s: 0.0,
+            mount_settle_release_sigma_rad: 7.5_f32.to_radians(),
+            mount_settle_zero_cross_covariance: true,
             r_vehicle_speed: 0.04,
             r_zero_vel: 0.0,
             r_stationary_accel: 0.0,
@@ -170,6 +178,7 @@ pub struct SensorFusion {
     mount_q_vb: Option<[f32; 4]>,
     eskf_mount_q_vb: Option<[f32; 4]>,
     ekf_mount_handoff_t_s: Option<f32>,
+    mount_settle_released: bool,
     last_imu_t_s: Option<f32>,
     last_gnss: Option<EskfGnssSample>,
     bootstrap_prev_gnss: Option<EskfGnssSample>,
@@ -212,6 +221,7 @@ impl SensorFusion {
             mount_q_vb: None,
             eskf_mount_q_vb: None,
             ekf_mount_handoff_t_s: None,
+            mount_settle_released: false,
             last_imu_t_s: None,
             last_gnss: None,
             bootstrap_prev_gnss: None,
@@ -243,6 +253,7 @@ impl SensorFusion {
         self.mount_q_vb = Some(q_vb);
         self.eskf_mount_q_vb = Some(q_vb);
         self.ekf_mount_handoff_t_s = None;
+        self.mount_settle_released = false;
         let n = &mut self.eskf.raw_mut().nominal;
         n.qcs0 = 1.0;
         n.qcs1 = 0.0;
@@ -271,6 +282,12 @@ impl SensorFusion {
     pub fn set_gyro_bias_init_sigma_radps(&mut self, gyro_bias_init_sigma_radps: f32) {
         if gyro_bias_init_sigma_radps.is_finite() && gyro_bias_init_sigma_radps >= 0.0 {
             self.cfg.gyro_bias_init_sigma_radps = gyro_bias_init_sigma_radps;
+        }
+    }
+
+    pub fn set_yaw_init_sigma_rad(&mut self, yaw_init_sigma_rad: f32) {
+        if yaw_init_sigma_rad.is_finite() && yaw_init_sigma_rad >= 0.0 {
+            self.cfg.yaw_init_sigma_rad = yaw_init_sigma_rad;
         }
     }
 
@@ -323,6 +340,23 @@ impl SensorFusion {
         self.eskf.set_freeze_misalignment_states(freeze);
     }
 
+    pub fn set_mount_settle_time_s(&mut self, mount_settle_time_s: f32) {
+        if mount_settle_time_s.is_finite() && mount_settle_time_s >= 0.0 {
+            self.cfg.mount_settle_time_s = mount_settle_time_s;
+            self.mount_settle_released = false;
+        }
+    }
+
+    pub fn set_mount_settle_release_sigma_rad(&mut self, sigma_rad: f32) {
+        if sigma_rad.is_finite() && sigma_rad >= 0.0 {
+            self.cfg.mount_settle_release_sigma_rad = sigma_rad;
+        }
+    }
+
+    pub fn set_mount_settle_zero_cross_covariance(&mut self, zero_cross: bool) {
+        self.cfg.mount_settle_zero_cross_covariance = zero_cross;
+    }
+
     pub fn set_r_vehicle_speed(&mut self, r_vehicle_speed: f32) {
         if r_vehicle_speed.is_finite() && r_vehicle_speed >= 0.0 {
             self.cfg.r_vehicle_speed = r_vehicle_speed;
@@ -361,6 +395,7 @@ impl SensorFusion {
         if !self.ekf_initialized || !self.mount_ready {
             return self.update(false, false);
         }
+        self.refresh_mount_settle_state(sample.t_s);
         if !(0.001..=0.05).contains(&dt) {
             return self.update(false, false);
         }
@@ -453,8 +488,11 @@ impl SensorFusion {
             self.initialize_eskf_from_gnss(local);
             self.ekf_initialized = true;
             self.ekf_mount_handoff_t_s = Some(local.t_s);
+            self.mount_settle_released = false;
+            self.refresh_mount_settle_state(local.t_s);
             true
         } else {
+            self.refresh_mount_settle_state(local.t_s);
             self.eskf.fuse_gps_scaled(
                 local,
                 self.cfg.gnss_pos_mount_scale,
@@ -470,6 +508,7 @@ impl SensorFusion {
         if !self.ekf_initialized || !self.mount_ready {
             return self.update(false, false);
         }
+        self.refresh_mount_settle_state(speed.t_s);
         if speed.speed_mps < 0.0 || !speed.speed_mps.is_finite() {
             return self.update(false, false);
         }
@@ -630,6 +669,7 @@ impl SensorFusion {
         raw.p[12][12] = self.cfg.accel_bias_init_sigma_mps2.powi(2);
         raw.p[13][13] = raw.p[12][12];
         raw.p[14][14] = raw.p[12][12];
+        raw.p[2][2] = self.cfg.yaw_init_sigma_rad.powi(2);
         let mount_var = 5.0_f32.to_radians().powi(2);
         raw.p[15][15] = 0.0;
         raw.p[16][16] = mount_var;
@@ -637,6 +677,50 @@ impl SensorFusion {
         if self.cfg.freeze_misalignment_states {
             self.eskf.set_freeze_misalignment_states(true);
         }
+    }
+
+    fn refresh_mount_settle_state(&mut self, t_s: f32) {
+        if self.cfg.freeze_misalignment_states {
+            self.eskf.set_freeze_misalignment_states(true);
+            return;
+        }
+        if self.cfg.mount_settle_time_s <= 0.0 {
+            self.eskf.set_freeze_misalignment_states(false);
+            return;
+        }
+        let Some(handoff_t_s) = self.ekf_mount_handoff_t_s else {
+            return;
+        };
+        if t_s - handoff_t_s < self.cfg.mount_settle_time_s {
+            self.eskf.set_freeze_misalignment_states(true);
+            return;
+        }
+        if !self.mount_settle_released {
+            self.eskf.set_freeze_misalignment_states(false);
+            self.reset_mount_covariance_after_settle();
+            self.mount_settle_released = true;
+        } else {
+            self.eskf.set_freeze_misalignment_states(false);
+        }
+    }
+
+    fn reset_mount_covariance_after_settle(&mut self) {
+        let sigma = self.cfg.mount_settle_release_sigma_rad;
+        if !sigma.is_finite() || sigma < 0.0 {
+            return;
+        }
+        let var = sigma * sigma;
+        let raw = self.eskf.raw_mut();
+        for i in 15..18 {
+            if self.cfg.mount_settle_zero_cross_covariance {
+                for j in 0..18 {
+                    raw.p[i][j] = 0.0;
+                    raw.p[j][i] = 0.0;
+                }
+            }
+            raw.p[i][i] = var;
+        }
+        raw.p[15][15] = 0.0;
     }
 
     fn fuse_signed_body_speed(&mut self, t_s: f32, signed_speed_mps: f32) {

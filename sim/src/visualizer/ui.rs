@@ -319,6 +319,14 @@ impl eframe::App for App {
                                         .range(0.0..=20.0),
                                 )
                                 .changed();
+                            ui.label("Yaw sigma deg");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut replay.ekf_cfg.yaw_init_sigma_deg)
+                                        .speed(0.5)
+                                        .range(0.0..=90.0),
+                                )
+                                .changed();
                         });
                         ui.horizontal_wrapped(|ui| {
                             ui.label("Mount RW");
@@ -373,6 +381,32 @@ impl eframe::App for App {
                                 .checkbox(
                                     &mut replay.ekf_cfg.freeze_misalignment_states,
                                     "Freeze mount states",
+                                )
+                                .changed();
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("Mount settle s");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut replay.ekf_cfg.mount_settle_time_s)
+                                        .speed(10.0)
+                                        .range(0.0..=1000.0),
+                                )
+                                .changed();
+                            ui.label("Release sigma deg");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut replay.ekf_cfg.mount_settle_release_sigma_deg,
+                                    )
+                                    .speed(0.5)
+                                    .range(0.0..=90.0),
+                                )
+                                .changed();
+                            replay_changed |= ui
+                                .checkbox(
+                                    &mut replay.ekf_cfg.mount_settle_zero_cross_covariance,
+                                    "Zero mount cross-cov",
                                 )
                                 .changed();
                         });
