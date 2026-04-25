@@ -30,6 +30,10 @@ fn main() -> Result<()> {
     )?;
     write_samples(&args.out_dir, &imu_samples, &gnss_samples)?;
     println!("generic_replay_dir={}", args.out_dir.display());
-    println!("imu_samples={} gnss_samples={}", imu_samples.len(), gnss_samples.len());
+    println!(
+        "imu_samples={} gnss_samples={}",
+        imu_samples.len(),
+        gnss_samples.len()
+    );
     Ok(())
 }

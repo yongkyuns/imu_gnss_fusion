@@ -1,7 +1,6 @@
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use sensor_fusion::c_api::{CLooseImuDelta, CLooseWrapper};
-use sensor_fusion::loose::LoosePredictNoise;
+use sensor_fusion::loose::{LooseFilter, LooseImuDelta, LoosePredictNoise};
 use serde::{Deserialize, Serialize};
 use sim::datasets::seeded_loose::{
     AccelSample, GyroSample, import_accel_data, import_gnss_data, import_gyro_data,
@@ -161,7 +160,7 @@ fn main() -> Result<()> {
     if let Some(value) = args.mount_align_rw_var {
         noise.mount_align_rw_var = value;
     }
-    let mut loose = CLooseWrapper::new(noise);
+    let mut loose = LooseFilter::new(noise);
     loose.init_from_reference_ecef_state(
         init.q_bn,
         init.pos_ecef_m,
@@ -299,7 +298,7 @@ fn main() -> Result<()> {
                 if !(dt > 0.0) {
                     continue;
                 }
-                let imu = CLooseImuDelta {
+                let imu = LooseImuDelta {
                     dax_1: (prev.omega_radps[0] * dt) as f32,
                     day_1: (prev.omega_radps[1] * dt) as f32,
                     daz_1: (prev.omega_radps[2] * dt) as f32,
@@ -680,7 +679,7 @@ fn accel_at(ttag_us: i64, accel: &[AccelSample]) -> Option<[f64; 3]> {
 }
 
 fn nhc_gate(
-    n: &sensor_fusion::c_api::CLooseNominalState,
+    n: &sensor_fusion::loose::LooseNominalState,
     gyro: &GyroSample,
     accel: &[f64; 3],
 ) -> bool {

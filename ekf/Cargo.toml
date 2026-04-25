@@ -8,6 +8,10 @@ license = "MIT"
 name = "sensor_fusion"
 path = "src/lib.rs"
 
+[features]
+default = []
+c-reference = []
+
 [dependencies]
 libm = "0.2"
 

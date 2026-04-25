@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::datasets::generic_replay::{GenericGnssSample, GenericImuSample};
 use crate::ubxlog::{
-    NavPvtObs, UbxFrame, extract_esf_raw_samples, extract_nav2_pvt_obs, extract_nav_pvt_obs,
+    NavPvtObs, UbxFrame, extract_esf_raw_samples, extract_nav_pvt_obs, extract_nav2_pvt_obs,
     parse_ubx_frames, sensor_meta,
 };
 use crate::visualizer::math::{deg2rad, nearest_master_ms};
@@ -44,9 +44,12 @@ pub fn load_generic_replay(
     Ok((replay.imu_samples, replay.gnss_samples))
 }
 
-pub fn load_generic_replay_with_nav(logfile: &Path, cfg: UbxReplayConfig) -> Result<UbxGenericReplay> {
-    let bytes = std::fs::read(logfile)
-        .with_context(|| format!("failed to read {}", logfile.display()))?;
+pub fn load_generic_replay_with_nav(
+    logfile: &Path,
+    cfg: UbxReplayConfig,
+) -> Result<UbxGenericReplay> {
+    let bytes =
+        std::fs::read(logfile).with_context(|| format!("failed to read {}", logfile.display()))?;
     let frames = parse_ubx_frames(&bytes, None);
     let tl = build_master_timeline(&frames);
     if tl.masters.is_empty() {
@@ -210,8 +213,7 @@ fn push_imu_sample(
     az: Option<f64>,
     t0_ms: f64,
 ) {
-    if let (Some(gx), Some(gy), Some(gz), Some(ax), Some(ay), Some(az)) = (gx, gy, gz, ax, ay, az)
-    {
+    if let (Some(gx), Some(gy), Some(gz), Some(ax), Some(ay), Some(az)) = (gx, gy, gz, ax, ay, az) {
         out.push(GenericImuSample {
             t_s: (t_ms - t0_ms) * 1.0e-3,
             gyro_radps: [gx.to_radians(), gy.to_radians(), gz.to_radians()],

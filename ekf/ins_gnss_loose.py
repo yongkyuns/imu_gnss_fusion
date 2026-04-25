@@ -10,11 +10,12 @@ from pathlib import Path
 import numpy as np
 from sympy import Matrix, Symbol, cse, symbols
 
-from code_gen import CodeGenerator
+from code_gen import CodeGenerator, RustCodeGenerator
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 GENERATED_C_DIR = SCRIPT_DIR / "c" / "generated_loose"
+GENERATED_RUST_DIR = SCRIPT_DIR / "src" / "generated_loose"
 C_DIR = SCRIPT_DIR / "c"
 DEFAULT_OAN_ROOT = Path("/Users/ykshin/Dev/me/open-aided-navigation")
 DEFAULT_SYNTH_CASE = DEFAULT_OAN_ROOT / "data" / "sim" / "generated_city_drive_case_5deg_15min"
@@ -151,6 +152,22 @@ def write_nhc_row(path: Path, est_expr, h_row: Matrix, prefix: str):
     gen.close()
 
 
+def write_rust_nhc_row(path: Path, est_expr, h_row: Matrix, prefix: str):
+    flat_values = Matrix([est_expr] + [h_row[i] for i in range(h_row.shape[1])])
+    subexprs, reduced = cse(flat_values, symbols(f"{prefix}_0:2000"), optimizations="basic")
+    gen = RustCodeGenerator(str(path))
+    gen.print_string("Sub Expressions")
+    gen.write_subexpressions(subexprs)
+    values = reduced
+    if len(values) == 1 and isinstance(values[0], Matrix):
+        values = values[0]
+    gen.print_string("Estimated Measurement")
+    gen.file.write(f"vc_est = {gen.get_ccode(values[0])};\n\n")
+    gen.print_string("Observation Jacobian")
+    gen.write_matrix(Matrix(values[1:25]), "H")
+    gen.close()
+
+
 def emit_reference_c():
     GENERATED_C_DIR.mkdir(parents=True, exist_ok=True)
     phi, g = create_reference_transition_and_noise()
@@ -160,6 +177,31 @@ def emit_reference_c():
     write_matrix(GENERATED_C_DIR / "reference_error_noise_input_generated.c", g, "G")
     write_nhc_row(GENERATED_C_DIR / "reference_nhc_y_generated.c", v_c[1], h_y, "tmp_nhc_y")
     write_nhc_row(GENERATED_C_DIR / "reference_nhc_z_generated.c", v_c[2], h_z, "tmp_nhc_z")
+
+
+def emit_reference_rust():
+    GENERATED_RUST_DIR.mkdir(parents=True, exist_ok=True)
+    phi, g = create_reference_transition_and_noise()
+    v_c, h_y, h_z = create_reference_nhc_rows()
+
+    gen = RustCodeGenerator(str(GENERATED_RUST_DIR / "reference_error_transition_generated.rs"))
+    gen.print_string("Sub Expressions")
+    subexprs, reduced = cse(phi, symbols("tmp_F_0:2000"), optimizations="basic")
+    gen.write_subexpressions(subexprs)
+    gen.print_string("F")
+    gen.write_matrix(Matrix(reduced), "F")
+    gen.close()
+
+    gen = RustCodeGenerator(str(GENERATED_RUST_DIR / "reference_error_noise_input_generated.rs"))
+    gen.print_string("Sub Expressions")
+    subexprs, reduced = cse(g, symbols("tmp_G_0:2000"), optimizations="basic")
+    gen.write_subexpressions(subexprs)
+    gen.print_string("G")
+    gen.write_matrix(Matrix(reduced), "G")
+    gen.close()
+
+    write_rust_nhc_row(GENERATED_RUST_DIR / "reference_nhc_y_generated.rs", v_c[1], h_y, "tmp_nhc_y")
+    write_rust_nhc_row(GENERATED_RUST_DIR / "reference_nhc_z_generated.rs", v_c[2], h_z, "tmp_nhc_z")
 
 
 class CLoosePredictNoise(ctypes.Structure):
@@ -941,6 +983,7 @@ def compare_c_to_open_aided(input_dir: Path, oan_root: Path = DEFAULT_OAN_ROOT) 
 def main():
     parser = argparse.ArgumentParser(description="Loose INS/GNSS symbolic utilities and C runtime harness.")
     parser.add_argument("--emit-c", action="store_true")
+    parser.add_argument("--emit-rust", action="store_true")
     parser.add_argument("--derive-fg", action="store_true")
     parser.add_argument("--run-c-case", type=Path)
     parser.add_argument("--run-python-case", type=Path)
@@ -952,6 +995,8 @@ def main():
 
     if args.emit_c:
         emit_reference_c()
+    if args.emit_rust:
+        emit_reference_rust()
         return
     if args.derive_fg:
         phi, g = create_reference_transition_and_noise()

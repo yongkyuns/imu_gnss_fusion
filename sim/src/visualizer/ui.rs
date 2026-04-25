@@ -290,21 +290,17 @@ impl eframe::App for App {
                             ui.label("GNSS pos R");
                             replay_changed |= ui
                                 .add(
-                                    egui::DragValue::new(
-                                        &mut replay.ekf_cfg.gnss_pos_r_scale,
-                                    )
-                                    .speed(0.01)
-                                    .range(0.001..=10.0),
+                                    egui::DragValue::new(&mut replay.ekf_cfg.gnss_pos_r_scale)
+                                        .speed(0.01)
+                                        .range(0.001..=10.0),
                                 )
                                 .changed();
                             ui.label("GNSS vel R");
                             replay_changed |= ui
                                 .add(
-                                    egui::DragValue::new(
-                                        &mut replay.ekf_cfg.gnss_vel_r_scale,
-                                    )
-                                    .speed(0.01)
-                                    .range(0.001..=10.0),
+                                    egui::DragValue::new(&mut replay.ekf_cfg.gnss_vel_r_scale)
+                                        .speed(0.01)
+                                        .range(0.001..=10.0),
                                 )
                                 .changed();
                             ui.label("NHC R");
@@ -318,11 +314,9 @@ impl eframe::App for App {
                             ui.label("Yaw init m/s");
                             replay_changed |= ui
                                 .add(
-                                    egui::DragValue::new(
-                                        &mut replay.ekf_cfg.yaw_init_speed_mps,
-                                    )
-                                    .speed(0.1)
-                                    .range(0.0..=20.0),
+                                    egui::DragValue::new(&mut replay.ekf_cfg.yaw_init_speed_mps)
+                                        .speed(0.1)
+                                        .range(0.0..=20.0),
                                 )
                                 .changed();
                         });
@@ -330,11 +324,9 @@ impl eframe::App for App {
                             ui.label("Mount RW");
                             replay_changed |= ui
                                 .add(
-                                    egui::DragValue::new(
-                                        &mut replay.ekf_cfg.mount_align_rw_var,
-                                    )
-                                    .speed(1.0e-8)
-                                    .range(0.0..=1.0e-3),
+                                    egui::DragValue::new(&mut replay.ekf_cfg.mount_align_rw_var)
+                                        .speed(1.0e-8)
+                                        .range(0.0..=1.0e-3),
                                 )
                                 .changed();
                             ui.label("Mount min scale");
@@ -372,21 +364,17 @@ impl eframe::App for App {
                             ui.label("GNSS pos->mount");
                             replay_changed |= ui
                                 .add(
-                                    egui::DragValue::new(
-                                        &mut replay.ekf_cfg.gnss_pos_mount_scale,
-                                    )
-                                    .speed(0.01)
-                                    .range(0.0..=1.0),
+                                    egui::DragValue::new(&mut replay.ekf_cfg.gnss_pos_mount_scale)
+                                        .speed(0.01)
+                                        .range(0.0..=1.0),
                                 )
                                 .changed();
                             ui.label("GNSS vel->mount");
                             replay_changed |= ui
                                 .add(
-                                    egui::DragValue::new(
-                                        &mut replay.ekf_cfg.gnss_vel_mount_scale,
-                                    )
-                                    .speed(0.01)
-                                    .range(0.0..=1.0),
+                                    egui::DragValue::new(&mut replay.ekf_cfg.gnss_vel_mount_scale)
+                                        .speed(0.01)
+                                        .range(0.0..=1.0),
                                 )
                                 .changed();
                             ui.label("Gyro bias init dps");
@@ -402,11 +390,9 @@ impl eframe::App for App {
                             ui.label("Vehicle speed R");
                             replay_changed |= ui
                                 .add(
-                                    egui::DragValue::new(
-                                        &mut replay.ekf_cfg.r_vehicle_speed,
-                                    )
-                                    .speed(0.01)
-                                    .range(0.0..=10.0),
+                                    egui::DragValue::new(&mut replay.ekf_cfg.r_vehicle_speed)
+                                        .speed(0.01)
+                                        .range(0.0..=10.0),
                                 )
                                 .changed();
                         });
@@ -422,11 +408,9 @@ impl eframe::App for App {
                             ui.label("Stationary accel R");
                             replay_changed |= ui
                                 .add(
-                                    egui::DragValue::new(
-                                        &mut replay.ekf_cfg.r_stationary_accel,
-                                    )
-                                    .speed(0.01)
-                                    .range(0.0..=10.0),
+                                    egui::DragValue::new(&mut replay.ekf_cfg.r_stationary_accel)
+                                        .speed(0.01)
+                                        .range(0.0..=10.0),
                                 )
                                 .changed();
                             ui.label("Predict decimation");
@@ -441,16 +425,10 @@ impl eframe::App for App {
                                 .changed();
                         });
                         ui.horizontal_wrapped(|ui| {
-                            let mut lpf_on =
-                                replay.ekf_cfg.predict_imu_lpf_cutoff_hz.is_some();
+                            let mut lpf_on = replay.ekf_cfg.predict_imu_lpf_cutoff_hz.is_some();
                             if ui.checkbox(&mut lpf_on, "Predict IMU LPF").changed() {
                                 replay.ekf_cfg.predict_imu_lpf_cutoff_hz = if lpf_on {
-                                    Some(
-                                        replay
-                                            .ekf_cfg
-                                            .predict_imu_lpf_cutoff_hz
-                                            .unwrap_or(150.0),
-                                    )
+                                    Some(replay.ekf_cfg.predict_imu_lpf_cutoff_hz.unwrap_or(150.0))
                                 } else {
                                     None
                                 };
@@ -478,11 +456,9 @@ impl eframe::App for App {
                             ui.label("Outage duration s");
                             replay_changed |= ui
                                 .add(
-                                    egui::DragValue::new(
-                                        &mut replay.gnss_outages.duration_s,
-                                    )
-                                    .speed(1.0)
-                                    .range(0.0..=300.0),
+                                    egui::DragValue::new(&mut replay.gnss_outages.duration_s)
+                                        .speed(1.0)
+                                        .range(0.0..=300.0),
                                 )
                                 .changed();
                             ui.label("Outage seed");

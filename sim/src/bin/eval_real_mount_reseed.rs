@@ -7,11 +7,9 @@ use sim::datasets::generic_replay::{
     fusion_gnss_sample as to_fusion_gnss, fusion_imu_sample as to_fusion_imu,
 };
 use sim::datasets::ubx_replay::{UbxReplayConfig, load_generic_replay};
-use sim::eval::replay::{ReplayEvent, for_each_event};
 use sim::eval::gnss_ins::{quat_angle_deg, quat_from_rpy_alg_deg};
-use sim::ubxlog::{
-    UbxFrame, extract_esf_alg, parse_ubx_frames,
-};
+use sim::eval::replay::{ReplayEvent, for_each_event};
+use sim::ubxlog::{UbxFrame, extract_esf_alg, parse_ubx_frames};
 use sim::visualizer::math::nearest_master_ms;
 use sim::visualizer::pipeline::align_replay::esf_alg_flu_to_frd_mount_quat;
 use sim::visualizer::pipeline::timebase::{MasterTimeline, build_master_timeline};
@@ -212,7 +210,11 @@ fn collect_alg_mount_events(frames: &[UbxFrame], tl: &MasterTimeline) -> Vec<Alg
             });
         }
     }
-    out.sort_by(|a, b| a.t_s.partial_cmp(&b.t_s).unwrap_or(std::cmp::Ordering::Equal));
+    out.sort_by(|a, b| {
+        a.t_s
+            .partial_cmp(&b.t_s)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     out
 }
 

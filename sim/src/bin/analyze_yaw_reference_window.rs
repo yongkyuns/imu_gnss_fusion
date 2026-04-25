@@ -4,11 +4,13 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use sim::datasets::ubx_replay::{UbxReplayConfig, load_generic_replay_with_nav};
 use sim::ubxlog::{extract_nav_att, parse_ubx_frames};
-use sim::visualizer::math::{deg2rad, mat_vec, nearest_master_ms, normalize_heading_deg, rad2deg, rot_zyx};
+use sim::visualizer::math::{
+    deg2rad, mat_vec, nearest_master_ms, normalize_heading_deg, rad2deg, rot_zyx,
+};
 use sim::visualizer::model::{EkfImuSource, NavAttEvent, Trace};
 use sim::visualizer::pipeline::build_plot_data;
-use sim::visualizer::pipeline::timebase::build_master_timeline;
 use sim::visualizer::pipeline::ekf_compare::{EkfCompareConfig, GnssOutageConfig};
+use sim::visualizer::pipeline::timebase::build_master_timeline;
 
 #[derive(Parser, Debug)]
 #[command(name = "analyze_yaw_reference_window")]
@@ -112,7 +114,11 @@ fn vehicle_velocity_with_yaw(
     roll_deg: f64,
     pitch_deg: f64,
 ) -> [f64; 3] {
-    let c_n_v = transpose3(rot_zyx(deg2rad(yaw_deg), deg2rad(pitch_deg), deg2rad(roll_deg)));
+    let c_n_v = transpose3(rot_zyx(
+        deg2rad(yaw_deg),
+        deg2rad(pitch_deg),
+        deg2rad(roll_deg),
+    ));
     mat_vec(c_n_v, vel_ned)
 }
 

@@ -3,11 +3,12 @@ from pathlib import Path
 
 from sympy import Matrix, Symbol, cse, symbols
 
-from code_gen import CodeGenerator
+from code_gen import CodeGenerator, RustCodeGenerator
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 GENERATED_C_DIR = SCRIPT_DIR / "c" / "generated_eskf"
+GENERATED_RUST_DIR = SCRIPT_DIR / "src" / "generated_eskf"
 
 
 def create_symmetric_cov_matrix(n):
@@ -36,8 +37,8 @@ def generate_observation_equations(p_cov, state, observation, variance, varname,
     return expr
 
 
-def write_observation_equations(path, equations, state_dim):
-    gen = CodeGenerator(str(path))
+def write_observation_equations(path, equations, state_dim, generator_cls=CodeGenerator):
+    gen = generator_cls(str(path))
     gen.print_string("Sub Expressions")
     gen.write_subexpressions(equations[0])
     values = equations[1]
@@ -316,9 +317,9 @@ def derive_measurement_model():
     }
 
 
-def emit_cse_matrix_assignments(path, title, matrix, variable_name, symbol_prefix, is_symmetric=False):
+def emit_cse_matrix_assignments(path, title, matrix, variable_name, symbol_prefix, is_symmetric=False, generator_cls=CodeGenerator):
     expr = cse(matrix, symbols(f"{symbol_prefix}0:4000"), optimizations="basic")
-    gen = CodeGenerator(str(path))
+    gen = generator_cls(str(path))
     gen.print_string(title)
     gen.write_subexpressions(expr[0])
     values = expr[1]
@@ -347,6 +348,29 @@ def emit_nominal_prediction_c(model):
     write_string = ""
     for i, name in enumerate(state_names):
         write_string += f"eskf->nominal.{name} = {gen.get_ccode(values[i])};\n"
+    gen.file.write(write_string)
+    gen.close()
+
+
+def emit_nominal_prediction_rust(model):
+    q_new = model["x_nom_new"][0:4, 0]
+    v_new = model["x_nom_new"][4:7, 0]
+    p_new = model["x_nom_new"][7:10, 0]
+    state_new = Matrix.vstack(q_new, v_new, p_new)
+    expr = cse(state_new, symbols("ESKF_PRED0:2000"), optimizations="basic")
+    pred_path = GENERATED_RUST_DIR / "nominal_prediction_generated.rs"
+    gen = RustCodeGenerator(str(pred_path))
+    gen.print_string("Generated ESKF nominal-state prediction")
+    gen.write_subexpressions(expr[0])
+
+    values = expr[1]
+    if len(values) == 1 and isinstance(values[0], Matrix):
+        values = values[0]
+
+    state_names = ["q0", "q1", "q2", "q3", "vn", "ve", "vd", "pn", "pe", "pd"]
+    write_string = ""
+    for i, name in enumerate(state_names):
+        write_string += f"nominal.{name} = {gen.get_ccode(values[i])};\n"
     gen.file.write(write_string)
     gen.close()
 
@@ -424,9 +448,90 @@ def emit_generated_c():
     print("Wrote:", body_vel_z_path)
 
 
+def emit_generated_rust():
+    model = derive_error_dynamics()
+    meas = derive_measurement_model()
+    GENERATED_RUST_DIR.mkdir(parents=True, exist_ok=True)
+
+    pred_path = GENERATED_RUST_DIR / "nominal_prediction_generated.rs"
+    f_path = GENERATED_RUST_DIR / "error_transition_generated.rs"
+    g_path = GENERATED_RUST_DIR / "error_noise_input_generated.rs"
+    reset_path = GENERATED_RUST_DIR / "attitude_reset_jacobian_generated.rs"
+    gps_pos_n_path = GENERATED_RUST_DIR / "gps_pos_n_generated.rs"
+    gps_pos_e_path = GENERATED_RUST_DIR / "gps_pos_e_generated.rs"
+    gps_pos_d_path = GENERATED_RUST_DIR / "gps_pos_d_generated.rs"
+    gps_vel_n_path = GENERATED_RUST_DIR / "gps_vel_n_generated.rs"
+    gps_vel_e_path = GENERATED_RUST_DIR / "gps_vel_e_generated.rs"
+    gps_vel_d_path = GENERATED_RUST_DIR / "gps_vel_d_generated.rs"
+    stationary_accel_x_path = GENERATED_RUST_DIR / "stationary_accel_x_generated.rs"
+    stationary_accel_y_path = GENERATED_RUST_DIR / "stationary_accel_y_generated.rs"
+    body_vel_x_path = GENERATED_RUST_DIR / "body_vel_x_generated.rs"
+    body_vel_y_path = GENERATED_RUST_DIR / "body_vel_y_generated.rs"
+    body_vel_z_path = GENERATED_RUST_DIR / "body_vel_z_generated.rs"
+
+    emit_nominal_prediction_rust(model)
+    emit_cse_matrix_assignments(
+        f_path,
+        "Generated ESKF error-state transition matrix",
+        model["F"],
+        "F",
+        "ESKF_F",
+        generator_cls=RustCodeGenerator,
+    )
+    emit_cse_matrix_assignments(
+        g_path,
+        "Generated ESKF error-state noise input matrix",
+        model["G"],
+        "G",
+        "ESKF_G",
+        generator_cls=RustCodeGenerator,
+    )
+    emit_cse_matrix_assignments(
+        reset_path,
+        "Generated first-order ESKF attitude reset Jacobian block",
+        model["attitude_reset_jacobian"],
+        "G_reset_theta",
+        "ESKF_RESET",
+        generator_cls=RustCodeGenerator,
+    )
+    state_dim = model["state_dim_error"]
+    write_observation_equations(gps_pos_n_path, meas["gps_pos_n"], state_dim, RustCodeGenerator)
+    write_observation_equations(gps_pos_e_path, meas["gps_pos_e"], state_dim, RustCodeGenerator)
+    write_observation_equations(gps_pos_d_path, meas["gps_pos_d"], state_dim, RustCodeGenerator)
+    write_observation_equations(gps_vel_n_path, meas["gps_vel_n"], state_dim, RustCodeGenerator)
+    write_observation_equations(gps_vel_e_path, meas["gps_vel_e"], state_dim, RustCodeGenerator)
+    write_observation_equations(gps_vel_d_path, meas["gps_vel_d"], state_dim, RustCodeGenerator)
+    write_observation_equations(stationary_accel_x_path, meas["stationary_accel_x"], state_dim, RustCodeGenerator)
+    write_observation_equations(stationary_accel_y_path, meas["stationary_accel_y"], state_dim, RustCodeGenerator)
+    write_observation_equations(body_vel_x_path, meas["body_vel_x"], state_dim, RustCodeGenerator)
+    write_observation_equations(body_vel_y_path, meas["body_vel_y"], state_dim, RustCodeGenerator)
+    write_observation_equations(body_vel_z_path, meas["body_vel_z"], state_dim, RustCodeGenerator)
+
+    for path in [
+        pred_path,
+        f_path,
+        g_path,
+        reset_path,
+        gps_pos_n_path,
+        gps_pos_e_path,
+        gps_pos_d_path,
+        gps_vel_n_path,
+        gps_vel_e_path,
+        gps_vel_d_path,
+        stationary_accel_x_path,
+        stationary_accel_y_path,
+        body_vel_x_path,
+        body_vel_y_path,
+        body_vel_z_path,
+    ]:
+        print("Wrote:", path)
+
+
 if __name__ == "__main__":
     if "--emit-c" in sys.argv:
         emit_generated_c()
+    elif "--emit-rust" in sys.argv:
+        emit_generated_rust()
     elif "--derive-fg" in sys.argv:
         model = derive_error_dynamics()
         print("F shape:", model["F"].shape)

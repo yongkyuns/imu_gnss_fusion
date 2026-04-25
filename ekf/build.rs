@@ -41,6 +41,10 @@ fn llvm_tool(name: &str) -> Option<PathBuf> {
 }
 
 fn main() {
+    if env::var_os("CARGO_FEATURE_C_REFERENCE").is_none() {
+        return;
+    }
+
     println!("cargo:rerun-if-env-changed=SF_ESKF_BODY_VEL_USE_QCS_CONJ");
     println!("cargo:rerun-if-env-changed=SF_ESKF_DIAG_DISABLE_BODY_VEL_Y_MOUNT");
     println!("cargo:rerun-if-env-changed=SF_ESKF_DIAG_DISABLE_GPS_VEL_D");

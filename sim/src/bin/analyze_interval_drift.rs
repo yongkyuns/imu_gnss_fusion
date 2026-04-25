@@ -112,7 +112,15 @@ fn mean_in_window(trace: &Trace, start_s: f64, end_s: f64, is_angle: bool) -> Op
     for value in values {
         accum += angle_wrap_deg(value - ref_v);
     }
-    Some(ref_v + accum / trace.points.iter().filter(|p| p[0] >= start_s && p[0] <= end_s).count() as f64)
+    Some(
+        ref_v
+            + accum
+                / trace
+                    .points
+                    .iter()
+                    .filter(|p| p[0] >= start_s && p[0] <= end_s)
+                    .count() as f64,
+    )
 }
 
 fn drift_in_window(trace: &Trace, start_s: f64, end_s: f64, is_angle: bool) -> Option<f64> {
@@ -205,7 +213,8 @@ fn main() -> Result<()> {
         let start_v = sample_trace(trace, args.start_s).unwrap_or(f64::NAN);
         let end_v = sample_trace(trace, args.end_s).unwrap_or(f64::NAN);
         let mean_v = mean_in_window(trace, args.start_s, args.end_s, is_angle).unwrap_or(f64::NAN);
-        let drift_v = drift_in_window(trace, args.start_s, args.end_s, is_angle).unwrap_or(f64::NAN);
+        let drift_v =
+            drift_in_window(trace, args.start_s, args.end_s, is_angle).unwrap_or(f64::NAN);
         println!(
             "{}: start={:.6} end={:.6} drift={:.6} mean={:.6}",
             name, start_v, end_v, drift_v, mean_v

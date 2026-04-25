@@ -1,12 +1,14 @@
 use std::collections::VecDeque;
 
 use sensor_fusion::align::GRAVITY_MPS2;
-use sensor_fusion::c_api::{CEskf, CLooseImuDelta, CLooseWrapper};
 use sensor_fusion::ekf::PredictNoise;
+use sensor_fusion::eskf_types::EskfState;
 use sensor_fusion::fusion::SensorFusion;
-use sensor_fusion::loose::LoosePredictNoise;
+use sensor_fusion::loose::{LooseFilter, LooseImuDelta, LoosePredictNoise};
 
-use crate::datasets::generic_replay::{fusion_gnss_sample as to_fusion_gnss, fusion_imu_sample as to_fusion_imu};
+use crate::datasets::generic_replay::{
+    fusion_gnss_sample as to_fusion_gnss, fusion_imu_sample as to_fusion_imu,
+};
 use crate::datasets::ubx_replay::{UbxReplayConfig, build_generic_replay_from_frames};
 use crate::ubxlog::{
     NavPvtObs, UbxFrame, extract_esf_alg, extract_esf_alg_status, extract_nav_att,
@@ -20,8 +22,8 @@ use super::super::math::{
 use super::super::model::{AlgEvent, EkfImuSource, HeadingSample, NavAttEvent, Trace};
 use super::align_replay::{
     BootstrapConfig as AlignBootstrapConfig, ImuReplayConfig, build_align_replay,
-    build_fusion_align_replay,
-    esf_alg_flu_to_frd_mount_quat, frd_mount_quat_to_esf_alg_flu_quat, quat_rpy_alg_deg,
+    build_fusion_align_replay, esf_alg_flu_to_frd_mount_quat, frd_mount_quat_to_esf_alg_flu_quat,
+    quat_rpy_alg_deg,
 };
 use super::timebase::MasterTimeline;
 
@@ -375,10 +377,9 @@ pub fn build_ekf_compare_traces(
         fusion_ref.set_mount_align_rw_var(cfg.mount_align_rw_var);
         fusion_ref.set_mount_update_min_scale(cfg.mount_update_min_scale);
         fusion_ref.set_mount_update_ramp_time_s(cfg.mount_update_ramp_time_s);
-        fusion_ref
-            .set_mount_update_innovation_gate_mps(cfg.mount_update_innovation_gate_mps);
+        fusion_ref.set_mount_update_innovation_gate_mps(cfg.mount_update_innovation_gate_mps);
     }
-    let mut loose: Option<CLooseWrapper> = None;
+    let mut loose: Option<LooseFilter> = None;
     let base_loose_predict_noise = cfg
         .loose_predict_noise
         .unwrap_or(LoosePredictNoise::lsm6dso_loose_104hz());
@@ -625,7 +626,7 @@ pub fn build_ekf_compare_traces(
                 predict_accel_sum[1] * inv_block_len,
                 predict_accel_sum[2] * inv_block_len,
             ];
-            let loose_imu = CLooseImuDelta {
+            let loose_imu = LooseImuDelta {
                 dax_1: (deg2rad(avg_predict_gyro[0]) * pred_dt) as f32,
                 day_1: (deg2rad(avg_predict_gyro[1]) * pred_dt) as f32,
                 daz_1: (deg2rad(avg_predict_gyro[2]) * pred_dt) as f32,
@@ -707,12 +708,11 @@ pub fn build_ekf_compare_traces(
                                     );
                                     [q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32]
                                 });
-                                let loose_init =
-                                    initialize_loose_from_nav(
-                                        nav,
-                                        gnss_sample,
-                                        base_loose_predict_noise,
-                                    );
+                                let loose_init = initialize_loose_from_nav(
+                                    nav,
+                                    gnss_sample,
+                                    base_loose_predict_noise,
+                                );
                                 loose = Some(loose_init);
                                 loose_last_gps_update_ms = Some(t_ms);
                             }
@@ -754,12 +754,11 @@ pub fn build_ekf_compare_traces(
                         eskf_ref.nominal.q2,
                         eskf_ref.nominal.q3,
                     );
-                    let (eskf_lat, eskf_lon, _eskf_h) =
-                        eskf_display_lla(&fusion_ref).unwrap_or((
-                            nav.lat_deg,
-                            nav.lon_deg,
-                            nav.height_m,
-                        ));
+                    let (eskf_lat, eskf_lon, _eskf_h) = eskf_display_lla(&fusion_ref).unwrap_or((
+                        nav.lat_deg,
+                        nav.lon_deg,
+                        nav.height_m,
+                    ));
                     map_eskf_heading.push(HeadingSample {
                         t_s: t,
                         lon_deg: eskf_lon,
@@ -1908,8 +1907,8 @@ fn initialize_loose_from_nav(
     nav: NavPvtObs,
     gnss: crate::datasets::generic_replay::GenericGnssSample,
     noise: LoosePredictNoise,
-) -> CLooseWrapper {
-    let mut loose = CLooseWrapper::new(noise);
+) -> LooseFilter {
+    let mut loose = LooseFilter::new(noise);
     let p_diag = default_loose_reference_p_diag(to_fusion_gnss(gnss));
     let vel_ecef = mat_vec(
         transpose3(ecef_to_ned_matrix(nav.lat_deg, nav.lon_deg)),
@@ -2052,7 +2051,7 @@ fn vehicle_measurements_from_mount(
 
 #[allow(clippy::too_many_arguments)]
 fn append_eskf_sample(
-    eskf: &CEskf,
+    eskf: &EskfState,
     t_imu: f64,
     gyro: [f64; 3],
     accel: [f64; 3],
@@ -2182,7 +2181,7 @@ fn append_eskf_sample(
 
 #[allow(clippy::too_many_arguments)]
 fn append_loose_sample(
-    loose: &CLooseWrapper,
+    loose: &LooseFilter,
     t_imu: f64,
     gyro: [f64; 3],
     accel: [f64; 3],
@@ -2331,7 +2330,7 @@ fn append_loose_sample(
 }
 
 fn loose_display_state(
-    loose: &CLooseWrapper,
+    loose: &LooseFilter,
     ref_ecef: [f64; 3],
     ref_lat: f64,
     ref_lon: f64,

@@ -2,7 +2,9 @@ use std::{fs::File, io::Read, path::PathBuf};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use sim::eval::gnss_ins::{quat_angle_deg, quat_axis_angle_deg, quat_from_rpy_alg_deg, quat_from_rpy_deg};
+use sim::eval::gnss_ins::{
+    quat_angle_deg, quat_axis_angle_deg, quat_from_rpy_alg_deg, quat_from_rpy_deg,
+};
 use sim::eval::state_summary::{
     StateSummary, SummaryMode, print_summary_table, summarize_trace_pair, write_summary_csv,
 };
@@ -761,12 +763,7 @@ fn build_state_summaries(data: &sim::visualizer::model::PlotData) -> Vec<StateSu
         .collect();
 
     for (system, att_traces, mount_traces, mount_ref_name_prefix) in [
-        (
-            "eskf",
-            &data.eskf_cmp_att,
-            &data.eskf_misalignment,
-            "ESKF",
-        ),
+        ("eskf", &data.eskf_cmp_att, &data.eskf_misalignment, "ESKF"),
         (
             "loose",
             &data.loose_cmp_att,

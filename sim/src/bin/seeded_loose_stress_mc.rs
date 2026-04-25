@@ -3,8 +3,7 @@ use clap::Parser;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use rayon::prelude::*;
-use sensor_fusion::c_api::{CLooseImuDelta, CLooseWrapper};
-use sensor_fusion::loose::LoosePredictNoise;
+use sensor_fusion::loose::{LooseFilter, LooseImuDelta, LoosePredictNoise};
 use sim::datasets::seeded_loose::{
     AccelSample, GnssSample, GyroSample, TruthNavSample, import_accel_data, import_gnss_data,
     import_gnss_velocity_map, import_gyro_data, import_truth_misalignment, import_truth_nav,
@@ -237,7 +236,7 @@ fn run_case(dataset: &Dataset, case: &StressCase, args: &Args) -> Result<CaseRes
     let vel_ecef = mat_vec(transpose3(c_en), vel_n);
     let p_diag = build_default_p_diag(gnss_init);
 
-    let mut loose = CLooseWrapper::new(LoosePredictNoise::reference_nsr_demo());
+    let mut loose = LooseFilter::new(LoosePredictNoise::reference_nsr_demo());
     loose.init_from_reference_ecef_state(
         q_es.map(|v| v as f32),
         pos_ecef,
@@ -285,7 +284,7 @@ fn run_case(dataset: &Dataset, case: &StressCase, args: &Args) -> Result<CaseRes
         let gyro_prev = mat_vec(c_seed, gyro_prev_raw);
         let gyro_curr = mat_vec(c_seed, gyro_curr_raw);
 
-        let imu = CLooseImuDelta {
+        let imu = LooseImuDelta {
             dax_1: (gyro_prev[0] * dt_s) as f32,
             day_1: (gyro_prev[1] * dt_s) as f32,
             daz_1: (gyro_prev[2] * dt_s) as f32,

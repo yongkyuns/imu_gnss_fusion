@@ -11,8 +11,7 @@ use sim::datasets::generic_replay::{
 };
 use sim::datasets::gnss_ins_sim::{
     GnssSample as DatasetGnssSample, load_gnss_samples as load_dataset_gnss_samples,
-    load_imu_samples as load_dataset_imu_samples,
-    load_truth_samples as load_dataset_truth_samples,
+    load_imu_samples as load_dataset_imu_samples, load_truth_samples as load_dataset_truth_samples,
 };
 use sim::eval::gnss_ins::{
     SignalSource, as_q64, course_rate_deg, horiz_speed, quat_angle_deg, quat_axis_angle_deg,
@@ -22,8 +21,8 @@ use sim::eval::replay::{ReplayEvent, for_each_event};
 use sim::eval::state_summary::{
     SummaryMode, print_summary_table, summarize_trace_pair, write_summary_csv,
 };
-use sim::visualizer::model::Trace;
 use sim::visualizer::math::{ecef_to_ned, lla_to_ecef, quat_rpy_deg};
+use sim::visualizer::model::Trace;
 use sim::visualizer::pipeline::align_replay::{
     frd_mount_quat_to_esf_alg_flu_quat, quat_rpy_alg_deg,
 };
@@ -188,7 +187,8 @@ fn main() -> Result<()> {
         args.mount_yaw_deg,
     );
     let generic_imu = build_generic_imu_samples(&imu, q_truth);
-    let generic_gnss = build_generic_gnss_samples(&gnss, args.gnss_pos_std_m, args.gnss_vel_std_mps);
+    let generic_gnss =
+        build_generic_gnss_samples(&gnss, args.gnss_pos_std_m, args.gnss_vel_std_mps);
     if let Some(dir) = &args.generic_out_dir {
         write_generic_samples(dir, &generic_imu, &generic_gnss)?;
         println!("generic_replay_dir={}", dir.display());
@@ -235,12 +235,8 @@ fn main() -> Result<()> {
                 && let Some(eskf) = fusion.eskf()
             {
                 let truth_ecef = lla_to_ecef(truth_s.lat_deg, truth_s.lon_deg, truth_s.height_m);
-                let truth_pos_ned = ecef_to_ned(
-                    truth_ecef,
-                    ref_ecef,
-                    truth[0].lat_deg,
-                    truth[0].lon_deg,
-                );
+                let truth_pos_ned =
+                    ecef_to_ned(truth_ecef, ref_ecef, truth[0].lat_deg, truth[0].lon_deg);
                 let (att_roll_deg, att_pitch_deg, att_yaw_deg) = quat_rpy_deg(
                     eskf.nominal.q0,
                     eskf.nominal.q1,
@@ -259,7 +255,12 @@ fn main() -> Result<()> {
                     .map(as_q64)
                     .or(seed_q_vb)
                     .unwrap_or(q_truth);
-                let q_est_att = as_q64([eskf.nominal.q0, eskf.nominal.q1, eskf.nominal.q2, eskf.nominal.q3]);
+                let q_est_att = as_q64([
+                    eskf.nominal.q0,
+                    eskf.nominal.q1,
+                    eskf.nominal.q2,
+                    eskf.nominal.q3,
+                ]);
                 let q_cs = as_q64([
                     eskf.nominal.qcs0,
                     eskf.nominal.qcs1,
@@ -430,9 +431,7 @@ fn main() -> Result<()> {
     );
     println!(
         "gps_vd_bias_mps={:.3} gps_vd_bias_duration_s={:.3} gnss_vel_std_mps={:.3}",
-        args.gps_vd_bias_mps,
-        args.gps_vd_bias_duration_s,
-        args.gnss_vel_std_mps
+        args.gps_vd_bias_mps, args.gps_vd_bias_duration_s, args.gnss_vel_std_mps
     );
     println!(
         "mount_ready={} ekf_init={}",
@@ -621,7 +620,10 @@ fn build_state_summaries(
     let specs = vec![
         Spec {
             state: "pos_n_m",
-            trace: trace("pos_n [m]", states.iter().map(|s| [s.t_s, s.pos_n_m]).collect()),
+            trace: trace(
+                "pos_n [m]",
+                states.iter().map(|s| [s.t_s, s.pos_n_m]).collect(),
+            ),
             reference: Some(trace(
                 "truth pos_n [m]",
                 states.iter().map(|s| [s.t_s, s.truth_pos_n_m]).collect(),
@@ -631,7 +633,10 @@ fn build_state_summaries(
         },
         Spec {
             state: "pos_e_m",
-            trace: trace("pos_e [m]", states.iter().map(|s| [s.t_s, s.pos_e_m]).collect()),
+            trace: trace(
+                "pos_e [m]",
+                states.iter().map(|s| [s.t_s, s.pos_e_m]).collect(),
+            ),
             reference: Some(trace(
                 "truth pos_e [m]",
                 states.iter().map(|s| [s.t_s, s.truth_pos_e_m]).collect(),
@@ -641,7 +646,10 @@ fn build_state_summaries(
         },
         Spec {
             state: "pos_d_m",
-            trace: trace("pos_d [m]", states.iter().map(|s| [s.t_s, s.pos_d_m]).collect()),
+            trace: trace(
+                "pos_d [m]",
+                states.iter().map(|s| [s.t_s, s.pos_d_m]).collect(),
+            ),
             reference: Some(trace(
                 "truth pos_d [m]",
                 states.iter().map(|s| [s.t_s, s.truth_pos_d_m]).collect(),
@@ -651,7 +659,10 @@ fn build_state_summaries(
         },
         Spec {
             state: "vel_n_mps",
-            trace: trace("vel_n [m/s]", states.iter().map(|s| [s.t_s, s.vel_n_mps]).collect()),
+            trace: trace(
+                "vel_n [m/s]",
+                states.iter().map(|s| [s.t_s, s.vel_n_mps]).collect(),
+            ),
             reference: Some(trace(
                 "truth vel_n [m/s]",
                 states.iter().map(|s| [s.t_s, s.truth_vel_n_mps]).collect(),
@@ -661,7 +672,10 @@ fn build_state_summaries(
         },
         Spec {
             state: "vel_e_mps",
-            trace: trace("vel_e [m/s]", states.iter().map(|s| [s.t_s, s.vel_e_mps]).collect()),
+            trace: trace(
+                "vel_e [m/s]",
+                states.iter().map(|s| [s.t_s, s.vel_e_mps]).collect(),
+            ),
             reference: Some(trace(
                 "truth vel_e [m/s]",
                 states.iter().map(|s| [s.t_s, s.truth_vel_e_mps]).collect(),
@@ -671,7 +685,10 @@ fn build_state_summaries(
         },
         Spec {
             state: "vel_d_mps",
-            trace: trace("vel_d [m/s]", states.iter().map(|s| [s.t_s, s.vel_d_mps]).collect()),
+            trace: trace(
+                "vel_d [m/s]",
+                states.iter().map(|s| [s.t_s, s.vel_d_mps]).collect(),
+            ),
             reference: Some(trace(
                 "truth vel_d [m/s]",
                 states.iter().map(|s| [s.t_s, s.truth_vel_d_mps]).collect(),
@@ -719,7 +736,10 @@ fn build_state_summaries(
             ),
             reference: Some(trace(
                 "truth att_yaw [deg]",
-                states.iter().map(|s| [s.t_s, s.truth_att_yaw_deg]).collect(),
+                states
+                    .iter()
+                    .map(|s| [s.t_s, s.truth_att_yaw_deg])
+                    .collect(),
             )),
             mode: SummaryMode::AngleDeg,
             settle_threshold: Some(5.0),
@@ -728,10 +748,7 @@ fn build_state_summaries(
             state: "att_quat_err_deg",
             trace: trace(
                 "att quat err [deg]",
-                states
-                    .iter()
-                    .map(|s| [s.t_s, s.att_quat_err_deg])
-                    .collect(),
+                states.iter().map(|s| [s.t_s, s.att_quat_err_deg]).collect(),
             ),
             reference: Some(zero_trace("zero", &state_times)),
             mode: SummaryMode::Linear,
@@ -741,10 +758,7 @@ fn build_state_summaries(
             state: "att_fwd_err_deg",
             trace: trace(
                 "att fwd err [deg]",
-                states
-                    .iter()
-                    .map(|s| [s.t_s, s.att_fwd_err_deg])
-                    .collect(),
+                states.iter().map(|s| [s.t_s, s.att_fwd_err_deg]).collect(),
             ),
             reference: Some(zero_trace("zero", &state_times)),
             mode: SummaryMode::Linear,
@@ -754,10 +768,7 @@ fn build_state_summaries(
             state: "att_down_err_deg",
             trace: trace(
                 "att down err [deg]",
-                states
-                    .iter()
-                    .map(|s| [s.t_s, s.att_down_err_deg])
-                    .collect(),
+                states.iter().map(|s| [s.t_s, s.att_down_err_deg]).collect(),
             ),
             reference: Some(zero_trace("zero", &state_times)),
             mode: SummaryMode::Linear,
@@ -803,7 +814,10 @@ fn build_state_summaries(
             ),
             reference: Some(trace(
                 "truth mount_yaw [deg]",
-                states.iter().map(|s| [s.t_s, s.truth_mount_yaw_deg]).collect(),
+                states
+                    .iter()
+                    .map(|s| [s.t_s, s.truth_mount_yaw_deg])
+                    .collect(),
             )),
             mode: SummaryMode::AngleDeg,
             settle_threshold: Some(5.0),
@@ -894,7 +908,10 @@ fn build_state_summaries(
             state: "accel_bias_x_mps2",
             trace: trace(
                 "accel bias x [m/s^2]",
-                states.iter().map(|s| [s.t_s, s.accel_bias_x_mps2]).collect(),
+                states
+                    .iter()
+                    .map(|s| [s.t_s, s.accel_bias_x_mps2])
+                    .collect(),
             ),
             reference: Some(zero_trace("zero", &state_times)),
             mode: SummaryMode::Linear,
@@ -904,7 +921,10 @@ fn build_state_summaries(
             state: "accel_bias_y_mps2",
             trace: trace(
                 "accel bias y [m/s^2]",
-                states.iter().map(|s| [s.t_s, s.accel_bias_y_mps2]).collect(),
+                states
+                    .iter()
+                    .map(|s| [s.t_s, s.accel_bias_y_mps2])
+                    .collect(),
             ),
             reference: Some(zero_trace("zero", &state_times)),
             mode: SummaryMode::Linear,
@@ -914,7 +934,10 @@ fn build_state_summaries(
             state: "accel_bias_z_mps2",
             trace: trace(
                 "accel bias z [m/s^2]",
-                states.iter().map(|s| [s.t_s, s.accel_bias_z_mps2]).collect(),
+                states
+                    .iter()
+                    .map(|s| [s.t_s, s.accel_bias_z_mps2])
+                    .collect(),
             ),
             reference: Some(zero_trace("zero", &state_times)),
             mode: SummaryMode::Linear,

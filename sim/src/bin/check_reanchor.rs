@@ -1,7 +1,9 @@
 use anyhow::{Result, bail};
 use clap::Parser;
-use sensor_fusion::c_api::CSensorFusionWrapper;
-use sim::datasets::generic_replay::{fusion_gnss_sample as to_fusion_gnss, fusion_imu_sample as to_fusion_imu};
+use sensor_fusion::fusion::SensorFusion;
+use sim::datasets::generic_replay::{
+    fusion_gnss_sample as to_fusion_gnss, fusion_imu_sample as to_fusion_imu,
+};
 use sim::datasets::ubx_replay::{UbxReplayConfig, load_generic_replay};
 use std::fs;
 use std::path::PathBuf;
@@ -23,7 +25,7 @@ fn main() -> Result<()> {
         bail!("need both IMU and GNSS events");
     }
 
-    let mut fusion = CSensorFusionWrapper::new_internal();
+    let mut fusion = SensorFusion::new();
     let mut imu_idx = 0usize;
     let mut gnss_idx = 0usize;
     let mut prev_reanchor_count = 0u32;

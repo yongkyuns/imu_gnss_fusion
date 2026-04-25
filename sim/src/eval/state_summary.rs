@@ -133,14 +133,8 @@ pub fn summarize_trace_pair(
             early_stddev_error = Some(stddev(&early_errors, mode));
             tail_stddev_error = Some(stddev(&tail_errors, mode));
             tail_span_error = Some(span(&tail_errors, mode));
-            settle_time_s = settle_threshold.and_then(|threshold| {
-                settling_time(
-                    &timed_errors,
-                    threshold,
-                    t_start_s,
-                    mode,
-                )
-            });
+            settle_time_s = settle_threshold
+                .and_then(|threshold| settling_time(&timed_errors, threshold, t_start_s, mode));
         }
     }
 
@@ -265,7 +259,9 @@ fn choose_window(duration_s: f64, max_window_s: f64) -> f64 {
     if duration_s <= 0.0 {
         0.0
     } else {
-        duration_s.min(max_window_s).max((duration_s * 0.1).min(max_window_s))
+        duration_s
+            .min(max_window_s)
+            .max((duration_s * 0.1).min(max_window_s))
     }
 }
 
@@ -408,8 +404,14 @@ fn circular_mean_deg(values: &[f64]) -> f64 {
     if values.is_empty() {
         return 0.0;
     }
-    let sin_sum = values.iter().map(|value| value.to_radians().sin()).sum::<f64>();
-    let cos_sum = values.iter().map(|value| value.to_radians().cos()).sum::<f64>();
+    let sin_sum = values
+        .iter()
+        .map(|value| value.to_radians().sin())
+        .sum::<f64>();
+    let cos_sum = values
+        .iter()
+        .map(|value| value.to_radians().cos())
+        .sum::<f64>();
     sin_sum.atan2(cos_sum).to_degrees()
 }
 
@@ -439,7 +441,5 @@ fn settling_time(
 }
 
 fn fmt_opt(value: Option<f64>) -> String {
-    value
-        .map(|value| format!("{value:.6}"))
-        .unwrap_or_default()
+    value.map(|value| format!("{value:.6}")).unwrap_or_default()
 }

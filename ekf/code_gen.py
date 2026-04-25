@@ -1,3 +1,5 @@
+import re
+
 from sympy import Integer
 from sympy.codegen.ast import float32, real
 from sympy.printing.c import C99CodePrinter
@@ -78,3 +80,33 @@ class CodeGenerator:
 
     def close(self):
         self.file.close()
+
+
+class RustCodeGenerator(CodeGenerator):
+    def __init__(self, file_name):
+        super().__init__(file_name)
+        self.file.write("{\n")
+
+    def get_ccode(self, expression):
+        code = super().get_ccode(expression)
+        code = re.sub(r"(?<=\d)F\b", "_f32", code)
+        code = re.sub(r"(?<![\[\]\w.])(\d+)(?![\[\]\w.])", r"\1.0_f32", code)
+        return code
+
+    def write_subexpressions(self, subexpressions):
+        write_string = ""
+        for item in subexpressions:
+            write_string += (
+                "let "
+                + str(item[0])
+                + ": f32 = "
+                + self.get_ccode(item[1])
+                + ";\n"
+            )
+
+        write_string = write_string + "\n\n"
+        self.file.write(write_string)
+
+    def close(self):
+        self.file.write("}\n")
+        super().close()

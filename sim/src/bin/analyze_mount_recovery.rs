@@ -58,7 +58,10 @@ fn sample_trace(trace: &Trace, t_s: f64) -> Option<f64> {
         .points
         .get(idx.saturating_sub(1))
         .map(|point| ((point[0] - t_s).abs(), point[1]));
-    let right = trace.points.get(idx).map(|point| ((point[0] - t_s).abs(), point[1]));
+    let right = trace
+        .points
+        .get(idx)
+        .map(|point| ((point[0] - t_s).abs(), point[1]));
     match (left, right) {
         (Some((left_dt, left_value)), Some((right_dt, right_value))) => {
             if right_dt < left_dt {

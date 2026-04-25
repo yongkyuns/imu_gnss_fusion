@@ -48,7 +48,11 @@ pub fn load_gnss_samples(dir: &Path) -> Result<Vec<GenericGnssSample>> {
             vel_ned_mps: [row[4], row[5], row[6]],
             pos_std_m: [row[7], row[8], row[9]],
             vel_std_mps: [row[10], row[11], row[12]],
-            heading_rad: if row[13].is_finite() { Some(row[13]) } else { None },
+            heading_rad: if row[13].is_finite() {
+                Some(row[13])
+            } else {
+                None
+            },
         })
         .collect())
 }
@@ -58,8 +62,7 @@ pub fn write_samples(
     imu_samples: &[GenericImuSample],
     gnss_samples: &[GenericGnssSample],
 ) -> Result<()> {
-    fs::create_dir_all(dir)
-        .with_context(|| format!("failed to create {}", dir.display()))?;
+    fs::create_dir_all(dir).with_context(|| format!("failed to create {}", dir.display()))?;
     write_imu_csv(&dir.join("imu.csv"), imu_samples)?;
     write_gnss_csv(&dir.join("gnss.csv"), gnss_samples)?;
     Ok(())
@@ -175,7 +178,11 @@ fn read_rows(path: &Path, cols: usize) -> Result<Vec<Vec<f64>>> {
                     Ok(f64::NAN)
                 } else {
                     trimmed.parse::<f64>().with_context(|| {
-                        format!("failed to parse numeric field in {}: {}", path.display(), line)
+                        format!(
+                            "failed to parse numeric field in {}: {}",
+                            path.display(),
+                            line
+                        )
                     })
                 }
             })

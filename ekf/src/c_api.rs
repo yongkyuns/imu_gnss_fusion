@@ -487,10 +487,7 @@ unsafe extern "C" {
     fn sf_set_accel_bias_rw_var(fusion: *mut CSensorFusion, accel_bias_rw_var: f32);
     fn sf_set_mount_align_rw_var(fusion: *mut CSensorFusion, mount_align_rw_var: f32);
     fn sf_set_mount_update_min_scale(fusion: *mut CSensorFusion, mount_update_min_scale: f32);
-    fn sf_set_mount_update_ramp_time_s(
-        fusion: *mut CSensorFusion,
-        mount_update_ramp_time_s: f32,
-    );
+    fn sf_set_mount_update_ramp_time_s(fusion: *mut CSensorFusion, mount_update_ramp_time_s: f32);
     fn sf_set_mount_update_innovation_gate_mps(
         fusion: *mut CSensorFusion,
         mount_update_innovation_gate_mps: f32,
@@ -771,20 +768,14 @@ impl CSensorFusionWrapper {
 
     pub fn set_gnss_pos_mount_scale(&mut self, gnss_pos_mount_scale: f32) {
         unsafe {
-            sf_set_gnss_pos_mount_scale(
-                &mut self.raw as *mut CSensorFusion,
-                gnss_pos_mount_scale,
-            )
+            sf_set_gnss_pos_mount_scale(&mut self.raw as *mut CSensorFusion, gnss_pos_mount_scale)
         }
         self.refresh_state();
     }
 
     pub fn set_gnss_vel_mount_scale(&mut self, gnss_vel_mount_scale: f32) {
         unsafe {
-            sf_set_gnss_vel_mount_scale(
-                &mut self.raw as *mut CSensorFusion,
-                gnss_vel_mount_scale,
-            )
+            sf_set_gnss_vel_mount_scale(&mut self.raw as *mut CSensorFusion, gnss_vel_mount_scale)
         }
         self.refresh_state();
     }
@@ -841,10 +832,7 @@ impl CSensorFusionWrapper {
         self.refresh_state();
     }
 
-    pub fn set_mount_update_innovation_gate_mps(
-        &mut self,
-        mount_update_innovation_gate_mps: f32,
-    ) {
+    pub fn set_mount_update_innovation_gate_mps(&mut self, mount_update_innovation_gate_mps: f32) {
         unsafe {
             sf_set_mount_update_innovation_gate_mps(
                 &mut self.raw as *mut CSensorFusion,
@@ -1093,6 +1081,10 @@ impl CEskfWrapper {
 
     pub fn nominal(&self) -> &CEskfNominalState {
         &self.raw.nominal
+    }
+
+    pub fn raw(&self) -> &CEskf {
+        &self.raw
     }
 
     pub fn covariance(&self) -> &[[f32; 18]; 18] {

@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
 use clap::Parser;
+use sensor_fusion::eskf_types::EskfState;
 use sensor_fusion::fusion::SensorFusion;
 use sim::datasets::generic_replay::{
     fusion_gnss_sample as to_fusion_gnss, fusion_imu_sample as to_fusion_imu,
@@ -103,8 +104,8 @@ fn main() -> Result<()> {
 fn log_transition_if_needed(
     source: &str,
     t_s: f64,
-    pre: Option<sensor_fusion::c_api::CEskf>,
-    post: Option<sensor_fusion::c_api::CEskf>,
+    pre: Option<EskfState>,
+    post: Option<EskfState>,
     prev_update_count: &mut u32,
     window_start_s: f64,
     window_end_s: f64,
@@ -124,9 +125,18 @@ fn log_transition_if_needed(
     let pre = pre.unwrap_or(post);
     let pre_body = nominal_vehicle_velocity(&pre);
     let post_body = nominal_vehicle_velocity(&post);
-    let (pre_r, pre_p, pre_y) = quat_rpy_deg(pre.nominal.q0, pre.nominal.q1, pre.nominal.q2, pre.nominal.q3);
-    let (post_r, post_p, post_y) =
-        quat_rpy_deg(post.nominal.q0, post.nominal.q1, post.nominal.q2, post.nominal.q3);
+    let (pre_r, pre_p, pre_y) = quat_rpy_deg(
+        pre.nominal.q0,
+        pre.nominal.q1,
+        pre.nominal.q2,
+        pre.nominal.q3,
+    );
+    let (post_r, post_p, post_y) = quat_rpy_deg(
+        post.nominal.q0,
+        post.nominal.q1,
+        post.nominal.q2,
+        post.nominal.q3,
+    );
     let (pre_mr, pre_mp, pre_my) = quat_rpy_deg(
         pre.nominal.qcs0,
         pre.nominal.qcs1,
@@ -191,7 +201,7 @@ fn update_type_name(t: u32) -> &'static str {
     }
 }
 
-fn nominal_vehicle_velocity(eskf: &sensor_fusion::c_api::CEskf) -> [f64; 3] {
+fn nominal_vehicle_velocity(eskf: &EskfState) -> [f64; 3] {
     let c_n_b = quat_to_rotmat_f64([
         eskf.nominal.q0 as f64,
         eskf.nominal.q1 as f64,
@@ -199,11 +209,14 @@ fn nominal_vehicle_velocity(eskf: &sensor_fusion::c_api::CEskf) -> [f64; 3] {
         eskf.nominal.q3 as f64,
     ]);
     let c_b_n = transpose3(c_n_b);
-    let v_seed = mat_vec(c_b_n, [
-        eskf.nominal.vn as f64,
-        eskf.nominal.ve as f64,
-        eskf.nominal.vd as f64,
-    ]);
+    let v_seed = mat_vec(
+        c_b_n,
+        [
+            eskf.nominal.vn as f64,
+            eskf.nominal.ve as f64,
+            eskf.nominal.vd as f64,
+        ],
+    );
     let c_c_s = quat_to_rotmat_f64([
         eskf.nominal.qcs0 as f64,
         eskf.nominal.qcs1 as f64,

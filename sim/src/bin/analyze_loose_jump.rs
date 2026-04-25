@@ -1,8 +1,7 @@
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use sensor_fusion::c_api::{CLooseImuDelta, CLooseWrapper};
 use sensor_fusion::fusion::SensorFusion;
-use sensor_fusion::loose::LoosePredictNoise;
+use sensor_fusion::loose::{LooseFilter, LooseImuDelta, LoosePredictNoise};
 use sim::datasets::generic_replay::{
     GenericGnssSample, fusion_gnss_sample as to_fusion_gnss, fusion_imu_sample as to_fusion_imu,
 };
@@ -145,7 +144,7 @@ fn main() -> Result<()> {
     }
 
     let mut fusion = SensorFusion::new();
-    let mut loose: Option<CLooseWrapper> = None;
+    let mut loose: Option<LooseFilter> = None;
     let mut loose_seed_mount_q_vb: Option<[f32; 4]> = None;
     let mut loose_last_gps_update_ms: Option<f64> = None;
     let mut prev_imu_t: Option<f64> = None;
@@ -266,7 +265,7 @@ fn main() -> Result<()> {
         predict_gyro_sum = [0.0; 3];
         predict_accel_sum = [0.0; 3];
 
-        let loose_imu = CLooseImuDelta {
+        let loose_imu = LooseImuDelta {
             dax_1: (deg2rad(avg_predict_gyro[0]) * pred_dt) as f32,
             day_1: (deg2rad(avg_predict_gyro[1]) * pred_dt) as f32,
             daz_1: (deg2rad(avg_predict_gyro[2]) * pred_dt) as f32,
@@ -854,8 +853,8 @@ fn initialize_loose_from_nav(
     gnss: GenericGnssSample,
     q_cs_init: [f32; 4],
     q_es_init: Option<[f32; 4]>,
-) -> CLooseWrapper {
-    let mut loose = CLooseWrapper::new(LoosePredictNoise::lsm6dso_loose_104hz());
+) -> LooseFilter {
+    let mut loose = LooseFilter::new(LoosePredictNoise::lsm6dso_loose_104hz());
     let p_diag = default_loose_reference_p_diag(to_fusion_gnss(gnss));
     let heading_rad = gnss
         .heading_rad
@@ -943,7 +942,7 @@ fn vehicle_measurements_from_mount(
     )
 }
 
-fn qcs_rpy(loose: &CLooseWrapper, seed_mount_q_vb: Option<[f32; 4]>) -> [f64; 3] {
+fn qcs_rpy(loose: &LooseFilter, seed_mount_q_vb: Option<[f32; 4]>) -> [f64; 3] {
     let n = loose.nominal();
     let q_seed = seed_mount_q_vb
         .map(|q| [q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64])

@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::Path;
 
@@ -104,10 +104,10 @@ pub fn load_gnss_samples(
 
 pub fn load_truth_samples(data_dir: &Path) -> Result<Vec<TruthSample>> {
     let time = read_time_csv(&data_dir.join("time.csv"))?;
-    let pos = read_matrix_csv(&data_dir.join("ref_pos.csv"), 3)
-        .context("failed to load ref_pos.csv")?;
-    let vel = read_matrix_csv(&data_dir.join("ref_vel.csv"), 3)
-        .context("failed to load ref_vel.csv")?;
+    let pos =
+        read_matrix_csv(&data_dir.join("ref_pos.csv"), 3).context("failed to load ref_pos.csv")?;
+    let vel =
+        read_matrix_csv(&data_dir.join("ref_vel.csv"), 3).context("failed to load ref_vel.csv")?;
     let quat = read_matrix_csv(&data_dir.join("ref_att_quat.csv"), 4)
         .context("failed to load ref_att_quat.csv")?;
     if time.len() != pos.len() || time.len() != vel.len() || time.len() != quat.len() {

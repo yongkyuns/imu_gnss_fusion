@@ -114,9 +114,10 @@ fn main() -> Result<()> {
             best_final.shift_ms, best_final.final_mount_quat_err_deg
         );
     }
-    if let Some(best_body_y) = results.iter().min_by(|a, b| {
-        a.body_vel_y_innov_abs.total_cmp(&b.body_vel_y_innov_abs)
-    }) {
+    if let Some(best_body_y) = results
+        .iter()
+        .min_by(|a, b| a.body_vel_y_innov_abs.total_cmp(&b.body_vel_y_innov_abs))
+    {
         println!(
             "best_body_vel_y: shift_ms={:.1} body_vel_y_innov_abs={:.6}",
             best_body_y.shift_ms, best_body_y.body_vel_y_innov_abs
@@ -191,18 +192,22 @@ fn run_shift(
         }
     });
 
-    let (body_vel_y_innov_abs, body_vel_y_yaw_dx_abs_deg, body_vel_z_innov_abs, body_vel_z_yaw_dx_abs_deg) =
-        fusion
-            .eskf()
-            .map(|eskf| {
-                (
-                    eskf.update_diag.sum_abs_innovation[4] as f64,
-                    eskf.update_diag.sum_abs_dx_mount_yaw[4] as f64 * 180.0 / std::f64::consts::PI,
-                    eskf.update_diag.sum_abs_innovation[5] as f64,
-                    eskf.update_diag.sum_abs_dx_mount_yaw[5] as f64 * 180.0 / std::f64::consts::PI,
-                )
-            })
-            .unwrap_or((f64::NAN, f64::NAN, f64::NAN, f64::NAN));
+    let (
+        body_vel_y_innov_abs,
+        body_vel_y_yaw_dx_abs_deg,
+        body_vel_z_innov_abs,
+        body_vel_z_yaw_dx_abs_deg,
+    ) = fusion
+        .eskf()
+        .map(|eskf| {
+            (
+                eskf.update_diag.sum_abs_innovation[4] as f64,
+                eskf.update_diag.sum_abs_dx_mount_yaw[4] as f64 * 180.0 / std::f64::consts::PI,
+                eskf.update_diag.sum_abs_innovation[5] as f64,
+                eskf.update_diag.sum_abs_dx_mount_yaw[5] as f64 * 180.0 / std::f64::consts::PI,
+            )
+        })
+        .unwrap_or((f64::NAN, f64::NAN, f64::NAN, f64::NAN));
 
     SweepResult {
         shift_ms,

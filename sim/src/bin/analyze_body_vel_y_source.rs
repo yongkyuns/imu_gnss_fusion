@@ -172,10 +172,14 @@ fn main() -> Result<()> {
 
     let innov_sum = trace_by_name(&data.eskf_stationary_diag, "innovation sum body_vel_y")?;
     let innov_abs = trace_by_name(&data.eskf_stationary_diag, "innovation abs body_vel_y")?;
-    let yaw_dx_sum =
-        trace_by_name(&data.eskf_stationary_diag, "mount yaw dx sum body_vel_y [deg]")?;
-    let yaw_dx_abs =
-        trace_by_name(&data.eskf_stationary_diag, "mount yaw dx abs body_vel_y [deg]")?;
+    let yaw_dx_sum = trace_by_name(
+        &data.eskf_stationary_diag,
+        "mount yaw dx sum body_vel_y [deg]",
+    )?;
+    let yaw_dx_abs = trace_by_name(
+        &data.eskf_stationary_diag,
+        "mount yaw dx abs body_vel_y [deg]",
+    )?;
 
     let course = trace_by_name(&data.align_res_vel, "course rate [deg/s]")?;
     let a_lat = trace_by_name(&data.align_res_vel, "a_lat [m/s^2]")?;
@@ -202,9 +206,12 @@ fn main() -> Result<()> {
         let Some(curr_yaw_dx_abs) = sample_trace(yaw_dx_abs, *t_s) else {
             continue;
         };
-        let (Some(prev_i_sum), Some(prev_i_abs), Some(prev_dx_sum), Some(prev_dx_abs)) =
-            (prev_innov_sum, prev_innov_abs, prev_yaw_dx_sum, prev_yaw_dx_abs)
-        else {
+        let (Some(prev_i_sum), Some(prev_i_abs), Some(prev_dx_sum), Some(prev_dx_abs)) = (
+            prev_innov_sum,
+            prev_innov_abs,
+            prev_yaw_dx_sum,
+            prev_yaw_dx_abs,
+        ) else {
             prev_innov_sum = Some(*curr_innov_sum);
             prev_innov_abs = Some(curr_innov_abs);
             prev_yaw_dx_sum = Some(curr_yaw_dx_sum);

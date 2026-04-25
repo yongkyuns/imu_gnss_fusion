@@ -5,6 +5,10 @@ edition = "2024"
 license = "MIT"
 default-run = "visualizer"
 
+[features]
+default = []
+c-reference = ["sensor-fusion/c-reference"]
+
 [dependencies]
 anyhow = "1"
 chrono = { version = "=0.4.44", features = ["serde"] }
@@ -12,7 +16,7 @@ clap = { version = "4.5", features = ["derive"] }
 eframe = "0.33.3"
 egui = "0.33.3"
 egui_plot = "0.34.1"
-sensor-fusion = { path = "../ekf" }
+sensor-fusion = { path = "../ekf", default-features = false }
 nalgebra = { version = "0.33", default-features = false, features = ["std"] }
 rand = "0.9"
 rayon = "1.10"

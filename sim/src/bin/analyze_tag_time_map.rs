@@ -61,7 +61,11 @@ impl Stats {
     }
 }
 
-fn windowed_local_fit(anchors: &[TagAnchor], start_s: f64, end_s: f64) -> Option<(f64, f64, usize)> {
+fn windowed_local_fit(
+    anchors: &[TagAnchor],
+    start_s: f64,
+    end_s: f64,
+) -> Option<(f64, f64, usize)> {
     let mut x = Vec::new();
     let mut y = Vec::new();
     for a in anchors {
@@ -181,7 +185,9 @@ fn main() -> Result<()> {
                 .nth(n_local / 2)
                 .copied();
             let local_minus_global_center_ms = center_anchor
-                .map(|c| (a_local * c.tag_u as f64 + b_local) - (a_global * c.tag_u as f64 + b_global))
+                .map(|c| {
+                    (a_local * c.tag_u as f64 + b_local) - (a_global * c.tag_u as f64 + b_global)
+                })
                 .unwrap_or(0.0);
             println!(
                 "  [{:7.1},{:7.1})s n={} residual_mean_ms={:+8.3} mean_abs_ms={:8.3} rms_ms={:8.3} min_ms={:+8.3} max_ms={:+8.3} local_slope_ms_per_tick={:.9} local_minus_global_center_ms={:+8.3}",
@@ -200,7 +206,14 @@ fn main() -> Result<()> {
         }
     }
 
-    for &(start_s, end_s) in &[(60.0, 120.0), (330.0, 390.0), (390.0, 450.0), (450.0, 510.0), (510.0, 570.0), (1260.0, 1320.0)] {
+    for &(start_s, end_s) in &[
+        (60.0, 120.0),
+        (330.0, 390.0),
+        (390.0, 450.0),
+        (450.0, 510.0),
+        (510.0, 570.0),
+        (1260.0, 1320.0),
+    ] {
         if let Some((a_local, b_local, n_local)) = windowed_local_fit(&anchors, start_s, end_s) {
             let subset: Vec<_> = anchors
                 .iter()
@@ -212,8 +225,8 @@ fn main() -> Result<()> {
                 stats.push(a.residual_ms);
             }
             let center = subset[subset.len() / 2];
-            let local_minus_global_center_ms =
-                (a_local * center.tag_u as f64 + b_local) - (a_global * center.tag_u as f64 + b_global);
+            let local_minus_global_center_ms = (a_local * center.tag_u as f64 + b_local)
+                - (a_global * center.tag_u as f64 + b_global);
             println!(
                 "focus_window [{:7.1},{:7.1})s n={} residual_mean_ms={:+8.3} mean_abs_ms={:8.3} local_slope_ms_per_tick={:.9} local_minus_global_center_ms={:+8.3}",
                 start_s,

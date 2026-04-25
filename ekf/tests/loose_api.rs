@@ -1,3 +1,5 @@
+#![cfg(feature = "c-reference")]
+
 use sensor_fusion::c_api::{CLooseImuDelta, CLooseWrapper};
 use sensor_fusion::loose::LoosePredictNoise;
 
