@@ -165,7 +165,7 @@ The ESKF error state has 18 scalar components:
 \in \R^{18}.
 \]
 
-The ordering in C/Rust is:
+The ordering in Rust is:
 \[
 \begin{array}{c|c}
 \text{Index range} & \text{State} \\
@@ -255,7 +255,7 @@ The covariance prediction is:
   G_k Q_k G_k^T .
 \]
 
-The diagonal noise covariance used by the C implementation is:
+The diagonal noise covariance used by the Rust implementation is:
 \[
 Q_k =
 \operatorname{diag}
@@ -799,7 +799,7 @@ For each variant, compare final mount yaw, NHC innovation sums, NHC absolute inn
 \texttt{sf\_eskf\_fuse\_stationary\_gravity()} & Applies stationary gravity update without residual mount columns. \\
 \texttt{sf\_eskf\_inject\_error\_state()} & Injects \(\delta \theta_s\) into \(q_{ns}\) and \(\delta \psi_{cs}\) into \(q_{cs}\). \\
 \texttt{sf\_eskf\_apply\_reset()} & Applies SO(3) reset blocks to attitude and residual mount covariance blocks. \\
-\texttt{sensor\_fusion.c} & Freezes coarse align mount at ESKF initialization and pre-rotates IMU samples by that frozen seed. \\
+\texttt{fusion.rs} & Freezes coarse align mount at ESKF initialization and pre-rotates IMU samples by that frozen seed. \\
 \texttt{visualizer/pipeline/ekf\_compare.rs} & Plots ESF-ALG versus frozen seed plus ESKF residual mount. \\
 \end{longtable}
 

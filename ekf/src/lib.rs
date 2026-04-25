@@ -1,8 +1,6 @@
 extern crate alloc;
 
 pub mod align;
-#[cfg(feature = "c-reference")]
-pub mod c_api;
 pub mod ekf;
 pub mod eskf;
 pub mod eskf_types;

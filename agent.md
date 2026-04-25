@@ -42,9 +42,8 @@ Recent relevant changes:
 
 - Added analyzer/visualizer diagnostics fixes in `ff50612`.
 - Added a standalone synthetic seeded loose stress harness in:
-  - `sim/run_seeded_loose_stress_sim.py`
   - `sim/motion_profiles/seeded_highspeed_straight_10min.csv`
-- The stress harness generates a synthetic `gnss-ins-sim` dataset, initializes the loose C filter in the same seeded pre-rotated-IMU mode as the real visualizer, and sweeps:
+- The stress harness generated a synthetic `gnss-ins-sim` dataset, initialized the loose filter in the same seeded pre-rotated-IMU mode as the real visualizer, and swept:
   - coarse seed mount error
   - early GNSS down-velocity bias windows
   - GNSS velocity over-trust
@@ -61,7 +60,7 @@ Important current conclusions:
   - It postpones the first bad branch, but the filter later converges to the same wrong mount solution.
 - The filter continues to update attitude while nearly stationary because there is no stationary-aware mode / ZUPT / low-speed gating for loose.
   - Near-standstill roll changes are mostly `q_es` continuing to absorb GNSS-velocity + NHC residuals.
-- On synthetic self-consistent cases, the loose C core behaves well and matches Matlab/Python closely enough for the relevant debugging.
+- On synthetic self-consistent cases, the loose core behaved well and matched Matlab/Python closely enough for the relevant debugging.
   - This points away from a gross loose-core mechanization bug.
 - The new seeded synthetic stress harness reproduces the wrong-mount / wrong-pitch basin with practical flat-road motion when an early GNSS down-velocity inconsistency is injected.
   - `seed_only` is benign.
@@ -101,12 +100,7 @@ Recent relevant work:
 
 - Added a transition analyzer in:
   - `sim/src/bin/analyze_eskf_transition.rs`
-- Added several temporary ESKF-side experiments in:
-  - `ekf/c/src/sensor_fusion.c`
-  - `ekf/c/src/sf_eskf.c`
-  - `ekf/c/include/sensor_fusion_defs.h`
-  - `ekf/c/include/sensor_fusion_internal.h`
-  - `ekf/c/include/sf_eskf.h`
+- Historical temporary ESKF-side experiments were superseded by the Rust implementation.
 
 Important current conclusions:
 

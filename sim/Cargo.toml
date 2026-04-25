@@ -5,10 +5,6 @@ edition = "2024"
 license = "MIT"
 default-run = "visualizer"
 
-[features]
-default = []
-c-reference = ["sensor-fusion/c-reference"]
-
 [dependencies]
 anyhow = "1"
 chrono = { version = "=0.4.44", features = ["serde"] }
