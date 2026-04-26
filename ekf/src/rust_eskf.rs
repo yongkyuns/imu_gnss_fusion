@@ -241,7 +241,7 @@ impl RustEskf {
     }
 
     pub fn fuse_body_speed_x(&mut self, speed_mps: f32, r_speed: f32) {
-        self.fuse_body_speed_x_scaled(speed_mps, r_speed, 1.0, 0.0);
+        self.fuse_body_speed_x_scaled(speed_mps, r_speed, 1.0, 0.0, 0.0);
     }
 
     pub fn fuse_body_speed_x_scaled(
@@ -250,6 +250,7 @@ impl RustEskf {
         r_speed: f32,
         mount_update_scale: f32,
         mount_update_innovation_gate_mps: f32,
+        mount_update_nis_gate: f32,
     ) {
         let obs = generated_eskf::body_vel_x_observation(&self.raw.nominal, &self.raw.p, r_speed);
         let v_vehicle = nominal_vehicle_velocity(&self.raw.nominal);
@@ -259,7 +260,9 @@ impl RustEskf {
         let mount_scale = gated_mount_update_scale(
             mount_update_scale,
             mount_update_innovation_gate_mps,
+            mount_update_nis_gate,
             innovation,
+            obs.s,
         );
         scale_mount_update(&mut k, &mut dx, mount_scale);
         self.freeze_mount_update_if_needed(&mut k, &mut dx);
@@ -268,7 +271,7 @@ impl RustEskf {
     }
 
     pub fn fuse_body_vel(&mut self, r_body_vel: f32) {
-        self.fuse_body_vel_scaled(r_body_vel, 1.0, 0.0);
+        self.fuse_body_vel_scaled(r_body_vel, 1.0, 0.0, 0.0);
     }
 
     pub fn fuse_body_vel_scaled(
@@ -276,11 +279,13 @@ impl RustEskf {
         r_body_vel: f32,
         mount_update_scale: f32,
         mount_update_innovation_gate_mps: f32,
+        mount_update_nis_gate: f32,
     ) {
         self.fuse_body_vel_yz_batch(
             r_body_vel,
             mount_update_scale,
             mount_update_innovation_gate_mps,
+            mount_update_nis_gate,
         );
     }
 
@@ -429,6 +434,7 @@ impl RustEskf {
         r_body_vel: f32,
         mount_update_scale: f32,
         mount_update_innovation_gate_mps: f32,
+        mount_update_nis_gate: f32,
     ) {
         let obs_y =
             generated_eskf::body_vel_y_observation(&self.raw.nominal, &self.raw.p, r_body_vel);
@@ -463,7 +469,8 @@ impl RustEskf {
             if !(s > 0.0) || !s.is_finite() {
                 continue;
             }
-            let alpha = (residual as f64 - hd) / s;
+            let effective_residual = residual as f64 - hd;
+            let alpha = effective_residual / s;
             let mut diag_k = [0.0; ERROR_STATES];
             let mut diag_dx = [0.0; ERROR_STATES];
             for i in 0..ERROR_STATES {
@@ -473,14 +480,23 @@ impl RustEskf {
             let mount_scale = gated_mount_update_scale(
                 mount_update_scale,
                 mount_update_innovation_gate_mps,
-                residual,
+                mount_update_nis_gate,
+                effective_residual as f32,
+                s as f32,
             );
             scale_mount_update(&mut diag_k, &mut diag_dx, mount_scale);
             self.freeze_mount_update_if_needed(&mut diag_k, &mut diag_dx);
             for i in 0..ERROR_STATES {
                 dx[i] += diag_dx[i] as f64;
             }
-            self.record_update_diag(diag_type, residual, s as f32, &obs.h, &diag_k, &diag_dx);
+            self.record_update_diag(
+                diag_type,
+                effective_residual as f32,
+                s as f32,
+                &obs.h,
+                &diag_k,
+                &diag_dx,
+            );
             for i in 0..ERROR_STATES {
                 for j in i..ERROR_STATES {
                     let updated = p[i][j] - diag_k[i] as f64 * ph[j] - ph[i] * diag_k[j] as f64
@@ -630,13 +646,21 @@ fn sanitized_mount_scale(mount_scale: f32) -> f32 {
 fn gated_mount_update_scale(
     mount_update_scale: f32,
     mount_update_innovation_gate_mps: f32,
+    mount_update_nis_gate: f32,
     innovation: f32,
+    innovation_var: f32,
 ) -> f32 {
     let mut obs_mount_scale = sanitized_mount_scale(mount_update_scale);
     if mount_update_innovation_gate_mps > 0.0 {
         let innov_abs = fabsf(innovation);
         if innov_abs > mount_update_innovation_gate_mps {
             obs_mount_scale *= mount_update_innovation_gate_mps / innov_abs;
+        }
+    }
+    if mount_update_nis_gate > 0.0 && innovation_var > 0.0 && innovation_var.is_finite() {
+        let nis = innovation * innovation / innovation_var;
+        if nis > mount_update_nis_gate && nis.is_finite() {
+            obs_mount_scale *= sqrtf(mount_update_nis_gate / nis);
         }
     }
     obs_mount_scale

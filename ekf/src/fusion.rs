@@ -109,6 +109,7 @@ struct FusionConfig {
     mount_update_min_scale: f32,
     mount_update_ramp_time_s: f32,
     mount_update_innovation_gate_mps: f32,
+    mount_update_nis_gate: f32,
     mount_update_yaw_rate_gate_radps: f32,
     freeze_misalignment_states: bool,
     mount_settle_time_s: f32,
@@ -143,6 +144,7 @@ impl Default for FusionConfig {
             mount_update_min_scale: 0.008,
             mount_update_ramp_time_s: 800.0,
             mount_update_innovation_gate_mps: 0.02,
+            mount_update_nis_gate: 0.0,
             mount_update_yaw_rate_gate_radps: 0.0,
             freeze_misalignment_states: false,
             mount_settle_time_s: 0.0,
@@ -329,6 +331,12 @@ impl SensorFusion {
         }
     }
 
+    pub fn set_mount_update_nis_gate(&mut self, mount_update_nis_gate: f32) {
+        if mount_update_nis_gate.is_finite() && mount_update_nis_gate >= 0.0 {
+            self.cfg.mount_update_nis_gate = mount_update_nis_gate;
+        }
+    }
+
     pub fn set_mount_update_yaw_rate_gate_radps(&mut self, mount_update_yaw_rate_gate_radps: f32) {
         if mount_update_yaw_rate_gate_radps.is_finite() && mount_update_yaw_rate_gate_radps >= 0.0 {
             self.cfg.mount_update_yaw_rate_gate_radps = mount_update_yaw_rate_gate_radps;
@@ -440,6 +448,7 @@ impl SensorFusion {
                         effective_r,
                         mount_update_scale,
                         self.cfg.mount_update_innovation_gate_mps,
+                        self.cfg.mount_update_nis_gate,
                     );
                 }
             }
@@ -731,6 +740,7 @@ impl SensorFusion {
             effective_r,
             scale,
             self.cfg.mount_update_innovation_gate_mps,
+            self.cfg.mount_update_nis_gate,
         );
     }
 
