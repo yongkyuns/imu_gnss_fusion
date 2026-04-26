@@ -10,7 +10,10 @@ use sim::eval::gnss_ins::{
     as_q64, quat_angle_deg, quat_conj, quat_from_rpy_alg_deg, quat_mul, quat_rotate,
 };
 use sim::eval::replay::{ReplayEvent, for_each_event};
-use sim::synthetic::gnss_ins_path::{MotionProfile, PathGenConfig, generate};
+use sim::synthetic::gnss_ins_path::{
+    AxisNoise, GpsNoiseModel, ImuAccuracy, ImuNoiseModel, MeasurementNoiseConfig, MotionProfile,
+    PathGenConfig, VibrationNoise, add_measurement_noise, generate, generate_with_noise,
+};
 use sim::visualizer::math::{ecef_to_ned, lla_to_ecef};
 
 const LOCAL_GNSS_INS_SIM_DIR: &str = "/Users/ykshin/Dev/me/gnss-ins-sim";
@@ -254,6 +257,119 @@ print(json.dumps({{'imu': r['imu'].tolist(), 'nav': r['nav'].tolist(), 'gps': r[
 }
 
 #[test]
+fn measurement_noise_supports_bias_drift_white_noise_vibration_and_gps_noise() -> Result<()> {
+    let profile = MotionProfile::from_csv_str(SHORT_PROFILE)?;
+    let reference = generate(&profile, PathGenConfig::default())?;
+
+    let bias_only = add_measurement_noise(
+        &reference,
+        100.0,
+        MeasurementNoiseConfig {
+            imu: ImuNoiseModel {
+                gyro: AxisNoise {
+                    bias: [0.01, -0.02, 0.03],
+                    ..AxisNoise::zero()
+                },
+                accel: AxisNoise {
+                    bias: [0.1, -0.2, 0.3],
+                    ..AxisNoise::zero()
+                },
+                gyro_vibration: None,
+                accel_vibration: None,
+            },
+            gps: None,
+        },
+        7,
+    );
+    for (actual, expected) in bias_only.imu.iter().zip(&reference.imu) {
+        assert_vec_close(
+            "gyro static bias",
+            sub3(actual.gyro_vehicle_radps, expected.gyro_vehicle_radps),
+            [0.01, -0.02, 0.03],
+            1.0e-14,
+        );
+        assert_vec_close(
+            "accel static bias",
+            sub3(actual.accel_vehicle_mps2, expected.accel_vehicle_mps2),
+            [0.1, -0.2, 0.3],
+            1.0e-14,
+        );
+    }
+    assert_eq!(bias_only.gnss.len(), reference.gnss.len());
+    assert_close(
+        "gps unchanged without gps noise",
+        bias_only.gnss[3].lat_deg,
+        reference.gnss[3].lat_deg,
+        0.0,
+    );
+
+    let stochastic_noise = MeasurementNoiseConfig {
+        imu: ImuNoiseModel {
+            gyro: AxisNoise {
+                bias: [0.001, 0.0, -0.001],
+                bias_drift_std: [1.0e-5; 3],
+                bias_corr_time_s: [100.0; 3],
+                white_noise_density: [2.0e-5; 3],
+            },
+            accel: AxisNoise {
+                bias: [0.01, 0.0, -0.01],
+                bias_drift_std: [2.0e-4; 3],
+                bias_corr_time_s: [100.0; 3],
+                white_noise_density: [3.0e-4; 3],
+            },
+            gyro_vibration: Some(VibrationNoise::Sinusoidal {
+                amplitude: [1.0e-4, 2.0e-4, 3.0e-4],
+                freq_hz: 3.0,
+            }),
+            accel_vibration: Some(VibrationNoise::Random {
+                std: [0.01, 0.02, 0.03],
+            }),
+        },
+        gps: Some(GpsNoiseModel::low_accuracy()),
+    };
+    let noisy_a = add_measurement_noise(&reference, 100.0, stochastic_noise, 42);
+    let noisy_b = add_measurement_noise(&reference, 100.0, stochastic_noise, 42);
+    let noisy_c = add_measurement_noise(&reference, 100.0, stochastic_noise, 43);
+    assert_vec_close(
+        "seeded gyro repeatability",
+        noisy_a.imu[123].gyro_vehicle_radps,
+        noisy_b.imu[123].gyro_vehicle_radps,
+        0.0,
+    );
+    assert_vec_close(
+        "seeded accel repeatability",
+        noisy_a.imu[123].accel_vehicle_mps2,
+        noisy_b.imu[123].accel_vehicle_mps2,
+        0.0,
+    );
+    assert_close(
+        "seeded gps repeatability",
+        noisy_a.gnss[4].lat_deg,
+        noisy_b.gnss[4].lat_deg,
+        0.0,
+    );
+    assert!(
+        norm3(sub3(
+            noisy_a.imu[123].accel_vehicle_mps2,
+            reference.imu[123].accel_vehicle_mps2
+        )) > 1.0e-4
+    );
+    assert!(
+        norm3(sub3(
+            noisy_a.imu[123].accel_vehicle_mps2,
+            noisy_c.imu[123].accel_vehicle_mps2
+        )) > 1.0e-4
+    );
+    assert!((noisy_a.gnss[4].lat_deg - reference.gnss[4].lat_deg).abs() > 1.0e-8);
+    assert!(matches!(
+        MeasurementNoiseConfig::accuracy(ImuAccuracy::Low).gps,
+        Some(_)
+    ));
+
+    Ok(())
+}
+
+#[test]
 fn eskf_converges_on_generated_city_blocks_truth_signals() -> Result<()> {
     assert_eskf_converges_on_profile("city_blocks_15min.csv")
 }
@@ -261,6 +377,48 @@ fn eskf_converges_on_generated_city_blocks_truth_signals() -> Result<()> {
 #[test]
 fn eskf_converges_on_generated_figure8_truth_signals() -> Result<()> {
     assert_eskf_converges_on_profile("figure8_15min.csv")
+}
+
+#[test]
+fn eskf_converges_on_generated_city_blocks_noisy_measurements() -> Result<()> {
+    let profile_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("motion_profiles/city_blocks_15min.csv");
+    let profile = MotionProfile::from_csv(&profile_path)?;
+    let measured = generate_with_noise(
+        &profile,
+        PathGenConfig::default(),
+        MeasurementNoiseConfig::accuracy(ImuAccuracy::Mid),
+        20260426,
+    )?;
+    let summary = run_eskf_on_samples(
+        &measured.reference,
+        &measured.imu,
+        &measured.gnss,
+        [5.0, -5.0, 5.0],
+        [5.0, 5.0, 7.0],
+        [0.05, 0.05, 0.05],
+    )?;
+    assert!(
+        summary.final_mount_quat_err_deg < 1.5,
+        "noisy mount quaternion error too high: {summary:#?}"
+    );
+    assert!(
+        summary.tail_mount_quat_err_mean_deg < 1.5,
+        "noisy tail mount quaternion mean error too high: {summary:#?}"
+    );
+    assert!(
+        summary.final_att_quat_err_deg < 3.0,
+        "noisy attitude quaternion error too high: {summary:#?}"
+    );
+    assert!(
+        summary.final_vel_err_mps < 0.75,
+        "noisy velocity error too high: {summary:#?}"
+    );
+    assert!(
+        summary.final_pos_err_m < 12.0,
+        "noisy position error too high: {summary:#?}"
+    );
+    Ok(())
 }
 
 fn assert_eskf_converges_on_profile(profile_name: &str) -> Result<()> {
@@ -333,9 +491,26 @@ fn run_eskf_on_generated_path(
     generated: &sim::synthetic::gnss_ins_path::GeneratedPath,
     mount_rpy_deg: [f64; 3],
 ) -> Result<EskfSyntheticSummary> {
+    run_eskf_on_samples(
+        generated,
+        &generated.imu,
+        &generated.gnss,
+        mount_rpy_deg,
+        [0.5, 0.5, 0.5],
+        [0.2, 0.2, 0.2],
+    )
+}
+
+fn run_eskf_on_samples(
+    reference: &sim::synthetic::gnss_ins_path::GeneratedPath,
+    imu_samples: &[sim::datasets::gnss_ins_sim::ImuSample],
+    gnss_samples: &[sim::datasets::gnss_ins_sim::GnssSample],
+    mount_rpy_deg: [f64; 3],
+    pos_std_m: [f64; 3],
+    vel_std_mps: [f64; 3],
+) -> Result<EskfSyntheticSummary> {
     let q_truth = quat_from_rpy_alg_deg(mount_rpy_deg[0], mount_rpy_deg[1], mount_rpy_deg[2]);
-    let imu = generated
-        .imu
+    let imu = imu_samples
         .iter()
         .map(|s| GenericImuSample {
             t_s: s.t_s,
@@ -343,8 +518,7 @@ fn run_eskf_on_generated_path(
             accel_mps2: quat_rotate(q_truth, s.accel_vehicle_mps2),
         })
         .collect::<Vec<_>>();
-    let gnss = generated
-        .gnss
+    let gnss = gnss_samples
         .iter()
         .map(|s| GenericGnssSample {
             t_s: s.t_s,
@@ -352,17 +526,17 @@ fn run_eskf_on_generated_path(
             lon_deg: s.lon_deg,
             height_m: s.height_m,
             vel_ned_mps: s.vel_ned_mps,
-            pos_std_m: [0.5, 0.5, 0.5],
-            vel_std_mps: [0.2, 0.2, 0.2],
+            pos_std_m,
+            vel_std_mps,
             heading_rad: None,
         })
         .collect::<Vec<_>>();
 
     let mut fusion = SensorFusion::new();
     let ref_ecef = lla_to_ecef(
-        generated.truth[0].lat_deg,
-        generated.truth[0].lon_deg,
-        generated.truth[0].height_m,
+        reference.truth[0].lat_deg,
+        reference.truth[0].lon_deg,
+        reference.truth[0].height_m,
     );
     let mut errors = Vec::new();
 
@@ -370,13 +544,13 @@ fn run_eskf_on_generated_path(
         ReplayEvent::Imu(idx, sample) => {
             let _ = fusion.process_imu(fusion_imu_sample(*sample));
             if let Some(eskf) = fusion.eskf() {
-                let truth = generated.truth[idx];
+                let truth = reference.truth[idx];
                 let truth_ecef = lla_to_ecef(truth.lat_deg, truth.lon_deg, truth.height_m);
                 let truth_pos_ned = ecef_to_ned(
                     truth_ecef,
                     ref_ecef,
-                    generated.truth[0].lat_deg,
-                    generated.truth[0].lon_deg,
+                    reference.truth[0].lat_deg,
+                    reference.truth[0].lon_deg,
                 );
                 let q_seed = fusion
                     .eskf_mount_q_vb()
@@ -479,6 +653,10 @@ fn assert_close(label: &str, actual: f64, expected: f64, tol: f64) {
 
 fn norm3(v: [f64; 3]) -> f64 {
     (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+}
+
+fn sub3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
 fn f64_at(row: &[serde_json::Value], idx: usize) -> f64 {

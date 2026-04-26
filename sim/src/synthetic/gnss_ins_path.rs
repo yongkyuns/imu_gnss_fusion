@@ -1,4 +1,6 @@
 use anyhow::{Context, Result, bail};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use std::fs;
 use std::path::Path;
 
@@ -63,6 +65,155 @@ pub struct GeneratedPath {
     pub imu: Vec<ImuSample>,
     pub gnss: Vec<GnssSample>,
     pub truth: Vec<TruthSample>,
+}
+
+#[derive(Clone, Debug)]
+pub struct GeneratedMeasurementSet {
+    pub reference: GeneratedPath,
+    pub imu: Vec<ImuSample>,
+    pub gnss: Vec<GnssSample>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum ImuAccuracy {
+    Low,
+    Mid,
+    High,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct AxisNoise {
+    pub bias: [f64; 3],
+    pub bias_drift_std: [f64; 3],
+    pub bias_corr_time_s: [f64; 3],
+    pub white_noise_density: [f64; 3],
+}
+
+impl AxisNoise {
+    pub fn zero() -> Self {
+        Self {
+            bias: [0.0; 3],
+            bias_drift_std: [0.0; 3],
+            bias_corr_time_s: [f64::INFINITY; 3],
+            white_noise_density: [0.0; 3],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum VibrationNoise {
+    Random { std: [f64; 3] },
+    Sinusoidal { amplitude: [f64; 3], freq_hz: f64 },
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ImuNoiseModel {
+    pub gyro: AxisNoise,
+    pub accel: AxisNoise,
+    pub gyro_vibration: Option<VibrationNoise>,
+    pub accel_vibration: Option<VibrationNoise>,
+}
+
+impl ImuNoiseModel {
+    pub fn zero() -> Self {
+        Self {
+            gyro: AxisNoise::zero(),
+            accel: AxisNoise::zero(),
+            gyro_vibration: None,
+            accel_vibration: None,
+        }
+    }
+
+    pub fn accuracy(accuracy: ImuAccuracy) -> Self {
+        let d2r = D2R;
+        match accuracy {
+            ImuAccuracy::Low => Self {
+                gyro: AxisNoise {
+                    bias: [0.0; 3],
+                    bias_drift_std: [10.0 * d2r / 3600.0; 3],
+                    bias_corr_time_s: [100.0; 3],
+                    white_noise_density: [0.75 * d2r / 60.0; 3],
+                },
+                accel: AxisNoise {
+                    bias: [0.0; 3],
+                    bias_drift_std: [2.0e-4; 3],
+                    bias_corr_time_s: [100.0; 3],
+                    white_noise_density: [0.05 / 60.0; 3],
+                },
+                gyro_vibration: None,
+                accel_vibration: None,
+            },
+            ImuAccuracy::Mid => Self {
+                gyro: AxisNoise {
+                    bias: [0.0; 3],
+                    bias_drift_std: [3.5 * d2r / 3600.0; 3],
+                    bias_corr_time_s: [100.0; 3],
+                    white_noise_density: [0.25 * d2r / 60.0; 3],
+                },
+                accel: AxisNoise {
+                    bias: [0.0; 3],
+                    bias_drift_std: [5.0e-5; 3],
+                    bias_corr_time_s: [100.0; 3],
+                    white_noise_density: [0.03 / 60.0; 3],
+                },
+                gyro_vibration: None,
+                accel_vibration: None,
+            },
+            ImuAccuracy::High => Self {
+                gyro: AxisNoise {
+                    bias: [0.0; 3],
+                    bias_drift_std: [0.1 * d2r / 3600.0; 3],
+                    bias_corr_time_s: [100.0; 3],
+                    white_noise_density: [2.0e-3 * d2r / 60.0; 3],
+                },
+                accel: AxisNoise {
+                    bias: [0.0; 3],
+                    bias_drift_std: [3.6e-6; 3],
+                    bias_corr_time_s: [100.0; 3],
+                    white_noise_density: [2.5e-5 / 60.0; 3],
+                },
+                gyro_vibration: None,
+                accel_vibration: None,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct GpsNoiseModel {
+    pub pos_std_m: [f64; 3],
+    pub vel_std_mps: [f64; 3],
+}
+
+impl GpsNoiseModel {
+    pub fn low_accuracy() -> Self {
+        Self {
+            pos_std_m: [5.0, 5.0, 7.0],
+            vel_std_mps: [0.05, 0.05, 0.05],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct MeasurementNoiseConfig {
+    pub imu: ImuNoiseModel,
+    pub gps: Option<GpsNoiseModel>,
+}
+
+impl MeasurementNoiseConfig {
+    pub fn zero() -> Self {
+        Self {
+            imu: ImuNoiseModel::zero(),
+            gps: None,
+        }
+    }
+
+    pub fn accuracy(accuracy: ImuAccuracy) -> Self {
+        Self {
+            imu: ImuNoiseModel::accuracy(accuracy),
+            gps: Some(GpsNoiseModel::low_accuracy()),
+        }
+    }
 }
 
 impl MotionProfile {
@@ -252,6 +403,176 @@ pub fn generate(profile: &MotionProfile, cfg: PathGenConfig) -> Result<Generated
     }
 
     Ok(GeneratedPath { imu, gnss, truth })
+}
+
+pub fn generate_with_noise(
+    profile: &MotionProfile,
+    cfg: PathGenConfig,
+    noise: MeasurementNoiseConfig,
+    seed: u64,
+) -> Result<GeneratedMeasurementSet> {
+    let reference = generate(profile, cfg)?;
+    let mut rng = StdRng::seed_from_u64(seed);
+    let imu = add_imu_noise(&reference.imu, cfg.imu_hz, noise.imu, &mut rng);
+    let gnss = if let Some(gps_noise) = noise.gps {
+        add_gps_noise(&reference.gnss, gps_noise, &mut rng)
+    } else {
+        reference.gnss.clone()
+    };
+    Ok(GeneratedMeasurementSet {
+        reference,
+        imu,
+        gnss,
+    })
+}
+
+pub fn add_measurement_noise(
+    reference: &GeneratedPath,
+    imu_hz: f64,
+    noise: MeasurementNoiseConfig,
+    seed: u64,
+) -> GeneratedMeasurementSet {
+    let mut rng = StdRng::seed_from_u64(seed);
+    let imu = add_imu_noise(&reference.imu, imu_hz, noise.imu, &mut rng);
+    let gnss = if let Some(gps_noise) = noise.gps {
+        add_gps_noise(&reference.gnss, gps_noise, &mut rng)
+    } else {
+        reference.gnss.clone()
+    };
+    GeneratedMeasurementSet {
+        reference: reference.clone(),
+        imu,
+        gnss,
+    }
+}
+
+fn add_imu_noise(
+    reference: &[ImuSample],
+    imu_hz: f64,
+    noise: ImuNoiseModel,
+    rng: &mut StdRng,
+) -> Vec<ImuSample> {
+    let gyro_drift = bias_drift(noise.gyro, reference.len(), imu_hz, rng);
+    let accel_drift = bias_drift(noise.accel, reference.len(), imu_hz, rng);
+    let dt = 1.0 / imu_hz;
+    let noise_scale = imu_hz.sqrt();
+    let gyro_sine_phase = random_phase(noise.gyro_vibration, rng);
+    let accel_sine_phase = [0.0; 3];
+
+    reference
+        .iter()
+        .enumerate()
+        .map(|(i, sample)| {
+            let t = i as f64 * dt;
+            let mut gyro = sample.gyro_vehicle_radps;
+            let mut accel = sample.accel_vehicle_mps2;
+            for axis in 0..3 {
+                gyro[axis] += noise.gyro.bias[axis]
+                    + gyro_drift[i][axis]
+                    + noise.gyro.white_noise_density[axis] * noise_scale * randn(rng)
+                    + vibration(noise.gyro_vibration, axis, t, gyro_sine_phase, rng);
+                accel[axis] += noise.accel.bias[axis]
+                    + accel_drift[i][axis]
+                    + noise.accel.white_noise_density[axis] * noise_scale * randn(rng)
+                    + vibration(noise.accel_vibration, axis, t, accel_sine_phase, rng);
+            }
+            ImuSample {
+                t_s: sample.t_s,
+                gyro_vehicle_radps: gyro,
+                accel_vehicle_mps2: accel,
+            }
+        })
+        .collect()
+}
+
+fn add_gps_noise(
+    reference: &[GnssSample],
+    noise: GpsNoiseModel,
+    rng: &mut StdRng,
+) -> Vec<GnssSample> {
+    if reference.is_empty() {
+        return Vec::new();
+    }
+    let earth = geo_param([
+        reference[0].lat_deg.to_radians(),
+        reference[0].lon_deg.to_radians(),
+        reference[0].height_m,
+    ]);
+    let lat_std_deg = (noise.pos_std_m[0] / earth.rm).to_degrees();
+    let lon_std_deg = (noise.pos_std_m[1] / earth.rn / earth.cl).to_degrees();
+    reference
+        .iter()
+        .map(|sample| {
+            let mut vel = sample.vel_ned_mps;
+            for (axis, v) in vel.iter_mut().enumerate() {
+                *v += noise.vel_std_mps[axis] * randn(rng);
+            }
+            GnssSample {
+                t_s: sample.t_s,
+                lat_deg: sample.lat_deg + lat_std_deg * randn(rng),
+                lon_deg: sample.lon_deg + lon_std_deg * randn(rng),
+                height_m: sample.height_m + noise.pos_std_m[2] * randn(rng),
+                vel_ned_mps: vel,
+            }
+        })
+        .collect()
+}
+
+fn bias_drift(noise: AxisNoise, n: usize, fs: f64, rng: &mut StdRng) -> Vec<[f64; 3]> {
+    let mut drift = vec![[0.0; 3]; n];
+    for axis in 0..3 {
+        let drift_std = noise.bias_drift_std[axis];
+        if drift_std == 0.0 {
+            continue;
+        }
+        let corr = noise.bias_corr_time_s[axis];
+        if corr.is_finite() && corr > 0.0 {
+            let a = 1.0 - 1.0 / fs / corr;
+            let b = drift_std * (1.0 - (-2.0 / (fs * corr)).exp()).sqrt();
+            for i in 1..n {
+                drift[i][axis] = a * drift[i - 1][axis] + b * randn(rng);
+            }
+        } else {
+            for row in &mut drift {
+                row[axis] = drift_std * randn(rng);
+            }
+        }
+    }
+    drift
+}
+
+fn vibration(
+    model: Option<VibrationNoise>,
+    axis: usize,
+    t_s: f64,
+    sine_phase: [f64; 3],
+    rng: &mut StdRng,
+) -> f64 {
+    match model {
+        Some(VibrationNoise::Random { std }) => std[axis] * randn(rng),
+        Some(VibrationNoise::Sinusoidal { amplitude, freq_hz }) => {
+            amplitude[axis] * (2.0 * std::f64::consts::PI * freq_hz * t_s + sine_phase[axis]).sin()
+        }
+        None => 0.0,
+    }
+}
+
+fn random_phase(model: Option<VibrationNoise>, rng: &mut StdRng) -> [f64; 3] {
+    if matches!(model, Some(VibrationNoise::Sinusoidal { .. })) {
+        [
+            rng.random::<f64>() * 2.0 * std::f64::consts::PI,
+            rng.random::<f64>() * 2.0 * std::f64::consts::PI,
+            rng.random::<f64>() * 2.0 * std::f64::consts::PI,
+        ]
+    } else {
+        [0.0; 3]
+    }
+}
+
+fn randn(rng: &mut StdRng) -> f64 {
+    let u1 = rng.random::<f64>().clamp(f64::MIN_POSITIVE, 1.0);
+    let u2 = rng.random::<f64>();
+    (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
 }
 
 #[derive(Clone, Copy, Debug)]
