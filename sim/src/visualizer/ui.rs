@@ -10,6 +10,7 @@ use super::math::heading_endpoint;
 use super::model::{EkfImuSource, HeadingSample, Page, PlotData, Trace};
 use super::pipeline::build_plot_data;
 use super::pipeline::ekf_compare::{EkfCompareConfig, GnssOutageConfig};
+use super::pipeline::synthetic::{SyntheticVisualizerConfig, build_synthetic_plot_data};
 use super::stats::map_center_from_traces;
 
 const MAPBOX_ACCESS_TOKEN: &str = "pk.eyJ1IjoieW9uZ2t5dW5zODciLCJhIjoiY21tNjB5NWt6MGJmOTJzcG02MmRvN3RnYiJ9.fu_66qb1G1cgrLzAE54E0w";
@@ -143,6 +144,7 @@ pub struct App {
 #[derive(Clone)]
 pub struct ReplayState {
     pub bytes: Vec<u8>,
+    pub synthetic: Option<SyntheticVisualizerConfig>,
     pub max_records: Option<usize>,
     pub misalignment: EkfImuSource,
     pub ekf_cfg: EkfCompareConfig,
@@ -196,16 +198,34 @@ impl App {
         let Some(replay) = self.replay.as_ref() else {
             return;
         };
-        let (data, has_itow) = build_plot_data(
-            &replay.bytes,
-            replay.max_records,
-            replay.misalignment,
-            replay.ekf_cfg,
-            replay.gnss_outages,
-        );
-        self.data = data;
-        self.has_itow = has_itow;
-        self.replay_status = Some("Replay refreshed".to_string());
+        if let Some(synthetic) = &replay.synthetic {
+            match build_synthetic_plot_data(
+                synthetic,
+                replay.misalignment,
+                replay.ekf_cfg,
+                replay.gnss_outages,
+            ) {
+                Ok(data) => {
+                    self.data = data;
+                    self.has_itow = false;
+                    self.replay_status = Some("Synthetic replay refreshed".to_string());
+                }
+                Err(err) => {
+                    self.replay_status = Some(format!("Synthetic replay failed: {err}"));
+                }
+            }
+        } else {
+            let (data, has_itow) = build_plot_data(
+                &replay.bytes,
+                replay.max_records,
+                replay.misalignment,
+                replay.ekf_cfg,
+                replay.gnss_outages,
+            );
+            self.data = data;
+            self.has_itow = has_itow;
+            self.replay_status = Some("Replay refreshed".to_string());
+        }
     }
 }
 

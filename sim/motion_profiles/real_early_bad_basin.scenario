@@ -1,0 +1,54 @@
+# Synthetic reconstruction of the early experimental window from
+# logger/data/ubx_raw_20260328_153757.bin.
+#
+# It intentionally places ESKF/align startup near a high-yaw-rate maneuver,
+# followed by straight braking and long low-excitation segments. Use this with
+# synthetic_bad_basin_sweep to inject GNSS timing/bias faults and look for
+# state-allocation failures.
+
+initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
+
+# Weak pre-alignment period.
+wait 50s
+
+# First usable motion: acceleration into a moderate turn.
+accelerate 1.35m/s^2 for 5s
+wait 3s
+turn right 21dps for 3s
+wait 4s
+turn left 18dps for 2s
+wait 8s
+
+# Straight hard braking around the same regime where the real log can push
+# residuals into yaw/velocity/bias instead of mount.
+accelerate 0.9m/s^2 for 6s
+wait 8s
+brake 2.6m/s^2 for 3s
+wait 8s
+
+# Strong turn near expected handoff.
+accelerate 1.2m/s^2 for 6s
+turn left 30dps for 2.5s
+wait 4s
+accelerate 1.5m/s^2 for 3s
+turn left 28dps for 2.5s
+wait 12s
+
+# Long straight/weak-excitation capture period.
+accelerate 0.6m/s^2 for 8s
+wait 35s
+brake 1.4m/s^2 for 6s
+wait 25s
+
+# Later observable maneuvers that should allow recovery if the formulation and
+# tuning can escape the early basin.
+repeat 4 {
+    accelerate 0.8m/s^2 for 8s
+    wait 12s
+    turn left 14dps for 5s
+    wait 12s
+    turn right 14dps for 5s
+    wait 12s
+    brake 0.8m/s^2 for 8s
+    wait 10s
+}

@@ -6,13 +6,17 @@ use std::{fs::File, io::Read, path::PathBuf};
 #[cfg(not(target_arch = "wasm32"))]
 use anyhow::{Context, Result};
 #[cfg(not(target_arch = "wasm32"))]
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 #[cfg(not(target_arch = "wasm32"))]
 use sim::visualizer::model::EkfImuSource;
 #[cfg(not(target_arch = "wasm32"))]
 use sim::visualizer::pipeline::build_plot_data;
 #[cfg(not(target_arch = "wasm32"))]
 use sim::visualizer::pipeline::ekf_compare::{EkfCompareConfig, GnssOutageConfig};
+#[cfg(not(target_arch = "wasm32"))]
+use sim::visualizer::pipeline::synthetic::{
+    SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_plot_data,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use sim::visualizer::stats::{
     group_stats, max_gap_sec, max_gap_trace, max_step_abs, trace_stats, trace_time_bounds,
@@ -26,7 +30,35 @@ use sim::visualizer::ui::{ReplayState, run_visualizer};
 #[command(name = "visualizer")]
 struct Args {
     #[arg(value_name = "LOGFILE")]
-    logfile: PathBuf,
+    logfile: Option<PathBuf>,
+    #[arg(long, alias = "synthetic-scenario")]
+    synthetic_motion_def: Option<PathBuf>,
+    #[arg(long, value_enum, default_value_t = SyntheticNoiseArg::Truth)]
+    synthetic_noise: SyntheticNoiseArg,
+    #[arg(long, default_value_t = 1)]
+    synthetic_seed: u64,
+    #[arg(long, default_value_t = 5.0)]
+    synthetic_mount_roll_deg: f64,
+    #[arg(long, default_value_t = -5.0)]
+    synthetic_mount_pitch_deg: f64,
+    #[arg(long, default_value_t = 5.0)]
+    synthetic_mount_yaw_deg: f64,
+    #[arg(long, default_value_t = 100.0)]
+    synthetic_imu_hz: f64,
+    #[arg(long, default_value_t = 2.0)]
+    synthetic_gnss_hz: f64,
+    #[arg(long, default_value_t = 0.0)]
+    synthetic_gnss_time_shift_ms: f64,
+    #[arg(long, default_value_t = 0.0)]
+    synthetic_early_vel_bias_n_mps: f64,
+    #[arg(long, default_value_t = 0.0)]
+    synthetic_early_vel_bias_e_mps: f64,
+    #[arg(long, default_value_t = 0.0)]
+    synthetic_early_vel_bias_d_mps: f64,
+    #[arg(long)]
+    synthetic_early_fault_start_s: Option<f64>,
+    #[arg(long)]
+    synthetic_early_fault_end_s: Option<f64>,
     #[arg(long)]
     max_records: Option<usize>,
     #[arg(long)]
@@ -93,16 +125,30 @@ struct Args {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum SyntheticNoiseArg {
+    Truth,
+    Low,
+    Mid,
+    High,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl From<SyntheticNoiseArg> for SyntheticNoiseMode {
+    fn from(value: SyntheticNoiseArg) -> Self {
+        match value {
+            SyntheticNoiseArg::Truth => Self::Truth,
+            SyntheticNoiseArg::Low => Self::Low,
+            SyntheticNoiseArg::Mid => Self::Mid,
+            SyntheticNoiseArg::High => Self::High,
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> Result<()> {
     let args = Args::parse();
     let t0 = Instant::now();
-    let mut bytes = Vec::new();
-    File::open(&args.logfile)
-        .with_context(|| format!("failed to open {}", args.logfile.display()))?
-        .read_to_end(&mut bytes)
-        .context("failed to read log")?;
-    let t_read = Instant::now();
-
     let ekf_cfg = EkfCompareConfig {
         r_body_vel: args
             .r_body_vel
@@ -159,23 +205,78 @@ fn main() -> Result<()> {
         ..EkfCompareConfig::default()
     };
 
-    let (data, has_itow) = build_plot_data(
-        &bytes,
-        args.max_records,
-        args.misalignment,
-        ekf_cfg,
-        GnssOutageConfig {
-            count: args.gnss_outage_count,
-            duration_s: args.gnss_outage_duration_s,
-            seed: args.gnss_outage_seed,
-        },
-    );
+    let gnss_outages = GnssOutageConfig {
+        count: args.gnss_outage_count,
+        duration_s: args.gnss_outage_duration_s,
+        seed: args.gnss_outage_seed,
+    };
+    let mut replay_bytes = Vec::new();
+    let mut synthetic_replay = None::<SyntheticVisualizerConfig>;
+    let (data, has_itow, input_label, input_bytes, t_read) = if let Some(motion_def) =
+        args.synthetic_motion_def.clone()
+    {
+        let synth_cfg = SyntheticVisualizerConfig {
+            motion_def: motion_def.clone(),
+            noise_mode: args.synthetic_noise.into(),
+            seed: args.synthetic_seed,
+            mount_rpy_deg: [
+                args.synthetic_mount_roll_deg,
+                args.synthetic_mount_pitch_deg,
+                args.synthetic_mount_yaw_deg,
+            ],
+            imu_hz: args.synthetic_imu_hz,
+            gnss_hz: args.synthetic_gnss_hz,
+            gnss_time_shift_ms: args.synthetic_gnss_time_shift_ms,
+            early_vel_bias_ned_mps: [
+                args.synthetic_early_vel_bias_n_mps,
+                args.synthetic_early_vel_bias_e_mps,
+                args.synthetic_early_vel_bias_d_mps,
+            ],
+            early_fault_window_s: args
+                .synthetic_early_fault_start_s
+                .zip(args.synthetic_early_fault_end_s),
+        };
+        let data = build_synthetic_plot_data(&synth_cfg, args.misalignment, ekf_cfg, gnss_outages)?;
+        synthetic_replay = Some(synth_cfg);
+        (
+            data,
+            false,
+            format!("synthetic:{}", motion_def.display()),
+            0usize,
+            Instant::now(),
+        )
+    } else {
+        let logfile = args.logfile.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("LOGFILE is required unless --synthetic-motion-def is set")
+        })?;
+        File::open(logfile)
+            .with_context(|| format!("failed to open {}", logfile.display()))?
+            .read_to_end(&mut replay_bytes)
+            .context("failed to read log")?;
+        let t_read = Instant::now();
+        let input_bytes = replay_bytes.len();
+        let (data, has_itow) = build_plot_data(
+            &replay_bytes,
+            args.max_records,
+            args.misalignment,
+            ekf_cfg,
+            gnss_outages,
+        );
+        (
+            data,
+            has_itow,
+            logfile.display().to_string(),
+            input_bytes,
+            t_read,
+        )
+    };
     let t_build = Instant::now();
     let (n_traces, n_points) = trace_stats(&data);
     let (tmin, tmax) = trace_time_bounds(&data).unwrap_or((f64::NAN, f64::NAN));
     eprintln!(
-        "[profile] bytes={} read={:.3}s build={:.3}s total_pre_ui={:.3}s traces={} points={} t_range=[{:.3}, {:.3}]s",
-        bytes.len(),
+        "[profile] input={} bytes={} read={:.3}s build={:.3}s total_pre_ui={:.3}s traces={} points={} t_range=[{:.3}, {:.3}]s",
+        input_label,
+        input_bytes,
         (t_read - t0).as_secs_f64(),
         (t_build - t_read).as_secs_f64(),
         (t_build - t0).as_secs_f64(),
@@ -364,15 +465,12 @@ fn main() -> Result<()> {
         data,
         has_itow,
         ReplayState {
-            bytes,
+            bytes: replay_bytes,
+            synthetic: synthetic_replay,
             max_records: args.max_records,
             misalignment: args.misalignment,
             ekf_cfg,
-            gnss_outages: GnssOutageConfig {
-                count: args.gnss_outage_count,
-                duration_s: args.gnss_outage_duration_s,
-                seed: args.gnss_outage_seed,
-            },
+            gnss_outages,
         },
     )
 }

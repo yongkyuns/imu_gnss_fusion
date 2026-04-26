@@ -217,10 +217,32 @@ impl MeasurementNoiseConfig {
 }
 
 impl MotionProfile {
+    pub fn from_path(path: &Path) -> Result<Self> {
+        let extension = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or_default();
+        if extension.eq_ignore_ascii_case("csv") {
+            Self::from_csv(path)
+        } else {
+            Self::from_dsl(path)
+        }
+    }
+
     pub fn from_csv(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)
             .with_context(|| format!("failed to read {}", path.display()))?;
         Self::from_csv_str(&text)
+    }
+
+    pub fn from_dsl(path: &Path) -> Result<Self> {
+        let text = fs::read_to_string(path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        Self::from_dsl_str(&text)
+    }
+
+    pub fn from_dsl_str(text: &str) -> Result<Self> {
+        crate::synthetic::motion_dsl::parse_motion_dsl(text)
     }
 
     pub fn from_csv_str(text: &str) -> Result<Self> {

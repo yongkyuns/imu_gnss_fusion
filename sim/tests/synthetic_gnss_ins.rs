@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::Path;
 use std::process::Command;
 
@@ -15,6 +16,11 @@ use sim::synthetic::gnss_ins_path::{
     PathGenConfig, VibrationNoise, add_measurement_noise, generate, generate_with_noise,
 };
 use sim::visualizer::math::{ecef_to_ned, lla_to_ecef};
+use sim::visualizer::model::EkfImuSource;
+use sim::visualizer::pipeline::ekf_compare::{EkfCompareConfig, GnssOutageConfig};
+use sim::visualizer::pipeline::synthetic::{
+    SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_plot_data,
+};
 
 const LOCAL_GNSS_INS_SIM_DIR: &str = "/Users/ykshin/Dev/me/gnss-ins-sim";
 const SHORT_PROFILE: &str = "\
@@ -24,6 +30,12 @@ command type,yaw (deg),pitch (deg),roll (deg),vx_body (m/s),vy_body (m/s),vz_bod
 1,0,0,0,0,0,0,1,1
 1,5,0,0,0.5,0,0,2,1
 1,-5,0,0,-0.5,0,0,2,1
+";
+const SHORT_SCENARIO: &str = "\
+initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
+wait 1s
+accelerate 0.5m/s^2 for 2s
+brake 0.5m/s^2 for 2s
 ";
 
 #[test]
@@ -104,6 +116,63 @@ fn rust_path_generator_matches_gnss_ins_sim_reference_samples() -> Result<()> {
         1.0e-12,
     );
 
+    Ok(())
+}
+
+#[test]
+fn motion_dsl_expands_to_gnss_ins_motion_commands() -> Result<()> {
+    let profile = MotionProfile::from_dsl_str(
+        r#"
+        initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
+        wait 60s
+        repeat 2 {
+            accelerate 1.0m/s^2 for 8s
+            hold 12s
+            turn left 10dps for 9s
+            brake 1.0m/s^2 for 8s
+            drive yaw=-10dps ax=0 for=9s gps=off
+        }
+        "#,
+    )?;
+
+    assert_eq!(profile.initial.lat_deg, 32.0);
+    assert_eq!(profile.commands.len(), 11);
+    assert_eq!(profile.commands[1].body_cmd, [1.0, 0.0, 0.0]);
+    assert_eq!(profile.commands[3].yaw_pitch_roll_cmd_deg, [10.0, 0.0, 0.0]);
+    assert_eq!(profile.commands[4].body_cmd, [-1.0, 0.0, 0.0]);
+    assert_eq!(
+        profile.commands[5].yaw_pitch_roll_cmd_deg,
+        [-10.0, 0.0, 0.0]
+    );
+    assert!(!profile.commands[5].gps_visible);
+    Ok(())
+}
+
+#[test]
+fn city_blocks_scenario_matches_csv_motion_profile() -> Result<()> {
+    let profile_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("motion_profiles");
+    let csv = MotionProfile::from_csv(&profile_dir.join("city_blocks_15min.csv"))?;
+    let scenario = MotionProfile::from_path(&profile_dir.join("city_blocks_15min.scenario"))?;
+
+    assert_eq!(scenario.initial.lat_deg, csv.initial.lat_deg);
+    assert_eq!(scenario.initial.lon_deg, csv.initial.lon_deg);
+    assert_eq!(scenario.initial.height_m, csv.initial.height_m);
+    assert_eq!(scenario.initial.vel_body_mps, csv.initial.vel_body_mps);
+    assert_eq!(
+        scenario.initial.yaw_pitch_roll_deg,
+        csv.initial.yaw_pitch_roll_deg
+    );
+    assert_eq!(scenario.commands.len(), csv.commands.len());
+    for (idx, (actual, expected)) in scenario.commands.iter().zip(&csv.commands).enumerate() {
+        assert_eq!(actual.command_type, expected.command_type, "command {idx}");
+        assert_eq!(
+            actual.yaw_pitch_roll_cmd_deg, expected.yaw_pitch_roll_cmd_deg,
+            "command {idx}"
+        );
+        assert_eq!(actual.body_cmd, expected.body_cmd, "command {idx}");
+        assert_eq!(actual.duration_s, expected.duration_s, "command {idx}");
+        assert_eq!(actual.gps_visible, expected.gps_visible, "command {idx}");
+    }
     Ok(())
 }
 
@@ -417,6 +486,55 @@ fn eskf_converges_on_generated_city_blocks_noisy_measurements() -> Result<()> {
     assert!(
         summary.final_pos_err_m < 12.0,
         "noisy position error too high: {summary:#?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn synthetic_inputs_populate_visualizer_eskf_traces() -> Result<()> {
+    let profile_path = std::env::temp_dir().join(format!(
+        "imu_gnss_fusion_visualizer_short_{}.scenario",
+        std::process::id()
+    ));
+    fs::write(&profile_path, SHORT_SCENARIO)?;
+    let data_result = build_synthetic_plot_data(
+        &SyntheticVisualizerConfig {
+            motion_def: profile_path.clone(),
+            noise_mode: SyntheticNoiseMode::Truth,
+            seed: 42,
+            mount_rpy_deg: [5.0, -5.0, 5.0],
+            imu_hz: 100.0,
+            gnss_hz: 2.0,
+            gnss_time_shift_ms: 0.0,
+            early_vel_bias_ned_mps: [0.0; 3],
+            early_fault_window_s: None,
+        },
+        EkfImuSource::EsfAlg,
+        EkfCompareConfig::default(),
+        GnssOutageConfig::default(),
+    );
+    let remove_result = fs::remove_file(&profile_path);
+    let data = data_result?;
+    remove_result?;
+
+    assert!(!data.speed.is_empty());
+    assert!(!data.imu_raw_gyro.is_empty());
+    assert!(!data.imu_raw_accel.is_empty());
+    assert!(!data.orientation.is_empty());
+    assert!(!data.eskf_cmp_pos.is_empty());
+    assert!(!data.eskf_cmp_vel.is_empty());
+    assert!(!data.eskf_cmp_att.is_empty());
+    assert!(!data.eskf_misalignment.is_empty());
+    assert!(!data.eskf_map.is_empty());
+    assert!(
+        data.eskf_cmp_pos
+            .iter()
+            .any(|trace| !trace.points.is_empty()),
+        "synthetic visualizer produced no ESKF position points"
+    );
+    assert!(
+        data.eskf_map.iter().any(|trace| !trace.points.is_empty()),
+        "synthetic visualizer produced no map points"
     );
     Ok(())
 }

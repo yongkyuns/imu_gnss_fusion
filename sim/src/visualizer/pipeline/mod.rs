@@ -2,6 +2,7 @@ mod align_compare;
 pub mod align_replay;
 pub mod ekf_compare;
 mod signals;
+pub mod synthetic;
 pub(crate) mod tag_time;
 pub mod timebase;
 
