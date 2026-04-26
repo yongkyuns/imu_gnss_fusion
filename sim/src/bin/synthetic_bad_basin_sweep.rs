@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, ValueEnum};
@@ -11,8 +11,8 @@ use sim::eval::gnss_ins::{
 };
 use sim::eval::replay::{for_each_event, ReplayEvent};
 use sim::synthetic::gnss_ins_path::{
-    generate_with_noise, GpsNoiseModel, ImuAccuracy, MeasurementNoiseConfig, MotionProfile,
-    PathGenConfig,
+    generate_with_noise, GeneratedMeasurementSet, GpsNoiseModel, ImuAccuracy,
+    MeasurementNoiseConfig, MotionProfile, PathGenConfig,
 };
 use sim::visualizer::math::{ecef_to_ned, lla_to_ecef, quat_rpy_deg};
 
@@ -21,7 +21,7 @@ const DIAG_BODY_VEL_Y: usize = 4;
 const RAD_TO_DEG: f64 = 180.0 / std::f64::consts::PI;
 const RADPS_TO_DPS: f64 = 180.0 / std::f64::consts::PI;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Clone, Debug)]
 #[command(name = "synthetic_bad_basin_sweep")]
 struct Args {
     #[arg(
@@ -107,6 +107,14 @@ struct Args {
     early_window_end_s: f64,
     #[arg(long, default_value_t = 60.0)]
     tail_s: f64,
+    #[arg(long, default_value_t = false)]
+    eval_matrix: bool,
+    #[arg(
+        long,
+        value_delimiter = ',',
+        default_value = "sim/motion_profiles/city_blocks_15min.scenario,sim/motion_profiles/figure8_15min.csv,sim/motion_profiles/real_early_bad_basin.scenario"
+    )]
+    matrix_scenarios: Vec<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -180,6 +188,35 @@ struct Snapshot {
     mount_yaw_sigma_deg: f64,
 }
 
+struct PreparedScenario {
+    generated: GeneratedMeasurementSet,
+    imu: Vec<GenericImuSample>,
+    gnss_base: Vec<GenericGnssSample>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MatrixFault {
+    name: &'static str,
+    shift_ms: f64,
+    bias_ned_mps: [f64; 3],
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MatrixVariant {
+    name: &'static str,
+    mount_update_yaw_rate_gate_dps: f32,
+    mount_settle_time_s: f32,
+    mount_settle_release_sigma_deg: f32,
+}
+
+#[derive(Clone, Debug)]
+struct MatrixRow {
+    variant: &'static str,
+    scenario: String,
+    fault: &'static str,
+    result: SweepResult,
+}
+
 impl Snapshot {
     fn nan() -> Self {
         Self {
@@ -205,9 +242,17 @@ fn main() -> Result<()> {
     {
         bail!("sweep lists must not be empty");
     }
+    if args.eval_matrix {
+        return run_eval_matrix(&args);
+    }
 
-    let profile = MotionProfile::from_path(&args.scenario)
-        .with_context(|| format!("failed to load scenario {}", args.scenario.display()))?;
+    run_sweep(&args, true)?;
+    Ok(())
+}
+
+fn prepare_scenario(args: &Args, scenario: &Path) -> Result<PreparedScenario> {
+    let profile = MotionProfile::from_path(scenario)
+        .with_context(|| format!("failed to load scenario {}", scenario.display()))?;
     let noise = measurement_noise(args.noise);
     let gps_noise = noise.gps.unwrap_or(GpsNoiseModel {
         pos_std_m: [0.5, 0.5, 0.5],
@@ -260,22 +305,32 @@ fn main() -> Result<()> {
         })
         .collect::<Vec<_>>();
 
-    println!(
-        "scenario={} imu_samples={} gnss_samples={} duration_s={:.3} seed_mode={:?}",
-        args.scenario.display(),
-        imu.len(),
-        gnss_base.len(),
-        generated
-            .reference
-            .truth
-            .last()
-            .map(|s| s.t_s)
-            .unwrap_or(0.0),
-        args.seed_mode
-    );
-    println!(
-        "shift_ms,bias_n_mps,bias_e_mps,bias_d_mps,mount_ready_t_s,ekf_init_t_s,early_mount_qerr_max_deg,early_mount_qerr_mean_deg,early_att_qerr_mean_deg,early_yaw_err_mean_deg,handoff_mount_qerr_deg,handoff_yaw_err_deg,handoff_vel_err_mps,handoff_yaw_sigma_deg,handoff_bgz_sigma_dps,handoff_mount_yaw_sigma_deg,early_end_mount_qerr_deg,early_end_yaw_err_deg,early_end_vel_err_mps,early_end_yaw_sigma_deg,early_end_bgz_sigma_dps,early_end_mount_yaw_sigma_deg,final_mount_qerr_deg,final_att_qerr_deg,final_yaw_err_deg,final_vel_err_mps,final_pos_err_m,final_yaw_sigma_deg,final_bgz_sigma_dps,final_mount_yaw_sigma_deg,tail_mount_qerr_mean_deg,tail_att_qerr_mean_deg,body_vel_y_innov_abs,gps_vel_yaw_dx_abs_deg,gps_vel_bgz_dx_abs_dps,gps_vel_mount_yaw_dx_abs_deg,body_vel_y_yaw_dx_abs_deg,body_vel_y_bgz_dx_abs_dps,body_vel_y_mount_yaw_dx_abs_deg"
-    );
+    Ok(PreparedScenario {
+        generated,
+        imu,
+        gnss_base,
+    })
+}
+
+fn run_sweep(args: &Args, print_details: bool) -> Result<Vec<SweepResult>> {
+    let prepared = prepare_scenario(args, &args.scenario)?;
+    if print_details {
+        println!(
+            "scenario={} imu_samples={} gnss_samples={} duration_s={:.3} seed_mode={:?}",
+            args.scenario.display(),
+            prepared.imu.len(),
+            prepared.gnss_base.len(),
+            prepared
+                .generated
+                .reference
+                .truth
+                .last()
+                .map(|s| s.t_s)
+                .unwrap_or(0.0),
+            args.seed_mode
+        );
+        print_sweep_header();
+    }
 
     let mut results = Vec::new();
     for shift_ms in &args.gnss_time_shifts_ms {
@@ -283,7 +338,7 @@ fn main() -> Result<()> {
             for bias_e in &args.early_vel_bias_e_mps {
                 for bias_d in &args.early_vel_bias_d_mps {
                     let gnss = perturb_gnss(
-                        &gnss_base,
+                        &prepared.gnss_base,
                         *shift_ms,
                         [*bias_n, *bias_e, *bias_d],
                         args.early_fault_start_s,
@@ -291,49 +346,249 @@ fn main() -> Result<()> {
                     );
                     let result = run_case(
                         &args,
-                        &generated.reference.truth,
-                        &imu,
+                        &prepared.generated.reference.truth,
+                        &prepared.imu,
                         &gnss,
                         *shift_ms,
                         [*bias_n, *bias_e, *bias_d],
                     )?;
-                    print_result(&result);
+                    if print_details {
+                        print_result(&result);
+                    }
                     results.push(result);
                 }
             }
         }
     }
 
-    if let Some(worst_early) = results.iter().max_by(|a, b| {
-        a.early_mount_qerr_mean_deg
-            .total_cmp(&b.early_mount_qerr_mean_deg)
-    }) {
-        println!(
-            "worst_early_mount: shift_ms={:.1} bias=[{:.3},{:.3},{:.3}] early_mount_mean={:.6} final_mount={:.6}",
-            worst_early.shift_ms,
-            worst_early.bias_n,
-            worst_early.bias_e,
-            worst_early.bias_d,
-            worst_early.early_mount_qerr_mean_deg,
-            worst_early.final_mount_qerr_deg
-        );
-    }
-    if let Some(worst_final) = results
-        .iter()
-        .max_by(|a, b| a.final_mount_qerr_deg.total_cmp(&b.final_mount_qerr_deg))
-    {
-        println!(
-            "worst_final_mount: shift_ms={:.1} bias=[{:.3},{:.3},{:.3}] early_mount_mean={:.6} final_mount={:.6}",
-            worst_final.shift_ms,
-            worst_final.bias_n,
-            worst_final.bias_e,
-            worst_final.bias_d,
-            worst_final.early_mount_qerr_mean_deg,
-            worst_final.final_mount_qerr_deg
-        );
+    if print_details {
+        print_worst_summary(&results);
     }
 
+    Ok(results)
+}
+
+fn run_eval_matrix(args: &Args) -> Result<()> {
+    let faults = [
+        MatrixFault {
+            name: "clean",
+            shift_ms: 0.0,
+            bias_ned_mps: [0.0, 0.0, 0.0],
+        },
+        MatrixFault {
+            name: "delay_500ms",
+            shift_ms: -500.0,
+            bias_ned_mps: [0.0, 0.0, 0.0],
+        },
+        MatrixFault {
+            name: "east_bias_1p5",
+            shift_ms: 0.0,
+            bias_ned_mps: [0.0, 1.5, 0.0],
+        },
+        MatrixFault {
+            name: "delay_500ms_east_bias_1p5",
+            shift_ms: -500.0,
+            bias_ned_mps: [0.0, 1.5, 0.0],
+        },
+    ];
+    let variants = [
+        MatrixVariant {
+            name: "baseline",
+            mount_update_yaw_rate_gate_dps: 0.0,
+            mount_settle_time_s: 0.0,
+            mount_settle_release_sigma_deg: args.mount_settle_release_sigma_deg,
+        },
+        MatrixVariant {
+            name: "mount_yaw_rate_gate_1dps",
+            mount_update_yaw_rate_gate_dps: 1.0,
+            mount_settle_time_s: 0.0,
+            mount_settle_release_sigma_deg: args.mount_settle_release_sigma_deg,
+        },
+        MatrixVariant {
+            name: "mount_yaw_rate_gate_3dps",
+            mount_update_yaw_rate_gate_dps: 3.0,
+            mount_settle_time_s: 0.0,
+            mount_settle_release_sigma_deg: args.mount_settle_release_sigma_deg,
+        },
+        MatrixVariant {
+            name: "mount_settle_100s",
+            mount_update_yaw_rate_gate_dps: 0.0,
+            mount_settle_time_s: 100.0,
+            mount_settle_release_sigma_deg: 5.0,
+        },
+    ];
+
+    println!(
+        "matrix_scenarios={} faults={} variants={}",
+        args.matrix_scenarios.len(),
+        faults.len(),
+        variants.len()
+    );
+    println!(
+        "matrix_case,variant,scenario,fault,shift_ms,bias_e_mps,mount_ready_t_s,ekf_init_t_s,handoff_yaw_err_deg,handoff_vel_err_mps,early_mount_qerr_mean_deg,final_mount_qerr_deg,final_att_qerr_deg,final_yaw_err_deg,final_vel_err_mps,final_pos_err_m,tail_mount_qerr_mean_deg,body_vel_y_mount_yaw_dx_abs_deg"
+    );
+
+    let mut rows = Vec::new();
+    for scenario in &args.matrix_scenarios {
+        let prepared = prepare_scenario(args, scenario)?;
+        let scenario_name = scenario_label(scenario);
+        for variant in variants {
+            let mut variant_args = args.clone();
+            variant_args.scenario = scenario.clone();
+            variant_args.mount_update_yaw_rate_gate_dps = variant.mount_update_yaw_rate_gate_dps;
+            variant_args.mount_settle_time_s = variant.mount_settle_time_s;
+            variant_args.mount_settle_release_sigma_deg = variant.mount_settle_release_sigma_deg;
+            for fault in faults {
+                let gnss = perturb_gnss(
+                    &prepared.gnss_base,
+                    fault.shift_ms,
+                    fault.bias_ned_mps,
+                    args.early_fault_start_s,
+                    args.early_fault_end_s,
+                );
+                let result = run_case(
+                    &variant_args,
+                    &prepared.generated.reference.truth,
+                    &prepared.imu,
+                    &gnss,
+                    fault.shift_ms,
+                    fault.bias_ned_mps,
+                )
+                .with_context(|| {
+                    format!(
+                        "matrix case failed variant={} scenario={} fault={}",
+                        variant.name,
+                        scenario.display(),
+                        fault.name
+                    )
+                })?;
+                println!(
+                    "matrix_case,{},{},{},{:.1},{:.6},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
+                    variant.name,
+                    scenario_name,
+                    fault.name,
+                    result.shift_ms,
+                    result.bias_e,
+                    fmt_opt(result.mount_ready_t_s),
+                    fmt_opt(result.ekf_init_t_s),
+                    result.handoff_yaw_err_deg,
+                    result.handoff_vel_err_mps,
+                    result.early_mount_qerr_mean_deg,
+                    result.final_mount_qerr_deg,
+                    result.final_att_qerr_deg,
+                    result.final_yaw_err_deg,
+                    result.final_vel_err_mps,
+                    result.final_pos_err_m,
+                    result.tail_mount_qerr_mean_deg,
+                    result.body_vel_y_mount_yaw_dx_abs_deg
+                );
+                rows.push(MatrixRow {
+                    variant: variant.name,
+                    scenario: scenario_name.clone(),
+                    fault: fault.name,
+                    result,
+                });
+            }
+        }
+    }
+
+    print_matrix_summary(&rows);
     Ok(())
+}
+
+fn print_matrix_summary(rows: &[MatrixRow]) {
+    println!(
+        "matrix_summary,variant,cases,pass_count,mean_final_mount_qerr_deg,worst_final_mount_qerr_deg,mean_final_att_qerr_deg,worst_final_att_qerr_deg,mean_final_vel_err_mps,worst_final_vel_err_mps,improved_vs_baseline,regressed_vs_baseline"
+    );
+    let mut variants = Vec::<&str>::new();
+    for row in rows {
+        if !variants.contains(&row.variant) {
+            variants.push(row.variant);
+        }
+    }
+    for variant in variants {
+        let variant_rows = rows
+            .iter()
+            .filter(|row| row.variant == variant)
+            .collect::<Vec<_>>();
+        let pass_count = variant_rows
+            .iter()
+            .filter(|row| matrix_passes(&row.result))
+            .count();
+        let improved = variant_rows
+            .iter()
+            .filter(|row| {
+                baseline_for(rows, row)
+                    .map(|baseline| matrix_improves(&row.result, &baseline.result))
+                    .unwrap_or(false)
+            })
+            .count();
+        let regressed = variant_rows
+            .iter()
+            .filter(|row| {
+                baseline_for(rows, row)
+                    .map(|baseline| matrix_regresses(&row.result, &baseline.result))
+                    .unwrap_or(false)
+            })
+            .count();
+        println!(
+            "matrix_summary,{},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{}",
+            variant,
+            variant_rows.len(),
+            pass_count,
+            mean_or_nan(
+                variant_rows
+                    .iter()
+                    .map(|row| row.result.final_mount_qerr_deg)
+            ),
+            max_or_nan(
+                variant_rows
+                    .iter()
+                    .map(|row| row.result.final_mount_qerr_deg)
+            ),
+            mean_or_nan(variant_rows.iter().map(|row| row.result.final_att_qerr_deg)),
+            max_or_nan(variant_rows.iter().map(|row| row.result.final_att_qerr_deg)),
+            mean_or_nan(variant_rows.iter().map(|row| row.result.final_vel_err_mps)),
+            max_or_nan(variant_rows.iter().map(|row| row.result.final_vel_err_mps)),
+            improved,
+            regressed
+        );
+    }
+}
+
+fn baseline_for<'a>(rows: &'a [MatrixRow], row: &MatrixRow) -> Option<&'a MatrixRow> {
+    rows.iter().find(|candidate| {
+        candidate.variant == "baseline"
+            && candidate.scenario == row.scenario
+            && candidate.fault == row.fault
+    })
+}
+
+fn matrix_passes(result: &SweepResult) -> bool {
+    result.final_mount_qerr_deg <= 2.0
+        && result.final_att_qerr_deg <= 2.5
+        && result.final_vel_err_mps <= 1.0
+        && result.final_pos_err_m <= 10.0
+}
+
+fn matrix_improves(result: &SweepResult, baseline: &SweepResult) -> bool {
+    result.final_mount_qerr_deg < baseline.final_mount_qerr_deg - 0.25
+        && result.final_att_qerr_deg <= baseline.final_att_qerr_deg + 0.25
+        && result.final_vel_err_mps <= baseline.final_vel_err_mps + 0.25
+}
+
+fn matrix_regresses(result: &SweepResult, baseline: &SweepResult) -> bool {
+    result.final_mount_qerr_deg > baseline.final_mount_qerr_deg + 0.25
+        || result.final_att_qerr_deg > baseline.final_att_qerr_deg + 0.25
+        || result.final_vel_err_mps > baseline.final_vel_err_mps + 0.25
+        || result.final_pos_err_m > baseline.final_pos_err_m + 2.0
+}
+
+fn scenario_label(path: &Path) -> String {
+    path.file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("scenario")
+        .to_string()
 }
 
 fn measurement_noise(mode: NoiseMode) -> MeasurementNoiseConfig {
@@ -630,6 +885,43 @@ fn apply_fusion_config(fusion: &mut SensorFusion, args: &Args) {
     fusion.set_mount_settle_time_s(args.mount_settle_time_s);
     fusion.set_mount_settle_release_sigma_rad(args.mount_settle_release_sigma_deg.to_radians());
     fusion.set_mount_settle_zero_cross_covariance(args.mount_settle_zero_cross_covariance);
+}
+
+fn print_sweep_header() {
+    println!(
+        "shift_ms,bias_n_mps,bias_e_mps,bias_d_mps,mount_ready_t_s,ekf_init_t_s,early_mount_qerr_max_deg,early_mount_qerr_mean_deg,early_att_qerr_mean_deg,early_yaw_err_mean_deg,handoff_mount_qerr_deg,handoff_yaw_err_deg,handoff_vel_err_mps,handoff_yaw_sigma_deg,handoff_bgz_sigma_dps,handoff_mount_yaw_sigma_deg,early_end_mount_qerr_deg,early_end_yaw_err_deg,early_end_vel_err_mps,early_end_yaw_sigma_deg,early_end_bgz_sigma_dps,early_end_mount_yaw_sigma_deg,final_mount_qerr_deg,final_att_qerr_deg,final_yaw_err_deg,final_vel_err_mps,final_pos_err_m,final_yaw_sigma_deg,final_bgz_sigma_dps,final_mount_yaw_sigma_deg,tail_mount_qerr_mean_deg,tail_att_qerr_mean_deg,body_vel_y_innov_abs,gps_vel_yaw_dx_abs_deg,gps_vel_bgz_dx_abs_dps,gps_vel_mount_yaw_dx_abs_deg,body_vel_y_yaw_dx_abs_deg,body_vel_y_bgz_dx_abs_dps,body_vel_y_mount_yaw_dx_abs_deg"
+    );
+}
+
+fn print_worst_summary(results: &[SweepResult]) {
+    if let Some(worst_early) = results.iter().max_by(|a, b| {
+        a.early_mount_qerr_mean_deg
+            .total_cmp(&b.early_mount_qerr_mean_deg)
+    }) {
+        println!(
+            "worst_early_mount: shift_ms={:.1} bias=[{:.3},{:.3},{:.3}] early_mount_mean={:.6} final_mount={:.6}",
+            worst_early.shift_ms,
+            worst_early.bias_n,
+            worst_early.bias_e,
+            worst_early.bias_d,
+            worst_early.early_mount_qerr_mean_deg,
+            worst_early.final_mount_qerr_deg
+        );
+    }
+    if let Some(worst_final) = results
+        .iter()
+        .max_by(|a, b| a.final_mount_qerr_deg.total_cmp(&b.final_mount_qerr_deg))
+    {
+        println!(
+            "worst_final_mount: shift_ms={:.1} bias=[{:.3},{:.3},{:.3}] early_mount_mean={:.6} final_mount={:.6}",
+            worst_final.shift_ms,
+            worst_final.bias_n,
+            worst_final.bias_e,
+            worst_final.bias_d,
+            worst_final.early_mount_qerr_mean_deg,
+            worst_final.final_mount_qerr_deg
+        );
+    }
 }
 
 fn print_result(result: &SweepResult) {
