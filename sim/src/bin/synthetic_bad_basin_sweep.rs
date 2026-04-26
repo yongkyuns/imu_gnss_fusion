@@ -170,9 +170,19 @@ struct SweepResult {
     gps_vel_yaw_dx_abs_deg: f64,
     gps_vel_bgz_dx_abs_dps: f64,
     gps_vel_mount_yaw_dx_abs_deg: f64,
+    gps_vel_nis_mean: f64,
+    gps_vel_nis_max: f64,
+    gps_vel_h_mount_norm_mean: f64,
+    gps_vel_k_mount_norm_mean: f64,
+    gps_vel_yaw_mount_corr_abs_mean: f64,
     body_vel_y_yaw_dx_abs_deg: f64,
     body_vel_y_bgz_dx_abs_dps: f64,
     body_vel_y_mount_yaw_dx_abs_deg: f64,
+    body_vel_y_nis_mean: f64,
+    body_vel_y_nis_max: f64,
+    body_vel_y_h_mount_norm_mean: f64,
+    body_vel_y_k_mount_norm_mean: f64,
+    body_vel_y_yaw_mount_corr_abs_mean: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -425,7 +435,7 @@ fn run_eval_matrix(args: &Args) -> Result<()> {
         variants.len()
     );
     println!(
-        "matrix_case,variant,scenario,fault,shift_ms,bias_e_mps,mount_ready_t_s,ekf_init_t_s,handoff_yaw_err_deg,handoff_vel_err_mps,early_mount_qerr_mean_deg,final_mount_qerr_deg,final_att_qerr_deg,final_yaw_err_deg,final_vel_err_mps,final_pos_err_m,tail_mount_qerr_mean_deg,body_vel_y_mount_yaw_dx_abs_deg"
+        "matrix_case,variant,scenario,fault,shift_ms,bias_e_mps,mount_ready_t_s,ekf_init_t_s,handoff_yaw_err_deg,handoff_vel_err_mps,early_mount_qerr_mean_deg,final_mount_qerr_deg,final_att_qerr_deg,final_yaw_err_deg,final_vel_err_mps,final_pos_err_m,tail_mount_qerr_mean_deg,body_vel_y_mount_yaw_dx_abs_deg,gps_vel_nis_mean,gps_vel_nis_max,body_vel_y_nis_mean,body_vel_y_nis_max,body_vel_y_h_mount_norm_mean,body_vel_y_k_mount_norm_mean,body_vel_y_yaw_mount_corr_abs_mean"
     );
 
     let mut rows = Vec::new();
@@ -463,7 +473,7 @@ fn run_eval_matrix(args: &Args) -> Result<()> {
                     )
                 })?;
                 println!(
-                    "matrix_case,{},{},{},{:.1},{:.6},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
+                    "matrix_case,{},{},{},{:.1},{:.6},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
                     variant.name,
                     scenario_name,
                     fault.name,
@@ -480,7 +490,14 @@ fn run_eval_matrix(args: &Args) -> Result<()> {
                     result.final_vel_err_mps,
                     result.final_pos_err_m,
                     result.tail_mount_qerr_mean_deg,
-                    result.body_vel_y_mount_yaw_dx_abs_deg
+                    result.body_vel_y_mount_yaw_dx_abs_deg,
+                    result.gps_vel_nis_mean,
+                    result.gps_vel_nis_max,
+                    result.body_vel_y_nis_mean,
+                    result.body_vel_y_nis_max,
+                    result.body_vel_y_h_mount_norm_mean,
+                    result.body_vel_y_k_mount_norm_mean,
+                    result.body_vel_y_yaw_mount_corr_abs_mean
                 );
                 rows.push(MatrixRow {
                     variant: variant.name,
@@ -720,6 +737,17 @@ fn run_case(
     });
     let gps_vel_mount_yaw_dx_abs_deg =
         diag_abs_rad_to_deg(update_diag, |diag| diag.sum_abs_dx_mount_yaw[DIAG_GPS_VEL]);
+    let gps_vel_nis_mean = diag_mean(update_diag, DIAG_GPS_VEL, |diag| diag.sum_nis[DIAG_GPS_VEL]);
+    let gps_vel_nis_max = diag_value(update_diag, |diag| diag.max_nis[DIAG_GPS_VEL]);
+    let gps_vel_h_mount_norm_mean = diag_mean(update_diag, DIAG_GPS_VEL, |diag| {
+        diag.sum_h_mount_norm[DIAG_GPS_VEL]
+    });
+    let gps_vel_k_mount_norm_mean = diag_mean(update_diag, DIAG_GPS_VEL, |diag| {
+        diag.sum_k_mount_norm[DIAG_GPS_VEL]
+    });
+    let gps_vel_yaw_mount_corr_abs_mean = diag_mean(update_diag, DIAG_GPS_VEL, |diag| {
+        diag.sum_abs_corr_yaw_mount_yaw[DIAG_GPS_VEL]
+    });
     let body_vel_y_yaw_dx_abs_deg =
         diag_abs_rad_to_deg(update_diag, |diag| diag.sum_abs_dx_yaw[DIAG_BODY_VEL_Y]);
     let body_vel_y_bgz_dx_abs_dps = diag_abs_rad_to_dps(update_diag, |diag| {
@@ -727,6 +755,19 @@ fn run_case(
     });
     let body_vel_y_mount_yaw_dx_abs_deg = diag_abs_rad_to_deg(update_diag, |diag| {
         diag.sum_abs_dx_mount_yaw[DIAG_BODY_VEL_Y]
+    });
+    let body_vel_y_nis_mean = diag_mean(update_diag, DIAG_BODY_VEL_Y, |diag| {
+        diag.sum_nis[DIAG_BODY_VEL_Y]
+    });
+    let body_vel_y_nis_max = diag_value(update_diag, |diag| diag.max_nis[DIAG_BODY_VEL_Y]);
+    let body_vel_y_h_mount_norm_mean = diag_mean(update_diag, DIAG_BODY_VEL_Y, |diag| {
+        diag.sum_h_mount_norm[DIAG_BODY_VEL_Y]
+    });
+    let body_vel_y_k_mount_norm_mean = diag_mean(update_diag, DIAG_BODY_VEL_Y, |diag| {
+        diag.sum_k_mount_norm[DIAG_BODY_VEL_Y]
+    });
+    let body_vel_y_yaw_mount_corr_abs_mean = diag_mean(update_diag, DIAG_BODY_VEL_Y, |diag| {
+        diag.sum_abs_corr_yaw_mount_yaw[DIAG_BODY_VEL_Y]
     });
 
     Ok(SweepResult {
@@ -766,9 +807,19 @@ fn run_case(
         gps_vel_yaw_dx_abs_deg,
         gps_vel_bgz_dx_abs_dps,
         gps_vel_mount_yaw_dx_abs_deg,
+        gps_vel_nis_mean,
+        gps_vel_nis_max,
+        gps_vel_h_mount_norm_mean,
+        gps_vel_k_mount_norm_mean,
+        gps_vel_yaw_mount_corr_abs_mean,
         body_vel_y_yaw_dx_abs_deg,
         body_vel_y_bgz_dx_abs_dps,
         body_vel_y_mount_yaw_dx_abs_deg,
+        body_vel_y_nis_mean,
+        body_vel_y_nis_max,
+        body_vel_y_h_mount_norm_mean,
+        body_vel_y_k_mount_norm_mean,
+        body_vel_y_yaw_mount_corr_abs_mean,
     })
 }
 
@@ -889,7 +940,7 @@ fn apply_fusion_config(fusion: &mut SensorFusion, args: &Args) {
 
 fn print_sweep_header() {
     println!(
-        "shift_ms,bias_n_mps,bias_e_mps,bias_d_mps,mount_ready_t_s,ekf_init_t_s,early_mount_qerr_max_deg,early_mount_qerr_mean_deg,early_att_qerr_mean_deg,early_yaw_err_mean_deg,handoff_mount_qerr_deg,handoff_yaw_err_deg,handoff_vel_err_mps,handoff_yaw_sigma_deg,handoff_bgz_sigma_dps,handoff_mount_yaw_sigma_deg,early_end_mount_qerr_deg,early_end_yaw_err_deg,early_end_vel_err_mps,early_end_yaw_sigma_deg,early_end_bgz_sigma_dps,early_end_mount_yaw_sigma_deg,final_mount_qerr_deg,final_att_qerr_deg,final_yaw_err_deg,final_vel_err_mps,final_pos_err_m,final_yaw_sigma_deg,final_bgz_sigma_dps,final_mount_yaw_sigma_deg,tail_mount_qerr_mean_deg,tail_att_qerr_mean_deg,body_vel_y_innov_abs,gps_vel_yaw_dx_abs_deg,gps_vel_bgz_dx_abs_dps,gps_vel_mount_yaw_dx_abs_deg,body_vel_y_yaw_dx_abs_deg,body_vel_y_bgz_dx_abs_dps,body_vel_y_mount_yaw_dx_abs_deg"
+        "shift_ms,bias_n_mps,bias_e_mps,bias_d_mps,mount_ready_t_s,ekf_init_t_s,early_mount_qerr_max_deg,early_mount_qerr_mean_deg,early_att_qerr_mean_deg,early_yaw_err_mean_deg,handoff_mount_qerr_deg,handoff_yaw_err_deg,handoff_vel_err_mps,handoff_yaw_sigma_deg,handoff_bgz_sigma_dps,handoff_mount_yaw_sigma_deg,early_end_mount_qerr_deg,early_end_yaw_err_deg,early_end_vel_err_mps,early_end_yaw_sigma_deg,early_end_bgz_sigma_dps,early_end_mount_yaw_sigma_deg,final_mount_qerr_deg,final_att_qerr_deg,final_yaw_err_deg,final_vel_err_mps,final_pos_err_m,final_yaw_sigma_deg,final_bgz_sigma_dps,final_mount_yaw_sigma_deg,tail_mount_qerr_mean_deg,tail_att_qerr_mean_deg,body_vel_y_innov_abs,gps_vel_yaw_dx_abs_deg,gps_vel_bgz_dx_abs_dps,gps_vel_mount_yaw_dx_abs_deg,gps_vel_nis_mean,gps_vel_nis_max,gps_vel_h_mount_norm_mean,gps_vel_k_mount_norm_mean,gps_vel_yaw_mount_corr_abs_mean,body_vel_y_yaw_dx_abs_deg,body_vel_y_bgz_dx_abs_dps,body_vel_y_mount_yaw_dx_abs_deg,body_vel_y_nis_mean,body_vel_y_nis_max,body_vel_y_h_mount_norm_mean,body_vel_y_k_mount_norm_mean,body_vel_y_yaw_mount_corr_abs_mean"
     );
 }
 
@@ -926,7 +977,7 @@ fn print_worst_summary(results: &[SweepResult]) {
 
 fn print_result(result: &SweepResult) {
     println!(
-        "{:.1},{:.6},{:.6},{:.6},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
+        "{:.1},{:.6},{:.6},{:.6},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
         result.shift_ms,
         result.bias_n,
         result.bias_e,
@@ -963,9 +1014,19 @@ fn print_result(result: &SweepResult) {
         result.gps_vel_yaw_dx_abs_deg,
         result.gps_vel_bgz_dx_abs_dps,
         result.gps_vel_mount_yaw_dx_abs_deg,
+        result.gps_vel_nis_mean,
+        result.gps_vel_nis_max,
+        result.gps_vel_h_mount_norm_mean,
+        result.gps_vel_k_mount_norm_mean,
+        result.gps_vel_yaw_mount_corr_abs_mean,
         result.body_vel_y_yaw_dx_abs_deg,
         result.body_vel_y_bgz_dx_abs_dps,
         result.body_vel_y_mount_yaw_dx_abs_deg,
+        result.body_vel_y_nis_mean,
+        result.body_vel_y_nis_max,
+        result.body_vel_y_h_mount_norm_mean,
+        result.body_vel_y_k_mount_norm_mean,
+        result.body_vel_y_yaw_mount_corr_abs_mean,
     );
 }
 
@@ -997,6 +1058,29 @@ fn diag_abs_rad_to_dps(
 ) -> f64 {
     diag.map(|diag| value(diag) as f64 * RADPS_TO_DPS)
         .unwrap_or(f64::NAN)
+}
+
+fn diag_mean(
+    diag: Option<sensor_fusion::eskf_types::EskfUpdateDiag>,
+    diag_type: usize,
+    value: impl FnOnce(sensor_fusion::eskf_types::EskfUpdateDiag) -> f32,
+) -> f64 {
+    let Some(diag) = diag else {
+        return f64::NAN;
+    };
+    let count = diag.type_counts[diag_type] as f64;
+    if count > 0.0 {
+        value(diag) as f64 / count
+    } else {
+        f64::NAN
+    }
+}
+
+fn diag_value(
+    diag: Option<sensor_fusion::eskf_types::EskfUpdateDiag>,
+    value: impl FnOnce(sensor_fusion::eskf_types::EskfUpdateDiag) -> f32,
+) -> f64 {
+    diag.map(|diag| value(diag) as f64).unwrap_or(f64::NAN)
 }
 
 fn sigma_from_var(var: f64) -> f64 {

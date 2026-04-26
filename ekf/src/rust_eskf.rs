@@ -263,7 +263,7 @@ impl RustEskf {
         );
         scale_mount_update(&mut k, &mut dx, mount_scale);
         self.freeze_mount_update_if_needed(&mut k, &mut dx);
-        self.record_update_diag(DIAG_BODY_SPEED_X, innovation, obs.s, &k, &dx);
+        self.record_update_diag(DIAG_BODY_SPEED_X, innovation, obs.s, &obs.h, &k, &dx);
         self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
@@ -291,7 +291,7 @@ impl RustEskf {
         let mut dx = gain_dx(k, innovation);
         scale_mount_update(&mut k, &mut dx, gnss_pos_mount_scale);
         self.freeze_mount_update_if_needed(&mut k, &mut dx);
-        self.record_update_diag(DIAG_GPS_POS, innovation, obs.s, &k, &dx);
+        self.record_update_diag(DIAG_GPS_POS, innovation, obs.s, &obs.h, &k, &dx);
         self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
@@ -302,7 +302,7 @@ impl RustEskf {
         let mut dx = gain_dx(k, innovation);
         scale_mount_update(&mut k, &mut dx, gnss_pos_mount_scale);
         self.freeze_mount_update_if_needed(&mut k, &mut dx);
-        self.record_update_diag(DIAG_GPS_POS, innovation, obs.s, &k, &dx);
+        self.record_update_diag(DIAG_GPS_POS, innovation, obs.s, &obs.h, &k, &dx);
         self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
@@ -313,7 +313,7 @@ impl RustEskf {
         let mut dx = gain_dx(k, innovation);
         scale_mount_update(&mut k, &mut dx, gnss_pos_mount_scale);
         self.freeze_mount_update_if_needed(&mut k, &mut dx);
-        self.record_update_diag(DIAG_GPS_POS_D, innovation, obs.s, &k, &dx);
+        self.record_update_diag(DIAG_GPS_POS_D, innovation, obs.s, &obs.h, &k, &dx);
         self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
@@ -331,7 +331,7 @@ impl RustEskf {
         } else {
             DIAG_GPS_VEL
         };
-        self.record_update_diag(diag, innovation, obs.s, &k, &dx);
+        self.record_update_diag(diag, innovation, obs.s, &obs.h, &k, &dx);
         self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
@@ -349,7 +349,7 @@ impl RustEskf {
         } else {
             DIAG_GPS_VEL
         };
-        self.record_update_diag(diag, innovation, obs.s, &k, &dx);
+        self.record_update_diag(diag, innovation, obs.s, &obs.h, &k, &dx);
         self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
@@ -367,7 +367,7 @@ impl RustEskf {
         } else {
             DIAG_GPS_VEL_D
         };
-        self.record_update_diag(diag, innovation, obs.s, &k, &dx);
+        self.record_update_diag(diag, innovation, obs.s, &obs.h, &k, &dx);
         self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
@@ -393,7 +393,7 @@ impl RustEskf {
         self.raw.stationary_diag.k_bax_from_x = k[12];
         self.raw.stationary_diag.k_bay_from_x = k[13];
         self.copy_stationary_p_diag();
-        self.record_update_diag(DIAG_STATIONARY_X, innovation, obs.s, &k, &dx);
+        self.record_update_diag(DIAG_STATIONARY_X, innovation, obs.s, &obs.h, &k, &dx);
         self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
@@ -420,7 +420,7 @@ impl RustEskf {
         self.raw.stationary_diag.k_bay_from_y = k[13];
         self.copy_stationary_p_diag();
         self.raw.stationary_diag.updates += 1;
-        self.record_update_diag(DIAG_STATIONARY_Y, innovation, obs.s, &k, &dx);
+        self.record_update_diag(DIAG_STATIONARY_Y, innovation, obs.s, &obs.h, &k, &dx);
         self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
@@ -480,7 +480,7 @@ impl RustEskf {
             for i in 0..ERROR_STATES {
                 dx[i] += diag_dx[i] as f64;
             }
-            self.record_update_diag(diag_type, residual, s as f32, &diag_k, &diag_dx);
+            self.record_update_diag(diag_type, residual, s as f32, &obs.h, &diag_k, &diag_dx);
             for i in 0..ERROR_STATES {
                 for j in i..ERROR_STATES {
                     let updated = p[i][j] - diag_k[i] as f64 * ph[j] - ph[i] * diag_k[j] as f64
@@ -539,6 +539,7 @@ impl RustEskf {
         diag_type: usize,
         innovation: f32,
         innovation_var: f32,
+        h: &[f32; ERROR_STATES],
         k: &[f32; ERROR_STATES],
         dx: &[f32; ERROR_STATES],
     ) {
@@ -561,10 +562,29 @@ impl RustEskf {
         diag.sum_abs_dx_mount_yaw[diag_type] += fabsf(dx[17]);
         diag.sum_innovation[diag_type] += innovation;
         diag.sum_abs_innovation[diag_type] += fabsf(innovation);
+        let nis = if innovation_var > 0.0 && innovation_var.is_finite() {
+            innovation * innovation / innovation_var
+        } else {
+            0.0
+        };
+        let h_mount_norm = sqrtf(h[15] * h[15] + h[16] * h[16] + h[17] * h[17]);
+        let k_mount_norm = sqrtf(k[15] * k[15] + k[16] * k[16] + k[17] * k[17]);
+        let corr_yaw_mount_yaw = corr_from_cov(&self.raw.p, 2, 17);
+        diag.sum_nis[diag_type] += nis;
+        diag.max_nis[diag_type] = diag.max_nis[diag_type].max(nis);
+        diag.sum_abs_h_yaw[diag_type] += fabsf(h[2]);
+        diag.sum_abs_h_gyro_bias_z[diag_type] += fabsf(h[11]);
+        diag.sum_h_mount_norm[diag_type] += h_mount_norm;
+        diag.sum_abs_k_yaw[diag_type] += fabsf(k[2]);
+        diag.sum_k_mount_norm[diag_type] += k_mount_norm;
+        diag.sum_abs_corr_yaw_mount_yaw[diag_type] += fabsf(corr_yaw_mount_yaw);
         diag.last_dx_mount_yaw = dx[17];
         diag.last_k_mount_yaw = k[17];
         diag.last_innovation = innovation;
         diag.last_innovation_var = innovation_var;
+        diag.last_nis = nis;
+        diag.last_h_mount_norm = h_mount_norm;
+        diag.last_corr_yaw_mount_yaw = corr_yaw_mount_yaw;
         diag.last_type = diag_type as u32;
     }
 
@@ -634,6 +654,16 @@ fn freeze_mount_covariance(p: &mut [[f32; ERROR_STATES]; ERROR_STATES]) {
             p[i][j] = 0.0;
             p[j][i] = 0.0;
         }
+    }
+}
+
+fn corr_from_cov(p: &[[f32; ERROR_STATES]; ERROR_STATES], a: usize, b: usize) -> f32 {
+    let va = p[a][a];
+    let vb = p[b][b];
+    if va > 0.0 && vb > 0.0 && va.is_finite() && vb.is_finite() {
+        (p[a][b] / sqrtf(va * vb)).clamp(-1.0, 1.0)
+    } else {
+        0.0
     }
 }
 
