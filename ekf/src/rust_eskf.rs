@@ -2,8 +2,8 @@ use libm::{fabsf, sqrtf};
 
 use crate::ekf::PredictNoise;
 use crate::eskf_types::{
-    ESKF_UPDATE_DIAG_TYPES, EskfGnssSample, EskfImuDelta, EskfNominalState, EskfState,
-    EskfStationaryDiag, EskfUpdateDiag,
+    EskfGnssSample, EskfImuDelta, EskfNominalState, EskfState, EskfStationaryDiag, EskfUpdateDiag,
+    ESKF_UPDATE_DIAG_TYPES,
 };
 use crate::generated_eskf::{self, ERROR_STATES, NOISE_STATES};
 
@@ -548,8 +548,15 @@ impl RustEskf {
         let diag = &mut self.raw.update_diag;
         diag.total_updates += 1;
         diag.type_counts[diag_type] += 1;
+        diag.sum_dx_yaw[diag_type] += dx[2];
+        diag.sum_abs_dx_yaw[diag_type] += fabsf(dx[2]);
         diag.sum_dx_pitch[diag_type] += dx[1];
         diag.sum_abs_dx_pitch[diag_type] += fabsf(dx[1]);
+        diag.sum_abs_dx_vel_h[diag_type] += sqrtf(dx[3] * dx[3] + dx[4] * dx[4]);
+        diag.sum_dx_gyro_bias_z[diag_type] += dx[11];
+        diag.sum_abs_dx_gyro_bias_z[diag_type] += fabsf(dx[11]);
+        diag.sum_abs_dx_mount_norm[diag_type] +=
+            sqrtf(dx[15] * dx[15] + dx[16] * dx[16] + dx[17] * dx[17]);
         diag.sum_dx_mount_yaw[diag_type] += dx[17];
         diag.sum_abs_dx_mount_yaw[diag_type] += fabsf(dx[17]);
         diag.sum_innovation[diag_type] += innovation;

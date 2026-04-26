@@ -1,20 +1,25 @@
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, ValueEnum};
 use sensor_fusion::fusion::SensorFusion;
 use sim::datasets::generic_replay::{
-    GenericGnssSample, GenericImuSample, fusion_gnss_sample, fusion_imu_sample,
+    fusion_gnss_sample, fusion_imu_sample, GenericGnssSample, GenericImuSample,
 };
 use sim::eval::gnss_ins::{
     as_q64, quat_angle_deg, quat_conj, quat_from_rpy_alg_deg, quat_mul, quat_rotate, wrap_deg180,
 };
-use sim::eval::replay::{ReplayEvent, for_each_event};
+use sim::eval::replay::{for_each_event, ReplayEvent};
 use sim::synthetic::gnss_ins_path::{
-    GpsNoiseModel, ImuAccuracy, MeasurementNoiseConfig, MotionProfile, PathGenConfig,
-    generate_with_noise,
+    generate_with_noise, GpsNoiseModel, ImuAccuracy, MeasurementNoiseConfig, MotionProfile,
+    PathGenConfig,
 };
 use sim::visualizer::math::{ecef_to_ned, lla_to_ecef, quat_rpy_deg};
+
+const DIAG_GPS_VEL: usize = 1;
+const DIAG_BODY_VEL_Y: usize = 4;
+const RAD_TO_DEG: f64 = 180.0 / std::f64::consts::PI;
+const RADPS_TO_DPS: f64 = 180.0 / std::f64::consts::PI;
 
 #[derive(Parser, Debug)]
 #[command(name = "synthetic_bad_basin_sweep")]
@@ -87,6 +92,16 @@ struct Args {
     #[arg(long, default_value_t = 0.02)]
     mount_update_innovation_gate_mps: f32,
     #[arg(long, default_value_t = 0.0)]
+    mount_update_yaw_rate_gate_dps: f32,
+    #[arg(long, default_value_t = false)]
+    freeze_misalignment_states: bool,
+    #[arg(long, default_value_t = 0.0)]
+    mount_settle_time_s: f32,
+    #[arg(long, default_value_t = 7.5)]
+    mount_settle_release_sigma_deg: f32,
+    #[arg(long, default_value_t = true)]
+    mount_settle_zero_cross_covariance: bool,
+    #[arg(long, default_value_t = 0.0)]
     early_window_start_s: f64,
     #[arg(long, default_value_t = 220.0)]
     early_window_end_s: f64,
@@ -121,15 +136,35 @@ struct SweepResult {
     early_mount_qerr_mean_deg: f64,
     early_att_qerr_mean_deg: f64,
     early_yaw_err_mean_deg: f64,
+    handoff_mount_qerr_deg: f64,
+    handoff_yaw_err_deg: f64,
+    handoff_vel_err_mps: f64,
+    handoff_yaw_sigma_deg: f64,
+    handoff_bgz_sigma_dps: f64,
+    handoff_mount_yaw_sigma_deg: f64,
+    early_end_mount_qerr_deg: f64,
+    early_end_yaw_err_deg: f64,
+    early_end_vel_err_mps: f64,
+    early_end_yaw_sigma_deg: f64,
+    early_end_bgz_sigma_dps: f64,
+    early_end_mount_yaw_sigma_deg: f64,
     final_mount_qerr_deg: f64,
     final_att_qerr_deg: f64,
     final_yaw_err_deg: f64,
     final_vel_err_mps: f64,
     final_pos_err_m: f64,
+    final_yaw_sigma_deg: f64,
+    final_bgz_sigma_dps: f64,
+    final_mount_yaw_sigma_deg: f64,
     tail_mount_qerr_mean_deg: f64,
     tail_att_qerr_mean_deg: f64,
     body_vel_y_innov_abs: f64,
+    gps_vel_yaw_dx_abs_deg: f64,
+    gps_vel_bgz_dx_abs_dps: f64,
+    gps_vel_mount_yaw_dx_abs_deg: f64,
     body_vel_y_yaw_dx_abs_deg: f64,
+    body_vel_y_bgz_dx_abs_dps: f64,
+    body_vel_y_mount_yaw_dx_abs_deg: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -140,6 +175,25 @@ struct Snapshot {
     yaw_err_deg: f64,
     vel_err_mps: f64,
     pos_err_m: f64,
+    yaw_sigma_deg: f64,
+    bgz_sigma_dps: f64,
+    mount_yaw_sigma_deg: f64,
+}
+
+impl Snapshot {
+    fn nan() -> Self {
+        Self {
+            t_s: f64::NAN,
+            mount_qerr_deg: f64::NAN,
+            att_qerr_deg: f64::NAN,
+            yaw_err_deg: f64::NAN,
+            vel_err_mps: f64::NAN,
+            pos_err_m: f64::NAN,
+            yaw_sigma_deg: f64::NAN,
+            bgz_sigma_dps: f64::NAN,
+            mount_yaw_sigma_deg: f64::NAN,
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -220,7 +274,7 @@ fn main() -> Result<()> {
         args.seed_mode
     );
     println!(
-        "shift_ms,bias_n_mps,bias_e_mps,bias_d_mps,mount_ready_t_s,ekf_init_t_s,early_mount_qerr_max_deg,early_mount_qerr_mean_deg,early_att_qerr_mean_deg,early_yaw_err_mean_deg,final_mount_qerr_deg,final_att_qerr_deg,final_yaw_err_deg,final_vel_err_mps,final_pos_err_m,tail_mount_qerr_mean_deg,tail_att_qerr_mean_deg,body_vel_y_innov_abs,body_vel_y_yaw_dx_abs_deg"
+        "shift_ms,bias_n_mps,bias_e_mps,bias_d_mps,mount_ready_t_s,ekf_init_t_s,early_mount_qerr_max_deg,early_mount_qerr_mean_deg,early_att_qerr_mean_deg,early_yaw_err_mean_deg,handoff_mount_qerr_deg,handoff_yaw_err_deg,handoff_vel_err_mps,handoff_yaw_sigma_deg,handoff_bgz_sigma_dps,handoff_mount_yaw_sigma_deg,early_end_mount_qerr_deg,early_end_yaw_err_deg,early_end_vel_err_mps,early_end_yaw_sigma_deg,early_end_bgz_sigma_dps,early_end_mount_yaw_sigma_deg,final_mount_qerr_deg,final_att_qerr_deg,final_yaw_err_deg,final_vel_err_mps,final_pos_err_m,final_yaw_sigma_deg,final_bgz_sigma_dps,final_mount_yaw_sigma_deg,tail_mount_qerr_mean_deg,tail_att_qerr_mean_deg,body_vel_y_innov_abs,gps_vel_yaw_dx_abs_deg,gps_vel_bgz_dx_abs_dps,gps_vel_mount_yaw_dx_abs_deg,body_vel_y_yaw_dx_abs_deg,body_vel_y_bgz_dx_abs_dps,body_vel_y_mount_yaw_dx_abs_deg"
     );
 
     let mut results = Vec::new();
@@ -395,15 +449,30 @@ fn run_case(
         .copied()
         .filter(|s| s.t_s >= tail_start)
         .collect::<Vec<_>>();
-    let (body_vel_y_innov_abs, body_vel_y_yaw_dx_abs_deg) = fusion
-        .eskf()
-        .map(|eskf| {
-            (
-                eskf.update_diag.sum_abs_innovation[4] as f64,
-                eskf.update_diag.sum_abs_dx_mount_yaw[4] as f64 * 180.0 / std::f64::consts::PI,
-            )
-        })
-        .unwrap_or((f64::NAN, f64::NAN));
+    let handoff_snapshot = ekf_init_t_s
+        .and_then(|t_s| snapshot_at_or_after(&snapshots, t_s))
+        .unwrap_or_else(Snapshot::nan);
+    let early_end_snapshot =
+        snapshot_at_or_after(&snapshots, args.early_window_end_s).unwrap_or_else(Snapshot::nan);
+    let update_diag = fusion.eskf().map(|eskf| eskf.update_diag);
+    let body_vel_y_innov_abs = update_diag
+        .map(|diag| diag.sum_abs_innovation[DIAG_BODY_VEL_Y] as f64)
+        .unwrap_or(f64::NAN);
+    let gps_vel_yaw_dx_abs_deg =
+        diag_abs_rad_to_deg(update_diag, |diag| diag.sum_abs_dx_yaw[DIAG_GPS_VEL]);
+    let gps_vel_bgz_dx_abs_dps = diag_abs_rad_to_dps(update_diag, |diag| {
+        diag.sum_abs_dx_gyro_bias_z[DIAG_GPS_VEL]
+    });
+    let gps_vel_mount_yaw_dx_abs_deg =
+        diag_abs_rad_to_deg(update_diag, |diag| diag.sum_abs_dx_mount_yaw[DIAG_GPS_VEL]);
+    let body_vel_y_yaw_dx_abs_deg =
+        diag_abs_rad_to_deg(update_diag, |diag| diag.sum_abs_dx_yaw[DIAG_BODY_VEL_Y]);
+    let body_vel_y_bgz_dx_abs_dps = diag_abs_rad_to_dps(update_diag, |diag| {
+        diag.sum_abs_dx_gyro_bias_z[DIAG_BODY_VEL_Y]
+    });
+    let body_vel_y_mount_yaw_dx_abs_deg = diag_abs_rad_to_deg(update_diag, |diag| {
+        diag.sum_abs_dx_mount_yaw[DIAG_BODY_VEL_Y]
+    });
 
     Ok(SweepResult {
         shift_ms,
@@ -416,15 +485,35 @@ fn run_case(
         early_mount_qerr_mean_deg: mean_or_nan(early.iter().map(|s| s.mount_qerr_deg)),
         early_att_qerr_mean_deg: mean_or_nan(early.iter().map(|s| s.att_qerr_deg)),
         early_yaw_err_mean_deg: mean_abs_or_nan(early.iter().map(|s| s.yaw_err_deg)),
+        handoff_mount_qerr_deg: handoff_snapshot.mount_qerr_deg,
+        handoff_yaw_err_deg: handoff_snapshot.yaw_err_deg,
+        handoff_vel_err_mps: handoff_snapshot.vel_err_mps,
+        handoff_yaw_sigma_deg: handoff_snapshot.yaw_sigma_deg,
+        handoff_bgz_sigma_dps: handoff_snapshot.bgz_sigma_dps,
+        handoff_mount_yaw_sigma_deg: handoff_snapshot.mount_yaw_sigma_deg,
+        early_end_mount_qerr_deg: early_end_snapshot.mount_qerr_deg,
+        early_end_yaw_err_deg: early_end_snapshot.yaw_err_deg,
+        early_end_vel_err_mps: early_end_snapshot.vel_err_mps,
+        early_end_yaw_sigma_deg: early_end_snapshot.yaw_sigma_deg,
+        early_end_bgz_sigma_dps: early_end_snapshot.bgz_sigma_dps,
+        early_end_mount_yaw_sigma_deg: early_end_snapshot.mount_yaw_sigma_deg,
         final_mount_qerr_deg: final_snapshot.mount_qerr_deg,
         final_att_qerr_deg: final_snapshot.att_qerr_deg,
         final_yaw_err_deg: final_snapshot.yaw_err_deg,
         final_vel_err_mps: final_snapshot.vel_err_mps,
         final_pos_err_m: final_snapshot.pos_err_m,
+        final_yaw_sigma_deg: final_snapshot.yaw_sigma_deg,
+        final_bgz_sigma_dps: final_snapshot.bgz_sigma_dps,
+        final_mount_yaw_sigma_deg: final_snapshot.mount_yaw_sigma_deg,
         tail_mount_qerr_mean_deg: mean_or_nan(tail.iter().map(|s| s.mount_qerr_deg)),
         tail_att_qerr_mean_deg: mean_or_nan(tail.iter().map(|s| s.att_qerr_deg)),
         body_vel_y_innov_abs,
+        gps_vel_yaw_dx_abs_deg,
+        gps_vel_bgz_dx_abs_dps,
+        gps_vel_mount_yaw_dx_abs_deg,
         body_vel_y_yaw_dx_abs_deg,
+        body_vel_y_bgz_dx_abs_dps,
+        body_vel_y_mount_yaw_dx_abs_deg,
     })
 }
 
@@ -517,6 +606,9 @@ fn snapshot_state(
             eskf.nominal.pe as f64 - truth_pos_ned[1],
             eskf.nominal.pd as f64 - truth_pos_ned[2],
         ]),
+        yaw_sigma_deg: sigma_from_var(eskf.p[2][2] as f64) * RAD_TO_DEG,
+        bgz_sigma_dps: sigma_from_var(eskf.p[11][11] as f64) * RADPS_TO_DPS,
+        mount_yaw_sigma_deg: sigma_from_var(eskf.p[17][17] as f64) * RAD_TO_DEG,
     })
 }
 
@@ -533,11 +625,16 @@ fn apply_fusion_config(fusion: &mut SensorFusion, args: &Args) {
     fusion.set_mount_update_min_scale(args.mount_update_min_scale);
     fusion.set_mount_update_ramp_time_s(args.mount_update_ramp_time_s);
     fusion.set_mount_update_innovation_gate_mps(args.mount_update_innovation_gate_mps);
+    fusion.set_mount_update_yaw_rate_gate_radps(args.mount_update_yaw_rate_gate_dps.to_radians());
+    fusion.set_freeze_misalignment_states(args.freeze_misalignment_states);
+    fusion.set_mount_settle_time_s(args.mount_settle_time_s);
+    fusion.set_mount_settle_release_sigma_rad(args.mount_settle_release_sigma_deg.to_radians());
+    fusion.set_mount_settle_zero_cross_covariance(args.mount_settle_zero_cross_covariance);
 }
 
 fn print_result(result: &SweepResult) {
     println!(
-        "{:.1},{:.6},{:.6},{:.6},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
+        "{:.1},{:.6},{:.6},{:.6},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
         result.shift_ms,
         result.bias_n,
         result.bias_e,
@@ -548,15 +645,35 @@ fn print_result(result: &SweepResult) {
         result.early_mount_qerr_mean_deg,
         result.early_att_qerr_mean_deg,
         result.early_yaw_err_mean_deg,
+        result.handoff_mount_qerr_deg,
+        result.handoff_yaw_err_deg,
+        result.handoff_vel_err_mps,
+        result.handoff_yaw_sigma_deg,
+        result.handoff_bgz_sigma_dps,
+        result.handoff_mount_yaw_sigma_deg,
+        result.early_end_mount_qerr_deg,
+        result.early_end_yaw_err_deg,
+        result.early_end_vel_err_mps,
+        result.early_end_yaw_sigma_deg,
+        result.early_end_bgz_sigma_dps,
+        result.early_end_mount_yaw_sigma_deg,
         result.final_mount_qerr_deg,
         result.final_att_qerr_deg,
         result.final_yaw_err_deg,
         result.final_vel_err_mps,
         result.final_pos_err_m,
+        result.final_yaw_sigma_deg,
+        result.final_bgz_sigma_dps,
+        result.final_mount_yaw_sigma_deg,
         result.tail_mount_qerr_mean_deg,
         result.tail_att_qerr_mean_deg,
         result.body_vel_y_innov_abs,
+        result.gps_vel_yaw_dx_abs_deg,
+        result.gps_vel_bgz_dx_abs_dps,
+        result.gps_vel_mount_yaw_dx_abs_deg,
         result.body_vel_y_yaw_dx_abs_deg,
+        result.body_vel_y_bgz_dx_abs_dps,
+        result.body_vel_y_mount_yaw_dx_abs_deg,
     );
 }
 
@@ -564,6 +681,38 @@ fn fmt_opt(value: Option<f64>) -> String {
     value
         .map(|v| format!("{v:.3}"))
         .unwrap_or_else(|| "nan".to_string())
+}
+
+fn snapshot_at_or_after(snapshots: &[Snapshot], t_s: f64) -> Option<Snapshot> {
+    snapshots
+        .iter()
+        .copied()
+        .find(|snapshot| snapshot.t_s >= t_s)
+        .or_else(|| snapshots.last().copied())
+}
+
+fn diag_abs_rad_to_deg(
+    diag: Option<sensor_fusion::eskf_types::EskfUpdateDiag>,
+    value: impl FnOnce(sensor_fusion::eskf_types::EskfUpdateDiag) -> f32,
+) -> f64 {
+    diag.map(|diag| value(diag) as f64 * RAD_TO_DEG)
+        .unwrap_or(f64::NAN)
+}
+
+fn diag_abs_rad_to_dps(
+    diag: Option<sensor_fusion::eskf_types::EskfUpdateDiag>,
+    value: impl FnOnce(sensor_fusion::eskf_types::EskfUpdateDiag) -> f32,
+) -> f64 {
+    diag.map(|diag| value(diag) as f64 * RADPS_TO_DPS)
+        .unwrap_or(f64::NAN)
+}
+
+fn sigma_from_var(var: f64) -> f64 {
+    if var.is_finite() && var > 0.0 {
+        var.sqrt()
+    } else {
+        0.0
+    }
 }
 
 fn mean_or_nan(values: impl Iterator<Item = f64>) -> f64 {
@@ -575,7 +724,11 @@ fn mean_or_nan(values: impl Iterator<Item = f64>) -> f64 {
             sum += value;
         }
     }
-    if n == 0 { f64::NAN } else { sum / n as f64 }
+    if n == 0 {
+        f64::NAN
+    } else {
+        sum / n as f64
+    }
 }
 
 fn mean_abs_or_nan(values: impl Iterator<Item = f64>) -> f64 {
