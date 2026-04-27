@@ -71,9 +71,9 @@ struct Args {
     mount_align_rw_var: f32,
     #[arg(long, default_value_t = 0.01)]
     mount_update_min_scale: f32,
-    #[arg(long, default_value_t = 300.0)]
+    #[arg(long, default_value_t = 120.0)]
     mount_update_ramp_time_s: f32,
-    #[arg(long, default_value_t = 0.05)]
+    #[arg(long, default_value_t = 0.10)]
     mount_update_innovation_gate_mps: f32,
     #[arg(long, default_value_t = false)]
     analysis_zero_mount_cross_cov: bool,

@@ -294,15 +294,22 @@ impl eframe::App for App {
                             replay_changed |= ui
                                 .selectable_value(
                                     &mut replay.misalignment,
-                                    EkfImuSource::Align,
-                                    "auto/align",
+                                    EkfImuSource::Internal,
+                                    "internal",
                                 )
                                 .changed();
                             replay_changed |= ui
                                 .selectable_value(
                                     &mut replay.misalignment,
-                                    EkfImuSource::EsfAlg,
-                                    "alg",
+                                    EkfImuSource::External,
+                                    "external",
+                                )
+                                .changed();
+                            replay_changed |= ui
+                                .selectable_value(
+                                    &mut replay.misalignment,
+                                    EkfImuSource::Ref,
+                                    "ref",
                                 )
                                 .changed();
                         });

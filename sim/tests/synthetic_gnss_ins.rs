@@ -509,7 +509,7 @@ fn synthetic_inputs_populate_visualizer_eskf_traces() -> Result<()> {
             early_vel_bias_ned_mps: [0.0; 3],
             early_fault_window_s: None,
         },
-        EkfImuSource::EsfAlg,
+        EkfImuSource::Ref,
         EkfCompareConfig::default(),
         GnssOutageConfig::default(),
     );

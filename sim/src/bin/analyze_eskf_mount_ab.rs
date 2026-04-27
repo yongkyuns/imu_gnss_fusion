@@ -17,7 +17,7 @@ use sim::visualizer::pipeline::ekf_compare::{EkfCompareConfig, GnssOutageConfig}
 struct Args {
     #[arg(value_name = "LOGFILE")]
     logfile: PathBuf,
-    #[arg(long, default_value = "align", value_parser = parse_misalignment)]
+    #[arg(long, default_value = "internal", value_parser = parse_misalignment)]
     misalignment: EkfImuSource,
     #[arg(long)]
     max_records: Option<usize>,
@@ -80,11 +80,7 @@ struct Args {
 }
 
 fn parse_misalignment(s: &str) -> Result<EkfImuSource, String> {
-    match s.to_ascii_lowercase().as_str() {
-        "align" | "auto" => Ok(EkfImuSource::Align),
-        "esf-alg" | "esf_alg" | "esfalg" => Ok(EkfImuSource::EsfAlg),
-        other => Err(format!("invalid misalignment source: {other}")),
-    }
+    EkfImuSource::from_cli_value(s)
 }
 
 fn trace_last(traces: &[Trace], name: &str) -> Result<f64> {
@@ -453,6 +449,26 @@ fn main() -> Result<()> {
         print_trace_summary(
             "loose_misalignment",
             trace_by_name(&data.loose_misalignment, name)?,
+        );
+    }
+    for name in [
+        "Loose accel bias x [m/s^2]",
+        "Loose accel bias y [m/s^2]",
+        "Loose accel bias z [m/s^2]",
+    ] {
+        print_trace_summary(
+            "loose_bias_accel",
+            trace_by_name(&data.loose_bias_accel, name)?,
+        );
+    }
+    for name in [
+        "Loose accel scale x",
+        "Loose accel scale y",
+        "Loose accel scale z",
+    ] {
+        print_trace_summary(
+            "loose_scale_accel",
+            trace_by_name(&data.loose_scale_accel, name)?,
         );
     }
     for name in [

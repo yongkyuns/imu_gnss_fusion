@@ -236,8 +236,8 @@ pub fn build_fusion_align_replay(
     let final_alg_q = alg_events.last().map(|ev| ev.q_frd);
 
     let mut fusion = match imu_source {
-        EkfImuSource::Align => Some(SensorFusion::new()),
-        EkfImuSource::EsfAlg => None,
+        EkfImuSource::Internal | EkfImuSource::External => Some(SensorFusion::new()),
+        EkfImuSource::Ref => None,
     };
     let mut scan_idx = 0usize;
     let mut alg_idx = 0usize;
@@ -261,7 +261,7 @@ pub fn build_fusion_align_replay(
                 alg_status_idx += 1;
             }
             let pkt = &imu_packets[scan_idx];
-            if imu_source == EkfImuSource::EsfAlg
+            if imu_source.uses_ref_mount()
                 && fusion.is_none()
                 && cur_alg_status >= 3
                 && let Some(q_vb) = final_alg_q
@@ -294,7 +294,7 @@ pub fn build_fusion_align_replay(
             cur_alg_status = alg_status_events[alg_status_idx].1;
             alg_status_idx += 1;
         }
-        if imu_source == EkfImuSource::EsfAlg && fusion.is_none() {
+        if imu_source.uses_ref_mount() && fusion.is_none() {
             continue;
         }
 

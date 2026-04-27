@@ -154,15 +154,15 @@ pub fn build_synthetic_plot_data(
 
     let outage_windows = sample_outage_windows(&gnss, gnss_outages);
     let mut fusion = match ekf_imu_source {
-        EkfImuSource::Align => SensorFusion::new(),
-        EkfImuSource::EsfAlg => SensorFusion::with_misalignment([
+        EkfImuSource::Internal | EkfImuSource::External => SensorFusion::new(),
+        EkfImuSource::Ref => SensorFusion::with_misalignment([
             q_truth_mount[0] as f32,
             q_truth_mount[1] as f32,
             q_truth_mount[2] as f32,
             q_truth_mount[3] as f32,
         ]),
     };
-    apply_fusion_config(&mut fusion, ekf_cfg);
+    apply_fusion_config(&mut fusion, ekf_cfg, ekf_imu_source);
 
     let mut eskf_pos_n = Vec::new();
     let mut eskf_pos_e = Vec::new();
@@ -569,7 +569,7 @@ pub fn build_synthetic_plot_data(
     })
 }
 
-fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig) {
+fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig, mode: EkfImuSource) {
     fusion.set_r_body_vel(cfg.r_body_vel);
     fusion.set_gnss_pos_mount_scale(cfg.gnss_pos_mount_scale);
     fusion.set_gnss_vel_mount_scale(cfg.gnss_vel_mount_scale);
@@ -587,6 +587,7 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig) {
     fusion.set_mount_update_yaw_rate_gate_radps(cfg.mount_update_yaw_rate_gate_dps.to_radians());
     fusion.set_align_handoff_delay_s(cfg.align_handoff_delay_s);
     fusion.set_freeze_misalignment_states(cfg.freeze_misalignment_states);
+    fusion.set_eskf_mount_source(mode.eskf_mount_source());
     fusion.set_mount_settle_time_s(cfg.mount_settle_time_s);
     fusion.set_mount_settle_release_sigma_rad(cfg.mount_settle_release_sigma_deg.to_radians());
     fusion.set_mount_settle_zero_cross_covariance(cfg.mount_settle_zero_cross_covariance);

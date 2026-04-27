@@ -9,10 +9,12 @@
 
 ## Workspace crates
 
-- `sim`: offline replay/simulation and visualization app (`visualize_pygpsdata_log`).
+- `sim`: offline replay/simulation, diagnostics, and visualization app.
 - `logger`: realtime serial logger and Rerun-based live UI (`realtime_rerun_logger`).
-- `ekf`: EKF implementation crate (including generated model code and C parity assets).
+- `ekf`: Rust EKF implementation crate, including generated model code.
 - `ublox`: local fork of the UBX parsing crate used by the workspace.
+
+See `docs/repo_architecture.png` for a high-level workspace data-flow diagram.
 
 ## Build
 
@@ -24,7 +26,21 @@ cargo build --release
 ## Run simulation/visualization
 
 ```bash
-cargo run --release -p sim -- /path/to/ubx_raw_*.bin
+cargo run --release -p sim --bin visualizer -- /path/to/ubx_raw_*.bin
+```
+
+The visualizer's `--misalignment` option selects one mount-angle source:
+
+- `internal`: seed from Align, then let ESKF estimate residual fine alignment.
+- `external`: keep ESKF mount states frozen and continuously follow Align.
+- `ref`: use ESF-ALG/reference mount angles.
+
+For example:
+
+```bash
+cargo run --release -p sim --bin visualizer -- \
+  logger/data/ubx_raw_20260328_153757.bin \
+  --misalignment external
 ```
 
 ## Run realtime logger

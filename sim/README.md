@@ -19,6 +19,8 @@ This crate mixes interactive tooling, stable evaluators, and one-off diagnostics
 - `analyze_eskf_transition`
 - `analyze_eskf_stop`
 - `analyze_eskf_mount_ab`
+- `analyze_loose_bias_drift`
+- `diag_loose_accel_z_bias`
 - `check_reanchor`
 - `analyze_esf_alg_behavior`
 - `analyze_esf_alg_transition_speeds`
@@ -27,6 +29,41 @@ This crate mixes interactive tooling, stable evaluators, and one-off diagnostics
 - `sweep_mapping`
 
 These are still useful, but they are not the stable surface area for automation or documentation.
+
+## Visualizer mount modes
+
+The visualizer and the main A/B analyzers use a single `--misalignment` option:
+
+- `internal`: Align provides the initial mount seed, then ESKF estimates residual mount states.
+- `external`: ESKF continuously follows Align and freezes its residual mount states.
+- `ref`: ESF-ALG/reference mount angles are used.
+
+Legacy aliases are still accepted where useful: `align`/`auto` map to `internal`,
+`follow-align` maps to `external`, and `esf-alg`/`alg`/`manual` map to `ref`.
+Loose keeps its historical behavior: `external` is treated like `internal`, so
+loose uses the latched Align seed rather than continuously following Align.
+
+## Loose diagnostics
+
+Loose accel and gyro diagnostic plots use the same pre-rotated IMU stream that is
+fed to the loose filter. The full loose mount plot composes the latched seed and
+residual correction as `q_seed * inv(qcs)`, matching the physical mount convention
+used by the ESKF plots.
+
+The loose accel-bias states are additive correction states:
+
+```text
+corrected_accel = accel_scale * raw_accel + accel_bias
+```
+
+So a physical sensor bias has the opposite sign of the plotted loose bias state.
+The loose Z-bias investigation showed that vertical accel bias is observable
+through GNSS vertical position/velocity, but estimating accel scale and accel
+bias together makes the Z channel underdetermined because the vehicle Z axis is
+dominated by gravity. The visualizer loose path therefore keeps accel scale fixed
+by default and lets accel bias absorb the remaining correction. Use
+`diag_loose_accel_z_bias` for controlled synthetic checks and
+`analyze_loose_bias_drift` for real-log trace sampling.
 
 ## Python scripts
 

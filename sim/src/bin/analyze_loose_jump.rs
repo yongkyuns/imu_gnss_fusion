@@ -522,6 +522,13 @@ fn main() -> Result<()> {
                     ecef_to_ned_matrix(ref_lat, ref_lon),
                     [pre_nom.vn as f64, pre_nom.ve as f64, pre_nom.vd as f64],
                 );
+                let pre_pos_ecef = [pre_nom.pn as f64, pre_nom.pe as f64, pre_nom.pd as f64];
+                let pre_pos_res_ned = ecef_to_ned(pre_pos_ecef, ecef, nav.lat_deg, nav.lon_deg);
+                let pre_vel_res_ned = [
+                    pre_vel_ned[0] - nav.vel_n_mps,
+                    pre_vel_ned[1] - nav.vel_e_mps,
+                    pre_vel_ned[2] - nav.vel_d_mps,
+                ];
                 let pre_q_ns = quat_mul(
                     quat_ecef_to_ned(ref_lat, ref_lon),
                     [
@@ -606,7 +613,7 @@ fn main() -> Result<()> {
                 prev_post_mount = Some(post_qcs);
                 if (t_s - args.target_s).abs() <= args.window_s {
                     println!(
-                        "t={:.3}s obs={:?} veh_att_pre=[{:.2},{:.2},{:.2}] vel_vehicle_pre=[{:.3},{:.3},{:.3}] full_mount_pre=[{:.2},{:.2},{:.2}] post=[{:.2},{:.2},{:.2}] dpsi_cc=[{:.3},{:.3},{:.3}] dtheta_e=[{:.3},{:.3},{:.3}] dv_e=[{:.3},{:.3},{:.3}] dba=[{:.3},{:.3},{:.3}] v_e_pre=[{:.3},{:.3},{:.3}] baz_pre={:.3}",
+                        "t={:.3}s obs={:?} veh_att_pre=[{:.2},{:.2},{:.2}] vel_vehicle_pre=[{:.3},{:.3},{:.3}] pos_res_ned_pre=[{:.3},{:.3},{:.3}] vel_res_ned_pre=[{:.3},{:.3},{:.3}] full_mount_pre=[{:.2},{:.2},{:.2}] post=[{:.2},{:.2},{:.2}] dpsi_cc=[{:.3},{:.3},{:.3}] dtheta_e=[{:.3},{:.3},{:.3}] dv_e=[{:.3},{:.3},{:.3}] dba=[{:.3},{:.3},{:.3}] v_e_pre=[{:.3},{:.3},{:.3}] accel_bias_pre=[{:.3},{:.3},{:.3}]",
                         t_s,
                         obs_names(loose_ref.last_obs_types()),
                         pre_roll,
@@ -615,6 +622,12 @@ fn main() -> Result<()> {
                         pre_vel_vehicle[0],
                         pre_vel_vehicle[1],
                         pre_vel_vehicle[2],
+                        pre_pos_res_ned[0],
+                        pre_pos_res_ned[1],
+                        pre_pos_res_ned[2],
+                        pre_vel_res_ned[0],
+                        pre_vel_res_ned[1],
+                        pre_vel_res_ned[2],
                         pre_qcs[0],
                         pre_qcs[1],
                         pre_qcs[2],
@@ -636,6 +649,8 @@ fn main() -> Result<()> {
                         pre_nom.vn,
                         pre_nom.ve,
                         pre_nom.vd,
+                        pre_nom.bax,
+                        pre_nom.bay,
                         pre_nom.baz,
                     );
                 }

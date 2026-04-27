@@ -28,11 +28,7 @@ struct Args {
     #[arg(long, default_value_t = 44)]
     gnss_outage_seed: u64,
 
-    #[arg(
-        long = "misalignment",
-        alias = "ekf-imu-source",
-        default_value = "manual"
-    )]
+    #[arg(long = "misalignment", alias = "ekf-imu-source", default_value = "ref")]
     misalignment: String,
 
     #[arg(long, default_value_t = 1)]
@@ -70,11 +66,8 @@ fn main() -> Result<()> {
     let args = Args::parse();
     let data = fs::read(&args.logfile)
         .with_context(|| format!("failed to read {}", args.logfile.display()))?;
-    let ekf_imu_source = match args.misalignment.as_str() {
-        "auto" | "align" => EkfImuSource::Align,
-        "manual" | "esf-alg" | "esf_alg" | "alg" => EkfImuSource::EsfAlg,
-        other => anyhow::bail!("unsupported --misalignment: {other}"),
-    };
+    let ekf_imu_source =
+        EkfImuSource::from_cli_value(&args.misalignment).map_err(anyhow::Error::msg)?;
     let _ = parse_ubx_frames(&data, None);
     let predict_noise = if args.gyro_var.is_some()
         || args.accel_var.is_some()

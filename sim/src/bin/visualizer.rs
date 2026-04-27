@@ -66,7 +66,7 @@ struct Args {
     #[arg(
         long = "misalignment",
         alias = "ekf-imu-source",
-        default_value = "auto",
+        default_value = "internal",
         value_parser = parse_misalignment
     )]
     misalignment: EkfImuSource,
@@ -301,7 +301,8 @@ fn main() -> Result<()> {
         tmax
     );
     eprintln!(
-        "[profile] ekf-only predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} gnss_pos_r_scale={:.3} gnss_vel_r_scale={:.3} r_body_vel={:.3} gnss_pos_mount_scale={:.3} gnss_vel_mount_scale={:.3} yaw_init_sigma_deg={:.3} gyro_bias_init_sigma_dps={:.3} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} mount_update_min_scale={:.3} mount_update_ramp_time_s={:.3} mount_update_innovation_gate_mps={:.3} align_handoff_delay_s={:.3} freeze_misalignment_states={} mount_settle_time_s={:.3} mount_settle_release_sigma_deg={:.3} mount_settle_zero_cross_covariance={}",
+        "[profile] ekf-only misalignment={:?} predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} gnss_pos_r_scale={:.3} gnss_vel_r_scale={:.3} r_body_vel={:.3} gnss_pos_mount_scale={:.3} gnss_vel_mount_scale={:.3} yaw_init_sigma_deg={:.3} gyro_bias_init_sigma_dps={:.3} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} mount_update_min_scale={:.3} mount_update_ramp_time_s={:.3} mount_update_innovation_gate_mps={:.3} align_handoff_delay_s={:.3} freeze_misalignment_states={} mount_settle_time_s={:.3} mount_settle_release_sigma_deg={:.3} mount_settle_zero_cross_covariance={}",
+        args.misalignment,
         ekf_cfg.predict_imu_decimation,
         ekf_cfg
             .predict_imu_lpf_cutoff_hz
@@ -496,13 +497,7 @@ fn main() {}
 
 #[cfg(not(target_arch = "wasm32"))]
 fn parse_misalignment(s: &str) -> Result<EkfImuSource, String> {
-    match s.to_ascii_lowercase().as_str() {
-        "auto" | "align" => Ok(EkfImuSource::Align),
-        "manual" | "esf-alg" | "esf_alg" | "alg" => Ok(EkfImuSource::EsfAlg),
-        _ => Err(format!(
-            "invalid misalignment '{s}', expected 'auto' or 'manual'"
-        )),
-    }
+    EkfImuSource::from_cli_value(s)
 }
 
 #[cfg(not(target_arch = "wasm32"))]

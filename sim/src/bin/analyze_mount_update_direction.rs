@@ -26,7 +26,7 @@ const CUES: [&str; 11] = [
 struct Args {
     #[arg(value_name = "LOGFILE")]
     logfile: PathBuf,
-    #[arg(long, default_value = "align", value_parser = parse_misalignment)]
+    #[arg(long, default_value = "internal", value_parser = parse_misalignment)]
     misalignment: EkfImuSource,
     #[arg(long)]
     max_records: Option<usize>,
@@ -86,11 +86,7 @@ struct CueStats {
 }
 
 fn parse_misalignment(s: &str) -> Result<EkfImuSource, String> {
-    match s.to_ascii_lowercase().as_str() {
-        "align" | "auto" => Ok(EkfImuSource::Align),
-        "esf-alg" | "esf_alg" | "esfalg" => Ok(EkfImuSource::EsfAlg),
-        other => Err(format!("invalid misalignment source: {other}")),
-    }
+    EkfImuSource::from_cli_value(s)
 }
 
 fn main() -> Result<()> {
@@ -300,7 +296,9 @@ fn print_summary(args: &Args, cfg: EkfCompareConfig, rows: &[Row]) {
         cfg.mount_update_innovation_gate_mps,
         cfg.mount_update_yaw_rate_gate_dps,
     );
-    println!("note: direction is scored at sample level; simultaneous batch cues share the same before/after mount state.");
+    println!(
+        "note: direction is scored at sample level; simultaneous batch cues share the same before/after mount state."
+    );
     println!("cue_summary:");
     println!(
         "cue,count,helpful,harmful,neutral,helpful_frac,dx_abs_sum_deg,innov_abs_sum,mean_delta_err_deg,dx_weighted_delta_err_deg,innov_weighted_delta_err_deg"
@@ -461,12 +459,7 @@ fn time_bin(t_s: f64) -> &'static str {
     }
 }
 
-fn print_top_rows(
-    title: &str,
-    rows: &[Row],
-    top_k: usize,
-    mut key: impl FnMut(&Row) -> f64,
-) {
+fn print_top_rows(title: &str, rows: &[Row], top_k: usize, mut key: impl FnMut(&Row) -> f64) {
     let mut selected: Vec<_> = rows
         .iter()
         .filter(|row| row.delta_err_deg.is_finite())
@@ -535,12 +528,7 @@ fn sample_trace(trace: &Trace, t_s: f64) -> Option<f64> {
     }
 }
 
-fn sample_mount_rpy(
-    roll: &Trace,
-    pitch: &Trace,
-    yaw: &Trace,
-    t_s: f64,
-) -> Option<(f64, f64, f64)> {
+fn sample_mount_rpy(roll: &Trace, pitch: &Trace, yaw: &Trace, t_s: f64) -> Option<(f64, f64, f64)> {
     Some((
         sample_trace(roll, t_s)?,
         sample_trace(pitch, t_s)?,
@@ -556,7 +544,7 @@ fn sample_mount_quat(roll: &Trace, pitch: &Trace, yaw: &Trace, t_s: f64) -> Opti
 fn axis_err_deg(q_est: [f64; 4], q_ref: [f64; 4], axis: [f64; 3]) -> f64 {
     let est = quat_rotate(q_est, axis);
     let reference = quat_rotate(q_ref, axis);
-    let dot = (est[0] * reference[0] + est[1] * reference[1] + est[2] * reference[2])
-        .clamp(-1.0, 1.0);
+    let dot =
+        (est[0] * reference[0] + est[1] * reference[1] + est[2] * reference[2]).clamp(-1.0, 1.0);
     dot.acos().to_degrees()
 }

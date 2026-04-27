@@ -945,7 +945,7 @@ fn evaluate_fusion_config(dataset: &AlignDataset) -> EvalResult {
     let samples = replay_to_residuals(build_fusion_align_replay(
         &dataset.frames,
         &dataset.timeline,
-        EkfImuSource::Align,
+        EkfImuSource::Internal,
         ImuReplayConfig::default(),
     ));
     let init_time_s = samples.first().map(|s| s.t_s).unwrap_or(f64::NAN);
@@ -1058,7 +1058,7 @@ fn build_replay_for_mode(
         FilterMode::Fusion => build_fusion_align_replay(
             &dataset.frames,
             &dataset.timeline,
-            EkfImuSource::Align,
+            EkfImuSource::Internal,
             ImuReplayConfig::default(),
         ),
     }

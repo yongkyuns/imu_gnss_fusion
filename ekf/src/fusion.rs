@@ -7,7 +7,7 @@ const WGS84_A_M: f64 = 6378137.0;
 const WGS84_E2: f64 = 6.69437999014e-3;
 const REANCHOR_DISTANCE_M: f32 = 5000.0;
 const RUNTIME_ZERO_SPEED_MPS: f32 = 0.80;
-const RUNTIME_NHC_MAX_GYRO_RADPS: f32 = 0.03;
+const RUNTIME_NHC_MAX_ROLL_PITCH_GYRO_RADPS: f32 = 0.03;
 const RUNTIME_NHC_MAX_ACCEL_NORM_ERR_MPS2: f32 = 0.2;
 const CAN_SPEED_ZERO_MPS: f32 = 0.15;
 const CAN_SPEED_SIGN_INFER_MIN_MPS: f32 = 1.0;
@@ -67,6 +67,12 @@ pub enum MisalignmentMode {
     External([f32; 4]),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EskfMountSource {
+    LatchedSeed,
+    FollowAlign,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct BootstrapConfig {
     ema_alpha: f32,
@@ -113,6 +119,7 @@ struct FusionConfig {
     mount_update_yaw_rate_gate_radps: f32,
     align_handoff_delay_s: f32,
     freeze_misalignment_states: bool,
+    eskf_mount_source: EskfMountSource,
     mount_settle_time_s: f32,
     mount_settle_release_sigma_rad: f32,
     mount_settle_zero_cross_covariance: bool,
@@ -144,11 +151,12 @@ impl Default for FusionConfig {
             gnss_vel_xy_update_min_scale: 0.25,
             gnss_vel_update_ramp_time_s: 20.0,
             mount_update_min_scale: 0.008,
-            mount_update_ramp_time_s: 800.0,
-            mount_update_innovation_gate_mps: 0.02,
+            mount_update_ramp_time_s: 120.0,
+            mount_update_innovation_gate_mps: 0.10,
             mount_update_yaw_rate_gate_radps: 0.0,
             align_handoff_delay_s: 0.0,
             freeze_misalignment_states: false,
+            eskf_mount_source: EskfMountSource::LatchedSeed,
             mount_settle_time_s: 0.0,
             mount_settle_release_sigma_rad: 7.5_f32.to_radians(),
             mount_settle_zero_cross_covariance: true,
@@ -357,7 +365,15 @@ impl SensorFusion {
 
     pub fn set_freeze_misalignment_states(&mut self, freeze: bool) {
         self.cfg.freeze_misalignment_states = freeze;
-        self.eskf.set_freeze_misalignment_states(freeze);
+        self.eskf
+            .set_freeze_misalignment_states(self.effective_freeze_misalignment_states());
+    }
+
+    pub fn set_eskf_mount_source(&mut self, source: EskfMountSource) {
+        self.cfg.eskf_mount_source = source;
+        self.refresh_follow_align_mount_source();
+        self.eskf
+            .set_freeze_misalignment_states(self.effective_freeze_misalignment_states());
     }
 
     pub fn set_mount_settle_time_s(&mut self, mount_settle_time_s: f32) {
@@ -492,6 +508,7 @@ impl SensorFusion {
                         self.mount_q_vb = Some(self.align.q_vb);
                         self.mount_ready =
                             self.align_handoff_ready(trace.coarse_alignment_ready, local.t_s);
+                        self.refresh_follow_align_mount_source();
                     }
                 }
             }
@@ -510,9 +527,11 @@ impl SensorFusion {
             self.ekf_initialized = true;
             self.ekf_mount_handoff_t_s = Some(local.t_s);
             self.mount_settle_released = false;
+            self.refresh_follow_align_mount_source();
             self.refresh_mount_settle_state(local.t_s);
             true
         } else {
+            self.refresh_follow_align_mount_source();
             self.refresh_mount_settle_state(local.t_s);
             self.eskf.fuse_gps_scaled(
                 local,
@@ -630,6 +649,9 @@ impl SensorFusion {
         if !self.ekf_initialized {
             return;
         }
+        if self.cfg.eskf_mount_source == EskfMountSource::FollowAlign {
+            return;
+        }
         let mut q = q_cs;
         quat_normalize(&mut q);
         let n = &mut self.eskf.raw_mut().nominal;
@@ -653,9 +675,32 @@ impl SensorFusion {
             }
             self.eskf.raw_mut().p[i][i] = var;
         }
-        if self.cfg.freeze_misalignment_states {
+        if self.effective_freeze_misalignment_states() {
             self.eskf.set_freeze_misalignment_states(true);
         }
+    }
+
+    fn effective_freeze_misalignment_states(&self) -> bool {
+        self.cfg.freeze_misalignment_states
+            || self.cfg.eskf_mount_source == EskfMountSource::FollowAlign
+    }
+
+    fn refresh_follow_align_mount_source(&mut self) {
+        if self.cfg.eskf_mount_source != EskfMountSource::FollowAlign {
+            return;
+        }
+        if let Some(q_vb) = self.mount_q_vb {
+            self.eskf_mount_q_vb = Some(q_vb);
+        }
+        self.reset_eskf_mount_residual();
+    }
+
+    fn reset_eskf_mount_residual(&mut self) {
+        let n = &mut self.eskf.raw_mut().nominal;
+        n.qcs0 = 1.0;
+        n.qcs1 = 0.0;
+        n.qcs2 = 0.0;
+        n.qcs3 = 0.0;
     }
 
     fn update(&self, mount_ready_changed: bool, ekf_initialized_now: bool) -> FusionUpdate {
@@ -671,7 +716,7 @@ impl SensorFusion {
     fn initialize_eskf_from_gnss(&mut self, gnss: EskfGnssSample) {
         self.eskf = RustEskf::new(self.cfg.predict_noise);
         self.eskf
-            .set_freeze_misalignment_states(self.cfg.freeze_misalignment_states);
+            .set_freeze_misalignment_states(self.effective_freeze_misalignment_states());
         let speed_h = (gnss.vel_ned_mps[0] * gnss.vel_ned_mps[0]
             + gnss.vel_ned_mps[1] * gnss.vel_ned_mps[1])
             .sqrt();
@@ -695,7 +740,7 @@ impl SensorFusion {
         raw.p[15][15] = 0.0;
         raw.p[16][16] = mount_var;
         raw.p[17][17] = mount_var;
-        if self.cfg.freeze_misalignment_states {
+        if self.effective_freeze_misalignment_states() {
             self.eskf.set_freeze_misalignment_states(true);
         }
     }
@@ -710,7 +755,7 @@ impl SensorFusion {
     }
 
     fn refresh_mount_settle_state(&mut self, t_s: f32) {
-        if self.cfg.freeze_misalignment_states {
+        if self.effective_freeze_misalignment_states() {
             self.eskf.set_freeze_misalignment_states(true);
             return;
         }
@@ -1110,7 +1155,8 @@ fn ramp_scale(
 }
 
 fn runtime_nhc_active(accel_v: [f32; 3], gyro_v: [f32; 3]) -> bool {
-    norm3(gyro_v) < RUNTIME_NHC_MAX_GYRO_RADPS
+    let roll_pitch_rate = (gyro_v[0] * gyro_v[0] + gyro_v[1] * gyro_v[1]).sqrt();
+    roll_pitch_rate < RUNTIME_NHC_MAX_ROLL_PITCH_GYRO_RADPS
         && (norm3(accel_v) - GRAVITY_MPS2).abs() < RUNTIME_NHC_MAX_ACCEL_NORM_ERR_MPS2
 }
 

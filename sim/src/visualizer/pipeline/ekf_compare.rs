@@ -104,8 +104,8 @@ impl Default for EkfCompareConfig {
             r_vehicle_speed: 0.04,
             mount_align_rw_var: 1.0e-7,
             mount_update_min_scale: 0.008,
-            mount_update_ramp_time_s: 800.0,
-            mount_update_innovation_gate_mps: 0.02,
+            mount_update_ramp_time_s: 120.0,
+            mount_update_innovation_gate_mps: 0.10,
             mount_update_yaw_rate_gate_dps: 0.0,
             align_handoff_delay_s: 0.0,
             freeze_misalignment_states: false,
@@ -147,7 +147,7 @@ const ESKF_YAW_CUE_NAMES: [&str; 11] = [
     "zero_vel_d",
 ];
 
-fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig) {
+fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig, mode: EkfImuSource) {
     fusion.set_r_body_vel(cfg.r_body_vel);
     fusion.set_gnss_pos_mount_scale(cfg.gnss_pos_mount_scale);
     fusion.set_gnss_vel_mount_scale(cfg.gnss_vel_mount_scale);
@@ -165,6 +165,7 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig) {
     fusion.set_mount_update_yaw_rate_gate_radps(cfg.mount_update_yaw_rate_gate_dps.to_radians());
     fusion.set_align_handoff_delay_s(cfg.align_handoff_delay_s);
     fusion.set_freeze_misalignment_states(cfg.freeze_misalignment_states);
+    fusion.set_eskf_mount_source(mode.eskf_mount_source());
     fusion.set_mount_settle_time_s(cfg.mount_settle_time_s);
     fusion.set_mount_settle_release_sigma_rad(cfg.mount_settle_release_sigma_deg.to_radians());
     fusion.set_mount_settle_zero_cross_covariance(cfg.mount_settle_zero_cross_covariance);
@@ -229,7 +230,7 @@ pub fn build_ekf_compare_traces(
                 yaw_deg: yaw,
             });
         }
-        if ekf_imu_source == EkfImuSource::EsfAlg
+        if ekf_imu_source.uses_ref_mount()
             && let Some((_, status_code, _is_fine)) = extract_esf_alg_status(f)
             && let Some(t_ms) = super::super::math::nearest_master_ms(f.seq, &tl.masters)
         {
@@ -275,17 +276,18 @@ pub fn build_ekf_compare_traces(
     let final_alg_q = alg_events
         .last()
         .map(|alg| esf_alg_flu_to_frd_mount_quat(alg.roll_deg, alg.pitch_deg, alg.yaw_deg));
-    let align_events = match ekf_imu_source {
-        EkfImuSource::Align | EkfImuSource::EsfAlg => {
-            build_align_mount_events(frames, tl, ImuReplayConfig::default())
-        }
-    };
-    let align_handoff_t_ms = if ekf_imu_source == EkfImuSource::EsfAlg {
-        build_fusion_align_replay(frames, tl, EkfImuSource::Align, ImuReplayConfig::default())
-            .ekf_initialized_times_s
-            .first()
-            .copied()
-            .map(|t_s| tl.t0_master_ms + t_s * 1000.0)
+    let align_events = build_align_mount_events(frames, tl, ImuReplayConfig::default());
+    let align_handoff_t_ms = if ekf_imu_source.uses_ref_mount() {
+        build_fusion_align_replay(
+            frames,
+            tl,
+            EkfImuSource::Internal,
+            ImuReplayConfig::default(),
+        )
+        .ekf_initialized_times_s
+        .first()
+        .copied()
+        .map(|t_s| tl.t0_master_ms + t_s * 1000.0)
     } else {
         align_events.first().map(|(t_ms, _)| *t_ms)
     };
@@ -404,11 +406,11 @@ pub fn build_ekf_compare_traces(
     let mut map_loose_heading = Vec::<HeadingSample>::new();
 
     let mut fusion = match ekf_imu_source {
-        EkfImuSource::Align => Some(SensorFusion::new()),
-        EkfImuSource::EsfAlg => None,
+        EkfImuSource::Internal | EkfImuSource::External => Some(SensorFusion::new()),
+        EkfImuSource::Ref => None,
     };
     if let Some(fusion_ref) = fusion.as_mut() {
-        apply_fusion_config(fusion_ref, cfg);
+        apply_fusion_config(fusion_ref, cfg, ekf_imu_source);
     }
     let mut loose: Option<LooseFilter> = None;
     let base_loose_predict_noise = cfg
@@ -529,7 +531,7 @@ pub fn build_ekf_compare_traces(
         if !(0.001..=0.05).contains(&dt) {
             continue;
         }
-        if ekf_imu_source == EkfImuSource::EsfAlg
+        if ekf_imu_source.uses_ref_mount()
             && fusion.is_none()
             && align_handoff_t_ms.is_some_and(|t_handoff_ms| pkt_t_ms >= t_handoff_ms)
             && let Some(q_vb) = final_alg_q
@@ -540,7 +542,7 @@ pub fn build_ekf_compare_traces(
                 q_vb[2] as f32,
                 q_vb[3] as f32,
             ]);
-            apply_fusion_config(&mut created, cfg);
+            apply_fusion_config(&mut created, cfg, ekf_imu_source);
             fusion = Some(created);
         }
         let Some(fusion_ref) = fusion.as_mut() else {
@@ -585,7 +587,7 @@ pub fn build_ekf_compare_traces(
             ],
         );
         let (loose_gyro_deg, loose_accel) = match ekf_imu_source {
-            EkfImuSource::Align => {
+            EkfImuSource::Internal | EkfImuSource::External => {
                 if let Some(q_vb) = loose_seed_mount_q_vb {
                     vehicle_measurements_from_mount(
                         Some(q_vb),
@@ -604,7 +606,7 @@ pub fn build_ekf_compare_traces(
                     (raw_gyro_deg, imu_sample.accel_mps2)
                 }
             }
-            EkfImuSource::EsfAlg => {
+            EkfImuSource::Ref => {
                 if let Some(alg) = cur_alg {
                     let r_sb = rot_zyx(
                         deg2rad(alg.yaw_deg),
@@ -715,7 +717,7 @@ pub fn build_ekf_compare_traces(
                 }
                 if loose.is_none() {
                     match ekf_imu_source {
-                        EkfImuSource::Align => {
+                        EkfImuSource::Internal | EkfImuSource::External => {
                             if update.mount_ready {
                                 if let Some(q_vb) =
                                     cur_align_q_vb.or_else(|| fusion_ref.mount_q_vb())
@@ -731,7 +733,7 @@ pub fn build_ekf_compare_traces(
                                 }
                             }
                         }
-                        EkfImuSource::EsfAlg => {
+                        EkfImuSource::Ref => {
                             if cur_alg_status >= 3 && cur_alg.is_some() {
                                 loose_seed_mount_q_vb = cur_alg.map(|alg| {
                                     let q = esf_alg_flu_to_frd_mount_quat(
@@ -781,11 +783,15 @@ pub fn build_ekf_compare_traces(
                 }
 
                 if let Some(eskf_ref) = fusion_ref.eskf() {
+                    let n = &eskf_ref.nominal;
+                    let q_n_s = [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64];
+                    let q_cs = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
+                    let q_n_c = quat_mul(q_n_s, quat_conj(q_cs));
                     let (_, _, eskf_yaw) = quat_rpy_deg(
-                        eskf_ref.nominal.q0,
-                        eskf_ref.nominal.q1,
-                        eskf_ref.nominal.q2,
-                        eskf_ref.nominal.q3,
+                        q_n_c[0] as f32,
+                        q_n_c[1] as f32,
+                        q_n_c[2] as f32,
+                        q_n_c[3] as f32,
                     );
                     let (eskf_lat, eskf_lon, _eskf_h) = eskf_display_lla(&fusion_ref).unwrap_or((
                         nav.lat_deg,
@@ -847,8 +853,8 @@ pub fn build_ekf_compare_traces(
                         append_loose_sample(
                             loose_ref,
                             t,
-                            gyro,
-                            accel,
+                            loose_gyro_deg,
+                            loose_accel,
                             dt,
                             loose_seed_mount_q_vb,
                             ref_ecef,
@@ -892,11 +898,14 @@ pub fn build_ekf_compare_traces(
                 if let Some(loose_ref) = loose.as_ref() {
                     let (loose_pos_ned, _, loose_q_ns) =
                         loose_display_state(loose_ref, ref_ecef, ref_lat, ref_lon);
+                    let n = loose_ref.nominal();
+                    let q_cs = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
+                    let q_nc = quat_mul(loose_q_ns, quat_conj(q_cs));
                     let (_, _, loose_yaw) = quat_rpy_deg(
-                        loose_q_ns[0] as f32,
-                        loose_q_ns[1] as f32,
-                        loose_q_ns[2] as f32,
-                        loose_q_ns[3] as f32,
+                        q_nc[0] as f32,
+                        q_nc[1] as f32,
+                        q_nc[2] as f32,
+                        q_nc[3] as f32,
                     );
                     let (loose_lat, loose_lon, _loose_h) = ned_to_lla_exact(
                         loose_pos_ned[0],
@@ -1013,8 +1022,8 @@ pub fn build_ekf_compare_traces(
             append_loose_sample(
                 loose_ref,
                 t_imu,
-                gyro,
-                accel,
+                loose_gyro_deg,
+                loose_accel,
                 dt_safe,
                 loose_seed_mount_q_vb,
                 ref_ecef,
@@ -2004,7 +2013,7 @@ fn default_loose_reference_p_diag(gnss: sensor_fusion::fusion::FusionGnssSample)
     const DEFAULT_GYRO_BIAS_SIGMA_DPS: f32 = 0.125;
     const DEFAULT_ACCEL_BIAS_SIGMA_MPS2: f32 = 0.075;
     const DEFAULT_GYRO_SCALE_SIGMA: f32 = 0.02;
-    const DEFAULT_ACCEL_SCALE_SIGMA: f32 = 0.02;
+    const DEFAULT_ACCEL_SCALE_SIGMA: f32 = 0.0;
 
     let att_sigma_rad = 2.0f32 * core::f32::consts::PI / 180.0;
     let att_var = att_sigma_rad * att_sigma_rad;
@@ -2286,7 +2295,10 @@ fn append_loose_sample(
     let q_seed = seed_mount_q_vb
         .map(|q| [q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64])
         .unwrap_or([1.0, 0.0, 0.0, 0.0]);
-    let q_total_vb = quat_mul(q_cs, q_seed);
+    // Loose receives IMU already pre-rotated by q_seed, and qcs is the
+    // residual seed-frame correction used for NHC. The physical mount plotted
+    // against ESF-ALG is therefore the same composition as ESKF: seed * inv(qcs).
+    let q_total_vb = quat_mul(q_seed, quat_conj(q_cs));
     let q_total_flu = frd_mount_quat_to_esf_alg_flu_quat(q_total_vb);
     let (mount_r, mount_p, mount_y) = quat_rpy_alg_deg(
         q_total_flu[0],

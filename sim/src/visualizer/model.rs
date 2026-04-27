@@ -1,3 +1,5 @@
+use sensor_fusion::fusion::EskfMountSource;
+
 #[derive(Clone, Default)]
 pub struct Trace {
     pub name: String,
@@ -59,8 +61,41 @@ pub struct PlotData {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum EkfImuSource {
     #[default]
-    Align,
-    EsfAlg,
+    Internal,
+    External,
+    Ref,
+}
+
+impl EkfImuSource {
+    pub fn from_cli_value(s: &str) -> Result<Self, String> {
+        match s.to_ascii_lowercase().as_str() {
+            "internal" | "auto" | "align" | "align-seed" | "seed" => Ok(Self::Internal),
+            "external" | "follow-align" | "continuous-align" | "align-external" => {
+                Ok(Self::External)
+            }
+            "ref" | "reference" | "manual" | "esf-alg" | "esf_alg" | "esfalg" | "alg" => {
+                Ok(Self::Ref)
+            }
+            _ => Err(format!(
+                "invalid misalignment '{s}', expected 'ref', 'external', or 'internal'"
+            )),
+        }
+    }
+
+    pub fn uses_ref_mount(self) -> bool {
+        matches!(self, Self::Ref)
+    }
+
+    pub fn uses_align_mount(self) -> bool {
+        matches!(self, Self::Internal | Self::External)
+    }
+
+    pub fn eskf_mount_source(self) -> EskfMountSource {
+        match self {
+            Self::External => EskfMountSource::FollowAlign,
+            Self::Internal | Self::Ref => EskfMountSource::LatchedSeed,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Default)]

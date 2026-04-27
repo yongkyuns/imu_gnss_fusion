@@ -12,7 +12,7 @@ use sim::visualizer::pipeline::ekf_compare::{EkfCompareConfig, GnssOutageConfig}
 struct Args {
     #[arg(value_name = "LOGFILE")]
     logfile: PathBuf,
-    #[arg(long, default_value = "align", value_parser = parse_misalignment)]
+    #[arg(long, default_value = "internal", value_parser = parse_misalignment)]
     misalignment: EkfImuSource,
     #[arg(long)]
     max_records: Option<usize>,
@@ -35,11 +35,7 @@ struct Args {
 }
 
 fn parse_misalignment(s: &str) -> Result<EkfImuSource, String> {
-    match s.to_ascii_lowercase().as_str() {
-        "align" | "auto" => Ok(EkfImuSource::Align),
-        "esf-alg" | "esf_alg" | "esfalg" => Ok(EkfImuSource::EsfAlg),
-        other => Err(format!("invalid misalignment source: {other}")),
-    }
+    EkfImuSource::from_cli_value(s)
 }
 
 fn trace_by_name<'a>(traces: &'a [Trace], name: &str) -> Result<&'a Trace> {
