@@ -347,6 +347,14 @@ impl eframe::App for App {
                                         .range(0.0..=90.0),
                                 )
                                 .changed();
+                            ui.label("Mount init deg");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut replay.ekf_cfg.mount_init_sigma_deg)
+                                        .speed(0.5)
+                                        .range(0.0..=90.0),
+                                )
+                                .changed();
                         });
                         ui.horizontal_wrapped(|ui| {
                             ui.label("Mount RW");
@@ -395,6 +403,14 @@ impl eframe::App for App {
                                     )
                                     .speed(0.1)
                                     .range(0.0..=90.0),
+                                )
+                                .changed();
+                            ui.label("Align handoff s");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut replay.ekf_cfg.align_handoff_delay_s)
+                                        .speed(1.0)
+                                        .range(0.0..=600.0),
                                 )
                                 .changed();
                             replay_changed |= ui
@@ -452,6 +468,16 @@ impl eframe::App for App {
                                 .add(
                                     egui::DragValue::new(
                                         &mut replay.ekf_cfg.gyro_bias_init_sigma_dps,
+                                    )
+                                    .speed(0.01)
+                                    .range(0.0..=10.0),
+                                )
+                                .changed();
+                            ui.label("Accel bias init");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut replay.ekf_cfg.accel_bias_init_sigma_mps2,
                                     )
                                     .speed(0.01)
                                     .range(0.0..=10.0),

@@ -150,7 +150,7 @@ fn zero_mount_update_scale_does_not_shrink_mount_covariance() {
         eskf.raw().p[17][17],
     ];
 
-    eskf.fuse_body_vel_scaled(0.01, 0.0, 0.0, 0.0);
+    eskf.fuse_body_vel_scaled(0.01, 0.0, 0.0);
 
     let n = &eskf.raw().nominal;
     assert_eq!([n.qcs0, n.qcs1, n.qcs2, n.qcs3], qcs_before);

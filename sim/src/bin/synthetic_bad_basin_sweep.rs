@@ -1,23 +1,25 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, ValueEnum};
 use sensor_fusion::fusion::SensorFusion;
 use sim::datasets::generic_replay::{
-    fusion_gnss_sample, fusion_imu_sample, GenericGnssSample, GenericImuSample,
+    GenericGnssSample, GenericImuSample, fusion_gnss_sample, fusion_imu_sample,
 };
 use sim::eval::gnss_ins::{
     as_q64, quat_angle_deg, quat_conj, quat_from_rpy_alg_deg, quat_mul, quat_rotate, wrap_deg180,
 };
-use sim::eval::replay::{for_each_event, ReplayEvent};
+use sim::eval::replay::{ReplayEvent, for_each_event};
 use sim::synthetic::gnss_ins_path::{
-    generate_with_noise, GeneratedMeasurementSet, GpsNoiseModel, ImuAccuracy,
-    MeasurementNoiseConfig, MotionProfile, PathGenConfig,
+    GeneratedMeasurementSet, GpsNoiseModel, ImuAccuracy, MeasurementNoiseConfig, MotionProfile,
+    PathGenConfig, generate_with_noise,
 };
 use sim::visualizer::math::{ecef_to_ned, lla_to_ecef, quat_rpy_deg};
 
 const DIAG_GPS_VEL: usize = 1;
 const DIAG_BODY_VEL_Y: usize = 4;
+const DIAG_BODY_VEL_Z: usize = 5;
+const DIAG_TYPES: usize = 11;
 const RAD_TO_DEG: f64 = 180.0 / std::f64::consts::PI;
 const RADPS_TO_DPS: f64 = 180.0 / std::f64::consts::PI;
 
@@ -77,6 +79,10 @@ struct Args {
     yaw_init_sigma_deg: f32,
     #[arg(long, default_value_t = 0.125)]
     gyro_bias_init_sigma_dps: f32,
+    #[arg(long, default_value_t = 0.20)]
+    accel_bias_init_sigma_mps2: f32,
+    #[arg(long, default_value_t = 2.5)]
+    mount_init_sigma_deg: f32,
     #[arg(long, default_value_t = 0.04)]
     r_vehicle_speed: f32,
     #[arg(long, default_value_t = 0.0)]
@@ -91,8 +97,6 @@ struct Args {
     mount_update_ramp_time_s: f32,
     #[arg(long, default_value_t = 0.02)]
     mount_update_innovation_gate_mps: f32,
-    #[arg(long, default_value_t = 0.0)]
-    mount_update_nis_gate: f32,
     #[arg(long, default_value_t = 0.0)]
     mount_update_yaw_rate_gate_dps: f32,
     #[arg(long, default_value_t = false)]
@@ -111,6 +115,10 @@ struct Args {
     tail_s: f64,
     #[arg(long, default_value_t = false)]
     eval_matrix: bool,
+    #[arg(long, default_value_t = false)]
+    timeline: bool,
+    #[arg(long, value_delimiter = ',', default_value = "108,120,140,180,220,320")]
+    timeline_events_s: Vec<f64>,
     #[arg(
         long,
         value_delimiter = ',',
@@ -190,14 +198,38 @@ struct SweepResult {
 #[derive(Clone, Copy, Debug)]
 struct Snapshot {
     t_s: f64,
+    yaw_truth_deg: f64,
+    yaw_gnss_course_deg: f64,
+    nominal_course_gnss_deg: f64,
+    yaw_nominal_course_deg: f64,
+    lat_vel_mps: f64,
     mount_qerr_deg: f64,
     att_qerr_deg: f64,
     yaw_err_deg: f64,
     vel_err_mps: f64,
     pos_err_m: f64,
+    bgz_dps: f64,
+    theta_z_var: f64,
+    mount_z_var: f64,
     yaw_sigma_deg: f64,
     bgz_sigma_dps: f64,
     mount_yaw_sigma_deg: f64,
+    type_counts: [u32; DIAG_TYPES],
+    sum_dx_yaw_deg: [f64; DIAG_TYPES],
+    sum_abs_dx_yaw_deg: [f64; DIAG_TYPES],
+    sum_abs_dx_vel_h_mps: [f64; DIAG_TYPES],
+    sum_dx_gyro_bias_z_dps: [f64; DIAG_TYPES],
+    sum_abs_dx_gyro_bias_z_dps: [f64; DIAG_TYPES],
+    sum_dx_mount_yaw_deg: [f64; DIAG_TYPES],
+    sum_abs_innovation: [f64; DIAG_TYPES],
+    sum_nis: [f64; DIAG_TYPES],
+    sum_abs_dx_mount_yaw_deg: [f64; DIAG_TYPES],
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TimelineRow {
+    target_t_s: f64,
+    snap: Snapshot,
 }
 
 struct PreparedScenario {
@@ -217,7 +249,6 @@ struct MatrixFault {
 struct MatrixVariant {
     name: &'static str,
     mount_update_yaw_rate_gate_dps: f32,
-    mount_update_nis_gate: f32,
     mount_settle_time_s: f32,
     mount_settle_release_sigma_deg: f32,
 }
@@ -234,14 +265,32 @@ impl Snapshot {
     fn nan() -> Self {
         Self {
             t_s: f64::NAN,
+            yaw_truth_deg: f64::NAN,
+            yaw_gnss_course_deg: f64::NAN,
+            nominal_course_gnss_deg: f64::NAN,
+            yaw_nominal_course_deg: f64::NAN,
+            lat_vel_mps: f64::NAN,
             mount_qerr_deg: f64::NAN,
             att_qerr_deg: f64::NAN,
             yaw_err_deg: f64::NAN,
             vel_err_mps: f64::NAN,
             pos_err_m: f64::NAN,
+            bgz_dps: f64::NAN,
+            theta_z_var: f64::NAN,
+            mount_z_var: f64::NAN,
             yaw_sigma_deg: f64::NAN,
             bgz_sigma_dps: f64::NAN,
             mount_yaw_sigma_deg: f64::NAN,
+            type_counts: [0; DIAG_TYPES],
+            sum_dx_yaw_deg: [0.0; DIAG_TYPES],
+            sum_abs_dx_yaw_deg: [0.0; DIAG_TYPES],
+            sum_abs_dx_vel_h_mps: [0.0; DIAG_TYPES],
+            sum_dx_gyro_bias_z_dps: [0.0; DIAG_TYPES],
+            sum_abs_dx_gyro_bias_z_dps: [0.0; DIAG_TYPES],
+            sum_dx_mount_yaw_deg: [0.0; DIAG_TYPES],
+            sum_abs_innovation: [0.0; DIAG_TYPES],
+            sum_nis: [0.0; DIAG_TYPES],
+            sum_abs_dx_mount_yaw_deg: [0.0; DIAG_TYPES],
         }
     }
 }
@@ -408,42 +457,24 @@ fn run_eval_matrix(args: &Args) -> Result<()> {
         MatrixVariant {
             name: "baseline",
             mount_update_yaw_rate_gate_dps: 0.0,
-            mount_update_nis_gate: 0.0,
-            mount_settle_time_s: 0.0,
-            mount_settle_release_sigma_deg: args.mount_settle_release_sigma_deg,
-        },
-        MatrixVariant {
-            name: "mount_nis_gate_9",
-            mount_update_yaw_rate_gate_dps: 0.0,
-            mount_update_nis_gate: 9.0,
-            mount_settle_time_s: 0.0,
-            mount_settle_release_sigma_deg: args.mount_settle_release_sigma_deg,
-        },
-        MatrixVariant {
-            name: "mount_nis_gate_25",
-            mount_update_yaw_rate_gate_dps: 0.0,
-            mount_update_nis_gate: 25.0,
             mount_settle_time_s: 0.0,
             mount_settle_release_sigma_deg: args.mount_settle_release_sigma_deg,
         },
         MatrixVariant {
             name: "mount_yaw_rate_gate_1dps",
             mount_update_yaw_rate_gate_dps: 1.0,
-            mount_update_nis_gate: 0.0,
             mount_settle_time_s: 0.0,
             mount_settle_release_sigma_deg: args.mount_settle_release_sigma_deg,
         },
         MatrixVariant {
             name: "mount_yaw_rate_gate_3dps",
             mount_update_yaw_rate_gate_dps: 3.0,
-            mount_update_nis_gate: 0.0,
             mount_settle_time_s: 0.0,
             mount_settle_release_sigma_deg: args.mount_settle_release_sigma_deg,
         },
         MatrixVariant {
             name: "mount_settle_100s",
             mount_update_yaw_rate_gate_dps: 0.0,
-            mount_update_nis_gate: 0.0,
             mount_settle_time_s: 100.0,
             mount_settle_release_sigma_deg: 5.0,
         },
@@ -467,7 +498,6 @@ fn run_eval_matrix(args: &Args) -> Result<()> {
             let mut variant_args = args.clone();
             variant_args.scenario = scenario.clone();
             variant_args.mount_update_yaw_rate_gate_dps = variant.mount_update_yaw_rate_gate_dps;
-            variant_args.mount_update_nis_gate = variant.mount_update_nis_gate;
             variant_args.mount_settle_time_s = variant.mount_settle_time_s;
             variant_args.mount_settle_release_sigma_deg = variant.mount_settle_release_sigma_deg;
             for fault in faults {
@@ -706,6 +736,13 @@ fn run_case(
     let mut snapshots = Vec::<Snapshot>::new();
     let mut mount_ready_t_s = None;
     let mut ekf_init_t_s = None;
+    let mut timeline_events_s = args.timeline_events_s.clone();
+    timeline_events_s.retain(|t| t.is_finite());
+    timeline_events_s.sort_by(|a, b| a.total_cmp(b));
+    timeline_events_s.dedup_by(|a, b| (*a - *b).abs() < 1.0e-6);
+    let mut next_timeline_event = 0usize;
+    let mut timeline_rows = Vec::<TimelineRow>::new();
+    let mut last_gnss = None::<GenericGnssSample>;
 
     for_each_event(imu, gnss, |event| match event {
         ReplayEvent::Imu(idx, sample) => {
@@ -719,15 +756,38 @@ fn run_case(
                 truth[0].lat_deg,
                 truth[0].lon_deg,
                 q_truth_mount,
+                last_gnss,
             ) {
+                while next_timeline_event < timeline_events_s.len()
+                    && snapshot.t_s >= timeline_events_s[next_timeline_event]
+                {
+                    timeline_rows.push(TimelineRow {
+                        target_t_s: timeline_events_s[next_timeline_event],
+                        snap: snapshot,
+                    });
+                    next_timeline_event += 1;
+                }
                 snapshots.push(snapshot);
             }
         }
         ReplayEvent::Gnss(_, sample) => {
+            last_gnss = Some(*sample);
             let update = fusion.process_gnss(fusion_gnss_sample(*sample));
             capture_update_times(sample.t_s, update, &mut mount_ready_t_s, &mut ekf_init_t_s);
         }
     });
+
+    if args.timeline {
+        println!(
+            "timeline_case: shift_ms={:.1} bias_ned_mps=[{:.3},{:.3},{:.3}] seed_mode={:?}",
+            shift_ms,
+            early_vel_bias_ned_mps[0],
+            early_vel_bias_ned_mps[1],
+            early_vel_bias_ned_mps[2],
+            args.seed_mode
+        );
+        print_timeline(&timeline_rows);
+    }
 
     let Some(final_snapshot) = snapshots.last().copied() else {
         bail!("ESKF produced no snapshots");
@@ -867,6 +927,7 @@ fn snapshot_state(
     fallback_ref_lat_deg: f64,
     fallback_ref_lon_deg: f64,
     q_truth_mount: [f64; 4],
+    last_gnss: Option<GenericGnssSample>,
 ) -> Option<Snapshot> {
     let eskf = fusion.eskf()?;
     let truth = truth?;
@@ -919,8 +980,39 @@ fn snapshot_state(
         truth.q_bn[2] as f32,
         truth.q_bn[3] as f32,
     );
+    let gnss_vel = last_gnss
+        .map(|sample| sample.vel_ned_mps)
+        .unwrap_or(truth.vel_ned_mps);
+    let gnss_course_deg = course_deg(gnss_vel[0], gnss_vel[1]);
+    let nominal_course_deg = course_deg(eskf.nominal.vn as f64, eskf.nominal.ve as f64);
+    let c_n_b = quat_to_rotmat(as_q64([
+        eskf.nominal.q0,
+        eskf.nominal.q1,
+        eskf.nominal.q2,
+        eskf.nominal.q3,
+    ]));
+    let c_c_s = quat_to_rotmat(as_q64([
+        eskf.nominal.qcs0,
+        eskf.nominal.qcs1,
+        eskf.nominal.qcs2,
+        eskf.nominal.qcs3,
+    ]));
+    let vel_seed = mat_vec(
+        transpose3(c_n_b),
+        [
+            eskf.nominal.vn as f64,
+            eskf.nominal.ve as f64,
+            eskf.nominal.vd as f64,
+        ],
+    );
+    let vel_vehicle = mat_vec(c_c_s, vel_seed);
     Some(Snapshot {
         t_s,
+        yaw_truth_deg: wrap_deg180(yaw - truth_yaw),
+        yaw_gnss_course_deg: wrap_deg180(yaw - gnss_course_deg),
+        nominal_course_gnss_deg: wrap_deg180(nominal_course_deg - gnss_course_deg),
+        yaw_nominal_course_deg: wrap_deg180(yaw - nominal_course_deg),
+        lat_vel_mps: vel_vehicle[1],
         mount_qerr_deg: quat_angle_deg(q_full_mount, q_truth_mount),
         att_qerr_deg: quat_angle_deg(q_vehicle, truth.q_bn),
         yaw_err_deg: wrap_deg180(yaw - truth_yaw),
@@ -934,9 +1026,32 @@ fn snapshot_state(
             eskf.nominal.pe as f64 - truth_pos_ned[1],
             eskf.nominal.pd as f64 - truth_pos_ned[2],
         ]),
+        bgz_dps: eskf.nominal.bgz as f64 * RADPS_TO_DPS,
+        theta_z_var: eskf.p[2][2] as f64,
+        mount_z_var: eskf.p[17][17] as f64,
         yaw_sigma_deg: sigma_from_var(eskf.p[2][2] as f64) * RAD_TO_DEG,
         bgz_sigma_dps: sigma_from_var(eskf.p[11][11] as f64) * RADPS_TO_DPS,
         mount_yaw_sigma_deg: sigma_from_var(eskf.p[17][17] as f64) * RAD_TO_DEG,
+        type_counts: eskf.update_diag.type_counts,
+        sum_dx_yaw_deg: std::array::from_fn(|i| eskf.update_diag.sum_dx_yaw[i] as f64 * RAD_TO_DEG),
+        sum_abs_dx_yaw_deg: std::array::from_fn(|i| {
+            eskf.update_diag.sum_abs_dx_yaw[i] as f64 * RAD_TO_DEG
+        }),
+        sum_abs_dx_vel_h_mps: std::array::from_fn(|i| eskf.update_diag.sum_abs_dx_vel_h[i] as f64),
+        sum_dx_gyro_bias_z_dps: std::array::from_fn(|i| {
+            eskf.update_diag.sum_dx_gyro_bias_z[i] as f64 * RADPS_TO_DPS
+        }),
+        sum_abs_dx_gyro_bias_z_dps: std::array::from_fn(|i| {
+            eskf.update_diag.sum_abs_dx_gyro_bias_z[i] as f64 * RADPS_TO_DPS
+        }),
+        sum_dx_mount_yaw_deg: std::array::from_fn(|i| {
+            eskf.update_diag.sum_dx_mount_yaw[i] as f64 * RAD_TO_DEG
+        }),
+        sum_abs_innovation: std::array::from_fn(|i| eskf.update_diag.sum_abs_innovation[i] as f64),
+        sum_nis: std::array::from_fn(|i| eskf.update_diag.sum_nis[i] as f64),
+        sum_abs_dx_mount_yaw_deg: std::array::from_fn(|i| {
+            eskf.update_diag.sum_abs_dx_mount_yaw[i] as f64 * RAD_TO_DEG
+        }),
     })
 }
 
@@ -946,6 +1061,8 @@ fn apply_fusion_config(fusion: &mut SensorFusion, args: &Args) {
     fusion.set_gnss_vel_mount_scale(args.gnss_vel_mount_scale);
     fusion.set_yaw_init_sigma_rad(args.yaw_init_sigma_deg.to_radians());
     fusion.set_gyro_bias_init_sigma_radps(args.gyro_bias_init_sigma_dps.to_radians());
+    fusion.set_accel_bias_init_sigma_mps2(args.accel_bias_init_sigma_mps2);
+    fusion.set_mount_init_sigma_rad(args.mount_init_sigma_deg.to_radians());
     fusion.set_r_vehicle_speed(args.r_vehicle_speed);
     fusion.set_r_zero_vel(args.r_zero_vel);
     fusion.set_r_stationary_accel(args.r_stationary_accel);
@@ -953,7 +1070,6 @@ fn apply_fusion_config(fusion: &mut SensorFusion, args: &Args) {
     fusion.set_mount_update_min_scale(args.mount_update_min_scale);
     fusion.set_mount_update_ramp_time_s(args.mount_update_ramp_time_s);
     fusion.set_mount_update_innovation_gate_mps(args.mount_update_innovation_gate_mps);
-    fusion.set_mount_update_nis_gate(args.mount_update_nis_gate);
     fusion.set_mount_update_yaw_rate_gate_radps(args.mount_update_yaw_rate_gate_dps.to_radians());
     fusion.set_freeze_misalignment_states(args.freeze_misalignment_states);
     fusion.set_mount_settle_time_s(args.mount_settle_time_s);
@@ -1053,6 +1169,111 @@ fn print_result(result: &SweepResult) {
     );
 }
 
+fn print_timeline(rows: &[TimelineRow]) {
+    if rows.is_empty() {
+        println!("timeline: no rows");
+        return;
+    }
+    println!(
+        "target_s\tsample_s\tinterval_s\tyaw_truth_deg\tyaw_gnss_course_deg\tnominal_course_gnss_deg\tyaw_nominal_course_deg\tlat_vel_mps\tmount_qerr_deg\tbgz_dps\ttheta_z_var\tmount_z_var\tgps_vel_n\tgps_vel_innov_abs\tgps_vel_yaw_dx_deg\tgps_vel_abs_yaw_dx_deg\tgps_vel_bgz_dx_dps\tgps_vel_abs_bgz_dx_dps\tgps_vel_velh_abs_mps\tgps_vel_nis_mean\tbody_y_n\tbody_y_innov_abs\tbody_y_yaw_dx_deg\tbody_y_abs_yaw_dx_deg\tbody_y_bgz_dx_dps\tbody_y_mount_yaw_dx_deg\tbody_y_abs_mount_yaw_dx_deg\tbody_y_nis_mean\tbody_z_n\tbody_z_mount_yaw_dx_deg"
+    );
+    for (idx, row) in rows.iter().enumerate() {
+        let prev = idx.checked_sub(1).and_then(|prev_idx| rows.get(prev_idx));
+        let snap = row.snap;
+        let interval_s = prev.map(|prev| snap.t_s - prev.snap.t_s).unwrap_or(0.0);
+        let gps_vel = timeline_delta(prev, snap, DIAG_GPS_VEL);
+        let body_y = timeline_delta(prev, snap, DIAG_BODY_VEL_Y);
+        let body_z = timeline_delta(prev, snap, DIAG_BODY_VEL_Z);
+        println!(
+            "{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.4}\t{:.6e}\t{:.6e}\t{}\t{:.3}\t{:.3}\t{:.3}\t{:.4}\t{:.4}\t{:.3}\t{:.3}\t{}\t{:.3}\t{:.3}\t{:.3}\t{:.4}\t{:.3}\t{:.3}\t{:.3}\t{}\t{:.3}",
+            row.target_t_s,
+            snap.t_s,
+            interval_s,
+            snap.yaw_truth_deg,
+            snap.yaw_gnss_course_deg,
+            snap.nominal_course_gnss_deg,
+            snap.yaw_nominal_course_deg,
+            snap.lat_vel_mps,
+            snap.mount_qerr_deg,
+            snap.bgz_dps,
+            snap.theta_z_var,
+            snap.mount_z_var,
+            gps_vel.count,
+            gps_vel.innov_abs,
+            gps_vel.yaw_dx,
+            gps_vel.yaw_dx_abs,
+            gps_vel.bgz_dx,
+            gps_vel.bgz_dx_abs,
+            gps_vel.vel_h_abs,
+            gps_vel.nis_mean,
+            body_y.count,
+            body_y.innov_abs,
+            body_y.yaw_dx,
+            body_y.yaw_dx_abs,
+            body_y.bgz_dx,
+            body_y.mount_yaw_dx,
+            body_y.mount_yaw_dx_abs,
+            body_y.nis_mean,
+            body_z.count,
+            body_z.mount_yaw_dx,
+        );
+    }
+}
+
+#[derive(Clone, Copy)]
+struct TimelineDelta {
+    count: u32,
+    innov_abs: f64,
+    yaw_dx: f64,
+    yaw_dx_abs: f64,
+    vel_h_abs: f64,
+    bgz_dx: f64,
+    bgz_dx_abs: f64,
+    mount_yaw_dx: f64,
+    mount_yaw_dx_abs: f64,
+    nis_mean: f64,
+}
+
+fn timeline_delta(prev: Option<&TimelineRow>, snap: Snapshot, cue: usize) -> TimelineDelta {
+    let prev_snap = prev.map(|row| row.snap);
+    let prev_count = prev_snap.map(|s| s.type_counts[cue]).unwrap_or(0);
+    let count = snap.type_counts[cue].saturating_sub(prev_count);
+    let nis_sum = snap.sum_nis[cue] - prev_snap.map(|s| s.sum_nis[cue]).unwrap_or(0.0);
+    TimelineDelta {
+        count,
+        innov_abs: snap.sum_abs_innovation[cue]
+            - prev_snap.map(|s| s.sum_abs_innovation[cue]).unwrap_or(0.0),
+        yaw_dx: snap.sum_dx_yaw_deg[cue] - prev_snap.map(|s| s.sum_dx_yaw_deg[cue]).unwrap_or(0.0),
+        yaw_dx_abs: snap.sum_abs_dx_yaw_deg[cue]
+            - prev_snap.map(|s| s.sum_abs_dx_yaw_deg[cue]).unwrap_or(0.0),
+        vel_h_abs: snap.sum_abs_dx_vel_h_mps[cue]
+            - prev_snap
+                .map(|s| s.sum_abs_dx_vel_h_mps[cue])
+                .unwrap_or(0.0),
+        bgz_dx: snap.sum_dx_gyro_bias_z_dps[cue]
+            - prev_snap
+                .map(|s| s.sum_dx_gyro_bias_z_dps[cue])
+                .unwrap_or(0.0),
+        bgz_dx_abs: snap.sum_abs_dx_gyro_bias_z_dps[cue]
+            - prev_snap
+                .map(|s| s.sum_abs_dx_gyro_bias_z_dps[cue])
+                .unwrap_or(0.0),
+        mount_yaw_dx: snap.sum_dx_mount_yaw_deg[cue]
+            - prev_snap
+                .map(|s| s.sum_dx_mount_yaw_deg[cue])
+                .unwrap_or(0.0),
+        mount_yaw_dx_abs: snap.sum_abs_dx_mount_yaw_deg[cue]
+            - prev_snap
+                .map(|s| s.sum_abs_dx_mount_yaw_deg[cue])
+                .unwrap_or(0.0),
+        nis_mean: if count == 0 {
+            0.0
+        } else {
+            nis_sum / count as f64
+        },
+    }
+}
+
 fn fmt_opt(value: Option<f64>) -> String {
     value
         .map(|v| format!("{v:.3}"))
@@ -1123,11 +1344,7 @@ fn mean_or_nan(values: impl Iterator<Item = f64>) -> f64 {
             sum += value;
         }
     }
-    if n == 0 {
-        f64::NAN
-    } else {
-        sum / n as f64
-    }
+    if n == 0 { f64::NAN } else { sum / n as f64 }
 }
 
 fn mean_abs_or_nan(values: impl Iterator<Item = f64>) -> f64 {
@@ -1143,4 +1360,49 @@ fn max_or_nan(values: impl Iterator<Item = f64>) -> f64 {
 
 fn norm3(v: [f64; 3]) -> f64 {
     (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+}
+
+fn course_deg(vn: f64, ve: f64) -> f64 {
+    if vn.hypot(ve) < 1.0e-6 {
+        0.0
+    } else {
+        ve.atan2(vn).to_degrees().rem_euclid(360.0)
+    }
+}
+
+fn quat_to_rotmat(q: [f64; 4]) -> [[f64; 3]; 3] {
+    let (w, x, y, z) = (q[0], q[1], q[2], q[3]);
+    [
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y - z * w),
+            2.0 * (x * z + y * w),
+        ],
+        [
+            2.0 * (x * y + z * w),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z - x * w),
+        ],
+        [
+            2.0 * (x * z - y * w),
+            2.0 * (y * z + x * w),
+            1.0 - 2.0 * (x * x + y * y),
+        ],
+    ]
+}
+
+fn transpose3(m: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    [
+        [m[0][0], m[1][0], m[2][0]],
+        [m[0][1], m[1][1], m[2][1]],
+        [m[0][2], m[1][2], m[2][2]],
+    ]
+}
+
+fn mat_vec(m: [[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
+    [
+        m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+        m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+        m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2],
+    ]
 }

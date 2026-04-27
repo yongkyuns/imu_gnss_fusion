@@ -36,6 +36,10 @@ struct Args {
     #[arg(long)]
     gyro_bias_init_sigma_dps: Option<f32>,
     #[arg(long)]
+    accel_bias_init_sigma_mps2: Option<f32>,
+    #[arg(long)]
+    mount_init_sigma_deg: Option<f32>,
+    #[arg(long)]
     r_vehicle_speed: Option<f32>,
     #[arg(long)]
     r_zero_vel: Option<f32>,
@@ -51,6 +55,8 @@ struct Args {
     mount_update_innovation_gate_mps: Option<f32>,
     #[arg(long)]
     mount_update_yaw_rate_gate_dps: Option<f32>,
+    #[arg(long, default_value_t = 0.0)]
+    align_handoff_delay_s: f32,
     #[arg(long, default_value_t = false)]
     freeze_misalignment_states: bool,
     #[arg(long)]
@@ -297,6 +303,12 @@ fn main() -> Result<()> {
         gyro_bias_init_sigma_dps: args
             .gyro_bias_init_sigma_dps
             .unwrap_or(EkfCompareConfig::default().gyro_bias_init_sigma_dps),
+        accel_bias_init_sigma_mps2: args
+            .accel_bias_init_sigma_mps2
+            .unwrap_or(EkfCompareConfig::default().accel_bias_init_sigma_mps2),
+        mount_init_sigma_deg: args
+            .mount_init_sigma_deg
+            .unwrap_or(EkfCompareConfig::default().mount_init_sigma_deg),
         r_vehicle_speed: args
             .r_vehicle_speed
             .unwrap_or(EkfCompareConfig::default().r_vehicle_speed),
@@ -321,6 +333,7 @@ fn main() -> Result<()> {
         mount_update_yaw_rate_gate_dps: args
             .mount_update_yaw_rate_gate_dps
             .unwrap_or(EkfCompareConfig::default().mount_update_yaw_rate_gate_dps),
+        align_handoff_delay_s: args.align_handoff_delay_s,
         freeze_misalignment_states: args.freeze_misalignment_states,
         mount_settle_time_s: args
             .mount_settle_time_s
@@ -356,7 +369,7 @@ fn main() -> Result<()> {
     let summaries = build_state_summaries(&data);
 
     println!(
-        "config: misalignment={:?} decimation={} lpf_hz={} gnss_pos_r_scale={:.3} gnss_vel_r_scale={:.3} r_body_vel={:.3} gnss_pos_mount_scale={:.3} gnss_vel_mount_scale={:.3} yaw_init_sigma_deg={:.3} gyro_bias_init_sigma_dps={:.3} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} mount_update_min_scale={:.3} mount_update_ramp_time_s={:.3} mount_update_innovation_gate_mps={:.3} mount_update_yaw_rate_gate_dps={:.3} freeze_misalignment_states={} mount_settle_time_s={:.3} mount_settle_release_sigma_deg={:.3} mount_settle_zero_cross_covariance={} outage_count={} outage_duration_s={:.3} outage_seed={}",
+        "config: misalignment={:?} decimation={} lpf_hz={} gnss_pos_r_scale={:.3} gnss_vel_r_scale={:.3} r_body_vel={:.3} gnss_pos_mount_scale={:.3} gnss_vel_mount_scale={:.3} yaw_init_sigma_deg={:.3} gyro_bias_init_sigma_dps={:.3} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} mount_update_min_scale={:.3} mount_update_ramp_time_s={:.3} mount_update_innovation_gate_mps={:.3} mount_update_yaw_rate_gate_dps={:.3} align_handoff_delay_s={:.3} freeze_misalignment_states={} mount_settle_time_s={:.3} mount_settle_release_sigma_deg={:.3} mount_settle_zero_cross_covariance={} outage_count={} outage_duration_s={:.3} outage_seed={}",
         args.misalignment,
         ekf_cfg.predict_imu_decimation,
         ekf_cfg
@@ -378,6 +391,7 @@ fn main() -> Result<()> {
         ekf_cfg.mount_update_ramp_time_s,
         ekf_cfg.mount_update_innovation_gate_mps,
         ekf_cfg.mount_update_yaw_rate_gate_dps,
+        ekf_cfg.align_handoff_delay_s,
         ekf_cfg.freeze_misalignment_states,
         ekf_cfg.mount_settle_time_s,
         ekf_cfg.mount_settle_release_sigma_deg,

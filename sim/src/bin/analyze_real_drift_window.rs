@@ -53,7 +53,7 @@ struct Args {
     gnss_pos_mount_scale: f32,
     #[arg(long, default_value_t = 0.0)]
     gnss_vel_mount_scale: f32,
-    #[arg(long, default_value_t = 0.125)]
+    #[arg(long, default_value_t = 0.0)]
     gyro_bias_init_sigma_dps: f32,
     #[arg(long, default_value_t = 0.20)]
     accel_bias_init_sigma_mps2: f32,
@@ -81,6 +81,14 @@ struct Args {
     analysis_freeze_mount: bool,
     #[arg(long, default_value_t = 0.001)]
     analysis_mount_sigma_deg: f32,
+    #[arg(long, default_value_t = false)]
+    timeline: bool,
+    #[arg(
+        long,
+        value_delimiter = ',',
+        default_value = "76.236,82,100,117.236,120,180,220,320"
+    )]
+    timeline_events_s: Vec<f64>,
 }
 
 #[derive(Clone, Copy)]
@@ -128,9 +136,22 @@ struct WindowSnapshot {
     v_e_var: f64,
     mount_z_var: f64,
     type_counts: [u32; 11],
+    sum_dx_yaw_deg: [f64; 11],
+    sum_abs_dx_yaw_deg: [f64; 11],
     sum_abs_dx_pitch_deg: [f64; 11],
+    sum_abs_dx_vel_h_mps: [f64; 11],
+    sum_dx_gyro_bias_z_dps: [f64; 11],
+    sum_abs_dx_gyro_bias_z_dps: [f64; 11],
+    sum_dx_mount_yaw_deg: [f64; 11],
     sum_abs_innovation: [f64; 11],
+    sum_nis: [f64; 11],
     sum_abs_dx_mount_yaw_deg: [f64; 11],
+}
+
+#[derive(Clone, Copy)]
+struct TimelineRow {
+    target_t_s: f64,
+    snap: WindowSnapshot,
 }
 
 #[derive(Default)]
@@ -284,6 +305,12 @@ fn main() -> Result<()> {
     let mut p_bax_ve = Stats::default();
     let mut gnss_track_pitch = GnssTrackPitchSplit::default();
     let mut latched_mount_qcs: Option<[f32; 4]> = None;
+    let mut timeline_events_s = args.timeline_events_s.clone();
+    timeline_events_s.retain(|t| t.is_finite());
+    timeline_events_s.sort_by(|a, b| a.total_cmp(b));
+    timeline_events_s.dedup_by(|a, b| (*a - *b).abs() < 1.0e-6);
+    let mut next_timeline_event = 0usize;
+    let mut timeline_rows = Vec::<TimelineRow>::new();
 
     let mut prev_imu_t_s: Option<f64> = None;
     for_each_event(
@@ -365,6 +392,15 @@ fn main() -> Result<()> {
                     return;
                 };
                 let snap = make_snapshot(t_s, sample, nav_att, alg, &fusion, eskf);
+                while next_timeline_event < timeline_events_s.len()
+                    && t_s >= timeline_events_s[next_timeline_event]
+                {
+                    timeline_rows.push(TimelineRow {
+                        target_t_s: timeline_events_s[next_timeline_event],
+                        snap,
+                    });
+                    next_timeline_event += 1;
+                }
                 pitch_vs_nav_att.push(snap.pitch_minus_nav_att_deg);
                 yaw_vs_nav_att.push(snap.yaw_minus_nav_att_deg);
                 yaw_vs_course.push(snap.yaw_minus_course_deg);
@@ -399,6 +435,11 @@ fn main() -> Result<()> {
     let Some(last) = last_snapshot else {
         bail!("no end snapshot in window");
     };
+
+    if args.timeline {
+        print_timeline(&timeline_rows);
+        return Ok(());
+    }
 
     println!(
         "window=[{:.3}, {:.3}] config: gnss_pos_r_scale={:.3} gnss_vel_r_scale={:.3} gnss_time_shift_ms={:.1} r_body_vel={:.3} gnss_pos_mount_scale={:.3} gnss_vel_mount_scale={:.3} gyro_bias_init_sigma_dps={:.3} accel_bias_init_sigma_mps2={:.3} accel_bias_rw_var={:.6e} r_vehicle_speed={:.3} fuse_gnss_speed_as_vehicle_speed={} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} mount_update_min_scale={:.3} mount_update_ramp_time_s={:.3} mount_update_innovation_gate_mps={:.3} analysis_zero_mount_cross_cov={} analysis_freeze_mount={} analysis_mount_sigma_deg={:.6}",
@@ -675,13 +716,133 @@ fn make_snapshot(
         v_e_var: eskf.p[4][4] as f64,
         mount_z_var: eskf.p[17][17] as f64,
         type_counts: eskf.update_diag.type_counts,
+        sum_dx_yaw_deg: std::array::from_fn(|i| rad2deg(eskf.update_diag.sum_dx_yaw[i] as f64)),
+        sum_abs_dx_yaw_deg: std::array::from_fn(|i| {
+            rad2deg(eskf.update_diag.sum_abs_dx_yaw[i] as f64)
+        }),
         sum_abs_dx_pitch_deg: std::array::from_fn(|i| {
             rad2deg(eskf.update_diag.sum_abs_dx_pitch[i] as f64)
         }),
+        sum_abs_dx_vel_h_mps: std::array::from_fn(|i| eskf.update_diag.sum_abs_dx_vel_h[i] as f64),
+        sum_dx_gyro_bias_z_dps: std::array::from_fn(|i| {
+            rad2deg(eskf.update_diag.sum_dx_gyro_bias_z[i] as f64)
+        }),
+        sum_abs_dx_gyro_bias_z_dps: std::array::from_fn(|i| {
+            rad2deg(eskf.update_diag.sum_abs_dx_gyro_bias_z[i] as f64)
+        }),
+        sum_dx_mount_yaw_deg: std::array::from_fn(|i| {
+            rad2deg(eskf.update_diag.sum_dx_mount_yaw[i] as f64)
+        }),
         sum_abs_innovation: std::array::from_fn(|i| eskf.update_diag.sum_abs_innovation[i] as f64),
+        sum_nis: std::array::from_fn(|i| eskf.update_diag.sum_nis[i] as f64),
         sum_abs_dx_mount_yaw_deg: std::array::from_fn(|i| {
             rad2deg(eskf.update_diag.sum_abs_dx_mount_yaw[i] as f64)
         }),
+    }
+}
+
+fn print_timeline(rows: &[TimelineRow]) {
+    if rows.is_empty() {
+        println!("timeline: no rows");
+        return;
+    }
+    println!(
+        "target_s\tsample_s\tinterval_s\tyaw_nav_deg\tyaw_gnss_course_deg\tnominal_course_gnss_deg\tyaw_nominal_course_deg\tlat_vel_mps\tmount_qerr_deg\tmount_yaw_err_deg\tbgz_dps\ttheta_z_var\tmount_z_var\tgps_vel_n\tgps_vel_innov_abs\tgps_vel_yaw_dx_deg\tgps_vel_abs_yaw_dx_deg\tgps_vel_bgz_dx_dps\tgps_vel_abs_bgz_dx_dps\tgps_vel_velh_abs_mps\tgps_vel_nis_mean\tbody_y_n\tbody_y_innov_abs\tbody_y_yaw_dx_deg\tbody_y_abs_yaw_dx_deg\tbody_y_bgz_dx_dps\tbody_y_mount_yaw_dx_deg\tbody_y_abs_mount_yaw_dx_deg\tbody_y_nis_mean\tbody_z_n\tbody_z_mount_yaw_dx_deg"
+    );
+    for (idx, row) in rows.iter().enumerate() {
+        let prev = idx.checked_sub(1).and_then(|prev_idx| rows.get(prev_idx));
+        let snap = row.snap;
+        let interval_s = prev.map(|prev| snap.t_s - prev.snap.t_s).unwrap_or(0.0);
+        let gps_vel = timeline_delta(prev, snap, 1);
+        let body_y = timeline_delta(prev, snap, 4);
+        let body_z = timeline_delta(prev, snap, 5);
+        println!(
+            "{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.4}\t{:.6e}\t{:.6e}\t{}\t{:.3}\t{:.3}\t{:.3}\t{:.4}\t{:.4}\t{:.3}\t{:.3}\t{}\t{:.3}\t{:.3}\t{:.3}\t{:.4}\t{:.3}\t{:.3}\t{:.3}\t{}\t{:.3}",
+            row.target_t_s,
+            snap.t_s,
+            interval_s,
+            snap.yaw_minus_nav_att_deg,
+            snap.yaw_minus_course_deg,
+            snap.course_minus_course_deg,
+            wrap_deg180(snap.yaw_deg - snap.course_deg),
+            snap.vel_vehicle_y_mps,
+            snap.mount_quat_err_deg,
+            snap.mount_yaw_err_deg,
+            snap.bgz_dps,
+            snap.theta_z_var,
+            snap.mount_z_var,
+            gps_vel.count,
+            gps_vel.innov_abs,
+            gps_vel.yaw_dx,
+            gps_vel.yaw_dx_abs,
+            gps_vel.bgz_dx,
+            gps_vel.bgz_dx_abs,
+            gps_vel.vel_h_abs,
+            gps_vel.nis_mean,
+            body_y.count,
+            body_y.innov_abs,
+            body_y.yaw_dx,
+            body_y.yaw_dx_abs,
+            body_y.bgz_dx,
+            body_y.mount_yaw_dx,
+            body_y.mount_yaw_dx_abs,
+            body_y.nis_mean,
+            body_z.count,
+            body_z.mount_yaw_dx,
+        );
+    }
+}
+
+struct TimelineDelta {
+    count: u32,
+    innov_abs: f64,
+    yaw_dx: f64,
+    yaw_dx_abs: f64,
+    vel_h_abs: f64,
+    bgz_dx: f64,
+    bgz_dx_abs: f64,
+    mount_yaw_dx: f64,
+    mount_yaw_dx_abs: f64,
+    nis_mean: f64,
+}
+
+fn timeline_delta(prev: Option<&TimelineRow>, snap: WindowSnapshot, cue: usize) -> TimelineDelta {
+    let prev_snap = prev.map(|row| row.snap);
+    let prev_count = prev_snap.map(|s| s.type_counts[cue]).unwrap_or(0);
+    let count = snap.type_counts[cue].saturating_sub(prev_count);
+    let nis_sum = snap.sum_nis[cue] - prev_snap.map(|s| s.sum_nis[cue]).unwrap_or(0.0);
+    TimelineDelta {
+        count,
+        innov_abs: snap.sum_abs_innovation[cue]
+            - prev_snap.map(|s| s.sum_abs_innovation[cue]).unwrap_or(0.0),
+        yaw_dx: snap.sum_dx_yaw_deg[cue] - prev_snap.map(|s| s.sum_dx_yaw_deg[cue]).unwrap_or(0.0),
+        yaw_dx_abs: snap.sum_abs_dx_yaw_deg[cue]
+            - prev_snap.map(|s| s.sum_abs_dx_yaw_deg[cue]).unwrap_or(0.0),
+        vel_h_abs: snap.sum_abs_dx_vel_h_mps[cue]
+            - prev_snap
+                .map(|s| s.sum_abs_dx_vel_h_mps[cue])
+                .unwrap_or(0.0),
+        bgz_dx: snap.sum_dx_gyro_bias_z_dps[cue]
+            - prev_snap
+                .map(|s| s.sum_dx_gyro_bias_z_dps[cue])
+                .unwrap_or(0.0),
+        bgz_dx_abs: snap.sum_abs_dx_gyro_bias_z_dps[cue]
+            - prev_snap
+                .map(|s| s.sum_abs_dx_gyro_bias_z_dps[cue])
+                .unwrap_or(0.0),
+        mount_yaw_dx: snap.sum_dx_mount_yaw_deg[cue]
+            - prev_snap
+                .map(|s| s.sum_dx_mount_yaw_deg[cue])
+                .unwrap_or(0.0),
+        mount_yaw_dx_abs: snap.sum_abs_dx_mount_yaw_deg[cue]
+            - prev_snap
+                .map(|s| s.sum_abs_dx_mount_yaw_deg[cue])
+                .unwrap_or(0.0),
+        nis_mean: if count == 0 {
+            0.0
+        } else {
+            nis_sum / count as f64
+        },
     }
 }
 

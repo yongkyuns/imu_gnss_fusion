@@ -575,6 +575,8 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig) {
     fusion.set_gnss_vel_mount_scale(cfg.gnss_vel_mount_scale);
     fusion.set_yaw_init_sigma_rad(cfg.yaw_init_sigma_deg.to_radians());
     fusion.set_gyro_bias_init_sigma_radps(cfg.gyro_bias_init_sigma_dps.to_radians());
+    fusion.set_accel_bias_init_sigma_mps2(cfg.accel_bias_init_sigma_mps2);
+    fusion.set_mount_init_sigma_rad(cfg.mount_init_sigma_deg.to_radians());
     fusion.set_r_vehicle_speed(cfg.r_vehicle_speed);
     fusion.set_r_zero_vel(cfg.r_zero_vel);
     fusion.set_r_stationary_accel(cfg.r_stationary_accel);
@@ -583,6 +585,7 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig) {
     fusion.set_mount_update_ramp_time_s(cfg.mount_update_ramp_time_s);
     fusion.set_mount_update_innovation_gate_mps(cfg.mount_update_innovation_gate_mps);
     fusion.set_mount_update_yaw_rate_gate_radps(cfg.mount_update_yaw_rate_gate_dps.to_radians());
+    fusion.set_align_handoff_delay_s(cfg.align_handoff_delay_s);
     fusion.set_freeze_misalignment_states(cfg.freeze_misalignment_states);
     fusion.set_mount_settle_time_s(cfg.mount_settle_time_s);
     fusion.set_mount_settle_release_sigma_rad(cfg.mount_settle_release_sigma_deg.to_radians());

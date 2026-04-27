@@ -66,12 +66,15 @@ pub struct EkfCompareConfig {
     pub gnss_vel_mount_scale: f32,
     pub yaw_init_sigma_deg: f32,
     pub gyro_bias_init_sigma_dps: f32,
+    pub accel_bias_init_sigma_mps2: f32,
+    pub mount_init_sigma_deg: f32,
     pub r_vehicle_speed: f32,
     pub mount_align_rw_var: f32,
     pub mount_update_min_scale: f32,
     pub mount_update_ramp_time_s: f32,
     pub mount_update_innovation_gate_mps: f32,
     pub mount_update_yaw_rate_gate_dps: f32,
+    pub align_handoff_delay_s: f32,
     pub freeze_misalignment_states: bool,
     pub mount_settle_time_s: f32,
     pub mount_settle_release_sigma_deg: f32,
@@ -96,12 +99,15 @@ impl Default for EkfCompareConfig {
             gnss_vel_mount_scale: 0.0,
             yaw_init_sigma_deg: 2.0,
             gyro_bias_init_sigma_dps: 0.125,
+            accel_bias_init_sigma_mps2: 0.20,
+            mount_init_sigma_deg: 2.5,
             r_vehicle_speed: 0.04,
             mount_align_rw_var: 1.0e-7,
             mount_update_min_scale: 0.008,
             mount_update_ramp_time_s: 800.0,
             mount_update_innovation_gate_mps: 0.02,
             mount_update_yaw_rate_gate_dps: 0.0,
+            align_handoff_delay_s: 0.0,
             freeze_misalignment_states: false,
             mount_settle_time_s: 0.0,
             mount_settle_release_sigma_deg: 7.5,
@@ -147,6 +153,8 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig) {
     fusion.set_gnss_vel_mount_scale(cfg.gnss_vel_mount_scale);
     fusion.set_yaw_init_sigma_rad(cfg.yaw_init_sigma_deg.to_radians());
     fusion.set_gyro_bias_init_sigma_radps(cfg.gyro_bias_init_sigma_dps.to_radians());
+    fusion.set_accel_bias_init_sigma_mps2(cfg.accel_bias_init_sigma_mps2);
+    fusion.set_mount_init_sigma_rad(cfg.mount_init_sigma_deg.to_radians());
     fusion.set_r_vehicle_speed(cfg.r_vehicle_speed);
     fusion.set_r_zero_vel(cfg.r_zero_vel);
     fusion.set_r_stationary_accel(cfg.r_stationary_accel);
@@ -155,6 +163,7 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig) {
     fusion.set_mount_update_ramp_time_s(cfg.mount_update_ramp_time_s);
     fusion.set_mount_update_innovation_gate_mps(cfg.mount_update_innovation_gate_mps);
     fusion.set_mount_update_yaw_rate_gate_radps(cfg.mount_update_yaw_rate_gate_dps.to_radians());
+    fusion.set_align_handoff_delay_s(cfg.align_handoff_delay_s);
     fusion.set_freeze_misalignment_states(cfg.freeze_misalignment_states);
     fusion.set_mount_settle_time_s(cfg.mount_settle_time_s);
     fusion.set_mount_settle_release_sigma_rad(cfg.mount_settle_release_sigma_deg.to_radians());

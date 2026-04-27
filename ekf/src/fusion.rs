@@ -101,6 +101,7 @@ struct FusionConfig {
     yaw_init_sigma_rad: f32,
     gyro_bias_init_sigma_radps: f32,
     accel_bias_init_sigma_mps2: f32,
+    mount_init_sigma_rad: f32,
     r_body_vel: f32,
     gnss_pos_mount_scale: f32,
     gnss_vel_mount_scale: f32,
@@ -109,8 +110,8 @@ struct FusionConfig {
     mount_update_min_scale: f32,
     mount_update_ramp_time_s: f32,
     mount_update_innovation_gate_mps: f32,
-    mount_update_nis_gate: f32,
     mount_update_yaw_rate_gate_radps: f32,
+    align_handoff_delay_s: f32,
     freeze_misalignment_states: bool,
     mount_settle_time_s: f32,
     mount_settle_release_sigma_rad: f32,
@@ -136,6 +137,7 @@ impl Default for FusionConfig {
             yaw_init_sigma_rad: 2.0_f32.to_radians(),
             gyro_bias_init_sigma_radps: 0.125_f32.to_radians(),
             accel_bias_init_sigma_mps2: 0.20,
+            mount_init_sigma_rad: 2.5_f32.to_radians(),
             r_body_vel: 0.001,
             gnss_pos_mount_scale: 0.0,
             gnss_vel_mount_scale: 0.0,
@@ -144,8 +146,8 @@ impl Default for FusionConfig {
             mount_update_min_scale: 0.008,
             mount_update_ramp_time_s: 800.0,
             mount_update_innovation_gate_mps: 0.02,
-            mount_update_nis_gate: 0.0,
             mount_update_yaw_rate_gate_radps: 0.0,
+            align_handoff_delay_s: 0.0,
             freeze_misalignment_states: false,
             mount_settle_time_s: 0.0,
             mount_settle_release_sigma_rad: 7.5_f32.to_radians(),
@@ -179,6 +181,7 @@ pub struct SensorFusion {
     mount_ready: bool,
     mount_q_vb: Option<[f32; 4]>,
     eskf_mount_q_vb: Option<[f32; 4]>,
+    align_ready_since_t_s: Option<f32>,
     ekf_mount_handoff_t_s: Option<f32>,
     mount_settle_released: bool,
     last_imu_t_s: Option<f32>,
@@ -222,6 +225,7 @@ impl SensorFusion {
             mount_ready: false,
             mount_q_vb: None,
             eskf_mount_q_vb: None,
+            align_ready_since_t_s: None,
             ekf_mount_handoff_t_s: None,
             mount_settle_released: false,
             last_imu_t_s: None,
@@ -254,6 +258,7 @@ impl SensorFusion {
         self.mount_ready = true;
         self.mount_q_vb = Some(q_vb);
         self.eskf_mount_q_vb = Some(q_vb);
+        self.align_ready_since_t_s = None;
         self.ekf_mount_handoff_t_s = None;
         self.mount_settle_released = false;
         let n = &mut self.eskf.raw_mut().nominal;
@@ -299,6 +304,12 @@ impl SensorFusion {
         }
     }
 
+    pub fn set_mount_init_sigma_rad(&mut self, mount_init_sigma_rad: f32) {
+        if mount_init_sigma_rad.is_finite() && mount_init_sigma_rad >= 0.0 {
+            self.cfg.mount_init_sigma_rad = mount_init_sigma_rad;
+        }
+    }
+
     pub fn set_accel_bias_rw_var(&mut self, accel_bias_rw_var: f32) {
         if accel_bias_rw_var.is_finite() && accel_bias_rw_var >= 0.0 {
             self.cfg.predict_noise.accel_bias_rw_var = accel_bias_rw_var;
@@ -331,15 +342,16 @@ impl SensorFusion {
         }
     }
 
-    pub fn set_mount_update_nis_gate(&mut self, mount_update_nis_gate: f32) {
-        if mount_update_nis_gate.is_finite() && mount_update_nis_gate >= 0.0 {
-            self.cfg.mount_update_nis_gate = mount_update_nis_gate;
-        }
-    }
-
     pub fn set_mount_update_yaw_rate_gate_radps(&mut self, mount_update_yaw_rate_gate_radps: f32) {
         if mount_update_yaw_rate_gate_radps.is_finite() && mount_update_yaw_rate_gate_radps >= 0.0 {
             self.cfg.mount_update_yaw_rate_gate_radps = mount_update_yaw_rate_gate_radps;
+        }
+    }
+
+    pub fn set_align_handoff_delay_s(&mut self, align_handoff_delay_s: f32) {
+        if align_handoff_delay_s.is_finite() && align_handoff_delay_s >= 0.0 {
+            self.cfg.align_handoff_delay_s = align_handoff_delay_s;
+            self.align_ready_since_t_s = None;
         }
     }
 
@@ -448,7 +460,6 @@ impl SensorFusion {
                         effective_r,
                         mount_update_scale,
                         self.cfg.mount_update_innovation_gate_mps,
-                        self.cfg.mount_update_nis_gate,
                     );
                 }
             }
@@ -479,7 +490,8 @@ impl SensorFusion {
                         self.last_align_window = Some(summary);
                         self.last_align_trace = Some(trace);
                         self.mount_q_vb = Some(self.align.q_vb);
-                        self.mount_ready = trace.coarse_alignment_ready;
+                        self.mount_ready =
+                            self.align_handoff_ready(trace.coarse_alignment_ready, local.t_s);
                     }
                 }
             }
@@ -679,13 +691,22 @@ impl SensorFusion {
         raw.p[13][13] = raw.p[12][12];
         raw.p[14][14] = raw.p[12][12];
         raw.p[2][2] = self.cfg.yaw_init_sigma_rad.powi(2);
-        let mount_var = 5.0_f32.to_radians().powi(2);
+        let mount_var = self.cfg.mount_init_sigma_rad.powi(2);
         raw.p[15][15] = 0.0;
         raw.p[16][16] = mount_var;
         raw.p[17][17] = mount_var;
         if self.cfg.freeze_misalignment_states {
             self.eskf.set_freeze_misalignment_states(true);
         }
+    }
+
+    fn align_handoff_ready(&mut self, coarse_ready: bool, t_s: f32) -> bool {
+        if !coarse_ready {
+            self.align_ready_since_t_s = None;
+            return false;
+        }
+        let ready_since = *self.align_ready_since_t_s.get_or_insert(t_s);
+        t_s - ready_since >= self.cfg.align_handoff_delay_s
     }
 
     fn refresh_mount_settle_state(&mut self, t_s: f32) {
@@ -740,7 +761,6 @@ impl SensorFusion {
             effective_r,
             scale,
             self.cfg.mount_update_innovation_gate_mps,
-            self.cfg.mount_update_nis_gate,
         );
     }
 
