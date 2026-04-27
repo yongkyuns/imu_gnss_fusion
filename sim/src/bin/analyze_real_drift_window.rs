@@ -53,7 +53,7 @@ struct Args {
     gnss_pos_mount_scale: f32,
     #[arg(long, default_value_t = 0.0)]
     gnss_vel_mount_scale: f32,
-    #[arg(long, default_value_t = 0.0)]
+    #[arg(long, default_value_t = 0.125)]
     gyro_bias_init_sigma_dps: f32,
     #[arg(long, default_value_t = 0.20)]
     accel_bias_init_sigma_mps2: f32,
@@ -616,11 +616,22 @@ fn main() -> Result<()> {
     for (i, name) in CUE_NAMES.iter().enumerate() {
         let count_delta = last.type_counts[i].saturating_sub(first.type_counts[i]);
         let innov_abs_delta = last.sum_abs_innovation[i] - first.sum_abs_innovation[i];
+        let yaw_dx_delta = last.sum_dx_yaw_deg[i] - first.sum_dx_yaw_deg[i];
+        let yaw_dx_abs_delta = last.sum_abs_dx_yaw_deg[i] - first.sum_abs_dx_yaw_deg[i];
         let pitch_dx_abs_delta = last.sum_abs_dx_pitch_deg[i] - first.sum_abs_dx_pitch_deg[i];
-        let yaw_dx_abs_delta = last.sum_abs_dx_mount_yaw_deg[i] - first.sum_abs_dx_mount_yaw_deg[i];
+        let mount_yaw_dx_delta = last.sum_dx_mount_yaw_deg[i] - first.sum_dx_mount_yaw_deg[i];
+        let mount_yaw_dx_abs_delta =
+            last.sum_abs_dx_mount_yaw_deg[i] - first.sum_abs_dx_mount_yaw_deg[i];
         println!(
-            "  cue={} count_delta={} innov_abs_delta={:.6} pitch_dx_abs_delta_deg={:.6} mount_yaw_dx_abs_delta_deg={:.6}",
-            name, count_delta, innov_abs_delta, pitch_dx_abs_delta, yaw_dx_abs_delta
+            "  cue={} count_delta={} innov_abs_delta={:.6} yaw_dx_delta_deg={:.6} yaw_dx_abs_delta_deg={:.6} pitch_dx_abs_delta_deg={:.6} mount_yaw_dx_delta_deg={:.6} mount_yaw_dx_abs_delta_deg={:.6}",
+            name,
+            count_delta,
+            innov_abs_delta,
+            yaw_dx_delta,
+            yaw_dx_abs_delta,
+            pitch_dx_abs_delta,
+            mount_yaw_dx_delta,
+            mount_yaw_dx_abs_delta
         );
     }
 
@@ -635,47 +646,42 @@ fn make_snapshot(
     fusion: &SensorFusion,
     eskf: &EskfState,
 ) -> WindowSnapshot {
-    let (_roll_deg, pitch_deg, yaw_deg) = quat_rpy_deg(
-        eskf.nominal.q0,
-        eskf.nominal.q1,
-        eskf.nominal.q2,
-        eskf.nominal.q3,
-    );
-    let course_deg = normalize_heading_deg(rad2deg(
-        (eskf.nominal.ve as f64).atan2(eskf.nominal.vn as f64),
-    ));
-    let c_n_b = quat_to_rotmat_f64([
+    let q_seed_frame = [
         eskf.nominal.q0 as f64,
         eskf.nominal.q1 as f64,
         eskf.nominal.q2 as f64,
         eskf.nominal.q3 as f64,
-    ]);
-    let c_c_s = quat_to_rotmat_f64([
-        eskf.nominal.qcs0 as f64,
-        eskf.nominal.qcs1 as f64,
-        eskf.nominal.qcs2 as f64,
-        eskf.nominal.qcs3 as f64,
-    ]);
-    let vel_seed = mat_vec(
-        transpose3(c_n_b),
-        [
-            eskf.nominal.vn as f64,
-            eskf.nominal.ve as f64,
-            eskf.nominal.vd as f64,
-        ],
-    );
-    let vel_vehicle = mat_vec(c_c_s, vel_seed);
-    let q_seed = fusion
-        .eskf_mount_q_vb()
-        .or_else(|| fusion.mount_q_vb())
-        .map(|q| q.map(|v| v as f64))
-        .unwrap_or([1.0, 0.0, 0.0, 0.0]);
+    ];
     let q_cs = [
         eskf.nominal.qcs0 as f64,
         eskf.nominal.qcs1 as f64,
         eskf.nominal.qcs2 as f64,
         eskf.nominal.qcs3 as f64,
     ];
+    let q_vehicle = quat_mul(q_seed_frame, quat_conj(q_cs));
+    let (_roll_deg, pitch_deg, yaw_deg) = quat_rpy_deg(
+        q_vehicle[0] as f32,
+        q_vehicle[1] as f32,
+        q_vehicle[2] as f32,
+        q_vehicle[3] as f32,
+    );
+    let course_deg = normalize_heading_deg(rad2deg(
+        (eskf.nominal.ve as f64).atan2(eskf.nominal.vn as f64),
+    ));
+    let c_n_vehicle = quat_to_rotmat_f64(q_vehicle);
+    let vel_vehicle = mat_vec(
+        transpose3(c_n_vehicle),
+        [
+            eskf.nominal.vn as f64,
+            eskf.nominal.ve as f64,
+            eskf.nominal.vd as f64,
+        ],
+    );
+    let q_seed = fusion
+        .eskf_mount_q_vb()
+        .or_else(|| fusion.mount_q_vb())
+        .map(|q| q.map(|v| v as f64))
+        .unwrap_or([1.0, 0.0, 0.0, 0.0]);
     let q_full_vb = quat_mul(q_seed, quat_conj(q_cs));
     let q_full_flu = frd_mount_quat_to_esf_alg_flu_quat(q_full_vb);
     let (_, mount_pitch_deg, mount_yaw_deg) =
