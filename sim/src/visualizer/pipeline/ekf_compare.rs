@@ -46,6 +46,8 @@ pub struct EkfCompareData {
     pub loose_cmp_pos: Vec<Trace>,
     pub loose_cmp_vel: Vec<Trace>,
     pub loose_cmp_att: Vec<Trace>,
+    pub loose_nominal_att: Vec<Trace>,
+    pub loose_residual_mount: Vec<Trace>,
     pub loose_misalignment: Vec<Trace>,
     pub loose_meas_gyro: Vec<Trace>,
     pub loose_meas_accel: Vec<Trace>,
@@ -198,6 +200,8 @@ pub fn build_ekf_compare_traces(
             loose_cmp_pos: Vec::new(),
             loose_cmp_vel: Vec::new(),
             loose_cmp_att: Vec::new(),
+            loose_nominal_att: Vec::new(),
+            loose_residual_mount: Vec::new(),
             loose_misalignment: Vec::new(),
             loose_meas_gyro: Vec::new(),
             loose_meas_accel: Vec::new(),
@@ -375,6 +379,12 @@ pub fn build_ekf_compare_traces(
     let mut loose_cmp_att_roll = Vec::<[f64; 2]>::new();
     let mut loose_cmp_att_pitch = Vec::<[f64; 2]>::new();
     let mut loose_cmp_att_yaw = Vec::<[f64; 2]>::new();
+    let mut loose_nominal_att_roll = Vec::<[f64; 2]>::new();
+    let mut loose_nominal_att_pitch = Vec::<[f64; 2]>::new();
+    let mut loose_nominal_att_yaw = Vec::<[f64; 2]>::new();
+    let mut loose_inv_qcs_roll = Vec::<[f64; 2]>::new();
+    let mut loose_inv_qcs_pitch = Vec::<[f64; 2]>::new();
+    let mut loose_inv_qcs_yaw = Vec::<[f64; 2]>::new();
     let mut loose_mount_roll = Vec::<[f64; 2]>::new();
     let mut loose_mount_pitch = Vec::<[f64; 2]>::new();
     let mut loose_mount_yaw = Vec::<[f64; 2]>::new();
@@ -870,6 +880,12 @@ pub fn build_ekf_compare_traces(
                             &mut loose_cmp_att_roll,
                             &mut loose_cmp_att_pitch,
                             &mut loose_cmp_att_yaw,
+                            &mut loose_nominal_att_roll,
+                            &mut loose_nominal_att_pitch,
+                            &mut loose_nominal_att_yaw,
+                            &mut loose_inv_qcs_roll,
+                            &mut loose_inv_qcs_pitch,
+                            &mut loose_inv_qcs_yaw,
                             &mut loose_mount_roll,
                             &mut loose_mount_pitch,
                             &mut loose_mount_yaw,
@@ -1039,6 +1055,12 @@ pub fn build_ekf_compare_traces(
                 &mut loose_cmp_att_roll,
                 &mut loose_cmp_att_pitch,
                 &mut loose_cmp_att_yaw,
+                &mut loose_nominal_att_roll,
+                &mut loose_nominal_att_pitch,
+                &mut loose_nominal_att_yaw,
+                &mut loose_inv_qcs_roll,
+                &mut loose_inv_qcs_pitch,
+                &mut loose_inv_qcs_yaw,
                 &mut loose_mount_roll,
                 &mut loose_mount_pitch,
                 &mut loose_mount_yaw,
@@ -1463,6 +1485,34 @@ pub fn build_ekf_compare_traces(
             points: ubx_att_yaw.clone(),
         },
     ];
+    let loose_nominal_att = vec![
+        Trace {
+            name: "Loose nominal q_ns roll [deg]".to_string(),
+            points: loose_nominal_att_roll,
+        },
+        Trace {
+            name: "Loose nominal q_ns pitch [deg]".to_string(),
+            points: loose_nominal_att_pitch,
+        },
+        Trace {
+            name: "Loose nominal q_ns yaw [deg]".to_string(),
+            points: loose_nominal_att_yaw,
+        },
+    ];
+    let loose_residual_mount = vec![
+        Trace {
+            name: "Loose inv(qcs) roll [deg]".to_string(),
+            points: loose_inv_qcs_roll,
+        },
+        Trace {
+            name: "Loose inv(qcs) pitch [deg]".to_string(),
+            points: loose_inv_qcs_pitch,
+        },
+        Trace {
+            name: "Loose inv(qcs) yaw [deg]".to_string(),
+            points: loose_inv_qcs_yaw,
+        },
+    ];
     let mut eskf_misalignment = vec![
         Trace {
             name: "ESKF full mount roll [deg]".to_string(),
@@ -1701,6 +1751,8 @@ pub fn build_ekf_compare_traces(
         loose_cmp_pos,
         loose_cmp_vel,
         loose_cmp_att,
+        loose_nominal_att,
+        loose_residual_mount,
         loose_misalignment,
         loose_meas_gyro,
         loose_meas_accel,
@@ -2248,6 +2300,12 @@ fn append_loose_sample(
     cmp_att_roll: &mut Vec<[f64; 2]>,
     cmp_att_pitch: &mut Vec<[f64; 2]>,
     cmp_att_yaw: &mut Vec<[f64; 2]>,
+    nominal_att_roll: &mut Vec<[f64; 2]>,
+    nominal_att_pitch: &mut Vec<[f64; 2]>,
+    nominal_att_yaw: &mut Vec<[f64; 2]>,
+    inv_qcs_roll: &mut Vec<[f64; 2]>,
+    inv_qcs_pitch: &mut Vec<[f64; 2]>,
+    inv_qcs_yaw: &mut Vec<[f64; 2]>,
     mount_roll: &mut Vec<[f64; 2]>,
     mount_pitch: &mut Vec<[f64; 2]>,
     mount_yaw: &mut Vec<[f64; 2]>,
@@ -2277,6 +2335,25 @@ fn append_loose_sample(
     cmp_pos_e.push([t_imu, pos_ned[1]]);
     cmp_pos_d.push([t_imu, pos_ned[2]]);
     let q_cs = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
+    let (nominal_roll, nominal_pitch, nominal_yaw) = quat_rpy_deg(
+        q_ns[0] as f32,
+        q_ns[1] as f32,
+        q_ns[2] as f32,
+        q_ns[3] as f32,
+    );
+    nominal_att_roll.push([t_imu, nominal_roll]);
+    nominal_att_pitch.push([t_imu, nominal_pitch]);
+    nominal_att_yaw.push([t_imu, nominal_yaw]);
+    let q_inv_cs = quat_conj(q_cs);
+    let (inv_roll, inv_pitch, inv_yaw) = quat_rpy_deg(
+        q_inv_cs[0] as f32,
+        q_inv_cs[1] as f32,
+        q_inv_cs[2] as f32,
+        q_inv_cs[3] as f32,
+    );
+    inv_qcs_roll.push([t_imu, inv_roll]);
+    inv_qcs_pitch.push([t_imu, inv_pitch]);
+    inv_qcs_yaw.push([t_imu, inv_yaw]);
     let q_nc = quat_mul(q_ns, quat_conj(q_cs));
     let c_n_c = quat_to_rotmat_f64(q_nc);
     let vel_vehicle = mat_vec(transpose3(c_n_c), vel_ned);

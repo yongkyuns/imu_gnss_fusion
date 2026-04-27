@@ -95,9 +95,18 @@ fn main() -> Result<()> {
     );
 
     print_group("loose_bias_accel", &data.loose_bias_accel, &sample_times);
+    print_group("loose_bias_gyro", &data.loose_bias_gyro, &sample_times);
     print_group("loose_scale_accel", &data.loose_scale_accel, &sample_times);
     print_group("loose_meas_accel", &data.loose_meas_accel, &sample_times);
     print_group("loose_cmp_vel", &data.loose_cmp_vel, &sample_times);
+    print_group("loose_cmp_att", &data.loose_cmp_att, &sample_times);
+    print_group("loose_nominal_att", &data.loose_nominal_att, &sample_times);
+    print_group(
+        "loose_residual_mount",
+        &data.loose_residual_mount,
+        &sample_times,
+    );
+    print_group("loose_cov_nonbias", &data.loose_cov_nonbias, &sample_times);
     print_group("loose_cmp_pos", &data.loose_cmp_pos, &sample_times);
     print_group(
         "loose_misalignment",

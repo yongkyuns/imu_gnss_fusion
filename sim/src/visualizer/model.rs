@@ -36,6 +36,8 @@ pub struct PlotData {
     pub loose_cmp_pos: Vec<Trace>,
     pub loose_cmp_vel: Vec<Trace>,
     pub loose_cmp_att: Vec<Trace>,
+    pub loose_nominal_att: Vec<Trace>,
+    pub loose_residual_mount: Vec<Trace>,
     pub loose_misalignment: Vec<Trace>,
     pub loose_meas_gyro: Vec<Trace>,
     pub loose_meas_accel: Vec<Trace>,

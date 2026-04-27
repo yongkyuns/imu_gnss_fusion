@@ -292,6 +292,8 @@ pub fn build_signal_traces(
     out.loose_cmp_pos = ekf.loose_cmp_pos;
     out.loose_cmp_vel = ekf.loose_cmp_vel;
     out.loose_cmp_att = ekf.loose_cmp_att;
+    out.loose_nominal_att = ekf.loose_nominal_att;
+    out.loose_residual_mount = ekf.loose_residual_mount;
     out.loose_misalignment = ekf.loose_misalignment;
     out.loose_meas_gyro = ekf.loose_meas_gyro;
     out.loose_meas_accel = ekf.loose_meas_accel;

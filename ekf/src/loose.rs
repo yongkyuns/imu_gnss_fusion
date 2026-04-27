@@ -17,6 +17,7 @@ const GPS_REF_SUPPORT_ROW1: &[usize] = &[0, 1];
 const GPS_REF_SUPPORT_ROW2: &[usize] = &[0, 1, 2];
 const NHC_Y_SUPPORT: &[usize] = &[3, 4, 5, 6, 7, 8, 21, 23];
 const NHC_Z_SUPPORT: &[usize] = &[3, 4, 5, 6, 7, 8, 21, 22];
+const MIN_NHC_UPDATE_SPEED_MPS: f32 = 0.5;
 const F_ROW_COUNTS: [usize; LOOSE_ERROR_STATES] = [
     2, 2, 2, 10, 10, 9, 8, 8, 7, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
 ];
@@ -699,7 +700,10 @@ impl LooseFilter {
     }
 
     pub fn fuse_nhc_reference(&mut self, gyro_radps: [f32; 3], accel_mps2: [f32; 3], dt_s: f32) {
-        if dt_s <= 0.0 || !self.nhc_gate_allows(gyro_radps, accel_mps2) {
+        if dt_s <= 0.0
+            || !self.nhc_gate_allows(gyro_radps, accel_mps2)
+            || self.vehicle_speed_mps() < MIN_NHC_UPDATE_SPEED_MPS
+        {
             return;
         }
         let (vc_y_est, h_y) = generated_loose::nhc_y(&self.raw.nominal);
@@ -775,7 +779,9 @@ impl LooseFilter {
             0,
         );
 
-        if self.nhc_gate_allows(gyro_radps, accel_mps2) {
+        if self.nhc_gate_allows(gyro_radps, accel_mps2)
+            && self.vehicle_speed_mps() >= MIN_NHC_UPDATE_SPEED_MPS
+        {
             let (vc_y_est, h_y) = generated_loose::nhc_y(&self.raw.nominal);
             let (vc_z_est, h_z) = generated_loose::nhc_z(&self.raw.nominal);
             let gate_var_y = 0.1_f32 * 0.1_f32;
@@ -993,6 +999,14 @@ impl LooseFilter {
         vec_norm3(omega_is) < 0.03 && libm::fabsf(vec_norm3(f_s) - 9.81) < 0.2
     }
 
+    fn vehicle_speed_mps(&self) -> f32 {
+        vec_norm3([
+            self.raw.nominal.vn,
+            self.raw.nominal.ve,
+            self.raw.nominal.vd,
+        ])
+    }
+
     fn batch_update_joseph(
         &mut self,
         obs_count: usize,
@@ -1004,11 +1018,11 @@ impl LooseFilter {
         let mut p = self.raw.p64;
         let mut dx = [0.0_f64; LOOSE_ERROR_STATES];
         for obs in 0..obs_count {
-            let dense_support;
+            let h_obs = h[obs];
+            let dense_support = extract_support_from_row(&h_obs);
             let support = if let Some(support) = h_supports[obs] {
                 support
             } else {
-                dense_support = extract_support_from_row(&h[obs]);
                 &dense_support
             };
 
@@ -1016,18 +1030,18 @@ impl LooseFilter {
             let mut s = variances[obs] as f64;
             for i in 0..LOOSE_ERROR_STATES {
                 for &state in support {
-                    ph[i] += p[i][state] * h[obs][state] as f64;
+                    ph[i] += p[i][state] * h_obs[state] as f64;
                 }
             }
             for &state in support {
-                s += h[obs][state] as f64 * ph[state];
+                s += h_obs[state] as f64 * ph[state];
             }
             if s <= 0.0 {
                 continue;
             }
             let mut hd = 0.0_f64;
             for &state in support {
-                hd += h[obs][state] as f64 * dx[state];
+                hd += h_obs[state] as f64 * dx[state];
             }
             for i in 0..LOOSE_ERROR_STATES {
                 dx[i] += (ph[i] / s) * (residuals[obs] as f64 - hd);
