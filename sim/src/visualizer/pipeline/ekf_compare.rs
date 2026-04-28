@@ -120,8 +120,8 @@ impl Default for EkfCompareConfig {
             predict_imu_lpf_cutoff_hz: None,
             predict_imu_decimation: 1,
             yaw_init_speed_mps: 0.0 / 3.6,
-            gnss_pos_r_scale: 0.1,
-            gnss_vel_r_scale: 1.0,
+            gnss_pos_r_scale: 0.05,
+            gnss_vel_r_scale: 2.5,
             predict_noise: None,
             loose_predict_noise: None,
         }
