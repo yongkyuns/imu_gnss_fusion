@@ -1,24 +1,30 @@
 use std::collections::VecDeque;
 
 use sensor_fusion::align::GRAVITY_MPS2;
-use sensor_fusion::c_api::{CEskfImuDelta, CEskfWrapper, CLooseImuDelta, CLooseWrapper};
 use sensor_fusion::ekf::PredictNoise;
-use sensor_fusion::loose::LoosePredictNoise;
+use sensor_fusion::eskf_types::EskfState;
+use sensor_fusion::fusion::SensorFusion;
+use sensor_fusion::loose::{LooseFilter, LooseImuDelta, LoosePredictNoise};
 
+use crate::datasets::generic_replay::{
+    fusion_gnss_sample as to_fusion_gnss, fusion_imu_sample as to_fusion_imu,
+};
+use crate::datasets::ubx_replay::{UbxReplayConfig, build_generic_replay_from_frames};
 use crate::ubxlog::{
-    NavPvtObs, UbxFrame, extract_esf_alg, extract_esf_alg_status, extract_esf_raw_samples,
-    extract_nav_att, extract_nav_pvt_obs, extract_nav2_pvt_obs, sensor_meta,
+    NavPvtObs, UbxFrame, extract_esf_alg, extract_esf_alg_status, extract_nav_att,
+    extract_nav_pvt_obs, extract_nav2_pvt_obs,
 };
 
 use super::super::math::{
     deg2rad, ecef_to_ned, lla_to_ecef, mat_vec, ned_to_lla_exact, normalize_heading_deg,
     quat_rpy_deg, rad2deg, rot_zyx,
 };
-use super::super::model::{AlgEvent, EkfImuSource, HeadingSample, ImuPacket, NavAttEvent, Trace};
+use super::super::model::{AlgEvent, EkfImuSource, HeadingSample, NavAttEvent, Trace};
 use super::align_replay::{
     BootstrapConfig as AlignBootstrapConfig, ImuReplayConfig, build_align_replay,
+    build_fusion_align_replay, esf_alg_flu_to_frd_mount_quat, frd_mount_quat_to_esf_alg_flu_quat,
+    quat_rpy_alg_deg,
 };
-use super::tag_time::fit_tag_ms_map;
 use super::timebase::MasterTimeline;
 
 pub struct EkfCompareData {
@@ -31,6 +37,7 @@ pub struct EkfCompareData {
     pub eskf_bias_accel: Vec<Trace>,
     pub eskf_cov_bias: Vec<Trace>,
     pub eskf_cov_nonbias: Vec<Trace>,
+    pub eskf_misalignment: Vec<Trace>,
     pub eskf_stationary_diag: Vec<Trace>,
     pub eskf_bump_pitch_speed: Vec<Trace>,
     pub eskf_bump_diag: Vec<Trace>,
@@ -39,6 +46,9 @@ pub struct EkfCompareData {
     pub loose_cmp_pos: Vec<Trace>,
     pub loose_cmp_vel: Vec<Trace>,
     pub loose_cmp_att: Vec<Trace>,
+    pub loose_nominal_att: Vec<Trace>,
+    pub loose_residual_mount: Vec<Trace>,
+    pub loose_misalignment: Vec<Trace>,
     pub loose_meas_gyro: Vec<Trace>,
     pub loose_meas_accel: Vec<Trace>,
     pub loose_bias_gyro: Vec<Trace>,
@@ -54,6 +64,23 @@ pub struct EkfCompareData {
 #[derive(Clone, Copy, Debug)]
 pub struct EkfCompareConfig {
     pub r_body_vel: f32,
+    pub gnss_pos_mount_scale: f32,
+    pub gnss_vel_mount_scale: f32,
+    pub yaw_init_sigma_deg: f32,
+    pub gyro_bias_init_sigma_dps: f32,
+    pub accel_bias_init_sigma_mps2: f32,
+    pub mount_init_sigma_deg: f32,
+    pub r_vehicle_speed: f32,
+    pub mount_align_rw_var: f32,
+    pub mount_update_min_scale: f32,
+    pub mount_update_ramp_time_s: f32,
+    pub mount_update_innovation_gate_mps: f32,
+    pub mount_update_yaw_rate_gate_dps: f32,
+    pub align_handoff_delay_s: f32,
+    pub freeze_misalignment_states: bool,
+    pub mount_settle_time_s: f32,
+    pub mount_settle_release_sigma_deg: f32,
+    pub mount_settle_zero_cross_covariance: bool,
     pub r_zero_vel: f32,
     pub r_stationary_accel: f32,
     pub vehicle_meas_lpf_cutoff_hz: f64,
@@ -69,15 +96,32 @@ pub struct EkfCompareConfig {
 impl Default for EkfCompareConfig {
     fn default() -> Self {
         Self {
-            r_body_vel: 0.2,
-            r_zero_vel: 0.25,
-            r_stationary_accel: 0.2,
+            r_body_vel: 0.001,
+            gnss_pos_mount_scale: 0.0,
+            gnss_vel_mount_scale: 0.0,
+            yaw_init_sigma_deg: 2.0,
+            gyro_bias_init_sigma_dps: 0.125,
+            accel_bias_init_sigma_mps2: 0.20,
+            mount_init_sigma_deg: 2.5,
+            r_vehicle_speed: 0.04,
+            mount_align_rw_var: 1.0e-7,
+            mount_update_min_scale: 0.008,
+            mount_update_ramp_time_s: 120.0,
+            mount_update_innovation_gate_mps: 0.10,
+            mount_update_yaw_rate_gate_dps: 0.0,
+            align_handoff_delay_s: 0.0,
+            freeze_misalignment_states: false,
+            mount_settle_time_s: 0.0,
+            mount_settle_release_sigma_deg: 7.5,
+            mount_settle_zero_cross_covariance: true,
+            r_zero_vel: 0.0,
+            r_stationary_accel: 0.0,
             vehicle_meas_lpf_cutoff_hz: 35.0,
             predict_imu_lpf_cutoff_hz: None,
             predict_imu_decimation: 1,
             yaw_init_speed_mps: 0.0 / 3.6,
-            gnss_pos_r_scale: 0.1,
-            gnss_vel_r_scale: 0.1,
+            gnss_pos_r_scale: 0.05,
+            gnss_vel_r_scale: 2.5,
             predict_noise: None,
             loose_predict_noise: None,
         }
@@ -89,6 +133,44 @@ pub struct GnssOutageConfig {
     pub count: usize,
     pub duration_s: f64,
     pub seed: u64,
+}
+
+const ESKF_YAW_CUE_NAMES: [&str; 11] = [
+    "gps_pos_ne",
+    "gps_vel_ne",
+    "zero_vel_ne",
+    "body_speed_x",
+    "body_vel_y",
+    "body_vel_z",
+    "stationary_x",
+    "stationary_y",
+    "gps_pos_d",
+    "gps_vel_d",
+    "zero_vel_d",
+];
+
+fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig, mode: EkfImuSource) {
+    fusion.set_r_body_vel(cfg.r_body_vel);
+    fusion.set_gnss_pos_mount_scale(cfg.gnss_pos_mount_scale);
+    fusion.set_gnss_vel_mount_scale(cfg.gnss_vel_mount_scale);
+    fusion.set_yaw_init_sigma_rad(cfg.yaw_init_sigma_deg.to_radians());
+    fusion.set_gyro_bias_init_sigma_radps(cfg.gyro_bias_init_sigma_dps.to_radians());
+    fusion.set_accel_bias_init_sigma_mps2(cfg.accel_bias_init_sigma_mps2);
+    fusion.set_mount_init_sigma_rad(cfg.mount_init_sigma_deg.to_radians());
+    fusion.set_r_vehicle_speed(cfg.r_vehicle_speed);
+    fusion.set_r_zero_vel(cfg.r_zero_vel);
+    fusion.set_r_stationary_accel(cfg.r_stationary_accel);
+    fusion.set_mount_align_rw_var(cfg.mount_align_rw_var);
+    fusion.set_mount_update_min_scale(cfg.mount_update_min_scale);
+    fusion.set_mount_update_ramp_time_s(cfg.mount_update_ramp_time_s);
+    fusion.set_mount_update_innovation_gate_mps(cfg.mount_update_innovation_gate_mps);
+    fusion.set_mount_update_yaw_rate_gate_radps(cfg.mount_update_yaw_rate_gate_dps.to_radians());
+    fusion.set_align_handoff_delay_s(cfg.align_handoff_delay_s);
+    fusion.set_freeze_misalignment_states(cfg.freeze_misalignment_states);
+    fusion.set_eskf_mount_source(mode.eskf_mount_source());
+    fusion.set_mount_settle_time_s(cfg.mount_settle_time_s);
+    fusion.set_mount_settle_release_sigma_rad(cfg.mount_settle_release_sigma_deg.to_radians());
+    fusion.set_mount_settle_zero_cross_covariance(cfg.mount_settle_zero_cross_covariance);
 }
 
 pub fn build_ekf_compare_traces(
@@ -109,6 +191,7 @@ pub fn build_ekf_compare_traces(
             eskf_bias_accel: Vec::new(),
             eskf_cov_bias: Vec::new(),
             eskf_cov_nonbias: Vec::new(),
+            eskf_misalignment: Vec::new(),
             eskf_stationary_diag: Vec::new(),
             eskf_bump_pitch_speed: Vec::new(),
             eskf_bump_diag: Vec::new(),
@@ -117,6 +200,9 @@ pub fn build_ekf_compare_traces(
             loose_cmp_pos: Vec::new(),
             loose_cmp_vel: Vec::new(),
             loose_cmp_att: Vec::new(),
+            loose_nominal_att: Vec::new(),
+            loose_residual_mount: Vec::new(),
+            loose_misalignment: Vec::new(),
             loose_meas_gyro: Vec::new(),
             loose_meas_accel: Vec::new(),
             loose_bias_gyro: Vec::new(),
@@ -138,42 +224,42 @@ pub fn build_ekf_compare_traces(
     let mut nav_events_pvt = Vec::<(f64, NavPvtObs)>::new();
     let mut nav_events_nav2 = Vec::<(f64, NavPvtObs)>::new();
     for f in frames {
-        if ekf_imu_source == EkfImuSource::EsfAlg {
-            if let Some((_, roll, pitch, yaw)) = extract_esf_alg(f)
-                && let Some(t_ms) = super::super::math::nearest_master_ms(f.seq, &tl.masters)
-            {
-                alg_events.push(AlgEvent {
-                    t_ms,
-                    roll_deg: roll,
-                    pitch_deg: pitch,
-                    yaw_deg: yaw,
-                });
-            }
-            if let Some((_, status_code, _is_fine)) = extract_esf_alg_status(f)
-                && let Some(t_ms) = super::super::math::nearest_master_ms(f.seq, &tl.masters)
-            {
-                alg_status_events.push((t_ms, status_code as u8));
-            }
+        if let Some((_, roll, pitch, yaw)) = extract_esf_alg(f)
+            && let Some(t_ms) = super::super::math::nearest_master_ms(f.seq, &tl.masters)
+        {
+            alg_events.push(AlgEvent {
+                t_ms,
+                roll_deg: roll,
+                pitch_deg: pitch,
+                yaw_deg: yaw,
+            });
         }
-        if let Some((_itow, roll, pitch, heading)) = extract_nav_att(f) {
-            if let Some(t_ms) = super::super::math::nearest_master_ms(f.seq, &tl.masters) {
-                nav_att_events.push(NavAttEvent {
-                    t_ms,
-                    roll_deg: roll,
-                    pitch_deg: pitch,
-                    heading_deg: normalize_heading_deg(heading),
-                });
-            }
+        if ekf_imu_source.uses_ref_mount()
+            && let Some((_, status_code, _is_fine)) = extract_esf_alg_status(f)
+            && let Some(t_ms) = super::super::math::nearest_master_ms(f.seq, &tl.masters)
+        {
+            alg_status_events.push((t_ms, status_code as u8));
+        }
+        if let Some((_itow, roll, pitch, heading)) = extract_nav_att(f)
+            && let Some(t_ms) = super::super::math::nearest_master_ms(f.seq, &tl.masters)
+        {
+            nav_att_events.push(NavAttEvent {
+                t_ms,
+                roll_deg: roll,
+                pitch_deg: pitch,
+                heading_deg: normalize_heading_deg(heading),
+            });
         }
         if let Some(t_ms) = super::super::math::nearest_master_ms(f.seq, &tl.masters) {
             if let Some(obs) = extract_nav2_pvt_obs(f) {
                 if obs.fix_ok && !obs.invalid_llh {
                     nav_events_nav2.push((t_ms, obs));
                 }
-            } else if let Some(obs) = extract_nav_pvt_obs(f) {
-                if obs.fix_ok && !obs.invalid_llh {
-                    nav_events_pvt.push((t_ms, obs));
-                }
+            } else if let Some(obs) = extract_nav_pvt_obs(f)
+                && obs.fix_ok
+                && !obs.invalid_llh
+            {
+                nav_events_pvt.push((t_ms, obs));
             }
         }
     }
@@ -192,112 +278,50 @@ pub fn build_ekf_compare_traces(
     nav_events_pvt.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     let nav_pvt_events_for_map = nav_events_pvt.clone();
     let nav2_events_for_map = nav_events_nav2.clone();
-    let (nav_events, use_nav2_for_ekf) = if !nav_events_nav2.is_empty() {
-        (nav_events_nav2, true)
+    let final_alg_q = alg_events
+        .last()
+        .map(|alg| esf_alg_flu_to_frd_mount_quat(alg.roll_deg, alg.pitch_deg, alg.yaw_deg));
+    let align_events = build_align_mount_events(frames, tl, ImuReplayConfig::default());
+    let align_handoff_t_ms = if ekf_imu_source.uses_ref_mount() {
+        build_fusion_align_replay(
+            frames,
+            tl,
+            EkfImuSource::Internal,
+            ImuReplayConfig::default(),
+        )
+        .ekf_initialized_times_s
+        .first()
+        .copied()
+        .map(|t_s| tl.t0_master_ms + t_s * 1000.0)
     } else {
+        align_events.first().map(|(t_ms, _)| *t_ms)
+    };
+    let replay = build_generic_replay_from_frames(
+        frames,
+        tl,
+        UbxReplayConfig {
+            gnss_pos_r_scale: cfg.gnss_pos_r_scale,
+            gnss_vel_r_scale: cfg.gnss_vel_r_scale,
+            ..UbxReplayConfig::default()
+        },
+    )
+    .expect("failed to build generic replay from UBX frames");
+    let nav_events = replay.nav_events.clone();
+    let gnss_samples = replay.gnss_samples.clone();
+    let use_nav2_for_ekf = replay.used_nav2;
+    if !use_nav2_for_ekf {
         eprintln!(
             "WARNING: NAV2-PVT not found; falling back to NAV-PVT downsampled to 2 Hz for EKF GNSS observations."
         );
-        (nav_events_pvt, false)
-    };
+    }
     let outage_windows_ms = sample_gnss_outage_windows(&nav_events, gnss_outages);
-
-    let mut raw_seq = Vec::<u64>::new();
-    let mut raw_tag = Vec::<u64>::new();
-    let mut raw_dtype = Vec::<u8>::new();
-    let mut raw_val = Vec::<f64>::new();
-    for f in frames {
-        for (tag, sw) in extract_esf_raw_samples(f) {
-            let (_name, _unit, scale) = sensor_meta(sw.dtype);
-            raw_seq.push(f.seq);
-            raw_tag.push(tag);
-            raw_dtype.push(sw.dtype);
-            raw_val.push(sw.value_i24 as f64 * scale);
-        }
-    }
-    let (raw_tag_u, a_raw, b_raw) = fit_tag_ms_map(&raw_seq, &raw_tag, &tl.masters, Some(1 << 16));
-
-    let mut imu_packets = Vec::<ImuPacket>::new();
-    let mut current_tag: Option<u64> = None;
-    let mut t_ms = 0.0_f64;
-    let mut gx: Option<f64> = None;
-    let mut gy: Option<f64> = None;
-    let mut gz: Option<f64> = None;
-    let mut ax: Option<f64> = None;
-    let mut ay: Option<f64> = None;
-    let mut az: Option<f64> = None;
-    for (((seq, tag_u), dtype), val) in raw_seq
-        .iter()
-        .zip(raw_tag_u.iter())
-        .zip(raw_dtype.iter())
-        .zip(raw_val.iter())
-    {
-        if current_tag != Some(*tag_u) {
-            if let (Some(gxv), Some(gyv), Some(gzv), Some(axv), Some(ayv), Some(azv)) =
-                (gx, gy, gz, ax, ay, az)
-            {
-                imu_packets.push(ImuPacket {
-                    t_ms,
-                    gx_dps: gxv,
-                    gy_dps: gyv,
-                    gz_dps: gzv,
-                    ax_mps2: axv,
-                    ay_mps2: ayv,
-                    az_mps2: azv,
-                });
-            }
-            gx = None;
-            gy = None;
-            gz = None;
-            ax = None;
-            ay = None;
-            az = None;
-            current_tag = Some(*tag_u);
-            if let Some(mapped_ms) = tl.map_tag_ms(a_raw, b_raw, *tag_u as f64, *seq) {
-                t_ms = mapped_ms;
-            }
-        }
-        match *dtype {
-            14 => gx = Some(*val),
-            13 => gy = Some(*val),
-            5 => gz = Some(*val),
-            16 => ax = Some(*val),
-            17 => ay = Some(*val),
-            18 => az = Some(*val),
-            _ => {}
-        }
-    }
-    if let (Some(gxv), Some(gyv), Some(gzv), Some(axv), Some(ayv), Some(azv)) =
-        (gx, gy, gz, ax, ay, az)
-    {
-        imu_packets.push(ImuPacket {
-            t_ms,
-            gx_dps: gxv,
-            gy_dps: gyv,
-            gz_dps: gzv,
-            ax_mps2: axv,
-            ay_mps2: ayv,
-            az_mps2: azv,
-        });
-    }
-    imu_packets.sort_by(|a, b| {
-        a.t_ms
-            .partial_cmp(&b.t_ms)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    let align_events = if ekf_imu_source == EkfImuSource::Align {
-        build_align_mount_events(frames, tl, ImuReplayConfig::default())
-    } else {
-        Vec::new()
-    };
-
     let mut ubx_pos_n = Vec::<[f64; 2]>::new();
     let mut ubx_pos_e = Vec::<[f64; 2]>::new();
     let mut ubx_pos_d = Vec::<[f64; 2]>::new();
 
-    let mut ubx_vel_n = Vec::<[f64; 2]>::new();
-    let mut ubx_vel_e = Vec::<[f64; 2]>::new();
-    let mut ubx_vel_d = Vec::<[f64; 2]>::new();
+    let mut ubx_vel_forward = Vec::<[f64; 2]>::new();
+    let mut ubx_vel_lateral = Vec::<[f64; 2]>::new();
+    let mut ubx_vel_vertical = Vec::<[f64; 2]>::new();
 
     let mut ubx_att_roll = Vec::<[f64; 2]>::new();
     let mut ubx_att_pitch = Vec::<[f64; 2]>::new();
@@ -307,9 +331,9 @@ pub fn build_ekf_compare_traces(
     let mut eskf_cmp_pos_n = Vec::<[f64; 2]>::new();
     let mut eskf_cmp_pos_e = Vec::<[f64; 2]>::new();
     let mut eskf_cmp_pos_d = Vec::<[f64; 2]>::new();
-    let mut eskf_cmp_vel_n = Vec::<[f64; 2]>::new();
-    let mut eskf_cmp_vel_e = Vec::<[f64; 2]>::new();
-    let mut eskf_cmp_vel_d = Vec::<[f64; 2]>::new();
+    let mut eskf_cmp_vel_forward = Vec::<[f64; 2]>::new();
+    let mut eskf_cmp_vel_lateral = Vec::<[f64; 2]>::new();
+    let mut eskf_cmp_vel_vertical = Vec::<[f64; 2]>::new();
     let mut eskf_cmp_att_roll = Vec::<[f64; 2]>::new();
     let mut eskf_cmp_att_pitch = Vec::<[f64; 2]>::new();
     let mut eskf_cmp_att_yaw = Vec::<[f64; 2]>::new();
@@ -325,30 +349,46 @@ pub fn build_ekf_compare_traces(
     let mut eskf_bias_accel_x = Vec::<[f64; 2]>::new();
     let mut eskf_bias_accel_y = Vec::<[f64; 2]>::new();
     let mut eskf_bias_accel_z = Vec::<[f64; 2]>::new();
-    let mut eskf_cov_diag: [Vec<[f64; 2]>; 15] = std::array::from_fn(|_| Vec::new());
-    let mut eskf_stationary_innov_x = Vec::<[f64; 2]>::new();
-    let mut eskf_stationary_innov_y = Vec::<[f64; 2]>::new();
-    let mut eskf_stationary_k_theta_x_from_x = Vec::<[f64; 2]>::new();
-    let mut eskf_stationary_k_theta_y_from_x = Vec::<[f64; 2]>::new();
-    let mut eskf_stationary_k_theta_x_from_y = Vec::<[f64; 2]>::new();
-    let mut eskf_stationary_k_theta_y_from_y = Vec::<[f64; 2]>::new();
-    let mut eskf_stationary_k_bax_from_x = Vec::<[f64; 2]>::new();
-    let mut eskf_stationary_k_bay_from_y = Vec::<[f64; 2]>::new();
-    let mut eskf_stationary_p_theta_x = Vec::<[f64; 2]>::new();
-    let mut eskf_stationary_p_theta_y = Vec::<[f64; 2]>::new();
-    let mut eskf_stationary_p_bax = Vec::<[f64; 2]>::new();
-    let mut eskf_stationary_p_bay = Vec::<[f64; 2]>::new();
-    let mut eskf_stationary_p_theta_x_bax = Vec::<[f64; 2]>::new();
-    let mut eskf_stationary_p_theta_y_bay = Vec::<[f64; 2]>::new();
+    let mut eskf_cov_diag: [Vec<[f64; 2]>; 18] = std::array::from_fn(|_| Vec::new());
+    let mut eskf_mount_roll = Vec::<[f64; 2]>::new();
+    let mut eskf_mount_pitch = Vec::<[f64; 2]>::new();
+    let mut eskf_mount_yaw = Vec::<[f64; 2]>::new();
+    let eskf_stationary_innov_x = Vec::<[f64; 2]>::new();
+    let eskf_stationary_innov_y = Vec::<[f64; 2]>::new();
+    let eskf_stationary_k_theta_x_from_x = Vec::<[f64; 2]>::new();
+    let eskf_stationary_k_theta_y_from_x = Vec::<[f64; 2]>::new();
+    let eskf_stationary_k_theta_x_from_y = Vec::<[f64; 2]>::new();
+    let eskf_stationary_k_theta_y_from_y = Vec::<[f64; 2]>::new();
+    let eskf_stationary_k_bax_from_x = Vec::<[f64; 2]>::new();
+    let eskf_stationary_k_bay_from_y = Vec::<[f64; 2]>::new();
+    let eskf_stationary_p_theta_x = Vec::<[f64; 2]>::new();
+    let eskf_stationary_p_theta_y = Vec::<[f64; 2]>::new();
+    let eskf_stationary_p_bax = Vec::<[f64; 2]>::new();
+    let eskf_stationary_p_bay = Vec::<[f64; 2]>::new();
+    let eskf_stationary_p_theta_x_bax = Vec::<[f64; 2]>::new();
+    let eskf_stationary_p_theta_y_bay = Vec::<[f64; 2]>::new();
+    let mut eskf_yaw_cue_sum: [Vec<[f64; 2]>; 11] = std::array::from_fn(|_| Vec::new());
+    let mut eskf_yaw_cue_abs: [Vec<[f64; 2]>; 11] = std::array::from_fn(|_| Vec::new());
+    let mut eskf_yaw_cue_innov_sum: [Vec<[f64; 2]>; 11] = std::array::from_fn(|_| Vec::new());
+    let mut eskf_yaw_cue_innov_abs: [Vec<[f64; 2]>; 11] = std::array::from_fn(|_| Vec::new());
     let mut loose_cmp_pos_n = Vec::<[f64; 2]>::new();
     let mut loose_cmp_pos_e = Vec::<[f64; 2]>::new();
     let mut loose_cmp_pos_d = Vec::<[f64; 2]>::new();
-    let mut loose_cmp_vel_n = Vec::<[f64; 2]>::new();
-    let mut loose_cmp_vel_e = Vec::<[f64; 2]>::new();
-    let mut loose_cmp_vel_d = Vec::<[f64; 2]>::new();
+    let mut loose_cmp_vel_forward = Vec::<[f64; 2]>::new();
+    let mut loose_cmp_vel_lateral = Vec::<[f64; 2]>::new();
+    let mut loose_cmp_vel_vertical = Vec::<[f64; 2]>::new();
     let mut loose_cmp_att_roll = Vec::<[f64; 2]>::new();
     let mut loose_cmp_att_pitch = Vec::<[f64; 2]>::new();
     let mut loose_cmp_att_yaw = Vec::<[f64; 2]>::new();
+    let mut loose_nominal_att_roll = Vec::<[f64; 2]>::new();
+    let mut loose_nominal_att_pitch = Vec::<[f64; 2]>::new();
+    let mut loose_nominal_att_yaw = Vec::<[f64; 2]>::new();
+    let mut loose_inv_qcs_roll = Vec::<[f64; 2]>::new();
+    let mut loose_inv_qcs_pitch = Vec::<[f64; 2]>::new();
+    let mut loose_inv_qcs_yaw = Vec::<[f64; 2]>::new();
+    let mut loose_mount_roll = Vec::<[f64; 2]>::new();
+    let mut loose_mount_pitch = Vec::<[f64; 2]>::new();
+    let mut loose_mount_yaw = Vec::<[f64; 2]>::new();
     let mut loose_meas_gyro_x = Vec::<[f64; 2]>::new();
     let mut loose_meas_gyro_y = Vec::<[f64; 2]>::new();
     let mut loose_meas_gyro_z = Vec::<[f64; 2]>::new();
@@ -371,14 +411,19 @@ pub fn build_ekf_compare_traces(
     let mut map_eskf = Vec::<[f64; 2]>::new();
     let mut map_eskf_outage = Vec::<[f64; 2]>::new();
     let mut map_eskf_heading = Vec::<HeadingSample>::new();
+    let mut fusion_mount_ready_marker = Vec::<[f64; 2]>::new();
+    let mut fusion_ekf_init_marker = Vec::<[f64; 2]>::new();
     let mut map_loose = Vec::<[f64; 2]>::new();
     let mut map_loose_heading = Vec::<HeadingSample>::new();
 
-    let mut eskf: Option<CEskfWrapper> = None;
-    let mut loose: Option<CLooseWrapper> = None;
-    let base_predict_noise = cfg
-        .predict_noise
-        .unwrap_or(PredictNoise::lsm6dso_typical_104hz());
+    let mut fusion = match ekf_imu_source {
+        EkfImuSource::Internal | EkfImuSource::External => Some(SensorFusion::new()),
+        EkfImuSource::Ref => None,
+    };
+    if let Some(fusion_ref) = fusion.as_mut() {
+        apply_fusion_config(fusion_ref, cfg, ekf_imu_source);
+    }
+    let mut loose: Option<LooseFilter> = None;
     let base_loose_predict_noise = cfg
         .loose_predict_noise
         .unwrap_or(LoosePredictNoise::lsm6dso_loose_104hz());
@@ -392,6 +437,7 @@ pub fn build_ekf_compare_traces(
     let mut cur_align_q_vb: Option<[f32; 4]> = None;
 
     let mut origin_set = false;
+    let mut loose_seed_mount_q_vb: Option<[f32; 4]> = None;
     let mut ref_lat = 0.0_f64;
     let mut ref_lon = 0.0_f64;
     let mut ref_ecef = [0.0_f64; 3];
@@ -413,16 +459,23 @@ pub fn build_ekf_compare_traces(
         ref_ecef = lla_to_ecef(ref_lat, ref_lon, ref_h);
         origin_set = true;
 
+        let mut nav_att_idx = 0usize;
+        let mut current_nav_att: Option<NavAttEvent> = None;
         for (t_ms, nav) in &nav_events {
+            while nav_att_idx < nav_att_events.len() && nav_att_events[nav_att_idx].t_ms <= *t_ms {
+                current_nav_att = Some(nav_att_events[nav_att_idx]);
+                nav_att_idx += 1;
+            }
             let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
             let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
+            let vel_vehicle = ubx_vehicle_velocity(*nav, current_nav_att);
             let t = rel_s(*t_ms);
             ubx_pos_n.push([t, ned[0]]);
             ubx_pos_e.push([t, ned[1]]);
             ubx_pos_d.push([t, ned[2]]);
-            ubx_vel_n.push([t, nav.vel_n_mps]);
-            ubx_vel_e.push([t, nav.vel_e_mps]);
-            ubx_vel_d.push([t, nav.vel_d_mps]);
+            ubx_vel_forward.push([t, vel_vehicle[0]]);
+            ubx_vel_lateral.push([t, vel_vehicle[1]]);
+            ubx_vel_vertical.push([t, vel_vehicle[2]]);
         }
     }
     for (_t_ms, nav_pvt) in &nav_pvt_events_for_map {
@@ -434,215 +487,167 @@ pub fn build_ekf_compare_traces(
         ubx_att_pitch.push([t, att.pitch_deg]);
         ubx_att_yaw.push([t, att.heading_deg]);
     }
+    let esf_alg_mount_ref = vec![
+        Trace {
+            name: "ESF-ALG mount roll [deg]".to_string(),
+            points: alg_events
+                .iter()
+                .map(|alg| [rel_s(alg.t_ms), alg.roll_deg])
+                .collect(),
+        },
+        Trace {
+            name: "ESF-ALG mount pitch [deg]".to_string(),
+            points: alg_events
+                .iter()
+                .map(|alg| [rel_s(alg.t_ms), alg.pitch_deg])
+                .collect(),
+        },
+        Trace {
+            name: "ESF-ALG mount yaw [deg]".to_string(),
+            points: alg_events
+                .iter()
+                .map(|alg| [rel_s(alg.t_ms), normalize_heading_deg(alg.yaw_deg)])
+                .collect(),
+        },
+    ];
     for (_t_ms, nav2) in &nav2_events_for_map {
         map_nav2.push([nav2.lon_deg, nav2.lat_deg]);
     }
 
-    let mut next_gps_update_ms = f64::NEG_INFINITY;
     let mut loose_last_gps_update_ms: Option<f64> = None;
-    let gps_period_ms = 500.0_f64;
-    let mut ekf_initialized = false;
-    for pkt in &imu_packets {
-        while alg_idx < alg_events.len() && alg_events[alg_idx].t_ms <= pkt.t_ms {
+    for imu_sample in &replay.imu_samples {
+        let pkt_t_ms = tl.t0_master_ms + imu_sample.t_s * 1.0e3;
+        while alg_idx < alg_events.len() && alg_events[alg_idx].t_ms <= pkt_t_ms {
             cur_alg = Some(alg_events[alg_idx]);
             alg_idx += 1;
         }
         while alg_status_idx < alg_status_events.len()
-            && alg_status_events[alg_status_idx].0 <= pkt.t_ms
+            && alg_status_events[alg_status_idx].0 <= pkt_t_ms
         {
             cur_alg_status = alg_status_events[alg_status_idx].1;
             alg_status_idx += 1;
         }
-        while align_idx < align_events.len() && align_events[align_idx].0 <= pkt.t_ms {
+        while align_idx < align_events.len() && align_events[align_idx].0 <= pkt_t_ms {
             cur_align_q_vb = Some(align_events[align_idx].1);
             align_idx += 1;
         }
         let dt = match prev_imu_t {
-            Some(prev) => (pkt.t_ms - prev) * 1e-3,
+            Some(prev) => imu_sample.t_s - prev,
             None => {
-                prev_imu_t = Some(pkt.t_ms);
+                prev_imu_t = Some(imu_sample.t_s);
                 continue;
             }
         };
-        prev_imu_t = Some(pkt.t_ms);
+        prev_imu_t = Some(imu_sample.t_s);
         if !(0.001..=0.05).contains(&dt) {
             continue;
         }
-        let imu_ready = match ekf_imu_source {
-            EkfImuSource::Align => cur_align_q_vb.is_some(),
-            EkfImuSource::EsfAlg => cur_alg_status >= 3 && cur_alg.is_some(),
-        };
-        if !imu_ready {
-            while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
+        if ekf_imu_source.uses_ref_mount()
+            && fusion.is_none()
+            && align_handoff_t_ms.is_some_and(|t_handoff_ms| pkt_t_ms >= t_handoff_ms)
+            && let Some(q_vb) = final_alg_q
+        {
+            let mut created = SensorFusion::with_misalignment([
+                q_vb[0] as f32,
+                q_vb[1] as f32,
+                q_vb[2] as f32,
+                q_vb[3] as f32,
+            ]);
+            apply_fusion_config(&mut created, cfg, ekf_imu_source);
+            fusion = Some(created);
+        }
+        let Some(fusion_ref) = fusion.as_mut() else {
+            while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt_t_ms {
                 nav_idx += 1;
             }
             continue;
-        }
-        let outage_active = in_gnss_outage(pkt.t_ms, &outage_windows_ms);
+        };
+        let outage_active = in_gnss_outage(pkt_t_ms, &outage_windows_ms);
 
-        let mut gyro = [pkt.gx_dps, pkt.gy_dps, pkt.gz_dps];
-        let mut accel = [pkt.ax_mps2, pkt.ay_mps2, pkt.az_mps2];
-        match ekf_imu_source {
-            EkfImuSource::Align => {
-                if let Some(q_vb) = cur_align_q_vb {
-                    let c_bv = transpose3(quat_to_rotmat_f64([
-                        q_vb[0] as f64,
-                        q_vb[1] as f64,
-                        q_vb[2] as f64,
-                        q_vb[3] as f64,
-                    ]));
-                    gyro = mat_vec(c_bv, gyro);
-                    accel = mat_vec(c_bv, accel);
+        let raw_gyro_radps = [
+            imu_sample.gyro_radps[0] as f32,
+            imu_sample.gyro_radps[1] as f32,
+            imu_sample.gyro_radps[2] as f32,
+        ];
+        let raw_accel_mps2 = [
+            imu_sample.accel_mps2[0] as f32,
+            imu_sample.accel_mps2[1] as f32,
+            imu_sample.accel_mps2[2] as f32,
+        ];
+        fusion_ref.process_imu(to_fusion_imu(*imu_sample));
+        let raw_gyro_deg = [
+            imu_sample.gyro_radps[0].to_degrees(),
+            imu_sample.gyro_radps[1].to_degrees(),
+            imu_sample.gyro_radps[2].to_degrees(),
+        ];
+
+        let eskf_predict_mount_q_vb = fusion_ref
+            .eskf_mount_q_vb()
+            .or_else(|| fusion_ref.mount_q_vb());
+        let (gyro, accel) = vehicle_measurements_from_mount(
+            eskf_predict_mount_q_vb,
+            [
+                raw_gyro_radps[0] as f64,
+                raw_gyro_radps[1] as f64,
+                raw_gyro_radps[2] as f64,
+            ],
+            [
+                raw_accel_mps2[0] as f64,
+                raw_accel_mps2[1] as f64,
+                raw_accel_mps2[2] as f64,
+            ],
+        );
+        let (loose_gyro_deg, loose_accel) = match ekf_imu_source {
+            EkfImuSource::Internal | EkfImuSource::External => {
+                if let Some(q_vb) = loose_seed_mount_q_vb {
+                    vehicle_measurements_from_mount(
+                        Some(q_vb),
+                        [
+                            raw_gyro_radps[0] as f64,
+                            raw_gyro_radps[1] as f64,
+                            raw_gyro_radps[2] as f64,
+                        ],
+                        [
+                            raw_accel_mps2[0] as f64,
+                            raw_accel_mps2[1] as f64,
+                            raw_accel_mps2[2] as f64,
+                        ],
+                    )
+                } else {
+                    (raw_gyro_deg, imu_sample.accel_mps2)
                 }
             }
-            EkfImuSource::EsfAlg => {
+            EkfImuSource::Ref => {
                 if let Some(alg) = cur_alg {
                     let r_sb = rot_zyx(
                         deg2rad(alg.yaw_deg),
                         deg2rad(alg.pitch_deg),
                         deg2rad(alg.roll_deg),
                     );
-                    gyro = mat_vec(r_sb, gyro);
-                    accel = mat_vec(r_sb, accel);
-                    gyro[1] = -gyro[1];
-                    gyro[2] = -gyro[2];
-                    accel[1] = -accel[1];
-                    accel[2] = -accel[2];
+                    let mut loose_gyro = mat_vec(r_sb, raw_gyro_deg);
+                    let mut loose_accel = mat_vec(r_sb, imu_sample.accel_mps2);
+                    loose_gyro[1] = -loose_gyro[1];
+                    loose_gyro[2] = -loose_gyro[2];
+                    loose_accel[1] = -loose_accel[1];
+                    loose_accel[2] = -loose_accel[2];
+                    (loose_gyro, loose_accel)
+                } else {
+                    (raw_gyro_deg, imu_sample.accel_mps2)
                 }
             }
-        }
-        if !ekf_initialized {
-            let mut initialized_this_pkt = false;
-            while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
-                let (t_ms, nav) = nav_events[nav_idx];
-                nav_idx += 1;
-                if in_gnss_outage(t_ms, &outage_windows_ms) {
-                    continue;
-                }
-                if !use_nav2_for_ekf {
-                    if !next_gps_update_ms.is_finite() {
-                        next_gps_update_ms = t_ms;
-                    }
-                    if t_ms + 1e-6 < next_gps_update_ms {
-                        continue;
-                    }
-                    next_gps_update_ms += gps_period_ms;
-                }
-
-                if !origin_set {
-                    ref_lat = nav.lat_deg;
-                    ref_lon = nav.lon_deg;
-                    ref_h = nav.height_m;
-                    ref_ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
-                    origin_set = true;
-                }
-                let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
-                let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
-                eskf = Some(initialize_eskf_from_nav(nav, ned, base_predict_noise, cfg));
-                loose = Some(initialize_loose_from_nav(nav, ned, base_loose_predict_noise, cfg));
-                loose_last_gps_update_ms = Some(t_ms);
-                ekf_initialized = true;
-                if let Some(eskf_ref) = eskf.as_ref() {
-                    append_eskf_sample(
-                        eskf_ref,
-                        rel_s(t_ms),
-                        gyro,
-                        accel,
-                        dt,
-                        cfg.vehicle_meas_lpf_cutoff_hz,
-                        &mut filt_eskf_meas_gyro,
-                        &mut filt_eskf_meas_accel,
-                        &mut eskf_cmp_pos_n,
-                        &mut eskf_cmp_pos_e,
-                        &mut eskf_cmp_pos_d,
-                        &mut eskf_cmp_vel_n,
-                        &mut eskf_cmp_vel_e,
-                        &mut eskf_cmp_vel_d,
-                        &mut eskf_cmp_att_roll,
-                        &mut eskf_cmp_att_pitch,
-                        &mut eskf_cmp_att_yaw,
-                        &mut eskf_meas_gyro_x,
-                        &mut eskf_meas_gyro_y,
-                        &mut eskf_meas_gyro_z,
-                        &mut eskf_meas_accel_x,
-                        &mut eskf_meas_accel_y,
-                        &mut eskf_meas_accel_z,
-                        &mut eskf_bias_gyro_x,
-                        &mut eskf_bias_gyro_y,
-                        &mut eskf_bias_gyro_z,
-                        &mut eskf_bias_accel_x,
-                        &mut eskf_bias_accel_y,
-                        &mut eskf_bias_accel_z,
-                        &mut eskf_cov_diag,
-                    );
-                }
-                if let Some(loose_ref) = loose.as_ref() {
-                    append_loose_sample(
-                        loose_ref,
-                        rel_s(t_ms),
-                        gyro,
-                        accel,
-                        dt,
-                        ref_ecef,
-                        ref_lat,
-                        ref_lon,
-                        cfg.vehicle_meas_lpf_cutoff_hz,
-                        &mut loose_cmp_pos_n,
-                        &mut loose_cmp_pos_e,
-                        &mut loose_cmp_pos_d,
-                        &mut loose_cmp_vel_n,
-                        &mut loose_cmp_vel_e,
-                        &mut loose_cmp_vel_d,
-                        &mut loose_cmp_att_roll,
-                        &mut loose_cmp_att_pitch,
-                        &mut loose_cmp_att_yaw,
-                        &mut loose_meas_gyro_x,
-                        &mut loose_meas_gyro_y,
-                        &mut loose_meas_gyro_z,
-                        &mut loose_meas_accel_x,
-                        &mut loose_meas_accel_y,
-                        &mut loose_meas_accel_z,
-                        &mut loose_bias_gyro_x,
-                        &mut loose_bias_gyro_y,
-                        &mut loose_bias_gyro_z,
-                        &mut loose_bias_accel_x,
-                        &mut loose_bias_accel_y,
-                        &mut loose_bias_accel_z,
-                        &mut loose_scale_gyro_x,
-                        &mut loose_scale_gyro_y,
-                        &mut loose_scale_gyro_z,
-                        &mut loose_scale_accel_x,
-                        &mut loose_scale_accel_y,
-                        &mut loose_scale_accel_z,
-                        &mut loose_cov_diag,
-                    );
-                }
-                initialized_this_pkt = true;
-                break;
-            }
-            if initialized_this_pkt {
-                continue;
-            }
-        }
-
-        if !ekf_initialized {
-            while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
-                nav_idx += 1;
-            }
-            continue;
-        }
+        };
 
         let predict_gyro = if let Some(cutoff_hz) = cfg.predict_imu_lpf_cutoff_hz {
             let alpha_pred = lpf_alpha(dt, cutoff_hz);
-            lpf_vec3(&mut filt_predict_gyro, gyro, alpha_pred)
+            lpf_vec3(&mut filt_predict_gyro, loose_gyro_deg, alpha_pred)
         } else {
-            gyro
+            loose_gyro_deg
         };
         let predict_accel = if let Some(cutoff_hz) = cfg.predict_imu_lpf_cutoff_hz {
             let alpha_pred = lpf_alpha(dt, cutoff_hz);
-            lpf_vec3(&mut filt_predict_accel, accel, alpha_pred)
+            lpf_vec3(&mut filt_predict_accel, loose_accel, alpha_pred)
         } else {
-            accel
+            loose_accel
         };
         predict_dt_accum += dt;
         predict_decim_count += 1;
@@ -653,9 +658,9 @@ pub fn build_ekf_compare_traces(
         predict_accel_sum[1] += predict_accel[1];
         predict_accel_sum[2] += predict_accel[2];
         let predict_decimation = cfg.predict_imu_decimation.max(1);
+        let mut eskf_initialized_this_pkt = false;
         if predict_decim_count >= predict_decimation {
             let pred_dt = predict_dt_accum.max(1.0e-6);
-            let block_len = predict_decim_count.max(1) as f32;
             let inv_block_len = 1.0 / (predict_decim_count.max(1) as f64);
             let avg_predict_gyro = [
                 predict_gyro_sum[0] * inv_block_len,
@@ -667,93 +672,21 @@ pub fn build_ekf_compare_traces(
                 predict_accel_sum[1] * inv_block_len,
                 predict_accel_sum[2] * inv_block_len,
             ];
-            let block_len_sq = block_len * block_len;
-            let imu = CEskfImuDelta {
-                dax: (deg2rad(avg_predict_gyro[0]) * pred_dt) as f32,
-                day: (deg2rad(avg_predict_gyro[1]) * pred_dt) as f32,
-                daz: (deg2rad(avg_predict_gyro[2]) * pred_dt) as f32,
-                dvx: (avg_predict_accel[0] * pred_dt) as f32,
-                dvy: (avg_predict_accel[1] * pred_dt) as f32,
-                dvz: (avg_predict_accel[2] * pred_dt) as f32,
+            let loose_imu = LooseImuDelta {
+                dax_1: (deg2rad(avg_predict_gyro[0]) * pred_dt) as f32,
+                day_1: (deg2rad(avg_predict_gyro[1]) * pred_dt) as f32,
+                daz_1: (deg2rad(avg_predict_gyro[2]) * pred_dt) as f32,
+                dvx_1: (avg_predict_accel[0] * pred_dt) as f32,
+                dvy_1: (avg_predict_accel[1] * pred_dt) as f32,
+                dvz_1: (avg_predict_accel[2] * pred_dt) as f32,
+                dax_2: (deg2rad(avg_predict_gyro[0]) * pred_dt) as f32,
+                day_2: (deg2rad(avg_predict_gyro[1]) * pred_dt) as f32,
+                daz_2: (deg2rad(avg_predict_gyro[2]) * pred_dt) as f32,
+                dvx_2: (avg_predict_accel[0] * pred_dt) as f32,
+                dvy_2: (avg_predict_accel[1] * pred_dt) as f32,
+                dvz_2: (avg_predict_accel[2] * pred_dt) as f32,
                 dt: pred_dt as f32,
             };
-            let loose_imu = CLooseImuDelta {
-                dax_1: imu.dax,
-                day_1: imu.day,
-                daz_1: imu.daz,
-                dvx_1: imu.dvx,
-                dvy_1: imu.dvy,
-                dvz_1: imu.dvz,
-                dax_2: imu.dax,
-                day_2: imu.day,
-                daz_2: imu.daz,
-                dvx_2: imu.dvx,
-                dvy_2: imu.dvy,
-                dvz_2: imu.dvz,
-                dt: imu.dt,
-            };
-            if let Some(eskf_ref) = eskf.as_mut() {
-                eskf_ref.predict(imu);
-                eskf_ref.fuse_body_vel(cfg.r_body_vel / block_len_sq.max(1.0));
-                let n = eskf_ref.nominal();
-                let accel_norm = (avg_predict_accel[0] * avg_predict_accel[0]
-                    + avg_predict_accel[1] * avg_predict_accel[1]
-                    + avg_predict_accel[2] * avg_predict_accel[2])
-                    .sqrt();
-                let c_n_b =
-                    quat_to_rotmat_f64([n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64]);
-                let gravity_b = [
-                    c_n_b[2][0] * GRAVITY_MPS2 as f64,
-                    c_n_b[2][1] * GRAVITY_MPS2 as f64,
-                    c_n_b[2][2] * GRAVITY_MPS2 as f64,
-                ];
-                let accel_resid = [
-                    avg_predict_accel[0] - n.bax as f64 + gravity_b[0],
-                    avg_predict_accel[1] - n.bay as f64 + gravity_b[1],
-                    avg_predict_accel[2] - n.baz as f64 + gravity_b[2],
-                ];
-                let accel_h =
-                    (accel_resid[0] * accel_resid[0] + accel_resid[1] * accel_resid[1]).sqrt();
-                let gyro_resid = [
-                    deg2rad(avg_predict_gyro[0]) - n.bgx as f64,
-                    deg2rad(avg_predict_gyro[1]) - n.bgy as f64,
-                    deg2rad(avg_predict_gyro[2]) - n.bgz as f64,
-                ];
-                let gyro_norm = (gyro_resid[0] * gyro_resid[0]
-                    + gyro_resid[1] * gyro_resid[1]
-                    + gyro_resid[2] * gyro_resid[2])
-                    .sqrt();
-                let speed_h = (n.vn as f64).hypot(n.ve as f64);
-                if false && speed_h < 0.35 && gyro_norm < deg2rad(0.25) && accel_h < 0.08 {
-                    eskf_ref.fuse_zero_vel(cfg.r_zero_vel);
-                    if (accel_norm - GRAVITY_MPS2 as f64).abs() < 0.15 {
-                        eskf_ref.fuse_stationary_gravity(
-                            [
-                                avg_predict_accel[0] as f32,
-                                avg_predict_accel[1] as f32,
-                                avg_predict_accel[2] as f32,
-                            ],
-                            cfg.r_stationary_accel,
-                        );
-                        let d = eskf_ref.stationary_diag();
-                        let t = rel_s(pkt.t_ms);
-                        eskf_stationary_innov_x.push([t, d.innovation_x as f64]);
-                        eskf_stationary_innov_y.push([t, d.innovation_y as f64]);
-                        eskf_stationary_k_theta_x_from_x.push([t, d.k_theta_x_from_x as f64]);
-                        eskf_stationary_k_theta_y_from_x.push([t, d.k_theta_y_from_x as f64]);
-                        eskf_stationary_k_theta_x_from_y.push([t, d.k_theta_x_from_y as f64]);
-                        eskf_stationary_k_theta_y_from_y.push([t, d.k_theta_y_from_y as f64]);
-                        eskf_stationary_k_bax_from_x.push([t, d.k_bax_from_x as f64]);
-                        eskf_stationary_k_bay_from_y.push([t, d.k_bay_from_y as f64]);
-                        eskf_stationary_p_theta_x.push([t, d.p_theta_x as f64]);
-                        eskf_stationary_p_theta_y.push([t, d.p_theta_y as f64]);
-                        eskf_stationary_p_bax.push([t, d.p_bax as f64]);
-                        eskf_stationary_p_bay.push([t, d.p_bay as f64]);
-                        eskf_stationary_p_theta_x_bax.push([t, d.p_theta_x_bax as f64]);
-                        eskf_stationary_p_theta_y_bay.push([t, d.p_theta_y_bay as f64]);
-                    }
-                }
-            }
             if let Some(loose_ref) = loose.as_mut() {
                 loose_ref.predict(loose_imu);
             }
@@ -769,20 +702,12 @@ pub fn build_ekf_compare_traces(
             ];
             let mut loose_batch_applied = false;
 
-            while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt.t_ms {
+            while nav_idx < nav_events.len() && nav_events[nav_idx].0 <= pkt_t_ms {
                 let (t_ms, nav) = nav_events[nav_idx];
+                let gnss_sample = gnss_samples[nav_idx];
                 nav_idx += 1;
                 if in_gnss_outage(t_ms, &outage_windows_ms) {
                     continue;
-                }
-                if !use_nav2_for_ekf {
-                    if !next_gps_update_ms.is_finite() {
-                        next_gps_update_ms = t_ms;
-                    }
-                    if t_ms + 1e-6 < next_gps_update_ms {
-                        continue;
-                    }
-                    next_gps_update_ms += gps_period_ms;
                 }
 
                 if !origin_set {
@@ -793,18 +718,71 @@ pub fn build_ekf_compare_traces(
                     origin_set = true;
                 }
                 let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
-                let ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
-                if let Some(eskf_ref) = eskf.as_mut() {
-                    eskf_ref.fuse_gps(fusion_gnss_sample(nav, ned, cfg));
+                let t = rel_s(t_ms);
+                let update = fusion_ref.process_gnss(to_fusion_gnss(gnss_sample));
+                if update.mount_ready_changed && update.mount_ready {
+                    fusion_mount_ready_marker.push([t, nav.heading_vehicle_deg]);
+                }
+                if update.ekf_initialized_now {
+                    fusion_ekf_init_marker.push([t, nav.heading_vehicle_deg]);
+                }
+                if loose.is_none() {
+                    match ekf_imu_source {
+                        EkfImuSource::Internal | EkfImuSource::External => {
+                            if update.mount_ready
+                                && let Some(q_vb) =
+                                    cur_align_q_vb.or_else(|| fusion_ref.mount_q_vb())
+                            {
+                                loose_seed_mount_q_vb = Some(q_vb);
+                                let loose_init = initialize_loose_from_nav(
+                                    nav,
+                                    gnss_sample,
+                                    base_loose_predict_noise,
+                                );
+                                loose = Some(loose_init);
+                                loose_last_gps_update_ms = Some(t_ms);
+                            }
+                        }
+                        EkfImuSource::Ref => {
+                            if cur_alg_status >= 3 && cur_alg.is_some() {
+                                loose_seed_mount_q_vb = cur_alg.map(|alg| {
+                                    let q = esf_alg_flu_to_frd_mount_quat(
+                                        alg.roll_deg,
+                                        alg.pitch_deg,
+                                        alg.yaw_deg,
+                                    );
+                                    [q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32]
+                                });
+                                let loose_init = initialize_loose_from_nav(
+                                    nav,
+                                    gnss_sample,
+                                    base_loose_predict_noise,
+                                );
+                                loose = Some(loose_init);
+                                loose_last_gps_update_ms = Some(t_ms);
+                            }
+                        }
+                    }
                 }
                 if let Some(loose_ref) = loose.as_mut() {
                     let dt_since_last_gnss_s = loose_last_gps_update_ms
                         .map(|last_t_ms| ((t_ms - last_t_ms) * 1.0e-3) as f32)
                         .unwrap_or(1.0)
                         .clamp(1.0e-3, 1.0);
-                    loose_ref.fuse_reference_batch(
+                    let vel_ecef = mat_vec(
+                        transpose3(ecef_to_ned_matrix(nav.lat_deg, nav.lon_deg)),
+                        [nav.vel_n_mps, nav.vel_e_mps, nav.vel_d_mps],
+                    );
+                    let vel_std_ned = [
+                        (nav.s_acc_mps * cfg.gnss_vel_r_scale.sqrt()) as f32,
+                        (nav.s_acc_mps * cfg.gnss_vel_r_scale.sqrt()) as f32,
+                        (nav.s_acc_mps * cfg.gnss_vel_r_scale.sqrt()) as f32,
+                    ];
+                    loose_ref.fuse_reference_batch_full(
                         Some(ecef),
+                        Some([vel_ecef[0] as f32, vel_ecef[1] as f32, vel_ecef[2] as f32]),
                         (nav.h_acc_m * cfg.gnss_pos_r_scale.sqrt()) as f32,
+                        Some(vel_std_ned),
                         dt_since_last_gnss_s,
                         loose_gyro_radps,
                         loose_accel_mps2,
@@ -814,18 +792,22 @@ pub fn build_ekf_compare_traces(
                     loose_batch_applied = true;
                 }
 
-                let t = rel_s(t_ms);
-                if let Some(eskf_ref) = eskf.as_ref() {
-                    let n = eskf_ref.nominal();
-                    let (_, _, eskf_yaw) = quat_rpy_deg(n.q0, n.q1, n.q2, n.q3);
-                    let (eskf_lat, eskf_lon, _eskf_h) = ned_to_lla_exact(
-                        n.pn as f64,
-                        n.pe as f64,
-                        n.pd as f64,
-                        ref_lat,
-                        ref_lon,
-                        ref_h,
+                if let Some(eskf_ref) = fusion_ref.eskf() {
+                    let n = &eskf_ref.nominal;
+                    let q_n_s = [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64];
+                    let q_cs = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
+                    let q_n_c = quat_mul(q_n_s, quat_conj(q_cs));
+                    let (_, _, eskf_yaw) = quat_rpy_deg(
+                        q_n_c[0] as f32,
+                        q_n_c[1] as f32,
+                        q_n_c[2] as f32,
+                        q_n_c[3] as f32,
                     );
+                    let (eskf_lat, eskf_lon, _eskf_h) = eskf_display_lla(fusion_ref).unwrap_or((
+                        nav.lat_deg,
+                        nav.lon_deg,
+                        nav.height_m,
+                    ));
                     map_eskf_heading.push(HeadingSample {
                         t_s: t,
                         lon_deg: eskf_lon,
@@ -833,14 +815,113 @@ pub fn build_ekf_compare_traces(
                         yaw_deg: eskf_yaw,
                     });
                 }
+                if update.ekf_initialized_now {
+                    eskf_initialized_this_pkt = true;
+                    if let Some(eskf_ref) = fusion_ref.eskf() {
+                        append_eskf_sample(
+                            eskf_ref,
+                            t,
+                            gyro,
+                            accel,
+                            dt,
+                            fusion_ref.eskf_mount_q_vb().or(eskf_predict_mount_q_vb),
+                            cfg.vehicle_meas_lpf_cutoff_hz,
+                            &mut filt_eskf_meas_gyro,
+                            &mut filt_eskf_meas_accel,
+                            &mut eskf_cmp_pos_n,
+                            &mut eskf_cmp_pos_e,
+                            &mut eskf_cmp_pos_d,
+                            &mut eskf_cmp_vel_forward,
+                            &mut eskf_cmp_vel_lateral,
+                            &mut eskf_cmp_vel_vertical,
+                            &mut eskf_cmp_att_roll,
+                            &mut eskf_cmp_att_pitch,
+                            &mut eskf_cmp_att_yaw,
+                            &mut eskf_mount_roll,
+                            &mut eskf_mount_pitch,
+                            &mut eskf_mount_yaw,
+                            &mut eskf_meas_gyro_x,
+                            &mut eskf_meas_gyro_y,
+                            &mut eskf_meas_gyro_z,
+                            &mut eskf_meas_accel_x,
+                            &mut eskf_meas_accel_y,
+                            &mut eskf_meas_accel_z,
+                            &mut eskf_bias_gyro_x,
+                            &mut eskf_bias_gyro_y,
+                            &mut eskf_bias_gyro_z,
+                            &mut eskf_bias_accel_x,
+                            &mut eskf_bias_accel_y,
+                            &mut eskf_bias_accel_z,
+                            &mut eskf_cov_diag,
+                            &mut eskf_yaw_cue_sum,
+                            &mut eskf_yaw_cue_abs,
+                            &mut eskf_yaw_cue_innov_sum,
+                            &mut eskf_yaw_cue_innov_abs,
+                        );
+                    }
+                    if let Some(loose_ref) = loose.as_ref() {
+                        append_loose_sample(
+                            loose_ref,
+                            t,
+                            loose_gyro_deg,
+                            loose_accel,
+                            dt,
+                            loose_seed_mount_q_vb,
+                            ref_ecef,
+                            ref_lat,
+                            ref_lon,
+                            cfg.vehicle_meas_lpf_cutoff_hz,
+                            &mut loose_cmp_pos_n,
+                            &mut loose_cmp_pos_e,
+                            &mut loose_cmp_pos_d,
+                            &mut loose_cmp_vel_forward,
+                            &mut loose_cmp_vel_lateral,
+                            &mut loose_cmp_vel_vertical,
+                            &mut loose_cmp_att_roll,
+                            &mut loose_cmp_att_pitch,
+                            &mut loose_cmp_att_yaw,
+                            &mut loose_nominal_att_roll,
+                            &mut loose_nominal_att_pitch,
+                            &mut loose_nominal_att_yaw,
+                            &mut loose_inv_qcs_roll,
+                            &mut loose_inv_qcs_pitch,
+                            &mut loose_inv_qcs_yaw,
+                            &mut loose_mount_roll,
+                            &mut loose_mount_pitch,
+                            &mut loose_mount_yaw,
+                            &mut loose_meas_gyro_x,
+                            &mut loose_meas_gyro_y,
+                            &mut loose_meas_gyro_z,
+                            &mut loose_meas_accel_x,
+                            &mut loose_meas_accel_y,
+                            &mut loose_meas_accel_z,
+                            &mut loose_bias_gyro_x,
+                            &mut loose_bias_gyro_y,
+                            &mut loose_bias_gyro_z,
+                            &mut loose_bias_accel_x,
+                            &mut loose_bias_accel_y,
+                            &mut loose_bias_accel_z,
+                            &mut loose_scale_gyro_x,
+                            &mut loose_scale_gyro_y,
+                            &mut loose_scale_gyro_z,
+                            &mut loose_scale_accel_x,
+                            &mut loose_scale_accel_y,
+                            &mut loose_scale_accel_z,
+                            &mut loose_cov_diag,
+                        );
+                    }
+                }
                 if let Some(loose_ref) = loose.as_ref() {
                     let (loose_pos_ned, _, loose_q_ns) =
                         loose_display_state(loose_ref, ref_ecef, ref_lat, ref_lon);
+                    let n = loose_ref.nominal();
+                    let q_cs = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
+                    let q_nc = quat_mul(loose_q_ns, quat_conj(q_cs));
                     let (_, _, loose_yaw) = quat_rpy_deg(
-                        loose_q_ns[0] as f32,
-                        loose_q_ns[1] as f32,
-                        loose_q_ns[2] as f32,
-                        loose_q_ns[3] as f32,
+                        q_nc[0] as f32,
+                        q_nc[1] as f32,
+                        q_nc[2] as f32,
+                        q_nc[3] as f32,
                     );
                     let (loose_lat, loose_lon, _loose_h) = ned_to_lla_exact(
                         loose_pos_ned[0],
@@ -858,17 +939,19 @@ pub fn build_ekf_compare_traces(
                     });
                 }
             }
-            if let Some(loose_ref) = loose.as_mut() {
-                if !loose_batch_applied {
-                    loose_ref.fuse_reference_batch(
-                        None,
-                        0.0,
-                        1.0,
-                        loose_gyro_radps,
-                        loose_accel_mps2,
-                        loose_imu.dt,
-                    );
-                }
+            if let Some(loose_ref) = loose.as_mut()
+                && !loose_batch_applied
+            {
+                loose_ref.fuse_reference_batch_full(
+                    None,
+                    None,
+                    0.0,
+                    None,
+                    1.0,
+                    loose_gyro_radps,
+                    loose_accel_mps2,
+                    loose_imu.dt,
+                );
             }
 
             predict_gyro_sum = [0.0; 3];
@@ -878,16 +961,9 @@ pub fn build_ekf_compare_traces(
         }
 
         if origin_set {
-            if let Some(eskf_ref) = eskf.as_ref() {
-                let n = eskf_ref.nominal();
-                let (eskf_lat, eskf_lon, _eskf_h) = ned_to_lla_exact(
-                    n.pn as f64,
-                    n.pe as f64,
-                    n.pd as f64,
-                    ref_lat,
-                    ref_lon,
-                    ref_h,
-                );
+            if let Some(_eskf_ref) = fusion_ref.eskf() {
+                let (eskf_lat, eskf_lon, _eskf_h) =
+                    eskf_display_lla(fusion_ref).unwrap_or((ref_lat, ref_lon, ref_h));
                 map_eskf.push([eskf_lon, eskf_lat]);
                 if outage_active {
                     if !prev_outage_active && !map_eskf_outage.is_empty() {
@@ -897,7 +973,8 @@ pub fn build_ekf_compare_traces(
                 }
             }
             if let Some(loose_ref) = loose.as_ref() {
-                let (loose_pos_ned, _, _) = loose_display_state(loose_ref, ref_ecef, ref_lat, ref_lon);
+                let (loose_pos_ned, _, _) =
+                    loose_display_state(loose_ref, ref_ecef, ref_lat, ref_lon);
                 let (loose_lat, loose_lon, _loose_h) = ned_to_lla_exact(
                     loose_pos_ned[0],
                     loose_pos_ned[1],
@@ -911,27 +988,33 @@ pub fn build_ekf_compare_traces(
         }
         prev_outage_active = outage_active;
 
-        let t_imu = rel_s(pkt.t_ms);
+        let t_imu = imu_sample.t_s;
         let dt_safe = dt.max(1.0e-6);
-        if let Some(eskf_ref) = eskf.as_ref() {
+        if let Some(eskf_ref) = fusion_ref.eskf()
+            && !eskf_initialized_this_pkt
+        {
             append_eskf_sample(
                 eskf_ref,
                 t_imu,
                 gyro,
                 accel,
                 dt_safe,
+                fusion_ref.eskf_mount_q_vb().or(eskf_predict_mount_q_vb),
                 cfg.vehicle_meas_lpf_cutoff_hz,
                 &mut filt_eskf_meas_gyro,
                 &mut filt_eskf_meas_accel,
                 &mut eskf_cmp_pos_n,
                 &mut eskf_cmp_pos_e,
                 &mut eskf_cmp_pos_d,
-                &mut eskf_cmp_vel_n,
-                &mut eskf_cmp_vel_e,
-                &mut eskf_cmp_vel_d,
+                &mut eskf_cmp_vel_forward,
+                &mut eskf_cmp_vel_lateral,
+                &mut eskf_cmp_vel_vertical,
                 &mut eskf_cmp_att_roll,
                 &mut eskf_cmp_att_pitch,
                 &mut eskf_cmp_att_yaw,
+                &mut eskf_mount_roll,
+                &mut eskf_mount_pitch,
+                &mut eskf_mount_yaw,
                 &mut eskf_meas_gyro_x,
                 &mut eskf_meas_gyro_y,
                 &mut eskf_meas_gyro_z,
@@ -945,15 +1028,20 @@ pub fn build_ekf_compare_traces(
                 &mut eskf_bias_accel_y,
                 &mut eskf_bias_accel_z,
                 &mut eskf_cov_diag,
+                &mut eskf_yaw_cue_sum,
+                &mut eskf_yaw_cue_abs,
+                &mut eskf_yaw_cue_innov_sum,
+                &mut eskf_yaw_cue_innov_abs,
             );
         }
         if let Some(loose_ref) = loose.as_ref() {
             append_loose_sample(
                 loose_ref,
                 t_imu,
-                gyro,
-                accel,
+                loose_gyro_deg,
+                loose_accel,
                 dt_safe,
+                loose_seed_mount_q_vb,
                 ref_ecef,
                 ref_lat,
                 ref_lon,
@@ -961,12 +1049,21 @@ pub fn build_ekf_compare_traces(
                 &mut loose_cmp_pos_n,
                 &mut loose_cmp_pos_e,
                 &mut loose_cmp_pos_d,
-                &mut loose_cmp_vel_n,
-                &mut loose_cmp_vel_e,
-                &mut loose_cmp_vel_d,
+                &mut loose_cmp_vel_forward,
+                &mut loose_cmp_vel_lateral,
+                &mut loose_cmp_vel_vertical,
                 &mut loose_cmp_att_roll,
                 &mut loose_cmp_att_pitch,
                 &mut loose_cmp_att_yaw,
+                &mut loose_nominal_att_roll,
+                &mut loose_nominal_att_pitch,
+                &mut loose_nominal_att_yaw,
+                &mut loose_inv_qcs_roll,
+                &mut loose_inv_qcs_pitch,
+                &mut loose_inv_qcs_yaw,
+                &mut loose_mount_roll,
+                &mut loose_mount_pitch,
+                &mut loose_mount_yaw,
                 &mut loose_meas_gyro_x,
                 &mut loose_meas_gyro_y,
                 &mut loose_meas_gyro_z,
@@ -992,10 +1089,10 @@ pub fn build_ekf_compare_traces(
 
     let (eskf_bump_pitch_speed, eskf_bump_diag) = build_bump_diagnostic_traces(
         &eskf_cmp_att_pitch,
-        &eskf_cmp_vel_n,
-        &eskf_cmp_vel_e,
-        &ubx_vel_n,
-        &ubx_vel_e,
+        &eskf_cmp_vel_forward,
+        &eskf_cmp_vel_lateral,
+        &ubx_vel_forward,
+        &ubx_vel_lateral,
     );
 
     let eskf_cmp_pos = vec![
@@ -1026,28 +1123,28 @@ pub fn build_ekf_compare_traces(
     ];
     let eskf_cmp_vel = vec![
         Trace {
-            name: "ESKF velN [m/s]".to_string(),
-            points: eskf_cmp_vel_n,
+            name: "ESKF forward vel [m/s]".to_string(),
+            points: eskf_cmp_vel_forward,
         },
         Trace {
-            name: "UBX velN [m/s]".to_string(),
-            points: ubx_vel_n.clone(),
+            name: "u-blox forward vel [m/s]".to_string(),
+            points: ubx_vel_forward.clone(),
         },
         Trace {
-            name: "ESKF velE [m/s]".to_string(),
-            points: eskf_cmp_vel_e,
+            name: "ESKF lateral vel [m/s]".to_string(),
+            points: eskf_cmp_vel_lateral,
         },
         Trace {
-            name: "UBX velE [m/s]".to_string(),
-            points: ubx_vel_e.clone(),
+            name: "u-blox lateral vel [m/s]".to_string(),
+            points: ubx_vel_lateral.clone(),
         },
         Trace {
-            name: "ESKF velD [m/s]".to_string(),
-            points: eskf_cmp_vel_d,
+            name: "ESKF vertical vel [m/s]".to_string(),
+            points: eskf_cmp_vel_vertical,
         },
         Trace {
-            name: "UBX velD [m/s]".to_string(),
-            points: ubx_vel_d.clone(),
+            name: "u-blox vertical vel [m/s]".to_string(),
+            points: ubx_vel_vertical.clone(),
         },
     ];
     let eskf_cmp_att = vec![
@@ -1074,6 +1171,14 @@ pub fn build_ekf_compare_traces(
         Trace {
             name: "NAV-ATT heading [deg]".to_string(),
             points: ubx_att_yaw.clone(),
+        },
+        Trace {
+            name: "mount ready".to_string(),
+            points: fusion_mount_ready_marker,
+        },
+        Trace {
+            name: "EKF initialized".to_string(),
+            points: fusion_ekf_init_marker,
         },
     ];
     let eskf_meas_gyro = vec![
@@ -1195,8 +1300,20 @@ pub fn build_ekf_compare_traces(
             name: "theta_z".to_string(),
             points: eskf_cov_diag[2].clone(),
         },
+        Trace {
+            name: "mount_x".to_string(),
+            points: eskf_cov_diag[15].clone(),
+        },
+        Trace {
+            name: "mount_y".to_string(),
+            points: eskf_cov_diag[16].clone(),
+        },
+        Trace {
+            name: "mount_z".to_string(),
+            points: eskf_cov_diag[17].clone(),
+        },
     ];
-    let eskf_stationary_diag = vec![
+    let mut eskf_stationary_diag = vec![
         Trace {
             name: "stationary innov x".to_string(),
             points: eskf_stationary_innov_x,
@@ -1254,6 +1371,24 @@ pub fn build_ekf_compare_traces(
             points: eskf_stationary_p_theta_y_bay,
         },
     ];
+    for (idx, name) in ESKF_YAW_CUE_NAMES.iter().enumerate() {
+        eskf_stationary_diag.push(Trace {
+            name: format!("mount yaw dx sum {name} [deg]"),
+            points: eskf_yaw_cue_sum[idx].clone(),
+        });
+        eskf_stationary_diag.push(Trace {
+            name: format!("mount yaw dx abs {name} [deg]"),
+            points: eskf_yaw_cue_abs[idx].clone(),
+        });
+        eskf_stationary_diag.push(Trace {
+            name: format!("innovation sum {name}"),
+            points: eskf_yaw_cue_innov_sum[idx].clone(),
+        });
+        eskf_stationary_diag.push(Trace {
+            name: format!("innovation abs {name}"),
+            points: eskf_yaw_cue_innov_abs[idx].clone(),
+        });
+    }
     let eskf_map = vec![
         Trace {
             name: "u-blox path (lon,lat)".to_string(),
@@ -1300,28 +1435,28 @@ pub fn build_ekf_compare_traces(
     ];
     let loose_cmp_vel = vec![
         Trace {
-            name: "Loose velN [m/s]".to_string(),
-            points: loose_cmp_vel_n,
+            name: "Loose forward vel [m/s]".to_string(),
+            points: loose_cmp_vel_forward,
         },
         Trace {
-            name: "UBX velN [m/s]".to_string(),
-            points: ubx_vel_n.clone(),
+            name: "u-blox forward vel [m/s]".to_string(),
+            points: ubx_vel_forward.clone(),
         },
         Trace {
-            name: "Loose velE [m/s]".to_string(),
-            points: loose_cmp_vel_e,
+            name: "Loose lateral vel [m/s]".to_string(),
+            points: loose_cmp_vel_lateral,
         },
         Trace {
-            name: "UBX velE [m/s]".to_string(),
-            points: ubx_vel_e.clone(),
+            name: "u-blox lateral vel [m/s]".to_string(),
+            points: ubx_vel_lateral.clone(),
         },
         Trace {
-            name: "Loose velD [m/s]".to_string(),
-            points: loose_cmp_vel_d,
+            name: "Loose vertical vel [m/s]".to_string(),
+            points: loose_cmp_vel_vertical,
         },
         Trace {
-            name: "UBX velD [m/s]".to_string(),
-            points: ubx_vel_d.clone(),
+            name: "u-blox vertical vel [m/s]".to_string(),
+            points: ubx_vel_vertical.clone(),
         },
     ];
     let loose_cmp_att = vec![
@@ -1350,6 +1485,64 @@ pub fn build_ekf_compare_traces(
             points: ubx_att_yaw.clone(),
         },
     ];
+    let loose_nominal_att = vec![
+        Trace {
+            name: "Loose nominal q_ns roll [deg]".to_string(),
+            points: loose_nominal_att_roll,
+        },
+        Trace {
+            name: "Loose nominal q_ns pitch [deg]".to_string(),
+            points: loose_nominal_att_pitch,
+        },
+        Trace {
+            name: "Loose nominal q_ns yaw [deg]".to_string(),
+            points: loose_nominal_att_yaw,
+        },
+    ];
+    let loose_residual_mount = vec![
+        Trace {
+            name: "Loose inv(qcs) roll [deg]".to_string(),
+            points: loose_inv_qcs_roll,
+        },
+        Trace {
+            name: "Loose inv(qcs) pitch [deg]".to_string(),
+            points: loose_inv_qcs_pitch,
+        },
+        Trace {
+            name: "Loose inv(qcs) yaw [deg]".to_string(),
+            points: loose_inv_qcs_yaw,
+        },
+    ];
+    let mut eskf_misalignment = vec![
+        Trace {
+            name: "ESKF full mount roll [deg]".to_string(),
+            points: eskf_mount_roll,
+        },
+        Trace {
+            name: "ESKF full mount pitch [deg]".to_string(),
+            points: eskf_mount_pitch,
+        },
+        Trace {
+            name: "ESKF full mount yaw [deg]".to_string(),
+            points: eskf_mount_yaw,
+        },
+    ];
+    eskf_misalignment.extend(esf_alg_mount_ref.clone());
+    let mut loose_misalignment = vec![
+        Trace {
+            name: "Loose full mount roll [deg]".to_string(),
+            points: loose_mount_roll,
+        },
+        Trace {
+            name: "Loose full mount pitch [deg]".to_string(),
+            points: loose_mount_pitch,
+        },
+        Trace {
+            name: "Loose full mount yaw [deg]".to_string(),
+            points: loose_mount_yaw,
+        },
+    ];
+    loose_misalignment.extend(esf_alg_mount_ref);
     let loose_meas_gyro = vec![
         Trace {
             name: "Loose vehicle gyro x [deg/s]".to_string(),
@@ -1549,6 +1742,7 @@ pub fn build_ekf_compare_traces(
         eskf_bias_accel,
         eskf_cov_bias,
         eskf_cov_nonbias,
+        eskf_misalignment,
         eskf_stationary_diag,
         eskf_bump_pitch_speed,
         eskf_bump_diag,
@@ -1557,6 +1751,9 @@ pub fn build_ekf_compare_traces(
         loose_cmp_pos,
         loose_cmp_vel,
         loose_cmp_att,
+        loose_nominal_att,
+        loose_residual_mount,
+        loose_misalignment,
         loose_meas_gyro,
         loose_meas_accel,
         loose_bias_gyro,
@@ -1800,6 +1997,29 @@ impl Lcg64 {
     }
 }
 
+fn initialize_loose_from_nav(
+    nav: NavPvtObs,
+    gnss: crate::datasets::generic_replay::GenericGnssSample,
+    noise: LoosePredictNoise,
+) -> LooseFilter {
+    let mut loose = LooseFilter::new(noise);
+    let p_diag = default_loose_reference_p_diag(to_fusion_gnss(gnss));
+    let vel_ecef = mat_vec(
+        transpose3(ecef_to_ned_matrix(nav.lat_deg, nav.lon_deg)),
+        [nav.vel_n_mps, nav.vel_e_mps, nav.vel_d_mps],
+    );
+    loose.init_seeded_vehicle_from_nav_ecef_state(
+        gnss.heading_rad.unwrap_or(0.0) as f32,
+        nav.lat_deg,
+        nav.lon_deg,
+        lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m),
+        [vel_ecef[0] as f32, vel_ecef[1] as f32, vel_ecef[2] as f32],
+        Some(p_diag),
+        None,
+    );
+    loose
+}
+
 fn build_align_mount_events(
     frames: &[UbxFrame],
     tl: &MasterTimeline,
@@ -1816,6 +2036,8 @@ fn build_align_mount_events(
         stationary_samples: 100,
         max_gyro_radps: cfg.max_stationary_gyro_radps,
         max_accel_norm_err_mps2: cfg.max_stationary_accel_norm_err_mps2,
+        max_speed_rate_mps2: 0.15,
+        max_course_rate_radps: 1.0_f32.to_radians(),
     };
     let replay = build_align_replay(frames, tl, cfg, bootstrap_cfg, imu_cfg);
     let mut out = Vec::<(f64, [f32; 4])>::new();
@@ -1839,62 +2061,11 @@ fn build_align_mount_events(
     out
 }
 
-fn initialize_eskf_from_nav(
-    nav: NavPvtObs,
-    ned: [f64; 3],
-    noise: PredictNoise,
-    cfg: EkfCompareConfig,
-) -> CEskfWrapper {
-    let mut eskf = CEskfWrapper::new(noise);
-    let q_bn = yaw_quat_f32(initial_yaw_from_nav(nav));
-    eskf.init_nominal_from_gnss(q_bn, fusion_gnss_sample(nav, ned, cfg));
-    eskf
-}
-
-fn initialize_loose_from_nav(
-    nav: NavPvtObs,
-    ned: [f64; 3],
-    noise: LoosePredictNoise,
-    cfg: EkfCompareConfig,
-) -> CLooseWrapper {
-    let mut loose = CLooseWrapper::new(noise);
-    let gnss = fusion_gnss_sample(nav, ned, cfg);
-    let p_diag = default_loose_reference_p_diag(gnss);
-    let q_ns = yaw_quat_f32(initial_yaw_from_nav(nav));
-    let q_es = quat_mul(quat_conj(quat_ecef_to_ned(nav.lat_deg, nav.lon_deg)), [
-        q_ns[0] as f64,
-        q_ns[1] as f64,
-        q_ns[2] as f64,
-        q_ns[3] as f64,
-    ]);
-    let vel_ecef = mat_vec(
-        transpose3(ecef_to_ned_matrix(nav.lat_deg, nav.lon_deg)),
-        [nav.vel_n_mps, nav.vel_e_mps, nav.vel_d_mps],
-    );
-    loose.init_from_reference_ecef_state(
-        [
-            q_es[0] as f32,
-            q_es[1] as f32,
-            q_es[2] as f32,
-            q_es[3] as f32,
-        ],
-        lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m),
-        [vel_ecef[0] as f32, vel_ecef[1] as f32, vel_ecef[2] as f32],
-        [0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0],
-        [1.0, 1.0, 1.0],
-        [1.0, 1.0, 1.0],
-        [1.0, 0.0, 0.0, 0.0],
-        Some(p_diag),
-    );
-    loose
-}
-
 fn default_loose_reference_p_diag(gnss: sensor_fusion::fusion::FusionGnssSample) -> [f32; 24] {
     const DEFAULT_GYRO_BIAS_SIGMA_DPS: f32 = 0.125;
     const DEFAULT_ACCEL_BIAS_SIGMA_MPS2: f32 = 0.075;
     const DEFAULT_GYRO_SCALE_SIGMA: f32 = 0.02;
-    const DEFAULT_ACCEL_SCALE_SIGMA: f32 = 0.02;
+    const DEFAULT_ACCEL_SCALE_SIGMA: f32 = 0.0;
 
     let att_sigma_rad = 2.0f32 * core::f32::consts::PI / 180.0;
     let att_var = att_sigma_rad * att_sigma_rad;
@@ -1939,76 +2110,62 @@ fn default_loose_reference_p_diag(gnss: sensor_fusion::fusion::FusionGnssSample)
     p_diag
 }
 
-fn initial_yaw_from_nav(nav: NavPvtObs) -> f32 {
-    let speed_h = nav.vel_n_mps.hypot(nav.vel_e_mps);
-    if nav.head_veh_valid {
-        deg2rad(nav.heading_vehicle_deg) as f32
-    } else if speed_h >= 1.0 {
-        nav.vel_e_mps.atan2(nav.vel_n_mps) as f32
-    } else {
-        deg2rad(nav.heading_motion_deg) as f32
-    }
-}
-
-fn yaw_quat_f32(yaw_rad: f32) -> [f32; 4] {
-    let half = 0.5 * yaw_rad;
-    [half.cos(), 0.0, 0.0, half.sin()]
-}
-
-fn fusion_gnss_sample(
-    nav: NavPvtObs,
-    ned: [f64; 3],
-    cfg: EkfCompareConfig,
-) -> sensor_fusion::fusion::FusionGnssSample {
-    let speed_h = nav.vel_n_mps.hypot(nav.vel_e_mps);
-    let heading_rad = if nav.head_veh_valid {
-        Some(deg2rad(nav.heading_vehicle_deg) as f32)
-    } else if speed_h >= cfg.yaw_init_speed_mps.max(1.0) {
-        Some(nav.vel_e_mps.atan2(nav.vel_n_mps) as f32)
-    } else {
-        Some(deg2rad(nav.heading_motion_deg) as f32)
+fn vehicle_measurements_from_mount(
+    q_vb: Option<[f32; 4]>,
+    raw_gyro_radps: [f64; 3],
+    raw_accel_mps2: [f64; 3],
+) -> ([f64; 3], [f64; 3]) {
+    let Some(q_vb) = q_vb else {
+        return (
+            [
+                raw_gyro_radps[0].to_degrees(),
+                raw_gyro_radps[1].to_degrees(),
+                raw_gyro_radps[2].to_degrees(),
+            ],
+            raw_accel_mps2,
+        );
     };
-    sensor_fusion::fusion::FusionGnssSample {
-        t_s: 0.0,
-        pos_ned_m: [ned[0] as f32, ned[1] as f32, ned[2] as f32],
-        vel_ned_mps: [
-            nav.vel_n_mps as f32,
-            nav.vel_e_mps as f32,
-            nav.vel_d_mps as f32,
+    let c_bv = transpose3(quat_to_rotmat_f64([
+        q_vb[0] as f64,
+        q_vb[1] as f64,
+        q_vb[2] as f64,
+        q_vb[3] as f64,
+    ]));
+    let gyro_vehicle_radps = mat_vec(c_bv, raw_gyro_radps);
+    let accel_vehicle_mps2 = mat_vec(c_bv, raw_accel_mps2);
+    (
+        [
+            gyro_vehicle_radps[0].to_degrees(),
+            gyro_vehicle_radps[1].to_degrees(),
+            gyro_vehicle_radps[2].to_degrees(),
         ],
-        pos_std_m: [
-            (nav.h_acc_m * cfg.gnss_pos_r_scale.sqrt()) as f32,
-            (nav.h_acc_m * cfg.gnss_pos_r_scale.sqrt()) as f32,
-            (nav.v_acc_m * cfg.gnss_pos_r_scale.sqrt()) as f32,
-        ],
-        vel_std_mps: [
-            (nav.s_acc_mps * cfg.gnss_vel_r_scale.sqrt()) as f32,
-            (nav.s_acc_mps * cfg.gnss_vel_r_scale.sqrt()) as f32,
-            (nav.s_acc_mps * cfg.gnss_vel_r_scale.sqrt()) as f32,
-        ],
-        heading_rad,
-    }
+        accel_vehicle_mps2,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
 fn append_eskf_sample(
-    eskf: &CEskfWrapper,
+    eskf: &EskfState,
     t_imu: f64,
     gyro: [f64; 3],
     accel: [f64; 3],
     dt_safe: f64,
+    predict_mount_q_vb: Option<[f32; 4]>,
     vehicle_meas_lpf_cutoff_hz: f64,
     filt_meas_gyro: &mut Option<[f64; 3]>,
     filt_meas_accel: &mut Option<[f64; 3]>,
     cmp_pos_n: &mut Vec<[f64; 2]>,
     cmp_pos_e: &mut Vec<[f64; 2]>,
     cmp_pos_d: &mut Vec<[f64; 2]>,
-    cmp_vel_n: &mut Vec<[f64; 2]>,
-    cmp_vel_e: &mut Vec<[f64; 2]>,
-    cmp_vel_d: &mut Vec<[f64; 2]>,
+    cmp_vel_forward: &mut Vec<[f64; 2]>,
+    cmp_vel_lateral: &mut Vec<[f64; 2]>,
+    cmp_vel_vertical: &mut Vec<[f64; 2]>,
     cmp_att_roll: &mut Vec<[f64; 2]>,
     cmp_att_pitch: &mut Vec<[f64; 2]>,
     cmp_att_yaw: &mut Vec<[f64; 2]>,
+    mount_roll: &mut Vec<[f64; 2]>,
+    mount_pitch: &mut Vec<[f64; 2]>,
+    mount_yaw: &mut Vec<[f64; 2]>,
     meas_gyro_x: &mut Vec<[f64; 2]>,
     meas_gyro_y: &mut Vec<[f64; 2]>,
     meas_gyro_z: &mut Vec<[f64; 2]>,
@@ -2021,21 +2178,59 @@ fn append_eskf_sample(
     bias_accel_x: &mut Vec<[f64; 2]>,
     bias_accel_y: &mut Vec<[f64; 2]>,
     bias_accel_z: &mut Vec<[f64; 2]>,
-    cov_diag: &mut [Vec<[f64; 2]>; 15],
+    cov_diag: &mut [Vec<[f64; 2]>; 18],
+    yaw_cue_sum: &mut [Vec<[f64; 2]>; 11],
+    yaw_cue_abs: &mut [Vec<[f64; 2]>; 11],
+    yaw_cue_innov_sum: &mut [Vec<[f64; 2]>; 11],
+    yaw_cue_innov_abs: &mut [Vec<[f64; 2]>; 11],
 ) {
-    let n = eskf.nominal();
+    let n = &eskf.nominal;
     cmp_pos_n.push([t_imu, n.pn as f64]);
     cmp_pos_e.push([t_imu, n.pe as f64]);
     cmp_pos_d.push([t_imu, n.pd as f64]);
-    cmp_vel_n.push([t_imu, n.vn as f64]);
-    cmp_vel_e.push([t_imu, n.ve as f64]);
-    cmp_vel_d.push([t_imu, n.vd as f64]);
-    let (roll, pitch, yaw) = quat_rpy_deg(n.q0, n.q1, n.q2, n.q3);
+    let q_n_s = [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64];
+    let q_cs = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
+    let q_n_c = quat_mul(q_n_s, quat_conj(q_cs));
+    let c_n_b = quat_to_rotmat_f64(q_n_s);
+    let c_n_c = quat_to_rotmat_f64(q_n_c);
+    let vel_vehicle = mat_vec(transpose3(c_n_c), [n.vn as f64, n.ve as f64, n.vd as f64]);
+    cmp_vel_forward.push([t_imu, vel_vehicle[0]]);
+    cmp_vel_lateral.push([t_imu, vel_vehicle[1]]);
+    cmp_vel_vertical.push([t_imu, vel_vehicle[2]]);
+    let (roll, pitch, yaw) = quat_rpy_deg(
+        q_n_c[0] as f32,
+        q_n_c[1] as f32,
+        q_n_c[2] as f32,
+        q_n_c[3] as f32,
+    );
     cmp_att_roll.push([t_imu, roll]);
     cmp_att_pitch.push([t_imu, pitch]);
     cmp_att_yaw.push([t_imu, yaw]);
 
-    let c_n_b = quat_to_rotmat_f64([n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64]);
+    let q_seed = predict_mount_q_vb
+        .map(|q| [q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64])
+        .unwrap_or([1.0, 0.0, 0.0, 0.0]);
+    // Runtime prediction pre-rotates raw IMU by q_seed before the ESKF sees it.
+    // q_cs maps that seed frame back to vehicle for NHC, so the physical
+    // vehicle-to-body mount is q_seed * inv(q_cs).
+    let q_total_vb = quat_mul(q_seed, quat_conj(q_cs));
+    let q_total_flu = frd_mount_quat_to_esf_alg_flu_quat(q_total_vb);
+    let (mount_r, mount_p, mount_y) = quat_rpy_alg_deg(
+        q_total_flu[0],
+        q_total_flu[1],
+        q_total_flu[2],
+        q_total_flu[3],
+    );
+    let mount_r_plot = if eskf.p[15][15].abs() <= 1.0e-12 {
+        let q_seed_flu = frd_mount_quat_to_esf_alg_flu_quat(q_seed);
+        quat_rpy_alg_deg(q_seed_flu[0], q_seed_flu[1], q_seed_flu[2], q_seed_flu[3]).0
+    } else {
+        mount_r
+    };
+    mount_roll.push([t_imu, mount_r_plot]);
+    mount_pitch.push([t_imu, mount_p]);
+    mount_yaw.push([t_imu, mount_y]);
+
     let gravity_b = [
         c_n_b[2][0] * GRAVITY_MPS2 as f64,
         c_n_b[2][1] * GRAVITY_MPS2 as f64,
@@ -2069,19 +2264,29 @@ fn append_eskf_sample(
     bias_accel_x.push([t_imu, -(n.bax as f64)]);
     bias_accel_y.push([t_imu, -(n.bay as f64)]);
     bias_accel_z.push([t_imu, -(n.baz as f64)]);
-    let p = eskf.covariance();
+    let p = &eskf.p;
     for (i, tr) in cov_diag.iter_mut().enumerate() {
         tr.push([t_imu, p[i][i] as f64]);
+    }
+    for i in 0..11 {
+        yaw_cue_sum[i].push([t_imu, rad2deg(eskf.update_diag.sum_dx_mount_yaw[i] as f64)]);
+        yaw_cue_abs[i].push([
+            t_imu,
+            rad2deg(eskf.update_diag.sum_abs_dx_mount_yaw[i] as f64),
+        ]);
+        yaw_cue_innov_sum[i].push([t_imu, eskf.update_diag.sum_innovation[i] as f64]);
+        yaw_cue_innov_abs[i].push([t_imu, eskf.update_diag.sum_abs_innovation[i] as f64]);
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 fn append_loose_sample(
-    loose: &CLooseWrapper,
+    loose: &LooseFilter,
     t_imu: f64,
     gyro: [f64; 3],
     accel: [f64; 3],
     dt_safe: f64,
+    seed_mount_q_vb: Option<[f32; 4]>,
     ref_ecef: [f64; 3],
     ref_lat: f64,
     ref_lon: f64,
@@ -2089,12 +2294,21 @@ fn append_loose_sample(
     cmp_pos_n: &mut Vec<[f64; 2]>,
     cmp_pos_e: &mut Vec<[f64; 2]>,
     cmp_pos_d: &mut Vec<[f64; 2]>,
-    cmp_vel_n: &mut Vec<[f64; 2]>,
-    cmp_vel_e: &mut Vec<[f64; 2]>,
-    cmp_vel_d: &mut Vec<[f64; 2]>,
+    cmp_vel_forward: &mut Vec<[f64; 2]>,
+    cmp_vel_lateral: &mut Vec<[f64; 2]>,
+    cmp_vel_vertical: &mut Vec<[f64; 2]>,
     cmp_att_roll: &mut Vec<[f64; 2]>,
     cmp_att_pitch: &mut Vec<[f64; 2]>,
     cmp_att_yaw: &mut Vec<[f64; 2]>,
+    nominal_att_roll: &mut Vec<[f64; 2]>,
+    nominal_att_pitch: &mut Vec<[f64; 2]>,
+    nominal_att_yaw: &mut Vec<[f64; 2]>,
+    inv_qcs_roll: &mut Vec<[f64; 2]>,
+    inv_qcs_pitch: &mut Vec<[f64; 2]>,
+    inv_qcs_yaw: &mut Vec<[f64; 2]>,
+    mount_roll: &mut Vec<[f64; 2]>,
+    mount_pitch: &mut Vec<[f64; 2]>,
+    mount_yaw: &mut Vec<[f64; 2]>,
     meas_gyro_x: &mut Vec<[f64; 2]>,
     meas_gyro_y: &mut Vec<[f64; 2]>,
     meas_gyro_z: &mut Vec<[f64; 2]>,
@@ -2120,20 +2334,63 @@ fn append_loose_sample(
     cmp_pos_n.push([t_imu, pos_ned[0]]);
     cmp_pos_e.push([t_imu, pos_ned[1]]);
     cmp_pos_d.push([t_imu, pos_ned[2]]);
-    cmp_vel_n.push([t_imu, vel_ned[0]]);
-    cmp_vel_e.push([t_imu, vel_ned[1]]);
-    cmp_vel_d.push([t_imu, vel_ned[2]]);
-    let (roll, pitch, yaw) =
-        quat_rpy_deg(q_ns[0] as f32, q_ns[1] as f32, q_ns[2] as f32, q_ns[3] as f32);
+    let q_cs = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
+    let (nominal_roll, nominal_pitch, nominal_yaw) = quat_rpy_deg(
+        q_ns[0] as f32,
+        q_ns[1] as f32,
+        q_ns[2] as f32,
+        q_ns[3] as f32,
+    );
+    nominal_att_roll.push([t_imu, nominal_roll]);
+    nominal_att_pitch.push([t_imu, nominal_pitch]);
+    nominal_att_yaw.push([t_imu, nominal_yaw]);
+    let q_inv_cs = quat_conj(q_cs);
+    let (inv_roll, inv_pitch, inv_yaw) = quat_rpy_deg(
+        q_inv_cs[0] as f32,
+        q_inv_cs[1] as f32,
+        q_inv_cs[2] as f32,
+        q_inv_cs[3] as f32,
+    );
+    inv_qcs_roll.push([t_imu, inv_roll]);
+    inv_qcs_pitch.push([t_imu, inv_pitch]);
+    inv_qcs_yaw.push([t_imu, inv_yaw]);
+    let q_nc = quat_mul(q_ns, quat_conj(q_cs));
+    let c_n_c = quat_to_rotmat_f64(q_nc);
+    let vel_vehicle = mat_vec(transpose3(c_n_c), vel_ned);
+    cmp_vel_forward.push([t_imu, vel_vehicle[0]]);
+    cmp_vel_lateral.push([t_imu, vel_vehicle[1]]);
+    cmp_vel_vertical.push([t_imu, vel_vehicle[2]]);
+    let (roll, pitch, yaw) = quat_rpy_deg(
+        q_nc[0] as f32,
+        q_nc[1] as f32,
+        q_nc[2] as f32,
+        q_nc[3] as f32,
+    );
     cmp_att_roll.push([t_imu, roll]);
     cmp_att_pitch.push([t_imu, pitch]);
     cmp_att_yaw.push([t_imu, yaw]);
+    let q_seed = seed_mount_q_vb
+        .map(|q| [q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64])
+        .unwrap_or([1.0, 0.0, 0.0, 0.0]);
+    // Loose receives IMU already pre-rotated by q_seed, and qcs is the
+    // residual seed-frame correction used for NHC. The physical mount plotted
+    // against ESF-ALG is therefore the same composition as ESKF: seed * inv(qcs).
+    let q_total_vb = quat_mul(q_seed, quat_conj(q_cs));
+    let q_total_flu = frd_mount_quat_to_esf_alg_flu_quat(q_total_vb);
+    let (mount_r, mount_p, mount_y) = quat_rpy_alg_deg(
+        q_total_flu[0],
+        q_total_flu[1],
+        q_total_flu[2],
+        q_total_flu[3],
+    );
+    mount_roll.push([t_imu, mount_r]);
+    mount_pitch.push([t_imu, mount_p]);
+    mount_yaw.push([t_imu, mount_y]);
 
-    let c_n_v = quat_to_rotmat_f64(q_ns);
     let gravity_v = [
-        c_n_v[2][0] * GRAVITY_MPS2 as f64,
-        c_n_v[2][1] * GRAVITY_MPS2 as f64,
-        c_n_v[2][2] * GRAVITY_MPS2 as f64,
+        c_n_c[2][0] * GRAVITY_MPS2 as f64,
+        c_n_c[2][1] * GRAVITY_MPS2 as f64,
+        c_n_c[2][2] * GRAVITY_MPS2 as f64,
     ];
     // The visualizer feeds loose with IMU samples already converted into the vehicle frame.
     // Mirror the runtime correction convention here: corrected = scale * raw + bias.
@@ -2201,7 +2458,7 @@ fn append_loose_sample(
 }
 
 fn loose_display_state(
-    loose: &CLooseWrapper,
+    loose: &LooseFilter,
     ref_ecef: [f64; 3],
     ref_lat: f64,
     ref_lon: f64,
@@ -2217,6 +2474,19 @@ fn loose_display_state(
     )
 }
 
+fn eskf_display_lla(fusion: &SensorFusion) -> Option<(f64, f64, f64)> {
+    let eskf = fusion.eskf()?;
+    let anchor = fusion.anchor_lla_debug()?;
+    Some(ned_to_lla_exact(
+        eskf.nominal.pn as f64,
+        eskf.nominal.pe as f64,
+        eskf.nominal.pd as f64,
+        anchor[0] as f64,
+        anchor[1] as f64,
+        anchor[2] as f64,
+    ))
+}
+
 fn ecef_to_ned_matrix(lat_deg: f64, lon_deg: f64) -> [[f64; 3]; 3] {
     let lat = deg2rad(lat_deg);
     let lon = deg2rad(lon_deg);
@@ -2229,10 +2499,6 @@ fn ecef_to_ned_matrix(lat_deg: f64, lon_deg: f64) -> [[f64; 3]; 3] {
     ]
 }
 
-fn quat_conj(q: [f64; 4]) -> [f64; 4] {
-    [q[0], -q[1], -q[2], -q[3]]
-}
-
 fn quat_mul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
     [
         a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
@@ -2240,6 +2506,10 @@ fn quat_mul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
         a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
         a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0],
     ]
+}
+
+fn quat_conj(q: [f64; 4]) -> [f64; 4] {
+    [q[0], -q[1], -q[2], -q[3]]
 }
 
 fn quat_ecef_to_ned(lat_deg: f64, lon_deg: f64) -> [f64; 4] {
@@ -2284,6 +2554,26 @@ fn transpose3(a: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
         [a[0][1], a[1][1], a[2][1]],
         [a[0][2], a[1][2], a[2][2]],
     ]
+}
+
+fn ubx_vehicle_velocity(nav: NavPvtObs, att: Option<NavAttEvent>) -> [f64; 3] {
+    let vel_ned = [nav.vel_n_mps, nav.vel_e_mps, nav.vel_d_mps];
+    let c_n_v = match att {
+        Some(att) => transpose3(rot_zyx(
+            deg2rad(att.heading_deg),
+            deg2rad(att.pitch_deg),
+            deg2rad(att.roll_deg),
+        )),
+        None => {
+            let yaw_deg = if nav.head_veh_valid {
+                nav.heading_vehicle_deg
+            } else {
+                normalize_heading_deg(rad2deg(nav.vel_e_mps.atan2(nav.vel_n_mps)))
+            };
+            transpose3(rot_zyx(deg2rad(yaw_deg), 0.0, 0.0))
+        }
+    };
+    mat_vec(c_n_v, vel_ned)
 }
 
 fn lpf_alpha(dt_s: f64, cutoff_hz: f64) -> f64 {

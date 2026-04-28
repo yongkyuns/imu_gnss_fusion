@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use sensor_fusion::fusion::{FusionConfig, FusionGnssSample, FusionImuSample, SensorFusion};
+use sensor_fusion::fusion::{FusionGnssSample, FusionImuSample, SensorFusion};
 use sim::ubxlog::{
     NavPvtObs, UbxFrame, extract_esf_raw_samples, extract_nav2_pvt_obs, parse_ubx_frames,
     sensor_meta,
@@ -80,6 +80,9 @@ enum ReplayEvent {
     },
     Gnss {
         t_s: f32,
+        lat_deg: f32,
+        lon_deg: f32,
+        height_m: f32,
         pos_ned_m: [f32; 3],
         vel_ned_mps: [f32; 3],
         pos_std_m: [f32; 3],
@@ -161,7 +164,7 @@ fn main() -> Result<()> {
     std::thread::sleep(Duration::from_millis(args.settle_ms));
 
     let (mode, q_vb) = parse_mode_and_q(&args.external_q_vb)?;
-    let host_summary = run_host_reference(&events, mode, q_vb, args.r_body_vel);
+    let host_summary = run_host_reference(&events, mode, q_vb);
     write_frame(
         &mut *port,
         MSG_CONFIG,
@@ -182,12 +185,13 @@ fn main() -> Result<()> {
         let ev_t_s = match ev {
             ReplayEvent::Imu { t_s, .. } | ReplayEvent::Gnss { t_s, .. } => t_s,
         };
-        if let (Some(speedup), Some(prev)) = (args.replay_speedup, prev_t_s) {
-            if speedup.is_finite() && speedup > 0.0 {
-                let dt_s = (ev_t_s - prev).max(0.0) / speedup;
-                if dt_s > 0.0 {
-                    std::thread::sleep(Duration::from_secs_f32(dt_s));
-                }
+        if let (Some(speedup), Some(prev)) = (args.replay_speedup, prev_t_s)
+            && speedup.is_finite()
+            && speedup > 0.0
+        {
+            let dt_s = (ev_t_s - prev).max(0.0) / speedup;
+            if dt_s > 0.0 {
+                std::thread::sleep(Duration::from_secs_f32(dt_s));
             }
         }
         match ev {
@@ -204,6 +208,9 @@ fn main() -> Result<()> {
             }
             ReplayEvent::Gnss {
                 t_s,
+                lat_deg: _,
+                lon_deg: _,
+                height_m: _,
                 pos_ned_m,
                 vel_ned_mps,
                 pos_std_m,
@@ -262,20 +269,11 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn run_host_reference(
-    events: &[ReplayEvent],
-    mode: u8,
-    q_vb: [f32; 4],
-    r_body_vel: Option<f32>,
-) -> HostSummary {
-    let mut cfg = FusionConfig::default();
-    if let Some(r) = r_body_vel {
-        cfg.r_body_vel = r;
-    }
+fn run_host_reference(events: &[ReplayEvent], mode: u8, q_vb: [f32; 4]) -> HostSummary {
     let mut fusion = if mode == MODE_EXTERNAL_QVB {
-        SensorFusion::with_misalignment(cfg, q_vb)
+        SensorFusion::with_misalignment(q_vb)
     } else {
-        SensorFusion::new(cfg)
+        SensorFusion::new()
     };
     let mut mount_ready_t_s = None;
     let mut ekf_init_t_s = None;
@@ -301,7 +299,10 @@ fn run_host_reference(
             }
             ReplayEvent::Gnss {
                 t_s,
-                pos_ned_m,
+                lat_deg,
+                lon_deg,
+                height_m,
+                pos_ned_m: _,
                 vel_ned_mps,
                 pos_std_m,
                 vel_std_mps,
@@ -310,7 +311,9 @@ fn run_host_reference(
             } => {
                 let update = fusion.process_gnss(FusionGnssSample {
                     t_s,
-                    pos_ned_m,
+                    lat_deg,
+                    lon_deg,
+                    height_m,
                     vel_ned_mps,
                     pos_std_m,
                     vel_std_mps,
@@ -406,6 +409,9 @@ fn build_replay_events(path: &PathBuf) -> Result<Vec<ReplayEvent>> {
             t_ms,
             ReplayEvent::Gnss {
                 t_s: ((t_ms - t0_ms) / 1000.0) as f32,
+                lat_deg: nav.lat_deg as f32,
+                lon_deg: nav.lon_deg as f32,
+                height_m: nav.height_m as f32,
                 pos_ned_m,
                 vel_ned_mps: [
                     nav.vel_n_mps as f32,

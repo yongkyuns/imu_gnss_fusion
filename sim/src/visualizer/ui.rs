@@ -7,7 +7,10 @@ use walkers::sources::{Mapbox, MapboxStyle, OpenStreetMap};
 use walkers::{HttpTiles, Map, MapMemory, Plugin, lon_lat};
 
 use super::math::heading_endpoint;
-use super::model::{HeadingSample, Page, PlotData, Trace};
+use super::model::{EkfImuSource, HeadingSample, Page, PlotData, Trace};
+use super::pipeline::build_plot_data;
+use super::pipeline::ekf_compare::{EkfCompareConfig, GnssOutageConfig};
+use super::pipeline::synthetic::{SyntheticVisualizerConfig, build_synthetic_plot_data};
 use super::stats::map_center_from_traces;
 
 const MAPBOX_ACCESS_TOKEN: &str = "pk.eyJ1IjoieW9uZ2t5dW5zODciLCJhIjoiY21tNjB5NWt6MGJmOTJzcG02MmRvN3RnYiJ9.fu_66qb1G1cgrLzAE54E0w";
@@ -96,23 +99,23 @@ impl Plugin for TrackOverlay<'_> {
                     _ => best = Some((d2, h, p)),
                 }
             }
-            if let Some((d2, h, p)) = best {
-                if d2 <= 12.0_f32 * 12.0_f32 {
-                    ui.painter()
-                        .circle_filled(p, 3.0, egui::Color32::from_rgb(255, 220, 0));
-                    let label = format!("t={:.2}s", h.t_s);
-                    let bg_min = p + egui::vec2(8.0, -24.0);
-                    let bg_rect = egui::Rect::from_min_size(bg_min, egui::vec2(78.0, 18.0));
-                    ui.painter()
-                        .rect_filled(bg_rect, 4.0, egui::Color32::from_black_alpha(180));
-                    ui.painter().text(
-                        bg_min + egui::vec2(6.0, 2.0),
-                        egui::Align2::LEFT_TOP,
-                        label,
-                        egui::FontId::monospace(12.0),
-                        egui::Color32::WHITE,
-                    );
-                }
+            if let Some((d2, h, p)) = best
+                && d2 <= 12.0_f32 * 12.0_f32
+            {
+                ui.painter()
+                    .circle_filled(p, 3.0, egui::Color32::from_rgb(255, 220, 0));
+                let label = format!("t={:.2}s", h.t_s);
+                let bg_min = p + egui::vec2(8.0, -24.0);
+                let bg_rect = egui::Rect::from_min_size(bg_min, egui::vec2(78.0, 18.0));
+                ui.painter()
+                    .rect_filled(bg_rect, 4.0, egui::Color32::from_black_alpha(180));
+                ui.painter().text(
+                    bg_min + egui::vec2(6.0, 2.0),
+                    egui::Align2::LEFT_TOP,
+                    label,
+                    egui::FontId::monospace(12.0),
+                    egui::Color32::WHITE,
+                );
             }
         }
     }
@@ -134,6 +137,98 @@ pub struct App {
     show_nav2_pvt: bool,
     show_eskf: bool,
     show_loose: bool,
+    replay: Option<ReplayState>,
+    replay_status: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct ReplayState {
+    pub bytes: Vec<u8>,
+    pub synthetic: Option<SyntheticVisualizerConfig>,
+    pub max_records: Option<usize>,
+    pub misalignment: EkfImuSource,
+    pub ekf_cfg: EkfCompareConfig,
+    pub gnss_outages: GnssOutageConfig,
+}
+
+fn create_app(
+    cc: &eframe::CreationContext<'_>,
+    data: PlotData,
+    has_itow: bool,
+    replay: Option<ReplayState>,
+) -> App {
+    let map_center = map_center_from_traces(&data.eskf_map);
+    let mapbox_access_token =
+        std::env::var("MAPBOX_ACCESS_TOKEN").unwrap_or_else(|_| MAPBOX_ACCESS_TOKEN.to_string());
+    let map_tiles = if mapbox_access_token.is_empty() {
+        HttpTiles::new(OpenStreetMap, cc.egui_ctx.clone())
+    } else {
+        HttpTiles::new(
+            Mapbox {
+                style: MapboxStyle::Dark,
+                high_resolution: true,
+                access_token: mapbox_access_token,
+            },
+            cc.egui_ctx.clone(),
+        )
+    };
+    let mut map_memory = MapMemory::default();
+    let _ = map_memory.set_zoom(15.0);
+    App {
+        data,
+        show_egui_inspection: false,
+        show_esf_meas: false,
+        has_itow,
+        fps_ema: 0.0,
+        max_points_per_trace: 2500,
+        page: Page::Signals,
+        map_tiles,
+        map_memory,
+        map_center,
+        show_heading: false,
+        show_nav_pvt: true,
+        show_nav2_pvt: true,
+        show_eskf: true,
+        show_loose: true,
+        replay,
+        replay_status: None,
+    }
+}
+
+impl App {
+    fn refresh_from_replay(&mut self) {
+        let Some(replay) = self.replay.as_ref() else {
+            return;
+        };
+        if let Some(synthetic) = &replay.synthetic {
+            match build_synthetic_plot_data(
+                synthetic,
+                replay.misalignment,
+                replay.ekf_cfg,
+                replay.gnss_outages,
+            ) {
+                Ok(data) => {
+                    self.data = data;
+                    self.has_itow = false;
+                    self.replay_status = Some("Synthetic replay refreshed".to_string());
+                }
+                Err(err) => {
+                    self.replay_status = Some(format!("Synthetic replay failed: {err}"));
+                }
+            }
+        } else {
+            let (data, has_itow) = build_plot_data(
+                &replay.bytes,
+                replay.max_records,
+                replay.misalignment,
+                replay.ekf_cfg,
+                replay.gnss_outages,
+            );
+            self.data = data;
+            self.has_itow = has_itow;
+            self.replay_status = Some("Replay refreshed".to_string());
+        }
+    }
 }
 
 impl eframe::App for App {
@@ -148,6 +243,8 @@ impl eframe::App for App {
         }
 
         egui::TopBottomPanel::top("top_controls").show(ctx, |ui| {
+            let mut replay_changed = false;
+            let mut apply_replay = false;
             let fps = ctx.input(|i| {
                 if i.stable_dt > 0.0 {
                     1.0 / i.stable_dt
@@ -189,6 +286,303 @@ impl eframe::App for App {
                         "Show egui inspection/profiler",
                     );
                 });
+            if let Some(replay) = self.replay.as_mut() {
+                egui::CollapsingHeader::new("Replay Controls")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.label("Adjust controls, then click Apply to rebuild the replay.");
+                        ui.horizontal(|ui| {
+                            ui.label("Misalignment:");
+                            replay_changed |= ui
+                                .selectable_value(
+                                    &mut replay.misalignment,
+                                    EkfImuSource::Internal,
+                                    "internal",
+                                )
+                                .changed();
+                            replay_changed |= ui
+                                .selectable_value(
+                                    &mut replay.misalignment,
+                                    EkfImuSource::External,
+                                    "external",
+                                )
+                                .changed();
+                            replay_changed |= ui
+                                .selectable_value(
+                                    &mut replay.misalignment,
+                                    EkfImuSource::Ref,
+                                    "ref",
+                                )
+                                .changed();
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("GNSS pos R");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut replay.ekf_cfg.gnss_pos_r_scale)
+                                        .speed(0.01)
+                                        .range(0.001..=10.0),
+                                )
+                                .changed();
+                            ui.label("GNSS vel R");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut replay.ekf_cfg.gnss_vel_r_scale)
+                                        .speed(0.01)
+                                        .range(0.001..=10.0),
+                                )
+                                .changed();
+                            ui.label("NHC R");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut replay.ekf_cfg.r_body_vel)
+                                        .speed(0.001)
+                                        .range(0.0001..=1000.0),
+                                )
+                                .changed();
+                            ui.label("Yaw init m/s");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut replay.ekf_cfg.yaw_init_speed_mps)
+                                        .speed(0.1)
+                                        .range(0.0..=20.0),
+                                )
+                                .changed();
+                            ui.label("Yaw sigma deg");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut replay.ekf_cfg.yaw_init_sigma_deg)
+                                        .speed(0.5)
+                                        .range(0.0..=90.0),
+                                )
+                                .changed();
+                            ui.label("Mount init deg");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut replay.ekf_cfg.mount_init_sigma_deg)
+                                        .speed(0.5)
+                                        .range(0.0..=90.0),
+                                )
+                                .changed();
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("Mount RW");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut replay.ekf_cfg.mount_align_rw_var)
+                                        .speed(1.0e-8)
+                                        .range(0.0..=1.0e-3),
+                                )
+                                .changed();
+                            ui.label("Mount min scale");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut replay.ekf_cfg.mount_update_min_scale,
+                                    )
+                                    .speed(0.001)
+                                    .range(0.0..=1.0),
+                                )
+                                .changed();
+                            ui.label("Mount ramp s");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut replay.ekf_cfg.mount_update_ramp_time_s,
+                                    )
+                                    .speed(10.0)
+                                    .range(0.0..=20000.0),
+                                )
+                                .changed();
+                            ui.label("Mount gate m/s");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut replay.ekf_cfg.mount_update_innovation_gate_mps,
+                                    )
+                                    .speed(0.001)
+                                    .range(0.0..=10.0),
+                                )
+                                .changed();
+                            ui.label("Mount yaw gate deg/s");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut replay.ekf_cfg.mount_update_yaw_rate_gate_dps,
+                                    )
+                                    .speed(0.1)
+                                    .range(0.0..=90.0),
+                                )
+                                .changed();
+                            ui.label("Align handoff s");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut replay.ekf_cfg.align_handoff_delay_s)
+                                        .speed(1.0)
+                                        .range(0.0..=600.0),
+                                )
+                                .changed();
+                            replay_changed |= ui
+                                .checkbox(
+                                    &mut replay.ekf_cfg.freeze_misalignment_states,
+                                    "Freeze mount states",
+                                )
+                                .changed();
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("Mount settle s");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut replay.ekf_cfg.mount_settle_time_s)
+                                        .speed(10.0)
+                                        .range(0.0..=1000.0),
+                                )
+                                .changed();
+                            ui.label("Release sigma deg");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut replay.ekf_cfg.mount_settle_release_sigma_deg,
+                                    )
+                                    .speed(0.5)
+                                    .range(0.0..=90.0),
+                                )
+                                .changed();
+                            replay_changed |= ui
+                                .checkbox(
+                                    &mut replay.ekf_cfg.mount_settle_zero_cross_covariance,
+                                    "Zero mount cross-cov",
+                                )
+                                .changed();
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("GNSS pos->mount");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut replay.ekf_cfg.gnss_pos_mount_scale)
+                                        .speed(0.01)
+                                        .range(0.0..=1.0),
+                                )
+                                .changed();
+                            ui.label("GNSS vel->mount");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut replay.ekf_cfg.gnss_vel_mount_scale)
+                                        .speed(0.01)
+                                        .range(0.0..=1.0),
+                                )
+                                .changed();
+                            ui.label("Gyro bias init dps");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut replay.ekf_cfg.gyro_bias_init_sigma_dps,
+                                    )
+                                    .speed(0.01)
+                                    .range(0.0..=10.0),
+                                )
+                                .changed();
+                            ui.label("Accel bias init");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut replay.ekf_cfg.accel_bias_init_sigma_mps2,
+                                    )
+                                    .speed(0.01)
+                                    .range(0.0..=10.0),
+                                )
+                                .changed();
+                            ui.label("Vehicle speed R");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut replay.ekf_cfg.r_vehicle_speed)
+                                        .speed(0.01)
+                                        .range(0.0..=10.0),
+                                )
+                                .changed();
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("Zero vel R");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut replay.ekf_cfg.r_zero_vel)
+                                        .speed(0.01)
+                                        .range(0.0..=10.0),
+                                )
+                                .changed();
+                            ui.label("Stationary accel R");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut replay.ekf_cfg.r_stationary_accel)
+                                        .speed(0.01)
+                                        .range(0.0..=10.0),
+                                )
+                                .changed();
+                            ui.label("Predict decimation");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(
+                                        &mut replay.ekf_cfg.predict_imu_decimation,
+                                    )
+                                    .speed(1)
+                                    .range(1..=32),
+                                )
+                                .changed();
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            let mut lpf_on = replay.ekf_cfg.predict_imu_lpf_cutoff_hz.is_some();
+                            if ui.checkbox(&mut lpf_on, "Predict IMU LPF").changed() {
+                                replay.ekf_cfg.predict_imu_lpf_cutoff_hz = if lpf_on {
+                                    Some(replay.ekf_cfg.predict_imu_lpf_cutoff_hz.unwrap_or(150.0))
+                                } else {
+                                    None
+                                };
+                                replay_changed = true;
+                            }
+                            if let Some(cutoff_hz) =
+                                replay.ekf_cfg.predict_imu_lpf_cutoff_hz.as_mut()
+                            {
+                                replay_changed |= ui
+                                    .add(
+                                        egui::DragValue::new(cutoff_hz)
+                                            .speed(1.0)
+                                            .range(1.0..=500.0),
+                                    )
+                                    .changed();
+                            }
+                            ui.label("Outage count");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut replay.gnss_outages.count)
+                                        .speed(1)
+                                        .range(0..=20),
+                                )
+                                .changed();
+                            ui.label("Outage duration s");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut replay.gnss_outages.duration_s)
+                                        .speed(1.0)
+                                        .range(0.0..=300.0),
+                                )
+                                .changed();
+                            ui.label("Outage seed");
+                            replay_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut replay.gnss_outages.seed)
+                                        .speed(1)
+                                        .range(0..=100000),
+                                )
+                                .changed();
+                        });
+                        ui.horizontal(|ui| {
+                            apply_replay = ui.button("Apply").clicked();
+                            if let Some(status) = &self.replay_status {
+                                ui.label(status);
+                            }
+                        });
+                    });
+            }
             ui.horizontal(|ui| {
                 ui.label("Page:");
                 ui.selectable_value(&mut self.page, Page::Signals, "Signals");
@@ -198,6 +592,12 @@ impl eframe::App for App {
                 ui.selectable_value(&mut self.page, Page::AlignCompare, "Align Compare");
                 ui.selectable_value(&mut self.page, Page::MapDark, "Map (Dark)");
             });
+            if replay_changed {
+                self.replay_status = Some("Pending changes".to_string());
+            }
+            if apply_replay {
+                self.refresh_from_replay();
+            }
         });
 
         let mut imu_gyro: Vec<&Trace> =
@@ -304,7 +704,7 @@ impl eframe::App for App {
                     .show(ctx, |ui| {
                         draw_plot(
                             ui,
-                            "Velocity: ESKF vs u-blox",
+                            "Vehicle Velocity: ESKF vs u-blox",
                             self.data.eskf_cmp_vel.iter(),
                             true,
                             self.max_points_per_trace,
@@ -313,6 +713,13 @@ impl eframe::App for App {
                             ui,
                             "Euler Angles: ESKF Quaternion vs NAV-ATT",
                             self.data.eskf_cmp_att.iter(),
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "ESKF Misalignment Estimates",
+                            self.data.eskf_misalignment.iter(),
                             true,
                             self.max_points_per_trace,
                         );
@@ -432,7 +839,7 @@ impl eframe::App for App {
                     .show(ctx, |ui| {
                         draw_plot(
                             ui,
-                            "Velocity: Loose INS/GNSS vs u-blox",
+                            "Vehicle Velocity: Loose INS/GNSS vs u-blox",
                             self.data.loose_cmp_vel.iter(),
                             true,
                             self.max_points_per_trace,
@@ -441,6 +848,13 @@ impl eframe::App for App {
                             ui,
                             "Euler Angles: Loose INS/GNSS vs NAV-ATT",
                             self.data.loose_cmp_att.iter(),
+                            true,
+                            self.max_points_per_trace,
+                        );
+                        draw_plot(
+                            ui,
+                            "Loose Misalignment Estimates",
+                            self.data.loose_misalignment.iter(),
                             true,
                             self.max_points_per_trace,
                         );
@@ -500,65 +914,76 @@ impl eframe::App for App {
                     .resizable(false)
                     .exact_width(half_width)
                     .show(ctx, |ui| {
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            draw_plot(
+                                ui,
+                                "Euler Angles: Align KF vs ESF-ALG",
+                                self.data.align_cmp_att.iter(),
+                                true,
+                                self.max_points_per_trace,
+                            );
+                            draw_plot(
+                                ui,
+                                "Align Window Diagnostics",
+                                self.data.align_res_vel.iter(),
+                                true,
+                                self.max_points_per_trace,
+                            );
+                            draw_plot(
+                                ui,
+                                "Align Axis Error vs ESF-ALG",
+                                self.data.align_axis_err.iter(),
+                                true,
+                                self.max_points_per_trace,
+                            );
+                            draw_plot(
+                                ui,
+                                "Final ESF-ALG vs PCA Heading",
+                                self.data.align_motion.iter(),
+                                true,
+                                self.max_points_per_trace,
+                            );
+                            draw_plot(
+                                ui,
+                                "Align Window Flags",
+                                self.data.align_flags.iter(),
+                                true,
+                                self.max_points_per_trace,
+                            );
+                        });
+                    });
+
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
                         draw_plot(
                             ui,
-                            "Euler Angles: Align KF vs ESF-ALG",
-                            self.data.align_cmp_att.iter(),
+                            "Align Roll Update Contributions",
+                            self.data.align_roll_contrib.iter(),
                             true,
                             self.max_points_per_trace,
                         );
                         draw_plot(
                             ui,
-                            "Align Window Diagnostics",
-                            self.data.align_res_vel.iter(),
+                            "Align Pitch Update Contributions",
+                            self.data.align_pitch_contrib.iter(),
                             true,
                             self.max_points_per_trace,
                         );
                         draw_plot(
                             ui,
-                            "Align Axis Error vs ESF-ALG",
-                            self.data.align_axis_err.iter(),
+                            "Align Yaw Update Contributions",
+                            self.data.align_yaw_contrib.iter(),
                             true,
                             self.max_points_per_trace,
                         );
                         draw_plot(
                             ui,
-                            "Final ESF-ALG vs PCA Heading",
-                            self.data.align_motion.iter(),
+                            "Align Covariance Diagonal",
+                            self.data.align_cov.iter(),
                             true,
                             self.max_points_per_trace,
                         );
                     });
-
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    draw_plot(
-                        ui,
-                        "Align Roll Update Contributions",
-                        self.data.align_roll_contrib.iter(),
-                        true,
-                        self.max_points_per_trace,
-                    );
-                    draw_plot(
-                        ui,
-                        "Align Pitch Update Contributions",
-                        self.data.align_pitch_contrib.iter(),
-                        true,
-                        self.max_points_per_trace,
-                    );
-                    draw_plot(
-                        ui,
-                        "Align Yaw Update Contributions",
-                        self.data.align_yaw_contrib.iter(),
-                        true,
-                        self.max_points_per_trace,
-                    );
-                    draw_plot(
-                        ui,
-                        "Align Covariance Diagonal",
-                        self.data.align_cov.iter(),
-                        true,
-                        self.max_points_per_trace,
-                    );
                 });
             }
             Page::MapDark => {
@@ -769,7 +1194,7 @@ fn draw_plot<'a, I>(
     ui.vertical(|ui| {
         ui.label(title);
         let mut plot = Plot::new(title)
-            .height(220.0)
+            .height(200.0)
             .link_axis("shared_x", egui::Vec2b::new(true, false))
             .x_axis_formatter(|mark, _range| format!("{:.1}", mark.value))
             .allow_drag(true)
@@ -803,7 +1228,8 @@ fn draw_plot<'a, I>(
     });
 }
 
-pub fn run_visualizer(data: PlotData, has_itow: bool) -> Result<()> {
+#[cfg(not(target_arch = "wasm32"))]
+pub fn run_visualizer(data: PlotData, has_itow: bool, replay: ReplayState) -> Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_maximized(true),
         ..Default::default()
@@ -811,41 +1237,28 @@ pub fn run_visualizer(data: PlotData, has_itow: bool) -> Result<()> {
     eframe::run_native(
         "visualizer",
         native_options,
-        Box::new(move |cc| {
-            let map_center = map_center_from_traces(&data.eskf_map);
-            let map_tiles = if MAPBOX_ACCESS_TOKEN.is_empty() {
-                HttpTiles::new(OpenStreetMap, cc.egui_ctx.clone())
-            } else {
-                HttpTiles::new(
-                    Mapbox {
-                        style: MapboxStyle::Dark,
-                        high_resolution: true,
-                        access_token: MAPBOX_ACCESS_TOKEN.to_string(),
-                    },
-                    cc.egui_ctx.clone(),
-                )
-            };
-            let mut map_memory = MapMemory::default();
-            let _ = map_memory.set_zoom(15.0);
-            Ok(Box::new(App {
-                data,
-                show_egui_inspection: false,
-                show_esf_meas: false,
-                has_itow,
-                fps_ema: 0.0,
-                max_points_per_trace: 2500,
-                page: Page::Signals,
-                map_tiles,
-                map_memory,
-                map_center,
-                show_heading: false,
-                show_nav_pvt: true,
-                show_nav2_pvt: true,
-                show_eskf: true,
-                show_loose: true,
-            }))
-        }),
+        Box::new(move |cc| Ok(Box::new(create_app(cc, data, has_itow, Some(replay))))),
     )
     .map_err(|e| anyhow::anyhow!("eframe error: {e}"))?;
     Ok(())
+}
+
+#[cfg(target_arch = "wasm32")]
+pub async fn run_visualizer_web(
+    canvas: eframe::web_sys::HtmlCanvasElement,
+    data: PlotData,
+    has_itow: bool,
+) -> std::result::Result<(), eframe::wasm_bindgen::JsValue> {
+    eframe::WebRunner::new()
+        .start(
+            canvas,
+            eframe::WebOptions::default(),
+            Box::new(move |cc| Ok(Box::new(create_app(cc, data, has_itow, None)))),
+        )
+        .await
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn run_visualizer(_data: PlotData, _has_itow: bool, _replay: ReplayState) -> Result<()> {
+    anyhow::bail!("run_visualizer is native-only on wasm; use run_visualizer_web instead")
 }

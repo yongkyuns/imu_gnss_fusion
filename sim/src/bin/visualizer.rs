@@ -1,30 +1,79 @@
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
+#[cfg(not(target_arch = "wasm32"))]
 use std::{fs::File, io::Read, path::PathBuf};
 
+#[cfg(not(target_arch = "wasm32"))]
 use anyhow::{Context, Result};
-use clap::Parser;
+#[cfg(not(target_arch = "wasm32"))]
+use clap::{Parser, ValueEnum};
+#[cfg(not(target_arch = "wasm32"))]
 use sim::visualizer::model::EkfImuSource;
+#[cfg(not(target_arch = "wasm32"))]
 use sim::visualizer::pipeline::build_plot_data;
+#[cfg(not(target_arch = "wasm32"))]
 use sim::visualizer::pipeline::ekf_compare::{EkfCompareConfig, GnssOutageConfig};
+#[cfg(not(target_arch = "wasm32"))]
+use sim::visualizer::pipeline::synthetic::{
+    SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_plot_data,
+};
+#[cfg(not(target_arch = "wasm32"))]
 use sim::visualizer::stats::{
     group_stats, max_gap_sec, max_gap_trace, max_step_abs, trace_stats, trace_time_bounds,
     trace_value_bounds,
 };
-use sim::visualizer::ui::run_visualizer;
+#[cfg(not(target_arch = "wasm32"))]
+use sim::visualizer::ui::{ReplayState, run_visualizer};
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Parser, Debug)]
 #[command(name = "visualizer")]
 struct Args {
     #[arg(value_name = "LOGFILE")]
-    logfile: PathBuf,
+    logfile: Option<PathBuf>,
+    #[arg(long, alias = "synthetic-scenario")]
+    synthetic_motion_def: Option<PathBuf>,
+    #[arg(long, value_enum, default_value_t = SyntheticNoiseArg::Truth)]
+    synthetic_noise: SyntheticNoiseArg,
+    #[arg(long, default_value_t = 1)]
+    synthetic_seed: u64,
+    #[arg(long, default_value_t = 5.0)]
+    synthetic_mount_roll_deg: f64,
+    #[arg(long, default_value_t = -5.0)]
+    synthetic_mount_pitch_deg: f64,
+    #[arg(long, default_value_t = 5.0)]
+    synthetic_mount_yaw_deg: f64,
+    #[arg(long, default_value_t = 100.0)]
+    synthetic_imu_hz: f64,
+    #[arg(long, default_value_t = 2.0)]
+    synthetic_gnss_hz: f64,
+    #[arg(long, default_value_t = 0.0)]
+    synthetic_gnss_time_shift_ms: f64,
+    #[arg(long, default_value_t = 0.0)]
+    synthetic_early_vel_bias_n_mps: f64,
+    #[arg(long, default_value_t = 0.0)]
+    synthetic_early_vel_bias_e_mps: f64,
+    #[arg(long, default_value_t = 0.0)]
+    synthetic_early_vel_bias_d_mps: f64,
+    #[arg(long)]
+    synthetic_early_fault_start_s: Option<f64>,
+    #[arg(long)]
+    synthetic_early_fault_end_s: Option<f64>,
     #[arg(long)]
     max_records: Option<usize>,
     #[arg(long)]
     profile_only: bool,
-    #[arg(long, default_value = "align", value_parser = parse_ekf_imu_source)]
-    ekf_imu_source: EkfImuSource,
+    #[arg(
+        long = "misalignment",
+        alias = "ekf-imu-source",
+        default_value = "internal",
+        value_parser = parse_misalignment
+    )]
+    misalignment: EkfImuSource,
     #[arg(long)]
     dump_align_axis_time_s: Option<f64>,
+    #[arg(long)]
+    dump_loose_time_s: Option<f64>,
     #[arg(long, default_value_t = 3.0)]
     dump_window_s: f64,
     #[arg(long, default_value_t = 0)]
@@ -37,41 +86,212 @@ struct Args {
     ekf_predict_imu_decimation: usize,
     #[arg(long)]
     ekf_predict_imu_lpf_cutoff_hz: Option<f64>,
+    #[arg(long)]
+    gnss_pos_r_scale: Option<f64>,
+    #[arg(long)]
+    gnss_vel_r_scale: Option<f64>,
+    #[arg(long)]
+    r_body_vel: Option<f32>,
+    #[arg(long)]
+    gnss_pos_mount_scale: Option<f32>,
+    #[arg(long)]
+    gnss_vel_mount_scale: Option<f32>,
+    #[arg(long)]
+    yaw_init_sigma_deg: Option<f32>,
+    #[arg(long)]
+    gyro_bias_init_sigma_dps: Option<f32>,
+    #[arg(long)]
+    accel_bias_init_sigma_mps2: Option<f32>,
+    #[arg(long)]
+    mount_init_sigma_deg: Option<f32>,
+    #[arg(long)]
+    r_vehicle_speed: Option<f32>,
+    #[arg(long)]
+    r_zero_vel: Option<f32>,
+    #[arg(long)]
+    r_stationary_accel: Option<f32>,
+    #[arg(long)]
+    mount_align_rw_var: Option<f32>,
+    #[arg(long)]
+    mount_update_min_scale: Option<f32>,
+    #[arg(long)]
+    mount_update_ramp_time_s: Option<f32>,
+    #[arg(long)]
+    mount_update_innovation_gate_mps: Option<f32>,
+    #[arg(long)]
+    align_handoff_delay_s: Option<f32>,
+    #[arg(long)]
+    freeze_misalignment_states: bool,
+    #[arg(long)]
+    mount_settle_time_s: Option<f32>,
+    #[arg(long)]
+    mount_settle_release_sigma_deg: Option<f32>,
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    mount_settle_zero_cross_covariance: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum SyntheticNoiseArg {
+    Truth,
+    Low,
+    Mid,
+    High,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl From<SyntheticNoiseArg> for SyntheticNoiseMode {
+    fn from(value: SyntheticNoiseArg) -> Self {
+        match value {
+            SyntheticNoiseArg::Truth => Self::Truth,
+            SyntheticNoiseArg::Low => Self::Low,
+            SyntheticNoiseArg::Mid => Self::Mid,
+            SyntheticNoiseArg::High => Self::High,
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> Result<()> {
     let args = Args::parse();
     let t0 = Instant::now();
-    let mut bytes = Vec::new();
-    File::open(&args.logfile)
-        .with_context(|| format!("failed to open {}", args.logfile.display()))?
-        .read_to_end(&mut bytes)
-        .context("failed to read log")?;
-    let t_read = Instant::now();
-
     let ekf_cfg = EkfCompareConfig {
+        r_body_vel: args
+            .r_body_vel
+            .unwrap_or(EkfCompareConfig::default().r_body_vel),
+        gnss_pos_mount_scale: args
+            .gnss_pos_mount_scale
+            .unwrap_or(EkfCompareConfig::default().gnss_pos_mount_scale),
+        gnss_vel_mount_scale: args
+            .gnss_vel_mount_scale
+            .unwrap_or(EkfCompareConfig::default().gnss_vel_mount_scale),
+        yaw_init_sigma_deg: args
+            .yaw_init_sigma_deg
+            .unwrap_or(EkfCompareConfig::default().yaw_init_sigma_deg),
+        gyro_bias_init_sigma_dps: args
+            .gyro_bias_init_sigma_dps
+            .unwrap_or(EkfCompareConfig::default().gyro_bias_init_sigma_dps),
+        accel_bias_init_sigma_mps2: args
+            .accel_bias_init_sigma_mps2
+            .unwrap_or(EkfCompareConfig::default().accel_bias_init_sigma_mps2),
+        mount_init_sigma_deg: args
+            .mount_init_sigma_deg
+            .unwrap_or(EkfCompareConfig::default().mount_init_sigma_deg),
+        r_vehicle_speed: args
+            .r_vehicle_speed
+            .unwrap_or(EkfCompareConfig::default().r_vehicle_speed),
+        r_zero_vel: args
+            .r_zero_vel
+            .unwrap_or(EkfCompareConfig::default().r_zero_vel),
+        r_stationary_accel: args
+            .r_stationary_accel
+            .unwrap_or(EkfCompareConfig::default().r_stationary_accel),
+        mount_align_rw_var: args
+            .mount_align_rw_var
+            .unwrap_or(EkfCompareConfig::default().mount_align_rw_var),
+        mount_update_min_scale: args
+            .mount_update_min_scale
+            .unwrap_or(EkfCompareConfig::default().mount_update_min_scale),
+        mount_update_ramp_time_s: args
+            .mount_update_ramp_time_s
+            .unwrap_or(EkfCompareConfig::default().mount_update_ramp_time_s),
+        mount_update_innovation_gate_mps: args
+            .mount_update_innovation_gate_mps
+            .unwrap_or(EkfCompareConfig::default().mount_update_innovation_gate_mps),
+        align_handoff_delay_s: args
+            .align_handoff_delay_s
+            .unwrap_or(EkfCompareConfig::default().align_handoff_delay_s),
+        freeze_misalignment_states: args.freeze_misalignment_states,
+        mount_settle_time_s: args
+            .mount_settle_time_s
+            .unwrap_or(EkfCompareConfig::default().mount_settle_time_s),
+        mount_settle_release_sigma_deg: args
+            .mount_settle_release_sigma_deg
+            .unwrap_or(EkfCompareConfig::default().mount_settle_release_sigma_deg),
+        mount_settle_zero_cross_covariance: args.mount_settle_zero_cross_covariance,
+        gnss_pos_r_scale: args
+            .gnss_pos_r_scale
+            .unwrap_or(EkfCompareConfig::default().gnss_pos_r_scale),
         predict_imu_decimation: args.ekf_predict_imu_decimation.max(1),
         predict_imu_lpf_cutoff_hz: args.ekf_predict_imu_lpf_cutoff_hz,
+        gnss_vel_r_scale: args
+            .gnss_vel_r_scale
+            .unwrap_or(EkfCompareConfig::default().gnss_vel_r_scale),
         ..EkfCompareConfig::default()
     };
 
-    let (data, has_itow) = build_plot_data(
-        &bytes,
-        args.max_records,
-        args.ekf_imu_source,
-        ekf_cfg,
-        GnssOutageConfig {
-            count: args.gnss_outage_count,
-            duration_s: args.gnss_outage_duration_s,
-            seed: args.gnss_outage_seed,
-        },
-    );
+    let gnss_outages = GnssOutageConfig {
+        count: args.gnss_outage_count,
+        duration_s: args.gnss_outage_duration_s,
+        seed: args.gnss_outage_seed,
+    };
+    let mut replay_bytes = Vec::new();
+    let mut synthetic_replay = None::<SyntheticVisualizerConfig>;
+    let (data, has_itow, input_label, input_bytes, t_read) = if let Some(motion_def) =
+        args.synthetic_motion_def.clone()
+    {
+        let synth_cfg = SyntheticVisualizerConfig {
+            motion_def: motion_def.clone(),
+            noise_mode: args.synthetic_noise.into(),
+            seed: args.synthetic_seed,
+            mount_rpy_deg: [
+                args.synthetic_mount_roll_deg,
+                args.synthetic_mount_pitch_deg,
+                args.synthetic_mount_yaw_deg,
+            ],
+            imu_hz: args.synthetic_imu_hz,
+            gnss_hz: args.synthetic_gnss_hz,
+            gnss_time_shift_ms: args.synthetic_gnss_time_shift_ms,
+            early_vel_bias_ned_mps: [
+                args.synthetic_early_vel_bias_n_mps,
+                args.synthetic_early_vel_bias_e_mps,
+                args.synthetic_early_vel_bias_d_mps,
+            ],
+            early_fault_window_s: args
+                .synthetic_early_fault_start_s
+                .zip(args.synthetic_early_fault_end_s),
+        };
+        let data = build_synthetic_plot_data(&synth_cfg, args.misalignment, ekf_cfg, gnss_outages)?;
+        synthetic_replay = Some(synth_cfg);
+        (
+            data,
+            false,
+            format!("synthetic:{}", motion_def.display()),
+            0usize,
+            Instant::now(),
+        )
+    } else {
+        let logfile = args.logfile.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("LOGFILE is required unless --synthetic-motion-def is set")
+        })?;
+        File::open(logfile)
+            .with_context(|| format!("failed to open {}", logfile.display()))?
+            .read_to_end(&mut replay_bytes)
+            .context("failed to read log")?;
+        let t_read = Instant::now();
+        let input_bytes = replay_bytes.len();
+        let (data, has_itow) = build_plot_data(
+            &replay_bytes,
+            args.max_records,
+            args.misalignment,
+            ekf_cfg,
+            gnss_outages,
+        );
+        (
+            data,
+            has_itow,
+            logfile.display().to_string(),
+            input_bytes,
+            t_read,
+        )
+    };
     let t_build = Instant::now();
     let (n_traces, n_points) = trace_stats(&data);
     let (tmin, tmax) = trace_time_bounds(&data).unwrap_or((f64::NAN, f64::NAN));
     eprintln!(
-        "[profile] bytes={} read={:.3}s build={:.3}s total_pre_ui={:.3}s traces={} points={} t_range=[{:.3}, {:.3}]s",
-        bytes.len(),
+        "[profile] input={} bytes={} read={:.3}s build={:.3}s total_pre_ui={:.3}s traces={} points={} t_range=[{:.3}, {:.3}]s",
+        input_label,
+        input_bytes,
         (t_read - t0).as_secs_f64(),
         (t_build - t_read).as_secs_f64(),
         (t_build - t0).as_secs_f64(),
@@ -81,12 +301,32 @@ fn main() -> Result<()> {
         tmax
     );
     eprintln!(
-        "[profile] ekf-only predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={}",
+        "[profile] ekf-only misalignment={:?} predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} gnss_pos_r_scale={:.3} gnss_vel_r_scale={:.3} r_body_vel={:.3} gnss_pos_mount_scale={:.3} gnss_vel_mount_scale={:.3} yaw_init_sigma_deg={:.3} gyro_bias_init_sigma_dps={:.3} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} mount_update_min_scale={:.3} mount_update_ramp_time_s={:.3} mount_update_innovation_gate_mps={:.3} align_handoff_delay_s={:.3} freeze_misalignment_states={} mount_settle_time_s={:.3} mount_settle_release_sigma_deg={:.3} mount_settle_zero_cross_covariance={}",
+        args.misalignment,
         ekf_cfg.predict_imu_decimation,
         ekf_cfg
             .predict_imu_lpf_cutoff_hz
             .map(|v| format!("{v:.3}"))
-            .unwrap_or_else(|| "off".to_string())
+            .unwrap_or_else(|| "off".to_string()),
+        ekf_cfg.gnss_pos_r_scale,
+        ekf_cfg.gnss_vel_r_scale,
+        ekf_cfg.r_body_vel,
+        ekf_cfg.gnss_pos_mount_scale,
+        ekf_cfg.gnss_vel_mount_scale,
+        ekf_cfg.yaw_init_sigma_deg,
+        ekf_cfg.gyro_bias_init_sigma_dps,
+        ekf_cfg.r_vehicle_speed,
+        ekf_cfg.r_zero_vel,
+        ekf_cfg.r_stationary_accel,
+        ekf_cfg.mount_align_rw_var,
+        ekf_cfg.mount_update_min_scale,
+        ekf_cfg.mount_update_ramp_time_s,
+        ekf_cfg.mount_update_innovation_gate_mps,
+        ekf_cfg.align_handoff_delay_s,
+        ekf_cfg.freeze_misalignment_states,
+        ekf_cfg.mount_settle_time_s,
+        ekf_cfg.mount_settle_release_sigma_deg,
+        ekf_cfg.mount_settle_zero_cross_covariance,
     );
     for (name, nt, np) in [
         group_stats("speed", &data.speed),
@@ -108,6 +348,7 @@ fn main() -> Result<()> {
         group_stats("eskf_bias_accel", &data.eskf_bias_accel),
         group_stats("eskf_cov_bias", &data.eskf_cov_bias),
         group_stats("eskf_cov_nonbias", &data.eskf_cov_nonbias),
+        group_stats("eskf_misalignment", &data.eskf_misalignment),
         group_stats("eskf_stationary_diag", &data.eskf_stationary_diag),
         group_stats("eskf_bump_pitch_speed", &data.eskf_bump_pitch_speed),
         group_stats("eskf_bump_diag", &data.eskf_bump_diag),
@@ -153,6 +394,7 @@ fn main() -> Result<()> {
         ("align_motion", &data.align_motion),
         ("eskf_meas_gyro", &data.eskf_meas_gyro),
         ("eskf_meas_accel", &data.eskf_meas_accel),
+        ("eskf_misalignment", &data.eskf_misalignment),
         ("eskf_bump_pitch_speed", &data.eskf_bump_pitch_speed),
         ("eskf_bump_diag", &data.eskf_bump_diag),
         ("loose_meas_gyro", &data.loose_meas_gyro),
@@ -194,23 +436,71 @@ fn main() -> Result<()> {
             args.dump_window_s,
         );
     }
+    if let Some(t_s) = args.dump_loose_time_s {
+        dump_traces_near_time(
+            "loose_cmp_vel",
+            &data.loose_cmp_vel,
+            t_s,
+            args.dump_window_s,
+        );
+        dump_traces_near_time(
+            "loose_cmp_att",
+            &data.loose_cmp_att,
+            t_s,
+            args.dump_window_s,
+        );
+        dump_traces_near_time(
+            "loose_misalignment",
+            &data.loose_misalignment,
+            t_s,
+            args.dump_window_s,
+        );
+        dump_traces_near_time(
+            "eskf_misalignment",
+            &data.eskf_misalignment,
+            t_s,
+            args.dump_window_s,
+        );
+        dump_traces_near_time(
+            "eskf_stationary_diag",
+            &data.eskf_stationary_diag,
+            t_s,
+            args.dump_window_s,
+        );
+        dump_traces_near_time(
+            "loose_bias_accel",
+            &data.loose_bias_accel,
+            t_s,
+            args.dump_window_s,
+        );
+    }
     if args.profile_only {
         return Ok(());
     }
 
-    run_visualizer(data, has_itow)
+    run_visualizer(
+        data,
+        has_itow,
+        ReplayState {
+            bytes: replay_bytes,
+            synthetic: synthetic_replay,
+            max_records: args.max_records,
+            misalignment: args.misalignment,
+            ekf_cfg,
+            gnss_outages,
+        },
+    )
 }
 
-fn parse_ekf_imu_source(s: &str) -> Result<EkfImuSource, String> {
-    match s.to_ascii_lowercase().as_str() {
-        "align" => Ok(EkfImuSource::Align),
-        "esf-alg" | "esf_alg" | "alg" => Ok(EkfImuSource::EsfAlg),
-        _ => Err(format!(
-            "invalid ekf IMU source '{s}', expected 'align' or 'esf-alg'"
-        )),
-    }
+#[cfg(target_arch = "wasm32")]
+fn main() {}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_misalignment(s: &str) -> Result<EkfImuSource, String> {
+    EkfImuSource::from_cli_value(s)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn dump_traces_near_time(
     group: &str,
     traces: &[sim::visualizer::model::Trace],

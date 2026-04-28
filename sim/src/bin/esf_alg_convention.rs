@@ -186,10 +186,11 @@ fn load_dataset(logfile: &PathBuf) -> Result<Dataset> {
                     q_raw: quat_from_rpy_deg(roll, pitch, yaw),
                 });
             }
-            if let Some(obs) = extract_nav2_pvt_obs(frame) {
-                if obs.fix_ok && !obs.invalid_llh {
-                    nav_events.push((t_ms, obs));
-                }
+            if let Some(obs) = extract_nav2_pvt_obs(frame)
+                && obs.fix_ok
+                && !obs.invalid_llh
+            {
+                nav_events.push((t_ms, obs));
             }
         }
     }
@@ -539,11 +540,7 @@ struct MasterTimeline {
 
 impl MasterTimeline {
     fn map_tag_ms(&self, a_raw: f64, b_raw: f64, raw_tag: f64, seq: u64) -> Option<f64> {
-        if let Some(t) = nearest_master_ms(seq, &self.masters) {
-            Some(t + (a_raw * raw_tag + b_raw - t))
-        } else {
-            None
-        }
+        nearest_master_ms(seq, &self.masters).map(|t| t + (a_raw * raw_tag + b_raw - t))
     }
 }
 

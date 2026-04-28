@@ -12,23 +12,12 @@ clap = { version = "4.5", features = ["derive"] }
 eframe = "0.33.3"
 egui = "0.33.3"
 egui_plot = "0.34.1"
-sensor-fusion = { path = "../ekf" }
+sensor-fusion = { path = "../ekf", default-features = false }
 nalgebra = { version = "0.33", default-features = false, features = ["std"] }
-polars = { version = "0.52", features = ["parquet"] }
+rand = "0.9"
+rayon = "1.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serialport = "4.8.1"
 ublox = { path = "../ublox", features = ["std", "ubx_proto23", "ubx_proto27", "ubx_proto31"] }
 walkers = "0.52.0"
-
-[[bin]]
-name = "visualizer"
-path = "src/bin/visualizer.rs"
-
-[[bin]]
-name = "run_loose_nsr"
-path = "src/bin/run_loose_nsr.rs"
-
-[[bin]]
-name = "compare_filter_runtime"
-path = "src/bin/compare_filter_runtime.rs"

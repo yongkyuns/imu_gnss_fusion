@@ -43,7 +43,8 @@ struct GoldenObsRow {
 
 #[test]
 fn loose_short_fixture_matches_golden_observation_sequence_and_checkpoints() {
-    let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/loose_nsr_short");
+    let fixture_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/loose_nsr_short");
     let scratch_dir = std::env::temp_dir().join(format!("loose_parity_{}", std::process::id()));
     let _ = fs::remove_dir_all(&scratch_dir);
     fs::create_dir_all(&scratch_dir).expect("create scratch dir");
@@ -63,14 +64,21 @@ fn loose_short_fixture_matches_golden_observation_sequence_and_checkpoints() {
         .arg("25")
         .status()
         .expect("run_loose_nsr");
-    assert!(status.success(), "run_loose_nsr failed with status {status}");
+    assert!(
+        status.success(),
+        "run_loose_nsr failed with status {status}"
+    );
 
     let output: ReplayOutput = load_json(&out_json);
     let diag: Vec<DiagRow> = load_json(&diag_json);
     let golden: GoldenSummary = load_json(&fixture_dir.join("golden_summary.json"));
 
     assert_eq!(output.time_s.len(), golden.sample_count, "sample count");
-    assert_eq!(diag.len(), golden.applied_observations.len(), "diag row count");
+    assert_eq!(
+        diag.len(),
+        golden.applied_observations.len(),
+        "diag row count"
+    );
 
     for (actual, expected) in diag.iter().zip(&golden.applied_observations) {
         assert!(
@@ -127,8 +135,10 @@ fn loose_short_fixture_matches_golden_observation_sequence_and_checkpoints() {
 }
 
 fn load_json<T: for<'de> Deserialize<'de>>(path: &Path) -> T {
-    serde_json::from_slice(&fs::read(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display())))
-        .unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
+    serde_json::from_slice(
+        &fs::read(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display())),
+    )
+    .unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
 }
 
 fn run_loose_nsr_path() -> PathBuf {

@@ -1,11 +1,9 @@
-use sensor_fusion::align::AlignConfig;
-
 use crate::ubxlog::{UbxFrame, extract_esf_alg};
 
+use super::super::model::EkfImuSource;
 use super::align_replay::{
-    BootstrapConfig as ReplayBootstrapConfig, ImuReplayConfig, build_align_replay,
-    frd_mount_quat_to_esf_alg_flu_quat, quat_rotate, quat_rpy_alg_deg,
-    signed_projected_axis_angle_deg,
+    ImuReplayConfig, axis_angle_deg, build_fusion_align_replay, frd_mount_quat_to_esf_alg_flu_quat,
+    quat_rotate, quat_rpy_alg_deg,
 };
 
 use super::super::math::nearest_master_ms;
@@ -17,6 +15,7 @@ pub struct AlignCompareData {
     pub res_vel: Vec<Trace>,
     pub axis_err: Vec<Trace>,
     pub motion: Vec<Trace>,
+    pub flags: Vec<Trace>,
     pub roll_contrib: Vec<Trace>,
     pub pitch_contrib: Vec<Trace>,
     pub yaw_contrib: Vec<Trace>,
@@ -26,6 +25,7 @@ pub struct AlignCompareData {
 pub fn build_align_compare_traces(
     frames: &[UbxFrame],
     tl: &MasterTimeline,
+    imu_source: EkfImuSource,
     imu_cfg: ImuReplayConfig,
 ) -> AlignCompareData {
     if tl.masters.is_empty() {
@@ -34,6 +34,7 @@ pub fn build_align_compare_traces(
             res_vel: Vec::new(),
             axis_err: Vec::new(),
             motion: Vec::new(),
+            flags: Vec::new(),
             roll_contrib: Vec::new(),
             pitch_contrib: Vec::new(),
             yaw_contrib: Vec::new(),
@@ -41,15 +42,7 @@ pub fn build_align_compare_traces(
         };
     }
     let rel_s = |master_ms: f64| (master_ms - tl.t0_master_ms) * 1e-3;
-    let cfg = AlignConfig::default();
-    let bootstrap_cfg = ReplayBootstrapConfig {
-        ema_alpha: 0.05,
-        max_speed_mps: 0.35,
-        stationary_samples: 300,
-        max_gyro_radps: cfg.max_stationary_gyro_radps,
-        max_accel_norm_err_mps2: cfg.max_stationary_accel_norm_err_mps2,
-    };
-    let replay = build_align_replay(frames, tl, cfg, bootstrap_cfg, imu_cfg);
+    let replay = build_fusion_align_replay(frames, tl, imu_source, imu_cfg);
     let final_alg_q = replay.final_alg_q;
 
     let mut out_roll = Vec::<[f64; 2]>::new();
@@ -65,6 +58,21 @@ pub fn build_align_compare_traces(
     let mut down_err = Vec::<[f64; 2]>::new();
     let mut yaw_init = Vec::<[f64; 2]>::new();
     let mut final_alg_heading = Vec::<[f64; 2]>::new();
+    let mut stationary_trace = Vec::<[f64; 2]>::new();
+    let mut gravity_applied_trace = Vec::<[f64; 2]>::new();
+    let mut gravity_quasi_static_trace = Vec::<[f64; 2]>::new();
+    let mut turn_core_trace = Vec::<[f64; 2]>::new();
+    let mut straight_core_trace = Vec::<[f64; 2]>::new();
+    let mount_ready_markers: Vec<[f64; 2]> = replay
+        .mount_ready_times_s
+        .iter()
+        .map(|&t| [t, 1.0])
+        .collect();
+    let ekf_initialized_markers: Vec<[f64; 2]> = replay
+        .ekf_initialized_times_s
+        .iter()
+        .map(|&t| [t, 2.0])
+        .collect();
     let mut roll_horiz = Vec::<[f64; 2]>::new();
     let mut roll_turn_gyro = Vec::<[f64; 2]>::new();
     let mut roll_lat = Vec::<[f64; 2]>::new();
@@ -93,6 +101,32 @@ pub fn build_align_compare_traces(
         diag_course.push([t, sample.course_rate_dps]);
         diag_lat.push([t, sample.a_lat_mps2]);
         diag_long.push([t, sample.a_long_mps2]);
+        stationary_trace.push([t, if sample.stationary { 1.0 } else { 0.0 }]);
+        gravity_applied_trace.push([t, if sample.upd_gravity { 1.0 } else { 0.0 }]);
+        gravity_quasi_static_trace.push([
+            t,
+            if sample.upd_gravity_quasi_static {
+                1.0
+            } else {
+                0.0
+            },
+        ]);
+        turn_core_trace.push([
+            t,
+            if sample.horiz_trace.turn_core_valid {
+                1.0
+            } else {
+                0.0
+            },
+        ]);
+        straight_core_trace.push([
+            t,
+            if sample.horiz_trace.straight_core_valid {
+                1.0
+            } else {
+                0.0
+            },
+        ]);
         if let Some(yaw_deg) = final_alg_heading_deg {
             final_alg_heading.push([t, yaw_deg]);
         }
@@ -113,15 +147,11 @@ pub fn build_align_compare_traces(
             if let Some(q_ref_final) = final_alg_q {
                 let ref_fwd = quat_rotate(q_ref_final, [1.0, 0.0, 0.0]);
                 let ref_down = quat_rotate(q_ref_final, [0.0, 0.0, 1.0]);
-                let ref_right = quat_rotate(q_ref_final, [0.0, 1.0, 0.0]);
-                let fwd_signed = signed_projected_axis_angle_deg(align_fwd, ref_fwd, ref_down);
-                fwd_err.push([t, fwd_signed]);
-                down_err.push([
-                    t,
-                    signed_projected_axis_angle_deg(align_down, ref_down, ref_right),
-                ]);
+                let fwd_unsigned = axis_angle_deg(align_fwd, ref_fwd);
+                fwd_err.push([t, fwd_unsigned]);
+                down_err.push([t, axis_angle_deg(align_down, ref_down)]);
                 if sample.yaw_initialized {
-                    yaw_init.push([t, fwd_signed]);
+                    yaw_init.push([t, fwd_unsigned]);
                 }
             }
         }
@@ -194,10 +224,42 @@ pub fn build_align_compare_traces(
                 points: yaw_init,
             },
         ],
-        motion: vec![Trace {
-            name: "final ESF-ALG heading [deg]".to_string(),
-            points: final_alg_heading,
-        }],
+        motion: vec![
+            Trace {
+                name: "final ESF-ALG heading [deg]".to_string(),
+                points: final_alg_heading,
+            },
+            Trace {
+                name: "mount ready".to_string(),
+                points: mount_ready_markers,
+            },
+            Trace {
+                name: "EKF initialized".to_string(),
+                points: ekf_initialized_markers,
+            },
+        ],
+        flags: vec![
+            Trace {
+                name: "stationary".to_string(),
+                points: stationary_trace,
+            },
+            Trace {
+                name: "gravity applied".to_string(),
+                points: gravity_applied_trace,
+            },
+            Trace {
+                name: "gravity quasi-static".to_string(),
+                points: gravity_quasi_static_trace,
+            },
+            Trace {
+                name: "turn core valid".to_string(),
+                points: turn_core_trace,
+            },
+            Trace {
+                name: "straight core valid".to_string(),
+                points: straight_core_trace,
+            },
+        ],
         roll_contrib: vec![
             Trace {
                 name: "horiz accel".to_string(),

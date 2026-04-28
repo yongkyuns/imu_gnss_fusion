@@ -1,3 +1,5 @@
+use sensor_fusion::fusion::EskfMountSource;
+
 #[derive(Clone, Default)]
 pub struct Trace {
     pub name: String,
@@ -25,6 +27,7 @@ pub struct PlotData {
     pub eskf_bias_accel: Vec<Trace>,
     pub eskf_cov_bias: Vec<Trace>,
     pub eskf_cov_nonbias: Vec<Trace>,
+    pub eskf_misalignment: Vec<Trace>,
     pub eskf_stationary_diag: Vec<Trace>,
     pub eskf_bump_pitch_speed: Vec<Trace>,
     pub eskf_bump_diag: Vec<Trace>,
@@ -33,6 +36,9 @@ pub struct PlotData {
     pub loose_cmp_pos: Vec<Trace>,
     pub loose_cmp_vel: Vec<Trace>,
     pub loose_cmp_att: Vec<Trace>,
+    pub loose_nominal_att: Vec<Trace>,
+    pub loose_residual_mount: Vec<Trace>,
+    pub loose_misalignment: Vec<Trace>,
     pub loose_meas_gyro: Vec<Trace>,
     pub loose_meas_accel: Vec<Trace>,
     pub loose_bias_gyro: Vec<Trace>,
@@ -47,6 +53,7 @@ pub struct PlotData {
     pub align_res_vel: Vec<Trace>,
     pub align_axis_err: Vec<Trace>,
     pub align_motion: Vec<Trace>,
+    pub align_flags: Vec<Trace>,
     pub align_roll_contrib: Vec<Trace>,
     pub align_pitch_contrib: Vec<Trace>,
     pub align_yaw_contrib: Vec<Trace>,
@@ -56,8 +63,41 @@ pub struct PlotData {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum EkfImuSource {
     #[default]
-    Align,
-    EsfAlg,
+    Internal,
+    External,
+    Ref,
+}
+
+impl EkfImuSource {
+    pub fn from_cli_value(s: &str) -> Result<Self, String> {
+        match s.to_ascii_lowercase().as_str() {
+            "internal" | "auto" | "align" | "align-seed" | "seed" => Ok(Self::Internal),
+            "external" | "follow-align" | "continuous-align" | "align-external" => {
+                Ok(Self::External)
+            }
+            "ref" | "reference" | "manual" | "esf-alg" | "esf_alg" | "esfalg" | "alg" => {
+                Ok(Self::Ref)
+            }
+            _ => Err(format!(
+                "invalid misalignment '{s}', expected 'ref', 'external', or 'internal'"
+            )),
+        }
+    }
+
+    pub fn uses_ref_mount(self) -> bool {
+        matches!(self, Self::Ref)
+    }
+
+    pub fn uses_align_mount(self) -> bool {
+        matches!(self, Self::Internal | Self::External)
+    }
+
+    pub fn eskf_mount_source(self) -> EskfMountSource {
+        match self {
+            Self::External => EskfMountSource::FollowAlign,
+            Self::Internal | Self::Ref => EskfMountSource::LatchedSeed,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Default)]

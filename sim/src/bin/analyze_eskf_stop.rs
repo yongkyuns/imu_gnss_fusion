@@ -28,8 +28,8 @@ struct Args {
     #[arg(long, default_value_t = 44)]
     gnss_outage_seed: u64,
 
-    #[arg(long, default_value = "esf-alg")]
-    ekf_imu_source: String,
+    #[arg(long = "misalignment", alias = "ekf-imu-source", default_value = "ref")]
+    misalignment: String,
 
     #[arg(long, default_value_t = 1)]
     ekf_predict_imu_decimation: usize,
@@ -66,11 +66,8 @@ fn main() -> Result<()> {
     let args = Args::parse();
     let data = fs::read(&args.logfile)
         .with_context(|| format!("failed to read {}", args.logfile.display()))?;
-    let ekf_imu_source = match args.ekf_imu_source.as_str() {
-        "align" => EkfImuSource::Align,
-        "esf-alg" => EkfImuSource::EsfAlg,
-        other => anyhow::bail!("unsupported --ekf-imu-source: {other}"),
-    };
+    let ekf_imu_source =
+        EkfImuSource::from_cli_value(&args.misalignment).map_err(anyhow::Error::msg)?;
     let _ = parse_ubx_frames(&data, None);
     let predict_noise = if args.gyro_var.is_some()
         || args.accel_var.is_some()
@@ -127,26 +124,26 @@ fn main() -> Result<()> {
     let w1 = args.window_end_s;
 
     print_trace_stats(
-        "ESKF velN [m/s]",
-        find_trace(&plot.eskf_cmp_vel, "ESKF velN [m/s]"),
+        "ESKF forward vel [m/s]",
+        find_trace(&plot.eskf_cmp_vel, "ESKF forward vel [m/s]"),
         w0,
         w1,
     );
     print_trace_stats(
-        "ESKF velE [m/s]",
-        find_trace(&plot.eskf_cmp_vel, "ESKF velE [m/s]"),
+        "ESKF lateral vel [m/s]",
+        find_trace(&plot.eskf_cmp_vel, "ESKF lateral vel [m/s]"),
         w0,
         w1,
     );
     print_trace_stats(
-        "UBX velN [m/s]",
-        find_trace(&plot.eskf_cmp_vel, "UBX velN [m/s]"),
+        "u-blox forward vel [m/s]",
+        find_trace(&plot.eskf_cmp_vel, "u-blox forward vel [m/s]"),
         w0,
         w1,
     );
     print_trace_stats(
-        "UBX velE [m/s]",
-        find_trace(&plot.eskf_cmp_vel, "UBX velE [m/s]"),
+        "u-blox lateral vel [m/s]",
+        find_trace(&plot.eskf_cmp_vel, "u-blox lateral vel [m/s]"),
         w0,
         w1,
     );
@@ -228,8 +225,8 @@ fn main() -> Result<()> {
     );
     print_body_velocity_stats(
         "ESKF body vel x [m/s]",
-        find_trace(&plot.eskf_cmp_vel, "ESKF velN [m/s]"),
-        find_trace(&plot.eskf_cmp_vel, "ESKF velE [m/s]"),
+        find_trace(&plot.eskf_cmp_vel, "ESKF forward vel [m/s]"),
+        find_trace(&plot.eskf_cmp_vel, "ESKF lateral vel [m/s]"),
         find_trace(&plot.eskf_cmp_att, "ESKF yaw [deg]"),
         w0,
         w1,
@@ -237,8 +234,8 @@ fn main() -> Result<()> {
     );
     print_body_velocity_stats(
         "ESKF body vel y [m/s]",
-        find_trace(&plot.eskf_cmp_vel, "ESKF velN [m/s]"),
-        find_trace(&plot.eskf_cmp_vel, "ESKF velE [m/s]"),
+        find_trace(&plot.eskf_cmp_vel, "ESKF forward vel [m/s]"),
+        find_trace(&plot.eskf_cmp_vel, "ESKF lateral vel [m/s]"),
         find_trace(&plot.eskf_cmp_att, "ESKF yaw [deg]"),
         w0,
         w1,

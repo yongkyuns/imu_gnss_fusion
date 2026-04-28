@@ -1,13 +1,19 @@
+import argparse
+import csv
+import math
 import sys
 from pathlib import Path
 
+import numpy as np
 from sympy import Matrix, Symbol, cse, symbols
 
-from code_gen import CodeGenerator
+from code_gen import RustCodeGenerator
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-GENERATED_C_DIR = SCRIPT_DIR / "c" / "generated_loose"
+GENERATED_RUST_DIR = SCRIPT_DIR / "src" / "generated_loose"
+DEFAULT_OAN_ROOT = Path("/Users/ykshin/Dev/me/open-aided-navigation")
+DEFAULT_SYNTH_CASE = DEFAULT_OAN_ROOT / "data" / "sim" / "generated_city_drive_case_5deg_15min"
 
 WGS84_OMEGA_IE = 7.292115e-5
 
@@ -115,20 +121,10 @@ def create_reference_nhc_rows():
     return v_c, h[1, :], h[2, :]
 
 
-def write_matrix(path: Path, exprs, var_name: str):
-    subexprs, reduced = cse(exprs, symbols(f"tmp_{var_name}_0:2000"), optimizations="basic")
-    gen = CodeGenerator(str(path))
-    gen.print_string("Sub Expressions")
-    gen.write_subexpressions(subexprs)
-    gen.print_string(var_name)
-    gen.write_matrix(Matrix(reduced), var_name)
-    gen.close()
-
-
-def write_nhc_row(path: Path, est_expr, h_row: Matrix, prefix: str):
+def write_rust_nhc_row(path: Path, est_expr, h_row: Matrix, prefix: str):
     flat_values = Matrix([est_expr] + [h_row[i] for i in range(h_row.shape[1])])
     subexprs, reduced = cse(flat_values, symbols(f"{prefix}_0:2000"), optimizations="basic")
-    gen = CodeGenerator(str(path))
+    gen = RustCodeGenerator(str(path))
     gen.print_string("Sub Expressions")
     gen.write_subexpressions(subexprs)
     values = reduced
@@ -141,28 +137,237 @@ def write_nhc_row(path: Path, est_expr, h_row: Matrix, prefix: str):
     gen.close()
 
 
-def emit_reference_c():
-    GENERATED_C_DIR.mkdir(parents=True, exist_ok=True)
+def emit_reference_rust():
+    GENERATED_RUST_DIR.mkdir(parents=True, exist_ok=True)
     phi, g = create_reference_transition_and_noise()
     v_c, h_y, h_z = create_reference_nhc_rows()
 
-    write_matrix(GENERATED_C_DIR / "reference_error_transition_generated.c", phi, "F")
-    write_matrix(GENERATED_C_DIR / "reference_error_noise_input_generated.c", g, "G")
-    write_nhc_row(GENERATED_C_DIR / "reference_nhc_y_generated.c", v_c[1], h_y, "tmp_nhc_y")
-    write_nhc_row(GENERATED_C_DIR / "reference_nhc_z_generated.c", v_c[2], h_z, "tmp_nhc_z")
+    gen = RustCodeGenerator(str(GENERATED_RUST_DIR / "reference_error_transition_generated.rs"))
+    gen.print_string("Sub Expressions")
+    subexprs, reduced = cse(phi, symbols("tmp_F_0:2000"), optimizations="basic")
+    gen.write_subexpressions(subexprs)
+    gen.print_string("F")
+    gen.write_matrix(Matrix(reduced), "F")
+    gen.close()
+
+    gen = RustCodeGenerator(str(GENERATED_RUST_DIR / "reference_error_noise_input_generated.rs"))
+    gen.print_string("Sub Expressions")
+    subexprs, reduced = cse(g, symbols("tmp_G_0:2000"), optimizations="basic")
+    gen.write_subexpressions(subexprs)
+    gen.print_string("G")
+    gen.write_matrix(Matrix(reduced), "G")
+    gen.close()
+
+    write_rust_nhc_row(GENERATED_RUST_DIR / "reference_nhc_y_generated.rs", v_c[1], h_y, "tmp_nhc_y")
+    write_rust_nhc_row(GENERATED_RUST_DIR / "reference_nhc_z_generated.rs", v_c[2], h_z, "tmp_nhc_z")
+
+
+def _ensure_oan_imports(oan_root: Path):
+    oan_str = str(oan_root)
+    if oan_str not in sys.path:
+        sys.path.insert(0, oan_str)
+    from open_aided_navigation.constants import IMU_TIMEOUT_US, WGS84
+    from open_aided_navigation.demos.ins_gnss_loose import run_ins_gnss_loose
+    from open_aided_navigation.enums import EventType, FilterMode
+    from open_aided_navigation.filters import InsGnssFilterLoose, InsGnssLooseMeasDb, nav_filter_routine
+    from open_aided_navigation.geo import dcm_ecef_to_ned, ecef_to_llh, llh_to_ecef, quat_ecef_to_ned
+    from open_aided_navigation.io import import_gnss_data, import_imu_data
+    from open_aided_navigation.math_utils import euler_to_quat, quat_conjugate, quat_mult, quat_to_euler
+    from open_aided_navigation.models import ErrorStateMapInsGnssLoose, ParamsInsGnssFilterLoose, StateMapInsGnssLoose
+
+    return {
+        "IMU_TIMEOUT_US": IMU_TIMEOUT_US,
+        "WGS84": WGS84,
+        "run_ins_gnss_loose": run_ins_gnss_loose,
+        "EventType": EventType,
+        "FilterMode": FilterMode,
+        "InsGnssFilterLoose": InsGnssFilterLoose,
+        "InsGnssLooseMeasDb": InsGnssLooseMeasDb,
+        "nav_filter_routine": nav_filter_routine,
+        "dcm_ecef_to_ned": dcm_ecef_to_ned,
+        "ecef_to_llh": ecef_to_llh,
+        "llh_to_ecef": llh_to_ecef,
+        "quat_ecef_to_ned": quat_ecef_to_ned,
+        "import_gnss_data": import_gnss_data,
+        "import_imu_data": import_imu_data,
+        "euler_to_quat": euler_to_quat,
+        "quat_conjugate": quat_conjugate,
+        "quat_mult": quat_mult,
+        "quat_to_euler": quat_to_euler,
+        "ErrorStateMapInsGnssLoose": ErrorStateMapInsGnssLoose,
+        "ParamsInsGnssFilterLoose": ParamsInsGnssFilterLoose,
+        "StateMapInsGnssLoose": StateMapInsGnssLoose,
+    }
+
+
+def _load_gnss_velocity_map(input_dir: Path) -> dict[int, tuple[np.ndarray, np.ndarray]]:
+    path = input_dir / "gnss_velocity_meas.csv"
+    if not path.is_file():
+        return {}
+    out: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+    with path.open("r", encoding="utf-8") as handle:
+        reader = csv.reader(handle, delimiter=";")
+        next(reader, None)
+        for row in reader:
+            clean = [cell.strip() for cell in row if cell.strip()]
+            if not clean:
+                continue
+            out[int(round(float(clean[0])))] = (
+                np.array([float(clean[1]), float(clean[2]), float(clean[3])], dtype=float),
+                np.array([float(clean[4]), float(clean[5]), float(clean[6])], dtype=float),
+            )
+    return out
+
+
+def _attach_gnss_velocity(gnss_data, velocity_map: dict[int, tuple[np.ndarray, np.ndarray]]) -> None:
+    for sample in gnss_data:
+        velocity = velocity_map.get(sample.ttag)
+        if velocity is None:
+            continue
+        sample.vel_valid = True
+        sample.v_n = velocity[0].copy()
+        sample.v_acc_n = velocity[1].copy()
+
+
+def _build_initialized_python_filter(input_dir: Path, oan_root: Path):
+    mods = _ensure_oan_imports(oan_root)
+    gyro_data, accel_data = mods["import_imu_data"](input_dir)
+    gnss_data = mods["import_gnss_data"](input_dir)
+    _attach_gnss_velocity(gnss_data, _load_gnss_velocity_map(input_dir))
+    EventType = mods["EventType"]
+    nav_filter = mods["InsGnssFilterLoose"]()
+    meas_db = mods["InsGnssLooseMeasDb"](64)
+    events = (
+        [(sample.ttag, EventType.GYRO_DATA, index) for index, sample in enumerate(gyro_data)]
+        + [(sample.ttag, EventType.ACCEL_DATA, index) for index, sample in enumerate(accel_data)]
+        + [(sample.ttag, EventType.GNSS_DATA, index) for index, sample in enumerate(gnss_data)]
+    )
+    events.sort(key=lambda item: item[0])
+    for event_idx, (_, event_type, sample_index) in enumerate(events):
+        prev_mode = int(nav_filter.mode)
+        if event_type == EventType.ACCEL_DATA:
+            meas_db.add_accel(accel_data[sample_index])
+        elif event_type == EventType.GYRO_DATA:
+            meas_db.add_gyro(gyro_data[sample_index])
+            nav_filter, meas_db = mods["nav_filter_routine"](nav_filter, meas_db)
+            if int(nav_filter.mode) == int(mods["FilterMode"].RUNNING) and prev_mode != int(mods["FilterMode"].RUNNING):
+                return {
+                    "mods": mods,
+                    "events": events,
+                    "init_event_idx": event_idx,
+                    "init_gyro_index": sample_index,
+                    "gyro_data": gyro_data,
+                    "accel_data": accel_data,
+                    "gnss_data": gnss_data,
+                    "nav_filter": nav_filter,
+                }
+        else:
+            meas_db.add_gnss(gnss_data[sample_index])
+    raise RuntimeError("Python loose filter never initialized on the provided case")
+
+
+def _read_semicolon_csv(path: Path) -> list[dict[str, str]]:
+    with path.open("r", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle, delimiter=";")
+        return list(reader)
+
+
+def _load_truth_nav(input_dir: Path) -> dict[str, np.ndarray]:
+    rows = _read_semicolon_csv(input_dir / "truth_nav.csv")
+    out: dict[str, np.ndarray] = {}
+    if not rows:
+        raise ValueError(f"empty truth_nav.csv in {input_dir}")
+    for key in rows[0].keys():
+        out[key] = np.array([float(row[key]) for row in rows], dtype=float)
+    return out
+
+
+def _load_truth_states(input_dir: Path) -> dict[str, np.ndarray]:
+    rows = _read_semicolon_csv(input_dir / "truth_states.csv")
+    out: dict[str, np.ndarray] = {}
+    for row in rows:
+        out[row["State"]] = np.array([float(row["X"]), float(row["Y"]), float(row["Z"])], dtype=float)
+    return out
+
+
+def run_python_loose_case(
+    input_dir: Path,
+    oan_root: Path = DEFAULT_OAN_ROOT,
+    lock_misalignment_axes: tuple[bool, bool, bool] | None = None,
+) -> dict[str, np.ndarray]:
+    mods = _ensure_oan_imports(oan_root)
+    py_results = mods["run_ins_gnss_loose"](
+        input_dir,
+        lock_misalignment_axes=lock_misalignment_axes,
+    )
+    s_map = mods["StateMapInsGnssLoose"]
+    x_out = np.asarray(py_results["x_out"], dtype=float)
+    mask = np.asarray(py_results["mask"], dtype=int)
+    if mask.size == 0:
+        raise RuntimeError("Python loose replay produced no propagated states")
+
+    q_es = x_out[s_map.Q_ES, :][:, mask].T
+    q_cs = x_out[s_map.Q_CS, :][:, mask].T
+    euler_mis_deg = np.asarray(py_results["euler_mis_deg"], dtype=float).T
+    euler_ns_deg = np.asarray(py_results["euler_ns_deg"], dtype=float).T
+    history = {
+        "time_s": np.asarray(py_results["time"], dtype=float),
+        "q_es": q_es,
+        "q_cs": q_cs,
+        "pos_e": x_out[s_map.POS_E, :][:, mask].T,
+        "vel_e": x_out[s_map.V_E, :][:, mask].T,
+        "accel_bias": x_out[s_map.B_F, :][:, mask].T,
+        "gyro_bias_deg": np.rad2deg(x_out[s_map.B_W, :][:, mask].T),
+        "accel_scale": x_out[s_map.S_F, :][:, mask].T,
+        "gyro_scale": x_out[s_map.S_W, :][:, mask].T,
+        "euler_ns_deg": euler_ns_deg,
+        "euler_mis_deg": euler_mis_deg,
+    }
+    final = {
+        "q_es": q_es[-1],
+        "q_cs": q_cs[-1],
+        "pos_e": history["pos_e"][-1],
+        "vel_e": history["vel_e"][-1],
+        "accel_bias": history["accel_bias"][-1],
+        "gyro_bias_deg": history["gyro_bias_deg"][-1],
+        "accel_scale": history["accel_scale"][-1],
+        "gyro_scale": history["gyro_scale"][-1],
+        "euler_ns_deg": euler_ns_deg[-1],
+        "euler_mis_deg": euler_mis_deg[-1],
+    }
+    return {"final": final, "history": history, "raw": py_results}
 
 
 def main():
-    args = set(sys.argv[1:])
-    if "--emit-c" in args:
-        emit_reference_c()
+    parser = argparse.ArgumentParser(description="Loose INS/GNSS symbolic utilities and Rust generator.")
+    parser.add_argument("--emit-rust", action="store_true")
+    parser.add_argument("--derive-fg", action="store_true")
+    parser.add_argument("--run-python-case", type=Path)
+    parser.add_argument("--oan-root", type=Path, default=DEFAULT_OAN_ROOT)
+    args = parser.parse_args()
+
+    if args.emit_rust:
+        emit_reference_rust()
         return
-    if "--derive-fg" in args:
+    if args.derive_fg:
         phi, g = create_reference_transition_and_noise()
         print("Phi shape:", phi.shape)
         print("G shape:", g.shape)
         return
-    print("Usage: python3 ekf/ins_gnss_loose.py [--derive-fg|--emit-c]")
+    if args.run_python_case is not None:
+        results = run_python_loose_case(args.run_python_case, args.oan_root)
+        final = results["final"]
+        print("Python loose final state:")
+        print("  accel_bias", np.array2string(final["accel_bias"], precision=6))
+        print("  gyro_bias_deg", np.array2string(final["gyro_bias_deg"], precision=6))
+        print("  accel_scale", np.array2string(final["accel_scale"], precision=6))
+        print("  gyro_scale", np.array2string(final["gyro_scale"], precision=6))
+        print("  mis_deg", np.array2string(final["euler_mis_deg"], precision=6))
+        return
+    print(
+        "Usage: python3 ekf/ins_gnss_loose.py "
+        "[--derive-fg|--emit-rust|--run-python-case CASE_DIR]"
+    )
 
 
 if __name__ == "__main__":

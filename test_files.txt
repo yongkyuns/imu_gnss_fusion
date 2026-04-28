@@ -15,14 +15,11 @@ ubx_raw_20260328_153757.bin (Galbi town)
 ubx_raw_20260328_173732.bin (Galbi town to square one, low signal)
 ubx_raw_20260328_185927.bin (Square One to home, low signal)
 
+Underground (GNSS outage in data):
+ubx_raw_20260404_173031.bin
+ubx_raw_20260404_223015.bin
+
 Unstable (do not use):
 ubx_raw_20260312_163416.bin
 ubx_raw_20260312_163831.bin
 ubx_raw_20260307_110649.bin
-
-
-cargo run -p sim --bin visualizer -- \
---gnss-outage-count 3 \
---gnss-outage-duration-s 30 \
---gnss-outage-seed 44 \
-logger/data/ubx_raw_20260328_153757.bin

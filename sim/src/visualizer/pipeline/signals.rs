@@ -201,29 +201,31 @@ pub fn build_signal_traces(
         }
     }
 
-    let mut out = PlotData::default();
-    out.speed = vec![
-        Trace {
-            name: "gSpeed [m/s]".to_string(),
-            points: speed_g,
-        },
-        Trace {
-            name: "velN [m/s]".to_string(),
-            points: speed_n,
-        },
-        Trace {
-            name: "velE [m/s]".to_string(),
-            points: speed_e,
-        },
-        Trace {
-            name: "velD [m/s]".to_string(),
-            points: speed_d,
-        },
-    ];
-    out.sat_cn0 = sats
-        .into_iter()
-        .map(|(k, v)| Trace { name: k, points: v })
-        .collect();
+    let mut out = PlotData {
+        speed: vec![
+            Trace {
+                name: "gSpeed [m/s]".to_string(),
+                points: speed_g,
+            },
+            Trace {
+                name: "velN [m/s]".to_string(),
+                points: speed_n,
+            },
+            Trace {
+                name: "velE [m/s]".to_string(),
+                points: speed_e,
+            },
+            Trace {
+                name: "velD [m/s]".to_string(),
+                points: speed_d,
+            },
+        ],
+        sat_cn0: sats
+            .into_iter()
+            .map(|(k, v)| Trace { name: k, points: v })
+            .collect(),
+        ..Default::default()
+    };
 
     for (k, v) in raw_by_sig {
         if k.contains("gyro_") {
@@ -283,6 +285,7 @@ pub fn build_signal_traces(
     out.eskf_bias_accel = ekf.eskf_bias_accel;
     out.eskf_cov_bias = ekf.eskf_cov_bias;
     out.eskf_cov_nonbias = ekf.eskf_cov_nonbias;
+    out.eskf_misalignment = ekf.eskf_misalignment;
     out.eskf_stationary_diag = ekf.eskf_stationary_diag;
     out.eskf_bump_pitch_speed = ekf.eskf_bump_pitch_speed;
     out.eskf_bump_diag = ekf.eskf_bump_diag;
@@ -291,6 +294,9 @@ pub fn build_signal_traces(
     out.loose_cmp_pos = ekf.loose_cmp_pos;
     out.loose_cmp_vel = ekf.loose_cmp_vel;
     out.loose_cmp_att = ekf.loose_cmp_att;
+    out.loose_nominal_att = ekf.loose_nominal_att;
+    out.loose_residual_mount = ekf.loose_residual_mount;
+    out.loose_misalignment = ekf.loose_misalignment;
     out.loose_meas_gyro = ekf.loose_meas_gyro;
     out.loose_meas_accel = ekf.loose_meas_accel;
     out.loose_bias_gyro = ekf.loose_bias_gyro;
@@ -305,6 +311,7 @@ pub fn build_signal_traces(
     out.align_res_vel = align_data.res_vel;
     out.align_axis_err = align_data.axis_err;
     out.align_motion = align_data.motion;
+    out.align_flags = align_data.flags;
     out.align_roll_contrib = align_data.roll_contrib;
     out.align_pitch_contrib = align_data.pitch_contrib;
     out.align_yaw_contrib = align_data.yaw_contrib;
@@ -360,12 +367,14 @@ pub fn build_signal_traces(
         &mut out.eskf_bias_accel,
         &mut out.eskf_cov_bias,
         &mut out.eskf_cov_nonbias,
+        &mut out.eskf_misalignment,
         &mut out.eskf_stationary_diag,
         &mut out.eskf_bump_pitch_speed,
         &mut out.eskf_bump_diag,
         &mut out.loose_cmp_pos,
         &mut out.loose_cmp_vel,
         &mut out.loose_cmp_att,
+        &mut out.loose_misalignment,
         &mut out.loose_meas_gyro,
         &mut out.loose_meas_accel,
         &mut out.loose_bias_gyro,
@@ -378,6 +387,7 @@ pub fn build_signal_traces(
         &mut out.align_res_vel,
         &mut out.align_axis_err,
         &mut out.align_motion,
+        &mut out.align_flags,
         &mut out.align_roll_contrib,
         &mut out.align_pitch_contrib,
         &mut out.align_yaw_contrib,

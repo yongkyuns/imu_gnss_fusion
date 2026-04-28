@@ -1,13 +1,17 @@
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use sensor_fusion::c_api::{CEskfImuDelta, CEskfWrapper, CLooseImuDelta, CLooseWrapper};
 use sensor_fusion::ekf::PredictNoise;
-use sensor_fusion::fusion::FusionGnssSample;
-use sensor_fusion::loose::LoosePredictNoise;
+use sensor_fusion::eskf_types::{EskfGnssSample, EskfImuDelta};
+use sensor_fusion::loose::{LooseFilter, LooseImuDelta, LoosePredictNoise};
+use sensor_fusion::rust_eskf::RustEskf;
 use serde::Deserialize;
+use sim::datasets::seeded_loose::{
+    AccelSample, GnssSample, GyroSample, import_accel_data, import_gnss_data, import_gyro_data,
+    resolve_single_file,
+};
 use sim::visualizer::math::{ecef_to_ned, lla_to_ecef};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 #[derive(Parser, Debug)]
@@ -20,31 +24,6 @@ struct Args {
     warmup_runs: usize,
     #[arg(long, default_value_t = 20)]
     timed_runs: usize,
-}
-
-#[derive(Debug, Clone)]
-struct GyroSample {
-    ttag_us: i64,
-    omega_radps: [f64; 3],
-}
-
-#[derive(Debug, Clone)]
-struct AccelSample {
-    ttag_us: i64,
-    accel_mps2: [f64; 3],
-}
-
-#[derive(Debug, Clone)]
-struct GnssSample {
-    ttag_us: i64,
-    lat_deg: f64,
-    lon_deg: f64,
-    height_m: f64,
-    speed_mps: f64,
-    heading_deg: f64,
-    h_acc_m: f64,
-    v_acc_m: f64,
-    speed_acc_mps: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -83,17 +62,19 @@ struct RefInit {
 
 #[derive(Debug, Clone, Copy)]
 struct GpsUpdate {
-    fusion: FusionGnssSample,
+    eskf: EskfGnssSample,
     pos_ecef_m: [f64; 3],
+    vel_ecef_mps: [f32; 3],
     h_acc_m: f32,
+    speed_acc_mps: f32,
     dt_since_last_gnss_s: f32,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct ReplayStep {
     t_s: f64,
-    eskf_imu: CEskfImuDelta,
-    loose_imu: CLooseImuDelta,
+    eskf_imu: EskfImuDelta,
+    loose_imu: LooseImuDelta,
     gyro_radps: [f32; 3],
     accel_mps2: [f32; 3],
     gps: Option<GpsUpdate>,
@@ -141,10 +122,10 @@ fn main() -> Result<()> {
     }
 
     let mut eskf_total = FilterStats::default();
-    let mut loose_full_total = FilterStats::default();
+    let mut loose_total = FilterStats::default();
     for _ in 0..timed_runs {
         eskf_total += run_eskf(&init, &steps);
-        loose_full_total += run_loose(&init, &steps);
+        loose_total += run_loose(&init, &steps);
     }
 
     let data_span_s = steps.last().map(|s| s.t_s).unwrap_or(0.0);
@@ -157,9 +138,9 @@ fn main() -> Result<()> {
         timed_runs
     );
     println!();
-    print_report("ESKF", eskf_total, timed_runs, data_span_s);
+    print_report("ESKF Rust", eskf_total, timed_runs, data_span_s);
     println!();
-    print_report("Loose GPS+NHC", loose_full_total, timed_runs, data_span_s);
+    print_report("Loose Rust GPS+NHC", loose_total, timed_runs, data_span_s);
     Ok(())
 }
 
@@ -233,41 +214,23 @@ fn build_replay_steps(
                     .map(|s| s.accel_mps2)
                     .with_context(|| format!("missing latest accel at {}", curr.ttag_us))?;
                 let dt = (curr.ttag_us - prev.ttag_us) as f64 * 1.0e-6;
-                if !(dt > 0.0) {
+                if dt <= 0.0 {
                     continue;
                 }
 
                 let gps = if let Some(gnss_index) = latest_gnss_index {
                     let g = &gnss[gnss_index];
                     let age_us = curr.ttag_us - g.ttag_us;
-                    if age_us >= 0 && age_us < 50_000 && g.ttag_us != last_gnss_used_ttag {
-                        let pos_ecef = lla_to_ecef(g.lat_deg, g.lon_deg, g.height_m);
-                        let pos_ned = ecef_to_ned(pos_ecef, ref_ecef, init.ref_lat_deg, init.ref_lon_deg);
-                        let heading_rad = g.heading_deg.to_radians();
-                        let vel_ned = [
-                            (g.speed_mps * heading_rad.cos()) as f32,
-                            (g.speed_mps * heading_rad.sin()) as f32,
-                            0.0,
-                        ];
-                        let dt_since_last_gnss_s = if last_gnss_used_ttag == i64::MIN {
-                            1.0
-                        } else {
-                            ((curr.ttag_us - last_gnss_used_ttag) as f32 * 1.0e-6).clamp(1.0e-3, 1.0)
-                        };
+                    if (0..50_000).contains(&age_us) && g.ttag_us != last_gnss_used_ttag {
+                        let prev_gnss_ttag = last_gnss_used_ttag;
                         last_gnss_used_ttag = g.ttag_us;
-                        Some(GpsUpdate {
-                            fusion: FusionGnssSample {
-                                t_s: ((curr.ttag_us - init.start_ttag_us) as f64 * 1.0e-6) as f32,
-                                pos_ned_m: [pos_ned[0] as f32, pos_ned[1] as f32, pos_ned[2] as f32],
-                                vel_ned_mps: vel_ned,
-                                pos_std_m: [g.h_acc_m as f32, g.h_acc_m as f32, g.v_acc_m as f32],
-                                vel_std_mps: [g.speed_acc_mps as f32; 3],
-                                heading_rad: None,
-                            },
-                            pos_ecef_m: pos_ecef,
-                            h_acc_m: g.h_acc_m as f32,
-                            dt_since_last_gnss_s,
-                        })
+                        Some(build_gps_update(
+                            init,
+                            &ref_ecef,
+                            curr.ttag_us,
+                            g,
+                            prev_gnss_ttag,
+                        ))
                     } else {
                         None
                     }
@@ -277,7 +240,7 @@ fn build_replay_steps(
 
                 steps.push(ReplayStep {
                     t_s: (curr.ttag_us - init.start_ttag_us) as f64 * 1.0e-6,
-                    eskf_imu: CEskfImuDelta {
+                    eskf_imu: EskfImuDelta {
                         dax: (curr.omega_radps[0] * dt) as f32,
                         day: (curr.omega_radps[1] * dt) as f32,
                         daz: (curr.omega_radps[2] * dt) as f32,
@@ -286,7 +249,7 @@ fn build_replay_steps(
                         dvz: (a2[2] * dt) as f32,
                         dt: dt as f32,
                     },
-                    loose_imu: CLooseImuDelta {
+                    loose_imu: LooseImuDelta {
                         dax_1: (prev.omega_radps[0] * dt) as f32,
                         day_1: (prev.omega_radps[1] * dt) as f32,
                         daz_1: (prev.omega_radps[2] * dt) as f32,
@@ -319,17 +282,65 @@ fn build_replay_steps(
     Ok(steps)
 }
 
-fn run_eskf(init: &RefInit, steps: &[ReplayStep]) -> FilterStats {
-    let mut eskf = CEskfWrapper::new(PredictNoise::default());
-    let init_gnss = FusionGnssSample {
-        t_s: 0.0,
-        pos_ned_m: init.pos_ned_m,
-        vel_ned_mps: init.vel_ned_mps,
-        pos_std_m: [2.5, 2.5, 100.0],
-        vel_std_mps: [20.0, 20.0, 20.0],
-        heading_rad: None,
+fn build_gps_update(
+    init: &RefInit,
+    ref_ecef: &[f64; 3],
+    curr_ttag_us: i64,
+    gnss: &GnssSample,
+    last_gnss_used_ttag: i64,
+) -> GpsUpdate {
+    let pos_ecef = lla_to_ecef(gnss.lat_deg, gnss.lon_deg, gnss.height_m);
+    let pos_ned = ecef_to_ned(pos_ecef, *ref_ecef, init.ref_lat_deg, init.ref_lon_deg);
+    let heading_rad = gnss.heading_deg.to_radians();
+    let vel_ned = [
+        (gnss.speed_mps * heading_rad.cos()) as f32,
+        (gnss.speed_mps * heading_rad.sin()) as f32,
+        0.0,
+    ];
+    let vel_ecef = mat_vec(
+        transpose3(ecef_to_ned_matrix(gnss.lat_deg, gnss.lon_deg)),
+        [vel_ned[0] as f64, vel_ned[1] as f64, vel_ned[2] as f64],
+    );
+    let dt_since_last_gnss_s = if last_gnss_used_ttag == i64::MIN {
+        1.0
+    } else {
+        ((curr_ttag_us - last_gnss_used_ttag) as f32 * 1.0e-6).clamp(1.0e-3, 1.0)
     };
-    eskf.init_nominal_from_gnss(init.q_bn, init_gnss);
+
+    GpsUpdate {
+        eskf: EskfGnssSample {
+            t_s: ((curr_ttag_us - init.start_ttag_us) as f64 * 1.0e-6) as f32,
+            pos_ned_m: [pos_ned[0] as f32, pos_ned[1] as f32, pos_ned[2] as f32],
+            vel_ned_mps: vel_ned,
+            pos_std_m: [
+                gnss.h_acc_m as f32,
+                gnss.h_acc_m as f32,
+                gnss.v_acc_m as f32,
+            ],
+            vel_std_mps: [gnss.speed_acc_mps as f32; 3],
+            heading_rad: None,
+        },
+        pos_ecef_m: pos_ecef,
+        vel_ecef_mps: [vel_ecef[0] as f32, vel_ecef[1] as f32, vel_ecef[2] as f32],
+        h_acc_m: gnss.h_acc_m as f32,
+        speed_acc_mps: gnss.speed_acc_mps as f32,
+        dt_since_last_gnss_s,
+    }
+}
+
+fn run_eskf(init: &RefInit, steps: &[ReplayStep]) -> FilterStats {
+    let mut eskf = RustEskf::new(PredictNoise::default());
+    eskf.init_nominal_from_gnss(
+        init.q_bn,
+        EskfGnssSample {
+            t_s: 0.0,
+            pos_ned_m: init.pos_ned_m,
+            vel_ned_mps: init.vel_ned_mps,
+            pos_std_m: [2.5, 2.5, 100.0],
+            vel_std_mps: [20.0, 20.0, 20.0],
+            heading_rad: None,
+        },
+    );
 
     let total_start = Instant::now();
     let mut stats = FilterStats::default();
@@ -341,7 +352,7 @@ fn run_eskf(init: &RefInit, steps: &[ReplayStep]) -> FilterStats {
 
         if let Some(gps) = step.gps {
             let t1 = Instant::now();
-            eskf.fuse_gps(gps.fusion);
+            eskf.fuse_gps(gps.eskf);
             stats.timing.gps_update += t1.elapsed();
             stats.counts.gps_updates += 1;
         }
@@ -351,7 +362,7 @@ fn run_eskf(init: &RefInit, steps: &[ReplayStep]) -> FilterStats {
 }
 
 fn run_loose(init: &RefInit, steps: &[ReplayStep]) -> FilterStats {
-    let mut loose = CLooseWrapper::new(LoosePredictNoise::reference_nsr_demo());
+    let mut loose = LooseFilter::new(LoosePredictNoise::reference_nsr_demo());
     loose.init_from_reference_ecef_state(
         init.q_bn,
         init.pos_ecef_m,
@@ -376,7 +387,9 @@ fn run_loose(init: &RefInit, steps: &[ReplayStep]) -> FilterStats {
         let t1 = Instant::now();
         loose.fuse_reference_batch(
             step.gps.map(|g| g.pos_ecef_m),
+            step.gps.map(|g| g.vel_ecef_mps),
             step.gps.map_or(0.0, |g| g.h_acc_m),
+            step.gps.map_or(0.0, |g| g.speed_acc_mps),
             step.gps.map_or(1.0, |g| g.dt_since_last_gnss_s),
             step.gyro_radps,
             step.accel_mps2,
@@ -400,7 +413,10 @@ fn print_report(name: &str, total: FilterStats, timed_runs: usize, data_span_s: 
     let avg = total / timed_runs as u32;
     let predict_ns = nanos_per(avg.timing.predict, avg.counts.predict_steps);
     let gps_us = nanos_per(avg.timing.gps_update, avg.counts.gps_updates) / 1_000.0;
-    let constrained_us = nanos_per(avg.timing.constrained_update, avg.counts.constrained_updates) / 1_000.0;
+    let constrained_us = nanos_per(
+        avg.timing.constrained_update,
+        avg.counts.constrained_updates,
+    ) / 1_000.0;
     let obs_us = nanos_per(avg.timing.constrained_update, avg.counts.observation_rows) / 1_000.0;
     let realtime = if avg.total.as_secs_f64() > 0.0 {
         data_span_s / avg.total.as_secs_f64()
@@ -415,23 +431,19 @@ fn print_report(name: &str, total: FilterStats, timed_runs: usize, data_span_s: 
     );
     println!(
         "  predict:      {:8} steps {:10.1} ns/step",
-        avg.counts.predict_steps,
-        predict_ns
+        avg.counts.predict_steps, predict_ns
     );
     println!(
         "  gps update:   {:8} calls {:10.3} us/call",
-        avg.counts.gps_updates,
-        gps_us
+        avg.counts.gps_updates, gps_us
     );
     println!(
         "  constrained:  {:8} calls {:10.3} us/call",
-        avg.counts.constrained_updates,
-        constrained_us
+        avg.counts.constrained_updates, constrained_us
     );
     println!(
         "  obs rows:     {:8} rows  {:10.3} us/row",
-        avg.counts.observation_rows,
-        obs_us
+        avg.counts.observation_rows, obs_us
     );
 }
 
@@ -449,95 +461,6 @@ fn event_rank(event_type: EventType) -> u8 {
         EventType::Accel => 2,
         EventType::Gnss => 4,
     }
-}
-
-fn resolve_single_file(input_dir: &Path, suffix: &str) -> Result<PathBuf> {
-    let mut matches = Vec::new();
-    for entry in fs::read_dir(input_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.ends_with(suffix))
-        {
-            matches.push(path);
-        }
-    }
-    matches.sort();
-    match matches.len() {
-        1 => Ok(matches.remove(0)),
-        0 => bail!("missing file with suffix {suffix} in {}", input_dir.display()),
-        _ => bail!("multiple files with suffix {suffix} in {}", input_dir.display()),
-    }
-}
-
-fn import_gyro_data(path: &Path) -> Result<Vec<GyroSample>> {
-    let rows = semicolon_rows(path, 3)?;
-    let mut out = Vec::with_capacity(rows.len());
-    for row in rows {
-        out.push(GyroSample {
-            ttag_us: (parse_f64(&row[0])? / 1000.0).floor() as i64,
-            omega_radps: [parse_f64(&row[1])?, parse_f64(&row[2])?, parse_f64(&row[3])?],
-        });
-    }
-    Ok(out)
-}
-
-fn import_accel_data(path: &Path) -> Result<Vec<AccelSample>> {
-    let rows = semicolon_rows(path, 3)?;
-    let mut out = Vec::with_capacity(rows.len());
-    for row in rows {
-        out.push(AccelSample {
-            ttag_us: (parse_f64(&row[0])? / 1000.0).floor() as i64,
-            accel_mps2: [parse_f64(&row[1])?, parse_f64(&row[2])?, parse_f64(&row[3])?],
-        });
-    }
-    Ok(out)
-}
-
-fn import_gnss_data(path: &Path) -> Result<Vec<GnssSample>> {
-    let rows = semicolon_rows(path, 1)?;
-    let mut out = Vec::with_capacity(rows.len());
-    for row in rows {
-        out.push(GnssSample {
-            ttag_us: (parse_f64(&row[0])? / 1000.0).floor() as i64,
-            lat_deg: parse_f64(&row[2])?,
-            lon_deg: parse_f64(&row[3])?,
-            height_m: parse_f64(&row[4])?,
-            speed_mps: parse_f64(&row[5])?,
-            heading_deg: parse_f64(&row[6])?,
-            h_acc_m: parse_f64(&row[7])?,
-            v_acc_m: parse_f64(&row[8])?,
-            speed_acc_mps: parse_f64(&row[9])?,
-        });
-    }
-    Ok(out)
-}
-
-fn semicolon_rows(path: &Path, skip_rows: usize) -> Result<Vec<Vec<String>>> {
-    let text = fs::read_to_string(path)?;
-    let mut out = Vec::new();
-    for (index, line) in text.lines().enumerate() {
-        if index < skip_rows {
-            continue;
-        }
-        let row: Vec<String> = line
-            .split(';')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(ToOwned::to_owned)
-            .collect();
-        if !row.is_empty() {
-            out.push(row);
-        }
-    }
-    Ok(out)
-}
-
-fn parse_f64(s: &str) -> Result<f64> {
-    s.parse::<f64>()
-        .with_context(|| format!("failed to parse float: {s}"))
 }
 
 fn accel_at(ttag_us: i64, accel: &[AccelSample]) -> Option<[f64; 3]> {
@@ -566,6 +489,34 @@ fn accel_at(ttag_us: i64, accel: &[AccelSample]) -> Option<[f64; 3]> {
             ])
         }
     }
+}
+
+fn ecef_to_ned_matrix(lat_deg: f64, lon_deg: f64) -> [[f64; 3]; 3] {
+    let lat = lat_deg.to_radians();
+    let lon = lon_deg.to_radians();
+    let (slat, clat) = lat.sin_cos();
+    let (slon, clon) = lon.sin_cos();
+    [
+        [-slat * clon, -slat * slon, clat],
+        [-slon, clon, 0.0],
+        [-clat * clon, -clat * slon, -slat],
+    ]
+}
+
+fn transpose3(a: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    [
+        [a[0][0], a[1][0], a[2][0]],
+        [a[0][1], a[1][1], a[2][1]],
+        [a[0][2], a[1][2], a[2][2]],
+    ]
+}
+
+fn mat_vec(a: [[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
+    [
+        a[0][0] * v[0] + a[0][1] * v[1] + a[0][2] * v[2],
+        a[1][0] * v[0] + a[1][1] * v[1] + a[1][2] * v[2],
+        a[2][0] * v[0] + a[2][1] * v[1] + a[2][2] * v[2],
+    ]
 }
 
 impl core::ops::AddAssign for FilterStats {
@@ -598,7 +549,8 @@ impl core::ops::Div<u32> for FilterStats {
             counts: FilterCounts {
                 predict_steps: (self.counts.predict_steps as f64 / div).round() as usize,
                 gps_updates: (self.counts.gps_updates as f64 / div).round() as usize,
-                constrained_updates: (self.counts.constrained_updates as f64 / div).round() as usize,
+                constrained_updates: (self.counts.constrained_updates as f64 / div).round()
+                    as usize,
                 observation_rows: (self.counts.observation_rows as f64 / div).round() as usize,
             },
         }

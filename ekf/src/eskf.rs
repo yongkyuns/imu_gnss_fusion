@@ -1,7 +1,7 @@
 use libm::sqrtf;
 
-pub const NOMINAL_STATE_DIM: usize = 16;
-pub const ERROR_STATE_DIM: usize = 15;
+pub const NOMINAL_STATE_DIM: usize = 20;
+pub const ERROR_STATE_DIM: usize = 18;
 
 pub const IDX_DTHETA_X: usize = 0;
 pub const IDX_DTHETA_Y: usize = 1;
@@ -18,6 +18,9 @@ pub const IDX_DBG_Z: usize = 11;
 pub const IDX_DBA_X: usize = 12;
 pub const IDX_DBA_Y: usize = 13;
 pub const IDX_DBA_Z: usize = 14;
+pub const IDX_DPSI_CS_X: usize = 15;
+pub const IDX_DPSI_CS_Y: usize = 16;
+pub const IDX_DPSI_CS_Z: usize = 17;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct NominalState {
@@ -26,6 +29,7 @@ pub struct NominalState {
     pub pos_n: [f32; 3],
     pub gyro_bias_b: [f32; 3],
     pub accel_bias_b: [f32; 3],
+    pub q_cs: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -35,6 +39,7 @@ pub struct ErrorState {
     pub dpos_n: [f32; 3],
     pub dgyro_bias_b: [f32; 3],
     pub daccel_bias_b: [f32; 3],
+    pub dpsi_cs: [f32; 3],
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -48,6 +53,7 @@ impl NominalState {
     pub fn identity() -> Self {
         Self {
             q_bn: [1.0, 0.0, 0.0, 0.0],
+            q_cs: [1.0, 0.0, 0.0, 0.0],
             ..Self::default()
         }
     }
@@ -60,6 +66,9 @@ impl NominalState {
         add_assign3(&mut self.pos_n, dx.dpos_n);
         add_assign3(&mut self.gyro_bias_b, dx.dgyro_bias_b);
         add_assign3(&mut self.accel_bias_b, dx.daccel_bias_b);
+        let dq_cs = quat_from_delta_theta(dx.dpsi_cs);
+        self.q_cs = quat_multiply(dq_cs, self.q_cs);
+        normalize_quat(&mut self.q_cs);
     }
 
     pub fn predict(&mut self, imu: ImuDelta, gravity_n: [f32; 3]) {
@@ -101,6 +110,7 @@ impl ErrorState {
             dpos_n: [dx[IDX_DPOS_N], dx[IDX_DPOS_E], dx[IDX_DPOS_D]],
             dgyro_bias_b: [dx[IDX_DBG_X], dx[IDX_DBG_Y], dx[IDX_DBG_Z]],
             daccel_bias_b: [dx[IDX_DBA_X], dx[IDX_DBA_Y], dx[IDX_DBA_Z]],
+            dpsi_cs: [dx[IDX_DPSI_CS_X], dx[IDX_DPSI_CS_Y], dx[IDX_DPSI_CS_Z]],
         }
     }
 
@@ -121,6 +131,9 @@ impl ErrorState {
             self.daccel_bias_b[0],
             self.daccel_bias_b[1],
             self.daccel_bias_b[2],
+            self.dpsi_cs[0],
+            self.dpsi_cs[1],
+            self.dpsi_cs[2],
         ]
     }
 }

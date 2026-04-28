@@ -232,10 +232,10 @@ fn main() -> Result<()> {
 
         let mut masters: Vec<(u64, f64)> = Vec::new();
         for f in &frames {
-            if let Some(itow) = extract_itow_ms(f) {
-                if (0..604_800_000).contains(&itow) {
-                    masters.push((f.seq, itow as f64));
-                }
+            if let Some(itow) = extract_itow_ms(f)
+                && (0..604_800_000).contains(&itow)
+            {
+                masters.push((f.seq, itow as f64));
             }
         }
         masters.sort_by_key(|x| x.0);
@@ -248,28 +248,28 @@ fn main() -> Result<()> {
         let mut alg_events = Vec::<AlgEvent>::new();
         let mut ins_events = Vec::<InsEvent>::new();
         for f in &frames {
-            if let Some((_, roll, pitch, yaw)) = extract_esf_alg(f) {
-                if let Some(t_ms) = nearest_master_ms(f.seq, &masters) {
-                    alg_events.push(AlgEvent {
-                        t_ms,
-                        roll_deg: roll,
-                        pitch_deg: pitch,
-                        yaw_deg: yaw,
-                    });
-                }
+            if let Some((_, roll, pitch, yaw)) = extract_esf_alg(f)
+                && let Some(t_ms) = nearest_master_ms(f.seq, &masters)
+            {
+                alg_events.push(AlgEvent {
+                    t_ms,
+                    roll_deg: roll,
+                    pitch_deg: pitch,
+                    yaw_deg: yaw,
+                });
             }
-            if let Some((_itow, gx, gy, gz, ax, ay, az)) = extract_esf_ins(f) {
-                if let Some(t_ms) = nearest_master_ms(f.seq, &masters) {
-                    ins_events.push(InsEvent {
-                        t_ms,
-                        gx_dps: gx,
-                        gy_dps: gy,
-                        gz_dps: gz,
-                        ax_mps2: ax,
-                        ay_mps2: ay,
-                        az_mps2: az,
-                    });
-                }
+            if let Some((_itow, gx, gy, gz, ax, ay, az)) = extract_esf_ins(f)
+                && let Some(t_ms) = nearest_master_ms(f.seq, &masters)
+            {
+                ins_events.push(InsEvent {
+                    t_ms,
+                    gx_dps: gx,
+                    gy_dps: gy,
+                    gz_dps: gz,
+                    ax_mps2: ax,
+                    ay_mps2: ay,
+                    az_mps2: az,
+                });
             }
         }
         alg_events.sort_by(|a, b| {
