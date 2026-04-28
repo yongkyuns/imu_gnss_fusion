@@ -87,7 +87,7 @@ See [sim/README.md](sim/README.md) for the current tool map.
 
 ## Data Formats
 
-The common hardware-agnostic replay directory contains two CSV files:
+The common hardware-agnostic replay directory contains two required CSV files:
 
 `imu.csv`
 
@@ -103,6 +103,15 @@ t_s,lat_deg,lon_deg,height_m,vn_mps,ve_mps,vd_mps,pos_std_n_m,pos_std_e_m,pos_st
 
 `heading_rad` may be `NaN` when heading is unavailable. Producers include `export_gnss_ins_sim_generic`; hardware-specific converters should live outside this repository and emit this schema.
 
+Replay directories can also include optional reference traces used only for evaluation and visualization:
+
+```text
+reference_attitude.csv
+reference_mount.csv
+```
+
+Both reference CSVs use `t_s,roll_deg,pitch_deg,yaw_deg`. They are intentionally generic: a converter may derive them from any trusted reference system, but this repository does not depend on the reference device protocol.
+
 Example conversions:
 
 ```bash
@@ -110,6 +119,24 @@ cargo run --release -p sim --bin export_gnss_ins_sim_generic -- \
   /path/to/gnss-ins-sim/output /tmp/replay \
   --signal-source meas
 ```
+
+Package generic replay data for static hosting:
+
+```bash
+python3 scripts/package_dataset.py /path/to/replay-dir /tmp/hosted-drive
+```
+
+The hosted dataset layout is:
+
+```text
+manifest.json
+imu.csv.gz
+gnss.csv.gz
+reference_attitude.csv.gz  # optional
+reference_mount.csv.gz     # optional
+```
+
+`scripts/package_dataset.py` can stage an existing generic replay directory or call `export_gnss_ins_sim_generic` for `gnss-ins-sim` output. Raw `.bin` logs are intentionally not supported in this repository because the prior UBX path depended on deleted device-specific parsing code.
 
 ## Generated-Code Workflow
 

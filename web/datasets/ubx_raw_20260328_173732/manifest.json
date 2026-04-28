@@ -1,0 +1,100 @@
+{
+  "created_utc": "2026-04-28T17:25:40Z",
+  "dataset_id": "ubx_raw_20260328_173732",
+  "files": {
+    "gnss": {
+      "bytes": 139540,
+      "columns": [
+        "t_s",
+        "lat_deg",
+        "lon_deg",
+        "height_m",
+        "vn_mps",
+        "ve_mps",
+        "vd_mps",
+        "pos_std_n_m",
+        "pos_std_e_m",
+        "pos_std_d_m",
+        "vel_std_n_mps",
+        "vel_std_e_mps",
+        "vel_std_d_mps",
+        "heading_rad"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 13.875,
+      "last_t_s": 1255.375,
+      "media_type": "text/csv",
+      "path": "gnss.csv.gz",
+      "rows": 2484,
+      "sha256": "cbb3abcefffc1e7007e79786f216d44f7615a450a7f1a359ecaca9022c66b599"
+    },
+    "imu": {
+      "bytes": 3452979,
+      "columns": [
+        "t_s",
+        "gx_radps",
+        "gy_radps",
+        "gz_radps",
+        "ax_mps2",
+        "ay_mps2",
+        "az_mps2"
+      ],
+      "encoding": "gzip",
+      "first_t_s": -0.00785561239719391,
+      "last_t_s": 1256.0299006615878,
+      "media_type": "text/csv",
+      "path": "imu.csv.gz",
+      "rows": 124975,
+      "sha256": "2354998adc41507b79f251a4a305296f4197a51b3d82bfa1d3bb6e7049fcbcba"
+    },
+    "reference_attitude": {
+      "bytes": 308585,
+      "columns": [
+        "t_s",
+        "roll_deg",
+        "pitch_deg",
+        "yaw_deg"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.125,
+      "last_t_s": 1256.138,
+      "media_type": "text/csv",
+      "path": "reference_attitude.csv.gz",
+      "rows": 38062,
+      "sha256": "48e1db6c0a4ea54093c4ed6d5b4b34a96b83b8f0d865139fceace4e706c366b8"
+    },
+    "reference_mount": {
+      "bytes": 5380,
+      "columns": [
+        "t_s",
+        "roll_deg",
+        "pitch_deg",
+        "yaw_deg"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.0,
+      "last_t_s": 1255.5,
+      "media_type": "text/csv",
+      "path": "reference_mount.csv.gz",
+      "rows": 2512,
+      "sha256": "093a7bebc5f70ce4152ef835d25828946219dee85553465e84911deeaa43e39e"
+    }
+  },
+  "manifest_version": 1,
+  "samples": {
+    "gnss": 2484,
+    "imu": 124975,
+    "reference_attitude": 38062,
+    "reference_mount": 2512
+  },
+  "schema": "generic-replay-v1",
+  "source": {
+    "format": "generic",
+    "input_path": "/private/tmp/generic_with_refs_sources/ubx_raw_20260328_173732"
+  },
+  "time_span_s": {
+    "end": 1256.138,
+    "start": -0.00785561239719391
+  },
+  "title": "Galbi town to Square One 2026-03-28 (low signal)"
+}

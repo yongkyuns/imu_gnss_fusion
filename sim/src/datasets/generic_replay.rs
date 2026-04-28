@@ -24,6 +24,14 @@ pub struct GenericGnssSample {
     pub heading_rad: Option<f64>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct GenericReferenceRpySample {
+    pub t_s: f64,
+    pub roll_deg: f64,
+    pub pitch_deg: f64,
+    pub yaw_deg: f64,
+}
+
 pub fn load_imu_samples(dir: &Path) -> Result<Vec<GenericImuSample>> {
     let rows = read_rows(&dir.join("imu.csv"), 7)?;
     Ok(rows
@@ -55,6 +63,14 @@ pub fn load_gnss_samples(dir: &Path) -> Result<Vec<GenericGnssSample>> {
             },
         })
         .collect())
+}
+
+pub fn load_reference_attitude_samples(dir: &Path) -> Result<Vec<GenericReferenceRpySample>> {
+    load_optional_reference_rpy_samples(dir, "reference_attitude.csv")
+}
+
+pub fn load_reference_mount_samples(dir: &Path) -> Result<Vec<GenericReferenceRpySample>> {
+    load_optional_reference_rpy_samples(dir, "reference_mount.csv")
 }
 
 pub fn write_samples(
@@ -107,6 +123,26 @@ pub fn fusion_gnss_sample(sample: GenericGnssSample) -> FusionGnssSample {
         ],
         heading_rad: sample.heading_rad.map(|v| v as f32),
     }
+}
+
+fn load_optional_reference_rpy_samples(
+    dir: &Path,
+    name: &str,
+) -> Result<Vec<GenericReferenceRpySample>> {
+    let path = dir.join(name);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let rows = read_rows(&path, 4)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| GenericReferenceRpySample {
+            t_s: row[0],
+            roll_deg: row[1],
+            pitch_deg: row[2],
+            yaw_deg: row[3],
+        })
+        .collect())
 }
 
 fn write_imu_csv(path: &Path, samples: &[GenericImuSample]) -> Result<()> {

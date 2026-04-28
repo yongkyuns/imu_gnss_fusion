@@ -1,0 +1,100 @@
+{
+  "created_utc": "2026-04-28T17:25:36Z",
+  "dataset_id": "ubx_raw_20260328_153757",
+  "files": {
+    "gnss": {
+      "bytes": 138848,
+      "columns": [
+        "t_s",
+        "lat_deg",
+        "lon_deg",
+        "height_m",
+        "vn_mps",
+        "ve_mps",
+        "vd_mps",
+        "pos_std_n_m",
+        "pos_std_e_m",
+        "pos_std_d_m",
+        "vel_std_n_mps",
+        "vel_std_e_mps",
+        "vel_std_d_mps",
+        "heading_rad"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 50.736000000000004,
+      "last_t_s": 1420.236,
+      "media_type": "text/csv",
+      "path": "gnss.csv.gz",
+      "rows": 2737,
+      "sha256": "0e0fd61bf69c417e95e7daf263ed11912ce65c2bd2298a2e8728bfecdeda9d62"
+    },
+    "imu": {
+      "bytes": 4149511,
+      "columns": [
+        "t_s",
+        "gx_radps",
+        "gy_radps",
+        "gz_radps",
+        "ax_mps2",
+        "ay_mps2",
+        "az_mps2"
+      ],
+      "encoding": "gzip",
+      "first_t_s": -0.03166989529132843,
+      "last_t_s": 1421.0179491822719,
+      "media_type": "text/csv",
+      "path": "imu.csv.gz",
+      "rows": 141403,
+      "sha256": "19976f79486f1247ac2f3379d24437a290ed8bfb1682e1152f5c19eac43ef75b"
+    },
+    "reference_attitude": {
+      "bytes": 631542,
+      "columns": [
+        "t_s",
+        "roll_deg",
+        "pitch_deg",
+        "yaw_deg"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.0,
+      "last_t_s": 1421.017,
+      "media_type": "text/csv",
+      "path": "reference_attitude.csv.gz",
+      "rows": 43054,
+      "sha256": "91277661b1c49d9113fe3695aef049cca1190b287cb0e58777889d0ebccabd8d"
+    },
+    "reference_mount": {
+      "bytes": 9847,
+      "columns": [
+        "t_s",
+        "roll_deg",
+        "pitch_deg",
+        "yaw_deg"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.23600000000000002,
+      "last_t_s": 1420.736,
+      "media_type": "text/csv",
+      "path": "reference_mount.csv.gz",
+      "rows": 2842,
+      "sha256": "3ecd9b9951c60d087cfd30039a787be895fbb0e6a12aa938c5010d9740af72be"
+    }
+  },
+  "manifest_version": 1,
+  "samples": {
+    "gnss": 2737,
+    "imu": 141403,
+    "reference_attitude": 43054,
+    "reference_mount": 2842
+  },
+  "schema": "generic-replay-v1",
+  "source": {
+    "format": "generic",
+    "input_path": "/private/tmp/generic_with_refs_sources/ubx_raw_20260328_153757"
+  },
+  "time_span_s": {
+    "end": 1421.0179491822719,
+    "start": -0.03166989529132843
+  },
+  "title": "Galbi town 2026-03-28"
+}

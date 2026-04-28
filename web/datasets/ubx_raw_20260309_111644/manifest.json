@@ -1,0 +1,100 @@
+{
+  "created_utc": "2026-04-28T17:25:20Z",
+  "dataset_id": "ubx_raw_20260309_111644",
+  "files": {
+    "gnss": {
+      "bytes": 44590,
+      "columns": [
+        "t_s",
+        "lat_deg",
+        "lon_deg",
+        "height_m",
+        "vn_mps",
+        "ve_mps",
+        "vd_mps",
+        "pos_std_n_m",
+        "pos_std_e_m",
+        "pos_std_d_m",
+        "vel_std_n_mps",
+        "vel_std_e_mps",
+        "vel_std_d_mps",
+        "heading_rad"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 15.502,
+      "last_t_s": 490.0,
+      "media_type": "text/csv",
+      "path": "gnss.csv.gz",
+      "rows": 950,
+      "sha256": "0de734b37cbd382556b16f7cf534465380f87ede8f0ccfb46da4a4c8e7d01016"
+    },
+    "imu": {
+      "bytes": 1353429,
+      "columns": [
+        "t_s",
+        "gx_radps",
+        "gy_radps",
+        "gz_radps",
+        "ax_mps2",
+        "ay_mps2",
+        "az_mps2"
+      ],
+      "encoding": "gzip",
+      "first_t_s": -0.10202922913432122,
+      "last_t_s": 490.39416401058435,
+      "media_type": "text/csv",
+      "path": "imu.csv.gz",
+      "rows": 48805,
+      "sha256": "23d08f1b1282c47b1986f50fe7cac1d0fe964f06b4552b0a541ec40568c6594e"
+    },
+    "reference_attitude": {
+      "bytes": 165574,
+      "columns": [
+        "t_s",
+        "roll_deg",
+        "pitch_deg",
+        "yaw_deg"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.533,
+      "last_t_s": 490.385,
+      "media_type": "text/csv",
+      "path": "reference_attitude.csv.gz",
+      "rows": 14845,
+      "sha256": "832624e4fb2180f69f3561f8a15cae9adc6435c1aa521793cde5e447cdf29215"
+    },
+    "reference_mount": {
+      "bytes": 3594,
+      "columns": [
+        "t_s",
+        "roll_deg",
+        "pitch_deg",
+        "yaw_deg"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.0,
+      "last_t_s": 490.0,
+      "media_type": "text/csv",
+      "path": "reference_mount.csv.gz",
+      "rows": 981,
+      "sha256": "5b28dcc2d2079b6251b045eb9aba5d6683cb7f207b730920994f5e9b7940f171"
+    }
+  },
+  "manifest_version": 1,
+  "samples": {
+    "gnss": 950,
+    "imu": 48805,
+    "reference_attitude": 14845,
+    "reference_mount": 981
+  },
+  "schema": "generic-replay-v1",
+  "source": {
+    "format": "generic",
+    "input_path": "/private/tmp/generic_with_refs_sources/ubx_raw_20260309_111644"
+  },
+  "time_span_s": {
+    "end": 490.39416401058435,
+    "start": -0.10202922913432122
+  },
+  "title": "Baseline 2026-03-09 11:16:44 (13 deg forward error)"
+}

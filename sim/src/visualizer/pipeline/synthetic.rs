@@ -14,6 +14,7 @@ use crate::synthetic::gnss_ins_path::{
 };
 use crate::visualizer::math::{ecef_to_ned, lla_to_ecef, quat_rpy_deg};
 use crate::visualizer::model::{EkfImuSource, HeadingSample, PlotData, Trace};
+use crate::visualizer::pipeline::generic::{GenericReplayInput, add_auxiliary_generic_traces};
 use crate::visualizer::pipeline::{EkfCompareConfig, GnssOutageConfig};
 
 #[derive(Clone, Copy, Debug)]
@@ -280,7 +281,7 @@ pub fn build_synthetic_plot_data(
         }
     });
 
-    Ok(PlotData {
+    let mut data = PlotData {
         speed: vec![
             Trace {
                 name: "Synthetic truth horizontal speed [m/s]".to_string(),
@@ -392,7 +393,7 @@ pub fn build_synthetic_plot_data(
             },
             Trace {
                 name: "Synthetic truth roll [deg]".to_string(),
-                points: truth_roll,
+                points: truth_roll.clone(),
             },
             Trace {
                 name: "ESKF pitch [deg]".to_string(),
@@ -400,7 +401,7 @@ pub fn build_synthetic_plot_data(
             },
             Trace {
                 name: "Synthetic truth pitch [deg]".to_string(),
-                points: truth_pitch,
+                points: truth_pitch.clone(),
             },
             Trace {
                 name: "ESKF yaw [deg]".to_string(),
@@ -408,7 +409,7 @@ pub fn build_synthetic_plot_data(
             },
             Trace {
                 name: "Synthetic truth yaw [deg]".to_string(),
-                points: truth_yaw,
+                points: truth_yaw.clone(),
             },
             Trace {
                 name: "mount ready".to_string(),
@@ -575,7 +576,16 @@ pub fn build_synthetic_plot_data(
         ],
         eskf_map_heading: eskf_heading,
         ..PlotData::default()
-    })
+    };
+    add_auxiliary_generic_traces(
+        &mut data,
+        &GenericReplayInput::new(imu, gnss),
+        ekf_cfg,
+        ekf_imu_source,
+        Some(synth_cfg.mount_rpy_deg),
+        Some([truth_roll, truth_pitch, truth_yaw]),
+    );
+    Ok(data)
 }
 
 fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig, mode: EkfImuSource) {

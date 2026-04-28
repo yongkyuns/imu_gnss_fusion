@@ -1,0 +1,100 @@
+{
+  "created_utc": "2026-04-28T17:25:28Z",
+  "dataset_id": "ubx_raw_20260326_220916",
+  "files": {
+    "gnss": {
+      "bytes": 11035,
+      "columns": [
+        "t_s",
+        "lat_deg",
+        "lon_deg",
+        "height_m",
+        "vn_mps",
+        "ve_mps",
+        "vd_mps",
+        "pos_std_n_m",
+        "pos_std_e_m",
+        "pos_std_d_m",
+        "vel_std_n_mps",
+        "vel_std_e_mps",
+        "vel_std_d_mps",
+        "heading_rad"
+      ],
+      "encoding": "gzip",
+      "first_t_s": -0.244,
+      "last_t_s": 94.756,
+      "media_type": "text/csv",
+      "path": "gnss.csv.gz",
+      "rows": 191,
+      "sha256": "1cc273056632df21d1cc85018e069878600cf1ab255af9b57f1ef2458aa2cae0"
+    },
+    "imu": {
+      "bytes": 317944,
+      "columns": [
+        "t_s",
+        "gx_radps",
+        "gy_radps",
+        "gz_radps",
+        "ax_mps2",
+        "ay_mps2",
+        "az_mps2"
+      ],
+      "encoding": "gzip",
+      "first_t_s": -0.011034063279628754,
+      "last_t_s": 95.47813172686101,
+      "media_type": "text/csv",
+      "path": "imu.csv.gz",
+      "rows": 9502,
+      "sha256": "72da1742885b0f8c3c843849c57f44e0d9abed653277fd4a63e3d47ce9d73497"
+    },
+    "reference_attitude": {
+      "bytes": 40041,
+      "columns": [
+        "t_s",
+        "roll_deg",
+        "pitch_deg",
+        "yaw_deg"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.244,
+      "last_t_s": 95.71300000000001,
+      "media_type": "text/csv",
+      "path": "reference_attitude.csv.gz",
+      "rows": 2894,
+      "sha256": "f9930e6f4be799bbbe1da5f3717fc3bcc6f36b521c1fdff239c5192567b5603f"
+    },
+    "reference_mount": {
+      "bytes": 1118,
+      "columns": [
+        "t_s",
+        "roll_deg",
+        "pitch_deg",
+        "yaw_deg"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.0,
+      "last_t_s": 95.0,
+      "media_type": "text/csv",
+      "path": "reference_mount.csv.gz",
+      "rows": 191,
+      "sha256": "7e78ce6d661e0f92c3ec9afd21c3e221f3ff423ef7f6b20750b48b96569edd70"
+    }
+  },
+  "manifest_version": 1,
+  "samples": {
+    "gnss": 191,
+    "imu": 9502,
+    "reference_attitude": 2894,
+    "reference_mount": 191
+  },
+  "schema": "generic-replay-v1",
+  "source": {
+    "format": "generic",
+    "input_path": "/private/tmp/generic_with_refs_sources/ubx_raw_20260326_220916"
+  },
+  "time_span_s": {
+    "end": 95.71300000000001,
+    "start": -0.244
+  },
+  "title": "Round maneuver 2026-03-26"
+}

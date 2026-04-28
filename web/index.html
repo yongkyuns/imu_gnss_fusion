@@ -35,13 +35,56 @@
   <body>
     <canvas id="visualizer_canvas"></canvas>
     <div id="status">Loading visualizer...</div>
+    <script>
+      window.IMU_GNSS_FUSION_CONFIG = window.IMU_GNSS_FUSION_CONFIG || {};
+    </script>
+    <script src="./local-config.js"></script>
     <script type="module">
-      import init, { start_visualizer } from "./pkg/visualizer.js";
-
       const status = document.getElementById("status");
+      const mapboxTokenStorageKey = "imu_gnss_fusion.mapbox_token";
+      window.__imuGnssFusionInitialMapboxToken = () => {
+        const queryToken = new URLSearchParams(window.location.search).get("mapbox_token") || "";
+        const config = window.IMU_GNSS_FUSION_CONFIG || {};
+        const configToken = String(config.mapboxToken || config.mapbox_token || "").trim();
+        const storedToken = window.localStorage.getItem(mapboxTokenStorageKey) || "";
+        return queryToken || configToken || storedToken;
+      };
+      window.__imuGnssFusionRememberMapboxToken = (token) => {
+        if (token) {
+          window.localStorage.setItem(mapboxTokenStorageKey, token);
+        } else {
+          window.localStorage.removeItem(mapboxTokenStorageKey);
+        }
+      };
+      window.__imuGnssFusionBrowserFps = {
+        fps: 0,
+        emaFps: 0,
+        frameCount: 0,
+      };
+      {
+        let lastTimestamp = 0;
+        const sample = window.__imuGnssFusionBrowserFps;
+        const tick = (timestamp) => {
+          if (lastTimestamp > 0) {
+            const dt = timestamp - lastTimestamp;
+            if (dt > 0) {
+              sample.fps = 1000 / dt;
+              sample.emaFps = sample.emaFps > 0 ? sample.emaFps * 0.9 + sample.fps * 0.1 : sample.fps;
+            }
+          }
+          sample.frameCount += 1;
+          lastTimestamp = timestamp;
+          window.requestAnimationFrame(tick);
+        };
+        window.requestAnimationFrame(tick);
+      }
       try {
-        await init();
-        await start_visualizer("visualizer_canvas");
+        const cacheBust = String(Date.now());
+        const wasm = await import(`./pkg/visualizer.js?v=${cacheBust}`);
+        await wasm.default({
+          module_or_path: `./pkg/visualizer_bg.wasm?v=${cacheBust}`,
+        });
+        await wasm.start_visualizer("visualizer_canvas");
         status.remove();
       } catch (error) {
         console.error(error);

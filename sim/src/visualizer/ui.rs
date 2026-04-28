@@ -1,44 +1,64 @@
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
+#[cfg(target_arch = "wasm32")]
+use std::{cell::RefCell, io::Read, rc::Rc};
 
 use anyhow::Result;
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints, Points};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(target_arch = "wasm32")]
+use flate2::read::GzDecoder;
+#[cfg(target_arch = "wasm32")]
+use js_sys::{Function, Object, Reflect, Uint8Array};
+#[cfg(target_arch = "wasm32")]
+use serde::Deserialize;
 use walkers::sources::{Mapbox, MapboxStyle, OpenStreetMap};
-#[cfg(not(target_arch = "wasm32"))]
 use walkers::{HttpTiles, Map, MapMemory, Plugin, lon_lat};
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::{JsCast, JsValue};
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen_futures::{JsFuture, spawn_local};
 
-#[cfg(not(target_arch = "wasm32"))]
 use super::math::heading_endpoint;
 use super::model::{EkfImuSource, HeadingSample, Page, PlotData, Trace};
 #[cfg(target_arch = "wasm32")]
 use super::pipeline::generic::{
-    GenericReplayInput, build_generic_replay_plot_data, parse_generic_replay_csvs,
+    GenericReplayInput, build_generic_replay_plot_data, parse_generic_replay_csvs_with_refs,
 };
 use super::pipeline::synthetic::{SyntheticVisualizerConfig, build_synthetic_plot_data};
 use super::pipeline::{EkfCompareConfig, GnssOutageConfig};
-#[cfg(not(target_arch = "wasm32"))]
 use super::stats::map_center_from_traces;
 
 #[cfg(not(target_arch = "wasm32"))]
-const MAPBOX_ACCESS_TOKEN: &str = "pk.eyJ1IjoieW9uZ2t5dW5zODciLCJhIjoiY21tNjB5NWt6MGJmOTJzcG02MmRvN3RnYiJ9.fu_66qb1G1cgrLzAE54E0w";
+const MAPBOX_ACCESS_TOKEN_ENV: &str = "MAPBOX_ACCESS_TOKEN";
+const TIME_SERIES_PLOT_HEIGHT: f32 = 200.0;
+#[cfg(target_arch = "wasm32")]
+const TIME_SERIES_PLOT_FRAME_HEIGHT: f32 = 226.0;
+#[cfg(target_arch = "wasm32")]
+const WEB_DECIMATION_SCAN_MULTIPLIER: usize = 8;
+#[cfg(target_arch = "wasm32")]
+const WEB_MAX_POINTS_PER_TRACE: usize = 80;
+#[cfg(target_arch = "wasm32")]
+const WEB_DATASET_MANIFEST_URL: &str = "datasets/manifest.json";
 
-#[cfg(not(target_arch = "wasm32"))]
 struct TrackOverlay<'a> {
     traces: Vec<&'a Trace>,
     headings: Vec<&'a HeadingSample>,
     show_heading: bool,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Plugin for TrackOverlay<'_> {
     fn run(
         self: Box<Self>,
         ui: &mut egui::Ui,
         _response: &egui::Response,
         projector: &walkers::Projector,
-        _map_memory: &MapMemory,
+        map_memory: &MapMemory,
     ) {
+        let view = map_view_bounds(projector, ui.max_rect(), 0.15);
+        let point_stride = map_trace_point_stride(map_memory.zoom());
+        let min_step = map_trace_min_pixel_step(map_memory.zoom());
+        let min_step_sq = min_step * min_step;
         for tr in &self.traces {
             if tr.points.len() < 2 {
                 continue;
@@ -54,11 +74,13 @@ impl Plugin for TrackOverlay<'_> {
             } else {
                 egui::Color32::WHITE
             };
-            let mut segment = Vec::<egui::Pos2>::with_capacity(tr.points.len());
-            for p in &tr.points {
+            let mut segment = Vec::<egui::Pos2>::with_capacity(tr.points.len().min(8192));
+            let mut last_drawn: Option<egui::Pos2> = None;
+            let mut pending: Option<egui::Pos2> = None;
+            for p in tr.points.iter().step_by(point_stride) {
                 let lon = p[0];
                 let lat = p[1];
-                if !lon.is_finite() || !lat.is_finite() {
+                if !lon.is_finite() || !lat.is_finite() || !view.contains(lon, lat) {
                     if segment.len() >= 2 {
                         ui.painter().add(egui::epaint::PathShape::line(
                             segment,
@@ -66,10 +88,36 @@ impl Plugin for TrackOverlay<'_> {
                         ));
                     }
                     segment = Vec::new();
+                    last_drawn = None;
+                    pending = None;
                     continue;
                 }
                 let v = projector.project(lon_lat(lon, lat));
-                segment.push(egui::pos2(v.x, v.y));
+                let pos = egui::pos2(v.x, v.y);
+                match last_drawn {
+                    None => {
+                        segment.push(pos);
+                        last_drawn = Some(pos);
+                    }
+                    Some(last) if last.distance_sq(pos) >= min_step_sq => {
+                        if let Some(pending) = pending.take()
+                            && last.distance_sq(pending) >= min_step_sq
+                            && pending.distance_sq(pos) >= min_step_sq
+                        {
+                            segment.push(pending);
+                        }
+                        segment.push(pos);
+                        last_drawn = Some(pos);
+                    }
+                    Some(_) => {
+                        pending = Some(pos);
+                    }
+                }
+            }
+            if let (Some(last), Some(pending)) = (last_drawn, pending)
+                && last.distance_sq(pending) > 0.0
+            {
+                segment.push(pending);
             }
             if segment.len() >= 2 {
                 ui.painter().add(egui::epaint::PathShape::line(
@@ -96,9 +144,12 @@ impl Plugin for TrackOverlay<'_> {
             }
         }
 
-        if let Some(mouse_pos) = ui.input(|i| i.pointer.hover_pos()) {
+        if self.show_heading
+            && let Some(mouse_pos) = ui.input(|i| i.pointer.hover_pos())
+        {
             let mut best: Option<(f32, &HeadingSample, egui::Pos2)> = None;
-            for h in &self.headings {
+            let step = (self.headings.len() / 200).max(1);
+            for h in self.headings.iter().step_by(step) {
                 let v = projector.project(lon_lat(h.lon_deg, h.lat_deg));
                 let p = egui::pos2(v.x, v.y);
                 let d2 = p.distance_sq(mouse_pos);
@@ -129,19 +180,92 @@ impl Plugin for TrackOverlay<'_> {
     }
 }
 
+fn map_trace_min_pixel_step(zoom: f64) -> f32 {
+    if zoom >= 18.0 {
+        0.25
+    } else if zoom >= 17.0 {
+        0.75
+    } else if zoom >= 16.0 {
+        1.5
+    } else if zoom >= 15.0 {
+        3.0
+    } else {
+        5.0
+    }
+}
+
+fn map_trace_point_stride(zoom: f64) -> usize {
+    if zoom >= 17.0 {
+        1
+    } else if zoom >= 16.0 {
+        3
+    } else if zoom >= 15.0 {
+        8
+    } else {
+        16
+    }
+}
+
+#[derive(Clone, Copy)]
+struct MapViewBounds {
+    lon_min: f64,
+    lon_max: f64,
+    lat_min: f64,
+    lat_max: f64,
+}
+
+impl MapViewBounds {
+    fn contains(self, lon: f64, lat: f64) -> bool {
+        lon >= self.lon_min && lon <= self.lon_max && lat >= self.lat_min && lat <= self.lat_max
+    }
+}
+
+fn map_view_bounds(
+    projector: &walkers::Projector,
+    rect: egui::Rect,
+    margin_fraction: f32,
+) -> MapViewBounds {
+    let margin = egui::vec2(
+        rect.width() * margin_fraction,
+        rect.height() * margin_fraction,
+    );
+    let rect = rect.expand2(margin);
+    let corners = [
+        rect.left_top(),
+        rect.right_top(),
+        rect.left_bottom(),
+        rect.right_bottom(),
+    ];
+    let mut lon_min = f64::INFINITY;
+    let mut lon_max = f64::NEG_INFINITY;
+    let mut lat_min = f64::INFINITY;
+    let mut lat_max = f64::NEG_INFINITY;
+    for corner in corners {
+        let pos = projector.unproject(corner.to_vec2());
+        lon_min = lon_min.min(pos.x());
+        lon_max = lon_max.max(pos.x());
+        lat_min = lat_min.min(pos.y());
+        lat_max = lat_max.max(pos.y());
+    }
+    MapViewBounds {
+        lon_min,
+        lon_max,
+        lat_min,
+        lat_max,
+    }
+}
+
 pub struct App {
     data: PlotData,
     show_egui_inspection: bool,
     show_meas_accel: bool,
     has_itow: bool,
     fps_ema: f32,
+    last_frame_time_s: f64,
     max_points_per_trace: usize,
     page: Page,
-    #[cfg(not(target_arch = "wasm32"))]
     map_tiles: HttpTiles,
-    #[cfg(not(target_arch = "wasm32"))]
     map_memory: MapMemory,
-    #[cfg(not(target_arch = "wasm32"))]
     map_center: walkers::Position,
     show_heading: bool,
     show_gnss_map: bool,
@@ -154,9 +278,21 @@ pub struct App {
     #[cfg(target_arch = "wasm32")]
     web_gnss_csv: Option<NamedText>,
     #[cfg(target_arch = "wasm32")]
+    web_reference_attitude_csv: Option<NamedText>,
+    #[cfg(target_arch = "wasm32")]
+    web_reference_mount_csv: Option<NamedText>,
+    #[cfg(target_arch = "wasm32")]
+    web_mapbox_token: String,
+    #[cfg(target_arch = "wasm32")]
+    web_mapbox_token_applied: String,
+    #[cfg(target_arch = "wasm32")]
     web_scenario: WebSyntheticScenario,
     #[cfg(target_arch = "wasm32")]
+    web_datasets: WebDatasetState,
+    #[cfg(target_arch = "wasm32")]
     web_status: String,
+    #[cfg(target_arch = "wasm32")]
+    web_perf: WebPerf,
 }
 
 #[derive(Clone)]
@@ -177,11 +313,424 @@ struct NamedText {
 }
 
 #[cfg(target_arch = "wasm32")]
+#[derive(Clone, Deserialize)]
+struct WebDatasetEntry {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default, alias = "baseUrl")]
+    base_url: Option<String>,
+    #[serde(default, alias = "imu_csv")]
+    imu: Option<String>,
+    #[serde(default, alias = "gnss_csv")]
+    gnss: Option<String>,
+    #[serde(default, alias = "imu_csv_gz")]
+    imu_gz: Option<String>,
+    #[serde(default, alias = "gnss_csv_gz")]
+    gnss_gz: Option<String>,
+    #[serde(default, alias = "reference_attitude_csv")]
+    reference_attitude: Option<String>,
+    #[serde(default, alias = "reference_attitude_csv_gz")]
+    reference_attitude_gz: Option<String>,
+    #[serde(default, alias = "reference_mount_csv")]
+    reference_mount: Option<String>,
+    #[serde(default, alias = "reference_mount_csv_gz")]
+    reference_mount_gz: Option<String>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Deserialize)]
+struct WebDatasetManifest {
+    #[serde(default)]
+    datasets: Vec<WebDatasetEntry>,
+}
+
+#[cfg(target_arch = "wasm32")]
+struct WebDatasetState {
+    manifest_url: String,
+    datasets: Vec<WebDatasetEntry>,
+    selected: usize,
+    auto_load_id: Option<String>,
+    auto_load_attempted: bool,
+    loading_manifest: bool,
+    loading_dataset: bool,
+    pending: Rc<RefCell<Option<WebDatasetTaskResult>>>,
+}
+
+#[cfg(target_arch = "wasm32")]
+enum WebDatasetTaskResult {
+    Manifest(std::result::Result<Vec<WebDatasetEntry>, String>),
+    Dataset(std::result::Result<WebDatasetFiles, String>),
+}
+
+#[cfg(target_arch = "wasm32")]
+struct WebDatasetFiles {
+    label: String,
+    imu: NamedText,
+    gnss: NamedText,
+    reference_attitude: Option<NamedText>,
+    reference_mount: Option<NamedText>,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl WebDatasetState {
+    fn new() -> Self {
+        Self {
+            manifest_url: WEB_DATASET_MANIFEST_URL.to_string(),
+            datasets: Vec::new(),
+            selected: 0,
+            auto_load_id: web_query_value("dataset"),
+            auto_load_attempted: false,
+            loading_manifest: false,
+            loading_dataset: false,
+            pending: Rc::new(RefCell::new(None)),
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl WebDatasetEntry {
+    fn display_label(&self) -> String {
+        self.label
+            .as_deref()
+            .or(self.id.as_deref())
+            .unwrap_or("unnamed dataset")
+            .to_string()
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum WebSyntheticScenario {
     CityBlocks,
     FigureEight,
     StraightAccelBrake,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Default)]
+struct WebPerf {
+    enabled: bool,
+    frame_count: u32,
+    start_time_s: f64,
+    last_time_s: f64,
+    fps_ema: f64,
+}
+
+#[cfg(target_arch = "wasm32")]
+fn web_query_value_raw(key: &str) -> Option<String> {
+    let search = eframe::web_sys::window()?.location().search().ok()?;
+    for pair in search.trim_start_matches('?').split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let (name, value) = pair.split_once('=').unwrap_or((pair, "1"));
+        if name == key {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+#[cfg(target_arch = "wasm32")]
+fn web_query_value(key: &str) -> Option<String> {
+    web_query_value_raw(key).map(|value| value.to_ascii_lowercase())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn web_query_flag(key: &str) -> bool {
+    matches!(
+        web_query_value(key).as_deref(),
+        Some("1" | "true" | "yes" | "on")
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+fn web_query_synthetic_scenario() -> Option<WebSyntheticScenario> {
+    match web_query_value("scenario").as_deref() {
+        Some("city" | "city_blocks" | "city-blocks") => Some(WebSyntheticScenario::CityBlocks),
+        Some("figure8" | "figure_eight" | "figure-eight") => {
+            Some(WebSyntheticScenario::FigureEight)
+        }
+        Some("straight" | "straight_accel_brake" | "straight-accel-brake") => {
+            Some(WebSyntheticScenario::StraightAccelBrake)
+        }
+        _ => None,
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn web_browser_fps_ema() -> Option<f64> {
+    let window = eframe::web_sys::window()?;
+    let sample = Reflect::get(
+        window.as_ref(),
+        &JsValue::from_str("__imuGnssFusionBrowserFps"),
+    )
+    .ok()?;
+    Reflect::get(&sample, &JsValue::from_str("emaFps"))
+        .ok()?
+        .as_f64()
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn web_fetch_bytes(url: &str) -> std::result::Result<Vec<u8>, String> {
+    let window = eframe::web_sys::window().ok_or_else(|| "missing window".to_string())?;
+    let response_value = JsFuture::from(window.fetch_with_str(url))
+        .await
+        .map_err(js_error_string)?;
+    let response = response_value
+        .dyn_into::<eframe::web_sys::Response>()
+        .map_err(|_| format!("{url}: fetch did not return a Response"))?;
+    if !response.ok() {
+        return Err(format!("{url}: HTTP {}", response.status()));
+    }
+    let buffer = JsFuture::from(response.array_buffer().map_err(js_error_string)?)
+        .await
+        .map_err(js_error_string)?;
+    let bytes = Uint8Array::new(&buffer);
+    let mut out = vec![0; bytes.length() as usize];
+    bytes.copy_to(&mut out);
+    Ok(out)
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn web_fetch_text(url: &str) -> std::result::Result<String, String> {
+    String::from_utf8(web_fetch_bytes(url).await?)
+        .map_err(|err| format!("{url}: response was not UTF-8: {err}"))
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn web_fetch_manifest(url: String) -> std::result::Result<Vec<WebDatasetEntry>, String> {
+    let text = web_fetch_text(&url).await?;
+    let manifest: WebDatasetManifest =
+        serde_json::from_str(&text).map_err(|err| format!("{url}: bad manifest JSON: {err}"))?;
+    Ok(manifest.datasets)
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn web_fetch_dataset(
+    manifest_url: String,
+    entry: WebDatasetEntry,
+) -> std::result::Result<WebDatasetFiles, String> {
+    let label = entry.display_label();
+    let imu = web_fetch_dataset_csv(&manifest_url, &entry, "imu")
+        .await
+        .map(|(name, text)| NamedText { name, text })?;
+    let gnss = web_fetch_dataset_csv(&manifest_url, &entry, "gnss")
+        .await
+        .map(|(name, text)| NamedText { name, text })?;
+    let reference_attitude =
+        web_fetch_optional_dataset_csv(&manifest_url, &entry, "reference_attitude")
+            .await?
+            .map(|(name, text)| NamedText { name, text });
+    let reference_mount = web_fetch_optional_dataset_csv(&manifest_url, &entry, "reference_mount")
+        .await?
+        .map(|(name, text)| NamedText { name, text });
+    Ok(WebDatasetFiles {
+        label,
+        imu,
+        gnss,
+        reference_attitude,
+        reference_mount,
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn web_fetch_dataset_csv(
+    manifest_url: &str,
+    entry: &WebDatasetEntry,
+    kind: &str,
+) -> std::result::Result<(String, String), String> {
+    let (plain, gz) = match kind {
+        "imu" => (entry.imu.as_deref(), entry.imu_gz.as_deref()),
+        "gnss" => (entry.gnss.as_deref(), entry.gnss_gz.as_deref()),
+        "reference_attitude" => (
+            entry.reference_attitude.as_deref(),
+            entry.reference_attitude_gz.as_deref(),
+        ),
+        "reference_mount" => (
+            entry.reference_mount.as_deref(),
+            entry.reference_mount_gz.as_deref(),
+        ),
+        _ => return Err(format!("unsupported dataset file kind: {kind}")),
+    };
+    if let Some(path) = gz {
+        let url = web_dataset_url(manifest_url, entry.base_url.as_deref(), path);
+        let bytes = web_fetch_bytes(&url).await?;
+        return Ok((web_dataset_file_name(&url), decode_gzip_csv(&url, &bytes)?));
+    }
+    if let Some(path) = plain {
+        let url = web_dataset_url(manifest_url, entry.base_url.as_deref(), path);
+        let bytes = web_fetch_bytes(&url).await?;
+        let text = if url.to_ascii_lowercase().ends_with(".gz") {
+            decode_gzip_csv(&url, &bytes)?
+        } else {
+            decode_plain_csv(&url, bytes)?
+        };
+        return Ok((web_dataset_file_name(&url), text));
+    }
+
+    let gz_url = web_dataset_url(
+        manifest_url,
+        entry.base_url.as_deref(),
+        &format!("{kind}.csv.gz"),
+    );
+    match web_fetch_bytes(&gz_url).await {
+        Ok(bytes) => {
+            return Ok((
+                web_dataset_file_name(&gz_url),
+                decode_gzip_csv(&gz_url, &bytes)?,
+            ));
+        }
+        Err(gz_err) => {
+            let csv_url = web_dataset_url(
+                manifest_url,
+                entry.base_url.as_deref(),
+                &format!("{kind}.csv"),
+            );
+            let bytes = web_fetch_bytes(&csv_url)
+                .await
+                .map_err(|csv_err| format!("{gz_err}; fallback {csv_err}"))?;
+            Ok((
+                web_dataset_file_name(&csv_url),
+                decode_plain_csv(&csv_url, bytes)?,
+            ))
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn web_fetch_optional_dataset_csv(
+    manifest_url: &str,
+    entry: &WebDatasetEntry,
+    kind: &str,
+) -> std::result::Result<Option<(String, String)>, String> {
+    let has_explicit_file = match kind {
+        "reference_attitude" => {
+            entry.reference_attitude.is_some() || entry.reference_attitude_gz.is_some()
+        }
+        "reference_mount" => entry.reference_mount.is_some() || entry.reference_mount_gz.is_some(),
+        _ => false,
+    };
+    if !has_explicit_file {
+        return Ok(None);
+    }
+    web_fetch_dataset_csv(manifest_url, entry, kind)
+        .await
+        .map(Some)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn web_dataset_url(manifest_url: &str, base_url: Option<&str>, path: &str) -> String {
+    if is_absolute_web_url(path) {
+        return path.to_string();
+    }
+    let base = base_url.unwrap_or("");
+    let joined = if base.is_empty() {
+        path.to_string()
+    } else {
+        format!(
+            "{}/{}",
+            base.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        )
+    };
+    if is_absolute_web_url(&joined) || joined.starts_with('/') {
+        joined
+    } else {
+        let manifest_dir = manifest_url
+            .rsplit_once('/')
+            .map(|(dir, _)| format!("{dir}/"))
+            .unwrap_or_default();
+        format!("{manifest_dir}{joined}")
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn is_absolute_web_url(url: &str) -> bool {
+    url.starts_with("http://") || url.starts_with("https://") || url.starts_with('/')
+}
+
+#[cfg(target_arch = "wasm32")]
+fn web_dataset_file_name(url: &str) -> String {
+    url.rsplit('/').next().unwrap_or(url).to_string()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn decode_plain_csv(url: &str, bytes: Vec<u8>) -> std::result::Result<String, String> {
+    String::from_utf8(bytes).map_err(|err| format!("{url}: CSV was not UTF-8: {err}"))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn decode_gzip_csv(url: &str, bytes: &[u8]) -> std::result::Result<String, String> {
+    let mut decoder = GzDecoder::new(bytes);
+    let mut text = String::new();
+    decoder
+        .read_to_string(&mut text)
+        .map_err(|err| format!("{url}: gzip decode failed: {err}"))?;
+    Ok(text)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn js_error_string(value: JsValue) -> String {
+    value
+        .as_string()
+        .unwrap_or_else(|| "JavaScript error".to_string())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn web_initial_mapbox_token() -> String {
+    let Some(window) = eframe::web_sys::window() else {
+        return web_query_value_raw("mapbox_token").unwrap_or_default();
+    };
+    let Ok(value) = Reflect::get(
+        window.as_ref(),
+        &JsValue::from_str("__imuGnssFusionInitialMapboxToken"),
+    ) else {
+        return web_query_value_raw("mapbox_token").unwrap_or_default();
+    };
+    let Some(function) = value.dyn_ref::<Function>() else {
+        return web_query_value_raw("mapbox_token").unwrap_or_default();
+    };
+    function
+        .call0(&JsValue::NULL)
+        .ok()
+        .and_then(|value| value.as_string())
+        .unwrap_or_else(|| web_query_value_raw("mapbox_token").unwrap_or_default())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn web_remember_mapbox_token(token: &str) {
+    let Some(window) = eframe::web_sys::window() else {
+        return;
+    };
+    let Ok(value) = Reflect::get(
+        window.as_ref(),
+        &JsValue::from_str("__imuGnssFusionRememberMapboxToken"),
+    ) else {
+        return;
+    };
+    if let Some(function) = value.dyn_ref::<Function>() {
+        let _ = function.call1(&JsValue::NULL, &JsValue::from_str(token));
+    }
+}
+
+fn map_tiles_from_token(token: &str, egui_ctx: egui::Context) -> HttpTiles {
+    if token.is_empty() {
+        HttpTiles::new(OpenStreetMap, egui_ctx)
+    } else {
+        HttpTiles::new(
+            Mapbox {
+                style: MapboxStyle::Dark,
+                high_resolution: true,
+                access_token: token.to_string(),
+            },
+            egui_ctx,
+        )
+    }
 }
 
 fn create_app(
@@ -190,43 +739,31 @@ fn create_app(
     has_itow: bool,
     replay: Option<ReplayState>,
 ) -> App {
-    #[cfg(target_arch = "wasm32")]
-    let _ = cc;
-    #[cfg(not(target_arch = "wasm32"))]
     let map_center = map_center_from_traces(&data.eskf_map);
     #[cfg(not(target_arch = "wasm32"))]
-    let mapbox_access_token =
-        std::env::var("MAPBOX_ACCESS_TOKEN").unwrap_or_else(|_| MAPBOX_ACCESS_TOKEN.to_string());
-    #[cfg(not(target_arch = "wasm32"))]
-    let map_tiles = if mapbox_access_token.is_empty() {
-        HttpTiles::new(OpenStreetMap, cc.egui_ctx.clone())
-    } else {
-        HttpTiles::new(
-            Mapbox {
-                style: MapboxStyle::Dark,
-                high_resolution: true,
-                access_token: mapbox_access_token,
-            },
-            cc.egui_ctx.clone(),
-        )
-    };
-    #[cfg(not(target_arch = "wasm32"))]
+    let mapbox_access_token = std::env::var(MAPBOX_ACCESS_TOKEN_ENV).unwrap_or_default();
+    #[cfg(target_arch = "wasm32")]
+    let mapbox_access_token = web_initial_mapbox_token();
+    let map_tiles = map_tiles_from_token(&mapbox_access_token, cc.egui_ctx.clone());
     let mut map_memory = MapMemory::default();
-    #[cfg(not(target_arch = "wasm32"))]
     let _ = map_memory.set_zoom(15.0);
-    App {
+    #[cfg(target_arch = "wasm32")]
+    let initial_max_points_per_trace = WEB_MAX_POINTS_PER_TRACE;
+    #[cfg(not(target_arch = "wasm32"))]
+    let initial_max_points_per_trace = 2500;
+
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let mut app = App {
         data,
         show_egui_inspection: false,
         show_meas_accel: false,
         has_itow,
         fps_ema: 0.0,
-        max_points_per_trace: 2500,
+        last_frame_time_s: 0.0,
+        max_points_per_trace: initial_max_points_per_trace,
         page: Page::Signals,
-        #[cfg(not(target_arch = "wasm32"))]
         map_tiles,
-        #[cfg(not(target_arch = "wasm32"))]
         map_memory,
-        #[cfg(not(target_arch = "wasm32"))]
         map_center,
         show_heading: false,
         show_gnss_map: true,
@@ -239,14 +776,156 @@ fn create_app(
         #[cfg(target_arch = "wasm32")]
         web_gnss_csv: None,
         #[cfg(target_arch = "wasm32")]
+        web_reference_attitude_csv: None,
+        #[cfg(target_arch = "wasm32")]
+        web_reference_mount_csv: None,
+        #[cfg(target_arch = "wasm32")]
+        web_mapbox_token: mapbox_access_token.clone(),
+        #[cfg(target_arch = "wasm32")]
+        web_mapbox_token_applied: mapbox_access_token,
+        #[cfg(target_arch = "wasm32")]
         web_scenario: WebSyntheticScenario::CityBlocks,
+        #[cfg(target_arch = "wasm32")]
+        web_datasets: WebDatasetState::new(),
         #[cfg(target_arch = "wasm32")]
         web_status: "Drag imu.csv and gnss.csv onto the app, or run a built-in synthetic scenario."
             .to_string(),
+        #[cfg(target_arch = "wasm32")]
+        web_perf: WebPerf {
+            enabled: web_query_flag("bench"),
+            ..WebPerf::default()
+        },
+    };
+    #[cfg(target_arch = "wasm32")]
+    if matches!(
+        web_query_value("page").as_deref(),
+        Some("map" | "mapdark" | "map-dark")
+    ) {
+        app.page = Page::MapDark;
     }
+    #[cfg(target_arch = "wasm32")]
+    if let Some(scenario) = web_query_synthetic_scenario() {
+        app.web_scenario = scenario;
+        app.refresh_from_web_synthetic();
+    }
+    #[cfg(target_arch = "wasm32")]
+    app.start_web_manifest_load();
+    app
 }
 
 impl App {
+    #[cfg(target_arch = "wasm32")]
+    fn start_web_manifest_load(&mut self) {
+        if self.web_datasets.loading_manifest {
+            return;
+        }
+        self.web_datasets.loading_manifest = true;
+        self.web_status = format!(
+            "Loading dataset manifest: {}",
+            self.web_datasets.manifest_url
+        );
+        let manifest_url = self.web_datasets.manifest_url.clone();
+        let pending = Rc::clone(&self.web_datasets.pending);
+        spawn_local(async move {
+            let result = web_fetch_manifest(manifest_url).await;
+            *pending.borrow_mut() = Some(WebDatasetTaskResult::Manifest(result));
+        });
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn start_web_dataset_load(&mut self) {
+        if self.web_datasets.loading_dataset || self.web_datasets.datasets.is_empty() {
+            return;
+        }
+        let selected = self
+            .web_datasets
+            .selected
+            .min(self.web_datasets.datasets.len().saturating_sub(1));
+        let entry = self.web_datasets.datasets[selected].clone();
+        let label = entry.display_label();
+        self.web_datasets.selected = selected;
+        self.web_datasets.loading_dataset = true;
+        self.web_status = format!("Loading dataset: {label}");
+        let manifest_url = self.web_datasets.manifest_url.clone();
+        let pending = Rc::clone(&self.web_datasets.pending);
+        spawn_local(async move {
+            let result = web_fetch_dataset(manifest_url, entry).await;
+            *pending.borrow_mut() = Some(WebDatasetTaskResult::Dataset(result));
+        });
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn poll_web_dataset_tasks(&mut self) {
+        let Some(result) = self.web_datasets.pending.borrow_mut().take() else {
+            return;
+        };
+        match result {
+            WebDatasetTaskResult::Manifest(result) => {
+                self.web_datasets.loading_manifest = false;
+                match result {
+                    Ok(datasets) => {
+                        let count = datasets.len();
+                        self.web_datasets.datasets = datasets;
+                        self.web_datasets.selected = self
+                            .web_datasets
+                            .selected
+                            .min(self.web_datasets.datasets.len().saturating_sub(1));
+                        self.web_status = if count == 0 {
+                            "Dataset manifest loaded with no entries.".to_string()
+                        } else {
+                            format!("Dataset manifest loaded: {count} entries")
+                        };
+                        if let Some(auto_id) = self.web_datasets.auto_load_id.clone()
+                            && !self.web_datasets.auto_load_attempted
+                        {
+                            self.web_datasets.auto_load_attempted = true;
+                            if let Some(idx) = self.web_datasets.datasets.iter().position(|d| {
+                                d.id.as_deref() == Some(auto_id.as_str())
+                                    || d.display_label().to_ascii_lowercase() == auto_id
+                            }) {
+                                self.web_datasets.selected = idx;
+                                self.start_web_dataset_load();
+                            } else {
+                                self.web_status = format!(
+                                    "Dataset manifest loaded, but '{auto_id}' was not found"
+                                );
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        self.web_datasets.datasets.clear();
+                        self.web_datasets.selected = 0;
+                        self.web_status = format!("Dataset manifest failed: {err}");
+                    }
+                }
+            }
+            WebDatasetTaskResult::Dataset(result) => {
+                self.web_datasets.loading_dataset = false;
+                match result {
+                    Ok(files) => {
+                        let label = files.label.clone();
+                        let imu_name = files.imu.name.clone();
+                        let gnss_name = files.gnss.name.clone();
+                        self.web_imu_csv = Some(files.imu);
+                        self.web_gnss_csv = Some(files.gnss);
+                        self.web_reference_attitude_csv = files.reference_attitude;
+                        self.web_reference_mount_csv = files.reference_mount;
+                        if self.refresh_from_generic_csv() {
+                            self.web_status =
+                                format!("Dataset loaded: {label} ({imu_name} / {gnss_name})");
+                        } else {
+                            let replay_status = self.web_status.clone();
+                            self.web_status = format!("Dataset fetched but {replay_status}");
+                        }
+                    }
+                    Err(err) => {
+                        self.web_status = format!("Dataset load failed: {err}");
+                    }
+                }
+            }
+        }
+    }
+
     fn refresh_from_replay(&mut self) {
         let Some(replay) = self.replay.as_ref() else {
             return;
@@ -260,6 +939,7 @@ impl App {
             ) {
                 Ok(data) => {
                     self.data = data;
+                    self.map_center = map_center_from_traces(&self.data.eskf_map);
                     self.has_itow = false;
                     self.replay_status = Some("Synthetic replay refreshed".to_string());
                 }
@@ -274,23 +954,38 @@ impl App {
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn refresh_from_generic_csv(&mut self) {
+    fn refresh_from_generic_csv(&mut self) -> bool {
         let (Some(imu), Some(gnss)) = (&self.web_imu_csv, &self.web_gnss_csv) else {
             self.web_status =
                 "Load both imu.csv and gnss.csv before running CSV replay.".to_string();
-            return;
+            return false;
         };
         let imu_name = imu.name.clone();
         let gnss_name = gnss.name.clone();
         let imu_text = imu.text.clone();
         let gnss_text = gnss.text.clone();
-        match parse_generic_replay_csvs(&imu_text, &gnss_text) {
+        let reference_attitude_text = self
+            .web_reference_attitude_csv
+            .as_ref()
+            .map(|file| file.text.as_str());
+        let reference_mount_text = self
+            .web_reference_mount_csv
+            .as_ref()
+            .map(|file| file.text.as_str());
+        match parse_generic_replay_csvs_with_refs(
+            &imu_text,
+            &gnss_text,
+            reference_attitude_text,
+            reference_mount_text,
+        ) {
             Ok(replay) => {
                 self.set_generic_replay(replay);
                 self.web_status = format!("CSV replay loaded: {imu_name} and {gnss_name}");
+                true
             }
             Err(err) => {
                 self.web_status = format!("CSV replay failed: {err}");
+                false
             }
         }
     }
@@ -304,8 +999,11 @@ impl App {
             GnssOutageConfig::default(),
         );
         self.data = data;
+        self.map_center = map_center_from_traces(&self.data.eskf_map);
         self.has_itow = false;
-        self.page = Page::EskfCompare;
+        if self.page != Page::MapDark {
+            self.page = Page::EskfCompare;
+        }
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -332,13 +1030,84 @@ impl App {
         ) {
             Ok(data) => {
                 self.data = data;
+                self.map_center = map_center_from_traces(&self.data.eskf_map);
                 self.has_itow = false;
-                self.page = Page::EskfCompare;
+                if self.page != Page::MapDark {
+                    self.page = Page::EskfCompare;
+                }
                 self.web_status = format!("Synthetic scenario loaded: {label}");
             }
             Err(err) => {
                 self.web_status = format!("Synthetic scenario failed: {err}");
             }
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn publish_web_perf(&mut self, ctx: &egui::Context) {
+        if !self.web_perf.enabled {
+            return;
+        }
+        let now_s = ctx.input(|i| i.time);
+        if self.web_perf.frame_count == 0 {
+            self.web_perf.start_time_s = now_s;
+            self.web_perf.last_time_s = now_s;
+        }
+        self.web_perf.frame_count = self.web_perf.frame_count.saturating_add(1);
+        let dt = now_s - self.web_perf.last_time_s;
+        if dt > 0.0 {
+            let fps = 1.0 / dt;
+            self.web_perf.fps_ema = if self.web_perf.fps_ema > 0.0 {
+                self.web_perf.fps_ema * 0.9 + fps * 0.1
+            } else {
+                fps
+            };
+        }
+        self.web_perf.last_time_s = now_s;
+
+        let elapsed_s = (now_s - self.web_perf.start_time_s).max(0.0);
+        let avg_fps = if elapsed_s > 0.0 {
+            self.web_perf.frame_count as f64 / elapsed_s
+        } else {
+            0.0
+        };
+        let sample = Object::new();
+        let _ = Reflect::set(
+            &sample,
+            &JsValue::from_str("frameCount"),
+            &JsValue::from_f64(self.web_perf.frame_count as f64),
+        );
+        let _ = Reflect::set(
+            &sample,
+            &JsValue::from_str("elapsedSec"),
+            &JsValue::from_f64(elapsed_s),
+        );
+        let _ = Reflect::set(
+            &sample,
+            &JsValue::from_str("avgFps"),
+            &JsValue::from_f64(avg_fps),
+        );
+        let _ = Reflect::set(
+            &sample,
+            &JsValue::from_str("emaFps"),
+            &JsValue::from_f64(self.web_perf.fps_ema),
+        );
+        let _ = Reflect::set(
+            &sample,
+            &JsValue::from_str("maxPointsPerTrace"),
+            &JsValue::from_f64(self.max_points_per_trace as f64),
+        );
+        let _ = Reflect::set(
+            &sample,
+            &JsValue::from_str("status"),
+            &JsValue::from_str(&self.web_status),
+        );
+        if let Some(window) = eframe::web_sys::window() {
+            let _ = Reflect::set(
+                window.as_ref(),
+                &JsValue::from_str("__imuGnssFusionPerf"),
+                sample.as_ref(),
+            );
         }
     }
 
@@ -365,7 +1134,11 @@ impl App {
                 name: file.name.clone(),
                 text,
             };
-            if lower.contains("gnss") {
+            if lower.contains("reference_attitude") || lower.contains("ref_att") {
+                self.web_reference_attitude_csv = Some(named);
+            } else if lower.contains("reference_mount") || lower.contains("ref_mount") {
+                self.web_reference_mount_csv = Some(named);
+            } else if lower.contains("gnss") {
                 self.web_gnss_csv = Some(named);
             } else if lower.contains("imu") || lower.contains("acc") || lower.contains("gyro") {
                 self.web_imu_csv = Some(named);
@@ -446,36 +1219,66 @@ impl eframe::App for App {
         #[cfg(target_arch = "wasm32")]
         self.consume_dropped_files(ctx);
 
+        #[cfg(target_arch = "wasm32")]
+        self.poll_web_dataset_tasks();
+
+        #[cfg(target_arch = "wasm32")]
+        self.publish_web_perf(ctx);
+
         #[cfg(target_os = "macos")]
         if ctx.input(|i| i.viewport().close_requested()) {
             std::process::exit(0);
         }
 
+        #[cfg(target_arch = "wasm32")]
+        ctx.request_repaint();
+        #[cfg(not(target_arch = "wasm32"))]
         if matches!(self.page, Page::MapDark) || self.show_egui_inspection {
-            ctx.request_repaint_after(Duration::from_millis(33));
+            ctx.request_repaint_after(Duration::from_millis(16));
         }
 
         egui::TopBottomPanel::top("top_controls").show(ctx, |ui| {
             let mut replay_changed = false;
             let mut apply_replay = false;
-            let fps = ctx.input(|i| {
-                if i.stable_dt > 0.0 {
-                    1.0 / i.stable_dt
-                } else {
-                    0.0
-                }
-            });
-            if self.fps_ema <= 0.0 {
-                self.fps_ema = fps;
+            #[cfg(target_arch = "wasm32")]
+            let now_s = eframe::web_sys::window()
+                .and_then(|w| w.performance())
+                .map(|p| p.now() / 1000.0)
+                .unwrap_or_else(|| ctx.input(|i| i.time));
+            #[cfg(not(target_arch = "wasm32"))]
+            let now_s = ctx.input(|i| i.time);
+            let fps = if self.last_frame_time_s > 0.0 {
+                let dt = (now_s - self.last_frame_time_s).max(0.0);
+                if dt > 0.0 { (1.0 / dt) as f32 } else { 0.0 }
             } else {
+                0.0
+            };
+            self.last_frame_time_s = now_s;
+            if fps > 0.0 && self.fps_ema <= 0.0 {
+                self.fps_ema = fps;
+            } else if fps > 0.0 {
                 self.fps_ema = self.fps_ema * 0.92 + fps * 0.08;
             }
-            if self.fps_ema < 24.0 {
-                self.max_points_per_trace = (self.max_points_per_trace as f32 * 0.85) as usize;
-            } else if self.fps_ema > 50.0 {
-                self.max_points_per_trace = (self.max_points_per_trace as f32 * 1.08) as usize;
+            #[cfg(target_arch = "wasm32")]
+            {
+                if self.fps_ema < 55.0 {
+                    self.max_points_per_trace = (self.max_points_per_trace as f32 * 0.80) as usize;
+                } else if self.fps_ema > 58.0 {
+                    self.max_points_per_trace = (self.max_points_per_trace as f32 * 1.03) as usize;
+                }
+                self.max_points_per_trace = self
+                    .max_points_per_trace
+                    .clamp(50, WEB_MAX_POINTS_PER_TRACE);
             }
-            self.max_points_per_trace = self.max_points_per_trace.clamp(300, 6000);
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if self.fps_ema < 24.0 {
+                    self.max_points_per_trace = (self.max_points_per_trace as f32 * 0.85) as usize;
+                } else if self.fps_ema > 50.0 {
+                    self.max_points_per_trace = (self.max_points_per_trace as f32 * 1.08) as usize;
+                }
+                self.max_points_per_trace = self.max_points_per_trace.clamp(300, 6000);
+            }
             ui.horizontal(|ui| {
                 ui.heading("pygpsdata Visualization (Rust + egui)");
                 ui.separator();
@@ -489,6 +1292,10 @@ impl eframe::App for App {
                 .default_open(false)
                 .show(ui, |ui| {
                     ui.label(format!("Estimated FPS: {:.1}", fps));
+                    #[cfg(target_arch = "wasm32")]
+                    if let Some(browser_fps) = web_browser_fps_ema() {
+                        ui.label(format!("Browser rAF FPS: {:.1}", browser_fps));
+                    }
                     ui.label(format!(
                         "Decimation budget: {} pts/trace (FPS EMA {:.1})",
                         self.max_points_per_trace, self.fps_ema
@@ -535,11 +1342,76 @@ impl eframe::App for App {
                             .as_ref()
                             .map(|f| f.name.as_str())
                             .unwrap_or("no gnss.csv");
-                        ui.label(format!("CSV: {imu_name} / {gnss_name}"));
+                        let ref_att = self
+                            .web_reference_attitude_csv
+                            .as_ref()
+                            .map(|f| f.name.as_str())
+                            .unwrap_or("no reference attitude");
+                        ui.label(format!("CSV: {imu_name} / {gnss_name} / {ref_att}"));
                         if ui.button("Run CSV replay").clicked() {
                             self.refresh_from_generic_csv();
                         }
                     });
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Dataset:");
+                        if self.web_datasets.loading_manifest {
+                            ui.label("loading manifest...");
+                        } else if self.web_datasets.datasets.is_empty() {
+                            ui.label("no manifest entries");
+                        } else {
+                            let selected = self
+                                .web_datasets
+                                .selected
+                                .min(self.web_datasets.datasets.len().saturating_sub(1));
+                            self.web_datasets.selected = selected;
+                            let selected_label =
+                                self.web_datasets.datasets[selected].display_label();
+                            egui::ComboBox::from_id_salt("web_dataset_select")
+                                .selected_text(selected_label)
+                                .show_ui(ui, |ui| {
+                                    for (idx, dataset) in
+                                        self.web_datasets.datasets.iter().enumerate()
+                                    {
+                                        ui.selectable_value(
+                                            &mut self.web_datasets.selected,
+                                            idx,
+                                            dataset.display_label(),
+                                        );
+                                    }
+                                });
+                        }
+                        if ui
+                            .add_enabled(
+                                !self.web_datasets.loading_dataset
+                                    && !self.web_datasets.loading_manifest
+                                    && !self.web_datasets.datasets.is_empty(),
+                                egui::Button::new(if self.web_datasets.loading_dataset {
+                                    "Loading dataset..."
+                                } else {
+                                    "Load dataset"
+                                }),
+                            )
+                            .clicked()
+                        {
+                            self.start_web_dataset_load();
+                        }
+                        if ui
+                            .add_enabled(
+                                !self.web_datasets.loading_manifest
+                                    && !self.web_datasets.loading_dataset,
+                                egui::Button::new("Reload manifest"),
+                            )
+                            .clicked()
+                        {
+                            self.start_web_manifest_load();
+                        }
+                    });
+                    if let Some(dataset) =
+                        self.web_datasets.datasets.get(self.web_datasets.selected)
+                        && let Some(description) = dataset.description.as_deref()
+                    {
+                        ui.label(description);
+                    }
                     ui.label(&self.web_status);
                 });
             if let Some(replay) = self.replay.as_mut() {
@@ -1221,37 +2093,64 @@ impl eframe::App for App {
                 });
             }
             Page::MapDark => {
-                #[cfg(not(target_arch = "wasm32"))]
+                egui::TopBottomPanel::top("map_controls")
+                    .resizable(false)
+                    .show(ctx, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Map traces");
+                            ui.checkbox(&mut self.show_heading, "show heading");
+                            ui.checkbox(&mut self.show_gnss_map, "show GNSS");
+                            ui.checkbox(&mut self.show_eskf, "show ESKF");
+                            ui.checkbox(&mut self.show_loose, "show Loose");
+                            if ui.button("Recenter").clicked() {
+                                self.map_memory.follow_my_position();
+                            }
+                        });
+                        #[cfg(target_arch = "wasm32")]
+                        ui.horizontal(|ui| {
+                            ui.label("Mapbox token");
+                            let response = ui.add(
+                                egui::TextEdit::singleline(&mut self.web_mapbox_token)
+                                    .desired_width(260.0)
+                                    .password(true),
+                            );
+                            if response.changed() {
+                                web_remember_mapbox_token(&self.web_mapbox_token);
+                                self.map_tiles =
+                                    map_tiles_from_token(&self.web_mapbox_token, ctx.clone());
+                                self.web_mapbox_token_applied = self.web_mapbox_token.clone();
+                            } else if self.web_mapbox_token != self.web_mapbox_token_applied {
+                                self.map_tiles =
+                                    map_tiles_from_token(&self.web_mapbox_token, ctx.clone());
+                                self.web_mapbox_token_applied = self.web_mapbox_token.clone();
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.colored_label(egui::Color32::from_rgb(0, 255, 255), "GNSS");
+                            ui.colored_label(egui::Color32::from_rgb(120, 170, 255), "ESKF");
+                            ui.colored_label(egui::Color32::from_rgb(120, 255, 170), "Loose");
+                            ui.colored_label(
+                                egui::Color32::from_rgb(255, 140, 220),
+                                "ESKF during GNSS outage",
+                            );
+                            ui.colored_label(
+                                egui::Color32::from_rgb(255, 255, 255),
+                                "ESKF heading",
+                            );
+                        });
+                    });
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Map overlay: GNSS + ESKF");
-                        ui.checkbox(&mut self.show_heading, "show heading");
-                        ui.checkbox(&mut self.show_gnss_map, "show GNSS");
-                        ui.checkbox(&mut self.show_eskf, "show ESKF");
-                        ui.checkbox(&mut self.show_loose, "show Loose");
-                        if ui.button("Recenter").clicked() {
-                            self.map_memory.follow_my_position();
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.colored_label(egui::Color32::from_rgb(0, 255, 255), "GNSS");
-                        ui.colored_label(egui::Color32::from_rgb(120, 170, 255), "ESKF");
-                        ui.colored_label(egui::Color32::from_rgb(120, 255, 170), "Loose");
-                        ui.colored_label(
-                            egui::Color32::from_rgb(255, 140, 220),
-                            "ESKF during GNSS outage",
-                        );
-                        ui.colored_label(egui::Color32::from_rgb(255, 255, 255), "ESKF heading");
-                    });
                     let mut map_traces: Vec<&Trace> = self.data.eskf_map.iter().collect();
                     if !self.show_gnss_map {
-                        map_traces.retain(|t| !t.name.contains("GNSS"));
+                        map_traces.retain(|t| {
+                            !t.name.contains("GNSS")
+                                && !t.name.contains("GNSS reference")
+                                && !t.name.contains("NAV")
+                                && !t.name.contains("truth")
+                        });
                     }
                     if !self.show_eskf {
-                        map_traces.retain(|t| {
-                            t.name != "ESKF path (lon,lat)"
-                                && t.name != "ESKF path during GNSS outage (lon,lat)"
-                        });
+                        map_traces.retain(|t| !t.name.contains("ESKF"));
                     }
                     if self.show_loose {
                         map_traces.extend(self.data.loose_map.iter());
@@ -1275,35 +2174,6 @@ impl eframe::App for App {
                         .with_plugin(track)
                         .double_click_to_zoom(true),
                     );
-                });
-                #[cfg(target_arch = "wasm32")]
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Map traces");
-                        ui.checkbox(&mut self.show_heading, "show heading");
-                        ui.checkbox(&mut self.show_gnss_map, "show GNSS");
-                        ui.checkbox(&mut self.show_eskf, "show ESKF");
-                        ui.checkbox(&mut self.show_loose, "show Loose");
-                    });
-                    let mut map_traces: Vec<&Trace> = self.data.eskf_map.iter().collect();
-                    if !self.show_gnss_map {
-                        map_traces.retain(|t| {
-                            !t.name.contains("GNSS")
-                                && !t.name.contains("GNSS reference")
-                                && !t.name.contains("NAV")
-                                && !t.name.contains("truth")
-                        });
-                    }
-                    if !self.show_eskf {
-                        map_traces.retain(|t| !t.name.contains("ESKF"));
-                    }
-                    if self.show_loose {
-                        map_traces.extend(self.data.loose_map.iter());
-                    }
-                    draw_lon_lat_plot(ui, map_traces.iter().copied(), self.max_points_per_trace);
-                    if self.show_heading {
-                        draw_heading_plot(ui, &self.data.eskf_map_heading);
-                    }
                 });
             }
         }
@@ -1347,9 +2217,20 @@ fn draw_plot<'a, I>(
                 return slice.iter().step_by(step.max(1)).copied().collect();
             }
 
+            #[cfg(target_arch = "wasm32")]
+            let scan_step = {
+                let scan_budget = max_points.saturating_mul(WEB_DECIMATION_SCAN_MULTIPLIER);
+                (slice.len() / scan_budget.max(1)).max(1)
+            };
+            #[cfg(not(target_arch = "wasm32"))]
+            let scan_step = 1usize;
+
             let mut min_b: Vec<Option<(usize, f64)>> = vec![None; buckets];
             let mut max_b: Vec<Option<(usize, f64)>> = vec![None; buckets];
-            for (i, p) in slice.iter().enumerate() {
+            let mut visit = |i: usize, p: &[f64; 2]| {
+                if !p[0].is_finite() || !p[1].is_finite() {
+                    return;
+                }
                 let mut b = (((p[0] - x0) / span) * buckets as f64).floor() as usize;
                 if b >= buckets {
                     b = buckets - 1;
@@ -1362,6 +2243,14 @@ fn draw_plot<'a, I>(
                     Some((_, y)) if p[1] <= y => {}
                     _ => max_b[b] = Some((i, p[1])),
                 }
+            };
+            for (i, p) in slice.iter().enumerate().step_by(scan_step) {
+                visit(i, p);
+            }
+            if scan_step > 1
+                && let Some((i, p)) = slice.len().checked_sub(1).map(|i| (i, &slice[i]))
+            {
+                visit(i, p);
             }
 
             let mut out = Vec::with_capacity(max_points);
@@ -1402,7 +2291,12 @@ fn draw_plot<'a, I>(
 
             if out.is_empty() {
                 let step = ((slice.len() as f64) / (max_points as f64)).ceil() as usize;
-                return slice.iter().step_by(step.max(1)).copied().collect();
+                return slice
+                    .iter()
+                    .step_by(step.max(1))
+                    .copied()
+                    .filter(|p| p[0].is_finite() && p[1].is_finite())
+                    .collect();
             }
             out
         }
@@ -1419,6 +2313,15 @@ fn draw_plot<'a, I>(
             points.len()
         };
         let slice = &points[start..end];
+        #[cfg(target_arch = "wasm32")]
+        if slice.len()
+            > max_points
+                .saturating_mul(WEB_DECIMATION_SCAN_MULTIPLIER)
+                .max(max_points + 1)
+        {
+            return decimate_finite_slice(slice, max_points);
+        }
+
         let mut out = Vec::new();
         let mut seg_start = 0usize;
         while seg_start < slice.len() {
@@ -1450,10 +2353,35 @@ fn draw_plot<'a, I>(
         out
     }
 
+    #[cfg(target_arch = "wasm32")]
+    {
+        let desired_size = egui::vec2(ui.available_width(), TIME_SERIES_PLOT_FRAME_HEIGHT);
+        let (rect, _) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
+        if !ui.is_rect_visible(rect) {
+            return;
+        }
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+            draw_plot_body(ui, title, traces, show_legend, max_points_per_trace);
+        });
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     ui.vertical(|ui| {
+        draw_plot_body(ui, title, traces, show_legend, max_points_per_trace);
+    });
+
+    fn draw_plot_body<'a, I>(
+        ui: &mut egui::Ui,
+        title: &str,
+        traces: I,
+        show_legend: bool,
+        max_points_per_trace: usize,
+    ) where
+        I: IntoIterator<Item = &'a Trace>,
+    {
         ui.label(title);
         let mut plot = Plot::new(title)
-            .height(200.0)
+            .height(TIME_SERIES_PLOT_HEIGHT)
             .link_axis("shared_x", egui::Vec2b::new(true, false))
             .x_axis_formatter(|mark, _range| format!("{:.1}", mark.value))
             .allow_drag(true)
@@ -1484,54 +2412,7 @@ fn draw_plot<'a, I>(
                 }
             }
         });
-    });
-}
-
-#[cfg(target_arch = "wasm32")]
-fn draw_lon_lat_plot<'a, I>(ui: &mut egui::Ui, traces: I, max_points_per_trace: usize)
-where
-    I: IntoIterator<Item = &'a Trace>,
-{
-    ui.vertical(|ui| {
-        ui.label("Longitude / Latitude");
-        Plot::new("web_lon_lat_map")
-            .height((ui.available_height() - 20.0).max(320.0))
-            .data_aspect(1.0)
-            .allow_drag(true)
-            .allow_zoom(true)
-            .legend(Legend::default())
-            .show(ui, |plot_ui| {
-                for trace in traces {
-                    if trace.points.is_empty() {
-                        continue;
-                    }
-                    let step = (trace.points.len() / max_points_per_trace.max(1)).max(1);
-                    let points: PlotPoints<'_> =
-                        trace.points.iter().step_by(step).copied().collect();
-                    plot_ui.line(Line::new(trace.name.clone(), points));
-                }
-            });
-    });
-}
-
-#[cfg(target_arch = "wasm32")]
-fn draw_heading_plot(ui: &mut egui::Ui, headings: &[HeadingSample]) {
-    if headings.is_empty() {
-        return;
     }
-    let points: PlotPoints<'_> = headings
-        .iter()
-        .step_by((headings.len() / 500).max(1))
-        .map(|h| [h.t_s, h.yaw_deg])
-        .collect();
-    ui.label("Heading");
-    Plot::new("web_heading")
-        .height(160.0)
-        .allow_drag(true)
-        .allow_zoom(true)
-        .show(ui, |plot_ui| {
-            plot_ui.line(Line::new("ESKF heading [deg]", points));
-        });
 }
 
 #[cfg(not(target_arch = "wasm32"))]

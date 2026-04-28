@@ -1,0 +1,154 @@
+{
+  "datasets": [
+    {
+      "id": "ubx_raw_20260312_170548",
+      "label": "Baseline 2026-03-12 17:05:48",
+      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
+      "base_url": "ubx_raw_20260312_170548",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz",
+      "reference_attitude_gz": "reference_attitude.csv.gz",
+      "reference_mount_gz": "reference_mount.csv.gz"
+    },
+    {
+      "id": "ubx_raw_20260312_170901",
+      "label": "Baseline 2026-03-12 17:09:01",
+      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
+      "base_url": "ubx_raw_20260312_170901",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz",
+      "reference_attitude_gz": "reference_attitude.csv.gz",
+      "reference_mount_gz": "reference_mount.csv.gz"
+    },
+    {
+      "id": "ubx_raw_20260312_171222",
+      "label": "Baseline 2026-03-12 17:12:22",
+      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
+      "base_url": "ubx_raw_20260312_171222",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz",
+      "reference_attitude_gz": "reference_attitude.csv.gz",
+      "reference_mount_gz": "reference_mount.csv.gz"
+    },
+    {
+      "id": "ubx_raw_20260312_171747",
+      "label": "Baseline 2026-03-12 17:17:47",
+      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
+      "base_url": "ubx_raw_20260312_171747",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz",
+      "reference_attitude_gz": "reference_attitude.csv.gz",
+      "reference_mount_gz": "reference_mount.csv.gz"
+    },
+    {
+      "id": "ubx_raw_20260312_172206",
+      "label": "Baseline 2026-03-12 17:22:06",
+      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
+      "base_url": "ubx_raw_20260312_172206",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz",
+      "reference_attitude_gz": "reference_attitude.csv.gz",
+      "reference_mount_gz": "reference_mount.csv.gz"
+    },
+    {
+      "id": "ubx_raw_20260309_112501",
+      "label": "Baseline 2026-03-09 11:25:01",
+      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
+      "base_url": "ubx_raw_20260309_112501",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz",
+      "reference_attitude_gz": "reference_attitude.csv.gz",
+      "reference_mount_gz": "reference_mount.csv.gz"
+    },
+    {
+      "id": "ubx_raw_20260307_124850",
+      "label": "Baseline 2026-03-07 12:48:50 (large forward error)",
+      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
+      "base_url": "ubx_raw_20260307_124850",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz",
+      "reference_attitude_gz": "reference_attitude.csv.gz",
+      "reference_mount_gz": "reference_mount.csv.gz"
+    },
+    {
+      "id": "ubx_raw_20260309_111644",
+      "label": "Baseline 2026-03-09 11:16:44 (13 deg forward error)",
+      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
+      "base_url": "ubx_raw_20260309_111644",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz",
+      "reference_attitude_gz": "reference_attitude.csv.gz",
+      "reference_mount_gz": "reference_mount.csv.gz"
+    },
+    {
+      "id": "ubx_raw_20260326_215732",
+      "label": "Home to parking lot 2026-03-26",
+      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
+      "base_url": "ubx_raw_20260326_215732",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz",
+      "reference_attitude_gz": "reference_attitude.csv.gz",
+      "reference_mount_gz": "reference_mount.csv.gz"
+    },
+    {
+      "id": "ubx_raw_20260326_220633",
+      "label": "Figure 8 2026-03-26",
+      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
+      "base_url": "ubx_raw_20260326_220633",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz",
+      "reference_attitude_gz": "reference_attitude.csv.gz",
+      "reference_mount_gz": "reference_mount.csv.gz"
+    },
+    {
+      "id": "ubx_raw_20260326_220916",
+      "label": "Round maneuver 2026-03-26",
+      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
+      "base_url": "ubx_raw_20260326_220916",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz",
+      "reference_attitude_gz": "reference_attitude.csv.gz",
+      "reference_mount_gz": "reference_mount.csv.gz"
+    },
+    {
+      "id": "ubx_raw_20260326_221113",
+      "label": "Drive thru 2026-03-26",
+      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
+      "base_url": "ubx_raw_20260326_221113",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz",
+      "reference_attitude_gz": "reference_attitude.csv.gz",
+      "reference_mount_gz": "reference_mount.csv.gz"
+    },
+    {
+      "id": "ubx_raw_20260328_153757",
+      "label": "Galbi town 2026-03-28",
+      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
+      "base_url": "ubx_raw_20260328_153757",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz",
+      "reference_attitude_gz": "reference_attitude.csv.gz",
+      "reference_mount_gz": "reference_mount.csv.gz"
+    },
+    {
+      "id": "ubx_raw_20260328_173732",
+      "label": "Galbi town to Square One 2026-03-28 (low signal)",
+      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
+      "base_url": "ubx_raw_20260328_173732",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz",
+      "reference_attitude_gz": "reference_attitude.csv.gz",
+      "reference_mount_gz": "reference_mount.csv.gz"
+    },
+    {
+      "id": "ubx_raw_20260328_185927",
+      "label": "Square One to home 2026-03-28 (low signal)",
+      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
+      "base_url": "ubx_raw_20260328_185927",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz",
+      "reference_attitude_gz": "reference_attitude.csv.gz",
+      "reference_mount_gz": "reference_mount.csv.gz"
+    }
+  ]
+}

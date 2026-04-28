@@ -1,0 +1,100 @@
+{
+  "created_utc": "2026-04-28T17:25:24Z",
+  "dataset_id": "ubx_raw_20260326_215732",
+  "files": {
+    "gnss": {
+      "bytes": 55491,
+      "columns": [
+        "t_s",
+        "lat_deg",
+        "lon_deg",
+        "height_m",
+        "vn_mps",
+        "ve_mps",
+        "vd_mps",
+        "pos_std_n_m",
+        "pos_std_e_m",
+        "pos_std_d_m",
+        "vel_std_n_mps",
+        "vel_std_e_mps",
+        "vel_std_d_mps",
+        "heading_rad"
+      ],
+      "encoding": "gzip",
+      "first_t_s": -0.193,
+      "last_t_s": 520.807,
+      "media_type": "text/csv",
+      "path": "gnss.csv.gz",
+      "rows": 1043,
+      "sha256": "641e10cfacbcbc60211cf918b9e63466efd6b120cfcda70d92d6ea81a3082d07"
+    },
+    "imu": {
+      "bytes": 1694222,
+      "columns": [
+        "t_s",
+        "gx_radps",
+        "gy_radps",
+        "gz_radps",
+        "ax_mps2",
+        "ay_mps2",
+        "az_mps2"
+      ],
+      "encoding": "gzip",
+      "first_t_s": -0.03654956257343292,
+      "last_t_s": 521.5124276146292,
+      "media_type": "text/csv",
+      "path": "imu.csv.gz",
+      "rows": 51891,
+      "sha256": "bec365b835ac07eaf7af7a06a5f56008d85c240bd00bac406c39d71cacd18fc5"
+    },
+    "reference_attitude": {
+      "bytes": 225401,
+      "columns": [
+        "t_s",
+        "roll_deg",
+        "pitch_deg",
+        "yaw_deg"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.193,
+      "last_t_s": 521.692,
+      "media_type": "text/csv",
+      "path": "reference_attitude.csv.gz",
+      "rows": 15804,
+      "sha256": "ddf471b6ab899691f3b979fef63c3eb37adbc9ca0ac3ea6b7fb6a3618256cc1b"
+    },
+    "reference_mount": {
+      "bytes": 4427,
+      "columns": [
+        "t_s",
+        "roll_deg",
+        "pitch_deg",
+        "yaw_deg"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.0,
+      "last_t_s": 521.0,
+      "media_type": "text/csv",
+      "path": "reference_mount.csv.gz",
+      "rows": 1043,
+      "sha256": "1ba78eafae31abd53428b83a7efc61340afafe1f492a6e839a0bc3a01600151e"
+    }
+  },
+  "manifest_version": 1,
+  "samples": {
+    "gnss": 1043,
+    "imu": 51891,
+    "reference_attitude": 15804,
+    "reference_mount": 1043
+  },
+  "schema": "generic-replay-v1",
+  "source": {
+    "format": "generic",
+    "input_path": "/private/tmp/generic_with_refs_sources/ubx_raw_20260326_215732"
+  },
+  "time_span_s": {
+    "end": 521.692,
+    "start": -0.193
+  },
+  "title": "Home to parking lot 2026-03-26"
+}

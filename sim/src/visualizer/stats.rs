@@ -1,4 +1,3 @@
-#[cfg(not(target_arch = "wasm32"))]
 use walkers::{Position, lon_lat};
 
 use super::model::{PlotData, Trace};
@@ -203,7 +202,6 @@ pub fn max_step_abs(traces: &[Trace]) -> Option<f64> {
     if any { Some(best) } else { None }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub fn map_center_from_traces(traces: &[Trace]) -> Position {
     let mut n = 0usize;
     let mut lon = 0.0_f64;

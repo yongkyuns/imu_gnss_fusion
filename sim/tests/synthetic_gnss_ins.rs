@@ -36,11 +36,17 @@ command type,yaw (deg),pitch (deg),roll (deg),vx_body (m/s),vy_body (m/s),vz_bod
 1,5,0,0,0.5,0,0,2,1
 1,-5,0,0,-0.5,0,0,2,1
 ";
-const SHORT_SCENARIO: &str = "\
+const VISUALIZER_AUX_SCENARIO: &str = "\
 initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
-wait 1s
-accelerate 0.5m/s^2 for 2s
-brake 0.5m/s^2 for 2s
+wait 5s
+repeat 10 {
+    accelerate 1.0m/s^2 for 4s
+    hold 4s
+    turn left 12dps for 4s
+    hold 4s
+    turn right 12dps for 4s
+    brake 1.0m/s^2 for 4s
+}
 ";
 
 #[test]
@@ -502,7 +508,7 @@ fn synthetic_inputs_populate_visualizer_eskf_traces() -> Result<()> {
         "imu_gnss_fusion_visualizer_short_{}.scenario",
         std::process::id()
     ));
-    fs::write(&profile_path, SHORT_SCENARIO)?;
+    fs::write(&profile_path, VISUALIZER_AUX_SCENARIO)?;
     let data_result = build_synthetic_plot_data(
         &SyntheticVisualizerConfig {
             motion_def: Some(profile_path.clone()),
@@ -534,6 +540,40 @@ fn synthetic_inputs_populate_visualizer_eskf_traces() -> Result<()> {
     assert!(!data.eskf_cmp_att.is_empty());
     assert!(!data.eskf_misalignment.is_empty());
     assert!(!data.eskf_map.is_empty());
+    assert!(
+        data.loose_cmp_att
+            .iter()
+            .any(|trace| !trace.points.is_empty()),
+        "synthetic visualizer produced no loose attitude points"
+    );
+    assert!(
+        data.loose_bias_accel
+            .iter()
+            .any(|trace| !trace.points.is_empty()),
+        "synthetic visualizer produced no loose accel-bias points"
+    );
+    assert!(
+        data.eskf_bump_pitch_speed
+            .iter()
+            .any(|trace| !trace.points.is_empty()),
+        "synthetic visualizer produced no ESKF bump pitch/speed points"
+    );
+    assert!(
+        data.eskf_bump_diag
+            .iter()
+            .any(|trace| !trace.points.is_empty()),
+        "synthetic visualizer produced no ESKF bump diagnostic points"
+    );
+    assert!(
+        data.align_cmp_att
+            .iter()
+            .any(|trace| !trace.points.is_empty()),
+        "synthetic visualizer produced no align compare attitude points"
+    );
+    assert!(
+        data.align_cov.iter().any(|trace| !trace.points.is_empty()),
+        "synthetic visualizer produced no align covariance points"
+    );
     require_trace_schema(
         "speed",
         &data.speed,
@@ -627,6 +667,40 @@ fn synthetic_inputs_populate_visualizer_eskf_traces() -> Result<()> {
             "Synthetic truth path (lon,lat)",
             "Synthetic GNSS path (lon,lat)",
             "ESKF path (lon,lat)",
+        ],
+    )?;
+    require_trace_schema(
+        "loose_cmp_att",
+        &data.loose_cmp_att,
+        &[
+            "Loose roll [deg]",
+            "Loose pitch [deg]",
+            "Loose yaw [deg]",
+            "Reference roll [deg]",
+            "Reference pitch [deg]",
+            "Reference yaw [deg]",
+        ],
+    )?;
+    require_trace_schema(
+        "eskf_bump_pitch_speed",
+        &data.eskf_bump_pitch_speed,
+        &["ESKF pitch [deg]", "vehicle speed [m/s]"],
+    )?;
+    require_trace_schema(
+        "eskf_bump_diag",
+        &data.eskf_bump_diag,
+        &["Pitch HPF [deg]", "Pitch RMS EMA [deg]"],
+    )?;
+    require_trace_schema(
+        "align_cmp_att",
+        &data.align_cmp_att,
+        &[
+            "Align roll [deg]",
+            "Align pitch [deg]",
+            "Align yaw [deg]",
+            "Reference mount roll [deg]",
+            "Reference mount pitch [deg]",
+            "Reference mount yaw [deg]",
         ],
     )?;
 

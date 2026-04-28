@@ -1,0 +1,591 @@
+{
+  "$schema": "./generic-datasets.schema.json",
+  "schema_version": 1,
+  "datasets": [
+    {
+      "id": "ubx_raw_20260312_170548",
+      "version": "v1",
+      "description": "Baseline 2026-03-12 17:05:48",
+      "license": "MIT",
+      "replay_dir": ".",
+      "files": [
+        {
+          "path": "imu.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260312_170548/imu.csv.gz",
+          "sha256": "db585024923ad4b4cc7f905b794901949d5465913f570da02704501d39db6308",
+          "bytes": 578953
+        },
+        {
+          "path": "gnss.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260312_170548/gnss.csv.gz",
+          "sha256": "a418674086cdb42743706259232695c31c8bbe3556c2c60afa7365985579c195",
+          "bytes": 18820
+        },
+        {
+          "path": "reference_attitude.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260312_170548/reference_attitude.csv.gz",
+          "sha256": "b6af98f5eb76676500939380327c9d8ffc93ca31e3dd8ad565d77484c6279bc4",
+          "bytes": 72356
+        },
+        {
+          "path": "reference_mount.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260312_170548/reference_mount.csv.gz",
+          "sha256": "2de00193ba4fe67f70df2ca9938edd3af9f1bea4367eb1f30ce9310459addd9d",
+          "bytes": 1632
+        }
+      ],
+      "smoke": {
+        "enabled": false,
+        "max_imu_rows": 17604,
+        "max_gnss_rows": 354,
+        "misalignment": "internal"
+      }
+    },
+    {
+      "id": "ubx_raw_20260312_170901",
+      "version": "v1",
+      "description": "Baseline 2026-03-12 17:09:01",
+      "license": "MIT",
+      "replay_dir": ".",
+      "files": [
+        {
+          "path": "imu.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260312_170901/imu.csv.gz",
+          "sha256": "e2728d1318add67525a5098b942782f0964c0ee895882b09b459622677c95cbe",
+          "bytes": 599790
+        },
+        {
+          "path": "gnss.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260312_170901/gnss.csv.gz",
+          "sha256": "e189e0ea14515ca2a58e477063dcb4046b520eda02d554549e825dbf55171aa8",
+          "bytes": 20696
+        },
+        {
+          "path": "reference_attitude.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260312_170901/reference_attitude.csv.gz",
+          "sha256": "8935dd6081de7804f69a63de81f69aa4873f563322827fbb448692a16090cc37",
+          "bytes": 88009
+        },
+        {
+          "path": "reference_mount.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260312_170901/reference_mount.csv.gz",
+          "sha256": "b91bae61c00feb20e45bce15bb463aa6fc0cc9f96463b42147002a9fd220c388",
+          "bytes": 1706
+        }
+      ],
+      "smoke": {
+        "enabled": false,
+        "max_imu_rows": 18904,
+        "max_gnss_rows": 380,
+        "misalignment": "internal"
+      }
+    },
+    {
+      "id": "ubx_raw_20260312_171222",
+      "version": "v1",
+      "description": "Baseline 2026-03-12 17:12:22",
+      "license": "MIT",
+      "replay_dir": ".",
+      "files": [
+        {
+          "path": "imu.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260312_171222/imu.csv.gz",
+          "sha256": "b36cc0905b9beb52273e8f0d7daade0802077e788bed8f705c9807ed69542e80",
+          "bytes": 993375
+        },
+        {
+          "path": "gnss.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260312_171222/gnss.csv.gz",
+          "sha256": "af31e854627e009fbfb2875035078ca2d1a7062751ea14d1ac32bad8b1e49953",
+          "bytes": 32006
+        },
+        {
+          "path": "reference_attitude.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260312_171222/reference_attitude.csv.gz",
+          "sha256": "c10e7cce3c500f140c0f64f03b4daeb63786da3834a1d28a166a7e2b4929155d",
+          "bytes": 134115
+        },
+        {
+          "path": "reference_mount.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260312_171222/reference_mount.csv.gz",
+          "sha256": "3760433b3d2740430aba9b0f5f1f205207fb910216166f6b3824dadbc8101402",
+          "bytes": 2192
+        }
+      ],
+      "smoke": {
+        "enabled": false,
+        "max_imu_rows": 20000,
+        "max_gnss_rows": 400,
+        "misalignment": "internal"
+      }
+    },
+    {
+      "id": "ubx_raw_20260312_171747",
+      "version": "v1",
+      "description": "Baseline 2026-03-12 17:17:47",
+      "license": "MIT",
+      "replay_dir": ".",
+      "files": [
+        {
+          "path": "imu.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260312_171747/imu.csv.gz",
+          "sha256": "c8a4be22f334b0c6ece6db8e34acc7967552de94c6bb2645479e7800f72c4492",
+          "bytes": 773393
+        },
+        {
+          "path": "gnss.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260312_171747/gnss.csv.gz",
+          "sha256": "895347d1d7fd85d961ea6c1a2a80fc3acdcfbbab0e2a47bdd3ef2bca4f33bb0e",
+          "bytes": 26370
+        },
+        {
+          "path": "reference_attitude.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260312_171747/reference_attitude.csv.gz",
+          "sha256": "bb0bdb98b4d0941c497b9c536358f35ea8effe112539ddca301e689a3a656921",
+          "bytes": 113629
+        },
+        {
+          "path": "reference_mount.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260312_171747/reference_mount.csv.gz",
+          "sha256": "45722d59d3de2f69e174dfe1a770ab64e3d20de3163326430eac4ad967f6e41d",
+          "bytes": 2056
+        }
+      ],
+      "smoke": {
+        "enabled": false,
+        "max_imu_rows": 20000,
+        "max_gnss_rows": 400,
+        "misalignment": "internal"
+      }
+    },
+    {
+      "id": "ubx_raw_20260312_172206",
+      "version": "v1",
+      "description": "Baseline 2026-03-12 17:22:06",
+      "license": "MIT",
+      "replay_dir": ".",
+      "files": [
+        {
+          "path": "imu.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260312_172206/imu.csv.gz",
+          "sha256": "7dade6307b827d6e59dd251f5c2dd6436d218c2e718ff0154d6e83e317d66939",
+          "bytes": 1364465
+        },
+        {
+          "path": "gnss.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260312_172206/gnss.csv.gz",
+          "sha256": "7887f55036e844c77923e99822ffe684b87427ba1f0515fd530233e46ae27313",
+          "bytes": 42357
+        },
+        {
+          "path": "reference_attitude.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260312_172206/reference_attitude.csv.gz",
+          "sha256": "0135dcffa507cd0d6a45fca87ceeb511fb4182fafc4169d0fa73974d8518dff1",
+          "bytes": 190511
+        },
+        {
+          "path": "reference_mount.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260312_172206/reference_mount.csv.gz",
+          "sha256": "7d69c78eb7a1f0a2d56ff13c2b5fa1f4621f6a3627c6e437486c2326840ba553",
+          "bytes": 3097
+        }
+      ],
+      "smoke": {
+        "enabled": false,
+        "max_imu_rows": 20000,
+        "max_gnss_rows": 400,
+        "misalignment": "internal"
+      }
+    },
+    {
+      "id": "ubx_raw_20260309_112501",
+      "version": "v1",
+      "description": "Baseline 2026-03-09 11:25:01",
+      "license": "MIT",
+      "replay_dir": ".",
+      "files": [
+        {
+          "path": "imu.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260309_112501/imu.csv.gz",
+          "sha256": "9525e74be1abcb82266976997258753fbe83f27dc53934d7af20c6db16126fb4",
+          "bytes": 3855632
+        },
+        {
+          "path": "gnss.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260309_112501/gnss.csv.gz",
+          "sha256": "9148b06b8290215e7a8590d56c7ecf8c82eb154b81f1f6dbb2afc7cf9a4a68c0",
+          "bytes": 122090
+        },
+        {
+          "path": "reference_attitude.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260309_112501/reference_attitude.csv.gz",
+          "sha256": "36b481c267899fefd3770ad2500660010e3f074aee5ed901977c8914476c8115",
+          "bytes": 596781
+        },
+        {
+          "path": "reference_mount.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260309_112501/reference_mount.csv.gz",
+          "sha256": "e2fe99366fe884462f6e0195999f434c2ccb0ef116a9e4fab2f57b70da5e42d5",
+          "bytes": 5819
+        }
+      ],
+      "smoke": {
+        "enabled": false,
+        "max_imu_rows": 20000,
+        "max_gnss_rows": 400,
+        "misalignment": "internal"
+      }
+    },
+    {
+      "id": "ubx_raw_20260307_124850",
+      "version": "v1",
+      "description": "Baseline 2026-03-07 12:48:50 (large forward error)",
+      "license": "MIT",
+      "replay_dir": ".",
+      "files": [
+        {
+          "path": "imu.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260307_124850/imu.csv.gz",
+          "sha256": "88b31137e3d1af44899fbd35ff8611b8e924f157ec78c0f61d88923ed52add73",
+          "bytes": 7473214
+        },
+        {
+          "path": "gnss.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260307_124850/gnss.csv.gz",
+          "sha256": "ce37e8b725e6868667fbf4a71b601a94047b2bb466599f0fd13ade9b60de6509",
+          "bytes": 270503
+        },
+        {
+          "path": "reference_attitude.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260307_124850/reference_attitude.csv.gz",
+          "sha256": "3c598784aa8ab2a50b8a3ab0798b0a61184c302188221e25c217966859cc15fa",
+          "bytes": 1188390
+        },
+        {
+          "path": "reference_mount.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260307_124850/reference_mount.csv.gz",
+          "sha256": "042111870860410e3026b2166c2feb845b2f4512c1febe4eee208a3a342a5410",
+          "bytes": 11117
+        }
+      ],
+      "smoke": {
+        "enabled": false,
+        "max_imu_rows": 20000,
+        "max_gnss_rows": 400,
+        "misalignment": "internal"
+      }
+    },
+    {
+      "id": "ubx_raw_20260309_111644",
+      "version": "v1",
+      "description": "Baseline 2026-03-09 11:16:44 (13 deg forward error)",
+      "license": "MIT",
+      "replay_dir": ".",
+      "files": [
+        {
+          "path": "imu.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260309_111644/imu.csv.gz",
+          "sha256": "23d08f1b1282c47b1986f50fe7cac1d0fe964f06b4552b0a541ec40568c6594e",
+          "bytes": 1353429
+        },
+        {
+          "path": "gnss.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260309_111644/gnss.csv.gz",
+          "sha256": "0de734b37cbd382556b16f7cf534465380f87ede8f0ccfb46da4a4c8e7d01016",
+          "bytes": 44590
+        },
+        {
+          "path": "reference_attitude.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260309_111644/reference_attitude.csv.gz",
+          "sha256": "832624e4fb2180f69f3561f8a15cae9adc6435c1aa521793cde5e447cdf29215",
+          "bytes": 165574
+        },
+        {
+          "path": "reference_mount.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260309_111644/reference_mount.csv.gz",
+          "sha256": "5b28dcc2d2079b6251b045eb9aba5d6683cb7f207b730920994f5e9b7940f171",
+          "bytes": 3594
+        }
+      ],
+      "smoke": {
+        "enabled": false,
+        "max_imu_rows": 20000,
+        "max_gnss_rows": 400,
+        "misalignment": "internal"
+      }
+    },
+    {
+      "id": "ubx_raw_20260326_215732",
+      "version": "v1",
+      "description": "Home to parking lot 2026-03-26",
+      "license": "MIT",
+      "replay_dir": ".",
+      "files": [
+        {
+          "path": "imu.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260326_215732/imu.csv.gz",
+          "sha256": "bec365b835ac07eaf7af7a06a5f56008d85c240bd00bac406c39d71cacd18fc5",
+          "bytes": 1694222
+        },
+        {
+          "path": "gnss.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260326_215732/gnss.csv.gz",
+          "sha256": "641e10cfacbcbc60211cf918b9e63466efd6b120cfcda70d92d6ea81a3082d07",
+          "bytes": 55491
+        },
+        {
+          "path": "reference_attitude.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260326_215732/reference_attitude.csv.gz",
+          "sha256": "ddf471b6ab899691f3b979fef63c3eb37adbc9ca0ac3ea6b7fb6a3618256cc1b",
+          "bytes": 225401
+        },
+        {
+          "path": "reference_mount.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260326_215732/reference_mount.csv.gz",
+          "sha256": "1ba78eafae31abd53428b83a7efc61340afafe1f492a6e839a0bc3a01600151e",
+          "bytes": 4427
+        }
+      ],
+      "smoke": {
+        "enabled": false,
+        "max_imu_rows": 20000,
+        "max_gnss_rows": 400,
+        "misalignment": "internal"
+      }
+    },
+    {
+      "id": "ubx_raw_20260326_220633",
+      "version": "v1",
+      "description": "Figure 8 2026-03-26",
+      "license": "MIT",
+      "replay_dir": ".",
+      "files": [
+        {
+          "path": "imu.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260326_220633/imu.csv.gz",
+          "sha256": "54c4430f015c269c5b2adc6c73cb15460823c009e261cf7dc5644eb54a736e78",
+          "bytes": 530018
+        },
+        {
+          "path": "gnss.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260326_220633/gnss.csv.gz",
+          "sha256": "ef46f0451a8276a4d3ef09fe5569b16becc71de3d66fe3c848e2f69fad3c69d4",
+          "bytes": 17080
+        },
+        {
+          "path": "reference_attitude.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260326_220633/reference_attitude.csv.gz",
+          "sha256": "2b6fdfe2cfbb36a7b3995eea3aa284f6c19fefd1f33944b4fffb96c613bba8da",
+          "bytes": 61101
+        },
+        {
+          "path": "reference_mount.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260326_220633/reference_mount.csv.gz",
+          "sha256": "84319dc2b6bb0cf990c779420dacd6e1c6f46007b7e9b131d636e0414ffb52fb",
+          "bytes": 1621
+        }
+      ],
+      "smoke": {
+        "enabled": true,
+        "max_imu_rows": 15010,
+        "max_gnss_rows": 302,
+        "misalignment": "internal"
+      }
+    },
+    {
+      "id": "ubx_raw_20260326_220916",
+      "version": "v1",
+      "description": "Round maneuver 2026-03-26",
+      "license": "MIT",
+      "replay_dir": ".",
+      "files": [
+        {
+          "path": "imu.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260326_220916/imu.csv.gz",
+          "sha256": "72da1742885b0f8c3c843849c57f44e0d9abed653277fd4a63e3d47ce9d73497",
+          "bytes": 317944
+        },
+        {
+          "path": "gnss.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260326_220916/gnss.csv.gz",
+          "sha256": "1cc273056632df21d1cc85018e069878600cf1ab255af9b57f1ef2458aa2cae0",
+          "bytes": 11035
+        },
+        {
+          "path": "reference_attitude.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260326_220916/reference_attitude.csv.gz",
+          "sha256": "f9930e6f4be799bbbe1da5f3717fc3bcc6f36b521c1fdff239c5192567b5603f",
+          "bytes": 40041
+        },
+        {
+          "path": "reference_mount.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260326_220916/reference_mount.csv.gz",
+          "sha256": "7e78ce6d661e0f92c3ec9afd21c3e221f3ff423ef7f6b20750b48b96569edd70",
+          "bytes": 1118
+        }
+      ],
+      "smoke": {
+        "enabled": false,
+        "max_imu_rows": 9502,
+        "max_gnss_rows": 191,
+        "misalignment": "internal"
+      }
+    },
+    {
+      "id": "ubx_raw_20260326_221113",
+      "version": "v1",
+      "description": "Drive thru 2026-03-26",
+      "license": "MIT",
+      "replay_dir": ".",
+      "files": [
+        {
+          "path": "imu.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260326_221113/imu.csv.gz",
+          "sha256": "0f2bb818c010f1ae6eafa710d03432a91d171709cca4ec3d95e404e0ffa98620",
+          "bytes": 1472401
+        },
+        {
+          "path": "gnss.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260326_221113/gnss.csv.gz",
+          "sha256": "551f4108469f611ca68a6eaa6feaf702177887c159d154aeb264b1517a77f44f",
+          "bytes": 51056
+        },
+        {
+          "path": "reference_attitude.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260326_221113/reference_attitude.csv.gz",
+          "sha256": "830c3e5a86da1e1aff0e4fec25d4d905b684b28144aa5e8214f478f94c08c75d",
+          "bytes": 177826
+        },
+        {
+          "path": "reference_mount.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260326_221113/reference_mount.csv.gz",
+          "sha256": "810198844a4fca5dd82ebed47f31214365f1e1f6e33e60fde640ad7d4fa9477d",
+          "bytes": 4506
+        }
+      ],
+      "smoke": {
+        "enabled": false,
+        "max_imu_rows": 20000,
+        "max_gnss_rows": 400,
+        "misalignment": "internal"
+      }
+    },
+    {
+      "id": "ubx_raw_20260328_153757",
+      "version": "v1",
+      "description": "Galbi town 2026-03-28",
+      "license": "MIT",
+      "replay_dir": ".",
+      "files": [
+        {
+          "path": "imu.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260328_153757/imu.csv.gz",
+          "sha256": "19976f79486f1247ac2f3379d24437a290ed8bfb1682e1152f5c19eac43ef75b",
+          "bytes": 4149511
+        },
+        {
+          "path": "gnss.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260328_153757/gnss.csv.gz",
+          "sha256": "0e0fd61bf69c417e95e7daf263ed11912ce65c2bd2298a2e8728bfecdeda9d62",
+          "bytes": 138848
+        },
+        {
+          "path": "reference_attitude.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260328_153757/reference_attitude.csv.gz",
+          "sha256": "91277661b1c49d9113fe3695aef049cca1190b287cb0e58777889d0ebccabd8d",
+          "bytes": 631542
+        },
+        {
+          "path": "reference_mount.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260328_153757/reference_mount.csv.gz",
+          "sha256": "3ecd9b9951c60d087cfd30039a787be895fbb0e6a12aa938c5010d9740af72be",
+          "bytes": 9847
+        }
+      ],
+      "smoke": {
+        "enabled": false,
+        "max_imu_rows": 20000,
+        "max_gnss_rows": 400,
+        "misalignment": "internal"
+      }
+    },
+    {
+      "id": "ubx_raw_20260328_173732",
+      "version": "v1",
+      "description": "Galbi town to Square One 2026-03-28 (low signal)",
+      "license": "MIT",
+      "replay_dir": ".",
+      "files": [
+        {
+          "path": "imu.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260328_173732/imu.csv.gz",
+          "sha256": "2354998adc41507b79f251a4a305296f4197a51b3d82bfa1d3bb6e7049fcbcba",
+          "bytes": 3452979
+        },
+        {
+          "path": "gnss.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260328_173732/gnss.csv.gz",
+          "sha256": "cbb3abcefffc1e7007e79786f216d44f7615a450a7f1a359ecaca9022c66b599",
+          "bytes": 139540
+        },
+        {
+          "path": "reference_attitude.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260328_173732/reference_attitude.csv.gz",
+          "sha256": "48e1db6c0a4ea54093c4ed6d5b4b34a96b83b8f0d865139fceace4e706c366b8",
+          "bytes": 308585
+        },
+        {
+          "path": "reference_mount.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260328_173732/reference_mount.csv.gz",
+          "sha256": "093a7bebc5f70ce4152ef835d25828946219dee85553465e84911deeaa43e39e",
+          "bytes": 5380
+        }
+      ],
+      "smoke": {
+        "enabled": false,
+        "max_imu_rows": 20000,
+        "max_gnss_rows": 400,
+        "misalignment": "internal"
+      }
+    },
+    {
+      "id": "ubx_raw_20260328_185927",
+      "version": "v1",
+      "description": "Square One to home 2026-03-28 (low signal)",
+      "license": "MIT",
+      "replay_dir": ".",
+      "files": [
+        {
+          "path": "imu.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260328_185927/imu.csv.gz",
+          "sha256": "b021f36a57763d9347b8a0d343dd9c276fdd76a4c0c300505360168c0868eb78",
+          "bytes": 3648205
+        },
+        {
+          "path": "gnss.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260328_185927/gnss.csv.gz",
+          "sha256": "0ced3e39bd080d2406204298bac44803233094d3b329a02010bf045e07e192ff",
+          "bytes": 138090
+        },
+        {
+          "path": "reference_attitude.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260328_185927/reference_attitude.csv.gz",
+          "sha256": "3b464f6a0d604a83340129841bdf6b2bae98ca249ac89bc8cbccaf47599a4b1f",
+          "bytes": 498083
+        },
+        {
+          "path": "reference_mount.csv.gz",
+          "url": "../../web/datasets/ubx_raw_20260328_185927/reference_mount.csv.gz",
+          "sha256": "25f84e618ddaff27aab07d449e0e7b5c3a043a44aa448a04f0dbf54d4261b6ec",
+          "bytes": 9511
+        }
+      ],
+      "smoke": {
+        "enabled": false,
+        "max_imu_rows": 20000,
+        "max_gnss_rows": 400,
+        "misalignment": "internal"
+      }
+    }
+  ]
+}

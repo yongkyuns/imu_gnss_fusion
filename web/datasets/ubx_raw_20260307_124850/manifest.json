@@ -1,0 +1,100 @@
+{
+  "created_utc": "2026-04-28T17:25:18Z",
+  "dataset_id": "ubx_raw_20260307_124850",
+  "files": {
+    "gnss": {
+      "bytes": 270503,
+      "columns": [
+        "t_s",
+        "lat_deg",
+        "lon_deg",
+        "height_m",
+        "vn_mps",
+        "ve_mps",
+        "vd_mps",
+        "pos_std_n_m",
+        "pos_std_e_m",
+        "pos_std_d_m",
+        "vel_std_n_mps",
+        "vel_std_e_mps",
+        "vel_std_d_mps",
+        "heading_rad"
+      ],
+      "encoding": "gzip",
+      "first_t_s": -0.042,
+      "last_t_s": 2607.458,
+      "media_type": "text/csv",
+      "path": "gnss.csv.gz",
+      "rows": 5207,
+      "sha256": "ce37e8b725e6868667fbf4a71b601a94047b2bb466599f0fd13ade9b60de6509"
+    },
+    "imu": {
+      "bytes": 7473214,
+      "columns": [
+        "t_s",
+        "gx_radps",
+        "gy_radps",
+        "gz_radps",
+        "ax_mps2",
+        "ay_mps2",
+        "az_mps2"
+      ],
+      "encoding": "gzip",
+      "first_t_s": -0.06650719273090362,
+      "last_t_s": 2608.010774216652,
+      "media_type": "text/csv",
+      "path": "imu.csv.gz",
+      "rows": 259460,
+      "sha256": "88b31137e3d1af44899fbd35ff8611b8e924f157ec78c0f61d88923ed52add73"
+    },
+    "reference_attitude": {
+      "bytes": 1188390,
+      "columns": [
+        "t_s",
+        "roll_deg",
+        "pitch_deg",
+        "yaw_deg"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.042,
+      "last_t_s": 2608.065,
+      "media_type": "text/csv",
+      "path": "reference_attitude.csv.gz",
+      "rows": 79032,
+      "sha256": "3c598784aa8ab2a50b8a3ab0798b0a61184c302188221e25c217966859cc15fa"
+    },
+    "reference_mount": {
+      "bytes": 11117,
+      "columns": [
+        "t_s",
+        "roll_deg",
+        "pitch_deg",
+        "yaw_deg"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.0,
+      "last_t_s": 2607.5,
+      "media_type": "text/csv",
+      "path": "reference_mount.csv.gz",
+      "rows": 5216,
+      "sha256": "042111870860410e3026b2166c2feb845b2f4512c1febe4eee208a3a342a5410"
+    }
+  },
+  "manifest_version": 1,
+  "samples": {
+    "gnss": 5207,
+    "imu": 259460,
+    "reference_attitude": 79032,
+    "reference_mount": 5216
+  },
+  "schema": "generic-replay-v1",
+  "source": {
+    "format": "generic",
+    "input_path": "/private/tmp/generic_with_refs_sources/ubx_raw_20260307_124850"
+  },
+  "time_span_s": {
+    "end": 2608.065,
+    "start": -0.06650719273090362
+  },
+  "title": "Baseline 2026-03-07 12:48:50 (large forward error)"
+}

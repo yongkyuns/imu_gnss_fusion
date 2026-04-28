@@ -1,0 +1,100 @@
+{
+  "created_utc": "2026-04-28T17:25:45Z",
+  "dataset_id": "ubx_raw_20260328_185927",
+  "files": {
+    "gnss": {
+      "bytes": 138090,
+      "columns": [
+        "t_s",
+        "lat_deg",
+        "lon_deg",
+        "height_m",
+        "vn_mps",
+        "ve_mps",
+        "vd_mps",
+        "pos_std_n_m",
+        "pos_std_e_m",
+        "pos_std_d_m",
+        "vel_std_n_mps",
+        "vel_std_e_mps",
+        "vel_std_d_mps",
+        "heading_rad"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 1.998,
+      "last_t_s": 1289.998,
+      "media_type": "text/csv",
+      "path": "gnss.csv.gz",
+      "rows": 2577,
+      "sha256": "0ced3e39bd080d2406204298bac44803233094d3b329a02010bf045e07e192ff"
+    },
+    "imu": {
+      "bytes": 3648205,
+      "columns": [
+        "t_s",
+        "gx_radps",
+        "gy_radps",
+        "gz_radps",
+        "ax_mps2",
+        "ay_mps2",
+        "az_mps2"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.21090051031112672,
+      "last_t_s": 1290.737704321146,
+      "media_type": "text/csv",
+      "path": "imu.csv.gz",
+      "rows": 128406,
+      "sha256": "b021f36a57763d9347b8a0d343dd9c276fdd76a4c0c300505360168c0868eb78"
+    },
+    "reference_attitude": {
+      "bytes": 498083,
+      "columns": [
+        "t_s",
+        "roll_deg",
+        "pitch_deg",
+        "yaw_deg"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.242,
+      "last_t_s": 1290.74,
+      "media_type": "text/csv",
+      "path": "reference_attitude.csv.gz",
+      "rows": 39107,
+      "sha256": "3b464f6a0d604a83340129841bdf6b2bae98ca249ac89bc8cbccaf47599a4b1f"
+    },
+    "reference_mount": {
+      "bytes": 9511,
+      "columns": [
+        "t_s",
+        "roll_deg",
+        "pitch_deg",
+        "yaw_deg"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.0,
+      "last_t_s": 1290.498,
+      "media_type": "text/csv",
+      "path": "reference_mount.csv.gz",
+      "rows": 2582,
+      "sha256": "25f84e618ddaff27aab07d449e0e7b5c3a043a44aa448a04f0dbf54d4261b6ec"
+    }
+  },
+  "manifest_version": 1,
+  "samples": {
+    "gnss": 2577,
+    "imu": 128406,
+    "reference_attitude": 39107,
+    "reference_mount": 2582
+  },
+  "schema": "generic-replay-v1",
+  "source": {
+    "format": "generic",
+    "input_path": "/private/tmp/generic_with_refs_sources/ubx_raw_20260328_185927"
+  },
+  "time_span_s": {
+    "end": 1290.74,
+    "start": 0.0
+  },
+  "title": "Square One to home 2026-03-28 (low signal)"
+}

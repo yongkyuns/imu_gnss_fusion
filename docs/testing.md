@@ -39,6 +39,7 @@ cargo test -p sensor-fusion --test fusion_api --locked
 | Loose observability | `ekf/tests/loose_mount_observability.rs`, `sim/tests/loose_parity.rs` | Loose mount behavior and parity with prepared seeded replay fixtures. |
 | Synthetic replay | `sim/tests/synthetic_gnss_ins.rs` | Synthetic path generation, ESKF convergence, visualizer trace population, and optional `gnss-ins-sim` parity. |
 | Generic replay | `sim/src/datasets/generic_replay.rs`, `sim/tests/synthetic_gnss_ins.rs` | Hardware-agnostic CSV schema loading and visualizer trace population. |
+| Dataset packaging | `scripts/tests/test_package_dataset.py` | Hosted-data manifest generation, deterministic gzip staging, and raw binary rejection. |
 
 ## Fixtures And Local Data
 
@@ -83,4 +84,25 @@ Use the full visualizer without `--profile-only` when checking plots, maps, and 
 
 ## Generic Replay Data
 
-Hardware-specific conversion is intentionally outside this repository. External converters should write `imu.csv` and `gnss.csv` using the schema documented in the root README, then this repository consumes only those generic files.
+Hardware-specific conversion is intentionally outside this repository. External converters should write `imu.csv` and `gnss.csv` using the schema documented in the root README, then this repository consumes only those generic files. Optional `reference_attitude.csv` and `reference_mount.csv` files can be included for plots and evaluation; they are not fed back into the filters.
+
+## Hosted Generic Dataset CI
+
+Hosted replay datasets are described by `.github/datasets/generic-datasets.json`. Each dataset entry lists URLs for `imu.csv`/`gnss.csv`, optional reference CSVs, their SHA-256 checksums, and optional byte counts. CI validates the manifest shape, downloads files into `.cache/generic-datasets`, verifies checksums, checks the generic CSV headers/numeric rows, then runs:
+
+```bash
+node scripts/validate_generic_datasets.mjs \
+  --manifest .github/datasets/generic-datasets.json \
+  --cache-dir .cache/generic-datasets \
+  --work-dir target/generic-datasets \
+  --smoke-profile
+```
+
+The smoke profile creates a bounded CSV subset before invoking `visualizer --profile-only`, so large hosted datasets can be represented without replaying the full log in every CI run. When changing hosted data, update `.github/datasets/logger-data.version` or the manifest so the Actions cache key changes.
+
+Package hosted datasets with:
+
+```bash
+python3 -m unittest scripts.tests.test_package_dataset
+python3 scripts/package_dataset.py /path/to/replay-dir /tmp/hosted-drive
+```

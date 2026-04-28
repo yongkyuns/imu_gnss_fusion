@@ -1,0 +1,100 @@
+{
+  "created_utc": "2026-04-28T17:25:04Z",
+  "dataset_id": "ubx_raw_20260312_172206",
+  "files": {
+    "gnss": {
+      "bytes": 42357,
+      "columns": [
+        "t_s",
+        "lat_deg",
+        "lon_deg",
+        "height_m",
+        "vn_mps",
+        "ve_mps",
+        "vd_mps",
+        "pos_std_n_m",
+        "pos_std_e_m",
+        "pos_std_d_m",
+        "vel_std_n_mps",
+        "vel_std_e_mps",
+        "vel_std_d_mps",
+        "heading_rad"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.0,
+      "last_t_s": 399.0,
+      "media_type": "text/csv",
+      "path": "gnss.csv.gz",
+      "rows": 799,
+      "sha256": "7887f55036e844c77923e99822ffe684b87427ba1f0515fd530233e46ae27313"
+    },
+    "imu": {
+      "bytes": 1364465,
+      "columns": [
+        "t_s",
+        "gx_radps",
+        "gy_radps",
+        "gz_radps",
+        "ax_mps2",
+        "ay_mps2",
+        "az_mps2"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.24610395699739457,
+      "last_t_s": 399.27955511158706,
+      "media_type": "text/csv",
+      "path": "imu.csv.gz",
+      "rows": 39703,
+      "sha256": "7dade6307b827d6e59dd251f5c2dd6436d218c2e718ff0154d6e83e317d66939"
+    },
+    "reference_attitude": {
+      "bytes": 190511,
+      "columns": [
+        "t_s",
+        "roll_deg",
+        "pitch_deg",
+        "yaw_deg"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.275,
+      "last_t_s": 399.278,
+      "media_type": "text/csv",
+      "path": "reference_attitude.csv.gz",
+      "rows": 12092,
+      "sha256": "0135dcffa507cd0d6a45fca87ceeb511fb4182fafc4169d0fa73974d8518dff1"
+    },
+    "reference_mount": {
+      "bytes": 3097,
+      "columns": [
+        "t_s",
+        "roll_deg",
+        "pitch_deg",
+        "yaw_deg"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.0,
+      "last_t_s": 399.0,
+      "media_type": "text/csv",
+      "path": "reference_mount.csv.gz",
+      "rows": 799,
+      "sha256": "7d69c78eb7a1f0a2d56ff13c2b5fa1f4621f6a3627c6e437486c2326840ba553"
+    }
+  },
+  "manifest_version": 1,
+  "samples": {
+    "gnss": 799,
+    "imu": 39703,
+    "reference_attitude": 12092,
+    "reference_mount": 799
+  },
+  "schema": "generic-replay-v1",
+  "source": {
+    "format": "generic",
+    "input_path": "/private/tmp/generic_with_refs_sources/ubx_raw_20260312_172206"
+  },
+  "time_span_s": {
+    "end": 399.27955511158706,
+    "start": 0.0
+  },
+  "title": "Baseline 2026-03-12 17:22:06"
+}

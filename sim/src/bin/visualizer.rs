@@ -10,7 +10,10 @@ use anyhow::Result;
 #[cfg(not(target_arch = "wasm32"))]
 use clap::{Parser, ValueEnum};
 #[cfg(not(target_arch = "wasm32"))]
-use sim::datasets::generic_replay::{load_gnss_samples, load_imu_samples};
+use sim::datasets::generic_replay::{
+    load_gnss_samples, load_imu_samples, load_reference_attitude_samples,
+    load_reference_mount_samples,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use sim::visualizer::model::EkfImuSource;
 #[cfg(not(target_arch = "wasm32"))]
@@ -238,9 +241,17 @@ fn main() -> Result<()> {
     {
         let imu = load_imu_samples(replay_dir)?;
         let gnss = load_gnss_samples(replay_dir)?;
-        let input_records = imu.len() + gnss.len();
+        let reference_attitude = load_reference_attitude_samples(replay_dir)?;
+        let reference_mount = load_reference_mount_samples(replay_dir)?;
+        let input_records =
+            imu.len() + gnss.len() + reference_attitude.len() + reference_mount.len();
         let t_read = Instant::now();
-        let replay = GenericReplayInput { imu, gnss };
+        let replay = GenericReplayInput {
+            imu,
+            gnss,
+            reference_attitude,
+            reference_mount,
+        };
         let data =
             build_generic_replay_plot_data(&replay, args.misalignment, ekf_cfg, gnss_outages);
         (

@@ -9,7 +9,13 @@ default-run = "visualizer"
 anyhow = "1"
 chrono = { version = "=0.4.44", features = ["serde"] }
 clap = { version = "4.5", features = ["derive"] }
-eframe = "0.33.3"
+eframe = { version = "0.33.3", default-features = false, features = [
+    "default_fonts",
+    "web_screen_reader",
+    "wgpu",
+    "wayland",
+    "x11",
+] }
 egui = "0.33.3"
 egui_plot = "0.34.1"
 sensor-fusion = { path = "../ekf", default-features = false }
@@ -18,10 +24,22 @@ rand = { version = "0.9", default-features = false, features = ["std", "std_rng"
 rayon = "1.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 walkers = "0.52.0"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+egui-wgpu = { version = "0.33.3", default-features = false, features = [
+    "fragile-send-sync-non-atomic-wasm",
+] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+js-sys = "=0.3.95"
 wasm-bindgen = "=0.2.118"
 wasm-bindgen-futures = "=0.4.68"
+web-sys = { version = "=0.3.95", features = [
+    "Response",
+    "Window",
+] }
+wgpu = { version = "27.0.1", default-features = false, features = [
+    "fragile-send-sync-non-atomic-wasm",
+    "webgpu",
+    "wgsl",
+] }

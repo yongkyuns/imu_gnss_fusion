@@ -7,6 +7,12 @@ on:
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -53,16 +59,108 @@ jobs:
         run: cargo build --workspace --locked
 
       - name: Check key sim binaries
-        run: |
-          cargo check -p sim --locked \
-            --bin visualizer \
-            --bin align_eval \
-            --bin align_eval_gnss_ins_sim \
-            --bin eskf_eval_gnss_ins_sim \
-            --bin run_loose_nsr
+        run: cargo check -p sim --bins --locked
 
       - name: Test workspace
         run: cargo test --workspace --locked
 
       - name: Document workspace
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
+
+  hosted-generic-datasets:
+    name: Hosted generic datasets
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libudev-dev pkg-config
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Cache hosted generic datasets
+        uses: actions/cache@v4
+        with:
+          path: .cache/generic-datasets
+          key: generic-datasets-${{ hashFiles('.github/datasets/**') }}
+          restore-keys: |
+            generic-datasets-
+
+      - name: Validate manifest, checksums, schema, and smoke profile
+        run: |
+          node scripts/validate_generic_datasets.mjs \
+            --manifest .github/datasets/generic-datasets.json \
+            --cache-dir .cache/generic-datasets \
+            --work-dir target/generic-datasets \
+            --smoke-profile
+
+  web-pages-artifact:
+    name: Web Pages artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-bindgen CLI
+        run: cargo install wasm-bindgen-cli --version 0.2.118 --locked
+
+      - name: Build browser visualizer
+        run: |
+          cargo build -p sim --bin visualizer --release --target wasm32-unknown-unknown --locked
+          wasm-bindgen \
+            --target web \
+            --out-dir web/pkg \
+            target/wasm32-unknown-unknown/release/visualizer.wasm
+          touch web/.nojekyll
+
+      - name: Validate Pages static artifact
+        run: node scripts/validate_pages_static.mjs --site-dir web --require-wasm
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+  deploy-pages:
+    name: Deploy GitHub Pages
+    needs: web-pages-artifact
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy Pages artifact
+        id: deployment
+        uses: actions/deploy-pages@v4

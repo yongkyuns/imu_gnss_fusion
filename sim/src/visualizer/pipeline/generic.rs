@@ -1,8 +1,10 @@
 use anyhow::{Context, Result, bail};
 use sensor_fusion::fusion::SensorFusion;
+use sensor_fusion::loose::{LOOSE_ERROR_STATES, LooseFilter, LooseImuDelta, LoosePredictNoise};
 
 use crate::datasets::generic_replay::{
-    GenericGnssSample, GenericImuSample, fusion_gnss_sample, fusion_imu_sample,
+    GenericGnssSample, GenericImuSample, GenericReferenceRpySample, fusion_gnss_sample,
+    fusion_imu_sample,
 };
 use crate::eval::gnss_ins::{as_q64, quat_conj, quat_mul};
 use crate::eval::replay::{ReplayEvent, for_each_event};
@@ -13,11 +15,41 @@ use crate::visualizer::pipeline::{EkfCompareConfig, GnssOutageConfig};
 pub struct GenericReplayInput {
     pub imu: Vec<GenericImuSample>,
     pub gnss: Vec<GenericGnssSample>,
+    pub reference_attitude: Vec<GenericReferenceRpySample>,
+    pub reference_mount: Vec<GenericReferenceRpySample>,
+}
+
+impl GenericReplayInput {
+    pub fn new(imu: Vec<GenericImuSample>, gnss: Vec<GenericGnssSample>) -> Self {
+        Self {
+            imu,
+            gnss,
+            reference_attitude: Vec::new(),
+            reference_mount: Vec::new(),
+        }
+    }
 }
 
 pub fn parse_generic_replay_csvs(imu_csv: &str, gnss_csv: &str) -> Result<GenericReplayInput> {
+    parse_generic_replay_csvs_with_refs(imu_csv, gnss_csv, None, None)
+}
+
+pub fn parse_generic_replay_csvs_with_refs(
+    imu_csv: &str,
+    gnss_csv: &str,
+    reference_attitude_csv: Option<&str>,
+    reference_mount_csv: Option<&str>,
+) -> Result<GenericReplayInput> {
     let mut imu = parse_imu_csv(imu_csv)?;
     let mut gnss = parse_gnss_csv(gnss_csv)?;
+    let mut reference_attitude = reference_attitude_csv
+        .map(parse_reference_rpy_csv)
+        .transpose()?
+        .unwrap_or_default();
+    let mut reference_mount = reference_mount_csv
+        .map(parse_reference_rpy_csv)
+        .transpose()?
+        .unwrap_or_default();
     imu.sort_by(|a, b| {
         a.t_s
             .partial_cmp(&b.t_s)
@@ -28,13 +60,28 @@ pub fn parse_generic_replay_csvs(imu_csv: &str, gnss_csv: &str) -> Result<Generi
             .partial_cmp(&b.t_s)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+    reference_attitude.sort_by(|a, b| {
+        a.t_s
+            .partial_cmp(&b.t_s)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    reference_mount.sort_by(|a, b| {
+        a.t_s
+            .partial_cmp(&b.t_s)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     if imu.is_empty() {
         bail!("imu.csv contained no samples");
     }
     if gnss.is_empty() {
         bail!("gnss.csv contained no samples");
     }
-    Ok(GenericReplayInput { imu, gnss })
+    Ok(GenericReplayInput {
+        imu,
+        gnss,
+        reference_attitude,
+        reference_mount,
+    })
 }
 
 pub fn build_generic_replay_plot_data(
@@ -159,7 +206,7 @@ pub fn build_generic_replay_plot_data(
         }
     });
 
-    PlotData {
+    let mut data = PlotData {
         speed: vec![Trace {
             name: "GNSS speed [m/s]".to_string(),
             points: gnss_speed,
@@ -167,29 +214,29 @@ pub fn build_generic_replay_plot_data(
         imu_raw_gyro: vec![
             Trace {
                 name: "CSV gyro X [dps]".to_string(),
-                points: raw_gyro_x,
+                points: raw_gyro_x.clone(),
             },
             Trace {
                 name: "CSV gyro Y [dps]".to_string(),
-                points: raw_gyro_y,
+                points: raw_gyro_y.clone(),
             },
             Trace {
                 name: "CSV gyro Z [dps]".to_string(),
-                points: raw_gyro_z,
+                points: raw_gyro_z.clone(),
             },
         ],
         imu_raw_accel: vec![
             Trace {
                 name: "CSV accel X [m/s^2]".to_string(),
-                points: raw_accel_x,
+                points: raw_accel_x.clone(),
             },
             Trace {
                 name: "CSV accel Y [m/s^2]".to_string(),
-                points: raw_accel_y,
+                points: raw_accel_y.clone(),
             },
             Trace {
                 name: "CSV accel Z [m/s^2]".to_string(),
-                points: raw_accel_z,
+                points: raw_accel_z.clone(),
             },
         ],
         eskf_cmp_pos: vec![
@@ -294,12 +341,64 @@ pub fn build_generic_replay_plot_data(
                 points: eskf_baz,
             },
         ],
-        eskf_cov_nonbias: eskf_cov
-            .iter()
-            .enumerate()
-            .map(|(i, points)| Trace {
-                name: format!("ESKF sigma state {i}"),
-                points: points.clone(),
+        eskf_meas_gyro: vec![
+            Trace {
+                name: "ESKF body gyro x [deg/s]".to_string(),
+                points: raw_gyro_x.clone(),
+            },
+            Trace {
+                name: "ESKF body gyro y [deg/s]".to_string(),
+                points: raw_gyro_y.clone(),
+            },
+            Trace {
+                name: "ESKF body gyro z [deg/s]".to_string(),
+                points: raw_gyro_z.clone(),
+            },
+        ],
+        eskf_meas_accel: vec![
+            Trace {
+                name: "ESKF body accel x [m/s^2]".to_string(),
+                points: raw_accel_x.clone(),
+            },
+            Trace {
+                name: "ESKF body accel y [m/s^2]".to_string(),
+                points: raw_accel_y.clone(),
+            },
+            Trace {
+                name: "ESKF body accel z [m/s^2]".to_string(),
+                points: raw_accel_z.clone(),
+            },
+        ],
+        eskf_cov_bias: vec![
+            Trace {
+                name: "acc_x".to_string(),
+                points: eskf_cov[12].clone(),
+            },
+            Trace {
+                name: "acc_y".to_string(),
+                points: eskf_cov[13].clone(),
+            },
+            Trace {
+                name: "acc_z".to_string(),
+                points: eskf_cov[14].clone(),
+            },
+            Trace {
+                name: "gyro_x".to_string(),
+                points: eskf_cov[9].clone(),
+            },
+            Trace {
+                name: "gyro_y".to_string(),
+                points: eskf_cov[10].clone(),
+            },
+            Trace {
+                name: "gyro_z".to_string(),
+                points: eskf_cov[11].clone(),
+            },
+        ],
+        eskf_cov_nonbias: (0..9)
+            .map(|i| Trace {
+                name: format!("state_{i}"),
+                points: eskf_cov[i].clone(),
             })
             .collect(),
         eskf_misalignment: vec![
@@ -332,7 +431,737 @@ pub fn build_generic_replay_plot_data(
         ],
         eskf_map_heading: eskf_heading,
         ..PlotData::default()
+    };
+    add_auxiliary_generic_traces(&mut data, replay, ekf_cfg, ekf_imu_source, None, None);
+    data
+}
+
+pub fn add_auxiliary_generic_traces(
+    data: &mut PlotData,
+    replay: &GenericReplayInput,
+    ekf_cfg: EkfCompareConfig,
+    ekf_imu_source: EkfImuSource,
+    reference_mount_rpy_deg: Option<[f64; 3]>,
+    reference_attitude_rpy: Option<[Vec<[f64; 2]>; 3]>,
+) {
+    let reference_mount_series = rpy_series_from_samples(&replay.reference_mount);
+    let reference_attitude_series =
+        reference_attitude_rpy.or_else(|| rpy_series_from_samples(&replay.reference_attitude));
+    populate_align_traces(
+        data,
+        replay,
+        ekf_cfg,
+        ekf_imu_source,
+        reference_mount_rpy_deg,
+        replay.reference_mount.as_slice(),
+    );
+    populate_loose_traces(data, replay, ekf_cfg);
+    populate_eskf_bump_traces(data);
+    if let Some(truth) = reference_attitude_series {
+        let traces = [
+            Trace {
+                name: "Reference roll [deg]".to_string(),
+                points: truth[0].clone(),
+            },
+            Trace {
+                name: "Reference pitch [deg]".to_string(),
+                points: truth[1].clone(),
+            },
+            Trace {
+                name: "Reference yaw [deg]".to_string(),
+                points: truth[2].clone(),
+            },
+        ];
+        data.eskf_cmp_att.extend(traces.clone());
+        data.loose_cmp_att.extend(traces);
     }
+    if let Some(reference) = reference_mount_series {
+        let traces = [
+            Trace {
+                name: "Reference mount roll [deg]".to_string(),
+                points: reference[0].clone(),
+            },
+            Trace {
+                name: "Reference mount pitch [deg]".to_string(),
+                points: reference[1].clone(),
+            },
+            Trace {
+                name: "Reference mount yaw [deg]".to_string(),
+                points: reference[2].clone(),
+            },
+        ];
+        data.eskf_misalignment.extend(traces.clone());
+        data.loose_misalignment.extend(traces);
+    }
+}
+
+fn populate_align_traces(
+    data: &mut PlotData,
+    replay: &GenericReplayInput,
+    ekf_cfg: EkfCompareConfig,
+    ekf_imu_source: EkfImuSource,
+    reference_mount_rpy_deg: Option<[f64; 3]>,
+    reference_mount_series: &[GenericReferenceRpySample],
+) {
+    let mut fusion = SensorFusion::new();
+    apply_fusion_config(&mut fusion, ekf_cfg, ekf_imu_source);
+
+    let mut align_roll = Vec::new();
+    let mut align_pitch = Vec::new();
+    let mut align_yaw = Vec::new();
+    let mut ref_roll = Vec::new();
+    let mut ref_pitch = Vec::new();
+    let mut ref_yaw = Vec::new();
+    let mut axis_roll_err = Vec::new();
+    let mut axis_pitch_err = Vec::new();
+    let mut axis_yaw_err = Vec::new();
+    let mut speed_mid = Vec::new();
+    let mut gyro_norm = Vec::new();
+    let mut accel_norm = Vec::new();
+    let mut horiz_angle = Vec::new();
+    let mut gnss_accel = Vec::new();
+    let mut imu_accel = Vec::new();
+    let mut straight_valid = Vec::new();
+    let mut turn_valid = Vec::new();
+    let mut coarse_ready = Vec::new();
+    let mut gravity_roll = Vec::new();
+    let mut gravity_pitch = Vec::new();
+    let mut gravity_yaw = Vec::new();
+    let mut horiz_roll = Vec::new();
+    let mut horiz_pitch = Vec::new();
+    let mut horiz_yaw = Vec::new();
+    let mut turn_roll = Vec::new();
+    let mut turn_pitch = Vec::new();
+    let mut turn_yaw = Vec::new();
+    let mut cov_roll = Vec::new();
+    let mut cov_pitch = Vec::new();
+    let mut cov_yaw = Vec::new();
+
+    for_each_event(&replay.imu, &replay.gnss, |event| match event {
+        ReplayEvent::Imu(_, sample) => {
+            let _ = fusion.process_imu(fusion_imu_sample(*sample));
+        }
+        ReplayEvent::Gnss(_, sample) => {
+            let _ = fusion.process_gnss(fusion_gnss_sample(*sample));
+            let Some(debug) = fusion.align_debug() else {
+                return;
+            };
+            let t = sample.t_s;
+            if align_roll.last().is_some_and(|p: &[f64; 2]| p[0] == t) {
+                return;
+            }
+            let Some(align) = fusion.align() else {
+                return;
+            };
+            let (r, p, y) = q_vb_to_reference_mount_rpy([
+                align.q_vb[0] as f64,
+                align.q_vb[1] as f64,
+                align.q_vb[2] as f64,
+                align.q_vb[3] as f64,
+            ]);
+            align_roll.push([t, r]);
+            align_pitch.push([t, p]);
+            align_yaw.push([t, y]);
+            let reference =
+                reference_mount_rpy_deg.or_else(|| reference_rpy_at(reference_mount_series, t));
+            if let Some(reference) = reference {
+                ref_roll.push([t, reference[0]]);
+                ref_pitch.push([t, reference[1]]);
+                ref_yaw.push([t, reference[2]]);
+                axis_roll_err.push([t, wrap_deg(r - reference[0])]);
+                axis_pitch_err.push([t, wrap_deg(p - reference[1])]);
+                axis_yaw_err.push([t, wrap_deg(y - reference[2])]);
+            }
+
+            let window = debug.window;
+            let trace = debug.trace;
+            let speed = 0.5
+                * (window.gnss_vel_prev_n[0].hypot(window.gnss_vel_prev_n[1])
+                    + window.gnss_vel_curr_n[0].hypot(window.gnss_vel_curr_n[1]))
+                    as f64;
+            speed_mid.push([t, speed]);
+            gyro_norm.push([t, vec3_norm_f32(window.mean_gyro_b) as f64]);
+            accel_norm.push([t, vec3_norm_f32(window.mean_accel_b) as f64]);
+            if let Some(v) = trace.horiz_angle_err_rad {
+                horiz_angle.push([t, (v as f64).to_degrees()]);
+            }
+            if let Some(v) = trace.horiz_gnss_norm_mps2 {
+                gnss_accel.push([t, v as f64]);
+            }
+            if let Some(v) = trace.horiz_imu_norm_mps2 {
+                imu_accel.push([t, v as f64]);
+            }
+            straight_valid.push([t, f64::from(trace.horiz_straight_core_valid)]);
+            turn_valid.push([t, f64::from(trace.horiz_turn_core_valid)]);
+            coarse_ready.push([t, f64::from(trace.coarse_alignment_ready)]);
+            push_update_contrib(
+                t,
+                trace.q_start,
+                trace.after_gravity,
+                &mut gravity_roll,
+                &mut gravity_pitch,
+                &mut gravity_yaw,
+            );
+            push_update_contrib(
+                t,
+                trace.q_start,
+                trace.after_horiz_accel,
+                &mut horiz_roll,
+                &mut horiz_pitch,
+                &mut horiz_yaw,
+            );
+            push_update_contrib(
+                t,
+                trace.q_start,
+                trace.after_turn_gyro,
+                &mut turn_roll,
+                &mut turn_pitch,
+                &mut turn_yaw,
+            );
+            cov_roll.push([t, (align.P[0][0].max(0.0).sqrt() as f64).to_degrees()]);
+            cov_pitch.push([t, (align.P[1][1].max(0.0).sqrt() as f64).to_degrees()]);
+            cov_yaw.push([t, (align.P[2][2].max(0.0).sqrt() as f64).to_degrees()]);
+        }
+    });
+
+    data.align_cmp_att = vec![
+        Trace {
+            name: "Align roll [deg]".to_string(),
+            points: align_roll,
+        },
+        Trace {
+            name: "Align pitch [deg]".to_string(),
+            points: align_pitch,
+        },
+        Trace {
+            name: "Align yaw [deg]".to_string(),
+            points: align_yaw,
+        },
+    ];
+    if !ref_roll.is_empty() {
+        data.align_cmp_att.extend([
+            Trace {
+                name: "Reference mount roll [deg]".to_string(),
+                points: ref_roll,
+            },
+            Trace {
+                name: "Reference mount pitch [deg]".to_string(),
+                points: ref_pitch,
+            },
+            Trace {
+                name: "Reference mount yaw [deg]".to_string(),
+                points: ref_yaw,
+            },
+        ]);
+        data.align_axis_err = vec![
+            Trace {
+                name: "Align roll error [deg]".to_string(),
+                points: axis_roll_err,
+            },
+            Trace {
+                name: "Align pitch error [deg]".to_string(),
+                points: axis_pitch_err,
+            },
+            Trace {
+                name: "Align yaw error [deg]".to_string(),
+                points: axis_yaw_err,
+            },
+        ];
+    }
+    data.align_res_vel = vec![
+        Trace {
+            name: "Window speed quality proxy [m/s]".to_string(),
+            points: speed_mid,
+        },
+        Trace {
+            name: "Mean gyro norm [rad/s]".to_string(),
+            points: gyro_norm,
+        },
+        Trace {
+            name: "Mean accel norm [m/s^2]".to_string(),
+            points: accel_norm,
+        },
+        Trace {
+            name: "Horizontal heading innovation [deg]".to_string(),
+            points: horiz_angle,
+        },
+        Trace {
+            name: "GNSS horizontal accel norm [m/s^2]".to_string(),
+            points: gnss_accel,
+        },
+        Trace {
+            name: "IMU horizontal accel norm [m/s^2]".to_string(),
+            points: imu_accel,
+        },
+    ];
+    data.align_flags = vec![
+        Trace {
+            name: "straight core valid".to_string(),
+            points: straight_valid,
+        },
+        Trace {
+            name: "turn core valid".to_string(),
+            points: turn_valid,
+        },
+        Trace {
+            name: "coarse alignment ready".to_string(),
+            points: coarse_ready,
+        },
+    ];
+    data.align_roll_contrib = vec![
+        Trace {
+            name: "gravity roll dx [deg]".to_string(),
+            points: gravity_roll,
+        },
+        Trace {
+            name: "horizontal roll dx [deg]".to_string(),
+            points: horiz_roll,
+        },
+        Trace {
+            name: "turn roll dx [deg]".to_string(),
+            points: turn_roll,
+        },
+    ];
+    data.align_pitch_contrib = vec![
+        Trace {
+            name: "gravity pitch dx [deg]".to_string(),
+            points: gravity_pitch,
+        },
+        Trace {
+            name: "horizontal pitch dx [deg]".to_string(),
+            points: horiz_pitch,
+        },
+        Trace {
+            name: "turn pitch dx [deg]".to_string(),
+            points: turn_pitch,
+        },
+    ];
+    data.align_yaw_contrib = vec![
+        Trace {
+            name: "gravity yaw dx [deg]".to_string(),
+            points: gravity_yaw,
+        },
+        Trace {
+            name: "horizontal yaw dx [deg]".to_string(),
+            points: horiz_yaw,
+        },
+        Trace {
+            name: "turn yaw dx [deg]".to_string(),
+            points: turn_yaw,
+        },
+    ];
+    data.align_cov = vec![
+        Trace {
+            name: "roll sigma [deg]".to_string(),
+            points: cov_roll,
+        },
+        Trace {
+            name: "pitch sigma [deg]".to_string(),
+            points: cov_pitch,
+        },
+        Trace {
+            name: "yaw sigma [deg]".to_string(),
+            points: cov_yaw,
+        },
+    ];
+}
+
+fn populate_loose_traces(
+    data: &mut PlotData,
+    replay: &GenericReplayInput,
+    ekf_cfg: EkfCompareConfig,
+) {
+    let Some(ref_gnss) = replay.gnss.first().copied() else {
+        return;
+    };
+    let ref_ecef = lla_to_ecef(ref_gnss.lat_deg, ref_gnss.lon_deg, ref_gnss.height_m);
+    let mut align_fusion = SensorFusion::new();
+    apply_fusion_config(&mut align_fusion, ekf_cfg, EkfImuSource::Internal);
+    let mut loose = LooseFilter::new(
+        ekf_cfg
+            .loose_predict_noise
+            .unwrap_or_else(LoosePredictNoise::lsm6dso_loose_104hz),
+    );
+    let mut loose_ready = false;
+    let mut last_imu: Option<GenericImuSample> = None;
+    let mut latest_gnss: Option<GenericGnssSample> = None;
+    let mut last_gnss_used_t_s = f64::NEG_INFINITY;
+    let mut seed_mount_q_vb: Option<[f32; 4]> = None;
+
+    let mut pos_n = Vec::new();
+    let mut pos_e = Vec::new();
+    let mut pos_d = Vec::new();
+    let mut vel_n = Vec::new();
+    let mut vel_e = Vec::new();
+    let mut vel_d = Vec::new();
+    let mut roll = Vec::new();
+    let mut pitch = Vec::new();
+    let mut yaw = Vec::new();
+    let mut mount_roll = Vec::new();
+    let mut mount_pitch = Vec::new();
+    let mut mount_yaw = Vec::new();
+    let mut gyro_x = Vec::new();
+    let mut gyro_y = Vec::new();
+    let mut gyro_z = Vec::new();
+    let mut accel_x = Vec::new();
+    let mut accel_y = Vec::new();
+    let mut accel_z = Vec::new();
+    let mut bgx = Vec::new();
+    let mut bgy = Vec::new();
+    let mut bgz = Vec::new();
+    let mut bax = Vec::new();
+    let mut bay = Vec::new();
+    let mut baz = Vec::new();
+    let mut sgx = Vec::new();
+    let mut sgy = Vec::new();
+    let mut sgz = Vec::new();
+    let mut sax = Vec::new();
+    let mut say = Vec::new();
+    let mut saz = Vec::new();
+    let mut cov_bias: [Vec<[f64; 2]>; 12] = std::array::from_fn(|_| Vec::new());
+    let mut cov_nonbias: [Vec<[f64; 2]>; 12] = std::array::from_fn(|_| Vec::new());
+    let mut map = Vec::new();
+    let mut headings = Vec::new();
+
+    for_each_event(&replay.imu, &replay.gnss, |event| match event {
+        ReplayEvent::Imu(_, sample) => {
+            let _ = align_fusion.process_imu(fusion_imu_sample(*sample));
+            let Some(prev) = last_imu.replace(*sample) else {
+                return;
+            };
+            if !loose_ready {
+                return;
+            }
+            let dt = (sample.t_s - prev.t_s).max(0.0);
+            if dt <= 0.0 || dt > 1.0 {
+                return;
+            }
+            let (gyro_vehicle_radps, accel_vehicle_mps2) = vehicle_measurements_from_mount(
+                seed_mount_q_vb,
+                sample.gyro_radps,
+                sample.accel_mps2,
+            );
+            let (prev_gyro_vehicle_radps, prev_accel_vehicle_mps2) =
+                vehicle_measurements_from_mount(seed_mount_q_vb, prev.gyro_radps, prev.accel_mps2);
+            let imu = loose_imu_delta_from_vehicle(
+                prev_gyro_vehicle_radps,
+                prev_accel_vehicle_mps2,
+                gyro_vehicle_radps,
+                accel_vehicle_mps2,
+                dt,
+            );
+            loose.predict(imu);
+            let mut gps_pos = None;
+            let mut gps_vel = None;
+            let mut gps_pos_std = 0.0f32;
+            let mut gps_vel_std = None;
+            let mut dt_since_gnss = 1.0f32;
+            if let Some(gnss) = latest_gnss
+                && (0.0..=0.05).contains(&(sample.t_s - gnss.t_s))
+                && gnss.t_s != last_gnss_used_t_s
+            {
+                gps_pos = Some(lla_to_ecef(gnss.lat_deg, gnss.lon_deg, gnss.height_m));
+                gps_vel = Some(
+                    ned_vector_to_ecef(gnss.lat_deg, gnss.lon_deg, gnss.vel_ned_mps)
+                        .map(|v| v as f32),
+                );
+                gps_pos_std = ((gnss.pos_std_m[0] + gnss.pos_std_m[1] + gnss.pos_std_m[2]) / 3.0)
+                    .max(0.1) as f32;
+                gps_vel_std = Some(gnss.vel_std_mps.map(|v| v.max(0.01) as f32));
+                dt_since_gnss = if last_gnss_used_t_s.is_finite() {
+                    (gnss.t_s - last_gnss_used_t_s).clamp(1.0e-3, 1.0) as f32
+                } else {
+                    1.0
+                };
+                last_gnss_used_t_s = gnss.t_s;
+            }
+            loose.fuse_reference_batch_full(
+                gps_pos,
+                gps_vel,
+                gps_pos_std,
+                gps_vel_std,
+                dt_since_gnss,
+                gyro_vehicle_radps.map(|v| v as f32),
+                accel_vehicle_mps2.map(|v| v as f32),
+                dt as f32,
+            );
+            append_loose_sample(
+                sample.t_s,
+                &loose,
+                ref_gnss,
+                ref_ecef,
+                seed_mount_q_vb,
+                &mut pos_n,
+                &mut pos_e,
+                &mut pos_d,
+                &mut vel_n,
+                &mut vel_e,
+                &mut vel_d,
+                &mut roll,
+                &mut pitch,
+                &mut yaw,
+                &mut mount_roll,
+                &mut mount_pitch,
+                &mut mount_yaw,
+                &mut bgx,
+                &mut bgy,
+                &mut bgz,
+                &mut bax,
+                &mut bay,
+                &mut baz,
+                &mut sgx,
+                &mut sgy,
+                &mut sgz,
+                &mut sax,
+                &mut say,
+                &mut saz,
+                &mut cov_bias,
+                &mut cov_nonbias,
+                &mut map,
+                &mut headings,
+            );
+            gyro_x.push([sample.t_s, gyro_vehicle_radps[0].to_degrees()]);
+            gyro_y.push([sample.t_s, gyro_vehicle_radps[1].to_degrees()]);
+            gyro_z.push([sample.t_s, gyro_vehicle_radps[2].to_degrees()]);
+            accel_x.push([sample.t_s, accel_vehicle_mps2[0]]);
+            accel_y.push([sample.t_s, accel_vehicle_mps2[1]]);
+            accel_z.push([sample.t_s, accel_vehicle_mps2[2]]);
+        }
+        ReplayEvent::Gnss(_, sample) => {
+            let _ = align_fusion.process_gnss(fusion_gnss_sample(*sample));
+            latest_gnss = Some(*sample);
+            if loose_ready || !align_fusion.mount_ready() {
+                return;
+            }
+            let speed = sample.vel_ned_mps[0].hypot(sample.vel_ned_mps[1]);
+            if speed < 0.5 {
+                return;
+            }
+            let yaw_rad = sample.vel_ned_mps[1].atan2(sample.vel_ned_mps[0]) as f32;
+            let pos_ecef = lla_to_ecef(sample.lat_deg, sample.lon_deg, sample.height_m);
+            let vel_ecef = ned_vector_to_ecef(sample.lat_deg, sample.lon_deg, sample.vel_ned_mps)
+                .map(|v| v as f32);
+            seed_mount_q_vb = align_fusion.mount_q_vb();
+            loose.init_seeded_vehicle_from_nav_ecef_state(
+                yaw_rad,
+                sample.lat_deg,
+                sample.lon_deg,
+                pos_ecef,
+                vel_ecef,
+                Some(default_loose_p_diag(*sample)),
+                None,
+            );
+            loose_ready = true;
+        }
+    });
+
+    data.loose_cmp_pos = vec![
+        Trace {
+            name: "Loose posN [m]".to_string(),
+            points: pos_n,
+        },
+        Trace {
+            name: "Loose posE [m]".to_string(),
+            points: pos_e,
+        },
+        Trace {
+            name: "Loose posD [m]".to_string(),
+            points: pos_d,
+        },
+    ];
+    data.loose_cmp_vel = vec![
+        Trace {
+            name: "Loose velN [m/s]".to_string(),
+            points: vel_n,
+        },
+        Trace {
+            name: "Loose velE [m/s]".to_string(),
+            points: vel_e,
+        },
+        Trace {
+            name: "Loose velD [m/s]".to_string(),
+            points: vel_d,
+        },
+    ];
+    data.loose_cmp_att = vec![
+        Trace {
+            name: "Loose roll [deg]".to_string(),
+            points: roll,
+        },
+        Trace {
+            name: "Loose pitch [deg]".to_string(),
+            points: pitch,
+        },
+        Trace {
+            name: "Loose yaw [deg]".to_string(),
+            points: yaw,
+        },
+    ];
+    data.loose_misalignment = vec![
+        Trace {
+            name: "Loose residual mount roll [deg]".to_string(),
+            points: mount_roll,
+        },
+        Trace {
+            name: "Loose residual mount pitch [deg]".to_string(),
+            points: mount_pitch,
+        },
+        Trace {
+            name: "Loose residual mount yaw [deg]".to_string(),
+            points: mount_yaw,
+        },
+    ];
+    data.loose_meas_gyro = vec![
+        Trace {
+            name: "Loose gyro x [deg/s]".to_string(),
+            points: gyro_x,
+        },
+        Trace {
+            name: "Loose gyro y [deg/s]".to_string(),
+            points: gyro_y,
+        },
+        Trace {
+            name: "Loose gyro z [deg/s]".to_string(),
+            points: gyro_z,
+        },
+    ];
+    data.loose_meas_accel = vec![
+        Trace {
+            name: "Loose accel x [m/s^2]".to_string(),
+            points: accel_x,
+        },
+        Trace {
+            name: "Loose accel y [m/s^2]".to_string(),
+            points: accel_y,
+        },
+        Trace {
+            name: "Loose accel z [m/s^2]".to_string(),
+            points: accel_z,
+        },
+    ];
+    data.loose_bias_gyro = vec![
+        Trace {
+            name: "Loose bgx [deg/s]".to_string(),
+            points: bgx,
+        },
+        Trace {
+            name: "Loose bgy [deg/s]".to_string(),
+            points: bgy,
+        },
+        Trace {
+            name: "Loose bgz [deg/s]".to_string(),
+            points: bgz,
+        },
+    ];
+    data.loose_bias_accel = vec![
+        Trace {
+            name: "Loose bax [m/s^2]".to_string(),
+            points: bax,
+        },
+        Trace {
+            name: "Loose bay [m/s^2]".to_string(),
+            points: bay,
+        },
+        Trace {
+            name: "Loose baz [m/s^2]".to_string(),
+            points: baz,
+        },
+    ];
+    data.loose_scale_gyro = vec![
+        Trace {
+            name: "Loose sgx".to_string(),
+            points: sgx,
+        },
+        Trace {
+            name: "Loose sgy".to_string(),
+            points: sgy,
+        },
+        Trace {
+            name: "Loose sgz".to_string(),
+            points: sgz,
+        },
+    ];
+    data.loose_scale_accel = vec![
+        Trace {
+            name: "Loose sax".to_string(),
+            points: sax,
+        },
+        Trace {
+            name: "Loose say".to_string(),
+            points: say,
+        },
+        Trace {
+            name: "Loose saz".to_string(),
+            points: saz,
+        },
+    ];
+    data.loose_cov_bias = cov_bias
+        .into_iter()
+        .enumerate()
+        .map(|(i, points)| Trace {
+            name: format!("Loose sigma bias/scale {i}"),
+            points,
+        })
+        .collect();
+    data.loose_cov_nonbias = cov_nonbias
+        .into_iter()
+        .enumerate()
+        .map(|(i, points)| Trace {
+            name: format!("Loose sigma state {i}"),
+            points,
+        })
+        .collect();
+    data.loose_map = vec![Trace {
+        name: "Loose path (lon,lat)".to_string(),
+        points: map,
+    }];
+    data.loose_map_heading = headings;
+}
+
+fn populate_eskf_bump_traces(data: &mut PlotData) {
+    let pitch = data
+        .eskf_cmp_att
+        .iter()
+        .find(|t| t.name.to_ascii_lowercase().contains("pitch"))
+        .map(|t| t.points.clone())
+        .unwrap_or_default();
+    let speed = data
+        .speed
+        .first()
+        .map(|t| t.points.clone())
+        .unwrap_or_default();
+    data.eskf_bump_pitch_speed = vec![
+        Trace {
+            name: "ESKF pitch [deg]".to_string(),
+            points: pitch.clone(),
+        },
+        Trace {
+            name: "vehicle speed [m/s]".to_string(),
+            points: speed,
+        },
+    ];
+    let mut hpf = Vec::new();
+    let mut abs_ema = Vec::new();
+    let mut ema = 0.0;
+    let mut rms_ema = 0.0;
+    let alpha = 0.02;
+    for [t, v] in pitch {
+        ema = (1.0 - alpha) * ema + alpha * v;
+        let hp = v - ema;
+        rms_ema = (1.0 - alpha) * rms_ema + alpha * hp * hp;
+        hpf.push([t, hp]);
+        abs_ema.push([t, rms_ema.sqrt()]);
+    }
+    data.eskf_bump_diag = vec![
+        Trace {
+            name: "Pitch HPF [deg]".to_string(),
+            points: hpf,
+        },
+        Trace {
+            name: "Pitch RMS EMA [deg]".to_string(),
+            points: abs_ema,
+        },
+    ];
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -385,8 +1214,15 @@ fn append_eskf_sample(
     pitch.push([t_s, p]);
     yaw.push([t_s, y]);
 
-    if let Some(q) = fusion.eskf_mount_q_vb().or_else(|| fusion.mount_q_vb()) {
-        let (mr, mp, my) = quat_rpy_deg(q[0], q[1], q[2], q[3]);
+    if let Some(seed_q) = fusion.eskf_mount_q_vb().or_else(|| fusion.mount_q_vb()) {
+        let q_cs = [
+            eskf.nominal.qcs0 as f64,
+            eskf.nominal.qcs1 as f64,
+            eskf.nominal.qcs2 as f64,
+            eskf.nominal.qcs3 as f64,
+        ];
+        let q_total_vb = quat_mul(as_q64(seed_q), quat_conj(q_cs));
+        let (mr, mp, my) = q_vb_to_reference_mount_rpy(q_total_vb);
         mount_roll.push([t_s, mr]);
         mount_pitch.push([t_s, mp]);
         mount_yaw.push([t_s, my]);
@@ -446,6 +1282,389 @@ fn eskf_vehicle_attitude_q(eskf: &sensor_fusion::eskf_types::EskfState) -> [f64;
     quat_mul(q_seed_frame, quat_conj(q_cs))
 }
 
+fn loose_imu_delta_from_vehicle(
+    prev_gyro_radps: [f64; 3],
+    prev_accel_mps2: [f64; 3],
+    curr_gyro_radps: [f64; 3],
+    curr_accel_mps2: [f64; 3],
+    dt: f64,
+) -> LooseImuDelta {
+    LooseImuDelta {
+        dax_1: (prev_gyro_radps[0] * dt) as f32,
+        day_1: (prev_gyro_radps[1] * dt) as f32,
+        daz_1: (prev_gyro_radps[2] * dt) as f32,
+        dvx_1: (prev_accel_mps2[0] * dt) as f32,
+        dvy_1: (prev_accel_mps2[1] * dt) as f32,
+        dvz_1: (prev_accel_mps2[2] * dt) as f32,
+        dax_2: (curr_gyro_radps[0] * dt) as f32,
+        day_2: (curr_gyro_radps[1] * dt) as f32,
+        daz_2: (curr_gyro_radps[2] * dt) as f32,
+        dvx_2: (curr_accel_mps2[0] * dt) as f32,
+        dvy_2: (curr_accel_mps2[1] * dt) as f32,
+        dvz_2: (curr_accel_mps2[2] * dt) as f32,
+        dt: dt as f32,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_loose_sample(
+    t_s: f64,
+    loose: &LooseFilter,
+    ref_gnss: GenericGnssSample,
+    ref_ecef: [f64; 3],
+    seed_mount_q_vb: Option<[f32; 4]>,
+    pos_n: &mut Vec<[f64; 2]>,
+    pos_e: &mut Vec<[f64; 2]>,
+    pos_d: &mut Vec<[f64; 2]>,
+    vel_n: &mut Vec<[f64; 2]>,
+    vel_e: &mut Vec<[f64; 2]>,
+    vel_d: &mut Vec<[f64; 2]>,
+    roll: &mut Vec<[f64; 2]>,
+    pitch: &mut Vec<[f64; 2]>,
+    yaw: &mut Vec<[f64; 2]>,
+    mount_roll: &mut Vec<[f64; 2]>,
+    mount_pitch: &mut Vec<[f64; 2]>,
+    mount_yaw: &mut Vec<[f64; 2]>,
+    bgx: &mut Vec<[f64; 2]>,
+    bgy: &mut Vec<[f64; 2]>,
+    bgz: &mut Vec<[f64; 2]>,
+    bax: &mut Vec<[f64; 2]>,
+    bay: &mut Vec<[f64; 2]>,
+    baz: &mut Vec<[f64; 2]>,
+    sgx: &mut Vec<[f64; 2]>,
+    sgy: &mut Vec<[f64; 2]>,
+    sgz: &mut Vec<[f64; 2]>,
+    sax: &mut Vec<[f64; 2]>,
+    say: &mut Vec<[f64; 2]>,
+    saz: &mut Vec<[f64; 2]>,
+    cov_bias: &mut [Vec<[f64; 2]>; 12],
+    cov_nonbias: &mut [Vec<[f64; 2]>; 12],
+    map: &mut Vec<[f64; 2]>,
+    headings: &mut Vec<HeadingSample>,
+) {
+    let n = loose.nominal();
+    let pos_ecef = loose.shadow_pos_ecef();
+    let vel_ecef = [n.vn as f64, n.ve as f64, n.vd as f64];
+    let pos = ecef_to_ned(pos_ecef, ref_ecef, ref_gnss.lat_deg, ref_gnss.lon_deg);
+    let vel = ecef_vector_to_ned(ref_gnss.lat_deg, ref_gnss.lon_deg, vel_ecef);
+    pos_n.push([t_s, pos[0]]);
+    pos_e.push([t_s, pos[1]]);
+    pos_d.push([t_s, pos[2]]);
+    vel_n.push([t_s, vel[0]]);
+    vel_e.push([t_s, vel[1]]);
+    vel_d.push([t_s, vel[2]]);
+
+    let (lat, lon, _) = ned_to_lla_exact(
+        pos[0],
+        pos[1],
+        pos[2],
+        ref_gnss.lat_deg,
+        ref_gnss.lon_deg,
+        ref_gnss.height_m,
+    );
+    map.push([lon, lat]);
+    let q_ne = quat_ecef_to_ned(lat, lon);
+    let q_es = [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64];
+    let q_cs = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
+    let q_ns = quat_mul(q_ne, q_es);
+    let q_vehicle = quat_mul(q_ns, quat_conj(q_cs));
+    let (r, p, y) = quat_rpy_deg(
+        q_vehicle[0] as f32,
+        q_vehicle[1] as f32,
+        q_vehicle[2] as f32,
+        q_vehicle[3] as f32,
+    );
+    roll.push([t_s, r]);
+    pitch.push([t_s, p]);
+    yaw.push([t_s, y]);
+    headings.push(HeadingSample {
+        t_s,
+        lon_deg: lon,
+        lat_deg: lat,
+        yaw_deg: y,
+    });
+
+    let q_seed = seed_mount_q_vb.map(as_q64).unwrap_or([1.0, 0.0, 0.0, 0.0]);
+    let q_total_vb = quat_mul(q_seed, quat_conj(q_cs));
+    let (mr, mp, my) = q_vb_to_reference_mount_rpy(q_total_vb);
+    mount_roll.push([t_s, mr]);
+    mount_pitch.push([t_s, mp]);
+    mount_yaw.push([t_s, my]);
+
+    bgx.push([t_s, (n.bgx as f64).to_degrees()]);
+    bgy.push([t_s, (n.bgy as f64).to_degrees()]);
+    bgz.push([t_s, (n.bgz as f64).to_degrees()]);
+    bax.push([t_s, n.bax as f64]);
+    bay.push([t_s, n.bay as f64]);
+    baz.push([t_s, n.baz as f64]);
+    sgx.push([t_s, n.sgx as f64]);
+    sgy.push([t_s, n.sgy as f64]);
+    sgz.push([t_s, n.sgz as f64]);
+    sax.push([t_s, n.sax as f64]);
+    say.push([t_s, n.say as f64]);
+    saz.push([t_s, n.saz as f64]);
+    let pmat = loose.covariance();
+    for (dst, idx) in cov_bias
+        .iter_mut()
+        .zip([12usize, 13, 14, 9, 10, 11, 15, 16, 17, 18, 19, 20])
+    {
+        dst.push([t_s, pmat[idx][idx].max(0.0).sqrt() as f64]);
+    }
+    for (idx, dst) in cov_nonbias.iter_mut().enumerate() {
+        dst.push([t_s, pmat[idx][idx].max(0.0).sqrt() as f64]);
+    }
+}
+
+fn default_loose_p_diag(gnss: GenericGnssSample) -> [f32; LOOSE_ERROR_STATES] {
+    const DEFAULT_GYRO_BIAS_SIGMA_DPS: f32 = 0.125;
+    const DEFAULT_ACCEL_BIAS_SIGMA_MPS2: f32 = 0.075;
+    const DEFAULT_GYRO_SCALE_SIGMA: f32 = 0.02;
+    const DEFAULT_ACCEL_SCALE_SIGMA: f32 = 0.0;
+
+    let mut p = [1.0_f32; LOOSE_ERROR_STATES];
+
+    let pos_n_sigma = (gnss.pos_std_m[0] as f32).max(0.5);
+    let pos_e_sigma = (gnss.pos_std_m[1] as f32).max(0.5);
+    let pos_d_sigma = (gnss.pos_std_m[2] as f32).max(0.5);
+    p[0] = pos_n_sigma * pos_n_sigma;
+    p[1] = pos_e_sigma * pos_e_sigma;
+    p[2] = pos_d_sigma * pos_d_sigma;
+
+    let vel_sigma = gnss
+        .vel_std_mps
+        .iter()
+        .copied()
+        .fold(0.0_f64, f64::max)
+        .max(0.2) as f32;
+    let vel_var = vel_sigma * vel_sigma;
+    p[3] = vel_var;
+    p[4] = vel_var;
+    p[5] = vel_var;
+
+    let attitude_var = 2.0_f32.to_radians().powi(2);
+    p[6] = attitude_var;
+    p[7] = attitude_var;
+    p[8] = attitude_var;
+
+    let gyro_bias_sigma = DEFAULT_GYRO_BIAS_SIGMA_DPS.to_radians();
+    p[9] = DEFAULT_ACCEL_BIAS_SIGMA_MPS2 * DEFAULT_ACCEL_BIAS_SIGMA_MPS2;
+    p[10] = DEFAULT_ACCEL_BIAS_SIGMA_MPS2 * DEFAULT_ACCEL_BIAS_SIGMA_MPS2;
+    p[11] = DEFAULT_ACCEL_BIAS_SIGMA_MPS2 * DEFAULT_ACCEL_BIAS_SIGMA_MPS2;
+    p[12] = gyro_bias_sigma * gyro_bias_sigma;
+    p[13] = gyro_bias_sigma * gyro_bias_sigma;
+    p[14] = gyro_bias_sigma * gyro_bias_sigma;
+
+    p[15] = DEFAULT_ACCEL_SCALE_SIGMA * DEFAULT_ACCEL_SCALE_SIGMA;
+    p[16] = DEFAULT_ACCEL_SCALE_SIGMA * DEFAULT_ACCEL_SCALE_SIGMA;
+    p[17] = DEFAULT_ACCEL_SCALE_SIGMA * DEFAULT_ACCEL_SCALE_SIGMA;
+    p[18] = DEFAULT_GYRO_SCALE_SIGMA * DEFAULT_GYRO_SCALE_SIGMA;
+    p[19] = DEFAULT_GYRO_SCALE_SIGMA * DEFAULT_GYRO_SCALE_SIGMA;
+    p[20] = DEFAULT_GYRO_SCALE_SIGMA * DEFAULT_GYRO_SCALE_SIGMA;
+
+    let mount_var = attitude_var;
+    p[21] = mount_var;
+    p[22] = mount_var;
+    p[23] = mount_var;
+    p
+}
+
+fn push_update_contrib(
+    t: f64,
+    q_start: [f32; 4],
+    q_after: Option<[f32; 4]>,
+    roll: &mut Vec<[f64; 2]>,
+    pitch: &mut Vec<[f64; 2]>,
+    yaw: &mut Vec<[f64; 2]>,
+) {
+    let Some(q_after) = q_after else {
+        roll.push([t, 0.0]);
+        pitch.push([t, 0.0]);
+        yaw.push([t, 0.0]);
+        return;
+    };
+    let before = quat_rpy_deg(q_start[0], q_start[1], q_start[2], q_start[3]);
+    let after = quat_rpy_deg(q_after[0], q_after[1], q_after[2], q_after[3]);
+    roll.push([t, wrap_deg(after.0 - before.0)]);
+    pitch.push([t, wrap_deg(after.1 - before.1)]);
+    yaw.push([t, wrap_deg(after.2 - before.2)]);
+}
+
+fn vec3_norm_f32(v: [f32; 3]) -> f32 {
+    (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+}
+
+fn wrap_deg(mut x: f64) -> f64 {
+    while x > 180.0 {
+        x -= 360.0;
+    }
+    while x < -180.0 {
+        x += 360.0;
+    }
+    x
+}
+
+fn q_vb_to_reference_mount_rpy(q_vb: [f64; 4]) -> (f64, f64, f64) {
+    let q_x_180 = [0.0, 1.0, 0.0, 0.0];
+    let q_flu = quat_mul(q_x_180, quat_conj(q_vb));
+    quat_rpy_alg_deg(q_flu)
+}
+
+fn quat_rpy_alg_deg(q: [f64; 4]) -> (f64, f64, f64) {
+    let n = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+    let (w, x, y, z) = if n > 1.0e-12 {
+        (q[0] / n, q[1] / n, q[2] / n, q[3] / n)
+    } else {
+        (1.0, 0.0, 0.0, 0.0)
+    };
+    let r00 = 1.0 - 2.0 * (y * y + z * z);
+    let r10 = 2.0 * (x * y + w * z);
+    let r20 = 2.0 * (x * z - w * y);
+    let r21 = 2.0 * (y * z + w * x);
+    let r22 = 1.0 - 2.0 * (x * x + y * y);
+    let pitch = (-r20).clamp(-1.0, 1.0).asin();
+    let roll = r21.atan2(r22);
+    let yaw = r10.atan2(r00);
+    (
+        roll.to_degrees(),
+        pitch.to_degrees(),
+        crate::visualizer::math::normalize_heading_deg(yaw.to_degrees()),
+    )
+}
+
+fn vehicle_measurements_from_mount(
+    q_vb: Option<[f32; 4]>,
+    raw_gyro_radps: [f64; 3],
+    raw_accel_mps2: [f64; 3],
+) -> ([f64; 3], [f64; 3]) {
+    let Some(q_vb) = q_vb else {
+        return (raw_gyro_radps, raw_accel_mps2);
+    };
+    let c_bv = transpose3(quat_to_rotmat_f64(as_q64(q_vb)));
+    (
+        mat_vec3(c_bv, raw_gyro_radps),
+        mat_vec3(c_bv, raw_accel_mps2),
+    )
+}
+
+fn quat_to_rotmat_f64(q: [f64; 4]) -> [[f64; 3]; 3] {
+    let n = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+    let (w, x, y, z) = if n > 1.0e-12 {
+        (q[0] / n, q[1] / n, q[2] / n, q[3] / n)
+    } else {
+        (1.0, 0.0, 0.0, 0.0)
+    };
+    [
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y - w * z),
+            2.0 * (x * z + w * y),
+        ],
+        [
+            2.0 * (x * y + w * z),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z - w * x),
+        ],
+        [
+            2.0 * (x * z - w * y),
+            2.0 * (y * z + w * x),
+            1.0 - 2.0 * (x * x + y * y),
+        ],
+    ]
+}
+
+fn transpose3(a: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    [
+        [a[0][0], a[1][0], a[2][0]],
+        [a[0][1], a[1][1], a[2][1]],
+        [a[0][2], a[1][2], a[2][2]],
+    ]
+}
+
+fn mat_vec3(r: [[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
+    [
+        r[0][0] * v[0] + r[0][1] * v[1] + r[0][2] * v[2],
+        r[1][0] * v[0] + r[1][1] * v[1] + r[1][2] * v[2],
+        r[2][0] * v[0] + r[2][1] * v[1] + r[2][2] * v[2],
+    ]
+}
+
+fn ned_vector_to_ecef(lat_deg: f64, lon_deg: f64, v_ned: [f64; 3]) -> [f64; 3] {
+    let c_ne = ecef_to_ned_matrix(lat_deg, lon_deg);
+    [
+        c_ne[0][0] * v_ned[0] + c_ne[1][0] * v_ned[1] + c_ne[2][0] * v_ned[2],
+        c_ne[0][1] * v_ned[0] + c_ne[1][1] * v_ned[1] + c_ne[2][1] * v_ned[2],
+        c_ne[0][2] * v_ned[0] + c_ne[1][2] * v_ned[1] + c_ne[2][2] * v_ned[2],
+    ]
+}
+
+fn ecef_vector_to_ned(lat_deg: f64, lon_deg: f64, v_ecef: [f64; 3]) -> [f64; 3] {
+    let c_ne = ecef_to_ned_matrix(lat_deg, lon_deg);
+    [
+        c_ne[0][0] * v_ecef[0] + c_ne[0][1] * v_ecef[1] + c_ne[0][2] * v_ecef[2],
+        c_ne[1][0] * v_ecef[0] + c_ne[1][1] * v_ecef[1] + c_ne[1][2] * v_ecef[2],
+        c_ne[2][0] * v_ecef[0] + c_ne[2][1] * v_ecef[1] + c_ne[2][2] * v_ecef[2],
+    ]
+}
+
+fn ecef_to_ned_matrix(lat_deg: f64, lon_deg: f64) -> [[f64; 3]; 3] {
+    let lat = lat_deg.to_radians();
+    let lon = lon_deg.to_radians();
+    let (slat, clat) = lat.sin_cos();
+    let (slon, clon) = lon.sin_cos();
+    [
+        [-slat * clon, -slat * slon, clat],
+        [-slon, clon, 0.0],
+        [-clat * clon, -clat * slon, -slat],
+    ]
+}
+
+fn quat_ecef_to_ned(lat_deg: f64, lon_deg: f64) -> [f64; 4] {
+    dcm_to_quat(ecef_to_ned_matrix(lat_deg, lon_deg))
+}
+
+fn dcm_to_quat(c: [[f64; 3]; 3]) -> [f64; 4] {
+    let trace = c[0][0] + c[1][1] + c[2][2];
+    let q = if trace > 0.0 {
+        let s = (trace + 1.0).sqrt() * 2.0;
+        [
+            0.25 * s,
+            (c[2][1] - c[1][2]) / s,
+            (c[0][2] - c[2][0]) / s,
+            (c[1][0] - c[0][1]) / s,
+        ]
+    } else if c[0][0] > c[1][1] && c[0][0] > c[2][2] {
+        let s = (1.0 + c[0][0] - c[1][1] - c[2][2]).sqrt() * 2.0;
+        [
+            (c[2][1] - c[1][2]) / s,
+            0.25 * s,
+            (c[0][1] + c[1][0]) / s,
+            (c[0][2] + c[2][0]) / s,
+        ]
+    } else if c[1][1] > c[2][2] {
+        let s = (1.0 + c[1][1] - c[0][0] - c[2][2]).sqrt() * 2.0;
+        [
+            (c[0][2] - c[2][0]) / s,
+            (c[0][1] + c[1][0]) / s,
+            0.25 * s,
+            (c[1][2] + c[2][1]) / s,
+        ]
+    } else {
+        let s = (1.0 + c[2][2] - c[0][0] - c[1][1]).sqrt() * 2.0;
+        [
+            (c[1][0] - c[0][1]) / s,
+            (c[0][2] + c[2][0]) / s,
+            (c[1][2] + c[2][1]) / s,
+            0.25 * s,
+        ]
+    };
+    let n = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+    if n > 0.0 {
+        [q[0] / n, q[1] / n, q[2] / n, q[3] / n]
+    } else {
+        [1.0, 0.0, 0.0, 0.0]
+    }
+}
+
 fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig, mode: EkfImuSource) {
     fusion.set_r_body_vel(cfg.r_body_vel);
     fusion.set_gnss_pos_mount_scale(cfg.gnss_pos_mount_scale);
@@ -497,6 +1716,55 @@ fn parse_gnss_csv(text: &str) -> Result<Vec<GenericGnssSample>> {
             heading_rad: row.get(13).copied().filter(|v| v.is_finite()),
         })
         .collect())
+}
+
+fn parse_reference_rpy_csv(text: &str) -> Result<Vec<GenericReferenceRpySample>> {
+    let rows = parse_numeric_rows(text, 4, "reference_rpy.csv")?;
+    Ok(rows
+        .into_iter()
+        .map(|row| GenericReferenceRpySample {
+            t_s: row[0],
+            roll_deg: row[1],
+            pitch_deg: row[2],
+            yaw_deg: row[3],
+        })
+        .collect())
+}
+
+fn rpy_series_from_samples(samples: &[GenericReferenceRpySample]) -> Option<[Vec<[f64; 2]>; 3]> {
+    if samples.is_empty() {
+        return None;
+    }
+    let mut roll = Vec::with_capacity(samples.len());
+    let mut pitch = Vec::with_capacity(samples.len());
+    let mut yaw = Vec::with_capacity(samples.len());
+    for sample in samples {
+        roll.push([sample.t_s, sample.roll_deg]);
+        pitch.push([sample.t_s, sample.pitch_deg]);
+        yaw.push([sample.t_s, sample.yaw_deg]);
+    }
+    Some([roll, pitch, yaw])
+}
+
+fn reference_rpy_at(samples: &[GenericReferenceRpySample], t_s: f64) -> Option<[f64; 3]> {
+    if samples.is_empty() {
+        return None;
+    }
+    let idx = samples.partition_point(|sample| sample.t_s < t_s);
+    let nearest = match (idx.checked_sub(1), samples.get(idx)) {
+        (Some(prev_idx), Some(next)) => {
+            let prev = samples[prev_idx];
+            if (t_s - prev.t_s).abs() <= (next.t_s - t_s).abs() {
+                prev
+            } else {
+                *next
+            }
+        }
+        (Some(prev_idx), None) => samples[prev_idx],
+        (None, Some(next)) => *next,
+        (None, None) => return None,
+    };
+    Some([nearest.roll_deg, nearest.pitch_deg, nearest.yaw_deg])
 }
 
 fn parse_numeric_rows(text: &str, cols: usize, label: &str) -> Result<Vec<Vec<f64>>> {

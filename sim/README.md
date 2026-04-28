@@ -50,8 +50,31 @@ The common replay format is a directory with:
 - `gnss.csv`
   - columns: `t_s,lat_deg,lon_deg,height_m,vn_mps,ve_mps,vd_mps,pos_std_n_m,pos_std_e_m,pos_std_d_m,vel_std_n_mps,vel_std_e_mps,vel_std_d_mps,heading_rad`
   - `heading_rad` may be `NaN` when heading is unavailable or intentionally omitted
+- Optional `reference_attitude.csv` and `reference_mount.csv`
+  - columns: `t_s,roll_deg,pitch_deg,yaw_deg`
+  - used by visualizer comparison plots only; filter inputs still come from the public generic IMU/GNSS path
 
 Hardware-specific converters should live outside this repository and emit this schema.
+
+## Hosted Dataset Packaging
+
+Use the repository-level packaging script to convert a generic replay directory into a static-hosting layout:
+
+```bash
+python3 scripts/package_dataset.py /path/to/replay-dir /tmp/hosted-drive
+```
+
+The output directory contains `manifest.json`, `imu.csv.gz`, `gnss.csv.gz`, and any optional reference CSVs found in the source replay. The manifest records the generic replay schema, sample counts, time span, compressed file sizes, and SHA-256 hashes.
+
+The script also accepts `gnss-ins-sim` output directories by invoking `export_gnss_ins_sim_generic` before packaging:
+
+```bash
+python3 scripts/package_dataset.py /path/to/gnss-ins-sim/output /tmp/hosted-drive \
+  --source-format gnss-ins-sim \
+  --signal-source meas
+```
+
+Raw UBX or other `.bin` logs are not packaged here. Rebuilding that conversion path would reintroduce the device-specific UBX parser stack removed from this repository; external converters should emit the generic CSV schema first.
 
 ## Shared Code Direction
 
