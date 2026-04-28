@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>IMU/GNSS Fusion Visualizer</title>
+    <style>
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #101418;
+      }
+
+      #visualizer_canvas {
+        width: 100vw;
+        height: 100vh;
+        display: block;
+      }
+
+      #status {
+        position: fixed;
+        left: 12px;
+        bottom: 10px;
+        padding: 6px 8px;
+        border-radius: 4px;
+        color: #d9e2ec;
+        background: rgba(0, 0, 0, 0.65);
+        font: 12px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="visualizer_canvas"></canvas>
+    <div id="status">Loading visualizer...</div>
+    <script type="module">
+      import init, { start_visualizer } from "./pkg/visualizer.js";
+
+      const status = document.getElementById("status");
+      try {
+        await init();
+        await start_visualizer("visualizer_canvas");
+        status.remove();
+      } catch (error) {
+        console.error(error);
+        status.textContent = `Failed to start visualizer: ${error}`;
+      }
+    </script>
+  </body>
+</html>

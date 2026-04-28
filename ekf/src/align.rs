@@ -1,8 +1,20 @@
 //! IMU-to-vehicle mount alignment from stationary gravity and GNSS-derived motion windows.
 //!
-//! The alignment filter maintains a quaternion `q_vb` that rotates vehicle-frame
-//! vectors into the IMU body frame. It uses stationary gravity to level roll and
-//! pitch, then GNSS acceleration and turn consistency to observe yaw.
+//! The full formulation is documented in
+//! `docs/align_nhc_formulation.pdf`. In short, the filter state is the
+//! vehicle-to-body mount quaternion `q_vb` plus a 3 by 3 covariance over the
+//! mount small angle `[roll, pitch, yaw]`.
+//!
+//! ```text
+//! x_b = C_bv(q_vb) x_v
+//! x_v = C_bv(q_vb)^T x_b
+//! ```
+//!
+//! Stationary gravity constrains roll and pitch, GNSS-derived horizontal
+//! acceleration supplies a scalar vehicle-yaw correction, and planar turn gyro
+//! windows constrain vehicle-frame roll and pitch rates. The nominal mount is
+//! modeled as constant between observation windows; prediction only adds mount
+//! random-walk variance to the covariance diagonal.
 
 #![allow(non_snake_case)]
 

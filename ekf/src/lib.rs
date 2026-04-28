@@ -4,6 +4,10 @@
 //! ESKF and loose-reference filters, and the generated symbolic model wrappers
 //! used by those filters. Public APIs use SI units unless a field name states
 //! otherwise.
+//!
+//! Maintained mathematical references:
+//! `docs/align_nhc_formulation.pdf`, `docs/eskf_mount_formulation.pdf`, and
+//! `docs/loose_formulation.pdf`.
 
 extern crate alloc;
 

@@ -5,6 +5,27 @@
 //! prediction Jacobians and scalar observation rows; this module applies
 //! covariance propagation, measurement fusion, reset injection, and diagnostic
 //! accounting.
+//!
+//! See `docs/eskf_mount_formulation.pdf` for the maintained derivation. The
+//! nominal state is:
+//!
+//! ```text
+//! q_ns, v_n, p_n, b_g, b_a, q_cs
+//! ```
+//!
+//! where `q_ns` rotates the seeded IMU frame into local NED and `q_cs` rotates
+//! seeded-frame velocity into the corrected vehicle frame. The 18-state error
+//! vector is:
+//!
+//! ```text
+//! dtheta_s, dv_n, dp_n, dbg, dba, dpsi_cs
+//! ```
+//!
+//! Propagation uses generated `F` and `G` matrices with
+//! `P+ = F P F^T + G Q G^T`. GNSS and zero-velocity rows observe NED position
+//! or velocity directly. Vehicle speed and NHC rows use
+//! `v_c = C_cs C_ns^T v_n`, which gives the residual-mount Jacobian block
+//! `-e_i^T [v_c]x`.
 
 use libm::{fabsf, sqrtf};
 

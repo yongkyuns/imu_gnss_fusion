@@ -5,24 +5,20 @@ This directory collects project-level notes for the IMU/GNSS fusion workspace. T
 ## Start Here
 
 - [Testing](testing.md): local test commands, targeted suites, fixtures, and expensive-data notes.
-- [Frame conventions](math/frames.md): navigation, body, vehicle, seeded, and corrected frames used across align, loose, and ESKF code.
-- [Loose INS/GNSS notes](math/loose.md): state layout, update sources, generated-code path, and diagnostic conventions for the loose filter.
+- [Frame conventions](math/frames.md): short index for navigation, ECEF, body, vehicle, seeded, and corrected frames.
+- [Loose INS/GNSS notes](math/loose.md): concise operational links for the loose filter.
 - [Simulation tooling map](../sim/README.md): stable `sim` binaries, generic replay schema, and supported visualizer modes.
+- [Browser visualizer](../web/README.md): wasm build and static hosting instructions.
 
 ## Detailed Math Notes
 
 - [ESKF mount formulation PDF](eskf_mount_formulation.pdf) and [TEX](eskf_mount_formulation.tex).
 - [Align/NHC formulation PDF](align_nhc_formulation.pdf) and [TEX](align_nhc_formulation.tex).
-- [Align pitch observability note PDF](align_pitch_observability_note.pdf) and [TEX](align_pitch_observability_note.tex).
-
-## Architecture Assets
-
-- [Repository architecture diagram](repo_architecture.png).
-- [Penpot source for the architecture diagram](repo_architecture.pen).
-
+- [Loose INS/GNSS formulation PDF](loose_formulation.pdf) and [TEX](loose_formulation.tex).
 ## Documentation Conventions
 
 - Keep README-level material short and operational.
 - Prefer `sim/README.md` for crate-specific tool inventory and diagnostics.
-- Put estimator conventions and equations under `docs/math/`.
+- Put estimator conventions and equations in the formulation PDFs under `docs/`, with TEX kept as the editable source.
+- Keep `docs/math/*.md` as index and operational-reference pages, not duplicate derivations.
 - When generated Rust changes, update both the symbolic source notes and the testing notes if the verification path changes.

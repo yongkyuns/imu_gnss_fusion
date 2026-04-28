@@ -14,7 +14,7 @@ use crate::synthetic::gnss_ins_path::{
 };
 use crate::visualizer::math::{ecef_to_ned, lla_to_ecef, quat_rpy_deg};
 use crate::visualizer::model::{EkfImuSource, HeadingSample, PlotData, Trace};
-use crate::visualizer::pipeline::ekf_compare::{EkfCompareConfig, GnssOutageConfig};
+use crate::visualizer::pipeline::{EkfCompareConfig, GnssOutageConfig};
 
 #[derive(Clone, Copy, Debug)]
 pub enum SyntheticNoiseMode {
@@ -26,7 +26,9 @@ pub enum SyntheticNoiseMode {
 
 #[derive(Clone, Debug)]
 pub struct SyntheticVisualizerConfig {
-    pub motion_def: std::path::PathBuf,
+    pub motion_def: Option<std::path::PathBuf>,
+    pub motion_label: String,
+    pub motion_text: Option<String>,
     pub noise_mode: SyntheticNoiseMode,
     pub seed: u64,
     pub mount_rpy_deg: [f64; 3],
@@ -43,7 +45,14 @@ pub fn build_synthetic_plot_data(
     ekf_cfg: EkfCompareConfig,
     gnss_outages: GnssOutageConfig,
 ) -> Result<PlotData> {
-    let profile = MotionProfile::from_path(&synth_cfg.motion_def)?;
+    let profile = match (&synth_cfg.motion_text, &synth_cfg.motion_def) {
+        (Some(text), _) if synth_cfg.motion_label.ends_with(".csv") => {
+            MotionProfile::from_csv_str(text)?
+        }
+        (Some(text), _) => MotionProfile::from_dsl_str(text)?,
+        (None, Some(path)) => MotionProfile::from_path(path)?,
+        (None, None) => anyhow::bail!("synthetic scenario has no path or inline text"),
+    };
     let path_cfg = PathGenConfig {
         imu_hz: synth_cfg.imu_hz,
         gnss_hz: synth_cfg.gnss_hz,

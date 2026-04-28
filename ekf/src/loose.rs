@@ -4,6 +4,25 @@
 //! diagnostics and comparison against the runtime ESKF. It keeps a single
 //! precision public state plus f64 shadow position, mount quaternion, and
 //! covariance fields used internally for numerically sensitive propagation.
+//!
+//! See `docs/loose_formulation.pdf` for the PDF-first derivation. The nominal
+//! state is:
+//!
+//! ```text
+//! q_es, v_e, p_e, b_g, b_a, s_g, s_a, q_cs
+//! ```
+//!
+//! `q_es` rotates the seeded IMU frame into ECEF, and `q_cs` rotates the seeded
+//! frame into the corrected vehicle frame used by NHC. The 24-state error order
+//! in generated matrices and injection is:
+//!
+//! ```text
+//! dp_e, dv_e, dtheta_s, dba, dbg, dsa, dsg, dpsi_cs
+//! ```
+//!
+//! GNSS reference rows observe ECEF position and velocity, optionally whitening
+//! NED standard deviations into ECEF. NHC rows predict
+//! `v_c = C_cs C_es^T v_e` and constrain its lateral and vertical components.
 
 #![allow(non_snake_case)]
 #![allow(clippy::excessive_precision)]

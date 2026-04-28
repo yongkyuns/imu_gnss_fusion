@@ -1,3 +1,13 @@
+//! Public state and sample structs for the runtime augmented ESKF.
+//!
+//! Mathematical details are maintained in `docs/eskf_mount_formulation.pdf`.
+//! `EskfNominalState` stores `q_ns, v_n, p_n, b_g, b_a, q_cs`, and the
+//! covariance in `EskfState` is ordered as:
+//!
+//! ```text
+//! dtheta_s, dv_n, dp_n, dbg, dba, dpsi_cs
+//! ```
+
 use crate::ekf::PredictNoise;
 
 pub const ESKF_UPDATE_DIAG_TYPES: usize = 11;

@@ -4,6 +4,11 @@
 //! initialization, and runtime updates. Feed samples in timestamp order through
 //! `process_imu`, `process_gnss`, and optional vehicle-speed updates; query the
 //! latest initialized ESKF state and mount estimates from the accessors.
+//!
+//! The facade bridges the PDF formulations in `docs/`: align estimates the
+//! physical vehicle-to-body seed `q_vb`, IMU deltas are pre-rotated into the
+//! ESKF seeded frame, and the runtime ESKF may then estimate residual mount
+//! `q_cs` through vehicle-speed and NHC measurements.
 
 use crate::align::{Align, AlignConfig, AlignUpdateTrace, AlignWindowSummary, GRAVITY_MPS2};
 use crate::ekf::PredictNoise;

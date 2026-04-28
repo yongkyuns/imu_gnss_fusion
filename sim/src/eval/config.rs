@@ -1,4 +1,4 @@
-use crate::visualizer::pipeline::ekf_compare::EkfCompareConfig;
+use crate::visualizer::pipeline::EkfCompareConfig;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EkfCompareConfigSnapshot {

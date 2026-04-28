@@ -3,24 +3,34 @@ use std::time::Duration;
 use anyhow::Result;
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints, Points};
+#[cfg(not(target_arch = "wasm32"))]
 use walkers::sources::{Mapbox, MapboxStyle, OpenStreetMap};
+#[cfg(not(target_arch = "wasm32"))]
 use walkers::{HttpTiles, Map, MapMemory, Plugin, lon_lat};
 
+#[cfg(not(target_arch = "wasm32"))]
 use super::math::heading_endpoint;
 use super::model::{EkfImuSource, HeadingSample, Page, PlotData, Trace};
-use super::pipeline::build_plot_data;
-use super::pipeline::ekf_compare::{EkfCompareConfig, GnssOutageConfig};
+#[cfg(target_arch = "wasm32")]
+use super::pipeline::generic::{
+    GenericReplayInput, build_generic_replay_plot_data, parse_generic_replay_csvs,
+};
 use super::pipeline::synthetic::{SyntheticVisualizerConfig, build_synthetic_plot_data};
+use super::pipeline::{EkfCompareConfig, GnssOutageConfig};
+#[cfg(not(target_arch = "wasm32"))]
 use super::stats::map_center_from_traces;
 
+#[cfg(not(target_arch = "wasm32"))]
 const MAPBOX_ACCESS_TOKEN: &str = "pk.eyJ1IjoieW9uZ2t5dW5zODciLCJhIjoiY21tNjB5NWt6MGJmOTJzcG02MmRvN3RnYiJ9.fu_66qb1G1cgrLzAE54E0w";
 
+#[cfg(not(target_arch = "wasm32"))]
 struct TrackOverlay<'a> {
     traces: Vec<&'a Trace>,
     headings: Vec<&'a HeadingSample>,
     show_heading: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Plugin for TrackOverlay<'_> {
     fn run(
         self: Box<Self>,
@@ -33,10 +43,8 @@ impl Plugin for TrackOverlay<'_> {
             if tr.points.len() < 2 {
                 continue;
             }
-            let color = if tr.name == "u-blox path (lon,lat)" {
+            let color = if tr.name.contains("GNSS") {
                 egui::Color32::from_rgb(0, 255, 255)
-            } else if tr.name == "NAV2-PVT path (GNSS-only, lon,lat)" {
-                egui::Color32::from_rgb(255, 196, 0)
             } else if tr.name == "ESKF path (lon,lat)" {
                 egui::Color32::from_rgb(120, 170, 255)
             } else if tr.name == "ESKF path during GNSS outage (lon,lat)" {
@@ -124,21 +132,31 @@ impl Plugin for TrackOverlay<'_> {
 pub struct App {
     data: PlotData,
     show_egui_inspection: bool,
-    show_esf_meas: bool,
+    show_meas_accel: bool,
     has_itow: bool,
     fps_ema: f32,
     max_points_per_trace: usize,
     page: Page,
+    #[cfg(not(target_arch = "wasm32"))]
     map_tiles: HttpTiles,
+    #[cfg(not(target_arch = "wasm32"))]
     map_memory: MapMemory,
+    #[cfg(not(target_arch = "wasm32"))]
     map_center: walkers::Position,
     show_heading: bool,
-    show_nav_pvt: bool,
-    show_nav2_pvt: bool,
+    show_gnss_map: bool,
     show_eskf: bool,
     show_loose: bool,
     replay: Option<ReplayState>,
     replay_status: Option<String>,
+    #[cfg(target_arch = "wasm32")]
+    web_imu_csv: Option<NamedText>,
+    #[cfg(target_arch = "wasm32")]
+    web_gnss_csv: Option<NamedText>,
+    #[cfg(target_arch = "wasm32")]
+    web_scenario: WebSyntheticScenario,
+    #[cfg(target_arch = "wasm32")]
+    web_status: String,
 }
 
 #[derive(Clone)]
@@ -151,15 +169,35 @@ pub struct ReplayState {
     pub gnss_outages: GnssOutageConfig,
 }
 
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone)]
+struct NamedText {
+    name: String,
+    text: String,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WebSyntheticScenario {
+    CityBlocks,
+    FigureEight,
+    StraightAccelBrake,
+}
+
 fn create_app(
     cc: &eframe::CreationContext<'_>,
     data: PlotData,
     has_itow: bool,
     replay: Option<ReplayState>,
 ) -> App {
+    #[cfg(target_arch = "wasm32")]
+    let _ = cc;
+    #[cfg(not(target_arch = "wasm32"))]
     let map_center = map_center_from_traces(&data.eskf_map);
+    #[cfg(not(target_arch = "wasm32"))]
     let mapbox_access_token =
         std::env::var("MAPBOX_ACCESS_TOKEN").unwrap_or_else(|_| MAPBOX_ACCESS_TOKEN.to_string());
+    #[cfg(not(target_arch = "wasm32"))]
     let map_tiles = if mapbox_access_token.is_empty() {
         HttpTiles::new(OpenStreetMap, cc.egui_ctx.clone())
     } else {
@@ -172,26 +210,39 @@ fn create_app(
             cc.egui_ctx.clone(),
         )
     };
+    #[cfg(not(target_arch = "wasm32"))]
     let mut map_memory = MapMemory::default();
+    #[cfg(not(target_arch = "wasm32"))]
     let _ = map_memory.set_zoom(15.0);
     App {
         data,
         show_egui_inspection: false,
-        show_esf_meas: false,
+        show_meas_accel: false,
         has_itow,
         fps_ema: 0.0,
         max_points_per_trace: 2500,
         page: Page::Signals,
+        #[cfg(not(target_arch = "wasm32"))]
         map_tiles,
+        #[cfg(not(target_arch = "wasm32"))]
         map_memory,
+        #[cfg(not(target_arch = "wasm32"))]
         map_center,
         show_heading: false,
-        show_nav_pvt: true,
-        show_nav2_pvt: true,
+        show_gnss_map: true,
         show_eskf: true,
         show_loose: true,
         replay,
         replay_status: None,
+        #[cfg(target_arch = "wasm32")]
+        web_imu_csv: None,
+        #[cfg(target_arch = "wasm32")]
+        web_gnss_csv: None,
+        #[cfg(target_arch = "wasm32")]
+        web_scenario: WebSyntheticScenario::CityBlocks,
+        #[cfg(target_arch = "wasm32")]
+        web_status: "Drag imu.csv and gnss.csv onto the app, or run a built-in synthetic scenario."
+            .to_string(),
     }
 }
 
@@ -217,22 +268,184 @@ impl App {
                 }
             }
         } else {
-            let (data, has_itow) = build_plot_data(
-                &replay.bytes,
-                replay.max_records,
-                replay.misalignment,
-                replay.ekf_cfg,
-                replay.gnss_outages,
-            );
-            self.data = data;
-            self.has_itow = has_itow;
-            self.replay_status = Some("Replay refreshed".to_string());
+            self.replay_status =
+                Some("Generic CSV replay can be loaded from the browser UI".to_string());
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn refresh_from_generic_csv(&mut self) {
+        let (Some(imu), Some(gnss)) = (&self.web_imu_csv, &self.web_gnss_csv) else {
+            self.web_status =
+                "Load both imu.csv and gnss.csv before running CSV replay.".to_string();
+            return;
+        };
+        let imu_name = imu.name.clone();
+        let gnss_name = gnss.name.clone();
+        let imu_text = imu.text.clone();
+        let gnss_text = gnss.text.clone();
+        match parse_generic_replay_csvs(&imu_text, &gnss_text) {
+            Ok(replay) => {
+                self.set_generic_replay(replay);
+                self.web_status = format!("CSV replay loaded: {imu_name} and {gnss_name}");
+            }
+            Err(err) => {
+                self.web_status = format!("CSV replay failed: {err}");
+            }
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn set_generic_replay(&mut self, replay: GenericReplayInput) {
+        let data = build_generic_replay_plot_data(
+            &replay,
+            EkfImuSource::Internal,
+            EkfCompareConfig::default(),
+            GnssOutageConfig::default(),
+        );
+        self.data = data;
+        self.has_itow = false;
+        self.page = Page::EskfCompare;
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn refresh_from_web_synthetic(&mut self) {
+        let (label, text) = self.web_scenario.scenario_text();
+        let synth_cfg = SyntheticVisualizerConfig {
+            motion_def: None,
+            motion_label: label.to_string(),
+            motion_text: Some(text.to_string()),
+            noise_mode: super::pipeline::synthetic::SyntheticNoiseMode::Low,
+            seed: 1,
+            mount_rpy_deg: [5.0, -5.0, 5.0],
+            imu_hz: 100.0,
+            gnss_hz: 2.0,
+            gnss_time_shift_ms: 0.0,
+            early_vel_bias_ned_mps: [0.0, 0.0, 0.0],
+            early_fault_window_s: None,
+        };
+        match build_synthetic_plot_data(
+            &synth_cfg,
+            EkfImuSource::Internal,
+            EkfCompareConfig::default(),
+            GnssOutageConfig::default(),
+        ) {
+            Ok(data) => {
+                self.data = data;
+                self.has_itow = false;
+                self.page = Page::EskfCompare;
+                self.web_status = format!("Synthetic scenario loaded: {label}");
+            }
+            Err(err) => {
+                self.web_status = format!("Synthetic scenario failed: {err}");
+            }
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn consume_dropped_files(&mut self, ctx: &egui::Context) {
+        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+        if dropped.is_empty() {
+            return;
+        }
+        for file in dropped {
+            let Some(bytes) = file.bytes else {
+                self.web_status = format!("{} has no available browser bytes", file.name);
+                continue;
+            };
+            let text = match std::str::from_utf8(bytes.as_ref()) {
+                Ok(text) => text.to_string(),
+                Err(err) => {
+                    self.web_status = format!("{} is not UTF-8 CSV text: {err}", file.name);
+                    continue;
+                }
+            };
+            let lower = file.name.to_ascii_lowercase();
+            let named = NamedText {
+                name: file.name.clone(),
+                text,
+            };
+            if lower.contains("gnss") {
+                self.web_gnss_csv = Some(named);
+            } else if lower.contains("imu") || lower.contains("acc") || lower.contains("gyro") {
+                self.web_imu_csv = Some(named);
+            } else if self.web_imu_csv.is_none() {
+                self.web_imu_csv = Some(named);
+            } else {
+                self.web_gnss_csv = Some(named);
+            }
+        }
+        self.web_status = "Dropped file(s) staged. Click Run CSV replay.".to_string();
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl WebSyntheticScenario {
+    fn scenario_text(self) -> (&'static str, &'static str) {
+        match self {
+            Self::CityBlocks => ("city_blocks_builtin.scenario", CITY_BLOCKS_SCENARIO),
+            Self::FigureEight => ("figure8_builtin.csv", FIGURE_EIGHT_CSV),
+            Self::StraightAccelBrake => {
+                ("straight_accel_brake_builtin.csv", STRAIGHT_ACCEL_BRAKE_CSV)
+            }
         }
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+const CITY_BLOCKS_SCENARIO: &str = r#"
+initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
+wait 20s
+repeat 3 {
+    accelerate 1.0m/s^2 for 8s
+    wait 10s
+    turn left 10dps for 9s
+    wait 10s
+    brake 1.0m/s^2 for 8s
+    wait 10s
+    accelerate 1.0m/s^2 for 8s
+    wait 10s
+    turn right 10dps for 9s
+    wait 10s
+    brake 1.0m/s^2 for 8s
+    wait 10s
+}
+"#;
+
+#[cfg(target_arch = "wasm32")]
+const FIGURE_EIGHT_CSV: &str = r#"ini lat (deg),ini lon (deg),ini alt (m),ini vx_body (m/s),ini vy_body (m/s),ini vz_body (m/s),ini yaw (deg),ini pitch (deg),ini roll (deg)
+32,120,0,0,0,0,0,0,0
+command type,yaw (deg),pitch (deg),roll (deg),vx_body (m/s),vy_body (m/s),vz_body (m/s),command duration (s),GPS visibility
+1,0,0,0,0,0,0,20,1
+1,0,0,0,0.6,0,0,20,1
+1,0,0,0,0,0,0,10,1
+1,10,0,0,0,0,0,36,1
+1,-10,0,0,0,0,0,36,1
+1,10,0,0,0,0,0,36,1
+1,-10,0,0,0,0,0,36,1
+1,0,0,0,-0.6666667,0,0,18,1
+"#;
+
+#[cfg(target_arch = "wasm32")]
+const STRAIGHT_ACCEL_BRAKE_CSV: &str = r#"ini lat (deg),ini lon (deg),ini alt (m),ini vx_body (m/s),ini vy_body (m/s),ini vz_body (m/s),ini yaw (deg),ini pitch (deg),ini roll (deg)
+32,120,0,0,0,0,0,0,0
+command type,yaw (deg),pitch (deg),roll (deg),vx_body (m/s),vy_body (m/s),vz_body (m/s),command duration (s),GPS visibility
+1,0,0,0,0,0,0,20,1
+1,0,0,0,0.5,0,0,20,1
+1,0,0,0,0,0,0,20,1
+1,0,0,0,-0.5,0,0,20,1
+1,0,0,0,0,0,0,15,1
+1,0,0,0,0.5,0,0,20,1
+1,0,0,0,0,0,0,20,1
+1,0,0,0,-0.5,0,0,20,1
+1,0,0,0,0,0,0,15,1
+"#;
+
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(target_arch = "wasm32")]
+        self.consume_dropped_files(ctx);
+
         #[cfg(target_os = "macos")]
         if ctx.input(|i| i.viewport().close_requested()) {
             std::process::exit(0);
@@ -280,11 +493,54 @@ impl eframe::App for App {
                         "Decimation budget: {} pts/trace (FPS EMA {:.1})",
                         self.max_points_per_trace, self.fps_ema
                     ));
-                    ui.checkbox(&mut self.show_esf_meas, "Show ESF-MEAS (Accel)");
+                    ui.checkbox(&mut self.show_meas_accel, "Show IMU measurement (Accel)");
                     ui.checkbox(
                         &mut self.show_egui_inspection,
                         "Show egui inspection/profiler",
                     );
+                });
+            #[cfg(target_arch = "wasm32")]
+            egui::CollapsingHeader::new("Browser Inputs")
+                .default_open(true)
+                .show(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Synthetic:");
+                        ui.selectable_value(
+                            &mut self.web_scenario,
+                            WebSyntheticScenario::CityBlocks,
+                            "City blocks",
+                        );
+                        ui.selectable_value(
+                            &mut self.web_scenario,
+                            WebSyntheticScenario::FigureEight,
+                            "Figure eight",
+                        );
+                        ui.selectable_value(
+                            &mut self.web_scenario,
+                            WebSyntheticScenario::StraightAccelBrake,
+                            "Straight accel/brake",
+                        );
+                        if ui.button("Run synthetic").clicked() {
+                            self.refresh_from_web_synthetic();
+                        }
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        let imu_name = self
+                            .web_imu_csv
+                            .as_ref()
+                            .map(|f| f.name.as_str())
+                            .unwrap_or("no imu.csv");
+                        let gnss_name = self
+                            .web_gnss_csv
+                            .as_ref()
+                            .map(|f| f.name.as_str())
+                            .unwrap_or("no gnss.csv");
+                        ui.label(format!("CSV: {imu_name} / {gnss_name}"));
+                        if ui.button("Run CSV replay").clicked() {
+                            self.refresh_from_generic_csv();
+                        }
+                    });
+                    ui.label(&self.web_status);
                 });
             if let Some(replay) = self.replay.as_mut() {
                 egui::CollapsingHeader::new("Replay Controls")
@@ -607,15 +863,15 @@ impl eframe::App for App {
             self.data
                 .imu_cal_gyro
                 .iter()
-                .filter(|t| !t.name.starts_with("ESF-MEAS ")),
+                .filter(|t| !t.name.starts_with("IMU measurement ")),
         );
 
         let mut imu_accel: Vec<&Trace> =
             Vec::with_capacity(self.data.imu_raw_accel.len() + self.data.imu_cal_accel.len());
         imu_accel.extend(self.data.imu_raw_accel.iter());
         imu_accel.extend(self.data.imu_cal_accel.iter());
-        if !self.show_esf_meas {
-            imu_accel.retain(|t| !t.name.starts_with("ESF-MEAS "));
+        if !self.show_meas_accel {
+            imu_accel.retain(|t| !t.name.starts_with("IMU measurement "));
         }
 
         match self.page {
@@ -634,15 +890,8 @@ impl eframe::App for App {
                         );
                         draw_plot(
                             ui,
-                            "IMU Gyro ESF (RAW/CAL)",
+                            "IMU Gyro Reference (RAW/CAL)",
                             imu_gyro.iter().copied(),
-                            true,
-                            self.max_points_per_trace,
-                        );
-                        draw_plot(
-                            ui,
-                            "ESF-INS Gyro",
-                            self.data.esf_ins_gyro.iter(),
                             true,
                             self.max_points_per_trace,
                         );
@@ -665,15 +914,8 @@ impl eframe::App for App {
                     );
                     draw_plot(
                         ui,
-                        "IMU Accel ESF (RAW/CAL/MEAS)",
+                        "IMU Accel Reference (RAW/CAL/MEAS)",
                         imu_accel.iter().copied(),
-                        true,
-                        self.max_points_per_trace,
-                    );
-                    draw_plot(
-                        ui,
-                        "ESF-INS Accel",
-                        self.data.esf_ins_accel.iter(),
                         true,
                         self.max_points_per_trace,
                     );
@@ -688,15 +930,11 @@ impl eframe::App for App {
             }
             Page::EskfCompare => {
                 let half_width = (ctx.content_rect().width() * 0.5).max(260.0);
-                let mut vehicle_gyro: Vec<&Trace> = Vec::with_capacity(
-                    self.data.esf_ins_gyro.len() + self.data.eskf_meas_gyro.len(),
-                );
-                vehicle_gyro.extend(self.data.esf_ins_gyro.iter());
+                let mut vehicle_gyro: Vec<&Trace> =
+                    Vec::with_capacity(self.data.eskf_meas_gyro.len());
                 vehicle_gyro.extend(self.data.eskf_meas_gyro.iter());
-                let mut vehicle_accel: Vec<&Trace> = Vec::with_capacity(
-                    self.data.esf_ins_accel.len() + self.data.eskf_meas_accel.len(),
-                );
-                vehicle_accel.extend(self.data.esf_ins_accel.iter());
+                let mut vehicle_accel: Vec<&Trace> =
+                    Vec::with_capacity(self.data.eskf_meas_accel.len());
                 vehicle_accel.extend(self.data.eskf_meas_accel.iter());
                 egui::SidePanel::left("eskf_compare_left")
                     .resizable(false)
@@ -704,14 +942,14 @@ impl eframe::App for App {
                     .show(ctx, |ui| {
                         draw_plot(
                             ui,
-                            "Vehicle Velocity: ESKF vs u-blox",
+                            "Vehicle Velocity: ESKF vs GNSS",
                             self.data.eskf_cmp_vel.iter(),
                             true,
                             self.max_points_per_trace,
                         );
                         draw_plot(
                             ui,
-                            "Euler Angles: ESKF Quaternion vs NAV-ATT",
+                            "Euler Angles: ESKF Quaternion vs reference attitude",
                             self.data.eskf_cmp_att.iter(),
                             true,
                             self.max_points_per_trace,
@@ -732,7 +970,7 @@ impl eframe::App for App {
                         );
                         draw_plot(
                             ui,
-                            "Vehicle Gyro: ESF-INS vs ESKF",
+                            "Vehicle Gyro: ESKF input",
                             vehicle_gyro.iter().copied(),
                             true,
                             self.max_points_per_trace,
@@ -763,7 +1001,7 @@ impl eframe::App for App {
                     );
                     draw_plot(
                         ui,
-                        "Vehicle Accel: ESF-INS vs ESKF",
+                        "Vehicle Accel: ESKF input",
                         vehicle_accel.iter().copied(),
                         true,
                         self.max_points_per_trace,
@@ -823,15 +1061,11 @@ impl eframe::App for App {
             }
             Page::LooseCompare => {
                 let half_width = (ctx.content_rect().width() * 0.5).max(260.0);
-                let mut vehicle_gyro: Vec<&Trace> = Vec::with_capacity(
-                    self.data.esf_ins_gyro.len() + self.data.loose_meas_gyro.len(),
-                );
-                vehicle_gyro.extend(self.data.esf_ins_gyro.iter());
+                let mut vehicle_gyro: Vec<&Trace> =
+                    Vec::with_capacity(self.data.loose_meas_gyro.len());
                 vehicle_gyro.extend(self.data.loose_meas_gyro.iter());
-                let mut vehicle_accel: Vec<&Trace> = Vec::with_capacity(
-                    self.data.esf_ins_accel.len() + self.data.loose_meas_accel.len(),
-                );
-                vehicle_accel.extend(self.data.esf_ins_accel.iter());
+                let mut vehicle_accel: Vec<&Trace> =
+                    Vec::with_capacity(self.data.loose_meas_accel.len());
                 vehicle_accel.extend(self.data.loose_meas_accel.iter());
                 egui::SidePanel::left("loose_compare_left")
                     .resizable(false)
@@ -839,14 +1073,14 @@ impl eframe::App for App {
                     .show(ctx, |ui| {
                         draw_plot(
                             ui,
-                            "Vehicle Velocity: Loose INS/GNSS vs u-blox",
+                            "Vehicle Velocity: Loose INS/GNSS vs GNSS",
                             self.data.loose_cmp_vel.iter(),
                             true,
                             self.max_points_per_trace,
                         );
                         draw_plot(
                             ui,
-                            "Euler Angles: Loose INS/GNSS vs NAV-ATT",
+                            "Euler Angles: Loose INS/GNSS vs reference attitude",
                             self.data.loose_cmp_att.iter(),
                             true,
                             self.max_points_per_trace,
@@ -867,7 +1101,7 @@ impl eframe::App for App {
                         );
                         draw_plot(
                             ui,
-                            "Vehicle Gyro: ESF-INS vs Loose INS/GNSS",
+                            "Vehicle Gyro: Loose INS/GNSS input",
                             vehicle_gyro.iter().copied(),
                             true,
                             self.max_points_per_trace,
@@ -901,7 +1135,7 @@ impl eframe::App for App {
                     );
                     draw_plot(
                         ui,
-                        "Vehicle Accel: ESF-INS vs Loose INS/GNSS",
+                        "Vehicle Accel: Loose INS/GNSS input",
                         vehicle_accel.iter().copied(),
                         true,
                         self.max_points_per_trace,
@@ -917,7 +1151,7 @@ impl eframe::App for App {
                         egui::ScrollArea::vertical().show(ui, |ui| {
                             draw_plot(
                                 ui,
-                                "Euler Angles: Align KF vs ESF-ALG",
+                                "Euler Angles: Align KF vs Reference mount",
                                 self.data.align_cmp_att.iter(),
                                 true,
                                 self.max_points_per_trace,
@@ -931,14 +1165,14 @@ impl eframe::App for App {
                             );
                             draw_plot(
                                 ui,
-                                "Align Axis Error vs ESF-ALG",
+                                "Align Axis Error vs Reference mount",
                                 self.data.align_axis_err.iter(),
                                 true,
                                 self.max_points_per_trace,
                             );
                             draw_plot(
                                 ui,
-                                "Final ESF-ALG vs PCA Heading",
+                                "Final Reference mount vs PCA Heading",
                                 self.data.align_motion.iter(),
                                 true,
                                 self.max_points_per_trace,
@@ -987,12 +1221,12 @@ impl eframe::App for App {
                 });
             }
             Page::MapDark => {
+                #[cfg(not(target_arch = "wasm32"))]
                 egui::CentralPanel::default().show(ctx, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label("Slippy map overlay: NAV-PVT + NAV2-PVT + ESKF");
+                        ui.label("Map overlay: GNSS + ESKF");
                         ui.checkbox(&mut self.show_heading, "show heading");
-                        ui.checkbox(&mut self.show_nav_pvt, "show NAV-PVT");
-                        ui.checkbox(&mut self.show_nav2_pvt, "show NAV2-PVT");
+                        ui.checkbox(&mut self.show_gnss_map, "show GNSS");
                         ui.checkbox(&mut self.show_eskf, "show ESKF");
                         ui.checkbox(&mut self.show_loose, "show Loose");
                         if ui.button("Recenter").clicked() {
@@ -1000,8 +1234,7 @@ impl eframe::App for App {
                         }
                     });
                     ui.horizontal(|ui| {
-                        ui.colored_label(egui::Color32::from_rgb(0, 255, 255), "NAV-PVT");
-                        ui.colored_label(egui::Color32::from_rgb(255, 196, 0), "NAV2-PVT");
+                        ui.colored_label(egui::Color32::from_rgb(0, 255, 255), "GNSS");
                         ui.colored_label(egui::Color32::from_rgb(120, 170, 255), "ESKF");
                         ui.colored_label(egui::Color32::from_rgb(120, 255, 170), "Loose");
                         ui.colored_label(
@@ -1011,11 +1244,8 @@ impl eframe::App for App {
                         ui.colored_label(egui::Color32::from_rgb(255, 255, 255), "ESKF heading");
                     });
                     let mut map_traces: Vec<&Trace> = self.data.eskf_map.iter().collect();
-                    if !self.show_nav_pvt {
-                        map_traces.retain(|t| t.name != "u-blox path (lon,lat)");
-                    }
-                    if !self.show_nav2_pvt {
-                        map_traces.retain(|t| t.name != "NAV2-PVT path (GNSS-only, lon,lat)");
+                    if !self.show_gnss_map {
+                        map_traces.retain(|t| !t.name.contains("GNSS"));
                     }
                     if !self.show_eskf {
                         map_traces.retain(|t| {
@@ -1045,6 +1275,35 @@ impl eframe::App for App {
                         .with_plugin(track)
                         .double_click_to_zoom(true),
                     );
+                });
+                #[cfg(target_arch = "wasm32")]
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Map traces");
+                        ui.checkbox(&mut self.show_heading, "show heading");
+                        ui.checkbox(&mut self.show_gnss_map, "show GNSS");
+                        ui.checkbox(&mut self.show_eskf, "show ESKF");
+                        ui.checkbox(&mut self.show_loose, "show Loose");
+                    });
+                    let mut map_traces: Vec<&Trace> = self.data.eskf_map.iter().collect();
+                    if !self.show_gnss_map {
+                        map_traces.retain(|t| {
+                            !t.name.contains("GNSS")
+                                && !t.name.contains("GNSS reference")
+                                && !t.name.contains("NAV")
+                                && !t.name.contains("truth")
+                        });
+                    }
+                    if !self.show_eskf {
+                        map_traces.retain(|t| !t.name.contains("ESKF"));
+                    }
+                    if self.show_loose {
+                        map_traces.extend(self.data.loose_map.iter());
+                    }
+                    draw_lon_lat_plot(ui, map_traces.iter().copied(), self.max_points_per_trace);
+                    if self.show_heading {
+                        draw_heading_plot(ui, &self.data.eskf_map_heading);
+                    }
                 });
             }
         }
@@ -1228,8 +1487,55 @@ fn draw_plot<'a, I>(
     });
 }
 
+#[cfg(target_arch = "wasm32")]
+fn draw_lon_lat_plot<'a, I>(ui: &mut egui::Ui, traces: I, max_points_per_trace: usize)
+where
+    I: IntoIterator<Item = &'a Trace>,
+{
+    ui.vertical(|ui| {
+        ui.label("Longitude / Latitude");
+        Plot::new("web_lon_lat_map")
+            .height((ui.available_height() - 20.0).max(320.0))
+            .data_aspect(1.0)
+            .allow_drag(true)
+            .allow_zoom(true)
+            .legend(Legend::default())
+            .show(ui, |plot_ui| {
+                for trace in traces {
+                    if trace.points.is_empty() {
+                        continue;
+                    }
+                    let step = (trace.points.len() / max_points_per_trace.max(1)).max(1);
+                    let points: PlotPoints<'_> =
+                        trace.points.iter().step_by(step).copied().collect();
+                    plot_ui.line(Line::new(trace.name.clone(), points));
+                }
+            });
+    });
+}
+
+#[cfg(target_arch = "wasm32")]
+fn draw_heading_plot(ui: &mut egui::Ui, headings: &[HeadingSample]) {
+    if headings.is_empty() {
+        return;
+    }
+    let points: PlotPoints<'_> = headings
+        .iter()
+        .step_by((headings.len() / 500).max(1))
+        .map(|h| [h.t_s, h.yaw_deg])
+        .collect();
+    ui.label("Heading");
+    Plot::new("web_heading")
+        .height(160.0)
+        .allow_drag(true)
+        .allow_zoom(true)
+        .show(ui, |plot_ui| {
+            plot_ui.line(Line::new("ESKF heading [deg]", points));
+        });
+}
+
 #[cfg(not(target_arch = "wasm32"))]
-pub fn run_visualizer(data: PlotData, has_itow: bool, replay: ReplayState) -> Result<()> {
+pub fn run_visualizer(data: PlotData, has_itow: bool, replay: Option<ReplayState>) -> Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_maximized(true),
         ..Default::default()
@@ -1237,7 +1543,7 @@ pub fn run_visualizer(data: PlotData, has_itow: bool, replay: ReplayState) -> Re
     eframe::run_native(
         "visualizer",
         native_options,
-        Box::new(move |cc| Ok(Box::new(create_app(cc, data, has_itow, Some(replay))))),
+        Box::new(move |cc| Ok(Box::new(create_app(cc, data, has_itow, replay)))),
     )
     .map_err(|e| anyhow::anyhow!("eframe error: {e}"))?;
     Ok(())
@@ -1245,11 +1551,12 @@ pub fn run_visualizer(data: PlotData, has_itow: bool, replay: ReplayState) -> Re
 
 #[cfg(target_arch = "wasm32")]
 pub async fn run_visualizer_web(
+    runner: &eframe::WebRunner,
     canvas: eframe::web_sys::HtmlCanvasElement,
     data: PlotData,
     has_itow: bool,
 ) -> std::result::Result<(), eframe::wasm_bindgen::JsValue> {
-    eframe::WebRunner::new()
+    runner
         .start(
             canvas,
             eframe::WebOptions::default(),
@@ -1259,6 +1566,10 @@ pub async fn run_visualizer_web(
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn run_visualizer(_data: PlotData, _has_itow: bool, _replay: ReplayState) -> Result<()> {
+pub fn run_visualizer(
+    _data: PlotData,
+    _has_itow: bool,
+    _replay: Option<ReplayState>,
+) -> Result<()> {
     anyhow::bail!("run_visualizer is native-only on wasm; use run_visualizer_web instead")
 }

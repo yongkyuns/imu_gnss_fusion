@@ -1,22 +1,26 @@
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::Instant;
-#[cfg(not(target_arch = "wasm32"))]
-use std::{fs::File, io::Read, path::PathBuf};
+#![recursion_limit = "1024"]
 
 #[cfg(not(target_arch = "wasm32"))]
-use anyhow::{Context, Result};
+use std::path::PathBuf;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+
+#[cfg(not(target_arch = "wasm32"))]
+use anyhow::Result;
 #[cfg(not(target_arch = "wasm32"))]
 use clap::{Parser, ValueEnum};
 #[cfg(not(target_arch = "wasm32"))]
+use sim::datasets::generic_replay::{load_gnss_samples, load_imu_samples};
+#[cfg(not(target_arch = "wasm32"))]
 use sim::visualizer::model::EkfImuSource;
 #[cfg(not(target_arch = "wasm32"))]
-use sim::visualizer::pipeline::build_plot_data;
-#[cfg(not(target_arch = "wasm32"))]
-use sim::visualizer::pipeline::ekf_compare::{EkfCompareConfig, GnssOutageConfig};
+use sim::visualizer::pipeline::generic::{GenericReplayInput, build_generic_replay_plot_data};
 #[cfg(not(target_arch = "wasm32"))]
 use sim::visualizer::pipeline::synthetic::{
     SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_plot_data,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use sim::visualizer::pipeline::{EkfCompareConfig, GnssOutageConfig};
 #[cfg(not(target_arch = "wasm32"))]
 use sim::visualizer::stats::{
     group_stats, max_gap_sec, max_gap_trace, max_step_abs, trace_stats, trace_time_bounds,
@@ -31,6 +35,8 @@ use sim::visualizer::ui::{ReplayState, run_visualizer};
 struct Args {
     #[arg(value_name = "LOGFILE")]
     logfile: Option<PathBuf>,
+    #[arg(long, value_name = "DIR")]
+    generic_replay_dir: Option<PathBuf>,
     #[arg(long, alias = "synthetic-scenario")]
     synthetic_motion_def: Option<PathBuf>,
     #[arg(long, value_enum, default_value_t = SyntheticNoiseArg::Truth)]
@@ -225,13 +231,31 @@ fn main() -> Result<()> {
         duration_s: args.gnss_outage_duration_s,
         seed: args.gnss_outage_seed,
     };
-    let mut replay_bytes = Vec::new();
-    let mut synthetic_replay = None::<SyntheticVisualizerConfig>;
-    let (data, has_itow, input_label, input_bytes, t_read) = if let Some(motion_def) =
-        args.synthetic_motion_def.clone()
+    let (data, has_itow, input_label, input_records, t_read, replay_state) = if let Some(
+        replay_dir,
+    ) =
+        args.generic_replay_dir.as_ref()
     {
+        let imu = load_imu_samples(replay_dir)?;
+        let gnss = load_gnss_samples(replay_dir)?;
+        let input_records = imu.len() + gnss.len();
+        let t_read = Instant::now();
+        let replay = GenericReplayInput { imu, gnss };
+        let data =
+            build_generic_replay_plot_data(&replay, args.misalignment, ekf_cfg, gnss_outages);
+        (
+            data,
+            false,
+            format!("generic-csv:{}", replay_dir.display()),
+            input_records,
+            t_read,
+            None,
+        )
+    } else if let Some(motion_def) = args.synthetic_motion_def.clone() {
         let synth_cfg = SyntheticVisualizerConfig {
-            motion_def: motion_def.clone(),
+            motion_def: Some(motion_def.clone()),
+            motion_label: motion_def.display().to_string(),
+            motion_text: None,
             noise_mode: args.synthetic_noise.into(),
             seed: args.synthetic_seed,
             mount_rpy_deg: [
@@ -252,46 +276,39 @@ fn main() -> Result<()> {
                 .zip(args.synthetic_early_fault_end_s),
         };
         let data = build_synthetic_plot_data(&synth_cfg, args.misalignment, ekf_cfg, gnss_outages)?;
-        synthetic_replay = Some(synth_cfg);
+        let replay = ReplayState {
+            bytes: Vec::new(),
+            synthetic: Some(synth_cfg),
+            max_records: args.max_records,
+            misalignment: args.misalignment,
+            ekf_cfg,
+            gnss_outages,
+        };
         (
             data,
             false,
             format!("synthetic:{}", motion_def.display()),
             0usize,
             Instant::now(),
+            Some(replay),
         )
     } else {
-        let logfile = args.logfile.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("LOGFILE is required unless --synthetic-motion-def is set")
-        })?;
-        File::open(logfile)
-            .with_context(|| format!("failed to open {}", logfile.display()))?
-            .read_to_end(&mut replay_bytes)
-            .context("failed to read log")?;
-        let t_read = Instant::now();
-        let input_bytes = replay_bytes.len();
-        let (data, has_itow) = build_plot_data(
-            &replay_bytes,
-            args.max_records,
-            args.misalignment,
-            ekf_cfg,
-            gnss_outages,
+        let logfile = args
+            .logfile
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "<none>".to_string());
+        anyhow::bail!(
+            "binary replay is unavailable in this checkout (input: {logfile}); use --generic-replay-dir or --synthetic-motion-def"
         );
-        (
-            data,
-            has_itow,
-            logfile.display().to_string(),
-            input_bytes,
-            t_read,
-        )
     };
     let t_build = Instant::now();
     let (n_traces, n_points) = trace_stats(&data);
     let (tmin, tmax) = trace_time_bounds(&data).unwrap_or((f64::NAN, f64::NAN));
     eprintln!(
-        "[profile] input={} bytes={} read={:.3}s build={:.3}s total_pre_ui={:.3}s traces={} points={} t_range=[{:.3}, {:.3}]s",
+        "[profile] input={} records={} read={:.3}s build={:.3}s total_pre_ui={:.3}s traces={} points={} t_range=[{:.3}, {:.3}]s",
         input_label,
-        input_bytes,
+        input_records,
         (t_read - t0).as_secs_f64(),
         (t_build - t_read).as_secs_f64(),
         (t_build - t0).as_secs_f64(),
@@ -335,8 +352,6 @@ fn main() -> Result<()> {
         group_stats("imu_raw_accel", &data.imu_raw_accel),
         group_stats("imu_cal_gyro", &data.imu_cal_gyro),
         group_stats("imu_cal_accel", &data.imu_cal_accel),
-        group_stats("esf_ins_gyro", &data.esf_ins_gyro),
-        group_stats("esf_ins_accel", &data.esf_ins_accel),
         group_stats("orientation", &data.orientation),
         group_stats("other", &data.other),
         group_stats("eskf_cmp_pos", &data.eskf_cmp_pos),
@@ -478,22 +493,37 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    run_visualizer(
-        data,
-        has_itow,
-        ReplayState {
-            bytes: replay_bytes,
-            synthetic: synthetic_replay,
-            max_records: args.max_records,
-            misalignment: args.misalignment,
-            ekf_cfg,
-            gnss_outages,
-        },
-    )
+    run_visualizer(data, has_itow, replay_state)
 }
 
 #[cfg(target_arch = "wasm32")]
 fn main() {}
+
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsCast;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn start_visualizer(canvas_id: &str) -> std::result::Result<(), JsValue> {
+    let window = eframe::web_sys::window().ok_or_else(|| JsValue::from_str("missing window"))?;
+    let document = window
+        .document()
+        .ok_or_else(|| JsValue::from_str("missing document"))?;
+    let canvas = document
+        .get_element_by_id(canvas_id)
+        .ok_or_else(|| JsValue::from_str("missing visualizer canvas"))?
+        .dyn_into::<eframe::web_sys::HtmlCanvasElement>()?;
+    let runner = Box::leak(Box::new(eframe::WebRunner::new()));
+    sim::visualizer::ui::run_visualizer_web(
+        runner,
+        canvas,
+        sim::visualizer::model::PlotData::default(),
+        false,
+    )
+    .await
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 fn parse_misalignment(s: &str) -> Result<EkfImuSource, String> {

@@ -14,8 +14,6 @@ pub struct PlotData {
     pub imu_raw_accel: Vec<Trace>,
     pub imu_cal_gyro: Vec<Trace>,
     pub imu_cal_accel: Vec<Trace>,
-    pub esf_ins_gyro: Vec<Trace>,
-    pub esf_ins_accel: Vec<Trace>,
     pub orientation: Vec<Trace>,
     pub other: Vec<Trace>,
     pub eskf_cmp_pos: Vec<Trace>,
@@ -75,9 +73,7 @@ impl EkfImuSource {
             "external" | "follow-align" | "continuous-align" | "align-external" => {
                 Ok(Self::External)
             }
-            "ref" | "reference" | "manual" | "esf-alg" | "esf_alg" | "esfalg" | "alg" => {
-                Ok(Self::Ref)
-            }
+            "ref" | "reference" | "manual" => Ok(Self::Ref),
             _ => Err(format!(
                 "invalid misalignment '{s}', expected 'ref', 'external', or 'internal'"
             )),
@@ -106,33 +102,6 @@ pub struct HeadingSample {
     pub lon_deg: f64,
     pub lat_deg: f64,
     pub yaw_deg: f64,
-}
-
-#[derive(Clone, Copy)]
-pub struct AlgEvent {
-    pub t_ms: f64,
-    pub roll_deg: f64,
-    pub pitch_deg: f64,
-    pub yaw_deg: f64,
-}
-
-#[derive(Clone, Copy)]
-pub struct NavAttEvent {
-    pub t_ms: f64,
-    pub roll_deg: f64,
-    pub pitch_deg: f64,
-    pub heading_deg: f64,
-}
-
-#[derive(Clone, Copy)]
-pub struct ImuPacket {
-    pub t_ms: f64,
-    pub gx_dps: f64,
-    pub gy_dps: f64,
-    pub gz_dps: f64,
-    pub ax_mps2: f64,
-    pub ay_mps2: f64,
-    pub az_mps2: f64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

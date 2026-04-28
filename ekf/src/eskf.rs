@@ -1,3 +1,22 @@
+//! Small standalone ESKF state helpers used by tests and legacy support code.
+//!
+//! The runtime filter is [`crate::rust_eskf::RustEskf`]; its full formulation is
+//! maintained in `docs/eskf_mount_formulation.pdf`. This support module uses
+//! the same 20-scalar nominal layout:
+//!
+//! ```text
+//! q_ns, v_n, p_n, b_g, b_a, q_cs
+//! ```
+//!
+//! and the same 18-state error layout:
+//!
+//! ```text
+//! dtheta_s, dv_n, dp_n, dbg, dba, dpsi_cs
+//! ```
+//!
+//! Attitude is right-injected as `q_ns <- q_ns * dq(dtheta_s)`, while residual
+//! mount is left-injected as `q_cs <- dq(dpsi_cs) * q_cs`.
+
 use libm::sqrtf;
 
 pub const NOMINAL_STATE_DIM: usize = 20;

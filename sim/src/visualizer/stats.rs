@@ -1,3 +1,4 @@
+#[cfg(not(target_arch = "wasm32"))]
 use walkers::{Position, lon_lat};
 
 use super::model::{PlotData, Trace};
@@ -10,8 +11,6 @@ pub fn trace_stats(data: &PlotData) -> (usize, usize) {
         &data.imu_raw_accel,
         &data.imu_cal_gyro,
         &data.imu_cal_accel,
-        &data.esf_ins_gyro,
-        &data.esf_ins_accel,
         &data.orientation,
         &data.other,
         &data.eskf_cmp_pos,
@@ -65,8 +64,6 @@ pub fn trace_time_bounds(data: &PlotData) -> Option<(f64, f64)> {
         &data.imu_raw_accel,
         &data.imu_cal_gyro,
         &data.imu_cal_accel,
-        &data.esf_ins_gyro,
-        &data.esf_ins_accel,
         &data.orientation,
         &data.other,
         &data.eskf_cmp_pos,
@@ -206,6 +203,7 @@ pub fn max_step_abs(traces: &[Trace]) -> Option<f64> {
     if any { Some(best) } else { None }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn map_center_from_traces(traces: &[Trace]) -> Position {
     let mut n = 0usize;
     let mut lon = 0.0_f64;

@@ -1,5 +1,4 @@
-# Synthetic reconstruction of the early experimental window from
-# logger/data/ubx_raw_20260328_153757.bin.
+# Synthetic reconstruction of an early-convergence stress window.
 #
 # It intentionally places ESKF/align startup near a high-yaw-rate maneuver,
 # followed by straight braking and long low-excitation segments. Use this with

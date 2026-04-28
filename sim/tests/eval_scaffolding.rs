@@ -4,7 +4,7 @@ use sim::eval::trace::{
     sample_nearest_value,
 };
 use sim::visualizer::model::Trace;
-use sim::visualizer::pipeline::ekf_compare::EkfCompareConfig;
+use sim::visualizer::pipeline::EkfCompareConfig;
 
 #[test]
 fn trace_helpers_find_required_traces_and_sample_nearest_values() {

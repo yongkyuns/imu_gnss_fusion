@@ -1,0 +1,324 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{hyperref}
+
+\title{Loose INS/GNSS Reference Filter Mathematical Formulation}
+\author{sensor-fusion documentation}
+\date{\today}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\T}{^{T}}
+\newcommand{\crossmat}[1]{\left[#1\right]_\times}
+\newcommand{\dq}{\delta q}
+\newcommand{\dt}{\Delta t}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+\section{Scope}
+
+This document describes the loose INS/GNSS reference filter implemented in
+\texttt{ekf/src/loose.rs} and \texttt{ekf/src/generated\_loose.rs}. It is used
+for seeded replay, diagnostics, and comparison with the runtime augmented ESKF.
+It carries ECEF navigation states, IMU bias and scale correction states, and a
+residual mount quaternion for vehicle-frame non-holonomic constraints.
+
+\section{Frames and Conventions}
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.12\linewidth} >{\raggedright\arraybackslash}p{0.78\linewidth}}
+\toprule
+\textbf{Symbol} & \textbf{Meaning} \\
+\midrule
+\(e\) & ECEF frame. Loose nominal position and velocity are propagated in this frame. \\
+\(n\) & Local NED frame. GNSS standard deviations may be supplied in this frame and are rotated into ECEF. \\
+\(s\) & Seeded sensor/vehicle frame of the IMU deltas consumed by the loose filter. \\
+\(c\) & Corrected vehicle frame after residual mount correction. \\
+\bottomrule
+\end{longtable}
+
+Rotations follow the project convention
+\begin{equation}
+  x_a=C_{ab}x_b,\qquad C(q_1\otimes q_2)=C(q_1)C(q_2).
+\end{equation}
+The loose attitude quaternion \(q_{es}\) maps seeded-frame vectors into ECEF:
+\begin{equation}
+  x_e=C_{es}(q_{es})x_s .
+\end{equation}
+The residual mount quaternion \(q_{cs}\) maps seeded-frame velocity into the
+corrected vehicle frame:
+\begin{equation}
+  x_c=C_{cs}(q_{cs})x_s .
+\end{equation}
+
+The local NED-to-ECEF relation is represented by
+\begin{equation}
+  x_n=C_{ne}x_e,\qquad x_e=C_{ne}\T x_n .
+\end{equation}
+
+\section{Nominal State}
+
+The nominal state contains 26 scalar fields:
+\begin{equation}
+  x=
+  \begin{bmatrix}
+  q_{es} & v_e\T & p_e\T & b_g\T & b_a\T &
+  s_g\T & s_a\T & q_{cs}
+  \end{bmatrix}\T .
+\end{equation}
+The public Rust fields are:
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Fields & Meaning \\
+\midrule
+\texttt{q0..q3} & \(q_{es}\), seeded frame to ECEF attitude \\
+\texttt{vn,ve,vd} & ECEF velocity \(v_e\), meters per second \\
+\texttt{pn,pe,pd} & ECEF position \(p_e\), meters \\
+\texttt{bgx..bgz} & gyro additive correction \(b_g\), radians per second \\
+\texttt{bax..baz} & accelerometer additive correction \(b_a\), meters per second squared \\
+\texttt{sgx..sgz} & gyro scale correction \(s_g\) \\
+\texttt{sax..saz} & accelerometer scale correction \(s_a\) \\
+\texttt{qcs0..qcs3} & residual seeded-frame-to-vehicle quaternion \(q_{cs}\) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The code applies scale and additive correction directly to IMU rates and
+specific force:
+\begin{align}
+  \omega_s &= s_g\odot\omega_{\mathrm{raw},s}+b_g,\\
+  f_s &= s_a\odot f_{\mathrm{raw},s}+b_a.
+\end{align}
+Consequently, these are correction states. A physical sensor bias appears with
+the opposite sign of the additive correction required to remove it.
+
+\section{Error State}
+
+The 24-dimensional error state order in the Rust update and generated matrices
+is
+\begin{equation}
+  \delta x =
+  \begin{bmatrix}
+  \delta p_e &
+  \delta v_e &
+  \delta\theta_s &
+  \delta b_a &
+  \delta b_g &
+  \delta s_a &
+  \delta s_g &
+  \delta\psi_{cs}
+  \end{bmatrix}\T .
+\end{equation}
+Index ranges are:
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Indices & Error component \\
+\midrule
+0..2 & ECEF position error \(\delta p_e\) \\
+3..5 & ECEF velocity error \(\delta v_e\) \\
+6..8 & attitude small angle \(\delta\theta_s\) \\
+9..11 & accelerometer-bias correction error \(\delta b_a\) \\
+12..14 & gyro-bias correction error \(\delta b_g\) \\
+15..17 & accelerometer-scale error \(\delta s_a\) \\
+18..20 & gyro-scale error \(\delta s_g\) \\
+21..23 & residual mount error \(\delta\psi_{cs}\) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Nominal Propagation}
+
+The loose filter uses a two-sample IMU increment. For each half-step \(i\in
+\{1,2\}\),
+\begin{align}
+  \omega_{s,i} &= s_g\odot\left(\frac{\Delta\theta_{s,i}}{\dt}\right)+b_g,\\
+  f_{s,i} &= s_a\odot\left(\frac{\Delta v_{s,i}}{\dt}\right)+b_a .
+\end{align}
+The attitude derivative includes Earth rotation:
+\begin{equation}
+  \dot q_{es} =
+  \frac{1}{2}q_{es}\otimes
+  \begin{bmatrix}0&\omega_s\T\end{bmatrix}\T
+  +\frac{1}{2}
+  \begin{bmatrix}
+  \omega_{ie} q_3 &
+  \omega_{ie} q_2 &
+  -\omega_{ie} q_1 &
+  -\omega_{ie} q_0
+  \end{bmatrix}\T .
+\end{equation}
+Specific force is rotated into ECEF:
+\begin{equation}
+  f_e=C_{es}f_s .
+\end{equation}
+Velocity dynamics use the J2 ECEF gravity model and Coriolis terms:
+\begin{equation}
+  \dot v_e =
+  f_e + g_e(p_e) - 2\,\Omega_{ie}^{e}\times v_e .
+\end{equation}
+The implementation writes this as component terms using
+\(\omega_{ie}=7.292115\times 10^{-5}\) rad/s. Position obeys
+\begin{equation}
+  \dot p_e=v_e .
+\end{equation}
+The nominal propagation uses a predictor-corrector/trapezoidal structure:
+evaluate derivatives at the current state, form a temporary state after
+\(\dt\), evaluate derivatives again, then average the two derivatives for the
+final position, velocity, and quaternion update. The nominal bias, scale, and
+mount states are constant during propagation.
+
+\section{Error Propagation}
+
+The generated loose model provides
+\begin{equation}
+  \delta x_{k+1}=F_k\delta x_k+G_kw_k,
+  \qquad
+  P_{k+1}^{-}=F_kP_k^{+}F_k\T+G_kQ_kG_k\T .
+\end{equation}
+The 21-noise vector groups are accelerometer white noise, gyro white noise,
+accelerometer-bias random walk, gyro-bias random walk, accelerometer-scale
+random walk, gyro-scale random walk, and mount random walk:
+\begin{equation}
+  w=
+  \begin{bmatrix}
+  n_a & n_g & n_{ba} & n_{bg} & n_{sa} & n_{sg} & n_m
+  \end{bmatrix}\T .
+\end{equation}
+The runtime diagonal entries are
+\begin{equation}
+  Q_k=\operatorname{diag}\left(
+  \sigma_a^2\dt I_3,\,
+  \sigma_g^2\dt I_3,\,
+  \sigma_{ba}^2\dt I_3,\,
+  \sigma_{bg}^2\dt I_3,\,
+  \sigma_{sa}^2\dt I_3,\,
+  \sigma_{sg}^2\dt I_3,\,
+  \sigma_m^2\dt I_3
+  \right).
+\end{equation}
+
+\section{GNSS Reference Measurements}
+
+\subsection{Position}
+
+GNSS position is supplied in ECEF:
+\begin{equation}
+  z_p=p_e+\eta_p .
+\end{equation}
+When a horizontal accuracy \(h_{\mathrm{acc}}\) is supplied, the implementation
+forms a local NED diagonal covariance
+\begin{equation}
+  R_n=\operatorname{diag}\left(h_{\mathrm{acc}}^2,\,
+  h_{\mathrm{acc}}^2,\,(2.5h_{\mathrm{acc}})^2\right),
+\end{equation}
+rotates it to ECEF, then applies a Cholesky whitening transform \(T_p\). The
+actual rows fused are
+\begin{equation}
+  r_p=T_p(z_p-\hat p_e),\qquad H_p=T_p
+  \begin{bmatrix}I_3&0&\cdots&0\end{bmatrix}.
+\end{equation}
+
+\subsection{Velocity}
+
+GNSS velocity is supplied in ECEF, with either a scalar speed accuracy or
+per-axis NED velocity standard deviations. In the per-axis case, the NED
+velocity covariance is rotated to ECEF and Cholesky-whitened:
+\begin{equation}
+  r_v=T_v(z_v-\hat v_e),\qquad H_v=T_v
+  \begin{bmatrix}0&I_3&0&\cdots&0\end{bmatrix}.
+\end{equation}
+If only scalar speed accuracy is available, the three ECEF velocity rows use
+that scalar variance directly.
+
+\section{Non-Holonomic Constraint}
+
+The loose NHC predicts corrected vehicle-frame velocity from ECEF velocity:
+\begin{equation}
+  v_s=C_{es}\T v_e,\qquad v_c=C_{cs}v_s .
+\end{equation}
+The lateral and vertical constraints are
+\begin{equation}
+  h_y=e_y\T v_c\approx 0,\qquad
+  h_z=e_z\T v_c\approx 0 .
+\end{equation}
+The generated rows include derivatives with respect to velocity, attitude, and
+residual mount. For the mount block, with left perturbation
+\(q_{cs}^{true}=\dq(\delta\psi_{cs})\otimes q_{cs}\),
+\begin{equation}
+  \frac{\partial(e_i\T v_c)}{\partial\delta\psi_{cs}}
+  =-e_i\T\crossmat{v_c},\qquad i\in\{y,z\}.
+\end{equation}
+NHC rows are gated by speed and a quasi-static IMU check:
+\begin{equation}
+  \|v_e\| \ge 0.5\ \mathrm{m/s},\qquad
+  \|\omega_s\|<0.03\ \mathrm{rad/s},\qquad
+  \left|\|f_s\|-9.81\right|<0.2\ \mathrm{m/s^2}.
+\end{equation}
+A scalar chi-square gate prevents large residuals from being fused.
+
+\section{Batch Update and Injection}
+
+The loose filter batches up to eight rows: three position rows, three velocity
+rows, and two NHC rows. It uses a sequential covariance update in f64 shadow
+storage:
+\begin{align}
+  S_i &= H_iPH_i\T+R_i,\\
+  K_i &= PH_i\T S_i^{-1},\\
+  \delta x &\leftarrow \delta x + K_i(r_i-H_i\delta x),\\
+  P &\leftarrow P-K_iS_iK_i\T .
+\end{align}
+After the batch, the accumulated error is injected:
+\begin{align}
+  p_e^{+}&=p_e^{-}+\delta p_e,\qquad
+  v_e^{+}=v_e^{-}+\delta v_e,\\
+  q_{es}^{+}&=\dq(\delta\theta_s)\otimes q_{es}^{-},\\
+  b_a^{+}&=b_a^{-}+\delta b_a,\qquad
+  b_g^{+}=b_g^{-}+\delta b_g,\\
+  s_a^{+}&=s_a^{-}+\delta s_a,\qquad
+  s_g^{+}=s_g^{-}+\delta s_g,\\
+  q_{cs}^{+}&=\dq(\delta\psi_{cs})\otimes q_{cs}^{-}.
+\end{align}
+Both quaternions are normalized. Unlike the runtime ESKF implementation, the
+loose batch update currently does not apply an explicit post-injection reset
+Jacobian to covariance.
+
+\section{Seeded ECEF/NED Initialization}
+
+For visualizer seeded replay, a yaw in the local NED frame is split into an
+ECEF seed attitude and an identity residual mount. The utility constructs a
+local NED-to-ECEF attitude from latitude and longitude, applies the yaw, and
+initializes \(q_{cs}=1\). This lets the loose path consume the same
+pre-rotated IMU stream used by ESKF comparisons while propagating navigation in
+ECEF.
+
+\section{Observability and Known Limitations}
+
+\begin{itemize}[leftmargin=1.5em]
+\item GNSS position and velocity directly observe only ECEF position and
+velocity. Attitude, biases, scales, and mount are updated through covariance
+coupling and inertial dynamics.
+\item Lateral and vertical NHC rows are the direct measurement path for
+residual mount. They are weak during low speed, poor seed attitude, or
+high-dynamic maneuvers outside the gate.
+\item Accelerometer vertical bias and accelerometer vertical scale are strongly
+coupled in ground-vehicle motion dominated by gravity. The visualizer commonly
+keeps accelerometer scale fixed for diagnostics.
+\item The additive bias states are correction states. Diagnostic plots should
+not be interpreted as physical sensor bias without applying the sign convention.
+\item Mount, attitude, gyro bias, and gyro scale can become correlated during
+turns. Compare seed, residual, and composed mount separately when diagnosing
+mount convergence.
+\end{itemize}
+
+\end{document}

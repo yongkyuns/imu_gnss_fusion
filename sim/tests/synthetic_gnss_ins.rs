@@ -22,10 +22,10 @@ use sim::synthetic::gnss_ins_path::{
 };
 use sim::visualizer::math::{ecef_to_ned, lla_to_ecef};
 use sim::visualizer::model::EkfImuSource;
-use sim::visualizer::pipeline::ekf_compare::{EkfCompareConfig, GnssOutageConfig};
 use sim::visualizer::pipeline::synthetic::{
     SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_plot_data,
 };
+use sim::visualizer::pipeline::{EkfCompareConfig, GnssOutageConfig};
 
 const LOCAL_GNSS_INS_SIM_DIR: &str = "/Users/ykshin/Dev/me/gnss-ins-sim";
 const SHORT_PROFILE: &str = "\
@@ -505,7 +505,9 @@ fn synthetic_inputs_populate_visualizer_eskf_traces() -> Result<()> {
     fs::write(&profile_path, SHORT_SCENARIO)?;
     let data_result = build_synthetic_plot_data(
         &SyntheticVisualizerConfig {
-            motion_def: profile_path.clone(),
+            motion_def: Some(profile_path.clone()),
+            motion_label: profile_path.display().to_string(),
+            motion_text: None,
             noise_mode: SyntheticNoiseMode::Truth,
             seed: 42,
             mount_rpy_deg: [5.0, -5.0, 5.0],
