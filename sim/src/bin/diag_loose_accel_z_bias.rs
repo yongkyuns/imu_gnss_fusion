@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -83,7 +83,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn run_case(scenario: &PathBuf, accel_z_bias_mps2: f64, args: &Args) -> Result<ResultRow> {
+fn run_case(scenario: &Path, accel_z_bias_mps2: f64, args: &Args) -> Result<ResultRow> {
     let profile = MotionProfile::from_path(scenario)?;
     let generated = generate(
         &profile,
@@ -195,7 +195,7 @@ fn run_case(scenario: &PathBuf, accel_z_bias_mps2: f64, args: &Args) -> Result<R
                 args.pos_std_m.max(1.0e-3),
                 args.use_gnss_velocity
                     .then_some([args.vel_std_mps.max(1.0e-3); 3]),
-                (gnss.t_s - first_gnss.t_s).min(1.0).max(1.0e-3) as f32,
+                (gnss.t_s - first_gnss.t_s).clamp(1.0e-3, 1.0) as f32,
                 curr.gyro_vehicle_radps.map(|v| v as f32),
                 accel_curr.map(|v| v as f32),
                 dt_s as f32,
@@ -205,8 +205,8 @@ fn run_case(scenario: &PathBuf, accel_z_bias_mps2: f64, args: &Args) -> Result<R
 
         if let Some(truth) = generated.truth.get(imu_index) {
             let n = loose.nominal();
-            let baz = n.baz as f64;
-            let estimated_sensor_bias = -baz;
+            let accel_bias_z = n.baz as f64;
+            let estimated_sensor_bias = -accel_bias_z;
             let sensor_bias_error = estimated_sensor_bias - accel_z_bias_mps2;
             if final_row.t_within_10pct_s.is_nan()
                 && sensor_bias_error.abs() <= 0.1 * accel_z_bias_mps2.abs().max(1.0e-9)
@@ -220,7 +220,7 @@ fn run_case(scenario: &PathBuf, accel_z_bias_mps2: f64, args: &Args) -> Result<R
             let q_ns = quat_mul(q_ne, [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64]);
             final_row = ResultRow {
                 final_t_s: curr.t_s,
-                final_baz_state_mps2: baz,
+                final_baz_state_mps2: accel_bias_z,
                 estimated_sensor_bias_mps2: estimated_sensor_bias,
                 final_baz_sensor_error_mps2: sensor_bias_error,
                 final_baz_sigma_mps2: loose.covariance()[11][11].max(0.0).sqrt() as f64,

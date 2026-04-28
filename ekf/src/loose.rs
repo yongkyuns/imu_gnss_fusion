@@ -1,8 +1,18 @@
+//! Loose INS/GNSS reference filter.
+//!
+//! This module implements a loose-coupled ECEF reference filter used for
+//! diagnostics and comparison against the runtime ESKF. It keeps a single
+//! precision public state plus f64 shadow position, mount quaternion, and
+//! covariance fields used internally for numerically sensitive propagation.
+
 #![allow(non_snake_case)]
+#![allow(clippy::excessive_precision)]
 
 use crate::generated_loose;
 
+/// Number of loose-filter error-state components.
 pub const LOOSE_ERROR_STATES: usize = 24;
+/// Number of loose-filter process-noise components.
 pub const LOOSE_NOISE_STATES: usize = 21;
 
 const WGS84_A: f32 = 6_378_137.0;
@@ -77,15 +87,23 @@ const G_ROW_COLS: [[usize; 3]; LOOSE_ERROR_STATES] = [
     [20, 0, 0],
 ];
 
+/// Process-noise variances used by [`LooseFilter::predict`].
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct LoosePredictNoise {
+    /// Gyro white-noise variance.
     pub gyro_var: f32,
+    /// Accelerometer white-noise variance.
     pub accel_var: f32,
+    /// Gyro-bias random-walk variance.
     pub gyro_bias_rw_var: f32,
+    /// Accelerometer-bias random-walk variance.
     pub accel_bias_rw_var: f32,
+    /// Gyro-scale random-walk variance.
     pub gyro_scale_rw_var: f32,
+    /// Accelerometer-scale random-walk variance.
     pub accel_scale_rw_var: f32,
+    /// Residual mount-alignment random-walk variance.
     pub mount_align_rw_var: f32,
 }
 
@@ -96,6 +114,7 @@ impl Default for LoosePredictNoise {
 }
 
 impl LoosePredictNoise {
+    /// Reference noise profile used by original NSR-style loose-filter demos.
     pub const fn reference_nsr_demo() -> Self {
         Self {
             gyro_var: 2.5e-5,
@@ -108,6 +127,7 @@ impl LoosePredictNoise {
         }
     }
 
+    /// LSM6DSO-oriented loose-filter noise profile for 104 Hz IMU data.
     pub const fn lsm6dso_loose_104hz() -> Self {
         Self {
             gyro_var: 2.287_311_3e-7 * 10.0_f32,
@@ -121,66 +141,117 @@ impl LoosePredictNoise {
     }
 }
 
+/// Loose-filter nominal state.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LooseNominalState {
+    /// ECEF/seed-frame attitude quaternion scalar component.
     pub q0: f32,
+    /// ECEF/seed-frame attitude quaternion X component.
     pub q1: f32,
+    /// ECEF/seed-frame attitude quaternion Y component.
     pub q2: f32,
+    /// ECEF/seed-frame attitude quaternion Z component.
     pub q3: f32,
+    /// ECEF-frame velocity X component, in meters per second.
     pub vn: f32,
+    /// ECEF-frame velocity Y component, in meters per second.
     pub ve: f32,
+    /// ECEF-frame velocity Z component, in meters per second.
     pub vd: f32,
+    /// ECEF-frame position X component, in meters.
     pub pn: f32,
+    /// ECEF-frame position Y component, in meters.
     pub pe: f32,
+    /// ECEF-frame position Z component, in meters.
     pub pd: f32,
+    /// Gyro X additive correction state, in radians per second.
     pub bgx: f32,
+    /// Gyro Y additive correction state, in radians per second.
     pub bgy: f32,
+    /// Gyro Z additive correction state, in radians per second.
     pub bgz: f32,
+    /// Accelerometer X additive correction state, in meters per second squared.
     pub bax: f32,
+    /// Accelerometer Y additive correction state, in meters per second squared.
     pub bay: f32,
+    /// Accelerometer Z additive correction state, in meters per second squared.
     pub baz: f32,
+    /// Gyro X scale correction.
     pub sgx: f32,
+    /// Gyro Y scale correction.
     pub sgy: f32,
+    /// Gyro Z scale correction.
     pub sgz: f32,
+    /// Accelerometer X scale correction.
     pub sax: f32,
+    /// Accelerometer Y scale correction.
     pub say: f32,
+    /// Accelerometer Z scale correction.
     pub saz: f32,
+    /// Residual seed-to-vehicle quaternion scalar component.
     pub qcs0: f32,
+    /// Residual seed-to-vehicle quaternion X component.
     pub qcs1: f32,
+    /// Residual seed-to-vehicle quaternion Y component.
     pub qcs2: f32,
+    /// Residual seed-to-vehicle quaternion Z component.
     pub qcs3: f32,
 }
 
+/// Two-sample IMU increment used by the loose ECEF propagation model.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LooseImuDelta {
+    /// First gyro X delta angle, in radians.
     pub dax_1: f32,
+    /// First gyro Y delta angle, in radians.
     pub day_1: f32,
+    /// First gyro Z delta angle, in radians.
     pub daz_1: f32,
+    /// First accelerometer X delta velocity, in meters per second.
     pub dvx_1: f32,
+    /// First accelerometer Y delta velocity, in meters per second.
     pub dvy_1: f32,
+    /// First accelerometer Z delta velocity, in meters per second.
     pub dvz_1: f32,
+    /// Second gyro X delta angle, in radians.
     pub dax_2: f32,
+    /// Second gyro Y delta angle, in radians.
     pub day_2: f32,
+    /// Second gyro Z delta angle, in radians.
     pub daz_2: f32,
+    /// Second accelerometer X delta velocity, in meters per second.
     pub dvx_2: f32,
+    /// Second accelerometer Y delta velocity, in meters per second.
     pub dvy_2: f32,
+    /// Second accelerometer Z delta velocity, in meters per second.
     pub dvz_2: f32,
+    /// Delta duration, in seconds.
     pub dt: f32,
 }
 
+/// Complete loose-filter state and diagnostics.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct LooseState {
+    /// Nominal navigation, sensor-error, and residual-mount state.
     pub nominal: LooseNominalState,
+    /// Public f32 covariance matrix.
     pub p: [[f32; LOOSE_ERROR_STATES]; LOOSE_ERROR_STATES],
+    /// Process-noise configuration.
     pub noise: LoosePredictNoise,
+    /// f64 ECEF position shadow used by propagation.
     pub pos_e64: [f64; 3],
+    /// f64 residual mount quaternion shadow.
     pub qcs64: [f64; 4],
+    /// f64 covariance shadow used by propagation and updates.
     pub p64: [[f64; LOOSE_ERROR_STATES]; LOOSE_ERROR_STATES],
+    /// Last injected error-state correction.
     pub last_dx: [f32; LOOSE_ERROR_STATES],
+    /// Number of observation rows used by the last batch update.
     pub last_obs_count: i32,
+    /// Observation type identifiers used by the last batch update.
     pub last_obs_types: [i32; 8],
 }
 
@@ -210,12 +281,14 @@ impl Default for LooseState {
     }
 }
 
+/// Loose-coupled ECEF INS/GNSS filter used for reference comparisons.
 #[derive(Clone, Debug)]
 pub struct LooseFilter {
     raw: LooseState,
 }
 
 impl LooseFilter {
+    /// Creates a loose filter with identity attitude/mount and the supplied process noise.
     pub fn new(noise: LoosePredictNoise) -> Self {
         let mut raw = LooseState {
             noise,
@@ -227,22 +300,27 @@ impl LooseFilter {
         Self { raw }
     }
 
+    /// Returns the full loose-filter state.
     pub fn raw(&self) -> &LooseState {
         &self.raw
     }
 
+    /// Returns the nominal loose-filter state.
     pub fn nominal(&self) -> &LooseNominalState {
         &self.raw.nominal
     }
 
+    /// Returns the public f32 covariance matrix.
     pub fn covariance(&self) -> &[[f32; LOOSE_ERROR_STATES]; LOOSE_ERROR_STATES] {
         &self.raw.p
     }
 
+    /// Returns the f64 ECEF position shadow used internally.
     pub fn shadow_pos_ecef(&self) -> [f64; 3] {
         self.raw.pos_e64
     }
 
+    /// Returns the observation type identifiers from the last batch update.
     pub fn last_obs_types(&self) -> &[i32] {
         let count = self
             .raw
@@ -251,10 +329,12 @@ impl LooseFilter {
         &self.raw.last_obs_types[..count]
     }
 
+    /// Returns the last injected error-state correction.
     pub fn last_dx(&self) -> &[f32; LOOSE_ERROR_STATES] {
         &self.raw.last_dx
     }
 
+    /// Replaces covariance and synchronizes the f64 covariance shadow.
     pub fn set_covariance(&mut self, p: [[f32; LOOSE_ERROR_STATES]; LOOSE_ERROR_STATES]) {
         self.raw.p = p;
         for i in 0..LOOSE_ERROR_STATES {
@@ -264,6 +344,7 @@ impl LooseFilter {
         }
     }
 
+    /// Sets the residual seed-to-vehicle mount quaternion.
     pub fn set_mount_quat(&mut self, q_cs: [f32; 4]) {
         self.raw.nominal.qcs0 = q_cs[0];
         self.raw.nominal.qcs1 = q_cs[1];
@@ -277,6 +358,7 @@ impl LooseFilter {
         ];
     }
 
+    /// Zeros residual-mount cross-covariances and sets mount variance from a degree sigma.
     pub fn tighten_mount_covariance_deg(&mut self, sigma_deg: f32) {
         let mut p = self.raw.p;
         let var = (sigma_deg as f64).to_radians().powi(2) as f32;
@@ -291,6 +373,7 @@ impl LooseFilter {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Initializes the loose filter from a reference-frame state.
     pub fn init_from_reference_state(
         &mut self,
         q_bn: [f32; 4],
@@ -352,6 +435,7 @@ impl LooseFilter {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Initializes the loose filter from an ECEF reference-frame state.
     pub fn init_from_reference_ecef_state(
         &mut self,
         q_es: [f32; 4],
@@ -382,6 +466,8 @@ impl LooseFilter {
         self.raw.pos_e64 = pos_ecef_m;
     }
 
+    /// Initializes from ECEF navigation state with a yaw-seeded vehicle frame split.
+    #[allow(clippy::too_many_arguments)]
     pub fn init_seeded_vehicle_from_nav_ecef_state(
         &mut self,
         yaw_rad: f32,
@@ -409,6 +495,7 @@ impl LooseFilter {
         }
     }
 
+    /// Predicts nominal state and covariance from one two-sample IMU delta.
     pub fn predict(&mut self, imu: LooseImuDelta) {
         if imu.dt <= 0.0 {
             return;
@@ -444,6 +531,7 @@ impl LooseFilter {
         self.sync_covariance_from_shadow();
     }
 
+    /// Predicts only the loose nominal state from one two-sample IMU delta.
     pub fn predict_nominal(&mut self, imu: LooseImuDelta) {
         let dt = imu.dt;
         if dt <= 0.0 {
@@ -569,6 +657,7 @@ impl LooseFilter {
         self.normalize_nominal_quat();
     }
 
+    /// Computes generated loose-filter transition and noise-input matrices.
     pub fn compute_error_transition(
         &self,
         imu: LooseImuDelta,
@@ -585,6 +674,7 @@ impl LooseFilter {
         generated_loose::error_transition(&self.raw.nominal, imu)
     }
 
+    /// Fuses ECEF GNSS position and optional velocity as reference observations.
     pub fn fuse_gps_reference(
         &mut self,
         pos_ecef_m: [f64; 3],
@@ -617,6 +707,7 @@ impl LooseFilter {
         }
     }
 
+    /// Fuses ECEF GNSS position and optional velocity with per-axis velocity standard deviations.
     pub fn fuse_gps_reference_full(
         &mut self,
         pos_ecef_m: [f64; 3],
@@ -650,6 +741,7 @@ impl LooseFilter {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Fuses position, velocity, and nonholonomic reference observations in one batch.
     pub fn fuse_reference_batch(
         &mut self,
         pos_ecef_m: Option<[f64; 3]>,
@@ -675,6 +767,7 @@ impl LooseFilter {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Fuses a full reference batch with optional per-axis velocity standard deviations.
     pub fn fuse_reference_batch_full(
         &mut self,
         pos_ecef_m: Option<[f64; 3]>,
@@ -699,6 +792,7 @@ impl LooseFilter {
         );
     }
 
+    /// Fuses loose-filter nonholonomic lateral and vertical velocity constraints.
     pub fn fuse_nhc_reference(&mut self, gyro_radps: [f32; 3], accel_mps2: [f32; 3], dt_s: f32) {
         if dt_s <= 0.0
             || !self.nhc_gate_allows(gyro_radps, accel_mps2)
@@ -814,7 +908,7 @@ impl LooseFilter {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
     fn append_reference_gps_observations(
         &self,
         pos_ecef_m: Option<[f64; 3]>,
@@ -1392,6 +1486,7 @@ fn extract_support_from_row(h: &[f32; LOOSE_ERROR_STATES]) -> Vec<usize> {
     support
 }
 
+/// Splits a yaw-seeded NED vehicle attitude into ECEF seed attitude and identity residual mount.
 pub fn loose_seeded_vehicle_ecef_split(
     yaw_rad: f32,
     lat_deg: f64,

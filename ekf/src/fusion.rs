@@ -1,3 +1,10 @@
+//! High-level IMU/GNSS fusion facade.
+//!
+//! `SensorFusion` owns mount alignment, local WGS84 anchoring, ESKF
+//! initialization, and runtime updates. Feed samples in timestamp order through
+//! `process_imu`, `process_gnss`, and optional vehicle-speed updates; query the
+//! latest initialized ESKF state and mount estimates from the accessors.
+
 use crate::align::{Align, AlignConfig, AlignUpdateTrace, AlignWindowSummary, GRAVITY_MPS2};
 use crate::ekf::PredictNoise;
 use crate::eskf_types::{EskfGnssSample, EskfImuDelta, EskfState};
@@ -12,64 +19,100 @@ const RUNTIME_NHC_MAX_ACCEL_NORM_ERR_MPS2: f32 = 0.2;
 const CAN_SPEED_ZERO_MPS: f32 = 0.15;
 const CAN_SPEED_SIGN_INFER_MIN_MPS: f32 = 1.0;
 
+/// One timestamped IMU sample in the sensor/body frame.
 #[derive(Clone, Copy, Debug)]
 pub struct FusionImuSample {
+    /// Sample timestamp, in seconds.
     pub t_s: f32,
+    /// Angular rate in the body frame, in radians per second.
     pub gyro_radps: [f32; 3],
+    /// Specific force in the body frame, in meters per second squared.
     pub accel_mps2: [f32; 3],
 }
 
+/// One timestamped GNSS sample in geodetic coordinates with NED velocity.
 #[derive(Clone, Copy, Debug)]
 pub struct FusionGnssSample {
+    /// Sample timestamp, in seconds.
     pub t_s: f32,
+    /// Geodetic latitude, in degrees.
     pub lat_deg: f32,
+    /// Geodetic longitude, in degrees.
     pub lon_deg: f32,
+    /// Ellipsoidal height, in meters.
     pub height_m: f32,
+    /// Velocity in local NED coordinates, in meters per second.
     pub vel_ned_mps: [f32; 3],
+    /// One-sigma position standard deviation for NED axes, in meters.
     pub pos_std_m: [f32; 3],
+    /// One-sigma velocity standard deviation for NED axes, in meters per second.
     pub vel_std_mps: [f32; 3],
+    /// Optional heading observation, in radians.
     pub heading_rad: Option<f32>,
 }
 
+/// Timestamped vehicle speed observation, typically from CAN or wheel speed.
 #[derive(Clone, Copy, Debug)]
 pub struct FusionVehicleSpeedSample {
+    /// Sample timestamp, in seconds.
     pub t_s: f32,
+    /// Nonnegative speed magnitude, in meters per second.
     pub speed_mps: f32,
+    /// Direction associated with `speed_mps`.
     pub direction: FusionVehicleSpeedDirection,
 }
 
+/// Direction qualifier for a vehicle-speed sample.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum FusionVehicleSpeedDirection {
+    /// Direction is unknown and may be inferred from the current filter state.
     #[default]
     Unknown,
+    /// Speed is forward along the vehicle X axis.
     Forward,
+    /// Speed is reverse along the vehicle X axis.
     Reverse,
 }
 
+/// Status returned after each fusion input sample.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FusionUpdate {
+    /// Whether a mount estimate is ready for ESKF initialization or propagation.
     pub mount_ready: bool,
+    /// Whether `mount_ready` changed during this input sample.
     pub mount_ready_changed: bool,
+    /// Whether the ESKF has been initialized from GNSS.
     pub ekf_initialized: bool,
+    /// Whether ESKF initialization happened during this input sample.
     pub ekf_initialized_now: bool,
+    /// Current vehicle-to-body mount quaternion, when available.
     pub mount_q_vb: Option<[f32; 4]>,
 }
 
+/// Last alignment window and update trace captured by [`SensorFusion`].
 #[derive(Clone, Copy, Debug)]
 pub struct FusionAlignDebug {
+    /// Window statistics passed to the align filter.
     pub window: AlignWindowSummary,
+    /// Detailed alignment update trace for the same window.
     pub trace: AlignUpdateTrace,
 }
 
+/// Selects how the runtime obtains the IMU-to-vehicle mount estimate.
 #[derive(Clone, Copy, Debug)]
 pub enum MisalignmentMode {
+    /// Estimate mount internally with [`Align`] before ESKF initialization.
     InternalAlign,
+    /// Use the supplied vehicle-to-body mount quaternion and disable internal alignment.
     External([f32; 4]),
 }
 
+/// Selects how ESKF propagation receives the mount after alignment handoff.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EskfMountSource {
+    /// Latch the alignment seed at ESKF initialization and let residual ESKF mount states evolve.
     LatchedSeed,
+    /// Keep following the current align mount and freeze residual ESKF mount states.
     FollowAlign,
 }
 
@@ -178,6 +221,7 @@ struct Anchor {
     c_ne: [[f32; 3]; 3],
 }
 
+/// Streaming fusion state for vehicle IMU, GNSS, and optional vehicle-speed inputs.
 #[derive(Debug)]
 pub struct SensorFusion {
     cfg: FusionConfig,
@@ -213,14 +257,17 @@ pub struct SensorFusion {
 }
 
 impl SensorFusion {
+    /// Creates a fusion pipeline with internal mount alignment enabled.
     pub fn new() -> Self {
         Self::with_misalignment_mode(MisalignmentMode::InternalAlign)
     }
 
+    /// Creates a fusion pipeline with a fixed external vehicle-to-body mount quaternion.
     pub fn with_misalignment(q_vb: [f32; 4]) -> Self {
         Self::with_misalignment_mode(MisalignmentMode::External(q_vb))
     }
 
+    /// Creates a fusion pipeline using the requested mount-source mode.
     pub fn with_misalignment_mode(mode: MisalignmentMode) -> Self {
         let cfg = FusionConfig::default();
         let mut out = Self {
@@ -261,6 +308,7 @@ impl SensorFusion {
         out
     }
 
+    /// Replaces the current mount with a fixed external vehicle-to-body quaternion.
     pub fn set_misalignment(&mut self, q_vb: [f32; 4]) {
         self.internal_align_enabled = false;
         self.mount_ready = true;
@@ -276,48 +324,56 @@ impl SensorFusion {
         n.qcs3 = 0.0;
     }
 
+    /// Sets the nonholonomic body-velocity observation variance.
     pub fn set_r_body_vel(&mut self, r_body_vel: f32) {
         if r_body_vel.is_finite() && r_body_vel >= 0.0 {
             self.cfg.r_body_vel = r_body_vel;
         }
     }
 
+    /// Sets how strongly GNSS position rows may update residual mount states.
     pub fn set_gnss_pos_mount_scale(&mut self, gnss_pos_mount_scale: f32) {
         if gnss_pos_mount_scale.is_finite() && (0.0..=1.0).contains(&gnss_pos_mount_scale) {
             self.cfg.gnss_pos_mount_scale = gnss_pos_mount_scale;
         }
     }
 
+    /// Sets how strongly GNSS velocity rows may update residual mount states.
     pub fn set_gnss_vel_mount_scale(&mut self, gnss_vel_mount_scale: f32) {
         if gnss_vel_mount_scale.is_finite() && (0.0..=1.0).contains(&gnss_vel_mount_scale) {
             self.cfg.gnss_vel_mount_scale = gnss_vel_mount_scale;
         }
     }
 
+    /// Sets initial gyro-bias one-sigma uncertainty, in radians per second.
     pub fn set_gyro_bias_init_sigma_radps(&mut self, gyro_bias_init_sigma_radps: f32) {
         if gyro_bias_init_sigma_radps.is_finite() && gyro_bias_init_sigma_radps >= 0.0 {
             self.cfg.gyro_bias_init_sigma_radps = gyro_bias_init_sigma_radps;
         }
     }
 
+    /// Sets initial yaw one-sigma uncertainty, in radians.
     pub fn set_yaw_init_sigma_rad(&mut self, yaw_init_sigma_rad: f32) {
         if yaw_init_sigma_rad.is_finite() && yaw_init_sigma_rad >= 0.0 {
             self.cfg.yaw_init_sigma_rad = yaw_init_sigma_rad;
         }
     }
 
+    /// Sets initial accelerometer-bias one-sigma uncertainty, in meters per second squared.
     pub fn set_accel_bias_init_sigma_mps2(&mut self, accel_bias_init_sigma_mps2: f32) {
         if accel_bias_init_sigma_mps2.is_finite() && accel_bias_init_sigma_mps2 >= 0.0 {
             self.cfg.accel_bias_init_sigma_mps2 = accel_bias_init_sigma_mps2;
         }
     }
 
+    /// Sets initial residual-mount one-sigma uncertainty, in radians.
     pub fn set_mount_init_sigma_rad(&mut self, mount_init_sigma_rad: f32) {
         if mount_init_sigma_rad.is_finite() && mount_init_sigma_rad >= 0.0 {
             self.cfg.mount_init_sigma_rad = mount_init_sigma_rad;
         }
     }
 
+    /// Sets accelerometer-bias random-walk process variance.
     pub fn set_accel_bias_rw_var(&mut self, accel_bias_rw_var: f32) {
         if accel_bias_rw_var.is_finite() && accel_bias_rw_var >= 0.0 {
             self.cfg.predict_noise.accel_bias_rw_var = accel_bias_rw_var;
@@ -325,6 +381,7 @@ impl SensorFusion {
         }
     }
 
+    /// Sets residual-mount random-walk process variance.
     pub fn set_mount_align_rw_var(&mut self, mount_align_rw_var: f32) {
         if mount_align_rw_var.is_finite() && mount_align_rw_var >= 0.0 {
             self.cfg.predict_noise.mount_align_rw_var = mount_align_rw_var;
@@ -332,30 +389,35 @@ impl SensorFusion {
         }
     }
 
+    /// Sets the minimum residual-mount update scale during the runtime ramp.
     pub fn set_mount_update_min_scale(&mut self, mount_update_min_scale: f32) {
         if mount_update_min_scale.is_finite() && (0.0..=1.0).contains(&mount_update_min_scale) {
             self.cfg.mount_update_min_scale = mount_update_min_scale;
         }
     }
 
+    /// Sets the residual-mount update ramp duration, in seconds.
     pub fn set_mount_update_ramp_time_s(&mut self, mount_update_ramp_time_s: f32) {
         if mount_update_ramp_time_s.is_finite() && mount_update_ramp_time_s >= 0.0 {
             self.cfg.mount_update_ramp_time_s = mount_update_ramp_time_s;
         }
     }
 
+    /// Sets the innovation magnitude at which residual-mount updates begin to be attenuated.
     pub fn set_mount_update_innovation_gate_mps(&mut self, mount_update_innovation_gate_mps: f32) {
         if mount_update_innovation_gate_mps.is_finite() && mount_update_innovation_gate_mps >= 0.0 {
             self.cfg.mount_update_innovation_gate_mps = mount_update_innovation_gate_mps;
         }
     }
 
+    /// Sets the yaw-rate gate used by residual-mount updates, in radians per second.
     pub fn set_mount_update_yaw_rate_gate_radps(&mut self, mount_update_yaw_rate_gate_radps: f32) {
         if mount_update_yaw_rate_gate_radps.is_finite() && mount_update_yaw_rate_gate_radps >= 0.0 {
             self.cfg.mount_update_yaw_rate_gate_radps = mount_update_yaw_rate_gate_radps;
         }
     }
 
+    /// Sets how long coarse alignment must remain ready before handoff, in seconds.
     pub fn set_align_handoff_delay_s(&mut self, align_handoff_delay_s: f32) {
         if align_handoff_delay_s.is_finite() && align_handoff_delay_s >= 0.0 {
             self.cfg.align_handoff_delay_s = align_handoff_delay_s;
@@ -363,12 +425,14 @@ impl SensorFusion {
         }
     }
 
+    /// Enables or disables residual-mount state freezing in the ESKF.
     pub fn set_freeze_misalignment_states(&mut self, freeze: bool) {
         self.cfg.freeze_misalignment_states = freeze;
         self.eskf
             .set_freeze_misalignment_states(self.effective_freeze_misalignment_states());
     }
 
+    /// Selects whether the ESKF uses a latched mount seed or follows the align filter.
     pub fn set_eskf_mount_source(&mut self, source: EskfMountSource) {
         self.cfg.eskf_mount_source = source;
         self.refresh_follow_align_mount_source();
@@ -376,6 +440,7 @@ impl SensorFusion {
             .set_freeze_misalignment_states(self.effective_freeze_misalignment_states());
     }
 
+    /// Sets a post-initialization delay before residual-mount states are released, in seconds.
     pub fn set_mount_settle_time_s(&mut self, mount_settle_time_s: f32) {
         if mount_settle_time_s.is_finite() && mount_settle_time_s >= 0.0 {
             self.cfg.mount_settle_time_s = mount_settle_time_s;
@@ -383,34 +448,40 @@ impl SensorFusion {
         }
     }
 
+    /// Sets the residual-mount uncertainty threshold for releasing mount-settle freezing.
     pub fn set_mount_settle_release_sigma_rad(&mut self, sigma_rad: f32) {
         if sigma_rad.is_finite() && sigma_rad >= 0.0 {
             self.cfg.mount_settle_release_sigma_rad = sigma_rad;
         }
     }
 
+    /// Sets whether mount-settle release clears mount cross-covariance terms.
     pub fn set_mount_settle_zero_cross_covariance(&mut self, zero_cross: bool) {
         self.cfg.mount_settle_zero_cross_covariance = zero_cross;
     }
 
+    /// Sets the vehicle-speed observation variance.
     pub fn set_r_vehicle_speed(&mut self, r_vehicle_speed: f32) {
         if r_vehicle_speed.is_finite() && r_vehicle_speed >= 0.0 {
             self.cfg.r_vehicle_speed = r_vehicle_speed;
         }
     }
 
+    /// Sets the zero-velocity observation variance.
     pub fn set_r_zero_vel(&mut self, r_zero_vel: f32) {
         if r_zero_vel.is_finite() && r_zero_vel >= 0.0 {
             self.cfg.r_zero_vel = r_zero_vel;
         }
     }
 
+    /// Sets the stationary-gravity observation variance.
     pub fn set_r_stationary_accel(&mut self, r_stationary_accel: f32) {
         if r_stationary_accel.is_finite() && r_stationary_accel >= 0.0 {
             self.cfg.r_stationary_accel = r_stationary_accel;
         }
     }
 
+    /// Processes one IMU sample and returns updated runtime status.
     pub fn process_imu(&mut self, sample: FusionImuSample) -> FusionUpdate {
         let Some(last_t) = self.last_imu_t_s.replace(sample.t_s) else {
             self.try_bootstrap_align(sample.accel_mps2, sample.gyro_radps);
@@ -485,6 +556,7 @@ impl SensorFusion {
         self.update(false, false)
     }
 
+    /// Processes one GNSS sample and returns updated runtime status.
     pub fn process_gnss(&mut self, gnss: FusionGnssSample) -> FusionUpdate {
         let Some(mut local) = self.prepare_local_gnss_sample(gnss) else {
             return self.update(false, false);
@@ -499,18 +571,17 @@ impl SensorFusion {
         self.bootstrap_update_gnss_hints(local);
 
         if self.internal_align_enabled {
-            if self.align_initialized {
-                if let Some(prev) = self.bootstrap_prev_gnss {
-                    if let Some(summary) = self.take_interval_summary(prev, local) {
-                        let (_score, trace) = self.align.update_window_with_trace(&summary);
-                        self.last_align_window = Some(summary);
-                        self.last_align_trace = Some(trace);
-                        self.mount_q_vb = Some(self.align.q_vb);
-                        self.mount_ready =
-                            self.align_handoff_ready(trace.coarse_alignment_ready, local.t_s);
-                        self.refresh_follow_align_mount_source();
-                    }
-                }
+            if self.align_initialized
+                && let Some(prev) = self.bootstrap_prev_gnss
+                && let Some(summary) = self.take_interval_summary(prev, local)
+            {
+                let (_score, trace) = self.align.update_window_with_trace(&summary);
+                self.last_align_window = Some(summary);
+                self.last_align_trace = Some(trace);
+                self.mount_q_vb = Some(self.align.q_vb);
+                self.mount_ready =
+                    self.align_handoff_ready(trace.coarse_alignment_ready, local.t_s);
+                self.refresh_follow_align_mount_source();
             }
             self.bootstrap_prev_gnss = Some(local);
         } else {
@@ -544,6 +615,7 @@ impl SensorFusion {
         self.update(prev_mount_ready != self.mount_ready, ekf_initialized_now)
     }
 
+    /// Processes one vehicle-speed sample and returns updated runtime status.
     pub fn process_vehicle_speed(&mut self, speed: FusionVehicleSpeedSample) -> FusionUpdate {
         if !self.ekf_initialized || !self.mount_ready {
             return self.update(false, false);
@@ -574,18 +646,22 @@ impl SensorFusion {
         self.update(false, false)
     }
 
+    /// Returns the current ESKF state after GNSS initialization.
     pub fn eskf(&self) -> Option<&EskfState> {
         self.ekf_initialized.then_some(self.eskf.raw())
     }
 
+    /// Returns the latest physical vehicle-to-body mount quaternion, if ready.
     pub fn mount_q_vb(&self) -> Option<[f32; 4]> {
         self.mount_q_vb
     }
 
+    /// Returns the mount quaternion currently used to pre-rotate IMU into the ESKF frame.
     pub fn eskf_mount_q_vb(&self) -> Option<[f32; 4]> {
         self.eskf_mount_q_vb
     }
 
+    /// Returns the current local-origin anchor `[lat_deg, lon_deg, height_m]` for diagnostics.
     pub fn anchor_lla_debug(&self) -> Option<[f32; 3]> {
         self.anchor.valid.then_some([
             self.anchor.lat_deg,
@@ -594,18 +670,22 @@ impl SensorFusion {
         ])
     }
 
+    /// Returns how many times the local navigation anchor has been reset.
     pub fn reanchor_count(&self) -> u32 {
         self.reanchor_count
     }
 
+    /// Returns the last reanchor distance and timestamp, when available.
     pub fn last_reanchor_info(&self) -> Option<(f32, f32)> {
         self.last_reanchor
     }
 
+    /// Reports whether a mount estimate is ready.
     pub fn mount_ready(&self) -> bool {
         self.mount_ready
     }
 
+    /// Returns the current ESKF position as `[lat_deg, lon_deg, height_m]`.
     pub fn position_lla(&self) -> Option<[f32; 3]> {
         let eskf = self.eskf()?;
         if !self.anchor.valid {
@@ -634,10 +714,12 @@ impl SensorFusion {
         Some(ecef_to_lla(ecef))
     }
 
+    /// Returns the internal align filter after stationary bootstrap.
     pub fn align(&self) -> Option<&Align> {
         self.align_initialized.then_some(&self.align)
     }
 
+    /// Returns the latest internal alignment debug information.
     pub fn align_debug(&self) -> Option<FusionAlignDebug> {
         Some(FusionAlignDebug {
             window: self.last_align_window?,
@@ -645,6 +727,7 @@ impl SensorFusion {
         })
     }
 
+    /// Diagnostic hook that directly sets the ESKF residual mount quaternion.
     pub fn analysis_set_eskf_mount_quat(&mut self, q_cs: [f32; 4]) {
         if !self.ekf_initialized {
             return;
@@ -661,6 +744,7 @@ impl SensorFusion {
         n.qcs3 = q[3];
     }
 
+    /// Diagnostic hook that directly sets residual-mount covariance.
     pub fn analysis_set_eskf_mount_covariance(&mut self, sigma_rad: f32, zero_cross: bool) {
         if !self.ekf_initialized || !sigma_rad.is_finite() || sigma_rad < 0.0 {
             return;
@@ -1393,6 +1477,7 @@ fn mat3_vec(a: [[f32; 3]; 3], v: [f32; 3]) -> [f32; 3] {
     ]
 }
 
+#[allow(clippy::needless_range_loop)]
 fn rotate_eskf_covariance_nav_blocks(p: &mut [[f32; 18]; 18], r_n1_n0: [[f32; 3]; 3]) {
     let mut t = [[0.0; 18]; 18];
     for i in 0..18 {

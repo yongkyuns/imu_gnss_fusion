@@ -41,10 +41,10 @@ impl MasterTimeline {
 pub fn build_master_timeline(frames: &[UbxFrame]) -> MasterTimeline {
     let mut masters: Vec<(u64, f64)> = Vec::new();
     for f in frames {
-        if let Some(itow) = extract_itow_ms(f) {
-            if (0..604_800_000).contains(&itow) {
-                masters.push((f.seq, itow as f64));
-            }
+        if let Some(itow) = extract_itow_ms(f)
+            && (0..604_800_000).contains(&itow)
+        {
+            masters.push((f.seq, itow as f64));
         }
     }
     masters.sort_by_key(|x| x.0);

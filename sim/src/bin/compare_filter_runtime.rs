@@ -221,7 +221,7 @@ fn build_replay_steps(
                 let gps = if let Some(gnss_index) = latest_gnss_index {
                     let g = &gnss[gnss_index];
                     let age_us = curr.ttag_us - g.ttag_us;
-                    if age_us >= 0 && age_us < 50_000 && g.ttag_us != last_gnss_used_ttag {
+                    if (0..50_000).contains(&age_us) && g.ttag_us != last_gnss_used_ttag {
                         let prev_gnss_ttag = last_gnss_used_ttag;
                         last_gnss_used_ttag = g.ttag_us;
                         Some(build_gps_update(

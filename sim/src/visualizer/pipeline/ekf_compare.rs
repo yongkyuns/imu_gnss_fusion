@@ -240,25 +240,26 @@ pub fn build_ekf_compare_traces(
         {
             alg_status_events.push((t_ms, status_code as u8));
         }
-        if let Some((_itow, roll, pitch, heading)) = extract_nav_att(f) {
-            if let Some(t_ms) = super::super::math::nearest_master_ms(f.seq, &tl.masters) {
-                nav_att_events.push(NavAttEvent {
-                    t_ms,
-                    roll_deg: roll,
-                    pitch_deg: pitch,
-                    heading_deg: normalize_heading_deg(heading),
-                });
-            }
+        if let Some((_itow, roll, pitch, heading)) = extract_nav_att(f)
+            && let Some(t_ms) = super::super::math::nearest_master_ms(f.seq, &tl.masters)
+        {
+            nav_att_events.push(NavAttEvent {
+                t_ms,
+                roll_deg: roll,
+                pitch_deg: pitch,
+                heading_deg: normalize_heading_deg(heading),
+            });
         }
         if let Some(t_ms) = super::super::math::nearest_master_ms(f.seq, &tl.masters) {
             if let Some(obs) = extract_nav2_pvt_obs(f) {
                 if obs.fix_ok && !obs.invalid_llh {
                     nav_events_nav2.push((t_ms, obs));
                 }
-            } else if let Some(obs) = extract_nav_pvt_obs(f) {
-                if obs.fix_ok && !obs.invalid_llh {
-                    nav_events_pvt.push((t_ms, obs));
-                }
+            } else if let Some(obs) = extract_nav_pvt_obs(f)
+                && obs.fix_ok
+                && !obs.invalid_llh
+            {
+                nav_events_pvt.push((t_ms, obs));
             }
         }
     }
@@ -728,19 +729,18 @@ pub fn build_ekf_compare_traces(
                 if loose.is_none() {
                     match ekf_imu_source {
                         EkfImuSource::Internal | EkfImuSource::External => {
-                            if update.mount_ready {
-                                if let Some(q_vb) =
+                            if update.mount_ready
+                                && let Some(q_vb) =
                                     cur_align_q_vb.or_else(|| fusion_ref.mount_q_vb())
-                                {
-                                    loose_seed_mount_q_vb = Some(q_vb);
-                                    let loose_init = initialize_loose_from_nav(
-                                        nav,
-                                        gnss_sample,
-                                        base_loose_predict_noise,
-                                    );
-                                    loose = Some(loose_init);
-                                    loose_last_gps_update_ms = Some(t_ms);
-                                }
+                            {
+                                loose_seed_mount_q_vb = Some(q_vb);
+                                let loose_init = initialize_loose_from_nav(
+                                    nav,
+                                    gnss_sample,
+                                    base_loose_predict_noise,
+                                );
+                                loose = Some(loose_init);
+                                loose_last_gps_update_ms = Some(t_ms);
                             }
                         }
                         EkfImuSource::Ref => {
@@ -803,7 +803,7 @@ pub fn build_ekf_compare_traces(
                         q_n_c[2] as f32,
                         q_n_c[3] as f32,
                     );
-                    let (eskf_lat, eskf_lon, _eskf_h) = eskf_display_lla(&fusion_ref).unwrap_or((
+                    let (eskf_lat, eskf_lon, _eskf_h) = eskf_display_lla(fusion_ref).unwrap_or((
                         nav.lat_deg,
                         nav.lon_deg,
                         nav.height_m,
@@ -939,19 +939,19 @@ pub fn build_ekf_compare_traces(
                     });
                 }
             }
-            if let Some(loose_ref) = loose.as_mut() {
-                if !loose_batch_applied {
-                    loose_ref.fuse_reference_batch_full(
-                        None,
-                        None,
-                        0.0,
-                        None,
-                        1.0,
-                        loose_gyro_radps,
-                        loose_accel_mps2,
-                        loose_imu.dt,
-                    );
-                }
+            if let Some(loose_ref) = loose.as_mut()
+                && !loose_batch_applied
+            {
+                loose_ref.fuse_reference_batch_full(
+                    None,
+                    None,
+                    0.0,
+                    None,
+                    1.0,
+                    loose_gyro_radps,
+                    loose_accel_mps2,
+                    loose_imu.dt,
+                );
             }
 
             predict_gyro_sum = [0.0; 3];
@@ -963,7 +963,7 @@ pub fn build_ekf_compare_traces(
         if origin_set {
             if let Some(_eskf_ref) = fusion_ref.eskf() {
                 let (eskf_lat, eskf_lon, _eskf_h) =
-                    eskf_display_lla(&fusion_ref).unwrap_or((ref_lat, ref_lon, ref_h));
+                    eskf_display_lla(fusion_ref).unwrap_or((ref_lat, ref_lon, ref_h));
                 map_eskf.push([eskf_lon, eskf_lat]);
                 if outage_active {
                     if !prev_outage_active && !map_eskf_outage.is_empty() {

@@ -73,10 +73,11 @@ pub fn build_generic_replay_from_frames(
                 if obs.fix_ok && !obs.invalid_llh {
                     nav_events_nav2.push((t_ms, obs));
                 }
-            } else if let Some(obs) = extract_nav_pvt_obs(f) {
-                if obs.fix_ok && !obs.invalid_llh {
-                    nav_events_pvt.push((t_ms, obs));
-                }
+            } else if let Some(obs) = extract_nav_pvt_obs(f)
+                && obs.fix_ok
+                && !obs.invalid_llh
+            {
+                nav_events_pvt.push((t_ms, obs));
             }
         }
     }
@@ -202,6 +203,7 @@ pub fn build_generic_replay_from_frames(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_imu_sample(
     out: &mut Vec<GenericImuSample>,
     t_ms: f64,

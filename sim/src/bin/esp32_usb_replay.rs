@@ -185,12 +185,13 @@ fn main() -> Result<()> {
         let ev_t_s = match ev {
             ReplayEvent::Imu { t_s, .. } | ReplayEvent::Gnss { t_s, .. } => t_s,
         };
-        if let (Some(speedup), Some(prev)) = (args.replay_speedup, prev_t_s) {
-            if speedup.is_finite() && speedup > 0.0 {
-                let dt_s = (ev_t_s - prev).max(0.0) / speedup;
-                if dt_s > 0.0 {
-                    std::thread::sleep(Duration::from_secs_f32(dt_s));
-                }
+        if let (Some(speedup), Some(prev)) = (args.replay_speedup, prev_t_s)
+            && speedup.is_finite()
+            && speedup > 0.0
+        {
+            let dt_s = (ev_t_s - prev).max(0.0) / speedup;
+            if dt_s > 0.0 {
+                std::thread::sleep(Duration::from_secs_f32(dt_s));
             }
         }
         match ev {
@@ -301,7 +302,7 @@ fn run_host_reference(events: &[ReplayEvent], mode: u8, q_vb: [f32; 4]) -> HostS
                 lat_deg,
                 lon_deg,
                 height_m,
-                pos_ned_m,
+                pos_ned_m: _,
                 vel_ned_mps,
                 pos_std_m,
                 vel_std_mps,

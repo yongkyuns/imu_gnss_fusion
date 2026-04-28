@@ -617,7 +617,7 @@ fn append_eskf_synthetic_sample(
     bgz: &mut Vec<[f64; 2]>,
     bax: &mut Vec<[f64; 2]>,
     bay: &mut Vec<[f64; 2]>,
-    baz: &mut Vec<[f64; 2]>,
+    accel_bias_z: &mut Vec<[f64; 2]>,
     cov: &mut [Vec<[f64; 2]>; 18],
 ) {
     let q_vehicle = eskf_vehicle_attitude_q(eskf);
@@ -658,7 +658,7 @@ fn append_eskf_synthetic_sample(
     bgz.push([t_s, (eskf.nominal.bgz as f64).to_degrees()]);
     bax.push([t_s, eskf.nominal.bax as f64]);
     bay.push([t_s, eskf.nominal.bay as f64]);
-    baz.push([t_s, eskf.nominal.baz as f64]);
+    accel_bias_z.push([t_s, eskf.nominal.baz as f64]);
     for (i, trace) in cov.iter_mut().enumerate() {
         trace.push([t_s, eskf.p[i][i].max(0.0).sqrt() as f64]);
     }

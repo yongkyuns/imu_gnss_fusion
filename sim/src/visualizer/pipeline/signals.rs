@@ -201,29 +201,31 @@ pub fn build_signal_traces(
         }
     }
 
-    let mut out = PlotData::default();
-    out.speed = vec![
-        Trace {
-            name: "gSpeed [m/s]".to_string(),
-            points: speed_g,
-        },
-        Trace {
-            name: "velN [m/s]".to_string(),
-            points: speed_n,
-        },
-        Trace {
-            name: "velE [m/s]".to_string(),
-            points: speed_e,
-        },
-        Trace {
-            name: "velD [m/s]".to_string(),
-            points: speed_d,
-        },
-    ];
-    out.sat_cn0 = sats
-        .into_iter()
-        .map(|(k, v)| Trace { name: k, points: v })
-        .collect();
+    let mut out = PlotData {
+        speed: vec![
+            Trace {
+                name: "gSpeed [m/s]".to_string(),
+                points: speed_g,
+            },
+            Trace {
+                name: "velN [m/s]".to_string(),
+                points: speed_n,
+            },
+            Trace {
+                name: "velE [m/s]".to_string(),
+                points: speed_e,
+            },
+            Trace {
+                name: "velD [m/s]".to_string(),
+                points: speed_d,
+            },
+        ],
+        sat_cn0: sats
+            .into_iter()
+            .map(|(k, v)| Trace { name: k, points: v })
+            .collect(),
+        ..Default::default()
+    };
 
     for (k, v) in raw_by_sig {
         if k.contains("gyro_") {

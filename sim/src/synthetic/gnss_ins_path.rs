@@ -376,7 +376,7 @@ pub fn generate(profile: &MotionProfile, cfg: PathGenConfig) -> Result<Generated
             acc_sum = add3(acc_sum, sensor.accel_body_mps2);
             gyro_sum = add3(gyro_sum, sensor.gyro_body_radps);
 
-            if sim_count % sim_osr == 0 {
+            if sim_count.is_multiple_of(sim_osr) {
                 let t_s = sim_count as f64 / out_freq;
                 let acc_avg = div3(acc_sum, sim_osr as f64);
                 let gyro_avg = div3(gyro_sum, sim_osr as f64);
@@ -399,7 +399,7 @@ pub fn generate(profile: &MotionProfile, cfg: PathGenConfig) -> Result<Generated
                 gyro_sum = [0.0; 3];
             }
 
-            if sim_count % gnss_period == 0 {
+            if sim_count.is_multiple_of(gnss_period) {
                 let pos = add3(pos_n, pos_delta_n);
                 gnss.push(GnssSample {
                     t_s: sim_count as f64 / out_freq,

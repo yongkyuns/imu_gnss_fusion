@@ -3,9 +3,7 @@ use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 use clap::Parser;
-use sim::ubxlog::{
-    NavPvtObs, UbxFrame, extract_esf_alg_status, extract_nav2_pvt_obs, parse_ubx_frames,
-};
+use sim::ubxlog::{NavPvtObs, extract_esf_alg_status, extract_nav2_pvt_obs, parse_ubx_frames};
 use sim::visualizer::math::nearest_master_ms;
 use sim::visualizer::pipeline::timebase::build_master_timeline;
 

@@ -111,7 +111,7 @@ fn parse_repeat(lines: &[String], idx: usize) -> Result<(Vec<MotionCommand>, usi
         .parse::<usize>()
         .map_err(|_| anyhow::anyhow!("invalid repeat count '{}'", tokens[1]))?;
     let mut block_start = idx + 1;
-    if !tokens.iter().any(|token| *token == "{") {
+    if !tokens.contains(&"{") {
         if lines.get(block_start).map(|line| line.trim()) != Some("{") {
             bail!("repeat block must start with '{{'");
         }

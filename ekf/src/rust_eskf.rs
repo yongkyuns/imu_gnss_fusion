@@ -1,3 +1,11 @@
+//! Runtime ESKF implementation backed by generated symbolic model functions.
+//!
+//! `RustEskf` owns the nominal state, covariance, update diagnostics, and
+//! residual mount-state controls. The generated model wrapper supplies
+//! prediction Jacobians and scalar observation rows; this module applies
+//! covariance propagation, measurement fusion, reset injection, and diagnostic
+//! accounting.
+
 use libm::{fabsf, sqrtf};
 
 use crate::ekf::PredictNoise;
@@ -21,6 +29,7 @@ const DIAG_GPS_POS_D: usize = 8;
 const DIAG_GPS_VEL_D: usize = 9;
 const DIAG_ZERO_VEL_D: usize = 10;
 
+/// Rust ESKF state machine with covariance and residual mount-control policy.
 #[derive(Debug, Clone)]
 pub struct RustEskf {
     raw: EskfState,
@@ -28,6 +37,7 @@ pub struct RustEskf {
 }
 
 impl RustEskf {
+    /// Creates a filter with identity attitude/mount and diagonal covariance.
     pub fn new(noise: PredictNoise) -> Self {
         let mut raw = EskfState {
             nominal: EskfNominalState {
@@ -49,22 +59,27 @@ impl RustEskf {
         }
     }
 
+    /// Returns the full raw ESKF state.
     pub fn raw(&self) -> &EskfState {
         &self.raw
     }
 
+    /// Returns mutable access to the full raw ESKF state for integration code and diagnostics.
     pub fn raw_mut(&mut self) -> &mut EskfState {
         &mut self.raw
     }
 
+    /// Returns the nominal navigation state.
     pub fn nominal(&self) -> &EskfNominalState {
         &self.raw.nominal
     }
 
+    /// Returns the error-state covariance matrix.
     pub fn covariance(&self) -> &[[f32; ERROR_STATES]; ERROR_STATES] {
         &self.raw.p
     }
 
+    /// Enables or disables residual-mount state freezing.
     pub fn set_freeze_misalignment_states(&mut self, freeze: bool) {
         self.freeze_misalignment_states = freeze;
         if freeze {
@@ -72,10 +87,12 @@ impl RustEskf {
         }
     }
 
+    /// Reports whether residual-mount states are currently frozen.
     pub fn freeze_misalignment_states(&self) -> bool {
         self.freeze_misalignment_states
     }
 
+    /// Initializes nominal attitude, velocity, and position from a GNSS sample.
     pub fn init_nominal_from_gnss(&mut self, q_bn: [f32; 4], gnss: EskfGnssSample) {
         const DEFAULT_GYRO_BIAS_SIGMA_DPS: f32 = 0.125;
         const DEFAULT_ACCEL_BIAS_SIGMA_MPS2: f32 = 0.20;
@@ -136,6 +153,7 @@ impl RustEskf {
         }
     }
 
+    /// Predicts nominal state and covariance from one IMU delta.
     pub fn predict(&mut self, imu: EskfImuDelta) {
         let (f, g) = self.compute_error_transition_with_noise(imu);
         generated_eskf::predict_nominal(&mut self.raw.nominal, imu);
@@ -170,6 +188,7 @@ impl RustEskf {
         }
     }
 
+    /// Computes the generated error-state transition matrix for an IMU delta.
     pub fn compute_error_transition(
         &self,
         imu: EskfImuDelta,
@@ -177,6 +196,7 @@ impl RustEskf {
         self.compute_error_transition_with_noise(imu).0
     }
 
+    /// Computes generated error-state transition and noise-input matrices.
     pub fn compute_error_transition_with_noise(
         &self,
         imu: EskfImuDelta,
@@ -187,10 +207,12 @@ impl RustEskf {
         generated_eskf::error_transition(&self.raw.nominal, imu)
     }
 
+    /// Fuses GNSS position and velocity with no residual-mount update scaling.
     pub fn fuse_gps(&mut self, sample: EskfGnssSample) {
         self.fuse_gps_scaled(sample, 0.0, 0.0);
     }
 
+    /// Fuses GNSS position and velocity with explicit residual-mount update scales.
     pub fn fuse_gps_scaled(
         &mut self,
         sample: EskfGnssSample,
@@ -229,21 +251,25 @@ impl RustEskf {
         );
     }
 
+    /// Applies a zero-velocity pseudo-measurement on all NED velocity axes.
     pub fn fuse_zero_vel(&mut self, r_zero_vel: f32) {
         self.fuse_gps_vel_n(0.0, r_zero_vel, 0.0);
         self.fuse_gps_vel_e(0.0, r_zero_vel, 0.0);
         self.fuse_gps_vel_d(0.0, r_zero_vel, 0.0);
     }
 
+    /// Applies stationary gravity pseudo-measurements from body-frame acceleration.
     pub fn fuse_stationary_gravity(&mut self, accel_body_mps2: [f32; 3], r_stationary_accel: f32) {
         self.fuse_stationary_gravity_x(accel_body_mps2[0], r_stationary_accel);
         self.fuse_stationary_gravity_y(accel_body_mps2[1], r_stationary_accel);
     }
 
+    /// Fuses forward vehicle speed as a body-frame X velocity observation.
     pub fn fuse_body_speed_x(&mut self, speed_mps: f32, r_speed: f32) {
         self.fuse_body_speed_x_scaled(speed_mps, r_speed, 1.0, 0.0);
     }
 
+    /// Fuses forward vehicle speed with residual-mount update scaling and innovation gating.
     pub fn fuse_body_speed_x_scaled(
         &mut self,
         speed_mps: f32,
@@ -267,10 +293,12 @@ impl RustEskf {
         self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
+    /// Fuses lateral and vertical nonholonomic body-velocity constraints.
     pub fn fuse_body_vel(&mut self, r_body_vel: f32) {
         self.fuse_body_vel_scaled(r_body_vel, 1.0, 0.0);
     }
 
+    /// Fuses nonholonomic body-velocity constraints with residual-mount update controls.
     pub fn fuse_body_vel_scaled(
         &mut self,
         r_body_vel: f32,
@@ -424,6 +452,7 @@ impl RustEskf {
         self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
+    #[allow(clippy::needless_range_loop, clippy::neg_cmp_op_on_partial_ord)]
     fn fuse_body_vel_yz_batch(
         &mut self,
         r_body_vel: f32,
@@ -675,6 +704,7 @@ fn corr_from_cov(p: &[[f32; ERROR_STATES]; ERROR_STATES], a: usize, b: usize) ->
     }
 }
 
+#[allow(clippy::needless_range_loop)]
 fn update_covariance_joseph_scalar(
     p: &mut [[f32; ERROR_STATES]; ERROR_STATES],
     innovation_var: f32,
@@ -696,6 +726,7 @@ fn update_covariance_joseph_scalar(
     }
 }
 
+#[allow(clippy::needless_range_loop)]
 fn predict_covariance_dense(
     f: &[[f32; ERROR_STATES]; ERROR_STATES],
     g: &[[f32; NOISE_STATES]; ERROR_STATES],
@@ -811,6 +842,7 @@ fn apply_reset(p: &mut [[f32; ERROR_STATES]; ERROR_STATES], dx: &[f32; ERROR_STA
     symmetrize_p(p);
 }
 
+#[allow(clippy::needless_range_loop)]
 fn apply_reset_block(p: &mut [[f32; ERROR_STATES]; ERROR_STATES], offset: usize, dtheta: [f32; 3]) {
     let g_reset_theta = generated_eskf::attitude_reset_jacobian(dtheta);
     let mut p_aa = [[0.0; 3]; 3];

@@ -1003,7 +1003,7 @@ fn apply_mount_ablation(
     fusion: &mut SensorFusion,
     latched_mount_qcs: &mut Option<[f32; 4]>,
 ) {
-    let sigma_rad = args.analysis_mount_sigma_deg.to_radians() as f32;
+    let sigma_rad = args.analysis_mount_sigma_deg.to_radians();
     let Some(eskf) = fusion.eskf() else {
         return;
     };

@@ -407,7 +407,7 @@ fn run_sweep(args: &Args, print_details: bool) -> Result<Vec<SweepResult>> {
                         args.early_fault_end_s,
                     );
                     let result = run_case(
-                        &args,
+                        args,
                         &prepared.generated.reference.truth,
                         &prepared.imu,
                         &gnss,
@@ -919,6 +919,7 @@ fn capture_update_times(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn snapshot_state(
     fusion: &SensorFusion,
     t_s: f64,

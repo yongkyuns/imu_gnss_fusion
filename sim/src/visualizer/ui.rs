@@ -99,23 +99,23 @@ impl Plugin for TrackOverlay<'_> {
                     _ => best = Some((d2, h, p)),
                 }
             }
-            if let Some((d2, h, p)) = best {
-                if d2 <= 12.0_f32 * 12.0_f32 {
-                    ui.painter()
-                        .circle_filled(p, 3.0, egui::Color32::from_rgb(255, 220, 0));
-                    let label = format!("t={:.2}s", h.t_s);
-                    let bg_min = p + egui::vec2(8.0, -24.0);
-                    let bg_rect = egui::Rect::from_min_size(bg_min, egui::vec2(78.0, 18.0));
-                    ui.painter()
-                        .rect_filled(bg_rect, 4.0, egui::Color32::from_black_alpha(180));
-                    ui.painter().text(
-                        bg_min + egui::vec2(6.0, 2.0),
-                        egui::Align2::LEFT_TOP,
-                        label,
-                        egui::FontId::monospace(12.0),
-                        egui::Color32::WHITE,
-                    );
-                }
+            if let Some((d2, h, p)) = best
+                && d2 <= 12.0_f32 * 12.0_f32
+            {
+                ui.painter()
+                    .circle_filled(p, 3.0, egui::Color32::from_rgb(255, 220, 0));
+                let label = format!("t={:.2}s", h.t_s);
+                let bg_min = p + egui::vec2(8.0, -24.0);
+                let bg_rect = egui::Rect::from_min_size(bg_min, egui::vec2(78.0, 18.0));
+                ui.painter()
+                    .rect_filled(bg_rect, 4.0, egui::Color32::from_black_alpha(180));
+                ui.painter().text(
+                    bg_min + egui::vec2(6.0, 2.0),
+                    egui::Align2::LEFT_TOP,
+                    label,
+                    egui::FontId::monospace(12.0),
+                    egui::Color32::WHITE,
+                );
             }
         }
     }
@@ -158,14 +158,16 @@ fn create_app(
     replay: Option<ReplayState>,
 ) -> App {
     let map_center = map_center_from_traces(&data.eskf_map);
-    let map_tiles = if MAPBOX_ACCESS_TOKEN.is_empty() {
+    let mapbox_access_token =
+        std::env::var("MAPBOX_ACCESS_TOKEN").unwrap_or_else(|_| MAPBOX_ACCESS_TOKEN.to_string());
+    let map_tiles = if mapbox_access_token.is_empty() {
         HttpTiles::new(OpenStreetMap, cc.egui_ctx.clone())
     } else {
         HttpTiles::new(
             Mapbox {
                 style: MapboxStyle::Dark,
                 high_resolution: true,
-                access_token: MAPBOX_ACCESS_TOKEN.to_string(),
+                access_token: mapbox_access_token,
             },
             cc.egui_ctx.clone(),
         )

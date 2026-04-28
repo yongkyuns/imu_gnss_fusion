@@ -1,5 +1,7 @@
 use crate::visualizer::model::Trace;
 
+use super::trace::sample_nearest_value;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SummaryMode {
     Linear,
@@ -274,31 +276,7 @@ fn values_in_window(points: &[[f64; 2]], t_start_s: f64, t_end_s: f64) -> Vec<f6
 }
 
 fn sample_reference(trace: &Trace, t_s: f64) -> Option<f64> {
-    if trace.points.is_empty() {
-        return None;
-    }
-    let idx = trace.points.partition_point(|point| point[0] < t_s);
-    let left = trace
-        .points
-        .get(idx.saturating_sub(1))
-        .filter(|point| point[0].is_finite() && point[1].is_finite())
-        .map(|point| ((point[0] - t_s).abs(), point[1]));
-    let right = trace
-        .points
-        .get(idx)
-        .filter(|point| point[0].is_finite() && point[1].is_finite())
-        .map(|point| ((point[0] - t_s).abs(), point[1]));
-    match (left, right) {
-        (Some((left_dt, left_value)), Some((right_dt, right_value))) => {
-            if right_dt < left_dt {
-                Some(right_value)
-            } else {
-                Some(left_value)
-            }
-        }
-        (Some((_, value)), None) | (None, Some((_, value))) => Some(value),
-        (None, None) => None,
-    }
+    sample_nearest_value(trace, t_s)
 }
 
 fn diff(a: f64, b: f64, mode: SummaryMode) -> f64 {

@@ -38,6 +38,7 @@ struct StatusEvent {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
 struct MotionWindow {
     t0_s: f64,
     t1_s: f64,

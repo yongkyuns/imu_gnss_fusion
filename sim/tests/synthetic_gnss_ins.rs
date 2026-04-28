@@ -1,3 +1,5 @@
+#![allow(clippy::excessive_precision)]
+
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -11,6 +13,9 @@ use sim::eval::gnss_ins::{
     as_q64, quat_angle_deg, quat_conj, quat_from_rpy_alg_deg, quat_mul, quat_rotate,
 };
 use sim::eval::replay::{ReplayEvent, for_each_event};
+use sim::eval::trace::{
+    require_trace, require_trace_points, require_trace_schema, sample_nearest_value,
+};
 use sim::synthetic::gnss_ins_path::{
     AxisNoise, GpsNoiseModel, ImuAccuracy, ImuNoiseModel, MeasurementNoiseConfig, MotionProfile,
     PathGenConfig, VibrationNoise, add_measurement_noise, generate, generate_with_noise,
@@ -430,10 +435,11 @@ fn measurement_noise_supports_bias_drift_white_noise_vibration_and_gps_noise() -
         )) > 1.0e-4
     );
     assert!((noisy_a.gnss[4].lat_deg - reference.gnss[4].lat_deg).abs() > 1.0e-8);
-    assert!(matches!(
-        MeasurementNoiseConfig::accuracy(ImuAccuracy::Low).gps,
-        Some(_)
-    ));
+    assert!(
+        MeasurementNoiseConfig::accuracy(ImuAccuracy::Low)
+            .gps
+            .is_some()
+    );
 
     Ok(())
 }
@@ -526,6 +532,110 @@ fn synthetic_inputs_populate_visualizer_eskf_traces() -> Result<()> {
     assert!(!data.eskf_cmp_att.is_empty());
     assert!(!data.eskf_misalignment.is_empty());
     assert!(!data.eskf_map.is_empty());
+    require_trace_schema(
+        "speed",
+        &data.speed,
+        &[
+            "Synthetic truth horizontal speed [m/s]",
+            "Synthetic GNSS horizontal speed [m/s]",
+        ],
+    )?;
+    require_trace_schema(
+        "imu_raw_gyro",
+        &data.imu_raw_gyro,
+        &[
+            "Synthetic body gyro x [deg/s]",
+            "Synthetic body gyro y [deg/s]",
+            "Synthetic body gyro z [deg/s]",
+        ],
+    )?;
+    require_trace_schema(
+        "imu_raw_accel",
+        &data.imu_raw_accel,
+        &[
+            "Synthetic body accel x [m/s^2]",
+            "Synthetic body accel y [m/s^2]",
+            "Synthetic body accel z [m/s^2]",
+        ],
+    )?;
+    require_trace_schema(
+        "orientation",
+        &data.orientation,
+        &[
+            "Synthetic truth roll [deg]",
+            "Synthetic truth pitch [deg]",
+            "Synthetic truth yaw [deg]",
+        ],
+    )?;
+    require_trace_schema(
+        "eskf_cmp_pos",
+        &data.eskf_cmp_pos,
+        &[
+            "ESKF posN [m]",
+            "Synthetic truth posN [m]",
+            "ESKF posE [m]",
+            "Synthetic truth posE [m]",
+            "ESKF posD [m]",
+            "Synthetic truth posD [m]",
+        ],
+    )?;
+    require_trace_schema(
+        "eskf_cmp_vel",
+        &data.eskf_cmp_vel,
+        &[
+            "ESKF vN [m/s]",
+            "Synthetic truth vN [m/s]",
+            "ESKF vE [m/s]",
+            "Synthetic truth vE [m/s]",
+            "ESKF vD [m/s]",
+            "Synthetic truth vD [m/s]",
+        ],
+    )?;
+    require_trace_schema(
+        "eskf_cmp_att",
+        &data.eskf_cmp_att,
+        &[
+            "ESKF roll [deg]",
+            "Synthetic truth roll [deg]",
+            "ESKF pitch [deg]",
+            "Synthetic truth pitch [deg]",
+            "ESKF yaw [deg]",
+            "Synthetic truth yaw [deg]",
+            "mount ready",
+            "EKF initialized",
+        ],
+    )?;
+    require_trace_schema(
+        "eskf_misalignment",
+        &data.eskf_misalignment,
+        &[
+            "ESKF full mount roll [deg]",
+            "ESKF full mount pitch [deg]",
+            "ESKF full mount yaw [deg]",
+            "ESKF mount quaternion error [deg]",
+            "Synthetic truth mount roll [deg]",
+            "Synthetic truth mount pitch [deg]",
+            "Synthetic truth mount yaw [deg]",
+        ],
+    )?;
+    require_trace_schema(
+        "eskf_map",
+        &data.eskf_map,
+        &[
+            "Synthetic truth path (lon,lat)",
+            "Synthetic GNSS path (lon,lat)",
+            "ESKF path (lon,lat)",
+        ],
+    )?;
+
+    let pos_n = require_trace("eskf_cmp_pos", &data.eskf_cmp_pos, "ESKF posN [m]")?;
+    require_trace_points("eskf_cmp_pos", pos_n)?;
+    let initial_state =
+        sample_nearest_value(pos_n, 0.0).expect("ESKF posN trace should be sampled");
+    assert!(
+        initial_state.is_finite(),
+        "sampled ESKF posN should be finite, got {initial_state}"
+    );
     assert!(
         data.eskf_cmp_pos
             .iter()

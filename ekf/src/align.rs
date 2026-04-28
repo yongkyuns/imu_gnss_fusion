@@ -1,28 +1,60 @@
+//! IMU-to-vehicle mount alignment from stationary gravity and GNSS-derived motion windows.
+//!
+//! The alignment filter maintains a quaternion `q_vb` that rotates vehicle-frame
+//! vectors into the IMU body frame. It uses stationary gravity to level roll and
+//! pitch, then GNSS acceleration and turn consistency to observe yaw.
+
 #![allow(non_snake_case)]
 
+/// Number of small-angle mount error states tracked by [`Align`].
 pub const ALIGN_N_STATES: usize = 3;
+/// Standard gravity used by alignment measurements, in meters per second squared.
 pub const GRAVITY_MPS2: f32 = 9.80665;
 
+/// Configuration for the standalone mount-alignment filter.
+///
+/// Standard-deviation fields are interpreted as one-sigma values. The filter
+/// stores covariance internally, so callers should pass standard deviations,
+/// not variances.
 #[derive(Debug, Clone, Copy)]
 pub struct AlignConfig {
+    /// Mount process-noise standard deviation per roll, pitch, and yaw state, in radians.
     pub q_mount_std_rad: [f32; ALIGN_N_STATES],
+    /// Gravity-vector observation standard deviation, in meters per second squared.
     pub r_gravity_std_mps2: f32,
+    /// Horizontal-acceleration heading observation standard deviation, in radians.
     pub r_horiz_heading_std_rad: f32,
+    /// Gyro-based turn observation standard deviation, in radians per second.
     pub r_turn_gyro_std_radps: f32,
+    /// Scale applied to yaw updates from turn-gyro observations.
     pub turn_gyro_yaw_scale: f32,
+    /// GNSS turn-heading observation standard deviation, in radians.
     pub r_turn_heading_std_rad: f32,
+    /// Low-pass filter coefficient for stationary gravity samples.
     pub gravity_lpf_alpha: f32,
+    /// Minimum horizontal speed required for motion-derived observations, in meters per second.
     pub min_speed_mps: f32,
+    /// Minimum course-rate magnitude required for turn observations, in radians per second.
     pub min_turn_rate_radps: f32,
+    /// Minimum lateral acceleration required for turn observations, in meters per second squared.
     pub min_lat_acc_mps2: f32,
+    /// Minimum longitudinal acceleration required for straight-line heading observations.
     pub min_long_acc_mps2: f32,
+    /// Minimum retained turn windows before turn consistency can pass.
     pub turn_consistency_min_windows: usize,
+    /// Required fraction of retained turn windows that must agree in sign and magnitude.
     pub turn_consistency_min_fraction: f32,
+    /// Absolute lateral-acceleration tolerance for turn consistency.
     pub turn_consistency_max_abs_lat_err_mps2: f32,
+    /// Relative lateral-acceleration tolerance for turn consistency.
     pub turn_consistency_max_rel_lat_err: f32,
+    /// Maximum gyro norm for a window to be considered stationary, in radians per second.
     pub max_stationary_gyro_radps: f32,
+    /// Maximum acceleration-norm error for stationary detection, in meters per second squared.
     pub max_stationary_accel_norm_err_mps2: f32,
+    /// Enables stationary gravity updates.
     pub use_gravity: bool,
+    /// Enables turn-gyro alignment updates.
     pub use_turn_gyro: bool,
 }
 
@@ -56,37 +88,65 @@ impl Default for AlignConfig {
     }
 }
 
+/// Mean IMU and GNSS motion summary over one alignment update window.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AlignWindowSummary {
+    /// Window duration, in seconds.
     pub dt: f32,
+    /// Mean angular rate in the IMU body frame, in radians per second.
     pub mean_gyro_b: [f32; 3],
+    /// Mean specific force in the IMU body frame, in meters per second squared.
     pub mean_accel_b: [f32; 3],
+    /// Previous GNSS velocity in NED coordinates, in meters per second.
     pub gnss_vel_prev_n: [f32; 3],
+    /// Current GNSS velocity in NED coordinates, in meters per second.
     pub gnss_vel_curr_n: [f32; 3],
 }
 
+/// Diagnostic trace for a single [`Align::update_window_with_trace`] call.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AlignUpdateTrace {
+    /// Quaternion at the start of the update.
     pub q_start: [f32; 4],
+    /// Whether the filter considered coarse alignment ready after this update.
     pub coarse_alignment_ready: bool,
+    /// Quaternion after the gravity update, if applied.
     pub after_gravity: Option<[f32; 4]>,
+    /// Whether the gravity update used the quasi-static path.
     pub after_gravity_quasi_static: bool,
+    /// Quaternion after the horizontal-acceleration update, if applied.
     pub after_horiz_accel: Option<[f32; 4]>,
+    /// Horizontal heading innovation angle, in radians.
     pub horiz_angle_err_rad: Option<f32>,
+    /// Effective standard deviation used for the horizontal heading update.
     pub horiz_effective_std_rad: Option<f32>,
+    /// GNSS-derived horizontal acceleration norm, in meters per second squared.
     pub horiz_gnss_norm_mps2: Option<f32>,
+    /// IMU-derived horizontal acceleration norm, in meters per second squared.
     pub horiz_imu_norm_mps2: Option<f32>,
+    /// Observed vehicle-frame longitudinal acceleration from the alignment model.
     pub horiz_obs_accel_vx: Option<f32>,
+    /// Observed vehicle-frame lateral acceleration from the alignment model.
     pub horiz_obs_accel_vy: Option<f32>,
+    /// Body-frame horizontal acceleration X component used by the update.
     pub horiz_accel_bx: Option<f32>,
+    /// Body-frame horizontal acceleration Y component used by the update.
     pub horiz_accel_by: Option<f32>,
+    /// Speed quality factor used in horizontal update weighting.
     pub horiz_speed_q: Option<f32>,
+    /// Acceleration quality factor used in horizontal update weighting.
     pub horiz_accel_q: Option<f32>,
+    /// Straight-line motion quality factor used in horizontal update weighting.
     pub horiz_straight_q: Option<f32>,
+    /// Turn-motion quality factor used in horizontal update weighting.
     pub horiz_turn_q: Option<f32>,
+    /// Dominance quality factor between longitudinal and lateral cues.
     pub horiz_dominance_q: Option<f32>,
+    /// Whether the core turn-observation gates passed before quality scaling.
     pub horiz_turn_core_valid: bool,
+    /// Whether the core straight-line-observation gates passed before quality scaling.
     pub horiz_straight_core_valid: bool,
+    /// Quaternion after the turn-gyro update, if applied.
     pub after_turn_gyro: Option<[f32; 4]>,
 }
 
@@ -97,15 +157,20 @@ struct TurnConsistencySample {
     a_lat_mps2: f32,
 }
 
+/// Standalone mount-alignment filter state.
 #[derive(Debug, Clone)]
 pub struct Align {
+    /// Vehicle-to-body mount quaternion `[w, x, y, z]`.
     pub q_vb: [f32; 4],
+    /// Small-angle mount covariance for roll, pitch, and yaw.
     pub P: [[f32; ALIGN_N_STATES]; ALIGN_N_STATES],
+    /// Low-pass stationary gravity vector in the IMU body frame.
     pub gravity_lp_b: [f32; 3],
     coarse_aligned: bool,
     yaw_observed: bool,
     turn_samples: [TurnConsistencySample; 16],
     turn_count: usize,
+    /// Runtime alignment configuration.
     pub cfg: AlignConfig,
 }
 
@@ -116,6 +181,7 @@ impl Default for Align {
 }
 
 impl Align {
+    /// Creates an alignment filter with identity mount and the provided configuration.
     pub fn new(cfg: AlignConfig) -> Self {
         Self {
             q_vb: [1.0, 0.0, 0.0, 0.0],
@@ -133,6 +199,7 @@ impl Align {
         }
     }
 
+    /// Initializes roll and pitch from stationary accelerometer samples and seeds yaw.
     pub fn initialize_from_stationary(
         &mut self,
         accel_samples_b: &[[f32; 3]],
@@ -154,6 +221,7 @@ impl Align {
         Ok(())
     }
 
+    /// Propagates mount covariance by `dt` seconds without changing the nominal quaternion.
     pub fn predict(&mut self, dt: f32) {
         let dt = dt.max(1.0e-3);
         for i in 0..3 {
@@ -161,10 +229,12 @@ impl Align {
         }
     }
 
+    /// Applies one alignment window and returns the accumulated update score.
     pub fn update_window(&mut self, window: &AlignWindowSummary) -> f32 {
         self.update_window_with_trace(window).0
     }
 
+    /// Applies one alignment window and returns both the update score and diagnostic trace.
     pub fn update_window_with_trace(
         &mut self,
         window: &AlignWindowSummary,
@@ -344,19 +414,23 @@ impl Align {
         (score, trace)
     }
 
+    /// Returns mount Euler angles `[roll, pitch, yaw]` in radians.
     pub fn mount_angles_rad(&self) -> [f32; 3] {
         rot_to_euler_zyx(quat_to_rotmat(self.q_vb))
     }
 
+    /// Returns mount Euler angles `[roll, pitch, yaw]` in degrees.
     pub fn mount_angles_deg(&self) -> [f32; 3] {
         let r = self.mount_angles_rad();
         [r[0].to_degrees(), r[1].to_degrees(), r[2].to_degrees()]
     }
 
+    /// Reports whether roll, pitch, and yaw have met the coarse-alignment covariance gates.
     pub fn coarse_alignment_ready(&self) -> bool {
         self.coarse_aligned
     }
 
+    /// Returns one-sigma mount uncertainty `[roll, pitch, yaw]` in degrees.
     pub fn sigma_deg(&self) -> [f32; 3] {
         [
             self.P[0][0].max(0.0).sqrt().to_degrees(),
@@ -429,6 +503,7 @@ impl Align {
     }
 }
 
+/// Projects body-frame horizontal acceleration onto axes leveled by the gravity vector.
 pub fn leveled_horiz_accel_xy(gravity_b: [f32; 3], horiz_accel_b: [f32; 3]) -> Option<[f32; 2]> {
     let (x_in_b, y_in_b) = leveled_xy_axes(gravity_b)?;
     Some([
@@ -689,6 +764,7 @@ fn inject_vehicle_yaw(q_vb: &mut [f32; 4], dpsi: f32) {
     quat_normalize(q_vb);
 }
 
+#[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
 fn apply_update1_masked(
     q_vb: &mut [f32; 4],
     p: &mut [[f32; 3]; 3],
@@ -738,6 +814,7 @@ fn apply_update1_masked(
     y * y * s_inv
 }
 
+#[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
 fn apply_update2_scaled_masked(
     q_vb: &mut [f32; 4],
     p: &mut [[f32; 3]; 3],

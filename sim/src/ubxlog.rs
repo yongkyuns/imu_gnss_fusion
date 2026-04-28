@@ -45,10 +45,10 @@ pub fn parse_ubx_frames(data: &[u8], max_records: Option<usize>) -> Vec<UbxFrame
             id,
             payload,
         });
-        if let Some(m) = max_records {
-            if out.len() >= m {
-                break;
-            }
+        if let Some(m) = max_records
+            && out.len() >= m
+        {
+            break;
         }
         i = end;
     }

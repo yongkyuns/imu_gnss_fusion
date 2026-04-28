@@ -151,6 +151,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn maybe_accumulate_error(
     fusion: &SensorFusion,
     alg_events: &[AlgMountEvent],

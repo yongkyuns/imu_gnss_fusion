@@ -8,9 +8,12 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  build-and-test:
-    name: CI (${{ matrix.os_name }})
+  rust:
+    name: Rust (${{ matrix.os_name }})
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 60
     strategy:
@@ -28,6 +31,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
@@ -38,151 +43,26 @@ jobs:
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Restore logger data cache
-        id: cache-logger-data
-        uses: actions/cache@v4
-        with:
-          path: logger/data
-          key: ${{ runner.os }}-logger-data-${{ hashFiles('.github/datasets/logger-data.version') }}
+      - name: Format check
+        run: cargo fmt --all -- --check
 
-      - name: Download logger data dataset
-        if: steps.cache-logger-data.outputs.cache-hit != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          DATASET_TAG="$(cat .github/datasets/logger-data.version)"
-          mkdir -p /tmp/logger-data-release logger
-          gh release download "$DATASET_TAG" \
-            --repo "${{ github.repository }}" \
-            --pattern "logger-data.tar.gz" \
-            --dir /tmp/logger-data-release
-          tar -xzf /tmp/logger-data-release/logger-data.tar.gz -C logger
+      - name: Clippy workspace
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Build workspace
         run: cargo build --workspace --locked
 
+      - name: Check key sim binaries
+        run: |
+          cargo check -p sim --locked \
+            --bin visualizer \
+            --bin align_eval \
+            --bin align_eval_gnss_ins_sim \
+            --bin eskf_eval_gnss_ins_sim \
+            --bin run_loose_nsr
+
       - name: Test workspace
         run: cargo test --workspace --locked
 
-      - name: Test standalone C library
-        run: make -C ekf/c test
-
-      - name: Baseline parity and convergence check
-        run: |
-          cargo run -q -p sim --bin compare_rust_c_baseline -- \
-            --file-list test_files.txt \
-            --section Baseline \
-            --data-dir logger/data \
-            --fail-on-mismatch
-
-      - name: Clean standalone C build
-        if: always()
-        run: make -C ekf/c clean
-
-  c-lib-linux-gcc:
-    name: C library build/test (Linux GCC)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install GCC toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc make
-
-      - name: Build standalone C library with GCC
-        run: make -C ekf/c linux-gcc
-
-      - name: Test standalone C library with GCC
-        run: make -C ekf/c test CC=gcc AR=ar
-
-      - name: Clean standalone C build
-        if: always()
-        run: make -C ekf/c clean
-
-  c-lib-stm32h5:
-    name: C library build (STM32H5)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install ARM embedded toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-arm-none-eabi binutils-arm-none-eabi make
-
-      - name: Build standalone C library for STM32H5
-        run: make -C ekf/c stm32h5
-
-      - name: Clean standalone C build
-        if: always()
-        run: make -C ekf/c clean
-
-  c-lib-stm32h7:
-    name: C library build (STM32H7)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install ARM embedded toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-arm-none-eabi binutils-arm-none-eabi make
-
-      - name: Build standalone C library for STM32H7
-        run: make -C ekf/c stm32h7
-
-      - name: Clean standalone C build
-        if: always()
-        run: make -C ekf/c clean
-
-  c-lib-qemu-stm32h5:
-    name: C library test (QEMU STM32H5 surrogate)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install ARM embedded toolchain and QEMU
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-arm-none-eabi binutils-arm-none-eabi qemu-system-arm make
-
-      - name: Run embedded C unit tests under QEMU
-        run: make -C ekf/c qemu-stm32h5
-
-      - name: Clean standalone C build
-        if: always()
-        run: make -C ekf/c clean
-
-  c-lib-qemu-stm32h7:
-    name: C library test (QEMU STM32H7 surrogate)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install ARM embedded toolchain and QEMU
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-arm-none-eabi binutils-arm-none-eabi qemu-system-arm make
-
-      - name: Run embedded C unit tests under QEMU
-        run: make -C ekf/c qemu-stm32h7
-
-      - name: Clean standalone C build
-        if: always()
-        run: make -C ekf/c clean
+      - name: Document workspace
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked

@@ -101,6 +101,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn log_transition_if_needed(
     source: &str,
     t_s: f64,

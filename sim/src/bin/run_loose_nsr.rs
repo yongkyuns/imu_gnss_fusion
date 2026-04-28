@@ -295,7 +295,7 @@ fn main() -> Result<()> {
                 let a2 = accel_at(curr.ttag_us, accel_seen)
                     .with_context(|| format!("missing accel at {}", curr.ttag_us))?;
                 let dt = (curr.ttag_us - prev.ttag_us) as f64 * 1.0e-6;
-                if !(dt > 0.0) {
+                if dt <= 0.0 {
                     continue;
                 }
                 let imu = LooseImuDelta {
@@ -321,7 +321,7 @@ fn main() -> Result<()> {
                 if let Some(gnss_index) = latest_gnss_index {
                     let g = &gnss[gnss_index];
                     let age_us = curr.ttag_us - g.ttag_us;
-                    if age_us >= 0 && age_us < 50_000 && g.ttag_us != last_gnss_used_ttag {
+                    if (0..50_000).contains(&age_us) && g.ttag_us != last_gnss_used_ttag {
                         let pos_ecef = lla_to_ecef(g.lat_deg, g.lon_deg, g.height_m);
                         gps_pos_ecef = Some(pos_ecef);
                         gps_h_acc_m = g.h_acc_m as f32;
@@ -468,9 +468,9 @@ fn main() -> Result<()> {
                                 row.p_psi_cc_post[i][j] = p[21 + i][21 + j] as f64;
                             }
                         }
-                        for i in 0..24 {
-                            for j in 0..24 {
-                                row.p_post_full[i][j] = p[i][j] as f64;
+                        for (i, p_row) in p.iter().enumerate() {
+                            for (j, value) in p_row.iter().enumerate() {
+                                row.p_post_full[i][j] = *value as f64;
                             }
                         }
                         row.pos_ecef_post = loose.shadow_pos_ecef();
@@ -811,8 +811,8 @@ fn gps_diag_inputs(
     let mut r_e = [[0.0; 3]; 3];
     for i in 0..3 {
         for j in 0..3 {
-            for k in 0..3 {
-                r_e[i][j] += c_en[i][k] * r_n_diag[k] * c_en[j][k];
+            for (k, r_n_k) in r_n_diag.iter().enumerate() {
+                r_e[i][j] += c_en[i][k] * *r_n_k * c_en[j][k];
             }
         }
     }

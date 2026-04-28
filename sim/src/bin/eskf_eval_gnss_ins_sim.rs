@@ -212,7 +212,7 @@ fn main() -> Result<()> {
         fusion.set_gnss_vel_mount_scale(gnss_vel_mount_scale);
     }
     if let Some(gyro_bias_init_sigma_dps) = args.gyro_bias_init_sigma_dps {
-        fusion.set_gyro_bias_init_sigma_radps(gyro_bias_init_sigma_dps.to_radians() as f32);
+        fusion.set_gyro_bias_init_sigma_radps(gyro_bias_init_sigma_dps.to_radians());
     }
 
     let mut residuals = Vec::<ResidualSample>::new();

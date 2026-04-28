@@ -231,15 +231,15 @@ fn main() -> Result<()> {
 
     let mut nav_att_events = Vec::<NavAttEvent>::new();
     for f in &frames {
-        if let Some((_itow, roll, pitch, heading)) = extract_nav_att(f) {
-            if let Some(t_ms) = nearest_master_ms(f.seq, &tl.masters) {
-                nav_att_events.push(NavAttEvent {
-                    t_ms,
-                    roll_deg: roll,
-                    pitch_deg: pitch,
-                    heading_deg: normalize_heading_deg(heading),
-                });
-            }
+        if let Some((_itow, roll, pitch, heading)) = extract_nav_att(f)
+            && let Some(t_ms) = nearest_master_ms(f.seq, &tl.masters)
+        {
+            nav_att_events.push(NavAttEvent {
+                t_ms,
+                roll_deg: roll,
+                pitch_deg: pitch,
+                heading_deg: normalize_heading_deg(heading),
+            });
         }
     }
     nav_att_events.sort_by(|a, b| a.t_ms.total_cmp(&b.t_ms));

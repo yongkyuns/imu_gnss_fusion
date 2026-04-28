@@ -162,7 +162,8 @@ fn main() -> Result<()> {
     let mut predict_dt_accum = 0.0_f64;
     let mut predict_decim_count = 0usize;
     let mut prev_post_mount: Option<[f64; 3]> = None;
-    let mut top_jumps: Vec<(f64, f64, [f64; 3], [f64; 3], Vec<String>, [f32; 24])> = Vec::new();
+    type JumpSummary = (f64, f64, [f64; 3], [f64; 3], Vec<String>, [f32; 24]);
+    let mut top_jumps: Vec<JumpSummary> = Vec::new();
 
     for imu_sample in &replay.imu_samples {
         let pkt_t_ms = tl.t0_master_ms + imu_sample.t_s * 1.0e3;
@@ -302,7 +303,7 @@ fn main() -> Result<()> {
             let ecef = lla_to_ecef(nav.lat_deg, nav.lon_deg, nav.height_m);
             let _ned = ecef_to_ned(ecef, ref_ecef, ref_lat, ref_lon);
             let update = fusion.process_gnss(to_fusion_gnss(gnss_sample));
-            if !loose.is_some() && update.mount_ready {
+            if loose.is_none() && update.mount_ready {
                 if let Some(alg) = nearest_alg(&alg_events, t_ms) {
                     println!(
                         "ESF-ALG near loose init t={:.3}s mount=[{:.2},{:.2},{:.2}]",
@@ -350,12 +351,7 @@ fn main() -> Result<()> {
                 }
                 if let Some(q_vb) = cur_align_q_vb.or_else(|| fusion.mount_q_vb()) {
                     let init_q_cs = if args.raw_imu_full_qcs {
-                        [
-                            q_vb[0] as f32,
-                            q_vb[1] as f32,
-                            q_vb[2] as f32,
-                            q_vb[3] as f32,
-                        ]
+                        [q_vb[0], q_vb[1], q_vb[2], q_vb[3]]
                     } else {
                         [1.0, 0.0, 0.0, 0.0]
                     };
@@ -448,10 +444,10 @@ fn main() -> Result<()> {
                     };
                     let mut loose_init =
                         initialize_loose_from_nav(nav, gnss_sample, init_q_cs, q_es_init);
-                    if !args.raw_imu_full_qcs {
-                        if let Some(sigma_deg) = args.seeded_qcs_sigma_deg {
-                            loose_init.tighten_mount_covariance_deg(sigma_deg as f32);
-                        }
+                    if !args.raw_imu_full_qcs
+                        && let Some(sigma_deg) = args.seeded_qcs_sigma_deg
+                    {
+                        loose_init.tighten_mount_covariance_deg(sigma_deg as f32);
                     }
                     if args.freeze_qcs {
                         let mut p = *loose_init.covariance();
@@ -495,14 +491,12 @@ fn main() -> Result<()> {
                         },
                     ])
                 };
-                let vel_ecef = if let Some(v_ned) = vel_ned_for_loose {
-                    Some(mat_vec(
+                let vel_ecef = vel_ned_for_loose.map(|v_ned| {
+                    mat_vec(
                         transpose3(ecef_to_ned_matrix(nav.lat_deg, nav.lon_deg)),
                         v_ned,
-                    ))
-                } else {
-                    None
-                };
+                    )
+                });
                 let vel_std_ned = if args.disable_gps_vel {
                     None
                 } else {
