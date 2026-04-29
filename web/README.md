@@ -13,21 +13,22 @@ python3 -m http.server --directory web 8080
 
 Open `http://localhost:8080`. The browser visualizer can generate built-in synthetic scenarios, load a generic replay by dragging `imu.csv`, `gnss.csv`, and optional reference CSVs into the app, or load an experimental generic dataset from `web/datasets/manifest.json`.
 
-The map page is available with `?page=map`. Browser and native maps are rendered by the Rust `walkers` egui widget, so map interaction stays inside the same canvas as the rest of the visualizer. Maps use OpenStreetMap tiles by default. To use Mapbox dark tiles, enter a token in the map-page token field or pass it in the URL:
+The map page is available with `?page=map`. Browser and native maps are rendered by the Rust `walkers` egui widget, so map interaction stays inside the same canvas as the rest of the visualizer. The app has light and dark themes; the map source follows the selected theme. Without a Mapbox token, maps use CARTO Positron for light theme and CARTO Dark Matter for dark theme, with OpenStreetMap/CARTO attribution. With a Mapbox token, maps use Mapbox Light or Mapbox Dark to match the app theme.
 
 ```text
-http://localhost:8080/?page=map&mapbox_token=<token>
+http://localhost:8080/?page=map&theme=light&mapbox_token=<token>
 ```
 
-The browser stores a token entered in the field in local storage, so it is reused on later reloads. For local development without entering a token manually, create an ignored `web/local-config.js`:
+The browser stores the selected theme and any token entered in the field in local storage, so they are reused on later reloads. For local development without entering a token manually, create an ignored `web/local-config.js`:
 
 ```js
 window.IMU_GNSS_FUSION_CONFIG = {
   mapboxToken: "<token>",
+  theme: "dark",
 };
 ```
 
-Native visualizer builds use the same fallback behavior: set `MAPBOX_ACCESS_TOKEN` for Mapbox tiles, or leave it unset for OpenStreetMap.
+Native visualizer builds use the same map fallback behavior: set `MAPBOX_ACCESS_TOKEN` for Mapbox tiles, or leave it unset for CARTO Positron/Dark Matter. Set `IMU_GNSS_FUSION_THEME=light` or `IMU_GNSS_FUSION_THEME=dark` to choose the startup theme.
 
 ## Experimental dataset manifest
 

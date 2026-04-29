@@ -12,8 +12,8 @@ use flate2::read::GzDecoder;
 use js_sys::{Function, Object, Reflect, Uint8Array};
 #[cfg(target_arch = "wasm32")]
 use serde::Deserialize;
-use walkers::sources::{Mapbox, MapboxStyle, OpenStreetMap};
-use walkers::{HttpTiles, Map, MapMemory, Plugin, lon_lat};
+use walkers::sources::{Attribution, Mapbox, MapboxStyle, TileSource};
+use walkers::{HttpTiles, Map, MapMemory, Plugin, TileId, lon_lat};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 #[cfg(target_arch = "wasm32")]
@@ -326,6 +326,7 @@ pub struct App {
     fps_ema: f32,
     last_frame_time_s: f64,
     max_points_per_trace: usize,
+    ui_theme: UiTheme,
     page: Page,
     map_tiles: HttpTiles,
     map_memory: MapMemory,
@@ -815,13 +816,127 @@ fn web_remember_mapbox_token(token: &str) {
     }
 }
 
-fn map_tiles_from_token(token: &str, egui_ctx: egui::Context) -> HttpTiles {
+#[cfg(target_arch = "wasm32")]
+fn web_initial_ui_theme() -> UiTheme {
+    if let Some(theme) = web_query_value_raw("theme").and_then(|value| UiTheme::from_value(&value))
+    {
+        return theme;
+    }
+    let Some(window) = eframe::web_sys::window() else {
+        return UiTheme::default();
+    };
+    let Ok(value) = Reflect::get(
+        window.as_ref(),
+        &JsValue::from_str("__imuGnssFusionInitialTheme"),
+    ) else {
+        return UiTheme::default();
+    };
+    let Some(function) = value.dyn_ref::<Function>() else {
+        return UiTheme::default();
+    };
+    function
+        .call0(&JsValue::NULL)
+        .ok()
+        .and_then(|value| value.as_string())
+        .and_then(|value| UiTheme::from_value(&value))
+        .unwrap_or_default()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn web_remember_ui_theme(theme: UiTheme) {
+    let Some(window) = eframe::web_sys::window() else {
+        return;
+    };
+    let Ok(value) = Reflect::get(
+        window.as_ref(),
+        &JsValue::from_str("__imuGnssFusionRememberTheme"),
+    ) else {
+        return;
+    };
+    if let Some(function) = value.dyn_ref::<Function>() {
+        let _ = function.call1(&JsValue::NULL, &JsValue::from_str(theme.storage_value()));
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn initial_ui_theme() -> UiTheme {
+    std::env::var("IMU_GNSS_FUSION_THEME")
+        .ok()
+        .and_then(|value| UiTheme::from_value(&value))
+        .unwrap_or_default()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn initial_ui_theme() -> UiTheme {
+    web_initial_ui_theme()
+}
+
+fn current_ui_density() -> UiDensity {
+    #[cfg(target_arch = "wasm32")]
+    {
+        UiDensity::Compact
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        UiDensity::Comfortable
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CartoRasterStyle {
+    Positron,
+    DarkMatter,
+}
+
+struct CartoRasterTiles {
+    style: CartoRasterStyle,
+}
+
+impl CartoRasterTiles {
+    fn for_theme(theme: UiTheme) -> Self {
+        let style = match theme {
+            UiTheme::Light => CartoRasterStyle::Positron,
+            UiTheme::Dark => CartoRasterStyle::DarkMatter,
+        };
+        Self { style }
+    }
+}
+
+impl TileSource for CartoRasterTiles {
+    fn tile_url(&self, tile_id: TileId) -> String {
+        let style = match self.style {
+            CartoRasterStyle::Positron => "light_all",
+            CartoRasterStyle::DarkMatter => "dark_all",
+        };
+        let subdomain =
+            ["a", "b", "c", "d"][((tile_id.x + tile_id.y + tile_id.zoom as u32) % 4) as usize];
+        format!(
+            "https://{subdomain}.basemaps.cartocdn.com/{style}/{}/{}/{}.png",
+            tile_id.zoom, tile_id.x, tile_id.y
+        )
+    }
+
+    fn attribution(&self) -> Attribution {
+        Attribution {
+            text: "(C) OpenStreetMap contributors, (C) CARTO",
+            url: "https://carto.com/attributions",
+            logo_light: None,
+            logo_dark: None,
+        }
+    }
+}
+
+fn map_tiles_from_token(token: &str, theme: UiTheme, egui_ctx: egui::Context) -> HttpTiles {
     if token.is_empty() {
-        HttpTiles::new(OpenStreetMap, egui_ctx)
+        HttpTiles::new(CartoRasterTiles::for_theme(theme), egui_ctx)
     } else {
+        let style = match theme {
+            UiTheme::Light => MapboxStyle::Light,
+            UiTheme::Dark => MapboxStyle::Dark,
+        };
         HttpTiles::new(
             Mapbox {
-                style: MapboxStyle::Dark,
+                style,
                 high_resolution: true,
                 access_token: token.to_string(),
             },
@@ -841,7 +956,8 @@ fn create_app(
     let mapbox_access_token = std::env::var(MAPBOX_ACCESS_TOKEN_ENV).unwrap_or_default();
     #[cfg(target_arch = "wasm32")]
     let mapbox_access_token = web_initial_mapbox_token();
-    let map_tiles = map_tiles_from_token(&mapbox_access_token, cc.egui_ctx.clone());
+    let ui_theme = initial_ui_theme();
+    let map_tiles = map_tiles_from_token(&mapbox_access_token, ui_theme, cc.egui_ctx.clone());
     let mut map_memory = MapMemory::default();
     let _ = map_memory.set_zoom(15.0);
     #[cfg(target_arch = "wasm32")]
@@ -856,6 +972,7 @@ fn create_app(
         fps_ema: 0.0,
         last_frame_time_s: 0.0,
         max_points_per_trace: initial_max_points_per_trace,
+        ui_theme,
         page: Page::Overview,
         map_tiles,
         map_memory,
@@ -919,6 +1036,25 @@ fn create_app(
 }
 
 impl App {
+    fn set_ui_theme(&mut self, theme: UiTheme, ctx: &egui::Context) {
+        if self.ui_theme == theme {
+            return;
+        }
+        self.ui_theme = theme;
+        super::theme::apply(ctx, current_ui_density(), self.ui_theme);
+        self.refresh_map_tiles(ctx);
+        #[cfg(target_arch = "wasm32")]
+        web_remember_ui_theme(self.ui_theme);
+    }
+
+    fn refresh_map_tiles(&mut self, ctx: &egui::Context) {
+        #[cfg(target_arch = "wasm32")]
+        let token = self.web_mapbox_token.clone();
+        #[cfg(not(target_arch = "wasm32"))]
+        let token = std::env::var(MAPBOX_ACCESS_TOKEN_ENV).unwrap_or_default();
+        self.map_tiles = map_tiles_from_token(&token, self.ui_theme, ctx.clone());
+    }
+
     #[cfg(target_arch = "wasm32")]
     fn start_web_manifest_load(&mut self) {
         if self.web_datasets.loading_manifest {
@@ -1334,10 +1470,10 @@ impl App {
             );
             if response.changed() {
                 web_remember_mapbox_token(&self.web_mapbox_token);
-                self.map_tiles = map_tiles_from_token(&self.web_mapbox_token, ctx.clone());
+                self.refresh_map_tiles(ctx);
                 self.web_mapbox_token_applied = self.web_mapbox_token.clone();
             } else if self.web_mapbox_token != self.web_mapbox_token_applied {
-                self.map_tiles = map_tiles_from_token(&self.web_mapbox_token, ctx.clone());
+                self.refresh_map_tiles(ctx);
                 self.web_mapbox_token_applied = self.web_mapbox_token.clone();
             }
         });
@@ -1756,10 +1892,7 @@ command type,yaw (deg),pitch (deg),roll (deg),vx_body (m/s),vy_body (m/s),vz_bod
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        #[cfg(target_arch = "wasm32")]
-        super::theme::apply(ctx, UiDensity::Compact, UiTheme::Dark);
-        #[cfg(not(target_arch = "wasm32"))]
-        super::theme::apply(ctx, UiDensity::Comfortable, UiTheme::Dark);
+        super::theme::apply(ctx, current_ui_density(), self.ui_theme);
 
         #[cfg(target_arch = "wasm32")]
         self.consume_dropped_files(ctx);
@@ -1836,6 +1969,14 @@ impl eframe::App for App {
                 });
                 ui.separator();
                 ui.label(format!("FPS {:.1}", self.fps_ema.max(fps)));
+                ui.separator();
+                ui.label("Theme");
+                let mut selected_theme = self.ui_theme;
+                ui.selectable_value(&mut selected_theme, UiTheme::Light, "Light");
+                ui.selectable_value(&mut selected_theme, UiTheme::Dark, "Dark");
+                if selected_theme != self.ui_theme {
+                    self.set_ui_theme(selected_theme, ctx);
+                }
             });
             ui.horizontal_wrapped(|ui| {
                 ui.selectable_value(&mut self.page, Page::Overview, "Overview");

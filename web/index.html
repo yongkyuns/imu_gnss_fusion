@@ -43,6 +43,7 @@
     <script type="module">
       const status = document.getElementById("status");
       const mapboxTokenStorageKey = "imu_gnss_fusion.mapbox_token";
+      const themeStorageKey = "imu_gnss_fusion.theme";
       window.__imuGnssFusionInitialMapboxToken = () => {
         const queryToken = new URLSearchParams(window.location.search).get("mapbox_token") || "";
         const config = window.IMU_GNSS_FUSION_CONFIG || {};
@@ -55,6 +56,20 @@
           window.localStorage.setItem(mapboxTokenStorageKey, token);
         } else {
           window.localStorage.removeItem(mapboxTokenStorageKey);
+        }
+      };
+      window.__imuGnssFusionInitialTheme = () => {
+        const queryTheme = new URLSearchParams(window.location.search).get("theme") || "";
+        const config = window.IMU_GNSS_FUSION_CONFIG || {};
+        const configTheme = String(config.theme || "").trim();
+        const storedTheme = window.localStorage.getItem(themeStorageKey) || "";
+        return queryTheme || configTheme || storedTheme || "dark";
+      };
+      window.__imuGnssFusionRememberTheme = (theme) => {
+        if (theme) {
+          window.localStorage.setItem(themeStorageKey, theme);
+        } else {
+          window.localStorage.removeItem(themeStorageKey);
         }
       };
       window.__imuGnssFusionBrowserFps = {

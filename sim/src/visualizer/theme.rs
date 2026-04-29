@@ -16,6 +16,28 @@ pub enum UiTheme {
 }
 
 impl UiTheme {
+    pub fn from_value(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "light" | "positron" => Some(Self::Light),
+            "dark" | "dark-matter" | "dark_matter" => Some(Self::Dark),
+            _ => None,
+        }
+    }
+
+    pub fn display_label(self) -> &'static str {
+        match self {
+            Self::Light => "Light",
+            Self::Dark => "Dark",
+        }
+    }
+
+    pub fn storage_value(self) -> &'static str {
+        match self {
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+
     fn egui_theme(self) -> Theme {
         match self {
             Self::Light => Theme::Light,
