@@ -168,6 +168,7 @@ pub fn build_generic_replay_plot_data(
                 sample.t_s,
                 &fusion,
                 ref_gnss,
+                ref_ecef,
                 &mut eskf_pos_n,
                 &mut eskf_pos_e,
                 &mut eskf_pos_d,
@@ -213,29 +214,29 @@ pub fn build_generic_replay_plot_data(
         }],
         imu_raw_gyro: vec![
             Trace {
-                name: "CSV gyro X [dps]".to_string(),
+                name: "Raw IMU gyro X [deg/s]".to_string(),
                 points: raw_gyro_x.clone(),
             },
             Trace {
-                name: "CSV gyro Y [dps]".to_string(),
+                name: "Raw IMU gyro Y [deg/s]".to_string(),
                 points: raw_gyro_y.clone(),
             },
             Trace {
-                name: "CSV gyro Z [dps]".to_string(),
+                name: "Raw IMU gyro Z [deg/s]".to_string(),
                 points: raw_gyro_z.clone(),
             },
         ],
         imu_raw_accel: vec![
             Trace {
-                name: "CSV accel X [m/s^2]".to_string(),
+                name: "Raw IMU accel X [m/s^2]".to_string(),
                 points: raw_accel_x.clone(),
             },
             Trace {
-                name: "CSV accel Y [m/s^2]".to_string(),
+                name: "Raw IMU accel Y [m/s^2]".to_string(),
                 points: raw_accel_y.clone(),
             },
             Trace {
-                name: "CSV accel Z [m/s^2]".to_string(),
+                name: "Raw IMU accel Z [m/s^2]".to_string(),
                 points: raw_accel_z.clone(),
             },
         ],
@@ -315,83 +316,83 @@ pub fn build_generic_replay_plot_data(
         ],
         eskf_bias_gyro: vec![
             Trace {
-                name: "ESKF bgx [dps]".to_string(),
+                name: "ESKF gyro bias X [deg/s]".to_string(),
                 points: eskf_bgx,
             },
             Trace {
-                name: "ESKF bgy [dps]".to_string(),
+                name: "ESKF gyro bias Y [deg/s]".to_string(),
                 points: eskf_bgy,
             },
             Trace {
-                name: "ESKF bgz [dps]".to_string(),
+                name: "ESKF gyro bias Z [deg/s]".to_string(),
                 points: eskf_bgz,
             },
         ],
         eskf_bias_accel: vec![
             Trace {
-                name: "ESKF bax [m/s^2]".to_string(),
+                name: "ESKF accel bias X [m/s^2]".to_string(),
                 points: eskf_bax,
             },
             Trace {
-                name: "ESKF bay [m/s^2]".to_string(),
+                name: "ESKF accel bias Y [m/s^2]".to_string(),
                 points: eskf_bay,
             },
             Trace {
-                name: "ESKF baz [m/s^2]".to_string(),
+                name: "ESKF accel bias Z [m/s^2]".to_string(),
                 points: eskf_baz,
             },
         ],
         eskf_meas_gyro: vec![
             Trace {
-                name: "ESKF body gyro x [deg/s]".to_string(),
+                name: "ESKF raw IMU gyro X [deg/s]".to_string(),
                 points: raw_gyro_x.clone(),
             },
             Trace {
-                name: "ESKF body gyro y [deg/s]".to_string(),
+                name: "ESKF raw IMU gyro Y [deg/s]".to_string(),
                 points: raw_gyro_y.clone(),
             },
             Trace {
-                name: "ESKF body gyro z [deg/s]".to_string(),
+                name: "ESKF raw IMU gyro Z [deg/s]".to_string(),
                 points: raw_gyro_z.clone(),
             },
         ],
         eskf_meas_accel: vec![
             Trace {
-                name: "ESKF body accel x [m/s^2]".to_string(),
+                name: "ESKF raw IMU accel X [m/s^2]".to_string(),
                 points: raw_accel_x.clone(),
             },
             Trace {
-                name: "ESKF body accel y [m/s^2]".to_string(),
+                name: "ESKF raw IMU accel Y [m/s^2]".to_string(),
                 points: raw_accel_y.clone(),
             },
             Trace {
-                name: "ESKF body accel z [m/s^2]".to_string(),
+                name: "ESKF raw IMU accel Z [m/s^2]".to_string(),
                 points: raw_accel_z.clone(),
             },
         ],
         eskf_cov_bias: vec![
             Trace {
-                name: "acc_x".to_string(),
+                name: "accel bias sigma X [m/s^2]".to_string(),
                 points: eskf_cov[12].clone(),
             },
             Trace {
-                name: "acc_y".to_string(),
+                name: "accel bias sigma Y [m/s^2]".to_string(),
                 points: eskf_cov[13].clone(),
             },
             Trace {
-                name: "acc_z".to_string(),
+                name: "accel bias sigma Z [m/s^2]".to_string(),
                 points: eskf_cov[14].clone(),
             },
             Trace {
-                name: "gyro_x".to_string(),
+                name: "gyro bias sigma X [deg/s]".to_string(),
                 points: eskf_cov[9].clone(),
             },
             Trace {
-                name: "gyro_y".to_string(),
+                name: "gyro bias sigma Y [deg/s]".to_string(),
                 points: eskf_cov[10].clone(),
             },
             Trace {
-                name: "gyro_z".to_string(),
+                name: "gyro bias sigma Z [deg/s]".to_string(),
                 points: eskf_cov[11].clone(),
             },
         ],
@@ -417,7 +418,7 @@ pub fn build_generic_replay_plot_data(
         ],
         eskf_map: vec![
             Trace {
-                name: "Generic GNSS path (lon,lat)".to_string(),
+                name: "GNSS path (lon,lat)".to_string(),
                 points: gnss_map,
             },
             Trace {
@@ -696,11 +697,11 @@ fn populate_align_traces(
     ];
     data.align_flags = vec![
         Trace {
-            name: "straight core valid".to_string(),
+            name: "straight window accepted".to_string(),
             points: straight_valid,
         },
         Trace {
-            name: "turn core valid".to_string(),
+            name: "turn window accepted".to_string(),
             points: turn_valid,
         },
         Trace {
@@ -710,43 +711,43 @@ fn populate_align_traces(
     ];
     data.align_roll_contrib = vec![
         Trace {
-            name: "gravity roll dx [deg]".to_string(),
+            name: "gravity roll update [deg]".to_string(),
             points: gravity_roll,
         },
         Trace {
-            name: "horizontal roll dx [deg]".to_string(),
+            name: "horizontal accel roll update [deg]".to_string(),
             points: horiz_roll,
         },
         Trace {
-            name: "turn roll dx [deg]".to_string(),
+            name: "turn gyro roll update [deg]".to_string(),
             points: turn_roll,
         },
     ];
     data.align_pitch_contrib = vec![
         Trace {
-            name: "gravity pitch dx [deg]".to_string(),
+            name: "gravity pitch update [deg]".to_string(),
             points: gravity_pitch,
         },
         Trace {
-            name: "horizontal pitch dx [deg]".to_string(),
+            name: "horizontal accel pitch update [deg]".to_string(),
             points: horiz_pitch,
         },
         Trace {
-            name: "turn pitch dx [deg]".to_string(),
+            name: "turn gyro pitch update [deg]".to_string(),
             points: turn_pitch,
         },
     ];
     data.align_yaw_contrib = vec![
         Trace {
-            name: "gravity yaw dx [deg]".to_string(),
+            name: "gravity yaw update [deg]".to_string(),
             points: gravity_yaw,
         },
         Trace {
-            name: "horizontal yaw dx [deg]".to_string(),
+            name: "horizontal accel yaw update [deg]".to_string(),
             points: horiz_yaw,
         },
         Trace {
-            name: "turn yaw dx [deg]".to_string(),
+            name: "turn gyro yaw update [deg]".to_string(),
             points: turn_yaw,
         },
     ];
@@ -1041,29 +1042,29 @@ fn populate_loose_traces(
     ];
     data.loose_bias_gyro = vec![
         Trace {
-            name: "Loose bgx [deg/s]".to_string(),
+            name: "Loose gyro bias X [deg/s]".to_string(),
             points: bgx,
         },
         Trace {
-            name: "Loose bgy [deg/s]".to_string(),
+            name: "Loose gyro bias Y [deg/s]".to_string(),
             points: bgy,
         },
         Trace {
-            name: "Loose bgz [deg/s]".to_string(),
+            name: "Loose gyro bias Z [deg/s]".to_string(),
             points: bgz,
         },
     ];
     data.loose_bias_accel = vec![
         Trace {
-            name: "Loose bax [m/s^2]".to_string(),
+            name: "Loose accel bias X [m/s^2]".to_string(),
             points: bax,
         },
         Trace {
-            name: "Loose bay [m/s^2]".to_string(),
+            name: "Loose accel bias Y [m/s^2]".to_string(),
             points: bay,
         },
         Trace {
-            name: "Loose baz [m/s^2]".to_string(),
+            name: "Loose accel bias Z [m/s^2]".to_string(),
             points: baz,
         },
     ];
@@ -1169,6 +1170,7 @@ fn append_eskf_sample(
     t_s: f64,
     fusion: &SensorFusion,
     ref_gnss: Option<GenericGnssSample>,
+    ref_ecef: Option<[f64; 3]>,
     pos_n: &mut Vec<[f64; 2]>,
     pos_e: &mut Vec<[f64; 2]>,
     pos_d: &mut Vec<[f64; 2]>,
@@ -1196,12 +1198,14 @@ fn append_eskf_sample(
     let Some(eskf) = fusion.eskf() else {
         return;
     };
-    pos_n.push([t_s, eskf.nominal.pn as f64]);
-    pos_e.push([t_s, eskf.nominal.pe as f64]);
-    pos_d.push([t_s, eskf.nominal.pd as f64]);
-    vel_n.push([t_s, eskf.nominal.vn as f64]);
-    vel_e.push([t_s, eskf.nominal.ve as f64]);
-    vel_d.push([t_s, eskf.nominal.vd as f64]);
+    let display_pos = eskf_display_position_ned(fusion, eskf, ref_gnss, ref_ecef);
+    let display_vel = eskf_display_velocity_ned(fusion, eskf, ref_gnss);
+    pos_n.push([t_s, display_pos[0]]);
+    pos_e.push([t_s, display_pos[1]]);
+    pos_d.push([t_s, display_pos[2]]);
+    vel_n.push([t_s, display_vel[0]]);
+    vel_e.push([t_s, display_vel[1]]);
+    vel_d.push([t_s, display_vel[2]]);
 
     let q_vehicle = eskf_vehicle_attitude_q(eskf);
     let (r, p, y) = quat_rpy_deg(
@@ -1238,15 +1242,7 @@ fn append_eskf_sample(
         trace.push([t_s, eskf.p[i][i].max(0.0).sqrt() as f64]);
     }
 
-    if let Some(ref_sample) = ref_gnss {
-        let (lat, lon, _) = ned_to_lla_exact(
-            eskf.nominal.pn as f64,
-            eskf.nominal.pe as f64,
-            eskf.nominal.pd as f64,
-            ref_sample.lat_deg,
-            ref_sample.lon_deg,
-            ref_sample.height_m,
-        );
+    if let Some([lat, lon, _]) = fusion.position_lla_f64() {
         map.push([lon, lat]);
         if outage_active {
             outage_map.push([lon, lat]);
@@ -1264,6 +1260,49 @@ fn append_eskf_sample(
             yaw_deg: y,
         });
     }
+}
+
+fn eskf_display_position_ned(
+    fusion: &SensorFusion,
+    eskf: &sensor_fusion::eskf_types::EskfState,
+    ref_gnss: Option<GenericGnssSample>,
+    ref_ecef: Option<[f64; 3]>,
+) -> [f64; 3] {
+    if let (Some([lat, lon, h]), Some(ref_sample), Some(ref_ecef)) =
+        (fusion.position_lla_f64(), ref_gnss, ref_ecef)
+    {
+        let ecef = lla_to_ecef(lat, lon, h);
+        return ecef_to_ned(ecef, ref_ecef, ref_sample.lat_deg, ref_sample.lon_deg);
+    }
+    [
+        eskf.nominal.pn as f64,
+        eskf.nominal.pe as f64,
+        eskf.nominal.pd as f64,
+    ]
+}
+
+fn eskf_display_velocity_ned(
+    fusion: &SensorFusion,
+    eskf: &sensor_fusion::eskf_types::EskfState,
+    ref_gnss: Option<GenericGnssSample>,
+) -> [f64; 3] {
+    if let (Some(anchor), Some(ref_sample)) = (fusion.anchor_lla_debug(), ref_gnss) {
+        let vel_ecef = ned_vector_to_ecef(
+            anchor[0] as f64,
+            anchor[1] as f64,
+            [
+                eskf.nominal.vn as f64,
+                eskf.nominal.ve as f64,
+                eskf.nominal.vd as f64,
+            ],
+        );
+        return ecef_vector_to_ned(ref_sample.lat_deg, ref_sample.lon_deg, vel_ecef);
+    }
+    [
+        eskf.nominal.vn as f64,
+        eskf.nominal.ve as f64,
+        eskf.nominal.vd as f64,
+    ]
 }
 
 fn eskf_vehicle_attitude_q(eskf: &sensor_fusion::eskf_types::EskfState) -> [f64; 4] {

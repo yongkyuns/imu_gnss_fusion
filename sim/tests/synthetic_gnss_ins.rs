@@ -586,18 +586,18 @@ fn synthetic_inputs_populate_visualizer_eskf_traces() -> Result<()> {
         "imu_raw_gyro",
         &data.imu_raw_gyro,
         &[
-            "Synthetic body gyro x [deg/s]",
-            "Synthetic body gyro y [deg/s]",
-            "Synthetic body gyro z [deg/s]",
+            "Synthetic raw IMU gyro X [deg/s]",
+            "Synthetic raw IMU gyro Y [deg/s]",
+            "Synthetic raw IMU gyro Z [deg/s]",
         ],
     )?;
     require_trace_schema(
         "imu_raw_accel",
         &data.imu_raw_accel,
         &[
-            "Synthetic body accel x [m/s^2]",
-            "Synthetic body accel y [m/s^2]",
-            "Synthetic body accel z [m/s^2]",
+            "Synthetic raw IMU accel X [m/s^2]",
+            "Synthetic raw IMU accel Y [m/s^2]",
+            "Synthetic raw IMU accel Z [m/s^2]",
         ],
     )?;
     require_trace_schema(
@@ -651,9 +651,9 @@ fn synthetic_inputs_populate_visualizer_eskf_traces() -> Result<()> {
         "eskf_misalignment",
         &data.eskf_misalignment,
         &[
-            "ESKF full mount roll [deg]",
-            "ESKF full mount pitch [deg]",
-            "ESKF full mount yaw [deg]",
+            "ESKF mount roll [deg]",
+            "ESKF mount pitch [deg]",
+            "ESKF mount yaw [deg]",
             "ESKF mount quaternion error [deg]",
             "Synthetic truth mount roll [deg]",
             "Synthetic truth mount pitch [deg]",

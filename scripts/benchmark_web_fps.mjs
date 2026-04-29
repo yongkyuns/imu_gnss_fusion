@@ -45,6 +45,8 @@ Options:
                           Browser device scale factor / DPR (default: 1)
   --scenario <name>       Built-in visualizer scenario for ?bench=1 (default: city_blocks)
   --dataset <id>          Hosted dataset id to auto-load with ?dataset=<id>
+  --dataset-timeout-ms <n>
+                          Dataset auto-load timeout (default: 30000)
   --activity <mode>       none or mouse; mouse moves over the canvas during sampling (default: mouse)
   --min-fps <n>           Exit non-zero if mean FPS is below this threshold
   --json                  Print the full JSON result instead of a short text summary
@@ -64,6 +66,7 @@ function parseArgs(argv) {
     deviceScaleFactor: 1,
     scenario: "city_blocks",
     dataset: "",
+    datasetTimeoutMs: 30000,
     activity: "mouse",
     minFps: null,
     json: false,
@@ -109,6 +112,9 @@ function parseArgs(argv) {
         break;
       case "--dataset":
         args.dataset = next();
+        break;
+      case "--dataset-timeout-ms":
+        args.datasetTimeoutMs = parsePositiveInt(arg, next());
         break;
       case "--activity":
         args.activity = next();
@@ -694,12 +700,17 @@ async function main() {
           const perf = window.__imuGnssFusionPerf;
           const status = perf && perf.status ? String(perf.status) : "";
           if (status.startsWith("Dataset loaded:")) return { ok: true, statusText: status };
-          if (status.startsWith("Dataset load failed:") || status.startsWith("Dataset fetched but")) {
+          if (
+            status.startsWith("Dataset load failed:") ||
+            status.startsWith("Dataset fetched but") ||
+            status.startsWith("CSV replay failed:") ||
+            status.startsWith("Replay result decode failed:")
+          ) {
             return { ok: false, statusText: status };
           }
           return false;
         })()`,
-        30000,
+        args.datasetTimeoutMs,
         "dataset auto-load",
       );
       if (!datasetReady.ok) {

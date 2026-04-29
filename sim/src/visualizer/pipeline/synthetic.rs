@@ -246,8 +246,8 @@ pub fn build_synthetic_plot_data(
                     &mut eskf_baz,
                     &mut eskf_cov,
                 );
-                if let Some([lat, lon, _h]) = fusion.position_lla() {
-                    eskf_map.push([lon as f64, lat as f64]);
+                if let Some([lat, lon, _h]) = fusion.position_lla_f64() {
+                    eskf_map.push([lon, lat]);
                     let q_vehicle = eskf_vehicle_attitude_q(eskf);
                     let (_, _, yaw) = quat_rpy_deg(
                         q_vehicle[0] as f32,
@@ -257,12 +257,12 @@ pub fn build_synthetic_plot_data(
                     );
                     eskf_heading.push(HeadingSample {
                         t_s: sample.t_s,
-                        lon_deg: lon as f64,
-                        lat_deg: lat as f64,
+                        lon_deg: lon,
+                        lat_deg: lat,
                         yaw_deg: yaw,
                     });
                     if in_outage(sample.t_s, &outage_windows) {
-                        eskf_outage_map.push([lon as f64, lat as f64]);
+                        eskf_outage_map.push([lon, lat]);
                     }
                 }
             }
@@ -294,29 +294,29 @@ pub fn build_synthetic_plot_data(
         ],
         imu_raw_gyro: vec![
             Trace {
-                name: "Synthetic body gyro x [deg/s]".to_string(),
+                name: "Synthetic raw IMU gyro X [deg/s]".to_string(),
                 points: raw_gyro_x.clone(),
             },
             Trace {
-                name: "Synthetic body gyro y [deg/s]".to_string(),
+                name: "Synthetic raw IMU gyro Y [deg/s]".to_string(),
                 points: raw_gyro_y.clone(),
             },
             Trace {
-                name: "Synthetic body gyro z [deg/s]".to_string(),
+                name: "Synthetic raw IMU gyro Z [deg/s]".to_string(),
                 points: raw_gyro_z.clone(),
             },
         ],
         imu_raw_accel: vec![
             Trace {
-                name: "Synthetic body accel x [m/s^2]".to_string(),
+                name: "Synthetic raw IMU accel X [m/s^2]".to_string(),
                 points: raw_accel_x.clone(),
             },
             Trace {
-                name: "Synthetic body accel y [m/s^2]".to_string(),
+                name: "Synthetic raw IMU accel Y [m/s^2]".to_string(),
                 points: raw_accel_y.clone(),
             },
             Trace {
-                name: "Synthetic body accel z [m/s^2]".to_string(),
+                name: "Synthetic raw IMU accel Z [m/s^2]".to_string(),
                 points: raw_accel_z.clone(),
             },
         ],
@@ -422,57 +422,57 @@ pub fn build_synthetic_plot_data(
         ],
         eskf_meas_gyro: vec![
             Trace {
-                name: "ESKF body gyro x [deg/s]".to_string(),
+                name: "ESKF raw IMU gyro X [deg/s]".to_string(),
                 points: raw_gyro_x,
             },
             Trace {
-                name: "ESKF body gyro y [deg/s]".to_string(),
+                name: "ESKF raw IMU gyro Y [deg/s]".to_string(),
                 points: raw_gyro_y,
             },
             Trace {
-                name: "ESKF body gyro z [deg/s]".to_string(),
+                name: "ESKF raw IMU gyro Z [deg/s]".to_string(),
                 points: raw_gyro_z,
             },
         ],
         eskf_meas_accel: vec![
             Trace {
-                name: "ESKF body accel x [m/s^2]".to_string(),
+                name: "ESKF raw IMU accel X [m/s^2]".to_string(),
                 points: raw_accel_x,
             },
             Trace {
-                name: "ESKF body accel y [m/s^2]".to_string(),
+                name: "ESKF raw IMU accel Y [m/s^2]".to_string(),
                 points: raw_accel_y,
             },
             Trace {
-                name: "ESKF body accel z [m/s^2]".to_string(),
+                name: "ESKF raw IMU accel Z [m/s^2]".to_string(),
                 points: raw_accel_z,
             },
         ],
         eskf_bias_gyro: vec![
             Trace {
-                name: "ESKF gyro bias x [deg/s]".to_string(),
+                name: "ESKF gyro bias X [deg/s]".to_string(),
                 points: eskf_bgx,
             },
             Trace {
-                name: "ESKF gyro bias y [deg/s]".to_string(),
+                name: "ESKF gyro bias Y [deg/s]".to_string(),
                 points: eskf_bgy,
             },
             Trace {
-                name: "ESKF gyro bias z [deg/s]".to_string(),
+                name: "ESKF gyro bias Z [deg/s]".to_string(),
                 points: eskf_bgz,
             },
         ],
         eskf_bias_accel: vec![
             Trace {
-                name: "ESKF accel bias x [m/s^2]".to_string(),
+                name: "ESKF accel bias X [m/s^2]".to_string(),
                 points: eskf_bax,
             },
             Trace {
-                name: "ESKF accel bias y [m/s^2]".to_string(),
+                name: "ESKF accel bias Y [m/s^2]".to_string(),
                 points: eskf_bay,
             },
             Trace {
-                name: "ESKF accel bias z [m/s^2]".to_string(),
+                name: "ESKF accel bias Z [m/s^2]".to_string(),
                 points: eskf_baz,
             },
         ],
@@ -510,15 +510,15 @@ pub fn build_synthetic_plot_data(
             .collect(),
         eskf_misalignment: vec![
             Trace {
-                name: "ESKF full mount roll [deg]".to_string(),
+                name: "ESKF mount roll [deg]".to_string(),
                 points: eskf_mount_roll,
             },
             Trace {
-                name: "ESKF full mount pitch [deg]".to_string(),
+                name: "ESKF mount pitch [deg]".to_string(),
                 points: eskf_mount_pitch,
             },
             Trace {
-                name: "ESKF full mount yaw [deg]".to_string(),
+                name: "ESKF mount yaw [deg]".to_string(),
                 points: eskf_mount_yaw,
             },
             Trace {

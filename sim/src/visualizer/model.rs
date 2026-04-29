@@ -1,11 +1,13 @@
 use sensor_fusion::fusion::EskfMountSource;
 
+#[cfg_attr(target_arch = "wasm32", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone, Default)]
 pub struct Trace {
     pub name: String,
     pub points: Vec<[f64; 2]>,
 }
 
+#[cfg_attr(target_arch = "wasm32", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Default)]
 pub struct PlotData {
     pub speed: Vec<Trace>,
@@ -96,6 +98,7 @@ impl EkfImuSource {
     }
 }
 
+#[cfg_attr(target_arch = "wasm32", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone, Copy, Default)]
 pub struct HeadingSample {
     pub t_s: f64,
@@ -106,10 +109,12 @@ pub struct HeadingSample {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Page {
-    Signals,
-    EskfCompare,
-    LooseCompare,
-    EskfBump,
-    AlignCompare,
-    MapDark,
+    Run,
+    Overview,
+    Map,
+    Motion,
+    Mount,
+    Calibration,
+    Sensors,
+    Diagnostics,
 }

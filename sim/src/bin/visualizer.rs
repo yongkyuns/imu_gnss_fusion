@@ -15,15 +15,19 @@ use sim::datasets::generic_replay::{
     load_reference_mount_samples,
 };
 #[cfg(not(target_arch = "wasm32"))]
-use sim::visualizer::model::EkfImuSource;
+use sim::eval::state_summary::{SummaryMode, summarize_trace_pair};
 #[cfg(not(target_arch = "wasm32"))]
-use sim::visualizer::pipeline::generic::{GenericReplayInput, build_generic_replay_plot_data};
+use sim::visualizer::model::{EkfImuSource, PlotData, Trace};
+#[cfg(not(target_arch = "wasm32"))]
+use sim::visualizer::pipeline::generic::GenericReplayInput;
 #[cfg(not(target_arch = "wasm32"))]
 use sim::visualizer::pipeline::synthetic::{
     SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_plot_data,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use sim::visualizer::pipeline::{EkfCompareConfig, GnssOutageConfig};
+#[cfg(not(target_arch = "wasm32"))]
+use sim::visualizer::replay_job::{GenericReplayJobConfig, run_generic_replay_job};
 #[cfg(not(target_arch = "wasm32"))]
 use sim::visualizer::stats::{
     group_stats, max_gap_sec, max_gap_trace, max_step_abs, trace_stats, trace_time_bounds,
@@ -252,8 +256,10 @@ fn main() -> Result<()> {
             reference_attitude,
             reference_mount,
         };
-        let data =
-            build_generic_replay_plot_data(&replay, args.misalignment, ekf_cfg, gnss_outages);
+        let data = run_generic_replay_job(
+            &replay,
+            GenericReplayJobConfig::full(args.misalignment, ekf_cfg, gnss_outages),
+        );
         (
             data,
             false,
@@ -448,6 +454,8 @@ fn main() -> Result<()> {
             eprintln!("[profile] max_step_abs group={} value={:.6}", group, step);
         }
     }
+    print_map_bounds("eskf_map", &data.eskf_map);
+    print_map_bounds("loose_map", &data.loose_map);
     if let Some(t_s) = args.dump_align_axis_time_s {
         dump_traces_near_time(
             "align_cmp_att",
@@ -500,6 +508,7 @@ fn main() -> Result<()> {
             args.dump_window_s,
         );
     }
+    print_reference_error_summaries(&data);
     if args.profile_only {
         return Ok(());
     }
@@ -536,18 +545,107 @@ pub async fn start_visualizer(canvas_id: &str) -> std::result::Result<(), JsValu
     .await
 }
 
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn build_generic_replay_job_json(request_json: &str) -> std::result::Result<String, JsValue> {
+    let request: WebReplayJobRequest = serde_json::from_str(request_json)
+        .map_err(|err| JsValue::from_str(&format!("invalid replay job request: {err}")))?;
+    let label = request.label.unwrap_or_else(|| "CSV replay".to_string());
+    let response = match build_generic_replay_plot_data_json(
+        request.imu_csv.as_deref().unwrap_or_default(),
+        request.gnss_csv.as_deref().unwrap_or_default(),
+        request.reference_attitude_csv,
+        request.reference_mount_csv,
+    ) {
+        Ok(json) => WebReplayJobResponse {
+            ok: true,
+            job_id: request.job_id,
+            label,
+            imu_name: request.imu_name.or_else(|| Some("imu.csv".to_string())),
+            gnss_name: request.gnss_name.or_else(|| Some("gnss.csv".to_string())),
+            json: Some(json),
+            error: None,
+        },
+        Err(err) => WebReplayJobResponse {
+            ok: false,
+            job_id: request.job_id,
+            label,
+            imu_name: None,
+            gnss_name: None,
+            json: None,
+            error: Some(js_error_string(err)),
+        },
+    };
+    serde_json::to_string(&response)
+        .map_err(|err| JsValue::from_str(&format!("failed to serialize replay job: {err}")))
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WebReplayJobRequest {
+    #[serde(default)]
+    job_id: u64,
+    label: Option<String>,
+    imu_name: Option<String>,
+    gnss_name: Option<String>,
+    imu_csv: Option<String>,
+    gnss_csv: Option<String>,
+    reference_attitude_csv: Option<String>,
+    reference_mount_csv: Option<String>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebReplayJobResponse {
+    ok: bool,
+    job_id: u64,
+    label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    imu_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    gnss_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    json: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[cfg(target_arch = "wasm32")]
+fn js_error_string(error: JsValue) -> String {
+    error.as_string().unwrap_or_else(|| format!("{error:?}"))
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn build_generic_replay_plot_data_json(
+    imu_csv: &str,
+    gnss_csv: &str,
+    reference_attitude_csv: Option<String>,
+    reference_mount_csv: Option<String>,
+) -> std::result::Result<String, JsValue> {
+    let data = sim::visualizer::replay_job::run_generic_csv_replay_job(
+        sim::visualizer::replay_job::GenericReplayCsvJob {
+            imu_csv,
+            gnss_csv,
+            reference_attitude_csv: reference_attitude_csv.as_deref(),
+            reference_mount_csv: reference_mount_csv.as_deref(),
+            config: sim::visualizer::replay_job::GenericReplayJobConfig::web_transport(),
+        },
+    )
+    .map_err(|err| JsValue::from_str(&format!("CSV replay failed: {err}")))?;
+    serde_json::to_string(&data)
+        .map_err(|err| JsValue::from_str(&format!("failed to serialize replay data: {err}")))
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn parse_misalignment(s: &str) -> Result<EkfImuSource, String> {
     EkfImuSource::from_cli_value(s)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn dump_traces_near_time(
-    group: &str,
-    traces: &[sim::visualizer::model::Trace],
-    t_s: f64,
-    window_s: f64,
-) {
+fn dump_traces_near_time(group: &str, traces: &[Trace], t_s: f64, window_s: f64) {
     let half = 0.5 * window_s.abs();
     eprintln!(
         "[dump] group={} center_t_s={:.3} window_s={:.3}",
@@ -566,6 +664,292 @@ fn dump_traces_near_time(
         }
         if !any {
             eprintln!("[dump] trace={} no points in window", trace.name);
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn print_reference_error_summaries(data: &PlotData) {
+    for (group, system, state, trace_name, reference_name, mode) in [
+        (
+            "pos",
+            "ESKF",
+            "N",
+            "ESKF posN [m]",
+            "GNSS posN [m]",
+            SummaryMode::Linear,
+        ),
+        (
+            "pos",
+            "ESKF",
+            "E",
+            "ESKF posE [m]",
+            "GNSS posE [m]",
+            SummaryMode::Linear,
+        ),
+        (
+            "pos",
+            "ESKF",
+            "D",
+            "ESKF posD [m]",
+            "GNSS posD [m]",
+            SummaryMode::Linear,
+        ),
+        (
+            "pos",
+            "Loose",
+            "N",
+            "Loose posN [m]",
+            "GNSS posN [m]",
+            SummaryMode::Linear,
+        ),
+        (
+            "pos",
+            "Loose",
+            "E",
+            "Loose posE [m]",
+            "GNSS posE [m]",
+            SummaryMode::Linear,
+        ),
+        (
+            "pos",
+            "Loose",
+            "D",
+            "Loose posD [m]",
+            "GNSS posD [m]",
+            SummaryMode::Linear,
+        ),
+        (
+            "vel",
+            "ESKF",
+            "N",
+            "ESKF velN [m/s]",
+            "GNSS velN [m/s]",
+            SummaryMode::Linear,
+        ),
+        (
+            "vel",
+            "ESKF",
+            "E",
+            "ESKF velE [m/s]",
+            "GNSS velE [m/s]",
+            SummaryMode::Linear,
+        ),
+        (
+            "vel",
+            "ESKF",
+            "D",
+            "ESKF velD [m/s]",
+            "GNSS velD [m/s]",
+            SummaryMode::Linear,
+        ),
+        (
+            "vel",
+            "Loose",
+            "N",
+            "Loose velN [m/s]",
+            "GNSS velN [m/s]",
+            SummaryMode::Linear,
+        ),
+        (
+            "vel",
+            "Loose",
+            "E",
+            "Loose velE [m/s]",
+            "GNSS velE [m/s]",
+            SummaryMode::Linear,
+        ),
+        (
+            "vel",
+            "Loose",
+            "D",
+            "Loose velD [m/s]",
+            "GNSS velD [m/s]",
+            SummaryMode::Linear,
+        ),
+        (
+            "att",
+            "ESKF",
+            "roll",
+            "ESKF roll [deg]",
+            "Reference roll [deg]",
+            SummaryMode::AngleDeg,
+        ),
+        (
+            "att",
+            "ESKF",
+            "pitch",
+            "ESKF pitch [deg]",
+            "Reference pitch [deg]",
+            SummaryMode::AngleDeg,
+        ),
+        (
+            "att",
+            "ESKF",
+            "yaw",
+            "ESKF yaw [deg]",
+            "Reference yaw [deg]",
+            SummaryMode::AngleDeg,
+        ),
+        (
+            "att",
+            "Loose",
+            "roll",
+            "Loose roll [deg]",
+            "Reference roll [deg]",
+            SummaryMode::AngleDeg,
+        ),
+        (
+            "att",
+            "Loose",
+            "pitch",
+            "Loose pitch [deg]",
+            "Reference pitch [deg]",
+            SummaryMode::AngleDeg,
+        ),
+        (
+            "att",
+            "Loose",
+            "yaw",
+            "Loose yaw [deg]",
+            "Reference yaw [deg]",
+            SummaryMode::AngleDeg,
+        ),
+        (
+            "mount",
+            "ESKF",
+            "roll",
+            "ESKF mount roll [deg]",
+            "Reference mount roll [deg]",
+            SummaryMode::AngleDeg,
+        ),
+        (
+            "mount",
+            "ESKF",
+            "pitch",
+            "ESKF mount pitch [deg]",
+            "Reference mount pitch [deg]",
+            SummaryMode::AngleDeg,
+        ),
+        (
+            "mount",
+            "ESKF",
+            "yaw",
+            "ESKF mount yaw [deg]",
+            "Reference mount yaw [deg]",
+            SummaryMode::AngleDeg,
+        ),
+        (
+            "mount",
+            "Loose",
+            "roll",
+            "Loose residual mount roll [deg]",
+            "Reference mount roll [deg]",
+            SummaryMode::AngleDeg,
+        ),
+        (
+            "mount",
+            "Loose",
+            "pitch",
+            "Loose residual mount pitch [deg]",
+            "Reference mount pitch [deg]",
+            SummaryMode::AngleDeg,
+        ),
+        (
+            "mount",
+            "Loose",
+            "yaw",
+            "Loose residual mount yaw [deg]",
+            "Reference mount yaw [deg]",
+            SummaryMode::AngleDeg,
+        ),
+    ] {
+        let traces = match (group, system) {
+            ("pos", "ESKF") | ("vel", "ESKF") => data.eskf_cmp_pos_or_vel(group),
+            ("pos", "Loose") => data.loose_cmp_pos.as_slice(),
+            ("vel", "Loose") => data.loose_cmp_vel.as_slice(),
+            ("att", "ESKF") => data.eskf_cmp_att.as_slice(),
+            ("att", "Loose") => data.loose_cmp_att.as_slice(),
+            ("mount", "ESKF") => data.eskf_misalignment.as_slice(),
+            ("mount", "Loose") => data.loose_misalignment.as_slice(),
+            _ => &[],
+        };
+        let reference_traces = match group {
+            "pos" => data.eskf_cmp_pos.as_slice(),
+            "vel" => data.eskf_cmp_vel.as_slice(),
+            _ => traces,
+        };
+        let Some(trace) = find_trace(traces, trace_name) else {
+            continue;
+        };
+        let Some(reference) = find_trace(reference_traces, reference_name) else {
+            continue;
+        };
+        if let Some(summary) =
+            summarize_trace_pair(system, state, trace, Some(reference), mode, None)
+        {
+            eprintln!(
+                "[profile] ref_error group={} system={} state={} samples={} final_err={:.6} mae={:.6} rmse={:.6} p95={:.6} tail_span={:.6} tail_drift={:.6}",
+                group,
+                system,
+                state,
+                summary.sample_count,
+                summary.final_error.unwrap_or(f64::NAN),
+                summary.mean_abs_error.unwrap_or(f64::NAN),
+                summary.rmse_error.unwrap_or(f64::NAN),
+                summary.p95_abs_error.unwrap_or(f64::NAN),
+                summary.tail_span_error.unwrap_or(f64::NAN),
+                summary.tail_drift_value,
+            );
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn find_trace<'a>(traces: &'a [Trace], name: &str) -> Option<&'a Trace> {
+    traces.iter().find(|trace| trace.name == name)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+trait PlotDataProfileExt {
+    fn eskf_cmp_pos_or_vel(&self, group: &str) -> &[Trace];
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl PlotDataProfileExt for PlotData {
+    fn eskf_cmp_pos_or_vel(&self, group: &str) -> &[Trace] {
+        match group {
+            "pos" => &self.eskf_cmp_pos,
+            "vel" => &self.eskf_cmp_vel,
+            _ => &[],
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn print_map_bounds(group: &str, traces: &[Trace]) {
+    for trace in traces {
+        let mut lon_min = f64::INFINITY;
+        let mut lon_max = f64::NEG_INFINITY;
+        let mut lat_min = f64::INFINITY;
+        let mut lat_max = f64::NEG_INFINITY;
+        let mut n = 0usize;
+        for point in &trace.points {
+            let lon = point[0];
+            let lat = point[1];
+            if lon.is_finite() && lat.is_finite() {
+                lon_min = lon_min.min(lon);
+                lon_max = lon_max.max(lon);
+                lat_min = lat_min.min(lat);
+                lat_max = lat_max.max(lat);
+                n += 1;
+            }
+        }
+        if n > 0 {
+            eprintln!(
+                "[profile] map_bounds group={} trace={} points={} lon=[{:.8},{:.8}] lat=[{:.8},{:.8}]",
+                group, trace.name, n, lon_min, lon_max, lat_min, lat_max
+            );
         }
     }
 }

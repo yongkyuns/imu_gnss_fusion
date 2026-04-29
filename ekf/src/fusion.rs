@@ -692,6 +692,13 @@ impl SensorFusion {
 
     /// Returns the current ESKF position as `[lat_deg, lon_deg, height_m]`.
     pub fn position_lla(&self) -> Option<[f32; 3]> {
+        self.position_lla_f64()
+            .map(|lla| [lla[0] as f32, lla[1] as f32, lla[2] as f32])
+    }
+
+    /// Returns the current ESKF position as `[lat_deg, lon_deg, height_m]` using
+    /// double precision for the final ECEF-to-geodetic conversion.
+    pub fn position_lla_f64(&self) -> Option<[f64; 3]> {
         let eskf = self.eskf()?;
         if !self.anchor.valid {
             return None;
@@ -716,7 +723,7 @@ impl SensorFusion {
                 + c_en[2][1] as f64 * p[1]
                 + c_en[2][2] as f64 * p[2],
         ];
-        Some(ecef_to_lla(ecef))
+        Some(ecef_to_lla_f64(ecef))
     }
 
     /// Returns the internal align filter after stationary bootstrap.
@@ -1289,7 +1296,7 @@ fn lla_to_ecef(lat_deg: f64, lon_deg: f64, height_m: f64) -> [f64; 3] {
     ]
 }
 
-fn ecef_to_lla(ecef_m: [f64; 3]) -> [f32; 3] {
+fn ecef_to_lla_f64(ecef_m: [f64; 3]) -> [f64; 3] {
     let x = ecef_m[0];
     let y = ecef_m[1];
     let z = ecef_m[2];
@@ -1301,7 +1308,7 @@ fn ecef_to_lla(ecef_m: [f64; 3]) -> [f32; 3] {
     let lat = (z + ep2 * b * th.sin().powi(3)).atan2(p - WGS84_E2 * WGS84_A_M * th.cos().powi(3));
     let n = WGS84_A_M / (1.0 - WGS84_E2 * lat.sin().powi(2)).sqrt();
     let h = p / lat.cos() - n;
-    [lat.to_degrees() as f32, lon.to_degrees() as f32, h as f32]
+    [lat.to_degrees(), lon.to_degrees(), h]
 }
 
 fn ecef_to_anchor_ned(anchor: &Anchor, ecef_m: [f64; 3]) -> [f32; 3] {
