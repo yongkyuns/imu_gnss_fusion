@@ -109,7 +109,6 @@ pub struct HeadingSample {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Page {
-    Run,
     Overview,
     Map,
     Motion,

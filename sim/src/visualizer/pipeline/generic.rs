@@ -1,6 +1,8 @@
 use anyhow::{Context, Result, bail};
 use sensor_fusion::fusion::SensorFusion;
-use sensor_fusion::loose::{LOOSE_ERROR_STATES, LooseFilter, LooseImuDelta, LoosePredictNoise};
+use sensor_fusion::loose::{
+    LOOSE_ERROR_STATES, LooseFilter, LooseImuDelta, LooseNominalState, LoosePredictNoise,
+};
 
 use crate::datasets::generic_replay::{
     GenericGnssSample, GenericImuSample, GenericReferenceRpySample, fusion_gnss_sample,
@@ -1042,29 +1044,29 @@ fn populate_loose_traces(
     ];
     data.loose_bias_gyro = vec![
         Trace {
-            name: "Loose gyro bias X [deg/s]".to_string(),
+            name: "Loose gyro sensor bias X [deg/s]".to_string(),
             points: bgx,
         },
         Trace {
-            name: "Loose gyro bias Y [deg/s]".to_string(),
+            name: "Loose gyro sensor bias Y [deg/s]".to_string(),
             points: bgy,
         },
         Trace {
-            name: "Loose gyro bias Z [deg/s]".to_string(),
+            name: "Loose gyro sensor bias Z [deg/s]".to_string(),
             points: bgz,
         },
     ];
     data.loose_bias_accel = vec![
         Trace {
-            name: "Loose accel bias X [m/s^2]".to_string(),
+            name: "Loose accel sensor bias X [m/s^2]".to_string(),
             points: bax,
         },
         Trace {
-            name: "Loose accel bias Y [m/s^2]".to_string(),
+            name: "Loose accel sensor bias Y [m/s^2]".to_string(),
             points: bay,
         },
         Trace {
-            name: "Loose accel bias Z [m/s^2]".to_string(),
+            name: "Loose accel sensor bias Z [m/s^2]".to_string(),
             points: baz,
         },
     ];
@@ -1430,12 +1432,14 @@ fn append_loose_sample(
     mount_pitch.push([t_s, mp]);
     mount_yaw.push([t_s, my]);
 
-    bgx.push([t_s, (n.bgx as f64).to_degrees()]);
-    bgy.push([t_s, (n.bgy as f64).to_degrees()]);
-    bgz.push([t_s, (n.bgz as f64).to_degrees()]);
-    bax.push([t_s, n.bax as f64]);
-    bay.push([t_s, n.bay as f64]);
-    baz.push([t_s, n.baz as f64]);
+    let gyro_sensor_bias_dps = loose_gyro_sensor_bias_dps(n);
+    let accel_sensor_bias_mps2 = loose_accel_sensor_bias_mps2(n);
+    bgx.push([t_s, gyro_sensor_bias_dps[0]]);
+    bgy.push([t_s, gyro_sensor_bias_dps[1]]);
+    bgz.push([t_s, gyro_sensor_bias_dps[2]]);
+    bax.push([t_s, accel_sensor_bias_mps2[0]]);
+    bay.push([t_s, accel_sensor_bias_mps2[1]]);
+    baz.push([t_s, accel_sensor_bias_mps2[2]]);
     sgx.push([t_s, n.sgx as f64]);
     sgy.push([t_s, n.sgy as f64]);
     sgz.push([t_s, n.sgz as f64]);
@@ -1452,6 +1456,18 @@ fn append_loose_sample(
     for (idx, dst) in cov_nonbias.iter_mut().enumerate() {
         dst.push([t_s, pmat[idx][idx].max(0.0).sqrt() as f64]);
     }
+}
+
+fn loose_gyro_sensor_bias_dps(n: &LooseNominalState) -> [f64; 3] {
+    [
+        -(n.bgx as f64).to_degrees(),
+        -(n.bgy as f64).to_degrees(),
+        -(n.bgz as f64).to_degrees(),
+    ]
+}
+
+fn loose_accel_sensor_bias_mps2(n: &LooseNominalState) -> [f64; 3] {
+    [-(n.bax as f64), -(n.bay as f64), -(n.baz as f64)]
 }
 
 fn default_loose_p_diag(gnss: GenericGnssSample) -> [f32; LOOSE_ERROR_STATES] {
@@ -1906,5 +1922,33 @@ impl Lcg64 {
             .wrapping_add(1442695040888963407);
         let v = self.state >> 11;
         (v as f64) * (1.0 / ((1u64 << 53) as f64))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loose_bias_display_converts_correction_state_to_sensor_bias() {
+        let nominal = LooseNominalState {
+            bgx: 1.0_f32.to_radians(),
+            bgy: -2.0_f32.to_radians(),
+            bgz: 0.5_f32.to_radians(),
+            bax: 0.1,
+            bay: -0.2,
+            baz: 0.3,
+            ..LooseNominalState::default()
+        };
+
+        let gyro_bias = loose_gyro_sensor_bias_dps(&nominal);
+        let accel_bias = loose_accel_sensor_bias_mps2(&nominal);
+
+        assert!((gyro_bias[0] + 1.0).abs() < 1.0e-6);
+        assert!((gyro_bias[1] - 2.0).abs() < 1.0e-6);
+        assert!((gyro_bias[2] + 0.5).abs() < 1.0e-6);
+        assert!((accel_bias[0] + 0.1).abs() < 1.0e-6);
+        assert!((accel_bias[1] - 0.2).abs() < 1.0e-6);
+        assert!((accel_bias[2] + 0.3).abs() < 1.0e-6);
     }
 }

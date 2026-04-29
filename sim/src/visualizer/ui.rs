@@ -5,7 +5,7 @@ use std::{cell::RefCell, io::Read, rc::Rc};
 
 use anyhow::Result;
 use eframe::egui;
-use egui_plot::{Legend, Line, Plot, PlotPoints, Points};
+use egui_plot::{Legend, Line, LineStyle, Plot, PlotPoints, Points, VLine};
 #[cfg(target_arch = "wasm32")]
 use flate2::read::GzDecoder;
 #[cfg(target_arch = "wasm32")]
@@ -44,17 +44,20 @@ struct TrackOverlay<'a> {
     traces: Vec<&'a Trace>,
     headings: Vec<&'a HeadingSample>,
     show_heading: bool,
+    cursor_t_s: Option<f64>,
 }
 
 impl Plugin for TrackOverlay<'_> {
     fn run(
         self: Box<Self>,
         ui: &mut egui::Ui,
-        _response: &egui::Response,
+        response: &egui::Response,
         projector: &walkers::Projector,
         map_memory: &MapMemory,
     ) {
-        let view = map_view_bounds(projector, ui.max_rect(), 0.15);
+        let map_rect = response.rect.intersect(ui.clip_rect());
+        let painter = ui.painter().with_clip_rect(map_rect);
+        let view = map_view_bounds(projector, map_rect, 0.15);
         let point_stride = map_trace_point_stride(map_memory.zoom());
         let min_step = map_trace_min_pixel_step(map_memory.zoom());
         let min_step_sq = min_step * min_step;
@@ -81,7 +84,7 @@ impl Plugin for TrackOverlay<'_> {
                 let lat = p[1];
                 if !lon.is_finite() || !lat.is_finite() || !view.contains(lon, lat) {
                     if segment.len() >= 2 {
-                        ui.painter().add(egui::epaint::PathShape::line(
+                        painter.add(egui::epaint::PathShape::line(
                             segment,
                             egui::Stroke::new(2.2, color),
                         ));
@@ -119,7 +122,7 @@ impl Plugin for TrackOverlay<'_> {
                 segment.push(pending);
             }
             if segment.len() >= 2 {
-                ui.painter().add(egui::epaint::PathShape::line(
+                painter.add(egui::epaint::PathShape::line(
                     segment,
                     egui::Stroke::new(2.2, color),
                 ));
@@ -136,15 +139,20 @@ impl Plugin for TrackOverlay<'_> {
                 let from = projector.project(lon_lat(h.lon_deg, h.lat_deg));
                 let (tip_lat, tip_lon) = heading_endpoint(h.lat_deg, h.lon_deg, h.yaw_deg, 6.0);
                 let to = projector.project(lon_lat(tip_lon, tip_lat));
-                ui.painter().line_segment(
+                painter.line_segment(
                     [egui::pos2(from.x, from.y), egui::pos2(to.x, to.y)],
                     egui::Stroke::new(1.8, egui::Color32::from_rgb(255, 255, 255)),
                 );
             }
         }
 
+        if let Some(t_s) = self.cursor_t_s {
+            draw_map_cursor_marker(&painter, projector, view, &self.headings, t_s);
+        }
+
         if self.show_heading
             && let Some(mouse_pos) = ui.input(|i| i.pointer.hover_pos())
+            && map_rect.contains(mouse_pos)
         {
             let mut best: Option<(f32, &HeadingSample, egui::Pos2)> = None;
             let step = (self.headings.len() / 200).max(1);
@@ -160,14 +168,12 @@ impl Plugin for TrackOverlay<'_> {
             if let Some((d2, h, p)) = best
                 && d2 <= 12.0_f32 * 12.0_f32
             {
-                ui.painter()
-                    .circle_filled(p, 3.0, egui::Color32::from_rgb(255, 220, 0));
+                painter.circle_filled(p, 3.0, egui::Color32::from_rgb(255, 220, 0));
                 let label = format!("t={:.2}s", h.t_s);
                 let bg_min = p + egui::vec2(8.0, -24.0);
                 let bg_rect = egui::Rect::from_min_size(bg_min, egui::vec2(78.0, 18.0));
-                ui.painter()
-                    .rect_filled(bg_rect, 4.0, egui::Color32::from_black_alpha(180));
-                ui.painter().text(
+                painter.rect_filled(bg_rect, 4.0, egui::Color32::from_black_alpha(180));
+                painter.text(
                     bg_min + egui::vec2(6.0, 2.0),
                     egui::Align2::LEFT_TOP,
                     label,
@@ -177,6 +183,66 @@ impl Plugin for TrackOverlay<'_> {
             }
         }
     }
+}
+
+fn draw_map_cursor_marker(
+    painter: &egui::Painter,
+    projector: &walkers::Projector,
+    view: MapViewBounds,
+    headings: &[&HeadingSample],
+    t_s: f64,
+) {
+    let Some(sample) = sample_heading_at(headings, t_s) else {
+        return;
+    };
+    if !view.contains(sample.lon_deg, sample.lat_deg) {
+        return;
+    }
+
+    let projected = projector.project(lon_lat(sample.lon_deg, sample.lat_deg));
+    let origin = egui::pos2(projected.x, projected.y);
+    let yaw = (sample.yaw_deg as f32).to_radians();
+    let dir = egui::vec2(yaw.sin(), -yaw.cos());
+    let tip = origin + dir * 24.0;
+    let side = egui::vec2(-dir.y, dir.x);
+    let color = egui::Color32::from_rgb(255, 220, 70);
+    painter.circle_filled(origin, 4.0, color);
+    painter.line_segment([origin, tip], egui::Stroke::new(2.2, color));
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            tip,
+            tip - dir * 8.0 + side * 4.5,
+            tip - dir * 8.0 - side * 4.5,
+        ],
+        color,
+        egui::Stroke::NONE,
+    ));
+
+    let label = format!("{t_s:.2}s");
+    let bg_min = origin + egui::vec2(8.0, 8.0);
+    let bg_rect = egui::Rect::from_min_size(bg_min, egui::vec2(62.0, 18.0));
+    painter.rect_filled(bg_rect, 4.0, egui::Color32::from_black_alpha(180));
+    painter.text(
+        bg_min + egui::vec2(6.0, 2.0),
+        egui::Align2::LEFT_TOP,
+        label,
+        egui::FontId::monospace(12.0),
+        egui::Color32::WHITE,
+    );
+}
+
+fn sample_heading_at(headings: &[&HeadingSample], t_s: f64) -> Option<HeadingSample> {
+    if !t_s.is_finite() || headings.is_empty() {
+        return None;
+    }
+    headings
+        .iter()
+        .min_by(|a, b| {
+            let da = (a.t_s - t_s).abs();
+            let db = (b.t_s - t_s).abs();
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|h| **h)
 }
 
 fn map_trace_min_pixel_step(zoom: f64) -> f32 {
@@ -256,8 +322,6 @@ fn map_view_bounds(
 
 pub struct App {
     data: PlotData,
-    show_egui_inspection: bool,
-    show_meas_accel: bool,
     has_itow: bool,
     fps_ema: f32,
     last_frame_time_s: f64,
@@ -270,6 +334,7 @@ pub struct App {
     show_gnss_map: bool,
     show_eskf: bool,
     show_loose: bool,
+    overview_cursor_t_s: Option<f64>,
     replay: Option<ReplayState>,
     replay_status: Option<String>,
     #[cfg(target_arch = "wasm32")]
@@ -286,6 +351,10 @@ pub struct App {
     web_mapbox_token_applied: String,
     #[cfg(target_arch = "wasm32")]
     web_scenario: WebSyntheticScenario,
+    #[cfg(target_arch = "wasm32")]
+    web_input_mode: WebInputMode,
+    #[cfg(target_arch = "wasm32")]
+    web_real_data_source: WebRealDataSource,
     #[cfg(target_arch = "wasm32")]
     web_datasets: WebDatasetState,
     #[cfg(target_arch = "wasm32")]
@@ -431,6 +500,20 @@ impl WebDatasetEntry {
 
 #[cfg(target_arch = "wasm32")]
 #[derive(Clone, Copy, PartialEq, Eq)]
+enum WebInputMode {
+    Synthetic,
+    RealData,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WebRealDataSource {
+    DroppedCsv,
+    ManifestDataset,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum WebSyntheticScenario {
     CityBlocks,
     FigureEight,
@@ -487,19 +570,6 @@ fn web_query_synthetic_scenario() -> Option<WebSyntheticScenario> {
         }
         _ => None,
     }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn web_browser_fps_ema() -> Option<f64> {
-    let window = eframe::web_sys::window()?;
-    let sample = Reflect::get(
-        window.as_ref(),
-        &JsValue::from_str("__imuGnssFusionBrowserFps"),
-    )
-    .ok()?;
-    Reflect::get(&sample, &JsValue::from_str("emaFps"))
-        .ok()?
-        .as_f64()
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -782,8 +852,6 @@ fn create_app(
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut app = App {
         data,
-        show_egui_inspection: false,
-        show_meas_accel: false,
         has_itow,
         fps_ema: 0.0,
         last_frame_time_s: 0.0,
@@ -796,6 +864,7 @@ fn create_app(
         show_gnss_map: true,
         show_eskf: true,
         show_loose: true,
+        overview_cursor_t_s: None,
         replay,
         replay_status: None,
         #[cfg(target_arch = "wasm32")]
@@ -813,6 +882,10 @@ fn create_app(
         #[cfg(target_arch = "wasm32")]
         web_scenario: WebSyntheticScenario::CityBlocks,
         #[cfg(target_arch = "wasm32")]
+        web_input_mode: WebInputMode::Synthetic,
+        #[cfg(target_arch = "wasm32")]
+        web_real_data_source: WebRealDataSource::DroppedCsv,
+        #[cfg(target_arch = "wasm32")]
         web_datasets: WebDatasetState::new(),
         #[cfg(target_arch = "wasm32")]
         web_status: "Drag imu.csv and gnss.csv onto the app, or run a built-in synthetic scenario."
@@ -823,6 +896,11 @@ fn create_app(
             ..WebPerf::default()
         },
     };
+    #[cfg(target_arch = "wasm32")]
+    if app.web_datasets.auto_load_id.is_some() {
+        app.web_input_mode = WebInputMode::RealData;
+        app.web_real_data_source = WebRealDataSource::ManifestDataset;
+    }
     #[cfg(target_arch = "wasm32")]
     if matches!(
         web_query_value("page").as_deref(),
@@ -874,6 +952,8 @@ impl App {
         let entry = self.web_datasets.datasets[selected].clone();
         let label = entry.display_label();
         self.web_datasets.selected = selected;
+        self.web_input_mode = WebInputMode::RealData;
+        self.web_real_data_source = WebRealDataSource::ManifestDataset;
         self.web_datasets.loading_dataset = true;
         self.web_status = format!("Loading dataset: {label}");
         let manifest_url = self.web_datasets.manifest_url.clone();
@@ -936,6 +1016,8 @@ impl App {
                         let label = files.label.clone();
                         let imu_name = files.imu.name.clone();
                         let gnss_name = files.gnss.name.clone();
+                        self.web_input_mode = WebInputMode::RealData;
+                        self.web_real_data_source = WebRealDataSource::ManifestDataset;
                         self.web_imu_csv = Some(files.imu);
                         self.web_gnss_csv = Some(files.gnss);
                         self.web_reference_attitude_csv = files.reference_attitude;
@@ -967,6 +1049,7 @@ impl App {
                     self.data = data;
                     self.map_center = map_center_from_traces(&self.data.eskf_map);
                     self.has_itow = false;
+                    self.web_input_mode = WebInputMode::RealData;
                     if self.page != Page::Map {
                         self.page = Page::Overview;
                     }
@@ -1019,6 +1102,8 @@ impl App {
                 "Load both imu.csv and gnss.csv before running CSV replay.".to_string();
             return false;
         };
+        self.web_input_mode = WebInputMode::RealData;
+        self.web_real_data_source = WebRealDataSource::DroppedCsv;
         self.start_web_replay_build(
             "CSV replay".to_string(),
             imu.name.clone(),
@@ -1213,6 +1298,7 @@ impl App {
                 self.data = data;
                 self.map_center = map_center_from_traces(&self.data.eskf_map);
                 self.has_itow = false;
+                self.web_input_mode = WebInputMode::Synthetic;
                 if self.page != Page::Map {
                     self.page = Page::Overview;
                 }
@@ -1222,6 +1308,268 @@ impl App {
                 self.web_status = format!("Synthetic scenario failed: {err}");
             }
         }
+    }
+
+    fn draw_map_controls(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = ctx;
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Map traces");
+            ui.checkbox(&mut self.show_heading, "show heading");
+            ui.checkbox(&mut self.show_gnss_map, "show GNSS");
+            ui.checkbox(&mut self.show_eskf, "show ESKF");
+            ui.checkbox(&mut self.show_loose, "show Loose");
+            if ui.button("Recenter").clicked() {
+                self.map_memory.follow_my_position();
+            }
+        });
+        #[cfg(target_arch = "wasm32")]
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Mapbox token");
+            let token_width = ui.available_width().clamp(120.0, 260.0);
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut self.web_mapbox_token)
+                    .desired_width(token_width)
+                    .password(true),
+            );
+            if response.changed() {
+                web_remember_mapbox_token(&self.web_mapbox_token);
+                self.map_tiles = map_tiles_from_token(&self.web_mapbox_token, ctx.clone());
+                self.web_mapbox_token_applied = self.web_mapbox_token.clone();
+            } else if self.web_mapbox_token != self.web_mapbox_token_applied {
+                self.map_tiles = map_tiles_from_token(&self.web_mapbox_token, ctx.clone());
+                self.web_mapbox_token_applied = self.web_mapbox_token.clone();
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.colored_label(egui::Color32::from_rgb(0, 255, 255), "GNSS");
+            ui.colored_label(egui::Color32::from_rgb(120, 170, 255), "ESKF");
+            ui.colored_label(egui::Color32::from_rgb(120, 255, 170), "Loose");
+            ui.colored_label(
+                egui::Color32::from_rgb(255, 140, 220),
+                "ESKF during GNSS outage",
+            );
+            ui.colored_label(egui::Color32::from_rgb(255, 255, 255), "ESKF heading");
+        });
+    }
+
+    fn draw_map_body(&mut self, ui: &mut egui::Ui, size: egui::Vec2, cursor_t_s: Option<f64>) {
+        let mut map_traces: Vec<&Trace> = self.data.eskf_map.iter().collect();
+        if !self.show_gnss_map {
+            map_traces.retain(|t| {
+                !t.name.contains("GNSS")
+                    && !t.name.contains("GNSS reference")
+                    && !t.name.contains("NAV")
+                    && !t.name.contains("truth")
+            });
+        }
+        if !self.show_eskf {
+            map_traces.retain(|t| !t.name.contains("ESKF"));
+        }
+        if self.show_loose {
+            map_traces.extend(self.data.loose_map.iter());
+        }
+        let mut headings: Vec<&HeadingSample> = self.data.eskf_map_heading.iter().collect();
+        if self.show_loose {
+            headings.extend(self.data.loose_map_heading.iter());
+        }
+        let track = TrackOverlay {
+            traces: map_traces,
+            headings,
+            show_heading: self.show_heading,
+            cursor_t_s,
+        };
+        ui.add_sized(
+            size,
+            Map::new(
+                Some(&mut self.map_tiles),
+                &mut self.map_memory,
+                self.map_center,
+            )
+            .with_plugin(track)
+            .double_click_to_zoom(true),
+        );
+    }
+
+    fn draw_overview_page(&mut self, ui: &mut egui::Ui) {
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                page_header(
+                    ui,
+                    "Overview",
+                    "Primary signals, references, and filter estimates.",
+                );
+                let speed: Vec<Trace> = trace_refs(&self.data.speed).into_iter().cloned().collect();
+                let mount: Vec<Trace> = concat_trace_refs_matching(
+                    [
+                        self.data.eskf_misalignment.as_slice(),
+                        self.data.loose_misalignment.as_slice(),
+                        self.data.align_cmp_att.as_slice(),
+                    ],
+                    &[
+                        "mount roll",
+                        "mount pitch",
+                        "mount yaw",
+                        "Align roll",
+                        "Align pitch",
+                        "Align yaw",
+                        "Reference mount roll",
+                        "Reference mount pitch",
+                        "Reference mount yaw",
+                    ],
+                )
+                .into_iter()
+                .cloned()
+                .collect();
+                let attitude: Vec<Trace> = concat_trace_refs_matching(
+                    [
+                        self.data.eskf_cmp_att.as_slice(),
+                        self.data.loose_cmp_att.as_slice(),
+                        self.data.orientation.as_slice(),
+                    ],
+                    &["roll", "pitch", "yaw"],
+                )
+                .into_iter()
+                .cloned()
+                .collect();
+                let biases: Vec<Trace> = concat_trace_refs([
+                    self.data.eskf_bias_gyro.as_slice(),
+                    self.data.loose_bias_gyro.as_slice(),
+                    self.data.eskf_bias_accel.as_slice(),
+                    self.data.loose_bias_accel.as_slice(),
+                ])
+                .into_iter()
+                .cloned()
+                .collect();
+
+                let tile_height = overview_tile_height(ui.available_width());
+                let cursor_t_s = self.overview_cursor_t_s;
+                let mut hovered_t_s = None;
+                if ui.available_width() < 900.0 {
+                    if let Some(t_s) = draw_plot_with_cursor_time(
+                        ui,
+                        "Vehicle Speed",
+                        speed.iter(),
+                        true,
+                        self.max_points_per_trace,
+                        cursor_t_s,
+                    ) {
+                        hovered_t_s = Some(t_s);
+                    }
+                    if let Some(t_s) = draw_plot_with_cursor_time(
+                        ui,
+                        "Mount Angles: Reference / Align / ESKF / Loose",
+                        mount.iter(),
+                        true,
+                        self.max_points_per_trace,
+                        hovered_t_s.or(cursor_t_s),
+                    ) {
+                        hovered_t_s = Some(t_s);
+                        draw_orthogonal_views_popup(
+                            ui,
+                            "Mount Alignment",
+                            &mount,
+                            t_s,
+                            OrthogonalViewKind::Mount,
+                        );
+                    }
+                    if let Some(t_s) = draw_plot_with_cursor_time(
+                        ui,
+                        "Vehicle Attitude: Reference / ESKF / Loose",
+                        attitude.iter(),
+                        true,
+                        self.max_points_per_trace,
+                        hovered_t_s.or(cursor_t_s),
+                    ) {
+                        hovered_t_s = Some(t_s);
+                        draw_orthogonal_views_popup(
+                            ui,
+                            "Vehicle Attitude",
+                            &attitude,
+                            t_s,
+                            OrthogonalViewKind::Vehicle,
+                        );
+                    }
+                    if let Some(t_s) = draw_plot_with_cursor_time(
+                        ui,
+                        "Biases: ESKF / Loose",
+                        biases.iter(),
+                        true,
+                        self.max_points_per_trace,
+                        hovered_t_s.or(cursor_t_s),
+                    ) {
+                        hovered_t_s = Some(t_s);
+                    }
+                    draw_map_tile(ui, "Map", tile_height, |ui, size| {
+                        self.draw_map_body(ui, size, hovered_t_s.or(cursor_t_s));
+                    });
+                } else {
+                    ui.columns(2, |cols| {
+                        if let Some(t_s) = draw_plot_with_cursor_time(
+                            &mut cols[0],
+                            "Vehicle Speed",
+                            speed.iter(),
+                            true,
+                            self.max_points_per_trace,
+                            cursor_t_s,
+                        ) {
+                            hovered_t_s = Some(t_s);
+                        }
+                        if let Some(t_s) = draw_plot_with_cursor_time(
+                            &mut cols[0],
+                            "Mount Angles: Reference / Align / ESKF / Loose",
+                            mount.iter(),
+                            true,
+                            self.max_points_per_trace,
+                            hovered_t_s.or(cursor_t_s),
+                        ) {
+                            hovered_t_s = Some(t_s);
+                            draw_orthogonal_views_popup(
+                                &mut cols[0],
+                                "Mount Alignment",
+                                &mount,
+                                t_s,
+                                OrthogonalViewKind::Mount,
+                            );
+                        }
+                        draw_map_tile(&mut cols[1], "Map", tile_height, |ui, size| {
+                            self.draw_map_body(ui, size, hovered_t_s.or(cursor_t_s));
+                        });
+                        if let Some(t_s) = draw_plot_with_cursor_time(
+                            &mut cols[0],
+                            "Vehicle Attitude: Reference / ESKF / Loose",
+                            attitude.iter(),
+                            true,
+                            self.max_points_per_trace,
+                            hovered_t_s.or(cursor_t_s),
+                        ) {
+                            hovered_t_s = Some(t_s);
+                            draw_orthogonal_views_popup(
+                                &mut cols[0],
+                                "Vehicle Attitude",
+                                &attitude,
+                                t_s,
+                                OrthogonalViewKind::Vehicle,
+                            );
+                        }
+                        if let Some(t_s) = draw_plot_with_cursor_time(
+                            &mut cols[1],
+                            "Biases: ESKF / Loose",
+                            biases.iter(),
+                            true,
+                            self.max_points_per_trace,
+                            hovered_t_s.or(cursor_t_s),
+                        ) {
+                            hovered_t_s = Some(t_s);
+                        }
+                    });
+                }
+                if self.overview_cursor_t_s != hovered_t_s {
+                    self.overview_cursor_t_s = hovered_t_s;
+                    ui.ctx().request_repaint();
+                }
+            });
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -1329,12 +1677,23 @@ impl App {
                 self.web_gnss_csv = Some(named);
             }
         }
-        self.web_status = "Dropped file(s) staged. Click Run CSV replay.".to_string();
+        self.web_input_mode = WebInputMode::RealData;
+        self.web_real_data_source = WebRealDataSource::DroppedCsv;
+        self.web_status =
+            "Dropped file(s) staged. Select Experimental/real data, then click Run.".to_string();
     }
 }
 
 #[cfg(target_arch = "wasm32")]
 impl WebSyntheticScenario {
+    fn display_label(self) -> &'static str {
+        match self {
+            Self::CityBlocks => "City blocks",
+            Self::FigureEight => "Figure eight",
+            Self::StraightAccelBrake => "Straight accel/brake",
+        }
+    }
+
     fn scenario_text(self) -> (&'static str, &'static str) {
         match self {
             Self::CityBlocks => ("city_blocks_builtin.scenario", CITY_BLOCKS_SCENARIO),
@@ -1421,7 +1780,7 @@ impl eframe::App for App {
         #[cfg(target_arch = "wasm32")]
         ctx.request_repaint();
         #[cfg(not(target_arch = "wasm32"))]
-        if matches!(self.page, Page::Map) || self.show_egui_inspection {
+        if matches!(self.page, Page::Overview | Page::Map) {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
 
@@ -1479,7 +1838,6 @@ impl eframe::App for App {
                 ui.label(format!("FPS {:.1}", self.fps_ema.max(fps)));
             });
             ui.horizontal_wrapped(|ui| {
-                ui.selectable_value(&mut self.page, Page::Run, "Run");
                 ui.selectable_value(&mut self.page, Page::Overview, "Overview");
                 ui.selectable_value(&mut self.page, Page::Map, "Map");
                 ui.selectable_value(&mut self.page, Page::Motion, "Motion");
@@ -1489,125 +1847,132 @@ impl eframe::App for App {
                 ui.selectable_value(&mut self.page, Page::Diagnostics, "Diagnostics");
             });
             {
-                egui::CollapsingHeader::new("Display")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        ui.label(format!("Estimated FPS: {:.1}", fps));
-                        #[cfg(target_arch = "wasm32")]
-                        if let Some(browser_fps) = web_browser_fps_ema() {
-                            ui.label(format!("Browser rAF FPS: {:.1}", browser_fps));
-                        }
-                        ui.label(format!(
-                            "Decimation budget: {} pts/trace (FPS EMA {:.1})",
-                            self.max_points_per_trace, self.fps_ema
-                        ));
-                        ui.checkbox(&mut self.show_meas_accel, "Show filter IMU accel");
-                        ui.checkbox(
-                            &mut self.show_egui_inspection,
-                            "Show egui inspection/profiler",
-                        );
-                    });
                 #[cfg(target_arch = "wasm32")]
                 egui::CollapsingHeader::new("Inputs")
-                    .default_open(false)
+                    .default_open(true)
                     .show(ui, |ui| {
                         ui.horizontal_wrapped(|ui| {
-                            ui.label("Synthetic:");
                             ui.selectable_value(
-                                &mut self.web_scenario,
-                                WebSyntheticScenario::CityBlocks,
-                                "City blocks",
+                                &mut self.web_input_mode,
+                                WebInputMode::Synthetic,
+                                "Synthetic",
                             );
                             ui.selectable_value(
-                                &mut self.web_scenario,
-                                WebSyntheticScenario::FigureEight,
-                                "Figure eight",
+                                &mut self.web_input_mode,
+                                WebInputMode::RealData,
+                                "Experimental/real data",
                             );
-                            ui.selectable_value(
-                                &mut self.web_scenario,
-                                WebSyntheticScenario::StraightAccelBrake,
-                                "Straight accel/brake",
-                            );
-                            if ui.button("Run synthetic").clicked() {
-                                self.refresh_from_web_synthetic();
-                            }
                         });
                         ui.horizontal_wrapped(|ui| {
-                            let imu_name = self
-                                .web_imu_csv
-                                .as_ref()
-                                .map(|f| f.name.as_str())
-                                .unwrap_or("no imu.csv");
-                            let gnss_name = self
-                                .web_gnss_csv
-                                .as_ref()
-                                .map(|f| f.name.as_str())
-                                .unwrap_or("no gnss.csv");
-                            let ref_att = self
-                                .web_reference_attitude_csv
-                                .as_ref()
-                                .map(|f| f.name.as_str())
-                                .unwrap_or("no reference attitude");
-                            ui.label(format!("CSV: {imu_name} / {gnss_name} / {ref_att}"));
-                            if ui
-                                .add_enabled(
-                                    !self.web_datasets.loading_replay,
-                                    egui::Button::new(if self.web_datasets.loading_replay {
-                                        "Running replay..."
-                                    } else {
-                                        "Run CSV replay"
-                                    }),
-                                )
-                                .clicked()
-                            {
-                                self.refresh_from_generic_csv();
-                            }
-                        });
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label("Dataset:");
-                            if self.web_datasets.loading_manifest {
-                                ui.label("loading manifest...");
-                            } else if self.web_datasets.datasets.is_empty() {
-                                ui.label("no manifest entries");
-                            } else {
-                                let selected = self
-                                    .web_datasets
-                                    .selected
-                                    .min(self.web_datasets.datasets.len().saturating_sub(1));
-                                self.web_datasets.selected = selected;
-                                let selected_label =
-                                    self.web_datasets.datasets[selected].display_label();
-                                egui::ComboBox::from_id_salt("web_dataset_select")
-                                    .selected_text(selected_label)
-                                    .show_ui(ui, |ui| {
-                                        for (idx, dataset) in
-                                            self.web_datasets.datasets.iter().enumerate()
-                                        {
+                            ui.label(match self.web_input_mode {
+                                WebInputMode::Synthetic => "Scenario:",
+                                WebInputMode::RealData => "Input:",
+                            });
+                            match self.web_input_mode {
+                                WebInputMode::Synthetic => {
+                                    egui::ComboBox::from_id_salt("web_synthetic_scenario_select")
+                                        .selected_text(self.web_scenario.display_label())
+                                        .show_ui(ui, |ui| {
                                             ui.selectable_value(
-                                                &mut self.web_datasets.selected,
-                                                idx,
-                                                dataset.display_label(),
+                                                &mut self.web_scenario,
+                                                WebSyntheticScenario::CityBlocks,
+                                                WebSyntheticScenario::CityBlocks.display_label(),
                                             );
+                                            ui.selectable_value(
+                                                &mut self.web_scenario,
+                                                WebSyntheticScenario::FigureEight,
+                                                WebSyntheticScenario::FigureEight.display_label(),
+                                            );
+                                            ui.selectable_value(
+                                                &mut self.web_scenario,
+                                                WebSyntheticScenario::StraightAccelBrake,
+                                                WebSyntheticScenario::StraightAccelBrake
+                                                    .display_label(),
+                                            );
+                                        });
+                                }
+                                WebInputMode::RealData => {
+                                    let selected_text = match self.web_real_data_source {
+                                        WebRealDataSource::DroppedCsv => {
+                                            "Dropped CSV files".to_string()
                                         }
-                                    });
+                                        WebRealDataSource::ManifestDataset => self
+                                            .web_datasets
+                                            .datasets
+                                            .get(self.web_datasets.selected)
+                                            .map(WebDatasetEntry::display_label)
+                                            .unwrap_or_else(|| "No manifest entries".to_string()),
+                                    };
+                                    egui::ComboBox::from_id_salt("web_real_data_select")
+                                        .selected_text(selected_text)
+                                        .show_ui(ui, |ui| {
+                                            ui.selectable_value(
+                                                &mut self.web_real_data_source,
+                                                WebRealDataSource::DroppedCsv,
+                                                "Dropped CSV files",
+                                            );
+                                            for (idx, dataset) in
+                                                self.web_datasets.datasets.iter().enumerate()
+                                            {
+                                                let selected = self.web_real_data_source
+                                                    == WebRealDataSource::ManifestDataset
+                                                    && self.web_datasets.selected == idx;
+                                                if ui
+                                                    .selectable_label(
+                                                        selected,
+                                                        dataset.display_label(),
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    self.web_real_data_source =
+                                                        WebRealDataSource::ManifestDataset;
+                                                    self.web_datasets.selected = idx;
+                                                }
+                                            }
+                                        });
+                                }
                             }
+
+                            let run_enabled = match self.web_input_mode {
+                                WebInputMode::Synthetic => true,
+                                WebInputMode::RealData => match self.web_real_data_source {
+                                    WebRealDataSource::DroppedCsv => {
+                                        !self.web_datasets.loading_replay
+                                            && self.web_imu_csv.is_some()
+                                            && self.web_gnss_csv.is_some()
+                                    }
+                                    WebRealDataSource::ManifestDataset => {
+                                        !self.web_datasets.loading_dataset
+                                            && !self.web_datasets.loading_replay
+                                            && !self.web_datasets.loading_manifest
+                                            && !self.web_datasets.datasets.is_empty()
+                                    }
+                                },
+                            };
+                            let run_text = match self.web_input_mode {
+                                WebInputMode::RealData if self.web_datasets.loading_dataset => {
+                                    "Loading dataset..."
+                                }
+                                WebInputMode::RealData if self.web_datasets.loading_replay => {
+                                    "Running replay..."
+                                }
+                                _ => "Run",
+                            };
                             if ui
-                                .add_enabled(
-                                    !self.web_datasets.loading_dataset
-                                        && !self.web_datasets.loading_replay
-                                        && !self.web_datasets.loading_manifest
-                                        && !self.web_datasets.datasets.is_empty(),
-                                    egui::Button::new(if self.web_datasets.loading_dataset {
-                                        "Loading dataset..."
-                                    } else if self.web_datasets.loading_replay {
-                                        "Running replay..."
-                                    } else {
-                                        "Load dataset"
-                                    }),
-                                )
+                                .add_enabled(run_enabled, egui::Button::new(run_text))
                                 .clicked()
                             {
-                                self.start_web_dataset_load();
+                                match self.web_input_mode {
+                                    WebInputMode::Synthetic => self.refresh_from_web_synthetic(),
+                                    WebInputMode::RealData => match self.web_real_data_source {
+                                        WebRealDataSource::DroppedCsv => {
+                                            self.refresh_from_generic_csv();
+                                        }
+                                        WebRealDataSource::ManifestDataset => {
+                                            self.start_web_dataset_load();
+                                        }
+                                    },
+                                }
                             }
                             if ui
                                 .add_enabled(
@@ -1621,11 +1986,39 @@ impl eframe::App for App {
                                 self.start_web_manifest_load();
                             }
                         });
-                        if let Some(dataset) =
-                            self.web_datasets.datasets.get(self.web_datasets.selected)
-                            && let Some(description) = dataset.description.as_deref()
-                        {
-                            ui.label(description);
+                        match self.web_input_mode {
+                            WebInputMode::Synthetic => {}
+                            WebInputMode::RealData => {
+                                let imu_name = self
+                                    .web_imu_csv
+                                    .as_ref()
+                                    .map(|f| f.name.as_str())
+                                    .unwrap_or("no imu.csv");
+                                let gnss_name = self
+                                    .web_gnss_csv
+                                    .as_ref()
+                                    .map(|f| f.name.as_str())
+                                    .unwrap_or("no gnss.csv");
+                                let ref_att = self
+                                    .web_reference_attitude_csv
+                                    .as_ref()
+                                    .map(|f| f.name.as_str())
+                                    .unwrap_or("no reference attitude");
+                                ui.label(format!("CSV: {imu_name} / {gnss_name} / {ref_att}"));
+                                if self.web_datasets.loading_manifest {
+                                    ui.label("loading manifest...");
+                                } else if self.web_datasets.datasets.is_empty() {
+                                    ui.label("no manifest entries");
+                                }
+                                if let WebRealDataSource::ManifestDataset =
+                                    self.web_real_data_source
+                                    && let Some(dataset) =
+                                        self.web_datasets.datasets.get(self.web_datasets.selected)
+                                    && let Some(description) = dataset.description.as_deref()
+                                {
+                                    ui.label(description);
+                                }
+                            }
                         }
                         ui.label(&self.web_status);
                     });
@@ -1964,208 +2357,27 @@ impl eframe::App for App {
             .iter()
             .filter(|t| !t.name.starts_with("IMU measurement "))
             .collect();
-        let mut imu_cal_accel: Vec<&Trace> = self.data.imu_cal_accel.iter().collect();
-        if !self.show_meas_accel {
-            imu_cal_accel.retain(|t| !t.name.starts_with("IMU measurement "));
-        }
+        let imu_cal_accel: Vec<&Trace> = self
+            .data
+            .imu_cal_accel
+            .iter()
+            .filter(|t| !t.name.starts_with("IMU measurement "))
+            .collect();
 
         match self.page {
-            Page::Run => {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        page_header(
-                            ui,
-                            "Run",
-                            "Load data and tune replay settings from the controls above.",
-                        );
-                        status_row(
-                            ui,
-                            "Samples",
-                            self.data
-                                .speed
-                                .iter()
-                                .map(|t| t.points.len())
-                                .max()
-                                .unwrap_or(0),
-                        );
-                        #[cfg(target_arch = "wasm32")]
-                        ui.label(&self.web_status);
-                        if let Some(status) = &self.replay_status {
-                            ui.label(status);
-                        }
-                    });
-                });
-            }
             Page::Overview => {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    draw_analysis_page(
-                        ui,
-                        "Overview",
-                        "Primary signals, references, and filter estimates.",
-                        vec![
-                            plot_spec("Vehicle Speed", trace_refs(&self.data.speed), true),
-                            plot_spec(
-                                "North Position: GNSS / ESKF / Loose",
-                                concat_trace_refs_matching(
-                                    [
-                                        self.data.eskf_cmp_pos.as_slice(),
-                                        self.data.loose_cmp_pos.as_slice(),
-                                    ],
-                                    &["posN"],
-                                ),
-                                true,
-                            ),
-                            plot_spec(
-                                "East Position: GNSS / ESKF / Loose",
-                                concat_trace_refs_matching(
-                                    [
-                                        self.data.eskf_cmp_pos.as_slice(),
-                                        self.data.loose_cmp_pos.as_slice(),
-                                    ],
-                                    &["posE"],
-                                ),
-                                true,
-                            ),
-                            plot_spec(
-                                "North Velocity: GNSS / ESKF / Loose",
-                                concat_trace_refs_matching(
-                                    [
-                                        self.data.eskf_cmp_vel.as_slice(),
-                                        self.data.loose_cmp_vel.as_slice(),
-                                    ],
-                                    &["velN", "vN "],
-                                ),
-                                true,
-                            ),
-                            plot_spec(
-                                "East Velocity: GNSS / ESKF / Loose",
-                                concat_trace_refs_matching(
-                                    [
-                                        self.data.eskf_cmp_vel.as_slice(),
-                                        self.data.loose_cmp_vel.as_slice(),
-                                    ],
-                                    &["velE", "vE "],
-                                ),
-                                true,
-                            ),
-                            plot_spec(
-                                "Yaw: Reference / ESKF / Loose",
-                                concat_trace_refs_matching(
-                                    [
-                                        self.data.eskf_cmp_att.as_slice(),
-                                        self.data.loose_cmp_att.as_slice(),
-                                        self.data.orientation.as_slice(),
-                                    ],
-                                    &["yaw"],
-                                ),
-                                true,
-                            ),
-                            plot_spec(
-                                "Mount Yaw: Reference / Align / ESKF / Loose",
-                                concat_trace_refs_matching(
-                                    [
-                                        self.data.eskf_misalignment.as_slice(),
-                                        self.data.loose_misalignment.as_slice(),
-                                        self.data.align_cmp_att.as_slice(),
-                                    ],
-                                    &["mount yaw", "Align yaw", "Reference mount yaw"],
-                                ),
-                                true,
-                            ),
-                            plot_spec(
-                                "GNSS Signal Strength",
-                                trace_refs(&self.data.sat_cn0),
-                                false,
-                            ),
-                        ],
-                        self.max_points_per_trace,
-                    );
+                    self.draw_overview_page(ui);
                 });
             }
             Page::Map => {
                 egui::TopBottomPanel::top("map_controls")
                     .resizable(false)
                     .show(ctx, |ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label("Map traces");
-                            ui.checkbox(&mut self.show_heading, "show heading");
-                            ui.checkbox(&mut self.show_gnss_map, "show GNSS");
-                            ui.checkbox(&mut self.show_eskf, "show ESKF");
-                            ui.checkbox(&mut self.show_loose, "show Loose");
-                            if ui.button("Recenter").clicked() {
-                                self.map_memory.follow_my_position();
-                            }
-                        });
-                        #[cfg(target_arch = "wasm32")]
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label("Mapbox token");
-                            let token_width = ui.available_width().clamp(120.0, 260.0);
-                            let response = ui.add(
-                                egui::TextEdit::singleline(&mut self.web_mapbox_token)
-                                    .desired_width(token_width)
-                                    .password(true),
-                            );
-                            if response.changed() {
-                                web_remember_mapbox_token(&self.web_mapbox_token);
-                                self.map_tiles =
-                                    map_tiles_from_token(&self.web_mapbox_token, ctx.clone());
-                                self.web_mapbox_token_applied = self.web_mapbox_token.clone();
-                            } else if self.web_mapbox_token != self.web_mapbox_token_applied {
-                                self.map_tiles =
-                                    map_tiles_from_token(&self.web_mapbox_token, ctx.clone());
-                                self.web_mapbox_token_applied = self.web_mapbox_token.clone();
-                            }
-                        });
-                        ui.horizontal_wrapped(|ui| {
-                            ui.colored_label(egui::Color32::from_rgb(0, 255, 255), "GNSS");
-                            ui.colored_label(egui::Color32::from_rgb(120, 170, 255), "ESKF");
-                            ui.colored_label(egui::Color32::from_rgb(120, 255, 170), "Loose");
-                            ui.colored_label(
-                                egui::Color32::from_rgb(255, 140, 220),
-                                "ESKF during GNSS outage",
-                            );
-                            ui.colored_label(
-                                egui::Color32::from_rgb(255, 255, 255),
-                                "ESKF heading",
-                            );
-                        });
+                        self.draw_map_controls(ui, ctx);
                     });
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let mut map_traces: Vec<&Trace> = self.data.eskf_map.iter().collect();
-                    if !self.show_gnss_map {
-                        map_traces.retain(|t| {
-                            !t.name.contains("GNSS")
-                                && !t.name.contains("GNSS reference")
-                                && !t.name.contains("NAV")
-                                && !t.name.contains("truth")
-                        });
-                    }
-                    if !self.show_eskf {
-                        map_traces.retain(|t| !t.name.contains("ESKF"));
-                    }
-                    if self.show_loose {
-                        map_traces.extend(self.data.loose_map.iter());
-                    }
-                    let mut headings: Vec<&HeadingSample> =
-                        self.data.eskf_map_heading.iter().collect();
-                    if self.show_loose {
-                        headings.extend(self.data.loose_map_heading.iter());
-                    }
-                    let track = TrackOverlay {
-                        traces: map_traces,
-                        headings,
-                        show_heading: self.show_heading,
-                    };
-                    ui.add_sized(
-                        ui.available_size(),
-                        Map::new(
-                            Some(&mut self.map_tiles),
-                            &mut self.map_memory,
-                            self.map_center,
-                        )
-                        .with_plugin(track)
-                        .double_click_to_zoom(true),
-                    );
+                    self.draw_map_body(ui, ui.available_size(), None);
                 });
             }
             Page::Motion => {
@@ -2534,14 +2746,6 @@ impl eframe::App for App {
                 });
             }
         }
-
-        if self.show_egui_inspection {
-            egui::Window::new("egui inspection/profiler")
-                .vscroll(true)
-                .show(ctx, |ui| {
-                    ctx.inspection_ui(ui);
-                });
-        }
     }
 }
 
@@ -2549,6 +2753,466 @@ struct PlotSpec<'a> {
     title: &'static str,
     traces: Vec<&'a Trace>,
     show_legend: bool,
+}
+
+fn overview_tile_height(width: f32) -> f32 {
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = width;
+    #[cfg(target_arch = "wasm32")]
+    {
+        responsive_plot_height(width)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        TIME_SERIES_PLOT_HEIGHT
+    }
+}
+
+fn draw_map_tile(
+    ui: &mut egui::Ui,
+    title: &str,
+    height: f32,
+    add_map: impl FnOnce(&mut egui::Ui, egui::Vec2),
+) {
+    egui::Frame::group(ui.style())
+        .fill(ui.visuals().window_fill)
+        .inner_margin(egui::Margin::same(8))
+        .corner_radius(egui::CornerRadius::same(8))
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new(title).strong());
+            let size = egui::vec2(ui.available_width(), height);
+            add_map(ui, size);
+        });
+}
+
+#[derive(Clone, Copy)]
+enum AttitudeAxis {
+    Roll,
+    Pitch,
+    Yaw,
+}
+
+struct AttitudeSeriesSample {
+    label: &'static str,
+    color: egui::Color32,
+    angle_deg: f64,
+}
+
+#[derive(Clone, Copy)]
+enum OrthogonalViewKind {
+    Vehicle,
+    Mount,
+}
+
+fn draw_orthogonal_views_popup(
+    ui: &mut egui::Ui,
+    title: &str,
+    traces: &[Trace],
+    t_s: f64,
+    kind: OrthogonalViewKind,
+) {
+    let Some(pointer_pos) = ui.input(|i| i.pointer.hover_pos()) else {
+        return;
+    };
+    let screen_rect = ui.ctx().content_rect();
+    let popup_size = egui::vec2(430.0, 218.0);
+    let mut pos = pointer_pos + egui::vec2(14.0, 14.0);
+    if pos.x + popup_size.x > screen_rect.right() - 8.0 {
+        pos.x = pointer_pos.x - popup_size.x - 14.0;
+    }
+    if pos.y + popup_size.y > screen_rect.bottom() - 8.0 {
+        pos.y = pointer_pos.y - popup_size.y - 14.0;
+    }
+    pos.x = pos.x.max(screen_rect.left() + 8.0);
+    pos.y = pos.y.max(screen_rect.top() + 8.0);
+
+    egui::Area::new(egui::Id::new(("orthogonal_views_popup", title)))
+        .order(egui::Order::Tooltip)
+        .fixed_pos(pos)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style())
+                .inner_margin(egui::Margin::same(8))
+                .show(ui, |ui| {
+                    ui.set_min_size(popup_size);
+                    ui.label(egui::RichText::new(format!("{title}  t={t_s:.2}s")).strong());
+                    let rect = ui
+                        .allocate_exact_size(
+                            egui::vec2(ui.available_width(), popup_size.y - 28.0),
+                            egui::Sense::hover(),
+                        )
+                        .0;
+                    let painter = ui.painter_at(rect);
+                    let gap = 8.0;
+                    let w = (rect.width() - 2.0 * gap).max(1.0) / 3.0;
+                    for (idx, (axis, label)) in [
+                        (AttitudeAxis::Roll, "Roll"),
+                        (AttitudeAxis::Pitch, "Pitch"),
+                        (AttitudeAxis::Yaw, "Yaw"),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        let x0 = rect.left() + idx as f32 * (w + gap);
+                        let view = egui::Rect::from_min_size(
+                            egui::pos2(x0, rect.top()),
+                            egui::vec2(w, rect.height()),
+                        );
+                        let samples = angle_samples_for_axis(traces, t_s, axis, kind);
+                        draw_angle_axis_view(&painter, view, label, axis, &samples, kind);
+                    }
+                });
+        });
+}
+
+fn angle_samples_for_axis(
+    traces: &[Trace],
+    t_s: f64,
+    axis: AttitudeAxis,
+    kind: OrthogonalViewKind,
+) -> Vec<AttitudeSeriesSample> {
+    let prefixes: &[(&str, &str, egui::Color32)] = match kind {
+        OrthogonalViewKind::Vehicle => &[
+            (
+                "Reference",
+                "Reference",
+                egui::Color32::from_rgb(235, 235, 235),
+            ),
+            (
+                "Synthetic truth",
+                "Reference",
+                egui::Color32::from_rgb(235, 235, 235),
+            ),
+            ("ESKF", "ESKF", egui::Color32::from_rgb(120, 170, 255)),
+            ("Loose", "Loose", egui::Color32::from_rgb(120, 255, 170)),
+        ],
+        OrthogonalViewKind::Mount => &[
+            (
+                "Reference mount",
+                "Reference",
+                egui::Color32::from_rgb(235, 235, 235),
+            ),
+            (
+                "Synthetic truth mount",
+                "Reference",
+                egui::Color32::from_rgb(235, 235, 235),
+            ),
+            ("Align", "Align", egui::Color32::from_rgb(244, 190, 96)),
+            ("ESKF mount", "ESKF", egui::Color32::from_rgb(120, 170, 255)),
+            (
+                "Loose residual mount",
+                "Loose",
+                egui::Color32::from_rgb(120, 255, 170),
+            ),
+        ],
+    };
+    prefixes
+        .iter()
+        .copied()
+        .into_iter()
+        .filter_map(|(prefix, label, color)| {
+            find_angle_trace(traces, prefix, axis, kind).and_then(|trace| {
+                sample_trace_at(trace, t_s).map(|angle_deg| AttitudeSeriesSample {
+                    label,
+                    color,
+                    angle_deg,
+                })
+            })
+        })
+        .fold(Vec::<AttitudeSeriesSample>::new(), |mut out, sample| {
+            if !out.iter().any(|existing| existing.label == sample.label) {
+                out.push(sample);
+            }
+            out
+        })
+}
+
+fn find_angle_trace<'a>(
+    traces: &'a [Trace],
+    prefix: &str,
+    axis: AttitudeAxis,
+    kind: OrthogonalViewKind,
+) -> Option<&'a Trace> {
+    let axis_token = match axis {
+        AttitudeAxis::Roll => "roll",
+        AttitudeAxis::Pitch => "pitch",
+        AttitudeAxis::Yaw => "yaw",
+    };
+    traces.iter().find(|trace| {
+        let name = trace.name.as_str();
+        name.starts_with(prefix)
+            && name.contains(axis_token)
+            && match kind {
+                OrthogonalViewKind::Vehicle => {
+                    !name.contains("mount") && !name.contains("residual")
+                }
+                OrthogonalViewKind::Mount => name.contains("mount") || name.starts_with("Align"),
+            }
+    })
+}
+
+fn sample_trace_at(trace: &Trace, t_s: f64) -> Option<f64> {
+    if !t_s.is_finite() || trace.points.is_empty() {
+        return None;
+    }
+    let points = &trace.points;
+    let idx = points.partition_point(|p| p[0] < t_s);
+    if idx == 0 {
+        return points.first().map(|p| p[1]);
+    }
+    if idx >= points.len() {
+        return points.last().map(|p| p[1]);
+    }
+    let a = points[idx - 1];
+    let b = points[idx];
+    let dt = b[0] - a[0];
+    if dt.abs() <= f64::EPSILON {
+        return Some(b[1]);
+    }
+    let alpha = ((t_s - a[0]) / dt).clamp(0.0, 1.0);
+    Some(a[1] + alpha * (b[1] - a[1]))
+}
+
+fn draw_angle_axis_view(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    label: &str,
+    axis: AttitudeAxis,
+    samples: &[AttitudeSeriesSample],
+    kind: OrthogonalViewKind,
+) {
+    painter.rect_stroke(
+        rect,
+        egui::CornerRadius::same(5),
+        egui::Stroke::new(1.0, egui::Color32::from_gray(45)),
+        egui::StrokeKind::Inside,
+    );
+    painter.text(
+        rect.center_top() + egui::vec2(0.0, 8.0),
+        egui::Align2::CENTER_TOP,
+        label,
+        egui::FontId::proportional(12.0),
+        egui::Color32::from_gray(210),
+    );
+    if samples.is_empty() {
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "No sample",
+            egui::FontId::proportional(11.0),
+            egui::Color32::from_gray(130),
+        );
+        return;
+    }
+
+    let figure_rect = rect.shrink2(egui::vec2(8.0, 24.0));
+    let scale = figure_rect.width().min(figure_rect.height()).max(1.0);
+    let center = figure_rect.center() + egui::vec2(0.0, -4.0);
+    draw_zero_angle_axis(painter, center, scale, axis);
+    for sample in samples {
+        draw_rotated_outline(
+            painter,
+            center,
+            scale,
+            axis,
+            sample.angle_deg,
+            sample.color,
+            matches!(kind, OrthogonalViewKind::Vehicle),
+        );
+    }
+
+    let mut y = rect.bottom() - 14.0 * samples.len() as f32 - 3.0;
+    for sample in samples {
+        painter.text(
+            egui::pos2(rect.left() + 7.0, y),
+            egui::Align2::LEFT_TOP,
+            format!("{} {:+.1} deg", sample.label, sample.angle_deg),
+            egui::FontId::proportional(10.5),
+            sample.color,
+        );
+        y += 14.0;
+    }
+}
+
+fn draw_zero_angle_axis(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    scale: f32,
+    axis: AttitudeAxis,
+) {
+    let half = 0.36 * scale;
+    let dash = 4.0;
+    let gap = 4.0;
+    let color = egui::Color32::from_gray(85).gamma_multiply(0.55);
+    match axis {
+        AttitudeAxis::Roll | AttitudeAxis::Pitch => {
+            let mut x = center.x - half;
+            while x < center.x + half {
+                let x1 = (x + dash).min(center.x + half);
+                painter.line_segment(
+                    [egui::pos2(x, center.y), egui::pos2(x1, center.y)],
+                    egui::Stroke::new(1.0, color),
+                );
+                x += dash + gap;
+            }
+        }
+        AttitudeAxis::Yaw => {
+            let mut y = center.y - half;
+            while y < center.y + half {
+                let y1 = (y + dash).min(center.y + half);
+                painter.line_segment(
+                    [egui::pos2(center.x, y), egui::pos2(center.x, y1)],
+                    egui::Stroke::new(1.0, color),
+                );
+                y += dash + gap;
+            }
+        }
+    }
+}
+
+fn draw_rotated_outline(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    scale: f32,
+    axis: AttitudeAxis,
+    angle_deg: f64,
+    color: egui::Color32,
+    show_wheels: bool,
+) {
+    let (w, h) = match axis {
+        AttitudeAxis::Roll => (0.58 * scale, 0.30 * scale),
+        AttitudeAxis::Pitch => (0.68 * scale, 0.24 * scale),
+        AttitudeAxis::Yaw => (0.62 * scale, 0.28 * scale),
+    };
+    let angle = orthogonal_view_screen_angle(axis, angle_deg);
+    let corners = [
+        egui::vec2(-0.5 * w, -0.5 * h),
+        egui::vec2(0.5 * w, -0.5 * h),
+        egui::vec2(0.5 * w, 0.5 * h),
+        egui::vec2(-0.5 * w, 0.5 * h),
+    ];
+    let mut points: Vec<egui::Pos2> = corners
+        .into_iter()
+        .map(|p| rotate_point(center, p, angle))
+        .collect();
+    points.push(points[0]);
+    painter.add(egui::Shape::line(points, egui::Stroke::new(1.8, color)));
+
+    let nose = match axis {
+        AttitudeAxis::Roll => [egui::vec2(0.0, -0.5 * h), egui::vec2(0.0, -0.82 * h)],
+        _ => [egui::vec2(0.5 * w, 0.0), egui::vec2(0.78 * w, 0.0)],
+    };
+    painter.line_segment(
+        [
+            rotate_point(center, nose[0], angle),
+            rotate_point(center, nose[1], angle),
+        ],
+        egui::Stroke::new(1.8, color),
+    );
+    if show_wheels {
+        draw_vehicle_wheels(painter, center, w, h, angle, color, axis);
+    }
+}
+
+fn orthogonal_view_screen_angle(axis: AttitudeAxis, angle_deg: f64) -> f32 {
+    let angle = angle_deg as f32;
+    match axis {
+        // FRD roll: positive roll moves the vehicle right side down. With
+        // screen +x as vehicle right and screen +y as vehicle down, this is a
+        // clockwise screen rotation.
+        AttitudeAxis::Roll => angle.to_radians(),
+        // FRD/NED pitch traces use positive pitch as nose-up. The side view
+        // has screen +x forward and screen +y down, so nose-up is
+        // counter-clockwise on screen.
+        AttitudeAxis::Pitch => (-angle).to_radians(),
+        // Yaw traces are headings: 0 deg is north/up, positive yaw turns
+        // clockwise toward east/right.
+        AttitudeAxis::Yaw => (-90.0 + angle).to_radians(),
+    }
+}
+
+fn draw_vehicle_wheels(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    w: f32,
+    h: f32,
+    angle: f32,
+    color: egui::Color32,
+    axis: AttitudeAxis,
+) {
+    if matches!(axis, AttitudeAxis::Roll | AttitudeAxis::Yaw) {
+        draw_rect_vehicle_wheels(painter, center, w, h, angle, color, axis);
+        return;
+    }
+
+    let wheel_radius = (w.min(h) * 0.20).clamp(4.5, 9.0);
+    let wheel_points: &[egui::Vec2] = match axis {
+        AttitudeAxis::Roll => &[
+            egui::vec2(-0.36 * w, 0.58 * h),
+            egui::vec2(0.36 * w, 0.58 * h),
+        ],
+        AttitudeAxis::Pitch => &[
+            egui::vec2(-0.34 * w, 0.56 * h),
+            egui::vec2(0.34 * w, 0.56 * h),
+        ],
+        AttitudeAxis::Yaw => &[],
+    };
+    for wheel in wheel_points {
+        let pos = rotate_point(center, *wheel, angle);
+        painter.circle_filled(pos, wheel_radius, egui::Color32::from_black_alpha(180));
+        painter.circle_stroke(pos, wheel_radius, egui::Stroke::new(1.0, color));
+    }
+}
+
+fn draw_rect_vehicle_wheels(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    w: f32,
+    h: f32,
+    angle: f32,
+    color: egui::Color32,
+    axis: AttitudeAxis,
+) {
+    let wheel_size = match axis {
+        AttitudeAxis::Roll => egui::vec2(0.18 * w, 0.28 * h),
+        AttitudeAxis::Yaw => egui::vec2(0.18 * w, 0.18 * h),
+        AttitudeAxis::Pitch => egui::Vec2::ZERO,
+    };
+    let wheel_centers: &[egui::Vec2] = match axis {
+        AttitudeAxis::Roll => &[
+            egui::vec2(-0.36 * w, 0.62 * h),
+            egui::vec2(0.36 * w, 0.62 * h),
+        ],
+        AttitudeAxis::Yaw => &[
+            egui::vec2(-0.34 * w, -0.56 * h),
+            egui::vec2(0.34 * w, -0.56 * h),
+            egui::vec2(-0.34 * w, 0.56 * h),
+            egui::vec2(0.34 * w, 0.56 * h),
+        ],
+        AttitudeAxis::Pitch => &[],
+    };
+    for wheel_center in wheel_centers {
+        let half = 0.5 * wheel_size;
+        let corners = [
+            *wheel_center + egui::vec2(-half.x, -half.y),
+            *wheel_center + egui::vec2(half.x, -half.y),
+            *wheel_center + egui::vec2(half.x, half.y),
+            *wheel_center + egui::vec2(-half.x, half.y),
+        ];
+        let points: Vec<egui::Pos2> = corners
+            .into_iter()
+            .map(|p| rotate_point(center, p, angle))
+            .collect();
+        painter.add(egui::Shape::convex_polygon(
+            points,
+            egui::Color32::from_black_alpha(185),
+            egui::Stroke::new(1.0, color),
+        ));
+    }
+}
+
+fn rotate_point(center: egui::Pos2, point: egui::Vec2, angle: f32) -> egui::Pos2 {
+    let (sin, cos) = angle.sin_cos();
+    center + egui::vec2(point.x * cos - point.y * sin, point.x * sin + point.y * cos)
 }
 
 fn plot_spec<'a>(title: &'static str, traces: Vec<&'a Trace>, show_legend: bool) -> PlotSpec<'a> {
@@ -2561,6 +3225,34 @@ fn plot_spec<'a>(title: &'static str, traces: Vec<&'a Trace>, show_legend: bool)
 
 fn trace_refs(traces: &[Trace]) -> Vec<&Trace> {
     traces.iter().filter(|t| !t.points.is_empty()).collect()
+}
+
+fn trace_time_range<'a>(traces: impl IntoIterator<Item = &'a Trace>) -> Option<(f64, f64)> {
+    traces
+        .into_iter()
+        .filter_map(|trace| {
+            let start = trace
+                .points
+                .iter()
+                .find_map(|p| p[0].is_finite().then_some(p[0]))?;
+            let end = trace
+                .points
+                .iter()
+                .rev()
+                .find_map(|p| p[0].is_finite().then_some(p[0]))?;
+            Some((start.min(end), start.max(end)))
+        })
+        .fold(None, |range, (start, end)| match range {
+            Some((min_t, max_t)) => Some((f64::min(min_t, start), f64::max(max_t, end))),
+            None => Some((start, end)),
+        })
+}
+
+fn time_in_range(t_s: f64, range: Option<(f64, f64)>) -> bool {
+    let Some((min_t, max_t)) = range else {
+        return false;
+    };
+    t_s.is_finite() && t_s >= min_t && t_s <= max_t
 }
 
 fn concat_trace_refs<const N: usize>(groups: [&[Trace]; N]) -> Vec<&Trace> {
@@ -2598,13 +3290,6 @@ fn concat_trace_refs_matching<'a, const N: usize>(
 fn page_header(ui: &mut egui::Ui, title: &str, _subtitle: &str) {
     ui.heading(title);
     ui.add_space(6.0);
-}
-
-fn status_row(ui: &mut egui::Ui, label: &str, value: usize) {
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(label).weak());
-        ui.monospace(value.to_string());
-    });
 }
 
 fn draw_analysis_page(
@@ -2664,6 +3349,20 @@ fn draw_plot<'a, I>(
     show_legend: bool,
     max_points_per_trace: usize,
 ) where
+    I: IntoIterator<Item = &'a Trace>,
+{
+    let _ = draw_plot_with_cursor_time(ui, title, traces, show_legend, max_points_per_trace, None);
+}
+
+fn draw_plot_with_cursor_time<'a, I>(
+    ui: &mut egui::Ui,
+    title: &str,
+    traces: I,
+    show_legend: bool,
+    max_points_per_trace: usize,
+    cursor_t_s: Option<f64>,
+) -> Option<f64>
+where
     I: IntoIterator<Item = &'a Trace>,
 {
     fn visible_decimated(
@@ -2831,31 +3530,39 @@ fn draw_plot<'a, I>(
         );
         let (rect, _) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
         if !ui.is_rect_visible(rect) {
-            return;
+            return None;
         }
-        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-            draw_plot_body(
-                ui,
-                title,
-                traces,
-                show_legend,
-                max_points_per_trace,
-                plot_height,
-            );
-        });
+        return ui
+            .scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                draw_plot_body(
+                    ui,
+                    title,
+                    traces,
+                    show_legend,
+                    max_points_per_trace,
+                    plot_height,
+                    cursor_t_s,
+                )
+            })
+            .inner;
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    ui.vertical(|ui| {
-        draw_plot_body(
-            ui,
-            title,
-            traces,
-            show_legend,
-            max_points_per_trace,
-            TIME_SERIES_PLOT_HEIGHT,
-        );
-    });
+    {
+        return ui
+            .vertical(|ui| {
+                draw_plot_body(
+                    ui,
+                    title,
+                    traces,
+                    show_legend,
+                    max_points_per_trace,
+                    TIME_SERIES_PLOT_HEIGHT,
+                    cursor_t_s,
+                )
+            })
+            .inner;
+    }
 
     fn draw_plot_body<'a, I>(
         ui: &mut egui::Ui,
@@ -2864,7 +3571,9 @@ fn draw_plot<'a, I>(
         show_legend: bool,
         max_points_per_trace: usize,
         plot_height: f32,
-    ) where
+        cursor_t_s: Option<f64>,
+    ) -> Option<f64>
+    where
         I: IntoIterator<Item = &'a Trace>,
     {
         let traces: Vec<&Trace> = traces.into_iter().collect();
@@ -2880,8 +3589,9 @@ fn draw_plot<'a, I>(
                             ui.label(egui::RichText::new("No data").weak());
                         });
                     });
-                    return;
+                    return None;
                 }
+                let data_time_range = trace_time_range(traces.iter().copied());
 
                 let mut plot = Plot::new(title)
                     .height(plot_height)
@@ -2915,8 +3625,29 @@ fn draw_plot<'a, I>(
                             plot_ui.line(Line::new(t.name.clone(), points));
                         }
                     }
-                });
-            });
+                    let hover_t_s = plot_ui
+                        .response()
+                        .hovered()
+                        .then(|| plot_ui.pointer_coordinate().map(|p| p.x))
+                        .flatten()
+                        .filter(|t| time_in_range(*t, data_time_range));
+                    if let Some(cursor_t_s) = hover_t_s
+                        .or(cursor_t_s)
+                        .filter(|t| time_in_range(*t, data_time_range))
+                    {
+                        plot_ui.vline(
+                            VLine::new("Shared cursor", cursor_t_s)
+                                .name("")
+                                .allow_hover(false)
+                                .color(egui::Color32::from_gray(210).gamma_multiply(0.55))
+                                .style(LineStyle::Dotted { spacing: 5.0 }),
+                        );
+                    }
+                    hover_t_s
+                })
+                .inner
+            })
+            .inner
     }
 }
 
