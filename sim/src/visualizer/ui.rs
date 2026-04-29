@@ -392,6 +392,7 @@ pub struct App {
     map_tiles: HttpTiles,
     map_memory: MapMemory,
     map_center: walkers::Position,
+    show_reference: bool,
     show_heading: bool,
     show_gnss_map: bool,
     show_eskf: bool,
@@ -435,6 +436,53 @@ pub struct App {
 enum DataOrigin {
     Real,
     Synthetic,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TraceVisibility {
+    show_reference: bool,
+    show_eskf: bool,
+    show_loose: bool,
+}
+
+impl TraceVisibility {
+    fn allows(self, trace: &Trace) -> bool {
+        let name = trace.name.as_str();
+        if !self.show_reference && is_reference_trace_name(name) {
+            return false;
+        }
+        if !self.show_eskf && is_eskf_trace_name(name) {
+            return false;
+        }
+        if !self.show_loose && is_loose_trace_name(name) {
+            return false;
+        }
+        true
+    }
+}
+
+fn is_reference_trace_name(name: &str) -> bool {
+    name.starts_with("Reference")
+        || name.contains(" Reference")
+        || name.starts_with("Synthetic truth")
+        || name.contains("Synthetic truth")
+        || name.contains("truth path")
+}
+
+fn is_eskf_trace_name(name: &str) -> bool {
+    name.starts_with("ESKF")
+        || name.contains(" ESKF")
+        || name.contains("eskf")
+        || name.contains("EKF initialized")
+        || name.contains("ekf initialized")
+        || name.contains("mount ready")
+}
+
+fn is_loose_trace_name(name: &str) -> bool {
+    name.starts_with("Loose")
+        || name.contains(" Loose")
+        || name.contains("loose")
+        || name.contains("residual mount")
 }
 
 #[derive(Clone)]
@@ -1277,6 +1325,7 @@ fn create_app(
         map_tiles,
         map_memory,
         map_center,
+        show_reference: true,
         show_heading: false,
         show_gnss_map: true,
         show_eskf: true,
@@ -1346,6 +1395,14 @@ fn create_app(
 }
 
 impl App {
+    fn trace_visibility(&self) -> TraceVisibility {
+        TraceVisibility {
+            show_reference: self.show_reference,
+            show_eskf: self.show_eskf,
+            show_loose: self.show_loose,
+        }
+    }
+
     fn set_ui_theme(&mut self, theme: UiTheme, ctx: &egui::Context) {
         if self.ui_theme == theme {
             return;
@@ -1780,8 +1837,6 @@ impl App {
             ui.label("Map traces");
             ui.checkbox(&mut self.show_heading, "show heading");
             ui.checkbox(&mut self.show_gnss_map, "show GNSS");
-            ui.checkbox(&mut self.show_eskf, "show ESKF");
-            ui.checkbox(&mut self.show_loose, "show Loose");
             if ui.button("Recenter").clicked() {
                 self.map_memory.follow_my_position();
             }
@@ -1832,13 +1887,20 @@ impl App {
                     && !t.name.contains("truth")
             });
         }
+        if !self.show_reference {
+            map_traces.retain(|t| !is_reference_trace_name(t.name.as_str()));
+        }
         if !self.show_eskf {
             map_traces.retain(|t| !t.name.contains("ESKF"));
         }
         if self.show_loose {
             map_traces.extend(self.data.loose_map.iter());
         }
-        let mut headings: Vec<&HeadingSample> = self.data.eskf_map_heading.iter().collect();
+        let mut headings: Vec<&HeadingSample> = if self.show_eskf {
+            self.data.eskf_map_heading.iter().collect()
+        } else {
+            Vec::new()
+        };
         if self.show_loose {
             headings.extend(self.data.loose_map_heading.iter());
         }
@@ -1869,6 +1931,7 @@ impl App {
         let traces = synthetic_trajectory_traces(
             &self.data,
             ui.visuals(),
+            self.show_reference,
             self.show_gnss_map,
             self.show_eskf,
             self.show_loose,
@@ -1929,7 +1992,12 @@ impl App {
                     "Overview",
                     "Primary signals, references, and filter estimates.",
                 );
-                let speed: Vec<Trace> = trace_refs(&self.data.speed).into_iter().cloned().collect();
+                let visibility = self.trace_visibility();
+                let speed: Vec<Trace> = trace_refs(&self.data.speed)
+                    .into_iter()
+                    .filter(|trace| visibility.allows(trace))
+                    .cloned()
+                    .collect();
                 let mount: Vec<Trace> = concat_trace_refs_matching(
                     [
                         self.data.eskf_misalignment.as_slice(),
@@ -1949,6 +2017,7 @@ impl App {
                     ],
                 )
                 .into_iter()
+                .filter(|trace| visibility.allows(trace))
                 .cloned()
                 .collect();
                 let attitude: Vec<Trace> = concat_trace_refs_matching(
@@ -1960,6 +2029,7 @@ impl App {
                     &["roll", "pitch", "yaw"],
                 )
                 .into_iter()
+                .filter(|trace| visibility.allows(trace))
                 .cloned()
                 .collect();
                 let biases: Vec<Trace> = concat_trace_refs([
@@ -1969,6 +2039,7 @@ impl App {
                     self.data.loose_bias_accel.as_slice(),
                 ])
                 .into_iter()
+                .filter(|trace| visibility.allows(trace))
                 .cloned()
                 .collect();
 
@@ -2373,6 +2444,11 @@ impl eframe::App for App {
                 if selected_theme != self.ui_theme {
                     self.set_ui_theme(selected_theme, ctx);
                 }
+                ui.separator();
+                ui.label("Traces");
+                ui.checkbox(&mut self.show_reference, "Reference");
+                ui.checkbox(&mut self.show_eskf, "ESKF");
+                ui.checkbox(&mut self.show_loose, "Loose");
             });
             ui.horizontal_wrapped(|ui| {
                 ui.selectable_value(&mut self.page, Page::Overview, "Overview");
@@ -3031,6 +3107,7 @@ impl eframe::App for App {
                             ),
                         ],
                         self.max_points_per_trace,
+                        self.trace_visibility(),
                     );
                 });
             }
@@ -3102,6 +3179,7 @@ impl eframe::App for App {
                             plot_spec("Align Covariance", trace_refs(&self.data.align_cov), true),
                         ],
                         self.max_points_per_trace,
+                        self.trace_visibility(),
                     );
                 });
             }
@@ -3153,6 +3231,7 @@ impl eframe::App for App {
                             plot_spec("Loose Scale Factors", scale, true),
                         ],
                         self.max_points_per_trace,
+                        self.trace_visibility(),
                     );
                 });
             }
@@ -3196,6 +3275,7 @@ impl eframe::App for App {
                             plot_spec("Other Signals", trace_refs(&self.data.other), true),
                         ],
                         self.max_points_per_trace,
+                        self.trace_visibility(),
                     );
                 });
             }
@@ -3282,6 +3362,7 @@ impl eframe::App for App {
                             ),
                         ],
                         self.max_points_per_trace,
+                        self.trace_visibility(),
                     );
                 });
             }
@@ -3366,19 +3447,22 @@ struct SyntheticTrajectoryTrace {
 fn synthetic_trajectory_traces(
     data: &PlotData,
     visuals: &egui::Visuals,
+    show_reference: bool,
     show_gnss: bool,
     show_eskf: bool,
     show_loose: bool,
 ) -> Vec<SyntheticTrajectoryTrace> {
     let mut traces = Vec::new();
-    push_position_pair_trace(
-        &mut traces,
-        "Reference",
-        &data.eskf_cmp_pos,
-        "Synthetic truth posN [m]",
-        "Synthetic truth posE [m]",
-        SeriesColor::Reference.resolve(visuals),
-    );
+    if show_reference {
+        push_position_pair_trace(
+            &mut traces,
+            "Reference",
+            &data.eskf_cmp_pos,
+            "Synthetic truth posN [m]",
+            "Synthetic truth posE [m]",
+            SeriesColor::Reference.resolve(visuals),
+        );
+    }
     if show_gnss
         && let Some(reference) = first_lonlat_trace_point(&data.eskf_map, "Synthetic truth path")
         && let Some(gnss) = data
@@ -4086,6 +4170,7 @@ fn draw_analysis_page(
     subtitle: &str,
     plots: Vec<PlotSpec<'_>>,
     max_points_per_trace: usize,
+    visibility: TraceVisibility,
 ) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -4093,6 +4178,10 @@ fn draw_analysis_page(
             page_header(ui, title, subtitle);
             let plots: Vec<PlotSpec<'_>> = plots
                 .into_iter()
+                .map(|mut plot| {
+                    plot.traces.retain(|trace| visibility.allows(trace));
+                    plot
+                })
                 .filter(|plot| plot.traces.iter().any(|trace| !trace.points.is_empty()))
                 .collect();
             if plots.is_empty() {
