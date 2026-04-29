@@ -77,7 +77,7 @@
         emaFps: 0,
         frameCount: 0,
       };
-      {
+      if (new URLSearchParams(window.location.search).has("bench")) {
         let lastTimestamp = 0;
         const sample = window.__imuGnssFusionBrowserFps;
         const tick = (timestamp) => {
@@ -97,9 +97,10 @@
       try {
         const cacheBust = String(Date.now());
         const wasm = await import(`./pkg/visualizer.js?v=${cacheBust}`);
-        await wasm.default({
+        const wasmExports = await wasm.default({
           module_or_path: `./pkg/visualizer_bg.wasm?v=${cacheBust}`,
         });
+        window.__imuGnssFusionWasmMemory = wasmExports && wasmExports.memory ? wasmExports.memory : null;
         await wasm.start_visualizer("visualizer_canvas");
         status.remove();
       } catch (error) {

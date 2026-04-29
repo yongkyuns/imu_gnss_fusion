@@ -1,10 +1,15 @@
-import init, * as visualizer from "./pkg/visualizer.js";
-
 let wasmReady = null;
+let visualizer = null;
 
 async function ensureWasm() {
   if (!wasmReady) {
-    wasmReady = init();
+    const version = new URL(self.location.href).searchParams.get("v") || String(Date.now());
+    wasmReady = import(`./pkg/visualizer.js?v=${encodeURIComponent(version)}`).then(async (module) => {
+      await module.default({
+        module_or_path: `./pkg/visualizer_bg.wasm?v=${encodeURIComponent(version)}`,
+      });
+      visualizer = module;
+    });
   }
   await wasmReady;
 }
@@ -44,6 +49,19 @@ function normalizeReplayJob(request) {
 }
 
 function runReplayJob(request) {
+  if (visualizer.build_replay_plot_data_json) {
+    const json = visualizer.build_replay_plot_data_json(JSON.stringify(request));
+    return replayResultFromRequest(request, json);
+  }
+
+  if (visualizer.build_replay_plot_data_json_with_progress) {
+    const json = visualizer.build_replay_plot_data_json_with_progress(
+      JSON.stringify(request),
+      () => {},
+    );
+    return replayResultFromRequest(request, json);
+  }
+
   if (visualizer.build_replay_job_json_with_progress) {
     const progress = (message) => {
       self.postMessage(message);
@@ -82,6 +100,21 @@ function runReplayJob(request) {
     source: "csv",
     imuName: request.imuName || "imu.csv",
     gnssName: request.gnssName || "gnss.csv",
+    json,
+  };
+}
+
+function replayResultFromRequest(request, json) {
+  const source = request.source || {};
+  const kind = source.kind || "csv";
+  const isSynthetic = kind === "synthetic";
+  return {
+    ok: true,
+    jobId: request.jobId ?? 0,
+    label: source.label || request.label || (isSynthetic ? "Synthetic replay" : "CSV replay"),
+    source: isSynthetic ? "synthetic" : "csv",
+    imuName: source.imuName || request.imuName || (isSynthetic ? "synthetic IMU" : "imu.csv"),
+    gnssName: source.gnssName || request.gnssName || (isSynthetic ? "synthetic GNSS" : "gnss.csv"),
     json,
   };
 }

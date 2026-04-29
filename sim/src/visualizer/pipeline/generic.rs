@@ -232,14 +232,13 @@ fn build_generic_replay_plot_data_impl(
     eskf_mount_seed_q_vb: Option<[f32; 4]>,
 ) -> PlotData {
     let mut progress = GenericProgressReporter::new(replay, progress);
-    let mut fusion = if ekf_imu_source.uses_ref_mount() {
-        eskf_mount_seed_q_vb
-            .map(SensorFusion::with_misalignment)
-            .unwrap_or_else(SensorFusion::new)
-    } else {
-        SensorFusion::new()
-    };
+    let mut fusion = SensorFusion::new();
     apply_fusion_config(&mut fusion, ekf_cfg, ekf_imu_source);
+    if let Some(seed_q_vb) =
+        eskf_mount_seed_q_vb.or_else(|| reference_mount_seed_q_vb(replay, ekf_imu_source))
+    {
+        fusion.set_misalignment(seed_q_vb);
+    }
 
     let ref_gnss = replay.gnss.first().copied();
     let ref_ecef = ref_gnss.map(|s| lla_to_ecef(s.lat_deg, s.lon_deg, s.height_m));
@@ -1136,7 +1135,7 @@ fn populate_loose_traces(
                 sample.lon_deg,
                 pos_ecef,
                 vel_ecef,
-                Some(default_loose_p_diag(*sample)),
+                Some(default_loose_p_diag(*sample, ekf_cfg)),
                 None,
             );
             loose_ready = true;
@@ -1655,17 +1654,16 @@ fn loose_accel_sensor_bias_mps2(n: &LooseNominalState) -> [f64; 3] {
     [-(n.bax as f64), -(n.bay as f64), -(n.baz as f64)]
 }
 
-fn default_loose_p_diag(gnss: GenericGnssSample) -> [f32; LOOSE_ERROR_STATES] {
-    const DEFAULT_GYRO_BIAS_SIGMA_DPS: f32 = 0.125;
-    const DEFAULT_ACCEL_BIAS_SIGMA_MPS2: f32 = 0.075;
-    const DEFAULT_GYRO_SCALE_SIGMA: f32 = 0.02;
-    const DEFAULT_ACCEL_SCALE_SIGMA: f32 = 0.0;
-
+fn default_loose_p_diag(
+    gnss: GenericGnssSample,
+    cfg: EkfCompareConfig,
+) -> [f32; LOOSE_ERROR_STATES] {
     let mut p = [1.0_f32; LOOSE_ERROR_STATES];
+    let init = cfg.loose_init;
 
-    let pos_n_sigma = (gnss.pos_std_m[0] as f32).max(0.5);
-    let pos_e_sigma = (gnss.pos_std_m[1] as f32).max(0.5);
-    let pos_d_sigma = (gnss.pos_std_m[2] as f32).max(0.5);
+    let pos_n_sigma = (gnss.pos_std_m[0] as f32).max(init.pos_min_sigma_m);
+    let pos_e_sigma = (gnss.pos_std_m[1] as f32).max(init.pos_min_sigma_m);
+    let pos_d_sigma = (gnss.pos_std_m[2] as f32).max(init.pos_min_sigma_m);
     p[0] = pos_n_sigma * pos_n_sigma;
     p[1] = pos_e_sigma * pos_e_sigma;
     p[2] = pos_d_sigma * pos_d_sigma;
@@ -1675,33 +1673,33 @@ fn default_loose_p_diag(gnss: GenericGnssSample) -> [f32; LOOSE_ERROR_STATES] {
         .iter()
         .copied()
         .fold(0.0_f64, f64::max)
-        .max(0.2) as f32;
+        .max(init.vel_min_sigma_mps as f64) as f32;
     let vel_var = vel_sigma * vel_sigma;
     p[3] = vel_var;
     p[4] = vel_var;
     p[5] = vel_var;
 
-    let attitude_var = 2.0_f32.to_radians().powi(2);
+    let attitude_var = init.attitude_sigma_deg.to_radians().powi(2);
     p[6] = attitude_var;
     p[7] = attitude_var;
     p[8] = attitude_var;
 
-    let gyro_bias_sigma = DEFAULT_GYRO_BIAS_SIGMA_DPS.to_radians();
-    p[9] = DEFAULT_ACCEL_BIAS_SIGMA_MPS2 * DEFAULT_ACCEL_BIAS_SIGMA_MPS2;
-    p[10] = DEFAULT_ACCEL_BIAS_SIGMA_MPS2 * DEFAULT_ACCEL_BIAS_SIGMA_MPS2;
-    p[11] = DEFAULT_ACCEL_BIAS_SIGMA_MPS2 * DEFAULT_ACCEL_BIAS_SIGMA_MPS2;
+    let gyro_bias_sigma = init.gyro_bias_sigma_dps.to_radians();
+    p[9] = init.accel_bias_sigma_mps2 * init.accel_bias_sigma_mps2;
+    p[10] = init.accel_bias_sigma_mps2 * init.accel_bias_sigma_mps2;
+    p[11] = init.accel_bias_sigma_mps2 * init.accel_bias_sigma_mps2;
     p[12] = gyro_bias_sigma * gyro_bias_sigma;
     p[13] = gyro_bias_sigma * gyro_bias_sigma;
     p[14] = gyro_bias_sigma * gyro_bias_sigma;
 
-    p[15] = DEFAULT_ACCEL_SCALE_SIGMA * DEFAULT_ACCEL_SCALE_SIGMA;
-    p[16] = DEFAULT_ACCEL_SCALE_SIGMA * DEFAULT_ACCEL_SCALE_SIGMA;
-    p[17] = DEFAULT_ACCEL_SCALE_SIGMA * DEFAULT_ACCEL_SCALE_SIGMA;
-    p[18] = DEFAULT_GYRO_SCALE_SIGMA * DEFAULT_GYRO_SCALE_SIGMA;
-    p[19] = DEFAULT_GYRO_SCALE_SIGMA * DEFAULT_GYRO_SCALE_SIGMA;
-    p[20] = DEFAULT_GYRO_SCALE_SIGMA * DEFAULT_GYRO_SCALE_SIGMA;
+    p[15] = init.accel_scale_sigma * init.accel_scale_sigma;
+    p[16] = init.accel_scale_sigma * init.accel_scale_sigma;
+    p[17] = init.accel_scale_sigma * init.accel_scale_sigma;
+    p[18] = init.gyro_scale_sigma * init.gyro_scale_sigma;
+    p[19] = init.gyro_scale_sigma * init.gyro_scale_sigma;
+    p[20] = init.gyro_scale_sigma * init.gyro_scale_sigma;
 
-    let mount_var = attitude_var;
+    let mount_var = init.mount_sigma_deg.to_radians().powi(2);
     p[21] = mount_var;
     p[22] = mount_var;
     p[23] = mount_var;
@@ -1747,6 +1745,35 @@ fn q_vb_to_reference_mount_rpy(q_vb: [f64; 4]) -> (f64, f64, f64) {
     let q_x_180 = [0.0, 1.0, 0.0, 0.0];
     let q_flu = quat_mul(q_x_180, quat_conj(q_vb));
     quat_rpy_alg_deg(q_flu)
+}
+
+fn reference_mount_rpy_to_q_vb(rpy_deg: [f64; 3]) -> [f64; 4] {
+    let q_x_180 = [0.0, 1.0, 0.0, 0.0];
+    let q_flu = crate::eval::gnss_ins::quat_from_rpy_alg_deg(rpy_deg[0], rpy_deg[1], rpy_deg[2]);
+    quat_mul(quat_conj(q_flu), q_x_180)
+}
+
+fn reference_mount_seed_q_vb(
+    replay: &GenericReplayInput,
+    ekf_imu_source: EkfImuSource,
+) -> Option<[f32; 4]> {
+    if !ekf_imu_source.uses_ref_mount() {
+        return None;
+    }
+    replay
+        .reference_mount
+        .iter()
+        .rev()
+        .find(|sample| {
+            sample.roll_deg.is_finite()
+                && sample.pitch_deg.is_finite()
+                && sample.yaw_deg.is_finite()
+        })
+        .map(|sample| {
+            let q =
+                reference_mount_rpy_to_q_vb([sample.roll_deg, sample.pitch_deg, sample.yaw_deg]);
+            [q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32]
+        })
 }
 
 fn quat_rpy_alg_deg(q: [f64; 4]) -> (f64, f64, f64) {
@@ -1906,6 +1933,10 @@ fn dcm_to_quat(c: [[f64; 3]; 3]) -> [f64; 4] {
 }
 
 fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig, mode: EkfImuSource) {
+    fusion.set_align_config(cfg.align);
+    if let Some(noise) = cfg.predict_noise {
+        fusion.set_predict_noise(noise);
+    }
     fusion.set_r_body_vel(cfg.r_body_vel);
     fusion.set_gnss_pos_mount_scale(cfg.gnss_pos_mount_scale);
     fusion.set_gnss_vel_mount_scale(cfg.gnss_vel_mount_scale);
@@ -2135,5 +2166,53 @@ mod tests {
         assert!((accel_bias[0] + 0.1).abs() < 1.0e-6);
         assert!((accel_bias[1] - 0.2).abs() < 1.0e-6);
         assert!((accel_bias[2] + 0.3).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn reference_mount_rpy_round_trips_to_seed_quaternion() {
+        let rpy = [4.5, -2.25, 7.75];
+        let q_vb = reference_mount_rpy_to_q_vb(rpy);
+        let round_trip = q_vb_to_reference_mount_rpy(q_vb);
+
+        assert!((wrap_deg(round_trip.0 - rpy[0])).abs() < 1.0e-9);
+        assert!((wrap_deg(round_trip.1 - rpy[1])).abs() < 1.0e-9);
+        assert!((wrap_deg(round_trip.2 - rpy[2])).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn reference_mount_seed_comes_from_generic_reference_mount_csv_samples() {
+        let replay = GenericReplayInput {
+            imu: Vec::new(),
+            gnss: Vec::new(),
+            reference_attitude: Vec::new(),
+            reference_mount: vec![
+                GenericReferenceRpySample {
+                    t_s: 10.0,
+                    roll_deg: 1.0,
+                    pitch_deg: -3.0,
+                    yaw_deg: 5.0,
+                },
+                GenericReferenceRpySample {
+                    t_s: 20.0,
+                    roll_deg: 2.0,
+                    pitch_deg: -4.0,
+                    yaw_deg: 6.0,
+                },
+            ],
+        };
+
+        let seed = reference_mount_seed_q_vb(&replay, EkfImuSource::Ref).unwrap();
+        let round_trip = q_vb_to_reference_mount_rpy([
+            seed[0] as f64,
+            seed[1] as f64,
+            seed[2] as f64,
+            seed[3] as f64,
+        ]);
+
+        assert!((wrap_deg(round_trip.0 - 2.0)).abs() < 1.0e-6);
+        assert!((wrap_deg(round_trip.1 + 4.0)).abs() < 1.0e-6);
+        assert!((wrap_deg(round_trip.2 - 6.0)).abs() < 1.0e-6);
+        assert!(reference_mount_seed_q_vb(&replay, EkfImuSource::Internal).is_none());
+        assert!(reference_mount_seed_q_vb(&replay, EkfImuSource::External).is_none());
     }
 }

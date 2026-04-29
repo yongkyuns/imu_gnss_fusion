@@ -329,6 +329,34 @@ impl SensorFusion {
         n.qcs3 = 0.0;
     }
 
+    /// Replaces the ESKF prediction-noise configuration.
+    pub fn set_predict_noise(&mut self, predict_noise: PredictNoise) {
+        self.cfg.predict_noise = predict_noise;
+        self.eskf.raw_mut().noise = predict_noise;
+    }
+
+    /// Replaces the mount-alignment filter configuration.
+    ///
+    /// This resets the internal alignment filter and bootstrap state, so callers
+    /// should configure it before streaming samples for a replay.
+    pub fn set_align_config(&mut self, align: AlignConfig) {
+        self.cfg.align = align;
+        self.cfg.bootstrap.max_gyro_radps = align.max_stationary_gyro_radps;
+        self.cfg.bootstrap.max_accel_norm_err_mps2 = align.max_stationary_accel_norm_err_mps2;
+        self.align = Align::new(align);
+        self.align_initialized = false;
+        self.align_ready_since_t_s = None;
+        self.mount_ready = false;
+        self.mount_q_vb = None;
+        self.bootstrap_speed_ema = Ema::default();
+        self.bootstrap_speed_rate_ema = Ema::default();
+        self.bootstrap_course_rate_ema = Ema::default();
+        self.bootstrap_gyro_ema = Ema::default();
+        self.bootstrap_accel_err_ema = Ema::default();
+        self.bootstrap_stationary_accel_sum = [0.0; 3];
+        self.bootstrap_stationary_count = 0;
+    }
+
     /// Sets the nonholonomic body-velocity observation variance.
     pub fn set_r_body_vel(&mut self, r_body_vel: f32) {
         if r_body_vel.is_finite() && r_body_vel >= 0.0 {

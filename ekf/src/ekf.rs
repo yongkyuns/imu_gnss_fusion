@@ -1,4 +1,6 @@
 #[repr(C)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 #[derive(Debug, Clone, Copy)]
 pub struct PredictNoise {
     pub gyro_var: f32,

@@ -28,6 +28,8 @@ pub const GRAVITY_MPS2: f32 = 9.80665;
 /// Standard-deviation fields are interpreted as one-sigma values. The filter
 /// stores covariance internally, so callers should pass standard deviations,
 /// not variances.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 #[derive(Debug, Clone, Copy)]
 pub struct AlignConfig {
     /// Mount process-noise standard deviation per roll, pitch, and yaw state, in radians.

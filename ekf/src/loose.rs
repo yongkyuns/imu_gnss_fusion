@@ -108,6 +108,8 @@ const G_ROW_COLS: [[usize; 3]; LOOSE_ERROR_STATES] = [
 
 /// Process-noise variances used by [`LooseFilter::predict`].
 #[repr(C)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 #[derive(Debug, Clone, Copy)]
 pub struct LoosePredictNoise {
     /// Gyro white-noise variance.

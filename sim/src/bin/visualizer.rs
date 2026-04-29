@@ -559,6 +559,17 @@ pub fn build_generic_replay_job_json(request_json: &str) -> std::result::Result<
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
+pub fn build_replay_plot_data_json(request_json: &str) -> std::result::Result<String, JsValue> {
+    let request: WebReplayJobRequest = serde_json::from_str(request_json)
+        .map_err(|err| JsValue::from_str(&format!("invalid replay job request: {err}")))?;
+    let data = build_web_replay_plot_data(request, None)
+        .map_err(|err| JsValue::from_str(&format!("replay failed: {err}")))?;
+    serde_json::to_string(&data)
+        .map_err(|err| JsValue::from_str(&format!("failed to serialize replay data: {err}")))
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
 pub fn build_replay_job_json_with_progress(
     request_json: &str,
     progress_callback: &Function,
@@ -612,11 +623,63 @@ pub fn build_generic_replay_job_json_with_progress(
 }
 
 #[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn build_replay_plot_data_json_with_progress(
+    request_json: &str,
+    progress_callback: &Function,
+) -> std::result::Result<String, JsValue> {
+    let request: WebReplayJobRequest = serde_json::from_str(request_json)
+        .map_err(|err| JsValue::from_str(&format!("invalid replay job request: {err}")))?;
+    let job_id = request.job_id;
+
+    let mut progress = |progress: sim::visualizer::pipeline::generic::GenericReplayProgress| {
+        let message = Object::new();
+        let _ = Reflect::set(
+            &message,
+            &JsValue::from_str("type"),
+            &JsValue::from_str("progress"),
+        );
+        let _ = Reflect::set(
+            &message,
+            &JsValue::from_str("jobId"),
+            &JsValue::from_f64(job_id as f64),
+        );
+        let _ = Reflect::set(
+            &message,
+            &JsValue::from_str("progress"),
+            &JsValue::from_f64(progress.fraction),
+        );
+        let _ = Reflect::set(
+            &message,
+            &JsValue::from_str("currentTimeS"),
+            &JsValue::from_f64(progress.current_t_s),
+        );
+        let _ = Reflect::set(
+            &message,
+            &JsValue::from_str("finalTimeS"),
+            &JsValue::from_f64(progress.final_t_s),
+        );
+        let _ = progress_callback.call1(&JsValue::NULL, &message);
+    };
+
+    let data = build_web_replay_plot_data(request, Some(&mut progress))
+        .map_err(|err| JsValue::from_str(&format!("replay failed: {err}")))?;
+    serde_json::to_string(&data)
+        .map_err(|err| JsValue::from_str(&format!("failed to serialize replay data: {err}")))
+}
+
+#[cfg(target_arch = "wasm32")]
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WebReplayJobRequest {
     #[serde(default)]
     job_id: u64,
+    #[serde(default)]
+    misalignment: Option<String>,
+    #[serde(default)]
+    ekf_cfg: Option<sim::visualizer::pipeline::EkfCompareConfig>,
+    #[serde(default)]
+    gnss_outages: Option<sim::visualizer::pipeline::GnssOutageConfig>,
     label: Option<String>,
     imu_name: Option<String>,
     gnss_name: Option<String>,
@@ -697,6 +760,29 @@ struct WebReplayInput {
 }
 
 #[cfg(target_arch = "wasm32")]
+fn web_request_misalignment(request: &WebReplayJobRequest) -> sim::visualizer::model::EkfImuSource {
+    request
+        .misalignment
+        .as_deref()
+        .and_then(|value| sim::visualizer::model::EkfImuSource::from_cli_value(value).ok())
+        .unwrap_or(sim::visualizer::model::EkfImuSource::Internal)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn web_request_gnss_outages(
+    request: &WebReplayJobRequest,
+) -> sim::visualizer::pipeline::GnssOutageConfig {
+    request.gnss_outages.unwrap_or_default()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn web_request_ekf_cfg(
+    request: &WebReplayJobRequest,
+) -> sim::visualizer::pipeline::EkfCompareConfig {
+    request.ekf_cfg.unwrap_or_default()
+}
+
+#[cfg(target_arch = "wasm32")]
 fn build_web_replay_job_response(
     request: WebReplayJobRequest,
     progress: Option<&mut dyn FnMut(sim::visualizer::pipeline::generic::GenericReplayProgress)>,
@@ -715,6 +801,9 @@ fn build_web_replay_job_response(
     if source_kind == "synthetic" {
         return build_web_synthetic_replay_job_response(request, progress);
     }
+    let misalignment = web_request_misalignment(&request);
+    let ekf_cfg = web_request_ekf_cfg(&request);
+    let gnss_outages = web_request_gnss_outages(&request);
     match build_web_replay_input(&request) {
         Ok(input) => {
             let source = input.source;
@@ -725,17 +814,17 @@ fn build_web_replay_job_response(
                 Some(progress) => {
                     sim::visualizer::pipeline::generic::build_generic_replay_plot_data_with_progress(
                         &input.replay,
-                        sim::visualizer::model::EkfImuSource::Internal,
-                        sim::visualizer::pipeline::EkfCompareConfig::default(),
-                        sim::visualizer::pipeline::GnssOutageConfig::default(),
+                        misalignment,
+                        ekf_cfg,
+                        gnss_outages,
                         progress,
                     )
                 }
                 None => sim::visualizer::pipeline::generic::build_generic_replay_plot_data(
                     &input.replay,
-                    sim::visualizer::model::EkfImuSource::Internal,
-                    sim::visualizer::pipeline::EkfCompareConfig::default(),
-                    sim::visualizer::pipeline::GnssOutageConfig::default(),
+                    misalignment,
+                    ekf_cfg,
+                    gnss_outages,
                 ),
             };
             sim::visualizer::replay_job::decimate_for_transport(
@@ -776,6 +865,49 @@ fn build_web_replay_job_response(
             error: Some(format!("replay failed: {err}")),
         },
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn build_web_replay_plot_data(
+    request: WebReplayJobRequest,
+    progress: Option<&mut dyn FnMut(sim::visualizer::pipeline::generic::GenericReplayProgress)>,
+) -> anyhow::Result<sim::visualizer::model::PlotData> {
+    let source_kind = request
+        .source
+        .as_ref()
+        .and_then(|source| source.kind.as_deref())
+        .unwrap_or("csv")
+        .to_ascii_lowercase();
+    let mut data = if source_kind == "synthetic" {
+        build_web_synthetic_plot_data(&request, progress)?
+    } else {
+        let input = build_web_replay_input(&request)?;
+        let misalignment = web_request_misalignment(&request);
+        let ekf_cfg = web_request_ekf_cfg(&request);
+        let gnss_outages = web_request_gnss_outages(&request);
+        match progress {
+            Some(progress) => {
+                sim::visualizer::pipeline::generic::build_generic_replay_plot_data_with_progress(
+                    &input.replay,
+                    misalignment,
+                    ekf_cfg,
+                    gnss_outages,
+                    progress,
+                )
+            }
+            None => sim::visualizer::pipeline::generic::build_generic_replay_plot_data(
+                &input.replay,
+                misalignment,
+                ekf_cfg,
+                gnss_outages,
+            ),
+        }
+    };
+    sim::visualizer::replay_job::decimate_for_transport(
+        &mut data,
+        sim::visualizer::replay_job::WEB_TRANSPORT_MAX_POINTS_PER_TRACE,
+    );
+    Ok(data)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -907,17 +1039,17 @@ fn build_web_synthetic_replay_job_response(
         Some(progress) => {
             sim::visualizer::pipeline::synthetic::build_synthetic_plot_data_with_progress(
                 &synth_cfg,
-                sim::visualizer::model::EkfImuSource::Internal,
-                sim::visualizer::pipeline::EkfCompareConfig::default(),
-                sim::visualizer::pipeline::GnssOutageConfig::default(),
+                web_request_misalignment(&request),
+                web_request_ekf_cfg(&request),
+                web_request_gnss_outages(&request),
                 progress,
             )
         }
         None => sim::visualizer::pipeline::synthetic::build_synthetic_plot_data(
             &synth_cfg,
-            sim::visualizer::model::EkfImuSource::Internal,
-            sim::visualizer::pipeline::EkfCompareConfig::default(),
-            sim::visualizer::pipeline::GnssOutageConfig::default(),
+            web_request_misalignment(&request),
+            web_request_ekf_cfg(&request),
+            web_request_gnss_outages(&request),
         ),
     };
     let label = source
@@ -964,6 +1096,68 @@ fn build_web_synthetic_replay_job_response(
             json: None,
             error: Some(format!("synthetic replay failed: {err}")),
         },
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn build_web_synthetic_plot_data(
+    request: &WebReplayJobRequest,
+    progress: Option<&mut dyn FnMut(sim::visualizer::pipeline::generic::GenericReplayProgress)>,
+) -> anyhow::Result<sim::visualizer::model::PlotData> {
+    let Some(source) = request.source.as_ref() else {
+        anyhow::bail!("synthetic replay source is missing");
+    };
+    let motion_label = source
+        .motion_label
+        .as_deref()
+        .unwrap_or("synthetic.scenario");
+    let motion_text = source.motion_text.as_deref().map(str::to_string);
+    let noise = match source
+        .noise_mode
+        .as_deref()
+        .unwrap_or("low")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "truth" | "none" | "zero" => {
+            sim::visualizer::pipeline::synthetic::SyntheticNoiseMode::Truth
+        }
+        "low" => sim::visualizer::pipeline::synthetic::SyntheticNoiseMode::Low,
+        "mid" | "medium" => sim::visualizer::pipeline::synthetic::SyntheticNoiseMode::Mid,
+        "high" => sim::visualizer::pipeline::synthetic::SyntheticNoiseMode::High,
+        other => anyhow::bail!("unsupported synthetic noise mode '{other}'"),
+    };
+    let synth_cfg = sim::visualizer::pipeline::synthetic::SyntheticVisualizerConfig {
+        motion_def: None,
+        motion_label: motion_label.to_string(),
+        motion_text,
+        noise_mode: noise,
+        seed: source.seed.unwrap_or(1),
+        mount_rpy_deg: source.mount_rpy_deg.unwrap_or([5.0, -5.0, 5.0]),
+        imu_hz: source.imu_hz.unwrap_or(100.0),
+        gnss_hz: source.gnss_hz.unwrap_or(2.0),
+        gnss_time_shift_ms: source.gnss_time_shift_ms.unwrap_or(0.0),
+        early_vel_bias_ned_mps: source.early_vel_bias_ned_mps.unwrap_or([0.0, 0.0, 0.0]),
+        early_fault_window_s: source
+            .early_fault_window_s
+            .map(|window| (window[0], window[1])),
+    };
+    match progress {
+        Some(progress) => {
+            sim::visualizer::pipeline::synthetic::build_synthetic_plot_data_with_progress(
+                &synth_cfg,
+                web_request_misalignment(request),
+                web_request_ekf_cfg(request),
+                web_request_gnss_outages(request),
+                progress,
+            )
+        }
+        None => sim::visualizer::pipeline::synthetic::build_synthetic_plot_data(
+            &synth_cfg,
+            web_request_misalignment(request),
+            web_request_ekf_cfg(request),
+            web_request_gnss_outages(request),
+        ),
     }
 }
 

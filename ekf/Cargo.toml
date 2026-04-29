@@ -8,5 +8,10 @@ license = "MIT"
 name = "sensor_fusion"
 path = "src/lib.rs"
 
+[features]
+default = []
+serde = ["dep:serde"]
+
 [dependencies]
 libm = "0.2"
+serde = { version = "1", default-features = false, features = ["derive"], optional = true }

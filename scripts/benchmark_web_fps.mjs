@@ -48,6 +48,8 @@ Options:
   --dataset-timeout-ms <n>
                           Dataset auto-load timeout (default: 30000)
   --activity <mode>       none or mouse; mouse moves over the canvas during sampling (default: mouse)
+  --sample-memory         Also sample JS heap, DOM counters, and wasm memory during the run
+  --memory-sample-ms <n>  Memory sampling interval when --sample-memory is set (default: 1000)
   --min-fps <n>           Exit non-zero if mean FPS is below this threshold
   --json                  Print the full JSON result instead of a short text summary
   --help                  Show this help
@@ -68,6 +70,8 @@ function parseArgs(argv) {
     dataset: "",
     datasetTimeoutMs: 30000,
     activity: "mouse",
+    sampleMemory: false,
+    memorySampleMs: 1000,
     minFps: null,
     json: false,
   };
@@ -121,6 +125,12 @@ function parseArgs(argv) {
         if (!["none", "mouse"].includes(args.activity)) {
           throw new Error("--activity must be either none or mouse");
         }
+        break;
+      case "--sample-memory":
+        args.sampleMemory = true;
+        break;
+      case "--memory-sample-ms":
+        args.memorySampleMs = parsePositiveInt(arg, next());
         break;
       case "--min-fps":
         args.minFps = parsePositiveFloat(arg, next());
@@ -483,6 +493,54 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function collectMemorySamples(cdp, durationMs, intervalMs) {
+  const samples = [];
+  const startedAt = Date.now();
+  while (Date.now() - startedAt <= durationMs) {
+    samples.push(await sampleMemory(cdp, Date.now() - startedAt));
+    await delay(intervalMs);
+  }
+  return samples;
+}
+
+async function sampleMemory(cdp, elapsedMs) {
+  const [metricsResult, domCounters, pageMemory] = await Promise.all([
+    cdp.send("Performance.getMetrics").catch(() => ({ metrics: [] })),
+    cdp.send("Memory.getDOMCounters").catch(() => null),
+    evaluate(
+      cdp,
+      `(() => {
+        const jsMemory = performance.memory ? {
+          usedJSHeapSize: performance.memory.usedJSHeapSize,
+          totalJSHeapSize: performance.memory.totalJSHeapSize,
+          jsHeapSizeLimit: performance.memory.jsHeapSizeLimit,
+        } : null;
+        const wasmMemory = window.__imuGnssFusionWasmMemory;
+        return {
+          jsMemory,
+          wasmMemoryBytes: wasmMemory && wasmMemory.buffer ? wasmMemory.buffer.byteLength : null,
+          appPerf: window.__imuGnssFusionPerf || null,
+          browserFps: window.__imuGnssFusionBrowserFps || null,
+        };
+      })()`,
+    ).catch(() => null),
+  ]);
+  const metrics = Object.fromEntries((metricsResult.metrics || []).map((metric) => [metric.name, metric.value]));
+  return {
+    elapsedMs,
+    jsHeapUsedBytes: metrics.JSHeapUsedSize ?? pageMemory?.jsMemory?.usedJSHeapSize ?? null,
+    jsHeapTotalBytes: metrics.JSHeapTotalSize ?? pageMemory?.jsMemory?.totalJSHeapSize ?? null,
+    wasmMemoryBytes: pageMemory?.wasmMemoryBytes ?? null,
+    nodes: domCounters?.nodes ?? null,
+    documents: domCounters?.documents ?? null,
+    jsEventListeners: domCounters?.jsEventListeners ?? null,
+    layoutCount: metrics.LayoutCount ?? null,
+    recalcStyleCount: metrics.RecalcStyleCount ?? null,
+    appFrameCount: pageMemory?.appPerf?.frameCount ?? null,
+    browserFrameCount: pageMemory?.browserFps?.frameCount ?? null,
+  };
+}
+
 async function stopProcess(child) {
   if (child.exitCode !== null || child.signalCode !== null) {
     return;
@@ -501,7 +559,7 @@ async function stopProcess(child) {
   }
 }
 
-function summarize(raw, options, pageInfo, consoleMessages, exceptions) {
+function summarize(raw, options, pageInfo, consoleMessages, exceptions, memorySamples = []) {
   const uniqueFrames = [];
   for (const timestamp of raw.frameTimestampsMs || []) {
     const last = uniqueFrames[uniqueFrames.length - 1];
@@ -565,7 +623,34 @@ function summarize(raw, options, pageInfo, consoleMessages, exceptions) {
       consoleMessages,
       exceptions,
     },
+    memory: summarizeMemory(memorySamples),
   };
+}
+
+function summarizeMemory(samples) {
+  if (!samples.length) {
+    return null;
+  }
+  const first = samples[0];
+  const last = samples[samples.length - 1];
+  return {
+    sampleCount: samples.length,
+    first,
+    last,
+    delta: {
+      jsHeapUsedBytes: delta(last.jsHeapUsedBytes, first.jsHeapUsedBytes),
+      jsHeapTotalBytes: delta(last.jsHeapTotalBytes, first.jsHeapTotalBytes),
+      wasmMemoryBytes: delta(last.wasmMemoryBytes, first.wasmMemoryBytes),
+      nodes: delta(last.nodes, first.nodes),
+      documents: delta(last.documents, first.documents),
+      jsEventListeners: delta(last.jsEventListeners, first.jsEventListeners),
+    },
+    samples,
+  };
+}
+
+function delta(last, first) {
+  return Number.isFinite(last) && Number.isFinite(first) ? last - first : null;
 }
 
 function mean(values) {
@@ -625,6 +710,29 @@ function printSummary(result) {
   if (result.diagnostics.exceptions.length || result.callbacks.errors.length) {
     console.log("  Diagnostics: runtime exceptions or rAF callback errors were captured; rerun with --json.");
   }
+  if (result.memory) {
+    console.log(
+      `  Memory: JS heap ${formatBytes(result.memory.first.jsHeapUsedBytes)} -> ${formatBytes(result.memory.last.jsHeapUsedBytes)} (${formatSignedBytes(result.memory.delta.jsHeapUsedBytes)}), wasm ${formatBytes(result.memory.first.wasmMemoryBytes)} -> ${formatBytes(result.memory.last.wasmMemoryBytes)} (${formatSignedBytes(result.memory.delta.wasmMemoryBytes)})`,
+    );
+    console.log(
+      `  DOM: nodes ${result.memory.first.nodes} -> ${result.memory.last.nodes}, listeners ${result.memory.first.jsEventListeners} -> ${result.memory.last.jsEventListeners}`,
+    );
+  }
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes)) {
+    return "n/a";
+  }
+  return `${Math.round((bytes / 1024 / 1024) * 10) / 10} MiB`;
+}
+
+function formatSignedBytes(bytes) {
+  if (!Number.isFinite(bytes)) {
+    return "n/a";
+  }
+  const sign = bytes >= 0 ? "+" : "";
+  return `${sign}${formatBytes(bytes)}`;
 }
 
 async function main() {
@@ -667,6 +775,9 @@ async function main() {
     await cdp.open();
     await cdp.send("Runtime.enable");
     await cdp.send("Page.enable");
+    if (args.sampleMemory) {
+      await cdp.send("Performance.enable").catch(() => {});
+    }
     await cdp.send("Input.setIgnoreInputEvents", { ignore: false });
     await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: installProbeSource() });
 
@@ -727,12 +838,15 @@ async function main() {
 
     const activity =
       args.activity === "mouse" ? driveMouse(cdp, args.width, args.height, args.durationMs) : delay(args.durationMs);
+    const memorySampling = args.sampleMemory
+      ? collectMemorySamples(cdp, args.durationMs, args.memorySampleMs)
+      : Promise.resolve([]);
     const sampleTimer = evaluate(
       cdp,
       `new Promise((resolve) => setTimeout(resolve, ${JSON.stringify(args.durationMs)}))`,
       args.durationMs + 5000,
     );
-    await Promise.all([activity, sampleTimer]);
+    const [, , memorySamples] = await Promise.all([activity, sampleTimer, memorySampling]);
 
     const raw = await evaluate(cdp, "window.__visualizerBenchmark.snapshot()", 5000);
     const pageInfo = await evaluate(
@@ -760,7 +874,7 @@ async function main() {
       })()`,
     );
 
-    const result = summarize(raw, args, pageInfo, cdp.consoleMessages, cdp.exceptions);
+    const result = summarize(raw, args, pageInfo, cdp.consoleMessages, cdp.exceptions, memorySamples);
     if (args.json) {
       console.log(JSON.stringify(result, null, 2));
     } else {

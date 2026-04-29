@@ -40,9 +40,11 @@ const PLOT_GRID_STRENGTH_SCALE: f64 = 0.45;
 #[cfg(target_arch = "wasm32")]
 const TIME_SERIES_PLOT_FRAME_PADDING: f32 = 26.0;
 #[cfg(target_arch = "wasm32")]
-const WEB_DECIMATION_SCAN_MULTIPLIER: usize = 8;
+const WEB_DECIMATION_SCAN_MULTIPLIER: usize = 16;
 #[cfg(target_arch = "wasm32")]
-const WEB_MAX_POINTS_PER_TRACE: usize = 80;
+const WEB_MIN_POINTS_PER_TRACE: usize = 80;
+#[cfg(target_arch = "wasm32")]
+const WEB_MAX_POINTS_PER_TRACE: usize = 240;
 #[cfg(target_arch = "wasm32")]
 const WEB_DATASET_MANIFEST_URL: &str = "datasets/manifest.json";
 
@@ -309,13 +311,13 @@ fn map_trace_min_pixel_step(zoom: f64) -> f32 {
     if zoom >= 18.0 {
         0.25
     } else if zoom >= 17.0 {
-        0.75
+        0.5
     } else if zoom >= 16.0 {
-        1.5
+        1.0
     } else if zoom >= 15.0 {
-        3.0
+        2.0
     } else {
-        5.0
+        3.0
     }
 }
 
@@ -323,11 +325,11 @@ fn map_trace_point_stride(zoom: f64) -> usize {
     if zoom >= 17.0 {
         1
     } else if zoom >= 16.0 {
-        3
+        2
     } else if zoom >= 15.0 {
-        8
+        4
     } else {
-        16
+        8
     }
 }
 
@@ -393,11 +395,16 @@ pub struct App {
     map_memory: MapMemory,
     map_center: walkers::Position,
     show_reference: bool,
+    show_align: bool,
     show_heading: bool,
     show_gnss_map: bool,
     show_eskf: bool,
     show_loose: bool,
     overview_cursor_t_s: Option<f64>,
+    tuning_cfg: EkfCompareConfig,
+    tuning_gnss_outages: GnssOutageConfig,
+    tuning_misalignment: EkfImuSource,
+    tuning_panel: Option<TuningPanel>,
     replay: Option<ReplayState>,
     replay_status: Option<String>,
     #[cfg(target_arch = "wasm32")]
@@ -438,17 +445,32 @@ enum DataOrigin {
     Synthetic,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TuningPanel {
+    Eskf,
+    Align,
+    Loose,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct TraceVisibility {
     show_reference: bool,
+    show_align: bool,
     show_eskf: bool,
     show_loose: bool,
 }
 
 impl TraceVisibility {
     fn allows(self, trace: &Trace) -> bool {
+        self.allows_in_plot("", trace)
+    }
+
+    fn allows_in_plot(self, plot_title: &str, trace: &Trace) -> bool {
         let name = trace.name.as_str();
         if !self.show_reference && is_reference_trace_name(name) {
+            return false;
+        }
+        if !self.show_align && (is_align_trace_name(name) || is_align_plot_title(plot_title)) {
             return false;
         }
         if !self.show_eskf && is_eskf_trace_name(name) {
@@ -467,6 +489,14 @@ fn is_reference_trace_name(name: &str) -> bool {
         || name.starts_with("Synthetic truth")
         || name.contains("Synthetic truth")
         || name.contains("truth path")
+}
+
+fn is_align_trace_name(name: &str) -> bool {
+    name.starts_with("Align") || name.contains(" Align")
+}
+
+fn is_align_plot_title(title: &str) -> bool {
+    title.starts_with("Align ")
 }
 
 fn is_eskf_trace_name(name: &str) -> bool {
@@ -551,17 +581,9 @@ struct WebDatasetState {
     replay_job_id: u64,
     pending: Rc<RefCell<Option<WebDatasetTaskResult>>>,
     pending_replay: Rc<RefCell<Option<WebReplayTaskResult>>>,
-    pending_progress: Rc<RefCell<Option<WebReplayProgress>>>,
     replay_worker: Option<Worker>,
     replay_onmessage: Option<Closure<dyn FnMut(MessageEvent)>>,
     replay_onerror: Option<Closure<dyn FnMut(ErrorEvent)>>,
-}
-
-#[cfg(target_arch = "wasm32")]
-#[derive(Clone, Copy)]
-struct WebReplayProgress {
-    job_id: u64,
-    progress: f32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -629,7 +651,6 @@ impl WebDatasetState {
             replay_job_id: 0,
             pending: Rc::new(RefCell::new(None)),
             pending_replay: Rc::new(RefCell::new(None)),
-            pending_progress: Rc::new(RefCell::new(None)),
             replay_worker: None,
             replay_onmessage: None,
             replay_onerror: None,
@@ -756,7 +777,13 @@ fn csv_time_span_s(csv: &str) -> f64 {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn web_replay_worker_request(job_id: u64, job: &WebReplayWorkerJob) -> Object {
+fn web_replay_worker_request(
+    job_id: u64,
+    job: &WebReplayWorkerJob,
+    misalignment: EkfImuSource,
+    ekf_cfg: EkfCompareConfig,
+    gnss_outages: GnssOutageConfig,
+) -> Object {
     let request = Object::new();
     let _ = Reflect::set(
         &request,
@@ -885,6 +912,21 @@ fn web_replay_worker_request(job_id: u64, job: &WebReplayWorkerJob) -> Object {
         }
     }
     let _ = Reflect::set(&request, &JsValue::from_str("source"), source.as_ref());
+    let _ = Reflect::set(
+        &request,
+        &JsValue::from_str("misalignment"),
+        &JsValue::from_str(misalignment.cli_value()),
+    );
+    let _ = Reflect::set(
+        &request,
+        &JsValue::from_str("ekfCfg"),
+        &serde_wasm_bindgen::to_value(&ekf_cfg).unwrap_or(JsValue::NULL),
+    );
+    let _ = Reflect::set(
+        &request,
+        &JsValue::from_str("gnssOutages"),
+        &serde_wasm_bindgen::to_value(&gnss_outages).unwrap_or(JsValue::NULL),
+    );
     request
 }
 
@@ -1313,6 +1355,20 @@ fn create_app(
     let initial_max_points_per_trace = 2500;
 
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
+    let tuning_cfg = replay
+        .as_ref()
+        .map(|replay| replay.ekf_cfg)
+        .unwrap_or_default();
+    let tuning_gnss_outages = replay
+        .as_ref()
+        .map(|replay| replay.gnss_outages)
+        .unwrap_or_default();
+    let tuning_misalignment = replay
+        .as_ref()
+        .map(|replay| replay.misalignment)
+        .unwrap_or(EkfImuSource::Internal);
+
+    #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut app = App {
         data,
         has_itow,
@@ -1326,11 +1382,16 @@ fn create_app(
         map_memory,
         map_center,
         show_reference: true,
+        show_align: true,
         show_heading: false,
         show_gnss_map: true,
         show_eskf: true,
         show_loose: true,
         overview_cursor_t_s: None,
+        tuning_cfg,
+        tuning_gnss_outages,
+        tuning_misalignment,
+        tuning_panel: None,
         replay,
         replay_status: None,
         #[cfg(target_arch = "wasm32")]
@@ -1387,10 +1448,10 @@ fn create_app(
         if let Some(scenario) = web_query_synthetic_scenario() {
             app.web_scenario = scenario;
         }
-        app.refresh_from_web_synthetic();
+        app.refresh_from_web_synthetic(&cc.egui_ctx);
     }
     #[cfg(target_arch = "wasm32")]
-    app.start_web_manifest_load();
+    app.start_web_manifest_load(&cc.egui_ctx);
     app
 }
 
@@ -1398,9 +1459,128 @@ impl App {
     fn trace_visibility(&self) -> TraceVisibility {
         TraceVisibility {
             show_reference: self.show_reference,
+            show_align: self.show_align,
             show_eskf: self.show_eskf,
             show_loose: self.show_loose,
         }
+    }
+
+    fn draw_tuning_window(&mut self, ctx: &egui::Context) {
+        let Some(panel) = self.tuning_panel else {
+            return;
+        };
+        let mut open = true;
+        let mut apply_replay = false;
+        let title = match panel {
+            TuningPanel::Eskf => "ESKF Tuning",
+            TuningPanel::Align => "Align Tuning",
+            TuningPanel::Loose => "Loose Tuning",
+        };
+        egui::Window::new(title)
+            .open(&mut open)
+            .resizable(true)
+            .default_width(620.0)
+            .show(ctx, |ui| {
+                match panel {
+                    TuningPanel::Eskf => {
+                        draw_eskf_tuning(ui, &mut self.tuning_misalignment, &mut self.tuning_cfg)
+                    }
+                    TuningPanel::Align => draw_align_tuning(ui, &mut self.tuning_cfg),
+                    TuningPanel::Loose => draw_loose_tuning(ui, &mut self.tuning_cfg),
+                }
+                ui.separator();
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("Reset section defaults").clicked() {
+                        let defaults = EkfCompareConfig::default();
+                        match panel {
+                            TuningPanel::Eskf => {
+                                self.tuning_misalignment = EkfImuSource::Internal;
+                                self.tuning_gnss_outages = GnssOutageConfig::default();
+                                self.tuning_cfg.r_body_vel = defaults.r_body_vel;
+                                self.tuning_cfg.gnss_pos_mount_scale =
+                                    defaults.gnss_pos_mount_scale;
+                                self.tuning_cfg.gnss_vel_mount_scale =
+                                    defaults.gnss_vel_mount_scale;
+                                self.tuning_cfg.yaw_init_sigma_deg = defaults.yaw_init_sigma_deg;
+                                self.tuning_cfg.gyro_bias_init_sigma_dps =
+                                    defaults.gyro_bias_init_sigma_dps;
+                                self.tuning_cfg.accel_bias_init_sigma_mps2 =
+                                    defaults.accel_bias_init_sigma_mps2;
+                                self.tuning_cfg.mount_init_sigma_deg =
+                                    defaults.mount_init_sigma_deg;
+                                self.tuning_cfg.r_vehicle_speed = defaults.r_vehicle_speed;
+                                self.tuning_cfg.mount_align_rw_var = defaults.mount_align_rw_var;
+                                self.tuning_cfg.mount_update_min_scale =
+                                    defaults.mount_update_min_scale;
+                                self.tuning_cfg.mount_update_ramp_time_s =
+                                    defaults.mount_update_ramp_time_s;
+                                self.tuning_cfg.mount_update_innovation_gate_mps =
+                                    defaults.mount_update_innovation_gate_mps;
+                                self.tuning_cfg.mount_update_yaw_rate_gate_dps =
+                                    defaults.mount_update_yaw_rate_gate_dps;
+                                self.tuning_cfg.align_handoff_delay_s =
+                                    defaults.align_handoff_delay_s;
+                                self.tuning_cfg.freeze_misalignment_states =
+                                    defaults.freeze_misalignment_states;
+                                self.tuning_cfg.mount_settle_time_s = defaults.mount_settle_time_s;
+                                self.tuning_cfg.mount_settle_release_sigma_deg =
+                                    defaults.mount_settle_release_sigma_deg;
+                                self.tuning_cfg.mount_settle_zero_cross_covariance =
+                                    defaults.mount_settle_zero_cross_covariance;
+                                self.tuning_cfg.r_zero_vel = defaults.r_zero_vel;
+                                self.tuning_cfg.r_stationary_accel = defaults.r_stationary_accel;
+                                self.tuning_cfg.vehicle_meas_lpf_cutoff_hz =
+                                    defaults.vehicle_meas_lpf_cutoff_hz;
+                                self.tuning_cfg.predict_imu_lpf_cutoff_hz =
+                                    defaults.predict_imu_lpf_cutoff_hz;
+                                self.tuning_cfg.predict_imu_decimation =
+                                    defaults.predict_imu_decimation;
+                                self.tuning_cfg.yaw_init_speed_mps = defaults.yaw_init_speed_mps;
+                                self.tuning_cfg.gnss_pos_r_scale = defaults.gnss_pos_r_scale;
+                                self.tuning_cfg.gnss_vel_r_scale = defaults.gnss_vel_r_scale;
+                                self.tuning_cfg.predict_noise = defaults.predict_noise;
+                            }
+                            TuningPanel::Align => {
+                                self.tuning_cfg.align = defaults.align;
+                            }
+                            TuningPanel::Loose => {
+                                self.tuning_cfg.loose_predict_noise = defaults.loose_predict_noise;
+                                self.tuning_cfg.loose_init = defaults.loose_init;
+                            }
+                        }
+                    }
+                    if self.replay.is_some() && ui.button("Apply replay").clicked() {
+                        apply_replay = true;
+                    }
+                });
+            });
+        if !open {
+            self.tuning_panel = None;
+        }
+        if apply_replay {
+            self.refresh_from_replay();
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn draw_web_bulk_loading_page(&self, ctx: &egui::Context) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.vertical_centered_justified(|ui| {
+                ui.add_space((ui.available_height() * 0.35).max(24.0));
+                ui.heading("Building replay");
+                ui.add_space(8.0);
+                ui.add(
+                    egui::ProgressBar::new(self.web_run_progress.clamp(0.0, 0.95))
+                        .desired_width((ui.available_width() * 0.45).clamp(220.0, 520.0))
+                        .text(format!(
+                            "{:.0}%",
+                            100.0 * self.web_run_progress.clamp(0.0, 0.95)
+                        )),
+                );
+                ui.add_space(6.0);
+                ui.label(&self.web_status);
+            });
+        });
     }
 
     fn set_ui_theme(&mut self, theme: UiTheme, ctx: &egui::Context) {
@@ -1423,7 +1603,7 @@ impl App {
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn start_web_manifest_load(&mut self) {
+    fn start_web_manifest_load(&mut self, ctx: &egui::Context) {
         if self.web_datasets.loading_manifest {
             return;
         }
@@ -1434,14 +1614,16 @@ impl App {
         );
         let manifest_url = self.web_datasets.manifest_url.clone();
         let pending = Rc::clone(&self.web_datasets.pending);
+        let repaint_ctx = ctx.clone();
         spawn_local(async move {
             let result = web_fetch_manifest(manifest_url).await;
             *pending.borrow_mut() = Some(WebDatasetTaskResult::Manifest(result));
+            repaint_ctx.request_repaint();
         });
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn start_web_dataset_load(&mut self) {
+    fn start_web_dataset_load(&mut self, ctx: &egui::Context) {
         if self.web_datasets.loading_dataset
             || self.web_datasets.loading_replay
             || self.web_datasets.datasets.is_empty()
@@ -1464,14 +1646,16 @@ impl App {
         self.web_status = format!("Loading dataset: {label}");
         let manifest_url = self.web_datasets.manifest_url.clone();
         let pending = Rc::clone(&self.web_datasets.pending);
+        let repaint_ctx = ctx.clone();
         spawn_local(async move {
             let result = web_fetch_dataset(manifest_url, entry).await;
             *pending.borrow_mut() = Some(WebDatasetTaskResult::Dataset(result));
+            repaint_ctx.request_repaint();
         });
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn poll_web_dataset_tasks(&mut self) {
+    fn poll_web_dataset_tasks(&mut self, ctx: &egui::Context) {
         let Some(result) = self.web_datasets.pending.borrow_mut().take() else {
             return;
         };
@@ -1500,7 +1684,7 @@ impl App {
                                     || d.display_label().to_ascii_lowercase() == auto_id
                             }) {
                                 self.web_datasets.selected = idx;
-                                self.start_web_dataset_load();
+                                self.start_web_dataset_load(ctx);
                             } else {
                                 self.web_status = format!(
                                     "Dataset manifest loaded, but '{auto_id}' was not found"
@@ -1529,7 +1713,7 @@ impl App {
                         self.web_reference_attitude_csv = files.reference_attitude;
                         self.web_reference_mount_csv = files.reference_mount;
                         self.web_run_progress = self.web_run_progress.max(0.02);
-                        self.start_web_replay_build(label, imu_name, gnss_name);
+                        self.start_web_replay_build(label, imu_name, gnss_name, ctx);
                     }
                     Err(err) => {
                         self.web_status = format!("Dataset load failed: {err}");
@@ -1540,17 +1724,11 @@ impl App {
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn poll_web_replay_progress(&mut self) {
+    fn advance_web_run_progress(&mut self) {
         if self.web_datasets.loading_dataset || self.web_datasets.loading_replay {
             let elapsed_s = (web_now_s() - self.web_run_started_time_s).max(0.0);
             let estimated = (elapsed_s / self.web_run_estimated_duration_s.max(0.5)) as f32;
             self.web_run_progress = self.web_run_progress.max(estimated.min(0.95));
-        }
-        let Some(progress) = self.web_datasets.pending_progress.borrow_mut().take() else {
-            return;
-        };
-        if progress.job_id == self.web_datasets.replay_job_id {
-            self.web_run_progress = self.web_run_progress.max(progress.progress);
         }
     }
 
@@ -1583,9 +1761,6 @@ impl App {
                     } else {
                         WebInputMode::RealData
                     };
-                    if self.page != Page::Map {
-                        self.page = Page::Overview;
-                    }
                     self.web_status = if is_synthetic {
                         format!("Synthetic scenario loaded: {}", output.label)
                     } else {
@@ -1609,13 +1784,11 @@ impl App {
         let Some(replay) = self.replay.as_ref() else {
             return;
         };
+        let misalignment = self.tuning_misalignment;
+        let ekf_cfg = self.tuning_cfg;
+        let gnss_outages = self.tuning_gnss_outages;
         if let Some(synthetic) = &replay.synthetic {
-            match build_synthetic_plot_data(
-                synthetic,
-                replay.misalignment,
-                replay.ekf_cfg,
-                replay.gnss_outages,
-            ) {
+            match build_synthetic_plot_data(synthetic, misalignment, ekf_cfg, gnss_outages) {
                 Ok(data) => {
                     self.data = data;
                     self.map_center = map_center_from_traces(&self.data.eskf_map);
@@ -1634,7 +1807,7 @@ impl App {
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn refresh_from_generic_csv(&mut self) -> bool {
+    fn refresh_from_generic_csv(&mut self, ctx: &egui::Context) -> bool {
         let (Some(imu), Some(gnss)) = (&self.web_imu_csv, &self.web_gnss_csv) else {
             self.web_status =
                 "Load both imu.csv and gnss.csv before running CSV replay.".to_string();
@@ -1647,12 +1820,19 @@ impl App {
             "CSV replay".to_string(),
             imu.name.clone(),
             gnss.name.clone(),
+            ctx,
         );
         true
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn start_web_replay_build(&mut self, label: String, imu_name: String, gnss_name: String) {
+    fn start_web_replay_build(
+        &mut self,
+        label: String,
+        imu_name: String,
+        gnss_name: String,
+        ctx: &egui::Context,
+    ) {
         let (Some(imu), Some(gnss)) = (&self.web_imu_csv, &self.web_gnss_csv) else {
             self.web_status =
                 "Load both imu.csv and gnss.csv before running CSV replay.".to_string();
@@ -1680,24 +1860,30 @@ impl App {
                 reference_mount_csv: reference_mount_text,
             },
             estimated_duration_s,
+            ctx,
         );
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn start_web_replay_worker(&mut self, job: WebReplayWorkerJob, estimated_duration_s: f64) {
+    fn start_web_replay_worker(
+        &mut self,
+        job: WebReplayWorkerJob,
+        estimated_duration_s: f64,
+        ctx: &egui::Context,
+    ) {
         let label = job.label().to_string();
         self.web_run_started_time_s = web_now_s();
         self.web_run_estimated_duration_s = estimated_duration_s;
         self.finish_web_replay_worker();
         *self.web_datasets.pending_replay.borrow_mut() = None;
-        *self.web_datasets.pending_progress.borrow_mut() = None;
         self.web_datasets.replay_job_id = self.web_datasets.replay_job_id.wrapping_add(1);
         let job_id = self.web_datasets.replay_job_id;
         self.web_run_progress = 0.02;
 
         let worker_options = WorkerOptions::new();
         worker_options.set_type(WorkerType::Module);
-        let worker = match Worker::new_with_options("replay_worker.js", &worker_options) {
+        let worker_url = format!("replay_worker.js?v={:.0}", Date::now());
+        let worker = match Worker::new_with_options(&worker_url, &worker_options) {
             Ok(worker) => worker,
             Err(err) => {
                 self.web_status =
@@ -1707,7 +1893,7 @@ impl App {
         };
 
         let pending = Rc::clone(&self.web_datasets.pending_replay);
-        let pending_progress = Rc::clone(&self.web_datasets.pending_progress);
+        let repaint_ctx = ctx.clone();
         let onmessage = Closure::wrap(Box::new(move |event: MessageEvent| {
             let value = event.data();
             let output_job_id = Reflect::get(&value, &JsValue::from_str("jobId"))
@@ -1715,21 +1901,6 @@ impl App {
                 .and_then(|v| v.as_f64())
                 .map(|v| v as u64)
                 .unwrap_or(job_id);
-            let message_type = Reflect::get(&value, &JsValue::from_str("type"))
-                .ok()
-                .and_then(|v| v.as_string());
-            if message_type.as_deref() == Some("progress") {
-                let progress = Reflect::get(&value, &JsValue::from_str("progress"))
-                    .ok()
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0)
-                    .clamp(0.0, 1.0) as f32;
-                *pending_progress.borrow_mut() = Some(WebReplayProgress {
-                    job_id: output_job_id,
-                    progress,
-                });
-                return;
-            }
             let ok = Reflect::get(&value, &JsValue::from_str("ok"))
                 .ok()
                 .and_then(|v| v.as_bool())
@@ -1773,20 +1944,29 @@ impl App {
                     result: Err(format!("{label}: {err}")),
                 });
             }
+            repaint_ctx.request_repaint();
         }) as Box<dyn FnMut(MessageEvent)>);
 
         let pending = Rc::clone(&self.web_datasets.pending_replay);
+        let repaint_ctx = ctx.clone();
         let onerror = Closure::wrap(Box::new(move |event: ErrorEvent| {
             *pending.borrow_mut() = Some(WebReplayTaskResult::Complete {
                 job_id,
                 result: Err(format!("replay worker error: {}", event.message())),
             });
+            repaint_ctx.request_repaint();
         }) as Box<dyn FnMut(ErrorEvent)>);
 
         worker.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
         worker.set_onerror(Some(onerror.as_ref().unchecked_ref()));
 
-        let request = web_replay_worker_request(job_id, &job);
+        let request = web_replay_worker_request(
+            job_id,
+            &job,
+            self.tuning_misalignment,
+            self.tuning_cfg,
+            self.tuning_gnss_outages,
+        );
         let _ = Reflect::set(
             &request,
             &JsValue::from_str("label"),
@@ -1811,13 +1991,12 @@ impl App {
         if let Some(worker) = self.web_datasets.replay_worker.take() {
             worker.terminate();
         }
-        *self.web_datasets.pending_progress.borrow_mut() = None;
         self.web_datasets.replay_onmessage = None;
         self.web_datasets.replay_onerror = None;
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn refresh_from_web_synthetic(&mut self) {
+    fn refresh_from_web_synthetic(&mut self, ctx: &egui::Context) {
         let (label, text) = self.web_scenario.scenario_text();
         self.web_input_mode = WebInputMode::Synthetic;
         self.start_web_replay_worker(
@@ -1827,6 +2006,7 @@ impl App {
                 motion_text: text.to_string(),
             },
             4.0,
+            ctx,
         );
     }
 
@@ -2363,9 +2543,9 @@ impl eframe::App for App {
         self.consume_dropped_files(ctx);
 
         #[cfg(target_arch = "wasm32")]
-        self.poll_web_dataset_tasks();
+        self.poll_web_dataset_tasks(ctx);
         #[cfg(target_arch = "wasm32")]
-        self.poll_web_replay_progress();
+        self.advance_web_run_progress();
         #[cfg(target_arch = "wasm32")]
         self.poll_web_replay_tasks();
 
@@ -2378,15 +2558,18 @@ impl eframe::App for App {
         }
 
         #[cfg(target_arch = "wasm32")]
-        ctx.request_repaint();
+        if self.web_datasets.loading_manifest
+            || self.web_datasets.loading_dataset
+            || self.web_datasets.loading_replay
+        {
+            ctx.request_repaint();
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if matches!(self.page, Page::Overview | Page::Map) {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
 
         egui::TopBottomPanel::top("top_controls").show(ctx, |ui| {
-            let mut replay_changed = false;
-            let mut apply_replay = false;
             #[cfg(target_arch = "wasm32")]
             let now_s = eframe::web_sys::window()
                 .and_then(|w| w.performance())
@@ -2408,14 +2591,9 @@ impl eframe::App for App {
             }
             #[cfg(target_arch = "wasm32")]
             {
-                if self.fps_ema < 55.0 {
-                    self.max_points_per_trace = (self.max_points_per_trace as f32 * 0.80) as usize;
-                } else if self.fps_ema > 58.0 {
-                    self.max_points_per_trace = (self.max_points_per_trace as f32 * 1.03) as usize;
-                }
                 self.max_points_per_trace = self
                     .max_points_per_trace
-                    .clamp(50, WEB_MAX_POINTS_PER_TRACE);
+                    .clamp(WEB_MIN_POINTS_PER_TRACE, WEB_MAX_POINTS_PER_TRACE);
             }
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -2435,7 +2613,11 @@ impl eframe::App for App {
                     "time axis: relative seconds"
                 });
                 ui.separator();
-                ui.label(format!("FPS {:.1}", self.fps_ema.max(fps)));
+                ui.label(format!(
+                    "FPS {:.1} | detail {}",
+                    self.fps_ema.max(fps),
+                    self.max_points_per_trace
+                ));
                 ui.separator();
                 ui.label("Theme");
                 let mut selected_theme = self.ui_theme;
@@ -2447,8 +2629,20 @@ impl eframe::App for App {
                 ui.separator();
                 ui.label("Traces");
                 ui.checkbox(&mut self.show_reference, "Reference");
+                ui.checkbox(&mut self.show_align, "Align");
                 ui.checkbox(&mut self.show_eskf, "ESKF");
                 ui.checkbox(&mut self.show_loose, "Loose");
+                ui.separator();
+                ui.label("Tune");
+                if ui.button("ESKF").clicked() {
+                    self.tuning_panel = Some(TuningPanel::Eskf);
+                }
+                if ui.button("Align").clicked() {
+                    self.tuning_panel = Some(TuningPanel::Align);
+                }
+                if ui.button("Loose").clicked() {
+                    self.tuning_panel = Some(TuningPanel::Loose);
+                }
             });
             ui.horizontal_wrapped(|ui| {
                 ui.selectable_value(&mut self.page, Page::Overview, "Overview");
@@ -2579,27 +2773,16 @@ impl eframe::App for App {
                                 run_text,
                             ) {
                                 match self.web_input_mode {
-                                    WebInputMode::Synthetic => self.refresh_from_web_synthetic(),
+                                    WebInputMode::Synthetic => self.refresh_from_web_synthetic(ctx),
                                     WebInputMode::RealData => match self.web_real_data_source {
                                         WebRealDataSource::DroppedCsv => {
-                                            self.refresh_from_generic_csv();
+                                            self.refresh_from_generic_csv(ctx);
                                         }
                                         WebRealDataSource::ManifestDataset => {
-                                            self.start_web_dataset_load();
+                                            self.start_web_dataset_load(ctx);
                                         }
                                     },
                                 }
-                            }
-                            if ui
-                                .add_enabled(
-                                    !self.web_datasets.loading_manifest
-                                        && !self.web_datasets.loading_dataset
-                                        && !self.web_datasets.loading_replay,
-                                    egui::Button::new("Reload manifest"),
-                                )
-                                .clicked()
-                            {
-                                self.start_web_manifest_load();
                             }
                         });
                         match self.web_input_mode {
@@ -2638,334 +2821,19 @@ impl eframe::App for App {
                         }
                         ui.label(&self.web_status);
                     });
-                if let Some(replay) = self.replay.as_mut() {
-                    egui::CollapsingHeader::new("Replay")
-                        .default_open(false)
-                        .show(ui, |ui| {
-                            ui.label("Adjust controls, then click Apply to rebuild the replay.");
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label("Mount source:");
-                                replay_changed |= ui
-                                    .selectable_value(
-                                        &mut replay.misalignment,
-                                        EkfImuSource::Internal,
-                                        "latched align",
-                                    )
-                                    .changed();
-                                replay_changed |= ui
-                                    .selectable_value(
-                                        &mut replay.misalignment,
-                                        EkfImuSource::External,
-                                        "follow align",
-                                    )
-                                    .changed();
-                                replay_changed |= ui
-                                    .selectable_value(
-                                        &mut replay.misalignment,
-                                        EkfImuSource::Ref,
-                                        "reference",
-                                    )
-                                    .changed();
-                            });
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label("GNSS pos R");
-                                replay_changed |= ui
-                                    .add(
-                                        egui::DragValue::new(&mut replay.ekf_cfg.gnss_pos_r_scale)
-                                            .speed(0.01)
-                                            .range(0.001..=10.0),
-                                    )
-                                    .changed();
-                                ui.label("GNSS vel R");
-                                replay_changed |= ui
-                                    .add(
-                                        egui::DragValue::new(&mut replay.ekf_cfg.gnss_vel_r_scale)
-                                            .speed(0.01)
-                                            .range(0.001..=10.0),
-                                    )
-                                    .changed();
-                                ui.label("NHC R");
-                                replay_changed |= ui
-                                    .add(
-                                        egui::DragValue::new(&mut replay.ekf_cfg.r_body_vel)
-                                            .speed(0.001)
-                                            .range(0.0001..=1000.0),
-                                    )
-                                    .changed();
-                                ui.label("Yaw init m/s");
-                                replay_changed |= ui
-                                    .add(
-                                        egui::DragValue::new(
-                                            &mut replay.ekf_cfg.yaw_init_speed_mps,
-                                        )
-                                        .speed(0.1)
-                                        .range(0.0..=20.0),
-                                    )
-                                    .changed();
-                                ui.label("Yaw sigma deg");
-                                replay_changed |= ui
-                                    .add(
-                                        egui::DragValue::new(
-                                            &mut replay.ekf_cfg.yaw_init_sigma_deg,
-                                        )
-                                        .speed(0.5)
-                                        .range(0.0..=90.0),
-                                    )
-                                    .changed();
-                                ui.label("Mount init deg");
-                                replay_changed |= ui
-                                    .add(
-                                        egui::DragValue::new(
-                                            &mut replay.ekf_cfg.mount_init_sigma_deg,
-                                        )
-                                        .speed(0.5)
-                                        .range(0.0..=90.0),
-                                    )
-                                    .changed();
-                            });
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label("Mount RW");
-                                replay_changed |= ui
-                                    .add(
-                                        egui::DragValue::new(
-                                            &mut replay.ekf_cfg.mount_align_rw_var,
-                                        )
-                                        .speed(1.0e-8)
-                                        .range(0.0..=1.0e-3),
-                                    )
-                                    .changed();
-                                ui.label("Mount min scale");
-                                replay_changed |= ui
-                                    .add(
-                                        egui::DragValue::new(
-                                            &mut replay.ekf_cfg.mount_update_min_scale,
-                                        )
-                                        .speed(0.001)
-                                        .range(0.0..=1.0),
-                                    )
-                                    .changed();
-                                ui.label("Mount ramp s");
-                                replay_changed |= ui
-                                    .add(
-                                        egui::DragValue::new(
-                                            &mut replay.ekf_cfg.mount_update_ramp_time_s,
-                                        )
-                                        .speed(10.0)
-                                        .range(0.0..=20000.0),
-                                    )
-                                    .changed();
-                                ui.label("Mount gate m/s");
-                                replay_changed |= ui
-                                    .add(
-                                        egui::DragValue::new(
-                                            &mut replay.ekf_cfg.mount_update_innovation_gate_mps,
-                                        )
-                                        .speed(0.001)
-                                        .range(0.0..=10.0),
-                                    )
-                                    .changed();
-                                ui.label("Mount yaw gate deg/s");
-                                replay_changed |= ui
-                                    .add(
-                                        egui::DragValue::new(
-                                            &mut replay.ekf_cfg.mount_update_yaw_rate_gate_dps,
-                                        )
-                                        .speed(0.1)
-                                        .range(0.0..=90.0),
-                                    )
-                                    .changed();
-                                ui.label("Align handoff s");
-                                replay_changed |= ui
-                                    .add(
-                                        egui::DragValue::new(
-                                            &mut replay.ekf_cfg.align_handoff_delay_s,
-                                        )
-                                        .speed(1.0)
-                                        .range(0.0..=600.0),
-                                    )
-                                    .changed();
-                                replay_changed |= ui
-                                    .checkbox(
-                                        &mut replay.ekf_cfg.freeze_misalignment_states,
-                                        "Freeze mount states",
-                                    )
-                                    .changed();
-                            });
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label("Mount settle s");
-                                replay_changed |= ui
-                                    .add(
-                                        egui::DragValue::new(
-                                            &mut replay.ekf_cfg.mount_settle_time_s,
-                                        )
-                                        .speed(10.0)
-                                        .range(0.0..=1000.0),
-                                    )
-                                    .changed();
-                                ui.label("Release sigma deg");
-                                replay_changed |= ui
-                                    .add(
-                                        egui::DragValue::new(
-                                            &mut replay.ekf_cfg.mount_settle_release_sigma_deg,
-                                        )
-                                        .speed(0.5)
-                                        .range(0.0..=90.0),
-                                    )
-                                    .changed();
-                                replay_changed |= ui
-                                    .checkbox(
-                                        &mut replay.ekf_cfg.mount_settle_zero_cross_covariance,
-                                        "Zero mount cross-cov",
-                                    )
-                                    .changed();
-                            });
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label("GNSS pos->mount");
-                                replay_changed |= ui
-                                    .add(
-                                        egui::DragValue::new(
-                                            &mut replay.ekf_cfg.gnss_pos_mount_scale,
-                                        )
-                                        .speed(0.01)
-                                        .range(0.0..=1.0),
-                                    )
-                                    .changed();
-                                ui.label("GNSS vel->mount");
-                                replay_changed |= ui
-                                    .add(
-                                        egui::DragValue::new(
-                                            &mut replay.ekf_cfg.gnss_vel_mount_scale,
-                                        )
-                                        .speed(0.01)
-                                        .range(0.0..=1.0),
-                                    )
-                                    .changed();
-                                ui.label("Gyro bias init dps");
-                                replay_changed |= ui
-                                    .add(
-                                        egui::DragValue::new(
-                                            &mut replay.ekf_cfg.gyro_bias_init_sigma_dps,
-                                        )
-                                        .speed(0.01)
-                                        .range(0.0..=10.0),
-                                    )
-                                    .changed();
-                                ui.label("Accel bias init");
-                                replay_changed |= ui
-                                    .add(
-                                        egui::DragValue::new(
-                                            &mut replay.ekf_cfg.accel_bias_init_sigma_mps2,
-                                        )
-                                        .speed(0.01)
-                                        .range(0.0..=10.0),
-                                    )
-                                    .changed();
-                                ui.label("Vehicle speed R");
-                                replay_changed |= ui
-                                    .add(
-                                        egui::DragValue::new(&mut replay.ekf_cfg.r_vehicle_speed)
-                                            .speed(0.01)
-                                            .range(0.0..=10.0),
-                                    )
-                                    .changed();
-                            });
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label("Zero vel R");
-                                replay_changed |= ui
-                                    .add(
-                                        egui::DragValue::new(&mut replay.ekf_cfg.r_zero_vel)
-                                            .speed(0.01)
-                                            .range(0.0..=10.0),
-                                    )
-                                    .changed();
-                                ui.label("Stationary accel R");
-                                replay_changed |= ui
-                                    .add(
-                                        egui::DragValue::new(
-                                            &mut replay.ekf_cfg.r_stationary_accel,
-                                        )
-                                        .speed(0.01)
-                                        .range(0.0..=10.0),
-                                    )
-                                    .changed();
-                                ui.label("Predict decimation");
-                                replay_changed |= ui
-                                    .add(
-                                        egui::DragValue::new(
-                                            &mut replay.ekf_cfg.predict_imu_decimation,
-                                        )
-                                        .speed(1)
-                                        .range(1..=32),
-                                    )
-                                    .changed();
-                            });
-                            ui.horizontal_wrapped(|ui| {
-                                let mut lpf_on = replay.ekf_cfg.predict_imu_lpf_cutoff_hz.is_some();
-                                if ui.checkbox(&mut lpf_on, "Predict IMU LPF").changed() {
-                                    replay.ekf_cfg.predict_imu_lpf_cutoff_hz = if lpf_on {
-                                        Some(
-                                            replay
-                                                .ekf_cfg
-                                                .predict_imu_lpf_cutoff_hz
-                                                .unwrap_or(150.0),
-                                        )
-                                    } else {
-                                        None
-                                    };
-                                    replay_changed = true;
-                                }
-                                if let Some(cutoff_hz) =
-                                    replay.ekf_cfg.predict_imu_lpf_cutoff_hz.as_mut()
-                                {
-                                    replay_changed |= ui
-                                        .add(
-                                            egui::DragValue::new(cutoff_hz)
-                                                .speed(1.0)
-                                                .range(1.0..=500.0),
-                                        )
-                                        .changed();
-                                }
-                                ui.label("Outage count");
-                                replay_changed |= ui
-                                    .add(
-                                        egui::DragValue::new(&mut replay.gnss_outages.count)
-                                            .speed(1)
-                                            .range(0..=20),
-                                    )
-                                    .changed();
-                                ui.label("Outage duration s");
-                                replay_changed |= ui
-                                    .add(
-                                        egui::DragValue::new(&mut replay.gnss_outages.duration_s)
-                                            .speed(1.0)
-                                            .range(0.0..=300.0),
-                                    )
-                                    .changed();
-                                ui.label("Outage seed");
-                                replay_changed |= ui
-                                    .add(
-                                        egui::DragValue::new(&mut replay.gnss_outages.seed)
-                                            .speed(1)
-                                            .range(0..=100000),
-                                    )
-                                    .changed();
-                            });
-                            ui.horizontal_wrapped(|ui| {
-                                apply_replay = ui.button("Apply").clicked();
-                                if let Some(status) = &self.replay_status {
-                                    ui.label(status);
-                                }
-                            });
-                        });
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(status) = &self.replay_status {
+                    ui.label(status);
                 }
             }
-            if replay_changed {
-                self.replay_status = Some("Pending changes".to_string());
-            }
-            if apply_replay {
-                self.refresh_from_replay();
-            }
         });
+        self.draw_tuning_window(ctx);
+
+        #[cfg(target_arch = "wasm32")]
+        if self.web_datasets.loading_dataset || self.web_datasets.loading_replay {
+            self.draw_web_bulk_loading_page(ctx);
+            return;
+        }
 
         let imu_cal_gyro: Vec<&Trace> = self
             .data
@@ -3001,41 +2869,8 @@ impl eframe::App for App {
                     draw_analysis_page(
                         ui,
                         "Motion",
-                        "Position, velocity, and vehicle attitude comparisons.",
+                        "Velocity and vehicle attitude comparisons.",
                         vec![
-                            plot_spec(
-                                "North Position: GNSS / ESKF / Loose",
-                                concat_trace_refs_matching(
-                                    [
-                                        self.data.eskf_cmp_pos.as_slice(),
-                                        self.data.loose_cmp_pos.as_slice(),
-                                    ],
-                                    &["posN"],
-                                ),
-                                true,
-                            ),
-                            plot_spec(
-                                "East Position: GNSS / ESKF / Loose",
-                                concat_trace_refs_matching(
-                                    [
-                                        self.data.eskf_cmp_pos.as_slice(),
-                                        self.data.loose_cmp_pos.as_slice(),
-                                    ],
-                                    &["posE"],
-                                ),
-                                true,
-                            ),
-                            plot_spec(
-                                "Down Position: GNSS / ESKF / Loose",
-                                concat_trace_refs_matching(
-                                    [
-                                        self.data.eskf_cmp_pos.as_slice(),
-                                        self.data.loose_cmp_pos.as_slice(),
-                                    ],
-                                    &["posD"],
-                                ),
-                                true,
-                            ),
                             plot_spec(
                                 "North Velocity: GNSS / ESKF / Loose",
                                 concat_trace_refs_matching(
@@ -3404,6 +3239,496 @@ fn draw_map_tile(
             let size = egui::vec2(ui.available_width(), height);
             add_map(ui, size);
         });
+}
+
+fn drag_f32(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut f32,
+    speed: f64,
+    range: std::ops::RangeInclusive<f64>,
+) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(label);
+        ui.add(egui::DragValue::new(value).speed(speed).range(range));
+    });
+}
+
+fn drag_f64(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut f64,
+    speed: f64,
+    range: std::ops::RangeInclusive<f64>,
+) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(label);
+        ui.add(egui::DragValue::new(value).speed(speed).range(range));
+    });
+}
+
+fn drag_usize(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut usize,
+    speed: f64,
+    range: std::ops::RangeInclusive<usize>,
+) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(label);
+        ui.add(egui::DragValue::new(value).speed(speed).range(range));
+    });
+}
+
+fn draw_eskf_tuning(
+    ui: &mut egui::Ui,
+    misalignment: &mut EkfImuSource,
+    cfg: &mut EkfCompareConfig,
+) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Mount source");
+        ui.selectable_value(misalignment, EkfImuSource::Internal, "internal");
+        ui.selectable_value(misalignment, EkfImuSource::External, "external align");
+        ui.selectable_value(misalignment, EkfImuSource::Ref, "reference");
+    });
+    ui.collapsing("Measurement weighting", |ui| {
+        drag_f64(
+            ui,
+            "GNSS pos R scale",
+            &mut cfg.gnss_pos_r_scale,
+            0.01,
+            0.001..=10.0,
+        );
+        drag_f64(
+            ui,
+            "GNSS vel R scale",
+            &mut cfg.gnss_vel_r_scale,
+            0.01,
+            0.001..=10.0,
+        );
+        drag_f32(
+            ui,
+            "NHC body velocity R",
+            &mut cfg.r_body_vel,
+            0.001,
+            0.0..=1000.0,
+        );
+        drag_f32(
+            ui,
+            "Vehicle speed R",
+            &mut cfg.r_vehicle_speed,
+            0.01,
+            0.0..=10.0,
+        );
+        drag_f32(ui, "Zero velocity R", &mut cfg.r_zero_vel, 0.01, 0.0..=10.0);
+        drag_f32(
+            ui,
+            "Stationary accel R",
+            &mut cfg.r_stationary_accel,
+            0.01,
+            0.0..=10.0,
+        );
+    });
+    ui.collapsing("Initialization", |ui| {
+        drag_f64(
+            ui,
+            "Yaw init speed m/s",
+            &mut cfg.yaw_init_speed_mps,
+            0.1,
+            0.0..=40.0,
+        );
+        drag_f32(
+            ui,
+            "Yaw sigma deg",
+            &mut cfg.yaw_init_sigma_deg,
+            0.5,
+            0.0..=180.0,
+        );
+        drag_f32(
+            ui,
+            "Gyro bias sigma deg/s",
+            &mut cfg.gyro_bias_init_sigma_dps,
+            0.01,
+            0.0..=10.0,
+        );
+        drag_f32(
+            ui,
+            "Accel bias sigma m/s^2",
+            &mut cfg.accel_bias_init_sigma_mps2,
+            0.01,
+            0.0..=10.0,
+        );
+        drag_f32(
+            ui,
+            "Mount sigma deg",
+            &mut cfg.mount_init_sigma_deg,
+            0.5,
+            0.0..=180.0,
+        );
+    });
+    ui.collapsing("Mount updates", |ui| {
+        drag_f32(
+            ui,
+            "Mount random walk var",
+            &mut cfg.mount_align_rw_var,
+            1.0e-8,
+            0.0..=1.0e-3,
+        );
+        drag_f32(
+            ui,
+            "Mount min update scale",
+            &mut cfg.mount_update_min_scale,
+            0.001,
+            0.0..=1.0,
+        );
+        drag_f32(
+            ui,
+            "Mount update ramp s",
+            &mut cfg.mount_update_ramp_time_s,
+            10.0,
+            0.0..=20000.0,
+        );
+        drag_f32(
+            ui,
+            "Mount innovation gate m/s",
+            &mut cfg.mount_update_innovation_gate_mps,
+            0.001,
+            0.0..=10.0,
+        );
+        drag_f32(
+            ui,
+            "Mount yaw-rate gate deg/s",
+            &mut cfg.mount_update_yaw_rate_gate_dps,
+            0.1,
+            0.0..=180.0,
+        );
+        drag_f32(
+            ui,
+            "GNSS pos mount scale",
+            &mut cfg.gnss_pos_mount_scale,
+            0.01,
+            0.0..=1.0,
+        );
+        drag_f32(
+            ui,
+            "GNSS vel mount scale",
+            &mut cfg.gnss_vel_mount_scale,
+            0.01,
+            0.0..=1.0,
+        );
+        ui.checkbox(&mut cfg.freeze_misalignment_states, "Freeze mount states");
+        drag_f32(
+            ui,
+            "Mount settle time s",
+            &mut cfg.mount_settle_time_s,
+            10.0,
+            0.0..=1000.0,
+        );
+        drag_f32(
+            ui,
+            "Mount release sigma deg",
+            &mut cfg.mount_settle_release_sigma_deg,
+            0.5,
+            0.0..=90.0,
+        );
+        ui.checkbox(
+            &mut cfg.mount_settle_zero_cross_covariance,
+            "Zero mount cross-covariance on release",
+        );
+    });
+    ui.collapsing("Prediction", |ui| {
+        let noise = cfg
+            .predict_noise
+            .get_or_insert_with(|| EkfCompareConfig::default().predict_noise.unwrap());
+        drag_f32(ui, "Gyro var", &mut noise.gyro_var, 1.0e-7, 0.0..=1.0);
+        drag_f32(ui, "Accel var", &mut noise.accel_var, 1.0e-5, 0.0..=100.0);
+        drag_f32(
+            ui,
+            "Gyro bias RW var",
+            &mut noise.gyro_bias_rw_var,
+            1.0e-13,
+            0.0..=1.0e-6,
+        );
+        drag_f32(
+            ui,
+            "Accel bias RW var",
+            &mut noise.accel_bias_rw_var,
+            1.0e-12,
+            0.0..=1.0e-6,
+        );
+        drag_f32(
+            ui,
+            "Predict-noise mount RW var",
+            &mut noise.mount_align_rw_var,
+            1.0e-8,
+            0.0..=1.0e-3,
+        );
+        drag_usize(
+            ui,
+            "Predict IMU decimation",
+            &mut cfg.predict_imu_decimation,
+            1.0,
+            1..=32,
+        );
+        let mut lpf_on = cfg.predict_imu_lpf_cutoff_hz.is_some();
+        if ui.checkbox(&mut lpf_on, "Predict IMU LPF").changed() {
+            cfg.predict_imu_lpf_cutoff_hz = lpf_on.then_some(150.0);
+        }
+        if let Some(cutoff) = cfg.predict_imu_lpf_cutoff_hz.as_mut() {
+            drag_f64(ui, "Predict IMU LPF cutoff Hz", cutoff, 1.0, 1.0..=500.0);
+        }
+        drag_f64(
+            ui,
+            "Vehicle measurement LPF Hz",
+            &mut cfg.vehicle_meas_lpf_cutoff_hz,
+            1.0,
+            1.0..=500.0,
+        );
+    });
+}
+
+fn draw_align_tuning(ui: &mut egui::Ui, cfg: &mut EkfCompareConfig) {
+    drag_f32(
+        ui,
+        "Align handoff delay s",
+        &mut cfg.align_handoff_delay_s,
+        1.0,
+        0.0..=600.0,
+    );
+    let align = &mut cfg.align;
+    ui.collapsing("Process and observation noise", |ui| {
+        let mut q_roll = align.q_mount_std_rad[0].to_degrees();
+        let mut q_pitch = align.q_mount_std_rad[1].to_degrees();
+        let mut q_yaw = align.q_mount_std_rad[2].to_degrees();
+        drag_f32(ui, "Mount q roll deg", &mut q_roll, 0.0001, 0.0..=1.0);
+        drag_f32(ui, "Mount q pitch deg", &mut q_pitch, 0.0001, 0.0..=1.0);
+        drag_f32(ui, "Mount q yaw deg", &mut q_yaw, 0.0001, 0.0..=1.0);
+        align.q_mount_std_rad = [
+            q_roll.to_radians(),
+            q_pitch.to_radians(),
+            q_yaw.to_radians(),
+        ];
+        drag_f32(
+            ui,
+            "Gravity std m/s^2",
+            &mut align.r_gravity_std_mps2,
+            0.01,
+            0.001..=10.0,
+        );
+        let mut horiz = align.r_horiz_heading_std_rad.to_degrees();
+        let mut turn_heading = align.r_turn_heading_std_rad.to_degrees();
+        let mut turn_gyro = align.r_turn_gyro_std_radps.to_degrees();
+        drag_f32(
+            ui,
+            "Horizontal heading std deg",
+            &mut horiz,
+            0.1,
+            0.001..=90.0,
+        );
+        drag_f32(
+            ui,
+            "Turn heading std deg",
+            &mut turn_heading,
+            0.1,
+            0.001..=90.0,
+        );
+        drag_f32(ui, "Turn gyro std deg/s", &mut turn_gyro, 0.001, 0.0..=10.0);
+        align.r_horiz_heading_std_rad = horiz.to_radians();
+        align.r_turn_heading_std_rad = turn_heading.to_radians();
+        align.r_turn_gyro_std_radps = turn_gyro.to_radians();
+        drag_f32(
+            ui,
+            "Turn gyro yaw scale",
+            &mut align.turn_gyro_yaw_scale,
+            0.01,
+            0.0..=1.0,
+        );
+    });
+    ui.collapsing("Motion gates", |ui| {
+        drag_f32(
+            ui,
+            "Gravity LPF alpha",
+            &mut align.gravity_lpf_alpha,
+            0.01,
+            0.0..=1.0,
+        );
+        drag_f32(
+            ui,
+            "Min speed m/s",
+            &mut align.min_speed_mps,
+            0.05,
+            0.0..=20.0,
+        );
+        let mut turn_rate = align.min_turn_rate_radps.to_degrees();
+        let mut stationary_gyro = align.max_stationary_gyro_radps.to_degrees();
+        drag_f32(ui, "Min turn rate deg/s", &mut turn_rate, 0.1, 0.0..=90.0);
+        drag_f32(
+            ui,
+            "Max stationary gyro deg/s",
+            &mut stationary_gyro,
+            0.1,
+            0.0..=90.0,
+        );
+        align.min_turn_rate_radps = turn_rate.to_radians();
+        align.max_stationary_gyro_radps = stationary_gyro.to_radians();
+        drag_f32(
+            ui,
+            "Min lat accel m/s^2",
+            &mut align.min_lat_acc_mps2,
+            0.01,
+            0.0..=20.0,
+        );
+        drag_f32(
+            ui,
+            "Min long accel m/s^2",
+            &mut align.min_long_acc_mps2,
+            0.01,
+            0.0..=20.0,
+        );
+        drag_f32(
+            ui,
+            "Max stationary accel norm err",
+            &mut align.max_stationary_accel_norm_err_mps2,
+            0.01,
+            0.0..=10.0,
+        );
+    });
+    ui.collapsing("Turn consistency", |ui| {
+        drag_usize(
+            ui,
+            "Min windows",
+            &mut align.turn_consistency_min_windows,
+            1.0,
+            0..=100,
+        );
+        drag_f32(
+            ui,
+            "Min fraction",
+            &mut align.turn_consistency_min_fraction,
+            0.01,
+            0.0..=1.0,
+        );
+        drag_f32(
+            ui,
+            "Max abs lat err m/s^2",
+            &mut align.turn_consistency_max_abs_lat_err_mps2,
+            0.01,
+            0.0..=20.0,
+        );
+        drag_f32(
+            ui,
+            "Max rel lat err",
+            &mut align.turn_consistency_max_rel_lat_err,
+            0.01,
+            0.0..=10.0,
+        );
+    });
+    ui.checkbox(&mut align.use_gravity, "Use gravity updates");
+    ui.checkbox(&mut align.use_turn_gyro, "Use turn gyro updates");
+}
+
+fn draw_loose_tuning(ui: &mut egui::Ui, cfg: &mut EkfCompareConfig) {
+    ui.collapsing("Prediction noise", |ui| {
+        let noise = cfg
+            .loose_predict_noise
+            .get_or_insert_with(|| EkfCompareConfig::default().loose_predict_noise.unwrap());
+        drag_f32(ui, "Gyro var", &mut noise.gyro_var, 1.0e-7, 0.0..=1.0);
+        drag_f32(ui, "Accel var", &mut noise.accel_var, 1.0e-5, 0.0..=100.0);
+        drag_f32(
+            ui,
+            "Gyro bias RW var",
+            &mut noise.gyro_bias_rw_var,
+            1.0e-13,
+            0.0..=1.0e-6,
+        );
+        drag_f32(
+            ui,
+            "Accel bias RW var",
+            &mut noise.accel_bias_rw_var,
+            1.0e-12,
+            0.0..=1.0e-6,
+        );
+        drag_f32(
+            ui,
+            "Gyro scale RW var",
+            &mut noise.gyro_scale_rw_var,
+            1.0e-11,
+            0.0..=1.0e-6,
+        );
+        drag_f32(
+            ui,
+            "Accel scale RW var",
+            &mut noise.accel_scale_rw_var,
+            1.0e-11,
+            0.0..=1.0e-6,
+        );
+        drag_f32(
+            ui,
+            "Mount RW var",
+            &mut noise.mount_align_rw_var,
+            1.0e-8,
+            0.0..=1.0e-3,
+        );
+    });
+    ui.collapsing("Initial covariance", |ui| {
+        let init = &mut cfg.loose_init;
+        drag_f32(
+            ui,
+            "Position min sigma m",
+            &mut init.pos_min_sigma_m,
+            0.1,
+            0.0..=100.0,
+        );
+        drag_f32(
+            ui,
+            "Velocity min sigma m/s",
+            &mut init.vel_min_sigma_mps,
+            0.1,
+            0.0..=50.0,
+        );
+        drag_f32(
+            ui,
+            "Attitude sigma deg",
+            &mut init.attitude_sigma_deg,
+            0.5,
+            0.0..=180.0,
+        );
+        drag_f32(
+            ui,
+            "Gyro bias sigma deg/s",
+            &mut init.gyro_bias_sigma_dps,
+            0.01,
+            0.0..=10.0,
+        );
+        drag_f32(
+            ui,
+            "Accel bias sigma m/s^2",
+            &mut init.accel_bias_sigma_mps2,
+            0.01,
+            0.0..=10.0,
+        );
+        drag_f32(
+            ui,
+            "Gyro scale sigma",
+            &mut init.gyro_scale_sigma,
+            0.001,
+            0.0..=1.0,
+        );
+        drag_f32(
+            ui,
+            "Accel scale sigma",
+            &mut init.accel_scale_sigma,
+            0.001,
+            0.0..=1.0,
+        );
+        drag_f32(
+            ui,
+            "Mount sigma deg",
+            &mut init.mount_sigma_deg,
+            0.5,
+            0.0..=180.0,
+        );
+    });
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -4120,6 +4445,26 @@ fn trace_time_range<'a>(traces: impl IntoIterator<Item = &'a Trace>) -> Option<(
         })
 }
 
+fn trace_value_range<'a>(traces: impl IntoIterator<Item = &'a Trace>) -> Option<(f64, f64)> {
+    traces
+        .into_iter()
+        .flat_map(|trace| trace.points.iter().map(|p| p[1]))
+        .filter(|v| v.is_finite())
+        .fold(None, |range, value| match range {
+            Some((min_y, max_y)) => Some((f64::min(min_y, value), f64::max(max_y, value))),
+            None => Some((value, value)),
+        })
+}
+
+fn expand_degenerate_range((min, max): (f64, f64)) -> (f64, f64) {
+    if min < max {
+        (min, max)
+    } else {
+        let pad = min.abs().max(1.0) * 0.01;
+        (min - pad, max + pad)
+    }
+}
+
 fn time_in_range(t_s: f64, range: Option<(f64, f64)>) -> bool {
     let Some((min_t, max_t)) = range else {
         return false;
@@ -4179,7 +4524,8 @@ fn draw_analysis_page(
             let plots: Vec<PlotSpec<'_>> = plots
                 .into_iter()
                 .map(|mut plot| {
-                    plot.traces.retain(|trace| visibility.allows(trace));
+                    plot.traces
+                        .retain(|trace| visibility.allows_in_plot(plot.title, trace));
                     plot
                 })
                 .filter(|plot| plot.traces.iter().any(|trace| !trace.points.is_empty()))
@@ -4469,6 +4815,7 @@ where
                     return None;
                 }
                 let data_time_range = trace_time_range(traces.iter().copied());
+                let data_value_range = trace_value_range(traces.iter().copied());
 
                 let mut plot = Plot::new(title)
                     .height(plot_height)
@@ -4482,6 +4829,12 @@ where
                     .allow_scroll(true)
                     .allow_boxed_zoom(true)
                     .allow_axis_zoom_drag(true);
+                if let Some(range) = data_time_range.map(expand_degenerate_range) {
+                    plot = plot.include_x(range.0).include_x(range.1);
+                }
+                if let Some(range) = data_value_range.map(expand_degenerate_range) {
+                    plot = plot.include_y(range.0).include_y(range.1);
+                }
                 if show_legend {
                     plot = plot.legend(Legend::default());
                 }

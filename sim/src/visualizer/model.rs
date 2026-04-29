@@ -96,6 +96,14 @@ impl EkfImuSource {
             Self::Internal | Self::Ref => EskfMountSource::LatchedSeed,
         }
     }
+
+    pub fn cli_value(self) -> &'static str {
+        match self {
+            Self::Ref => "ref",
+            Self::External => "external",
+            Self::Internal => "internal",
+        }
+    }
 }
 
 #[cfg_attr(target_arch = "wasm32", derive(serde::Deserialize, serde::Serialize))]

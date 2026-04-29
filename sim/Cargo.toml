@@ -18,7 +18,7 @@ eframe = { version = "0.33.3", default-features = false, features = [
 ] }
 egui = "0.33.3"
 egui_plot = "0.34.1"
-sensor-fusion = { path = "../ekf", default-features = false }
+sensor-fusion = { path = "../ekf", default-features = false, features = ["serde"] }
 nalgebra = { version = "0.33", default-features = false, features = ["std"] }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng"] }
 rayon = "1.10"
@@ -32,6 +32,7 @@ egui-wgpu = { version = "0.33.3", default-features = false, features = [
 ] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 js-sys = "=0.3.95"
+serde-wasm-bindgen = "0.6"
 wasm-bindgen = "=0.2.118"
 wasm-bindgen-futures = "=0.4.68"
 web-sys = { version = "=0.3.95", features = [
