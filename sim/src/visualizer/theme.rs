@@ -166,7 +166,13 @@ fn build_visuals(theme: UiTheme) -> Visuals {
 
     visuals.widgets.active.bg_fill = accent;
     visuals.widgets.active.bg_stroke = Stroke::new(1.0, accent);
-    visuals.widgets.active.fg_stroke = Stroke::new(1.0, Color32::WHITE);
+    visuals.widgets.active.fg_stroke = Stroke::new(
+        1.0,
+        match theme {
+            UiTheme::Dark => Color32::WHITE,
+            UiTheme::Light => text,
+        },
+    );
 
     visuals.widgets.open.bg_fill = panel_strong;
     visuals.widgets.open.bg_stroke = Stroke::new(1.0, accent_soft);

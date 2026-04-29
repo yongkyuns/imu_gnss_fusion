@@ -5,11 +5,13 @@ use std::{cell::RefCell, io::Read, rc::Rc};
 
 use anyhow::Result;
 use eframe::egui;
-use egui_plot::{Legend, Line, LineStyle, Plot, PlotPoints, Points, VLine};
+use egui_plot::{
+    GridInput, GridMark, Legend, Line, LineStyle, Plot, PlotPoints, Points, VLine, log_grid_spacer,
+};
 #[cfg(target_arch = "wasm32")]
 use flate2::read::GzDecoder;
 #[cfg(target_arch = "wasm32")]
-use js_sys::{Function, Object, Reflect, Uint8Array};
+use js_sys::{Array, Date, Function, Object, Reflect, Uint8Array};
 #[cfg(target_arch = "wasm32")]
 use serde::Deserialize;
 use walkers::sources::{Attribution, Mapbox, MapboxStyle, TileSource};
@@ -21,7 +23,7 @@ use wasm_bindgen_futures::{JsFuture, spawn_local};
 #[cfg(target_arch = "wasm32")]
 use web_sys::{ErrorEvent, MessageEvent, Worker, WorkerOptions, WorkerType};
 
-use super::math::heading_endpoint;
+use super::math::{ecef_to_ned, heading_endpoint, lla_to_ecef};
 use super::model::{EkfImuSource, HeadingSample, Page, PlotData, Trace};
 use super::pipeline::synthetic::{SyntheticVisualizerConfig, build_synthetic_plot_data};
 use super::pipeline::{EkfCompareConfig, GnssOutageConfig};
@@ -31,6 +33,10 @@ use super::theme::{UiDensity, UiTheme};
 #[cfg(not(target_arch = "wasm32"))]
 const MAPBOX_ACCESS_TOKEN_ENV: &str = "MAPBOX_ACCESS_TOKEN";
 const TIME_SERIES_PLOT_HEIGHT: f32 = 200.0;
+const SYNTHETIC_TRAJECTORY_MAX_POINTS: usize = 2_000;
+const PLOT_GRID_MIN_SPACING_PX: f32 = 14.0;
+const PLOT_GRID_MAX_SPACING_PX: f32 = 360.0;
+const PLOT_GRID_STRENGTH_SCALE: f64 = 0.45;
 #[cfg(target_arch = "wasm32")]
 const TIME_SERIES_PLOT_FRAME_PADDING: f32 = 26.0;
 #[cfg(target_arch = "wasm32")]
@@ -57,6 +63,7 @@ impl Plugin for TrackOverlay<'_> {
     ) {
         let map_rect = response.rect.intersect(ui.clip_rect());
         let painter = ui.painter().with_clip_rect(map_rect);
+        let visuals = ui.visuals();
         let view = map_view_bounds(projector, map_rect, 0.15);
         let point_stride = map_trace_point_stride(map_memory.zoom());
         let min_step = map_trace_min_pixel_step(map_memory.zoom());
@@ -65,17 +72,7 @@ impl Plugin for TrackOverlay<'_> {
             if tr.points.len() < 2 {
                 continue;
             }
-            let color = if tr.name.contains("GNSS") {
-                egui::Color32::from_rgb(0, 255, 255)
-            } else if tr.name == "ESKF path (lon,lat)" {
-                egui::Color32::from_rgb(120, 170, 255)
-            } else if tr.name == "ESKF path during GNSS outage (lon,lat)" {
-                egui::Color32::from_rgb(255, 140, 220)
-            } else if tr.name == "Loose path (lon,lat)" {
-                egui::Color32::from_rgb(120, 255, 170)
-            } else {
-                egui::Color32::WHITE
-            };
+            let color = map_trace_color(tr.name.as_str(), visuals);
             let mut segment = Vec::<egui::Pos2>::with_capacity(tr.points.len().min(8192));
             let mut last_drawn: Option<egui::Pos2> = None;
             let mut pending: Option<egui::Pos2> = None;
@@ -141,13 +138,13 @@ impl Plugin for TrackOverlay<'_> {
                 let to = projector.project(lon_lat(tip_lon, tip_lat));
                 painter.line_segment(
                     [egui::pos2(from.x, from.y), egui::pos2(to.x, to.y)],
-                    egui::Stroke::new(1.8, egui::Color32::from_rgb(255, 255, 255)),
+                    egui::Stroke::new(1.8, map_heading_color(visuals)),
                 );
             }
         }
 
         if let Some(t_s) = self.cursor_t_s {
-            draw_map_cursor_marker(&painter, projector, view, &self.headings, t_s);
+            draw_map_cursor_marker(&painter, projector, view, &self.headings, t_s, visuals);
         }
 
         if self.show_heading
@@ -168,17 +165,17 @@ impl Plugin for TrackOverlay<'_> {
             if let Some((d2, h, p)) = best
                 && d2 <= 12.0_f32 * 12.0_f32
             {
-                painter.circle_filled(p, 3.0, egui::Color32::from_rgb(255, 220, 0));
+                painter.circle_filled(p, 3.0, cursor_marker_color(visuals));
                 let label = format!("t={:.2}s", h.t_s);
                 let bg_min = p + egui::vec2(8.0, -24.0);
                 let bg_rect = egui::Rect::from_min_size(bg_min, egui::vec2(78.0, 18.0));
-                painter.rect_filled(bg_rect, 4.0, egui::Color32::from_black_alpha(180));
+                painter.rect_filled(bg_rect, 4.0, tooltip_fill(visuals));
                 painter.text(
                     bg_min + egui::vec2(6.0, 2.0),
                     egui::Align2::LEFT_TOP,
                     label,
                     egui::FontId::monospace(12.0),
-                    egui::Color32::WHITE,
+                    tooltip_text_color(visuals),
                 );
             }
         }
@@ -191,6 +188,7 @@ fn draw_map_cursor_marker(
     view: MapViewBounds,
     headings: &[&HeadingSample],
     t_s: f64,
+    visuals: &egui::Visuals,
 ) {
     let Some(sample) = sample_heading_at(headings, t_s) else {
         return;
@@ -205,7 +203,7 @@ fn draw_map_cursor_marker(
     let dir = egui::vec2(yaw.sin(), -yaw.cos());
     let tip = origin + dir * 24.0;
     let side = egui::vec2(-dir.y, dir.x);
-    let color = egui::Color32::from_rgb(255, 220, 70);
+    let color = cursor_marker_color(visuals);
     painter.circle_filled(origin, 4.0, color);
     painter.line_segment([origin, tip], egui::Stroke::new(2.2, color));
     painter.add(egui::Shape::convex_polygon(
@@ -221,13 +219,13 @@ fn draw_map_cursor_marker(
     let label = format!("{t_s:.2}s");
     let bg_min = origin + egui::vec2(8.0, 8.0);
     let bg_rect = egui::Rect::from_min_size(bg_min, egui::vec2(62.0, 18.0));
-    painter.rect_filled(bg_rect, 4.0, egui::Color32::from_black_alpha(180));
+    painter.rect_filled(bg_rect, 4.0, tooltip_fill(visuals));
     painter.text(
         bg_min + egui::vec2(6.0, 2.0),
         egui::Align2::LEFT_TOP,
         label,
         egui::FontId::monospace(12.0),
-        egui::Color32::WHITE,
+        tooltip_text_color(visuals),
     );
 }
 
@@ -243,6 +241,68 @@ fn sample_heading_at(headings: &[&HeadingSample], t_s: f64) -> Option<HeadingSam
             da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
         })
         .map(|h| **h)
+}
+
+fn map_trace_color(name: &str, visuals: &egui::Visuals) -> egui::Color32 {
+    if name.contains("GNSS") {
+        if visuals.dark_mode {
+            egui::Color32::from_rgb(0, 255, 255)
+        } else {
+            egui::Color32::from_rgb(0, 118, 152)
+        }
+    } else if name == "ESKF path (lon,lat)" {
+        if visuals.dark_mode {
+            egui::Color32::from_rgb(120, 170, 255)
+        } else {
+            egui::Color32::from_rgb(35, 105, 200)
+        }
+    } else if name == "ESKF path during GNSS outage (lon,lat)" {
+        if visuals.dark_mode {
+            egui::Color32::from_rgb(255, 140, 220)
+        } else {
+            egui::Color32::from_rgb(184, 55, 144)
+        }
+    } else if name == "Loose path (lon,lat)" {
+        if visuals.dark_mode {
+            egui::Color32::from_rgb(120, 255, 170)
+        } else {
+            egui::Color32::from_rgb(26, 138, 78)
+        }
+    } else {
+        visuals.text_color()
+    }
+}
+
+fn map_heading_color(visuals: &egui::Visuals) -> egui::Color32 {
+    if visuals.dark_mode {
+        egui::Color32::from_rgb(245, 248, 252)
+    } else {
+        egui::Color32::from_rgb(42, 49, 59)
+    }
+}
+
+fn cursor_marker_color(visuals: &egui::Visuals) -> egui::Color32 {
+    if visuals.dark_mode {
+        egui::Color32::from_rgb(255, 220, 70)
+    } else {
+        egui::Color32::from_rgb(194, 119, 0)
+    }
+}
+
+fn tooltip_fill(visuals: &egui::Visuals) -> egui::Color32 {
+    if visuals.dark_mode {
+        egui::Color32::from_black_alpha(190)
+    } else {
+        egui::Color32::from_white_alpha(230)
+    }
+}
+
+fn tooltip_text_color(visuals: &egui::Visuals) -> egui::Color32 {
+    if visuals.dark_mode {
+        egui::Color32::WHITE
+    } else {
+        egui::Color32::from_rgb(32, 38, 48)
+    }
 }
 
 fn map_trace_min_pixel_step(zoom: f64) -> f32 {
@@ -327,6 +387,7 @@ pub struct App {
     last_frame_time_s: f64,
     max_points_per_trace: usize,
     ui_theme: UiTheme,
+    data_origin: DataOrigin,
     page: Page,
     map_tiles: HttpTiles,
     map_memory: MapMemory,
@@ -359,9 +420,21 @@ pub struct App {
     #[cfg(target_arch = "wasm32")]
     web_datasets: WebDatasetState,
     #[cfg(target_arch = "wasm32")]
+    web_run_progress: f32,
+    #[cfg(target_arch = "wasm32")]
+    web_run_started_time_s: f64,
+    #[cfg(target_arch = "wasm32")]
+    web_run_estimated_duration_s: f64,
+    #[cfg(target_arch = "wasm32")]
     web_status: String,
     #[cfg(target_arch = "wasm32")]
     web_perf: WebPerf,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DataOrigin {
+    Real,
+    Synthetic,
 }
 
 #[derive(Clone)]
@@ -430,9 +503,17 @@ struct WebDatasetState {
     replay_job_id: u64,
     pending: Rc<RefCell<Option<WebDatasetTaskResult>>>,
     pending_replay: Rc<RefCell<Option<WebReplayTaskResult>>>,
+    pending_progress: Rc<RefCell<Option<WebReplayProgress>>>,
     replay_worker: Option<Worker>,
     replay_onmessage: Option<Closure<dyn FnMut(MessageEvent)>>,
     replay_onerror: Option<Closure<dyn FnMut(ErrorEvent)>>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Copy)]
+struct WebReplayProgress {
+    job_id: u64,
+    progress: f32,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -451,10 +532,29 @@ enum WebReplayTaskResult {
 
 #[cfg(target_arch = "wasm32")]
 struct WebReplayWorkerOutput {
+    source: String,
     label: String,
     imu_name: String,
     gnss_name: String,
     json: String,
+}
+
+#[cfg(target_arch = "wasm32")]
+enum WebReplayWorkerJob {
+    Csv {
+        label: String,
+        imu_name: String,
+        gnss_name: String,
+        imu_csv: String,
+        gnss_csv: String,
+        reference_attitude_csv: Option<String>,
+        reference_mount_csv: Option<String>,
+    },
+    Synthetic {
+        label: String,
+        motion_label: String,
+        motion_text: String,
+    },
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -481,9 +581,19 @@ impl WebDatasetState {
             replay_job_id: 0,
             pending: Rc::new(RefCell::new(None)),
             pending_replay: Rc::new(RefCell::new(None)),
+            pending_progress: Rc::new(RefCell::new(None)),
             replay_worker: None,
             replay_onmessage: None,
             replay_onerror: None,
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl WebReplayWorkerJob {
+    fn label(&self) -> &str {
+        match self {
+            Self::Csv { label, .. } | Self::Synthetic { label, .. } => label,
         }
     }
 }
@@ -557,6 +667,186 @@ fn web_query_flag(key: &str) -> bool {
         web_query_value(key).as_deref(),
         Some("1" | "true" | "yes" | "on")
     )
+}
+
+#[cfg(target_arch = "wasm32")]
+fn web_now_s() -> f64 {
+    Date::now() * 0.001
+}
+
+#[cfg(target_arch = "wasm32")]
+fn estimate_web_replay_duration_s(imu_csv: &str, gnss_csv: &str) -> f64 {
+    let span_s = csv_time_span_s(imu_csv).max(csv_time_span_s(gnss_csv));
+    if span_s.is_finite() && span_s > 0.0 {
+        (span_s / 140.0).clamp(3.0, 18.0)
+    } else {
+        6.0
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn csv_time_span_s(csv: &str) -> f64 {
+    let mut first = None::<f64>;
+    let mut last = None::<f64>;
+    for line in csv.lines() {
+        let Some(value) = line
+            .split(',')
+            .next()
+            .and_then(|cell| cell.trim().parse().ok())
+        else {
+            continue;
+        };
+        if first.is_none() {
+            first = Some(value);
+        }
+        last = Some(value);
+    }
+    match (first, last) {
+        (Some(first), Some(last)) => (last - first).abs(),
+        _ => 0.0,
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn web_replay_worker_request(job_id: u64, job: &WebReplayWorkerJob) -> Object {
+    let request = Object::new();
+    let _ = Reflect::set(
+        &request,
+        &JsValue::from_str("jobId"),
+        &JsValue::from_f64(job_id as f64),
+    );
+    let _ = Reflect::set(
+        &request,
+        &JsValue::from_str("label"),
+        &JsValue::from_str(job.label()),
+    );
+    let source = Object::new();
+    match job {
+        WebReplayWorkerJob::Csv {
+            label,
+            imu_name,
+            gnss_name,
+            imu_csv,
+            gnss_csv,
+            reference_attitude_csv,
+            reference_mount_csv,
+        } => {
+            let _ = Reflect::set(
+                &source,
+                &JsValue::from_str("kind"),
+                &JsValue::from_str("csv"),
+            );
+            let _ = Reflect::set(
+                &source,
+                &JsValue::from_str("label"),
+                &JsValue::from_str(label),
+            );
+            let _ = Reflect::set(
+                &source,
+                &JsValue::from_str("imuName"),
+                &JsValue::from_str(imu_name),
+            );
+            let _ = Reflect::set(
+                &source,
+                &JsValue::from_str("gnssName"),
+                &JsValue::from_str(gnss_name),
+            );
+            let _ = Reflect::set(
+                &source,
+                &JsValue::from_str("imuCsv"),
+                &JsValue::from_str(imu_csv),
+            );
+            let _ = Reflect::set(
+                &source,
+                &JsValue::from_str("gnssCsv"),
+                &JsValue::from_str(gnss_csv),
+            );
+            if let Some(reference) = reference_attitude_csv {
+                let _ = Reflect::set(
+                    &source,
+                    &JsValue::from_str("referenceAttitudeCsv"),
+                    &JsValue::from_str(reference),
+                );
+            }
+            if let Some(reference) = reference_mount_csv {
+                let _ = Reflect::set(
+                    &source,
+                    &JsValue::from_str("referenceMountCsv"),
+                    &JsValue::from_str(reference),
+                );
+            }
+        }
+        WebReplayWorkerJob::Synthetic {
+            label,
+            motion_label,
+            motion_text,
+        } => {
+            let _ = Reflect::set(
+                &source,
+                &JsValue::from_str("kind"),
+                &JsValue::from_str("synthetic"),
+            );
+            let _ = Reflect::set(
+                &source,
+                &JsValue::from_str("label"),
+                &JsValue::from_str(label),
+            );
+            let _ = Reflect::set(
+                &source,
+                &JsValue::from_str("motionLabel"),
+                &JsValue::from_str(motion_label),
+            );
+            let _ = Reflect::set(
+                &source,
+                &JsValue::from_str("motionText"),
+                &JsValue::from_str(motion_text),
+            );
+            let _ = Reflect::set(
+                &source,
+                &JsValue::from_str("noiseMode"),
+                &JsValue::from_str("low"),
+            );
+            let _ = Reflect::set(&source, &JsValue::from_str("seed"), &JsValue::from_f64(1.0));
+            let mount_rpy_deg = js_number_array([5.0, -5.0, 5.0]);
+            let _ = Reflect::set(
+                &source,
+                &JsValue::from_str("mountRpyDeg"),
+                mount_rpy_deg.as_ref(),
+            );
+            let _ = Reflect::set(
+                &source,
+                &JsValue::from_str("imuHz"),
+                &JsValue::from_f64(100.0),
+            );
+            let _ = Reflect::set(
+                &source,
+                &JsValue::from_str("gnssHz"),
+                &JsValue::from_f64(2.0),
+            );
+            let _ = Reflect::set(
+                &source,
+                &JsValue::from_str("gnssTimeShiftMs"),
+                &JsValue::from_f64(0.0),
+            );
+            let early_vel_bias_ned_mps = js_number_array([0.0, 0.0, 0.0]);
+            let _ = Reflect::set(
+                &source,
+                &JsValue::from_str("earlyVelBiasNedMps"),
+                early_vel_bias_ned_mps.as_ref(),
+            );
+        }
+    }
+    let _ = Reflect::set(&request, &JsValue::from_str("source"), source.as_ref());
+    request
+}
+
+#[cfg(target_arch = "wasm32")]
+fn js_number_array(values: [f64; 3]) -> Array {
+    let array = Array::new();
+    for value in values {
+        array.push(&JsValue::from_f64(value));
+    }
+    array
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -957,6 +1247,15 @@ fn create_app(
     #[cfg(target_arch = "wasm32")]
     let mapbox_access_token = web_initial_mapbox_token();
     let ui_theme = initial_ui_theme();
+    let data_origin = if replay
+        .as_ref()
+        .and_then(|replay| replay.synthetic.as_ref())
+        .is_some()
+    {
+        DataOrigin::Synthetic
+    } else {
+        DataOrigin::Real
+    };
     let map_tiles = map_tiles_from_token(&mapbox_access_token, ui_theme, cc.egui_ctx.clone());
     let mut map_memory = MapMemory::default();
     let _ = map_memory.set_zoom(15.0);
@@ -973,6 +1272,7 @@ fn create_app(
         last_frame_time_s: 0.0,
         max_points_per_trace: initial_max_points_per_trace,
         ui_theme,
+        data_origin,
         page: Page::Overview,
         map_tiles,
         map_memory,
@@ -1005,6 +1305,12 @@ fn create_app(
         #[cfg(target_arch = "wasm32")]
         web_datasets: WebDatasetState::new(),
         #[cfg(target_arch = "wasm32")]
+        web_run_progress: 0.0,
+        #[cfg(target_arch = "wasm32")]
+        web_run_started_time_s: 0.0,
+        #[cfg(target_arch = "wasm32")]
+        web_run_estimated_duration_s: 1.0,
+        #[cfg(target_arch = "wasm32")]
         web_status: "Drag imu.csv and gnss.csv onto the app, or run a built-in synthetic scenario."
             .to_string(),
         #[cfg(target_arch = "wasm32")]
@@ -1014,7 +1320,9 @@ fn create_app(
         },
     };
     #[cfg(target_arch = "wasm32")]
-    if app.web_datasets.auto_load_id.is_some() {
+    let auto_load_dataset = app.web_datasets.auto_load_id.is_some();
+    #[cfg(target_arch = "wasm32")]
+    if auto_load_dataset {
         app.web_input_mode = WebInputMode::RealData;
         app.web_real_data_source = WebRealDataSource::ManifestDataset;
     }
@@ -1026,8 +1334,10 @@ fn create_app(
         app.page = Page::Map;
     }
     #[cfg(target_arch = "wasm32")]
-    if let Some(scenario) = web_query_synthetic_scenario() {
-        app.web_scenario = scenario;
+    if !auto_load_dataset {
+        if let Some(scenario) = web_query_synthetic_scenario() {
+            app.web_scenario = scenario;
+        }
         app.refresh_from_web_synthetic();
     }
     #[cfg(target_arch = "wasm32")]
@@ -1091,6 +1401,9 @@ impl App {
         self.web_input_mode = WebInputMode::RealData;
         self.web_real_data_source = WebRealDataSource::ManifestDataset;
         self.web_datasets.loading_dataset = true;
+        self.web_run_progress = 0.0;
+        self.web_run_started_time_s = web_now_s();
+        self.web_run_estimated_duration_s = 2.0;
         self.web_status = format!("Loading dataset: {label}");
         let manifest_url = self.web_datasets.manifest_url.clone();
         let pending = Rc::clone(&self.web_datasets.pending);
@@ -1158,6 +1471,7 @@ impl App {
                         self.web_gnss_csv = Some(files.gnss);
                         self.web_reference_attitude_csv = files.reference_attitude;
                         self.web_reference_mount_csv = files.reference_mount;
+                        self.web_run_progress = self.web_run_progress.max(0.02);
                         self.start_web_replay_build(label, imu_name, gnss_name);
                     }
                     Err(err) => {
@@ -1165,6 +1479,21 @@ impl App {
                     }
                 }
             }
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn poll_web_replay_progress(&mut self) {
+        if self.web_datasets.loading_dataset || self.web_datasets.loading_replay {
+            let elapsed_s = (web_now_s() - self.web_run_started_time_s).max(0.0);
+            let estimated = (elapsed_s / self.web_run_estimated_duration_s.max(0.5)) as f32;
+            self.web_run_progress = self.web_run_progress.max(estimated.min(0.95));
+        }
+        let Some(progress) = self.web_datasets.pending_progress.borrow_mut().take() else {
+            return;
+        };
+        if progress.job_id == self.web_datasets.replay_job_id {
+            self.web_run_progress = self.web_run_progress.max(progress.progress);
         }
     }
 
@@ -1179,20 +1508,35 @@ impl App {
         }
         self.finish_web_replay_worker();
         self.web_datasets.loading_replay = false;
+        self.web_run_progress = 1.0;
         match result {
             Ok(output) => match serde_json::from_str::<PlotData>(&output.json) {
                 Ok(data) => {
+                    let is_synthetic = output.source == "synthetic";
                     self.data = data;
                     self.map_center = map_center_from_traces(&self.data.eskf_map);
                     self.has_itow = false;
-                    self.web_input_mode = WebInputMode::RealData;
+                    self.data_origin = if is_synthetic {
+                        DataOrigin::Synthetic
+                    } else {
+                        DataOrigin::Real
+                    };
+                    self.web_input_mode = if is_synthetic {
+                        WebInputMode::Synthetic
+                    } else {
+                        WebInputMode::RealData
+                    };
                     if self.page != Page::Map {
                         self.page = Page::Overview;
                     }
-                    self.web_status = format!(
-                        "Dataset loaded: {} ({} / {})",
-                        output.label, output.imu_name, output.gnss_name
-                    );
+                    self.web_status = if is_synthetic {
+                        format!("Synthetic scenario loaded: {}", output.label)
+                    } else {
+                        format!(
+                            "Dataset loaded: {} ({} / {})",
+                            output.label, output.imu_name, output.gnss_name
+                        )
+                    };
                 }
                 Err(err) => {
                     self.web_status = format!("Replay result decode failed: {err}");
@@ -1219,6 +1563,7 @@ impl App {
                     self.data = data;
                     self.map_center = map_center_from_traces(&self.data.eskf_map);
                     self.has_itow = false;
+                    self.data_origin = DataOrigin::Synthetic;
                     self.replay_status = Some("Synthetic replay refreshed".to_string());
                 }
                 Err(err) => {
@@ -1240,6 +1585,7 @@ impl App {
         };
         self.web_input_mode = WebInputMode::RealData;
         self.web_real_data_source = WebRealDataSource::DroppedCsv;
+        self.data_origin = DataOrigin::Real;
         self.start_web_replay_build(
             "CSV replay".to_string(),
             imu.name.clone(),
@@ -1265,10 +1611,32 @@ impl App {
             .web_reference_mount_csv
             .as_ref()
             .map(|reference| reference.text.clone());
+        let estimated_duration_s = estimate_web_replay_duration_s(&imu_text, &gnss_text);
+        self.start_web_replay_worker(
+            WebReplayWorkerJob::Csv {
+                label,
+                imu_name,
+                gnss_name,
+                imu_csv: imu_text,
+                gnss_csv: gnss_text,
+                reference_attitude_csv: reference_attitude_text,
+                reference_mount_csv: reference_mount_text,
+            },
+            estimated_duration_s,
+        );
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn start_web_replay_worker(&mut self, job: WebReplayWorkerJob, estimated_duration_s: f64) {
+        let label = job.label().to_string();
+        self.web_run_started_time_s = web_now_s();
+        self.web_run_estimated_duration_s = estimated_duration_s;
         self.finish_web_replay_worker();
         *self.web_datasets.pending_replay.borrow_mut() = None;
+        *self.web_datasets.pending_progress.borrow_mut() = None;
         self.web_datasets.replay_job_id = self.web_datasets.replay_job_id.wrapping_add(1);
         let job_id = self.web_datasets.replay_job_id;
+        self.web_run_progress = 0.02;
 
         let worker_options = WorkerOptions::new();
         worker_options.set_type(WorkerType::Module);
@@ -1282,6 +1650,7 @@ impl App {
         };
 
         let pending = Rc::clone(&self.web_datasets.pending_replay);
+        let pending_progress = Rc::clone(&self.web_datasets.pending_progress);
         let onmessage = Closure::wrap(Box::new(move |event: MessageEvent| {
             let value = event.data();
             let output_job_id = Reflect::get(&value, &JsValue::from_str("jobId"))
@@ -1289,6 +1658,21 @@ impl App {
                 .and_then(|v| v.as_f64())
                 .map(|v| v as u64)
                 .unwrap_or(job_id);
+            let message_type = Reflect::get(&value, &JsValue::from_str("type"))
+                .ok()
+                .and_then(|v| v.as_string());
+            if message_type.as_deref() == Some("progress") {
+                let progress = Reflect::get(&value, &JsValue::from_str("progress"))
+                    .ok()
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0)
+                    .clamp(0.0, 1.0) as f32;
+                *pending_progress.borrow_mut() = Some(WebReplayProgress {
+                    job_id: output_job_id,
+                    progress,
+                });
+                return;
+            }
             let ok = Reflect::get(&value, &JsValue::from_str("ok"))
                 .ok()
                 .and_then(|v| v.as_bool())
@@ -1297,8 +1681,13 @@ impl App {
                 .ok()
                 .and_then(|v| v.as_string())
                 .unwrap_or_else(|| "CSV replay".to_string());
+            let source = Reflect::get(&value, &JsValue::from_str("source"))
+                .ok()
+                .and_then(|v| v.as_string())
+                .unwrap_or_else(|| "csv".to_string());
             if ok {
                 let output = WebReplayWorkerOutput {
+                    source,
                     label,
                     imu_name: Reflect::get(&value, &JsValue::from_str("imuName"))
                         .ok()
@@ -1340,54 +1729,15 @@ impl App {
         worker.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
         worker.set_onerror(Some(onerror.as_ref().unchecked_ref()));
 
-        let request = Object::new();
-        let _ = Reflect::set(
-            &request,
-            &JsValue::from_str("jobId"),
-            &JsValue::from_f64(job_id as f64),
-        );
+        let request = web_replay_worker_request(job_id, &job);
         let _ = Reflect::set(
             &request,
             &JsValue::from_str("label"),
             &JsValue::from_str(&label),
         );
-        let _ = Reflect::set(
-            &request,
-            &JsValue::from_str("imuName"),
-            &JsValue::from_str(&imu_name),
-        );
-        let _ = Reflect::set(
-            &request,
-            &JsValue::from_str("gnssName"),
-            &JsValue::from_str(&gnss_name),
-        );
-        let _ = Reflect::set(
-            &request,
-            &JsValue::from_str("imuCsv"),
-            &JsValue::from_str(&imu_text),
-        );
-        let _ = Reflect::set(
-            &request,
-            &JsValue::from_str("gnssCsv"),
-            &JsValue::from_str(&gnss_text),
-        );
-        if let Some(reference) = &reference_attitude_text {
-            let _ = Reflect::set(
-                &request,
-                &JsValue::from_str("referenceAttitudeCsv"),
-                &JsValue::from_str(reference),
-            );
-        }
-        if let Some(reference) = &reference_mount_text {
-            let _ = Reflect::set(
-                &request,
-                &JsValue::from_str("referenceMountCsv"),
-                &JsValue::from_str(reference),
-            );
-        }
 
         if let Err(err) = worker.post_message(&request) {
-            self.web_status = format!("Failed to start CSV replay: {}", js_error_string(err));
+            self.web_status = format!("Failed to start replay: {}", js_error_string(err));
             worker.terminate();
             return;
         }
@@ -1404,6 +1754,7 @@ impl App {
         if let Some(worker) = self.web_datasets.replay_worker.take() {
             worker.terminate();
         }
+        *self.web_datasets.pending_progress.borrow_mut() = None;
         self.web_datasets.replay_onmessage = None;
         self.web_datasets.replay_onerror = None;
     }
@@ -1411,39 +1762,15 @@ impl App {
     #[cfg(target_arch = "wasm32")]
     fn refresh_from_web_synthetic(&mut self) {
         let (label, text) = self.web_scenario.scenario_text();
-        let synth_cfg = SyntheticVisualizerConfig {
-            motion_def: None,
-            motion_label: label.to_string(),
-            motion_text: Some(text.to_string()),
-            noise_mode: super::pipeline::synthetic::SyntheticNoiseMode::Low,
-            seed: 1,
-            mount_rpy_deg: [5.0, -5.0, 5.0],
-            imu_hz: 100.0,
-            gnss_hz: 2.0,
-            gnss_time_shift_ms: 0.0,
-            early_vel_bias_ned_mps: [0.0, 0.0, 0.0],
-            early_fault_window_s: None,
-        };
-        match build_synthetic_plot_data(
-            &synth_cfg,
-            EkfImuSource::Internal,
-            EkfCompareConfig::default(),
-            GnssOutageConfig::default(),
-        ) {
-            Ok(data) => {
-                self.data = data;
-                self.map_center = map_center_from_traces(&self.data.eskf_map);
-                self.has_itow = false;
-                self.web_input_mode = WebInputMode::Synthetic;
-                if self.page != Page::Map {
-                    self.page = Page::Overview;
-                }
-                self.web_status = format!("Synthetic scenario loaded: {label}");
-            }
-            Err(err) => {
-                self.web_status = format!("Synthetic scenario failed: {err}");
-            }
-        }
+        self.web_input_mode = WebInputMode::Synthetic;
+        self.start_web_replay_worker(
+            WebReplayWorkerJob::Synthetic {
+                label: self.web_scenario.display_label().to_string(),
+                motion_label: label.to_string(),
+                motion_text: text.to_string(),
+            },
+            4.0,
+        );
     }
 
     fn draw_map_controls(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -1478,18 +1805,24 @@ impl App {
             }
         });
         ui.horizontal_wrapped(|ui| {
-            ui.colored_label(egui::Color32::from_rgb(0, 255, 255), "GNSS");
-            ui.colored_label(egui::Color32::from_rgb(120, 170, 255), "ESKF");
-            ui.colored_label(egui::Color32::from_rgb(120, 255, 170), "Loose");
+            let visuals = ui.visuals().clone();
+            ui.colored_label(map_trace_color("GNSS", &visuals), "GNSS");
+            ui.colored_label(map_trace_color("ESKF path (lon,lat)", &visuals), "ESKF");
+            ui.colored_label(map_trace_color("Loose path (lon,lat)", &visuals), "Loose");
             ui.colored_label(
-                egui::Color32::from_rgb(255, 140, 220),
+                map_trace_color("ESKF path during GNSS outage (lon,lat)", &visuals),
                 "ESKF during GNSS outage",
             );
-            ui.colored_label(egui::Color32::from_rgb(255, 255, 255), "ESKF heading");
+            ui.colored_label(map_heading_color(&visuals), "ESKF heading");
         });
     }
 
     fn draw_map_body(&mut self, ui: &mut egui::Ui, size: egui::Vec2, cursor_t_s: Option<f64>) {
+        if self.data_origin == DataOrigin::Synthetic {
+            self.draw_synthetic_trajectory_body(ui, size, cursor_t_s);
+            return;
+        }
+
         let mut map_traces: Vec<&Trace> = self.data.eskf_map.iter().collect();
         if !self.show_gnss_map {
             map_traces.retain(|t| {
@@ -1525,6 +1858,66 @@ impl App {
             .with_plugin(track)
             .double_click_to_zoom(true),
         );
+    }
+
+    fn draw_synthetic_trajectory_body(
+        &self,
+        ui: &mut egui::Ui,
+        size: egui::Vec2,
+        cursor_t_s: Option<f64>,
+    ) {
+        let traces = synthetic_trajectory_traces(
+            &self.data,
+            ui.visuals(),
+            self.show_gnss_map,
+            self.show_eskf,
+            self.show_loose,
+        );
+        if traces.is_empty() {
+            ui.allocate_ui(size, |ui| {
+                ui.centered_and_justified(|ui| {
+                    ui.label(egui::RichText::new("No local trajectory").weak());
+                });
+            });
+            return;
+        }
+
+        let cursor_point = cursor_t_s.and_then(|t_s| synthetic_cursor_point(&self.data, t_s));
+        let cursor_color = cursor_marker_color(ui.visuals());
+        Plot::new("synthetic_local_trajectory")
+            .width(size.x)
+            .height(size.y)
+            .data_aspect(1.0)
+            .grid_spacing(subtle_plot_grid_spacing())
+            .x_grid_spacer(subdued_plot_grid_marks)
+            .y_grid_spacer(subdued_plot_grid_marks)
+            .legend(Legend::default())
+            .include_x(0.0)
+            .include_y(0.0)
+            .x_axis_label("East [m]")
+            .y_axis_label("North [m]")
+            .x_axis_formatter(|mark, _range| format!("{:.0}", mark.value))
+            .y_axis_formatter(|mark, _range| format!("{:.0}", mark.value))
+            .allow_drag(true)
+            .allow_zoom(true)
+            .allow_scroll(true)
+            .allow_boxed_zoom(true)
+            .allow_axis_zoom_drag(true)
+            .show(ui, |plot_ui| {
+                for trace in traces {
+                    let points: PlotPoints<'_> =
+                        decimate_trajectory_points(&trace.points, SYNTHETIC_TRAJECTORY_MAX_POINTS)
+                            .into();
+                    plot_ui.line(Line::new(trace.name, points).color(trace.color));
+                }
+                if let Some(point) = cursor_point {
+                    plot_ui.points(
+                        Points::new("Cursor", vec![point])
+                            .radius(5.0)
+                            .color(cursor_color),
+                    );
+                }
+            });
     }
 
     fn draw_overview_page(&mut self, ui: &mut egui::Ui) {
@@ -1815,6 +2208,7 @@ impl App {
         }
         self.web_input_mode = WebInputMode::RealData;
         self.web_real_data_source = WebRealDataSource::DroppedCsv;
+        self.data_origin = DataOrigin::Real;
         self.web_status =
             "Dropped file(s) staged. Select Experimental/real data, then click Run.".to_string();
     }
@@ -1899,6 +2293,8 @@ impl eframe::App for App {
 
         #[cfg(target_arch = "wasm32")]
         self.poll_web_dataset_tasks();
+        #[cfg(target_arch = "wasm32")]
+        self.poll_web_replay_progress();
         #[cfg(target_arch = "wasm32")]
         self.poll_web_replay_tasks();
 
@@ -2091,18 +2487,21 @@ impl eframe::App for App {
                                 },
                             };
                             let run_text = match self.web_input_mode {
+                                _ if self.web_datasets.loading_replay => "Running replay...",
                                 WebInputMode::RealData if self.web_datasets.loading_dataset => {
                                     "Loading dataset..."
                                 }
-                                WebInputMode::RealData if self.web_datasets.loading_replay => {
-                                    "Running replay..."
-                                }
                                 _ => "Run",
                             };
-                            if ui
-                                .add_enabled(run_enabled, egui::Button::new(run_text))
-                                .clicked()
-                            {
+                            let run_busy = self.web_datasets.loading_dataset
+                                || self.web_datasets.loading_replay;
+                            if draw_web_run_button(
+                                ui,
+                                run_enabled,
+                                run_busy,
+                                self.web_run_progress,
+                                run_text,
+                            ) {
                                 match self.web_input_mode {
                                     WebInputMode::Synthetic => self.refresh_from_web_synthetic(),
                                     WebInputMode::RealData => match self.web_real_data_source {
@@ -2926,6 +3325,232 @@ fn draw_map_tile(
         });
 }
 
+#[cfg(target_arch = "wasm32")]
+fn draw_web_run_button(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    busy: bool,
+    progress: f32,
+    text: &str,
+) -> bool {
+    let width = 128.0_f32.max(ui.spacing().interact_size.x * 3.2);
+    let height = ui.spacing().interact_size.y;
+    if busy {
+        ui.add_sized(
+            [width, height],
+            egui::ProgressBar::new(progress.clamp(0.0, 1.0))
+                .desired_width(width)
+                .desired_height(height)
+                .fill(ui.visuals().selection.bg_fill)
+                .text(egui::RichText::new(format!(
+                    "{text} {:>3.0}%",
+                    100.0 * progress.clamp(0.0, 1.0)
+                ))),
+        );
+        false
+    } else {
+        ui.add_enabled(
+            enabled,
+            egui::Button::new("Run").min_size(egui::vec2(width, height)),
+        )
+        .clicked()
+    }
+}
+
+struct SyntheticTrajectoryTrace {
+    name: String,
+    points: Vec<[f64; 2]>,
+    color: egui::Color32,
+}
+
+fn synthetic_trajectory_traces(
+    data: &PlotData,
+    visuals: &egui::Visuals,
+    show_gnss: bool,
+    show_eskf: bool,
+    show_loose: bool,
+) -> Vec<SyntheticTrajectoryTrace> {
+    let mut traces = Vec::new();
+    push_position_pair_trace(
+        &mut traces,
+        "Reference",
+        &data.eskf_cmp_pos,
+        "Synthetic truth posN [m]",
+        "Synthetic truth posE [m]",
+        SeriesColor::Reference.resolve(visuals),
+    );
+    if show_gnss
+        && let Some(reference) = first_lonlat_trace_point(&data.eskf_map, "Synthetic truth path")
+        && let Some(gnss) = data
+            .eskf_map
+            .iter()
+            .find(|trace| trace.name.contains("Synthetic GNSS path"))
+        && let Some(points) = lonlat_trace_to_local_en(gnss, reference)
+    {
+        traces.push(SyntheticTrajectoryTrace {
+            name: "GNSS".to_string(),
+            points,
+            color: map_trace_color("GNSS", visuals),
+        });
+    }
+    if show_eskf {
+        push_position_pair_trace(
+            &mut traces,
+            "ESKF",
+            &data.eskf_cmp_pos,
+            "ESKF posN [m]",
+            "ESKF posE [m]",
+            map_trace_color("ESKF path (lon,lat)", visuals),
+        );
+    }
+    if show_loose {
+        push_position_pair_trace(
+            &mut traces,
+            "Loose",
+            &data.loose_cmp_pos,
+            "Loose posN [m]",
+            "Loose posE [m]",
+            map_trace_color("Loose path (lon,lat)", visuals),
+        );
+    }
+    traces
+}
+
+fn push_position_pair_trace(
+    out: &mut Vec<SyntheticTrajectoryTrace>,
+    name: &str,
+    traces: &[Trace],
+    north_name: &str,
+    east_name: &str,
+    color: egui::Color32,
+) {
+    let (Some(north), Some(east)) = (
+        traces.iter().find(|trace| trace.name == north_name),
+        traces.iter().find(|trace| trace.name == east_name),
+    ) else {
+        return;
+    };
+    let points = position_pair_to_en_points(north, east);
+    if points.len() >= 2 {
+        out.push(SyntheticTrajectoryTrace {
+            name: name.to_string(),
+            points,
+            color,
+        });
+    }
+}
+
+fn position_pair_to_en_points(north: &Trace, east: &Trace) -> Vec<[f64; 2]> {
+    north
+        .points
+        .iter()
+        .filter_map(|sample| {
+            let t_s = sample[0];
+            let north_m = sample[1];
+            let east_m = sample_trace_at(east, t_s)?;
+            (north_m.is_finite() && east_m.is_finite()).then_some([east_m, north_m])
+        })
+        .collect()
+}
+
+fn decimate_trajectory_points(points: &[[f64; 2]], max_points: usize) -> Vec<[f64; 2]> {
+    if points.len() <= max_points || max_points < 2 {
+        return points.to_vec();
+    }
+    let stride = points.len().div_ceil(max_points).max(1);
+    let mut out: Vec<[f64; 2]> = points.iter().copied().step_by(stride).collect();
+    if let Some(last) = points.last().copied()
+        && out.last().copied() != Some(last)
+    {
+        out.push(last);
+    }
+    out
+}
+
+fn subtle_plot_grid_spacing() -> egui::emath::Rangef {
+    egui::emath::Rangef::new(PLOT_GRID_MIN_SPACING_PX, PLOT_GRID_MAX_SPACING_PX)
+}
+
+fn subdued_plot_grid_marks(input: GridInput) -> Vec<GridMark> {
+    log_grid_spacer(10)(input)
+        .into_iter()
+        .map(|mut mark| {
+            mark.step_size *= PLOT_GRID_STRENGTH_SCALE;
+            mark
+        })
+        .collect()
+}
+
+fn synthetic_cursor_point(data: &PlotData, t_s: f64) -> Option<[f64; 2]> {
+    synthetic_cursor_point_from_traces(&data.eskf_cmp_pos, t_s, "ESKF posN [m]", "ESKF posE [m]")
+        .or_else(|| {
+            synthetic_cursor_point_from_traces(
+                &data.eskf_cmp_pos,
+                t_s,
+                "Synthetic truth posN [m]",
+                "Synthetic truth posE [m]",
+            )
+        })
+        .or_else(|| {
+            synthetic_cursor_point_from_traces(
+                &data.loose_cmp_pos,
+                t_s,
+                "Loose posN [m]",
+                "Loose posE [m]",
+            )
+        })
+}
+
+fn synthetic_cursor_point_from_traces(
+    traces: &[Trace],
+    t_s: f64,
+    north_name: &str,
+    east_name: &str,
+) -> Option<[f64; 2]> {
+    let north = traces.iter().find(|trace| trace.name == north_name)?;
+    let east = traces.iter().find(|trace| trace.name == east_name)?;
+    let north_m = sample_trace_at(north, t_s)?;
+    let east_m = sample_trace_at(east, t_s)?;
+    (north_m.is_finite() && east_m.is_finite()).then_some([east_m, north_m])
+}
+
+fn first_lonlat_trace_point(traces: &[Trace], name_contains: &str) -> Option<[f64; 2]> {
+    traces
+        .iter()
+        .find(|trace| trace.name.contains(name_contains))
+        .and_then(|trace| {
+            trace
+                .points
+                .iter()
+                .copied()
+                .find(|point| point[0].is_finite() && point[1].is_finite())
+        })
+}
+
+fn lonlat_trace_to_local_en(trace: &Trace, reference_lonlat: [f64; 2]) -> Option<Vec<[f64; 2]>> {
+    let ref_lon_deg = reference_lonlat[0];
+    let ref_lat_deg = reference_lonlat[1];
+    if !ref_lon_deg.is_finite() || !ref_lat_deg.is_finite() {
+        return None;
+    }
+    let ref_ecef = lla_to_ecef(ref_lat_deg, ref_lon_deg, 0.0);
+    let points: Vec<[f64; 2]> = trace
+        .points
+        .iter()
+        .filter_map(|point| {
+            let lon_deg = point[0];
+            let lat_deg = point[1];
+            if !lon_deg.is_finite() || !lat_deg.is_finite() {
+                return None;
+            }
+            let ecef = lla_to_ecef(lat_deg, lon_deg, 0.0);
+            let ned = ecef_to_ned(ecef, ref_ecef, ref_lat_deg, ref_lon_deg);
+            Some([ned[1], ned[0]])
+        })
+        .collect();
+    (points.len() >= 2).then_some(points)
+}
+
 #[derive(Clone, Copy)]
 enum AttitudeAxis {
     Roll,
@@ -2935,8 +3560,32 @@ enum AttitudeAxis {
 
 struct AttitudeSeriesSample {
     label: &'static str,
-    color: egui::Color32,
+    color: SeriesColor,
     angle_deg: f64,
+}
+
+#[derive(Clone, Copy)]
+enum SeriesColor {
+    Reference,
+    Eskf,
+    Loose,
+    Align,
+}
+
+impl SeriesColor {
+    fn resolve(self, visuals: &egui::Visuals) -> egui::Color32 {
+        let dark = visuals.dark_mode;
+        match self {
+            Self::Reference if dark => egui::Color32::from_rgb(235, 238, 244),
+            Self::Reference => egui::Color32::from_rgb(34, 43, 55),
+            Self::Eskf if dark => egui::Color32::from_rgb(120, 170, 255),
+            Self::Eskf => egui::Color32::from_rgb(35, 105, 200),
+            Self::Loose if dark => egui::Color32::from_rgb(120, 255, 170),
+            Self::Loose => egui::Color32::from_rgb(26, 138, 78),
+            Self::Align if dark => egui::Color32::from_rgb(244, 190, 96),
+            Self::Align => egui::Color32::from_rgb(168, 93, 22),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -3011,39 +3660,19 @@ fn angle_samples_for_axis(
     axis: AttitudeAxis,
     kind: OrthogonalViewKind,
 ) -> Vec<AttitudeSeriesSample> {
-    let prefixes: &[(&str, &str, egui::Color32)] = match kind {
+    let prefixes: &[(&str, &str, SeriesColor)] = match kind {
         OrthogonalViewKind::Vehicle => &[
-            (
-                "Reference",
-                "Reference",
-                egui::Color32::from_rgb(235, 235, 235),
-            ),
-            (
-                "Synthetic truth",
-                "Reference",
-                egui::Color32::from_rgb(235, 235, 235),
-            ),
-            ("ESKF", "ESKF", egui::Color32::from_rgb(120, 170, 255)),
-            ("Loose", "Loose", egui::Color32::from_rgb(120, 255, 170)),
+            ("Reference", "Reference", SeriesColor::Reference),
+            ("Synthetic truth", "Reference", SeriesColor::Reference),
+            ("ESKF", "ESKF", SeriesColor::Eskf),
+            ("Loose", "Loose", SeriesColor::Loose),
         ],
         OrthogonalViewKind::Mount => &[
-            (
-                "Reference mount",
-                "Reference",
-                egui::Color32::from_rgb(235, 235, 235),
-            ),
-            (
-                "Synthetic truth mount",
-                "Reference",
-                egui::Color32::from_rgb(235, 235, 235),
-            ),
-            ("Align", "Align", egui::Color32::from_rgb(244, 190, 96)),
-            ("ESKF mount", "ESKF", egui::Color32::from_rgb(120, 170, 255)),
-            (
-                "Loose residual mount",
-                "Loose",
-                egui::Color32::from_rgb(120, 255, 170),
-            ),
+            ("Reference mount", "Reference", SeriesColor::Reference),
+            ("Synthetic truth mount", "Reference", SeriesColor::Reference),
+            ("Align", "Align", SeriesColor::Align),
+            ("ESKF mount", "ESKF", SeriesColor::Eskf),
+            ("Loose residual mount", "Loose", SeriesColor::Loose),
         ],
     };
     prefixes
@@ -3121,10 +3750,11 @@ fn draw_angle_axis_view(
     samples: &[AttitudeSeriesSample],
     kind: OrthogonalViewKind,
 ) {
+    let visuals = painter.ctx().style().visuals.clone();
     painter.rect_stroke(
         rect,
         egui::CornerRadius::same(5),
-        egui::Stroke::new(1.0, egui::Color32::from_gray(45)),
+        egui::Stroke::new(1.0, orthogonal_panel_stroke(&visuals)),
         egui::StrokeKind::Inside,
     );
     painter.text(
@@ -3132,7 +3762,7 @@ fn draw_angle_axis_view(
         egui::Align2::CENTER_TOP,
         label,
         egui::FontId::proportional(12.0),
-        egui::Color32::from_gray(210),
+        visuals.text_color(),
     );
     if samples.is_empty() {
         painter.text(
@@ -3140,7 +3770,7 @@ fn draw_angle_axis_view(
             egui::Align2::CENTER_CENTER,
             "No sample",
             egui::FontId::proportional(11.0),
-            egui::Color32::from_gray(130),
+            visuals.weak_text_color(),
         );
         return;
     }
@@ -3148,7 +3778,7 @@ fn draw_angle_axis_view(
     let figure_rect = rect.shrink2(egui::vec2(8.0, 24.0));
     let scale = figure_rect.width().min(figure_rect.height()).max(1.0);
     let center = figure_rect.center() + egui::vec2(0.0, -4.0);
-    draw_zero_angle_axis(painter, center, scale, axis);
+    draw_zero_angle_axis(painter, center, scale, axis, &visuals);
     for sample in samples {
         draw_rotated_outline(
             painter,
@@ -3156,7 +3786,7 @@ fn draw_angle_axis_view(
             scale,
             axis,
             sample.angle_deg,
-            sample.color,
+            sample.color.resolve(&visuals),
             matches!(kind, OrthogonalViewKind::Vehicle),
         );
     }
@@ -3168,9 +3798,17 @@ fn draw_angle_axis_view(
             egui::Align2::LEFT_TOP,
             format!("{} {:+.1} deg", sample.label, sample.angle_deg),
             egui::FontId::proportional(10.5),
-            sample.color,
+            sample.color.resolve(&visuals),
         );
         y += 14.0;
+    }
+}
+
+fn orthogonal_panel_stroke(visuals: &egui::Visuals) -> egui::Color32 {
+    if visuals.dark_mode {
+        egui::Color32::from_gray(58)
+    } else {
+        egui::Color32::from_rgb(185, 176, 164)
     }
 }
 
@@ -3179,11 +3817,12 @@ fn draw_zero_angle_axis(
     center: egui::Pos2,
     scale: f32,
     axis: AttitudeAxis,
+    visuals: &egui::Visuals,
 ) {
     let half = 0.36 * scale;
     let dash = 4.0;
     let gap = 4.0;
-    let color = egui::Color32::from_gray(85).gamma_multiply(0.55);
+    let color = zero_angle_axis_color(visuals);
     match axis {
         AttitudeAxis::Roll | AttitudeAxis::Pitch => {
             let mut x = center.x - half;
@@ -3207,6 +3846,14 @@ fn draw_zero_angle_axis(
                 y += dash + gap;
             }
         }
+    }
+}
+
+fn zero_angle_axis_color(visuals: &egui::Visuals) -> egui::Color32 {
+    if visuals.dark_mode {
+        egui::Color32::from_gray(95).gamma_multiply(0.58)
+    } else {
+        egui::Color32::from_rgb(105, 113, 126).gamma_multiply(0.58)
     }
 }
 
@@ -3736,6 +4383,9 @@ where
 
                 let mut plot = Plot::new(title)
                     .height(plot_height)
+                    .grid_spacing(subtle_plot_grid_spacing())
+                    .x_grid_spacer(subdued_plot_grid_marks)
+                    .y_grid_spacer(subdued_plot_grid_marks)
                     .link_axis("shared_x", egui::Vec2b::new(true, false))
                     .x_axis_formatter(|mark, _range| format!("{:.1}", mark.value))
                     .allow_drag(true)
@@ -3746,6 +4396,7 @@ where
                 if show_legend {
                     plot = plot.legend(Legend::default());
                 }
+                let shared_cursor_color = shared_cursor_color(ui.visuals());
                 plot.show(ui, |plot_ui| {
                     let bounds = plot_ui.plot_bounds();
                     let xmin = bounds.min()[0];
@@ -3780,7 +4431,7 @@ where
                             VLine::new("Shared cursor", cursor_t_s)
                                 .name("")
                                 .allow_hover(false)
-                                .color(egui::Color32::from_gray(210).gamma_multiply(0.55))
+                                .color(shared_cursor_color)
                                 .style(LineStyle::Dotted { spacing: 5.0 }),
                         );
                     }
@@ -3789,6 +4440,14 @@ where
                 .inner
             })
             .inner
+    }
+}
+
+fn shared_cursor_color(visuals: &egui::Visuals) -> egui::Color32 {
+    if visuals.dark_mode {
+        egui::Color32::from_gray(210).gamma_multiply(0.55)
+    } else {
+        egui::Color32::from_rgb(73, 84, 100).gamma_multiply(0.72)
     }
 }
 

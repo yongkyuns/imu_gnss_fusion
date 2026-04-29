@@ -21,6 +21,65 @@ pub struct GenericReplayInput {
     pub reference_mount: Vec<GenericReferenceRpySample>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct GenericReplayProgress {
+    pub current_t_s: f64,
+    pub final_t_s: f64,
+    pub fraction: f64,
+}
+
+struct GenericProgressReporter<'a> {
+    callback: Option<&'a mut dyn FnMut(GenericReplayProgress)>,
+    start_t_s: f64,
+    final_t_s: f64,
+    last_fraction: f64,
+}
+
+impl<'a> GenericProgressReporter<'a> {
+    fn new(
+        replay: &GenericReplayInput,
+        callback: Option<&'a mut dyn FnMut(GenericReplayProgress)>,
+    ) -> Self {
+        let (start_t_s, final_t_s) = replay_time_range(replay).unwrap_or((0.0, 1.0));
+        Self {
+            callback,
+            start_t_s,
+            final_t_s,
+            last_fraction: -1.0,
+        }
+    }
+
+    fn report_stage(&mut self, stage_start: f64, stage_span: f64, current_t_s: f64) {
+        let Some(callback) = self.callback.as_deref_mut() else {
+            return;
+        };
+        let denom = (self.final_t_s - self.start_t_s).abs().max(f64::EPSILON);
+        let time_fraction = ((current_t_s - self.start_t_s) / denom).clamp(0.0, 1.0);
+        let fraction = (stage_start + stage_span * time_fraction).clamp(0.0, 1.0);
+        if fraction < 1.0 && fraction - self.last_fraction < 0.005 {
+            return;
+        }
+        self.last_fraction = fraction;
+        callback(GenericReplayProgress {
+            current_t_s,
+            final_t_s: self.final_t_s,
+            fraction,
+        });
+    }
+
+    fn complete(&mut self) {
+        let Some(callback) = self.callback.as_deref_mut() else {
+            return;
+        };
+        self.last_fraction = 1.0;
+        callback(GenericReplayProgress {
+            current_t_s: self.final_t_s,
+            final_t_s: self.final_t_s,
+            fraction: 1.0,
+        });
+    }
+}
+
 impl GenericReplayInput {
     pub fn new(imu: Vec<GenericImuSample>, gnss: Vec<GenericGnssSample>) -> Self {
         Self {
@@ -30,6 +89,23 @@ impl GenericReplayInput {
             reference_mount: Vec::new(),
         }
     }
+}
+
+fn replay_time_range(replay: &GenericReplayInput) -> Option<(f64, f64)> {
+    let mut start = f64::INFINITY;
+    let mut end = f64::NEG_INFINITY;
+    for t_s in replay
+        .imu
+        .iter()
+        .map(|sample| sample.t_s)
+        .chain(replay.gnss.iter().map(|sample| sample.t_s))
+    {
+        if t_s.is_finite() {
+            start = start.min(t_s);
+            end = end.max(t_s);
+        }
+    }
+    start.is_finite().then_some((start, end.max(start)))
 }
 
 pub fn parse_generic_replay_csvs(imu_csv: &str, gnss_csv: &str) -> Result<GenericReplayInput> {
@@ -92,7 +168,77 @@ pub fn build_generic_replay_plot_data(
     ekf_cfg: EkfCompareConfig,
     gnss_outages: GnssOutageConfig,
 ) -> PlotData {
-    let mut fusion = SensorFusion::new();
+    build_generic_replay_plot_data_impl(replay, ekf_imu_source, ekf_cfg, gnss_outages, None, None)
+}
+
+pub fn build_generic_replay_plot_data_with_eskf_mount_seed(
+    replay: &GenericReplayInput,
+    ekf_imu_source: EkfImuSource,
+    ekf_cfg: EkfCompareConfig,
+    gnss_outages: GnssOutageConfig,
+    eskf_mount_seed_q_vb: Option<[f32; 4]>,
+) -> PlotData {
+    build_generic_replay_plot_data_impl(
+        replay,
+        ekf_imu_source,
+        ekf_cfg,
+        gnss_outages,
+        None,
+        eskf_mount_seed_q_vb,
+    )
+}
+
+pub fn build_generic_replay_plot_data_with_progress(
+    replay: &GenericReplayInput,
+    ekf_imu_source: EkfImuSource,
+    ekf_cfg: EkfCompareConfig,
+    gnss_outages: GnssOutageConfig,
+    progress: &mut dyn FnMut(GenericReplayProgress),
+) -> PlotData {
+    build_generic_replay_plot_data_impl(
+        replay,
+        ekf_imu_source,
+        ekf_cfg,
+        gnss_outages,
+        Some(progress),
+        None,
+    )
+}
+
+pub fn build_generic_replay_plot_data_with_progress_and_eskf_mount_seed(
+    replay: &GenericReplayInput,
+    ekf_imu_source: EkfImuSource,
+    ekf_cfg: EkfCompareConfig,
+    gnss_outages: GnssOutageConfig,
+    progress: &mut dyn FnMut(GenericReplayProgress),
+    eskf_mount_seed_q_vb: Option<[f32; 4]>,
+) -> PlotData {
+    build_generic_replay_plot_data_impl(
+        replay,
+        ekf_imu_source,
+        ekf_cfg,
+        gnss_outages,
+        Some(progress),
+        eskf_mount_seed_q_vb,
+    )
+}
+
+fn build_generic_replay_plot_data_impl(
+    replay: &GenericReplayInput,
+    ekf_imu_source: EkfImuSource,
+    ekf_cfg: EkfCompareConfig,
+    gnss_outages: GnssOutageConfig,
+    progress: Option<&mut dyn FnMut(GenericReplayProgress)>,
+    eskf_mount_seed_q_vb: Option<[f32; 4]>,
+) -> PlotData {
+    let mut progress = GenericProgressReporter::new(replay, progress);
+    let mut fusion = if ekf_imu_source.uses_ref_mount() {
+        eskf_mount_seed_q_vb
+            .map(SensorFusion::with_misalignment)
+            .unwrap_or_else(SensorFusion::new)
+    } else {
+        SensorFusion::new()
+    };
     apply_fusion_config(&mut fusion, ekf_cfg, ekf_imu_source);
 
     let ref_gnss = replay.gnss.first().copied();
@@ -159,6 +305,7 @@ pub fn build_generic_replay_plot_data(
 
     for_each_event(&replay.imu, &replay.gnss, |event| match event {
         ReplayEvent::Imu(_, sample) => {
+            progress.report_stage(0.0, 0.55, sample.t_s);
             let _ = fusion.process_imu(fusion_imu_sample(*sample));
             raw_gyro_x.push([sample.t_s, sample.gyro_radps[0].to_degrees()]);
             raw_gyro_y.push([sample.t_s, sample.gyro_radps[1].to_degrees()]);
@@ -197,6 +344,7 @@ pub fn build_generic_replay_plot_data(
             );
         }
         ReplayEvent::Gnss(_, sample) => {
+            progress.report_stage(0.0, 0.55, sample.t_s);
             if !in_outage(sample.t_s, &outage_windows) {
                 let update = fusion.process_gnss(fusion_gnss_sample(*sample));
                 if update.mount_ready_changed && update.mount_ready {
@@ -435,7 +583,16 @@ pub fn build_generic_replay_plot_data(
         eskf_map_heading: eskf_heading,
         ..PlotData::default()
     };
-    add_auxiliary_generic_traces(&mut data, replay, ekf_cfg, ekf_imu_source, None, None);
+    add_auxiliary_generic_traces_impl(
+        &mut data,
+        replay,
+        ekf_cfg,
+        ekf_imu_source,
+        None,
+        None,
+        &mut progress,
+    );
+    progress.complete();
     data
 }
 
@@ -447,6 +604,27 @@ pub fn add_auxiliary_generic_traces(
     reference_mount_rpy_deg: Option<[f64; 3]>,
     reference_attitude_rpy: Option<[Vec<[f64; 2]>; 3]>,
 ) {
+    let mut progress = GenericProgressReporter::new(replay, None);
+    add_auxiliary_generic_traces_impl(
+        data,
+        replay,
+        ekf_cfg,
+        ekf_imu_source,
+        reference_mount_rpy_deg,
+        reference_attitude_rpy,
+        &mut progress,
+    );
+}
+
+fn add_auxiliary_generic_traces_impl(
+    data: &mut PlotData,
+    replay: &GenericReplayInput,
+    ekf_cfg: EkfCompareConfig,
+    ekf_imu_source: EkfImuSource,
+    reference_mount_rpy_deg: Option<[f64; 3]>,
+    reference_attitude_rpy: Option<[Vec<[f64; 2]>; 3]>,
+    progress: &mut GenericProgressReporter<'_>,
+) {
     let reference_mount_series = rpy_series_from_samples(&replay.reference_mount);
     let reference_attitude_series =
         reference_attitude_rpy.or_else(|| rpy_series_from_samples(&replay.reference_attitude));
@@ -457,8 +635,9 @@ pub fn add_auxiliary_generic_traces(
         ekf_imu_source,
         reference_mount_rpy_deg,
         replay.reference_mount.as_slice(),
+        progress,
     );
-    populate_loose_traces(data, replay, ekf_cfg);
+    populate_loose_traces(data, replay, ekf_cfg, progress);
     populate_eskf_bump_traces(data);
     if let Some(truth) = reference_attitude_series {
         let traces = [
@@ -505,6 +684,7 @@ fn populate_align_traces(
     ekf_imu_source: EkfImuSource,
     reference_mount_rpy_deg: Option<[f64; 3]>,
     reference_mount_series: &[GenericReferenceRpySample],
+    progress: &mut GenericProgressReporter<'_>,
 ) {
     let mut fusion = SensorFusion::new();
     apply_fusion_config(&mut fusion, ekf_cfg, ekf_imu_source);
@@ -542,9 +722,11 @@ fn populate_align_traces(
 
     for_each_event(&replay.imu, &replay.gnss, |event| match event {
         ReplayEvent::Imu(_, sample) => {
+            progress.report_stage(0.55, 0.17, sample.t_s);
             let _ = fusion.process_imu(fusion_imu_sample(*sample));
         }
         ReplayEvent::Gnss(_, sample) => {
+            progress.report_stage(0.55, 0.17, sample.t_s);
             let _ = fusion.process_gnss(fusion_gnss_sample(*sample));
             let Some(debug) = fusion.align_debug() else {
                 return;
@@ -773,6 +955,7 @@ fn populate_loose_traces(
     data: &mut PlotData,
     replay: &GenericReplayInput,
     ekf_cfg: EkfCompareConfig,
+    progress: &mut GenericProgressReporter<'_>,
 ) {
     let Some(ref_gnss) = replay.gnss.first().copied() else {
         return;
@@ -828,6 +1011,7 @@ fn populate_loose_traces(
 
     for_each_event(&replay.imu, &replay.gnss, |event| match event {
         ReplayEvent::Imu(_, sample) => {
+            progress.report_stage(0.72, 0.26, sample.t_s);
             let _ = align_fusion.process_imu(fusion_imu_sample(*sample));
             let Some(prev) = last_imu.replace(*sample) else {
                 return;
@@ -931,6 +1115,7 @@ fn populate_loose_traces(
             accel_z.push([sample.t_s, accel_vehicle_mps2[2]]);
         }
         ReplayEvent::Gnss(_, sample) => {
+            progress.report_stage(0.72, 0.26, sample.t_s);
             let _ = align_fusion.process_gnss(fusion_gnss_sample(*sample));
             latest_gnss = Some(*sample);
             if loose_ready || !align_fusion.mount_ready() {

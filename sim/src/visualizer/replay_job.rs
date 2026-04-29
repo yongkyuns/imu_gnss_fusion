@@ -6,7 +6,8 @@ use std::thread;
 
 use super::model::{EkfImuSource, PlotData, Trace};
 use super::pipeline::generic::{
-    GenericReplayInput, build_generic_replay_plot_data, parse_generic_replay_csvs_with_refs,
+    GenericReplayInput, GenericReplayProgress, build_generic_replay_plot_data,
+    build_generic_replay_plot_data_with_progress, parse_generic_replay_csvs_with_refs,
 };
 use super::pipeline::{EkfCompareConfig, GnssOutageConfig};
 
@@ -197,6 +198,27 @@ pub fn run_generic_csv_replay_job(job: GenericReplayCsvJob<'_>) -> Result<PlotDa
         job.reference_mount_csv,
     )?;
     Ok(run_generic_replay_job(&replay, job.config))
+}
+
+pub fn run_generic_csv_replay_job_with_progress(
+    job: GenericReplayCsvJob<'_>,
+    progress: &mut dyn FnMut(GenericReplayProgress),
+) -> Result<PlotData> {
+    let replay = parse_generic_replay_csvs_with_refs(
+        job.imu_csv,
+        job.gnss_csv,
+        job.reference_attitude_csv,
+        job.reference_mount_csv,
+    )?;
+    let mut plot_data = build_generic_replay_plot_data_with_progress(
+        &replay,
+        job.config.misalignment,
+        job.config.ekf_cfg,
+        job.config.gnss_outages,
+        progress,
+    );
+    job.config.output_policy.apply(&mut plot_data);
+    Ok(plot_data)
 }
 
 #[cfg(not(target_arch = "wasm32"))]

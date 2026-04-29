@@ -520,6 +520,8 @@ fn main() -> Result<()> {
 fn main() {}
 
 #[cfg(target_arch = "wasm32")]
+use js_sys::{Function, Object, Reflect};
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -550,34 +552,63 @@ pub async fn start_visualizer(canvas_id: &str) -> std::result::Result<(), JsValu
 pub fn build_generic_replay_job_json(request_json: &str) -> std::result::Result<String, JsValue> {
     let request: WebReplayJobRequest = serde_json::from_str(request_json)
         .map_err(|err| JsValue::from_str(&format!("invalid replay job request: {err}")))?;
-    let label = request.label.unwrap_or_else(|| "CSV replay".to_string());
-    let response = match build_generic_replay_plot_data_json(
-        request.imu_csv.as_deref().unwrap_or_default(),
-        request.gnss_csv.as_deref().unwrap_or_default(),
-        request.reference_attitude_csv,
-        request.reference_mount_csv,
-    ) {
-        Ok(json) => WebReplayJobResponse {
-            ok: true,
-            job_id: request.job_id,
-            label,
-            imu_name: request.imu_name.or_else(|| Some("imu.csv".to_string())),
-            gnss_name: request.gnss_name.or_else(|| Some("gnss.csv".to_string())),
-            json: Some(json),
-            error: None,
-        },
-        Err(err) => WebReplayJobResponse {
-            ok: false,
-            job_id: request.job_id,
-            label,
-            imu_name: None,
-            gnss_name: None,
-            json: None,
-            error: Some(js_error_string(err)),
-        },
-    };
+    let response = build_web_replay_job_response(request, None);
     serde_json::to_string(&response)
         .map_err(|err| JsValue::from_str(&format!("failed to serialize replay job: {err}")))
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn build_replay_job_json_with_progress(
+    request_json: &str,
+    progress_callback: &Function,
+) -> std::result::Result<String, JsValue> {
+    let request: WebReplayJobRequest = serde_json::from_str(request_json)
+        .map_err(|err| JsValue::from_str(&format!("invalid replay job request: {err}")))?;
+    let job_id = request.job_id;
+
+    let mut progress = |progress: sim::visualizer::pipeline::generic::GenericReplayProgress| {
+        let message = Object::new();
+        let _ = Reflect::set(
+            &message,
+            &JsValue::from_str("type"),
+            &JsValue::from_str("progress"),
+        );
+        let _ = Reflect::set(
+            &message,
+            &JsValue::from_str("jobId"),
+            &JsValue::from_f64(job_id as f64),
+        );
+        let _ = Reflect::set(
+            &message,
+            &JsValue::from_str("progress"),
+            &JsValue::from_f64(progress.fraction),
+        );
+        let _ = Reflect::set(
+            &message,
+            &JsValue::from_str("currentTimeS"),
+            &JsValue::from_f64(progress.current_t_s),
+        );
+        let _ = Reflect::set(
+            &message,
+            &JsValue::from_str("finalTimeS"),
+            &JsValue::from_f64(progress.final_t_s),
+        );
+        let _ = progress_callback.call1(&JsValue::NULL, &message);
+    };
+
+    let response = build_web_replay_job_response(request, Some(&mut progress));
+    serde_json::to_string(&response)
+        .map_err(|err| JsValue::from_str(&format!("failed to serialize replay job: {err}")))
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn build_generic_replay_job_json_with_progress(
+    request_json: &str,
+    progress_callback: &Function,
+) -> std::result::Result<String, JsValue> {
+    build_replay_job_json_with_progress(request_json, progress_callback)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -593,6 +624,49 @@ struct WebReplayJobRequest {
     gnss_csv: Option<String>,
     reference_attitude_csv: Option<String>,
     reference_mount_csv: Option<String>,
+    source: Option<WebReplayJobSource>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WebReplayJobSource {
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    imu_name: Option<String>,
+    #[serde(default)]
+    gnss_name: Option<String>,
+    #[serde(default)]
+    imu_csv: Option<String>,
+    #[serde(default)]
+    gnss_csv: Option<String>,
+    #[serde(default)]
+    reference_attitude_csv: Option<String>,
+    #[serde(default)]
+    reference_mount_csv: Option<String>,
+    #[serde(default)]
+    motion_label: Option<String>,
+    #[serde(default)]
+    motion_text: Option<String>,
+    #[serde(default)]
+    noise_mode: Option<String>,
+    #[serde(default)]
+    seed: Option<u64>,
+    #[serde(default)]
+    mount_rpy_deg: Option<[f64; 3]>,
+    #[serde(default)]
+    imu_hz: Option<f64>,
+    #[serde(default)]
+    gnss_hz: Option<f64>,
+    #[serde(default)]
+    gnss_time_shift_ms: Option<f64>,
+    #[serde(default)]
+    early_vel_bias_ned_mps: Option<[f64; 3]>,
+    #[serde(default)]
+    early_fault_window_s: Option<[f64; 2]>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -602,6 +676,7 @@ struct WebReplayJobResponse {
     ok: bool,
     job_id: u64,
     label: String,
+    source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     imu_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -613,8 +688,283 @@ struct WebReplayJobResponse {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn js_error_string(error: JsValue) -> String {
-    error.as_string().unwrap_or_else(|| format!("{error:?}"))
+struct WebReplayInput {
+    source: String,
+    label: String,
+    imu_name: String,
+    gnss_name: String,
+    replay: sim::visualizer::pipeline::generic::GenericReplayInput,
+}
+
+#[cfg(target_arch = "wasm32")]
+fn build_web_replay_job_response(
+    request: WebReplayJobRequest,
+    progress: Option<&mut dyn FnMut(sim::visualizer::pipeline::generic::GenericReplayProgress)>,
+) -> WebReplayJobResponse {
+    let job_id = request.job_id;
+    let fallback_label = request
+        .label
+        .clone()
+        .unwrap_or_else(|| "CSV replay".to_string());
+    let source_kind = request
+        .source
+        .as_ref()
+        .and_then(|source| source.kind.as_deref())
+        .unwrap_or("csv")
+        .to_ascii_lowercase();
+    if source_kind == "synthetic" {
+        return build_web_synthetic_replay_job_response(request, progress);
+    }
+    match build_web_replay_input(&request) {
+        Ok(input) => {
+            let source = input.source;
+            let label = input.label;
+            let imu_name = input.imu_name;
+            let gnss_name = input.gnss_name;
+            let mut data = match progress {
+                Some(progress) => {
+                    sim::visualizer::pipeline::generic::build_generic_replay_plot_data_with_progress(
+                        &input.replay,
+                        sim::visualizer::model::EkfImuSource::Internal,
+                        sim::visualizer::pipeline::EkfCompareConfig::default(),
+                        sim::visualizer::pipeline::GnssOutageConfig::default(),
+                        progress,
+                    )
+                }
+                None => sim::visualizer::pipeline::generic::build_generic_replay_plot_data(
+                    &input.replay,
+                    sim::visualizer::model::EkfImuSource::Internal,
+                    sim::visualizer::pipeline::EkfCompareConfig::default(),
+                    sim::visualizer::pipeline::GnssOutageConfig::default(),
+                ),
+            };
+            sim::visualizer::replay_job::decimate_for_transport(
+                &mut data,
+                sim::visualizer::replay_job::WEB_TRANSPORT_MAX_POINTS_PER_TRACE,
+            );
+            match serde_json::to_string(&data) {
+                Ok(json) => WebReplayJobResponse {
+                    ok: true,
+                    job_id,
+                    label,
+                    source,
+                    imu_name: Some(imu_name),
+                    gnss_name: Some(gnss_name),
+                    json: Some(json),
+                    error: None,
+                },
+                Err(err) => WebReplayJobResponse {
+                    ok: false,
+                    job_id,
+                    label,
+                    source,
+                    imu_name: None,
+                    gnss_name: None,
+                    json: None,
+                    error: Some(format!("failed to serialize replay data: {err}")),
+                },
+            }
+        }
+        Err(err) => WebReplayJobResponse {
+            ok: false,
+            job_id,
+            label: fallback_label,
+            source: "unknown".to_string(),
+            imu_name: None,
+            gnss_name: None,
+            json: None,
+            error: Some(format!("replay failed: {err}")),
+        },
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn build_web_replay_input(request: &WebReplayJobRequest) -> anyhow::Result<WebReplayInput> {
+    let source = request.source.as_ref();
+    let kind = source
+        .and_then(|source| source.kind.as_deref())
+        .unwrap_or("csv")
+        .to_ascii_lowercase();
+    match kind.as_str() {
+        "csv" | "generic" | "real" => build_web_csv_replay_input(source, request),
+        "synthetic" => anyhow::bail!("synthetic replay must be handled by the synthetic adapter"),
+        other => anyhow::bail!("unsupported replay source kind '{other}'"),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn build_web_csv_replay_input(
+    source: Option<&WebReplayJobSource>,
+    request: &WebReplayJobRequest,
+) -> anyhow::Result<WebReplayInput> {
+    let imu_csv = source
+        .and_then(|source| source.imu_csv.as_deref())
+        .or(request.imu_csv.as_deref())
+        .unwrap_or_default();
+    let gnss_csv = source
+        .and_then(|source| source.gnss_csv.as_deref())
+        .or(request.gnss_csv.as_deref())
+        .unwrap_or_default();
+    let reference_attitude_csv = source
+        .and_then(|source| source.reference_attitude_csv.as_deref())
+        .or(request.reference_attitude_csv.as_deref());
+    let reference_mount_csv = source
+        .and_then(|source| source.reference_mount_csv.as_deref())
+        .or(request.reference_mount_csv.as_deref());
+    let replay = sim::visualizer::pipeline::generic::parse_generic_replay_csvs_with_refs(
+        imu_csv,
+        gnss_csv,
+        reference_attitude_csv,
+        reference_mount_csv,
+    )?;
+    Ok(WebReplayInput {
+        source: "csv".to_string(),
+        label: source
+            .and_then(|source| source.label.clone())
+            .or_else(|| request.label.clone())
+            .unwrap_or_else(|| "CSV replay".to_string()),
+        imu_name: source
+            .and_then(|source| source.imu_name.clone())
+            .or_else(|| request.imu_name.clone())
+            .unwrap_or_else(|| "imu.csv".to_string()),
+        gnss_name: source
+            .and_then(|source| source.gnss_name.clone())
+            .or_else(|| request.gnss_name.clone())
+            .unwrap_or_else(|| "gnss.csv".to_string()),
+        replay,
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn build_web_synthetic_replay_job_response(
+    request: WebReplayJobRequest,
+    progress: Option<&mut dyn FnMut(sim::visualizer::pipeline::generic::GenericReplayProgress)>,
+) -> WebReplayJobResponse {
+    let job_id = request.job_id;
+    let fallback_label = request
+        .label
+        .clone()
+        .unwrap_or_else(|| "Synthetic replay".to_string());
+    let Some(source) = request.source.as_ref() else {
+        return WebReplayJobResponse {
+            ok: false,
+            job_id,
+            label: fallback_label,
+            source: "synthetic".to_string(),
+            imu_name: None,
+            gnss_name: None,
+            json: None,
+            error: Some("synthetic replay source is missing".to_string()),
+        };
+    };
+    let motion_label = source
+        .motion_label
+        .as_deref()
+        .unwrap_or("synthetic.scenario");
+    let motion_text = source.motion_text.as_deref().map(str::to_string);
+    let noise = match source
+        .noise_mode
+        .as_deref()
+        .unwrap_or("low")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "truth" | "none" | "zero" => {
+            sim::visualizer::pipeline::synthetic::SyntheticNoiseMode::Truth
+        }
+        "low" => sim::visualizer::pipeline::synthetic::SyntheticNoiseMode::Low,
+        "mid" | "medium" => sim::visualizer::pipeline::synthetic::SyntheticNoiseMode::Mid,
+        "high" => sim::visualizer::pipeline::synthetic::SyntheticNoiseMode::High,
+        other => {
+            return WebReplayJobResponse {
+                ok: false,
+                job_id,
+                label: fallback_label,
+                source: "synthetic".to_string(),
+                imu_name: None,
+                gnss_name: None,
+                json: None,
+                error: Some(format!("unsupported synthetic noise mode '{other}'")),
+            };
+        }
+    };
+    let synth_cfg = sim::visualizer::pipeline::synthetic::SyntheticVisualizerConfig {
+        motion_def: None,
+        motion_label: motion_label.to_string(),
+        motion_text,
+        noise_mode: noise,
+        seed: source.seed.unwrap_or(1),
+        mount_rpy_deg: source.mount_rpy_deg.unwrap_or([5.0, -5.0, 5.0]),
+        imu_hz: source.imu_hz.unwrap_or(100.0),
+        gnss_hz: source.gnss_hz.unwrap_or(2.0),
+        gnss_time_shift_ms: source.gnss_time_shift_ms.unwrap_or(0.0),
+        early_vel_bias_ned_mps: source.early_vel_bias_ned_mps.unwrap_or([0.0, 0.0, 0.0]),
+        early_fault_window_s: source
+            .early_fault_window_s
+            .map(|window| (window[0], window[1])),
+    };
+    let data_result = match progress {
+        Some(progress) => {
+            sim::visualizer::pipeline::synthetic::build_synthetic_plot_data_with_progress(
+                &synth_cfg,
+                sim::visualizer::model::EkfImuSource::Internal,
+                sim::visualizer::pipeline::EkfCompareConfig::default(),
+                sim::visualizer::pipeline::GnssOutageConfig::default(),
+                progress,
+            )
+        }
+        None => sim::visualizer::pipeline::synthetic::build_synthetic_plot_data(
+            &synth_cfg,
+            sim::visualizer::model::EkfImuSource::Internal,
+            sim::visualizer::pipeline::EkfCompareConfig::default(),
+            sim::visualizer::pipeline::GnssOutageConfig::default(),
+        ),
+    };
+    let label = source
+        .label
+        .clone()
+        .or_else(|| request.label.clone())
+        .unwrap_or_else(|| format!("Synthetic: {motion_label}"));
+    match data_result {
+        Ok(mut data) => {
+            sim::visualizer::replay_job::decimate_for_transport(
+                &mut data,
+                sim::visualizer::replay_job::WEB_TRANSPORT_MAX_POINTS_PER_TRACE,
+            );
+            match serde_json::to_string(&data) {
+                Ok(json) => WebReplayJobResponse {
+                    ok: true,
+                    job_id,
+                    label,
+                    source: "synthetic".to_string(),
+                    imu_name: Some("synthetic IMU".to_string()),
+                    gnss_name: Some("synthetic GNSS".to_string()),
+                    json: Some(json),
+                    error: None,
+                },
+                Err(err) => WebReplayJobResponse {
+                    ok: false,
+                    job_id,
+                    label,
+                    source: "synthetic".to_string(),
+                    imu_name: None,
+                    gnss_name: None,
+                    json: None,
+                    error: Some(format!("failed to serialize replay data: {err}")),
+                },
+            }
+        }
+        Err(err) => WebReplayJobResponse {
+            ok: false,
+            job_id,
+            label,
+            source: "synthetic".to_string(),
+            imu_name: None,
+            gnss_name: None,
+            json: None,
+            error: Some(format!("synthetic replay failed: {err}")),
+        },
+    }
 }
 
 #[cfg(target_arch = "wasm32")]

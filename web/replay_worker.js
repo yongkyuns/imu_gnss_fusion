@@ -10,7 +10,7 @@ async function ensureWasm() {
 }
 
 self.onmessage = async (event) => {
-  const request = event.data || {};
+  const request = normalizeReplayJob(event.data || {});
   try {
     await ensureWasm();
     self.postMessage(runReplayJob(request));
@@ -24,7 +24,47 @@ self.onmessage = async (event) => {
   }
 };
 
+function normalizeReplayJob(request) {
+  if (request.source) {
+    return request;
+  }
+  return {
+    ...request,
+    source: {
+      kind: "csv",
+      label: request.label || "CSV replay",
+      imuName: request.imuName || "imu.csv",
+      gnssName: request.gnssName || "gnss.csv",
+      imuCsv: request.imuCsv || "",
+      gnssCsv: request.gnssCsv || "",
+      referenceAttitudeCsv: request.referenceAttitudeCsv ?? null,
+      referenceMountCsv: request.referenceMountCsv ?? null,
+    },
+  };
+}
+
 function runReplayJob(request) {
+  if (visualizer.build_replay_job_json_with_progress) {
+    const progress = (message) => {
+      self.postMessage(message);
+    };
+    return JSON.parse(
+      visualizer.build_replay_job_json_with_progress(JSON.stringify(request), progress),
+    );
+  }
+
+  if (visualizer.build_generic_replay_job_json_with_progress) {
+    const progress = (message) => {
+      self.postMessage(message);
+    };
+    return JSON.parse(
+      visualizer.build_generic_replay_job_json_with_progress(
+        JSON.stringify(request),
+        progress,
+      ),
+    );
+  }
+
   if (visualizer.build_generic_replay_job_json) {
     return JSON.parse(visualizer.build_generic_replay_job_json(JSON.stringify(request)));
   }
@@ -39,6 +79,7 @@ function runReplayJob(request) {
     ok: true,
     jobId: request.jobId ?? 0,
     label: request.label || "CSV replay",
+    source: "csv",
     imuName: request.imuName || "imu.csv",
     gnssName: request.gnssName || "gnss.csv",
     json,
