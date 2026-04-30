@@ -3,17 +3,20 @@
 [![CI](https://github.com/yongkyuns/imu_gnss_fusion/actions/workflows/ci.yml/badge.svg)](https://github.com/yongkyuns/imu_gnss_fusion/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-stable-orange.svg)](https://www.rust-lang.org/)
+[![Web demo](https://img.shields.io/badge/Web%20demo-GitHub%20Pages-blue)](https://yongkyuns.github.io/imu_gnss_fusion/)
+
+🌐 **Hosted web app:** [yongkyuns.github.io/imu_gnss_fusion](https://yongkyuns.github.io/imu_gnss_fusion/)
 
 `imu_gnss_fusion` is a Rust workspace for experimenting with IMU, GNSS, and wheel-speed sensor fusion. It contains an embedded-oriented filter crate, offline replay and visualization tools, synthetic trajectory generation, and hardware-agnostic CSV replay support.
 
 The project is useful for:
 
-- replaying hardware-agnostic IMU/GNSS CSV datasets,
-- comparing align, loose INS/GNSS, and augmented ESKF behavior,
-- generating synthetic trajectories for repeatable mount-angle experiments,
-- validating generated Kalman-model code against focused Rust tests.
+- 📊 replaying hardware-agnostic IMU/GNSS CSV datasets,
+- 🧭 comparing align, loose INS/GNSS, and augmented ESKF behavior,
+- 🧪 generating synthetic trajectories for repeatable mount-angle experiments,
+- ✅ validating generated Kalman-model code against focused Rust tests.
 
-## Workspace Layout
+## 🧱 Workspace Layout
 
 | Path | Purpose |
 | --- | --- |
@@ -23,7 +26,7 @@ The project is useful for:
 | `web/` | Static browser host for the wasm visualizer. |
 | `mobile/ios/` | Experimental iOS sensor collection app. |
 
-## Architecture
+## 🗺️ Architecture
 
 ![Architecture overview](docs/assets/architecture.png)
 
@@ -41,7 +44,7 @@ The main replay path is:
 
 The runtime Rust filter code consumes generated matrix/Jacobian snippets under `ekf/src/generated_eskf/` and `ekf/src/generated_loose/`. The symbolic sources live in Python so model derivation stays reviewable while generated Rust stays fast and dependency-light.
 
-## Quick Start
+## 🚀 Quick Start
 
 Requirements:
 
@@ -79,7 +82,7 @@ wasm-bindgen --target web --out-dir web/pkg \
 python3 -m http.server --directory web 8080
 ```
 
-## Filter And Replay Modes
+## 🎛️ Filter And Replay Modes
 
 The visualizer and primary A/B analyzers use `--misalignment` to select the mount-angle source:
 
@@ -91,7 +94,7 @@ The visualizer and primary A/B analyzers use `--misalignment` to select the moun
 
 See [sim/README.md](sim/README.md) for the current tool map.
 
-## Data Formats
+## 📦 Data Formats
 
 The common hardware-agnostic replay directory contains two required CSV files:
 
@@ -144,7 +147,7 @@ reference_mount.csv.gz     # optional
 
 `scripts/package_dataset.py` can stage an existing generic replay directory or call `export_gnss_ins_sim_generic` for `gnss-ins-sim` output. Raw `.bin` logs are intentionally not supported in this repository because device-specific parsing belongs outside the hardware-agnostic replay boundary.
 
-## Generated-Code Workflow
+## ⚙️ Generated-Code Workflow
 
 Generated Rust files are checked in and included by `ekf/src/generated_eskf.rs` and `ekf/src/generated_loose.rs`.
 
@@ -162,7 +165,7 @@ python ekf/ins_gnss_loose.py --emit-rust
 
 After regeneration, review the generated diffs and run targeted tests from [docs/testing.md](docs/testing.md).
 
-## Tests
+## ✅ Tests
 
 Common local checks:
 
@@ -174,7 +177,7 @@ cargo test --workspace --locked
 
 See [docs/testing.md](docs/testing.md) for focused test groups, fixtures, and expensive/local-data notes.
 
-## Documentation
+## 📚 Documentation
 
 - [docs/README.md](docs/README.md): documentation index.
 - [docs/testing.md](docs/testing.md): testing workflow.
@@ -184,6 +187,6 @@ See [docs/testing.md](docs/testing.md) for focused test groups, fixtures, and ex
 - [docs/align_nhc_formulation.pdf](docs/align_nhc_formulation.pdf): detailed Align/NHC formulation.
 - [docs/loose_formulation.pdf](docs/loose_formulation.pdf): detailed loose INS/GNSS formulation.
 
-## License
+## 📄 License
 
 MIT. See [LICENSE](LICENSE).
