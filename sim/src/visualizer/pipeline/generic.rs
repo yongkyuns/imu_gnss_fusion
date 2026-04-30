@@ -345,7 +345,7 @@ fn build_generic_replay_plot_data_impl(
         ReplayEvent::Gnss(_, sample) => {
             progress.report_stage(0.0, 0.55, sample.t_s);
             if !in_outage(sample.t_s, &outage_windows) {
-                let update = fusion.process_gnss(fusion_gnss_sample(*sample));
+                let update = fusion.process_gnss(scaled_fusion_gnss_sample(*sample, ekf_cfg));
                 if update.mount_ready_changed && update.mount_ready {
                     mount_ready_marker.push([sample.t_s, 0.0]);
                 }
@@ -1960,6 +1960,30 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig, mode: E
     fusion.set_mount_settle_zero_cross_covariance(cfg.mount_settle_zero_cross_covariance);
 }
 
+fn scaled_fusion_gnss_sample(
+    sample: GenericGnssSample,
+    cfg: EkfCompareConfig,
+) -> sensor_fusion::fusion::FusionGnssSample {
+    let mut sample = fusion_gnss_sample(sample);
+    let pos_std_scale = sanitized_r_scale(cfg.gnss_pos_r_scale).sqrt() as f32;
+    let vel_std_scale = sanitized_r_scale(cfg.gnss_vel_r_scale).sqrt() as f32;
+    for std in &mut sample.pos_std_m {
+        *std *= pos_std_scale;
+    }
+    for std in &mut sample.vel_std_mps {
+        *std *= vel_std_scale;
+    }
+    sample
+}
+
+fn sanitized_r_scale(scale: f64) -> f64 {
+    if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    }
+}
+
 fn parse_imu_csv(text: &str) -> Result<Vec<GenericImuSample>> {
     let rows = parse_numeric_rows(text, 7, "imu.csv")?;
     Ok(rows
@@ -2214,5 +2238,27 @@ mod tests {
         assert!((wrap_deg(round_trip.2 - 6.0)).abs() < 1.0e-6);
         assert!(reference_mount_seed_q_vb(&replay, EkfImuSource::Internal).is_none());
         assert!(reference_mount_seed_q_vb(&replay, EkfImuSource::External).is_none());
+    }
+
+    #[test]
+    fn scaled_fusion_gnss_sample_applies_variance_scales_to_standard_deviations() {
+        let mut cfg = EkfCompareConfig::default();
+        cfg.gnss_pos_r_scale = 0.25;
+        cfg.gnss_vel_r_scale = 4.0;
+        let sample = GenericGnssSample {
+            t_s: 1.0,
+            lat_deg: 37.0,
+            lon_deg: -122.0,
+            height_m: 10.0,
+            vel_ned_mps: [1.0, 2.0, 3.0],
+            pos_std_m: [2.0, 4.0, 6.0],
+            vel_std_mps: [0.1, 0.2, 0.3],
+            heading_rad: None,
+        };
+
+        let scaled = scaled_fusion_gnss_sample(sample, cfg);
+
+        assert_eq!(scaled.pos_std_m, [1.0, 2.0, 3.0]);
+        assert_eq!(scaled.vel_std_mps, [0.2, 0.4, 0.6]);
     }
 }

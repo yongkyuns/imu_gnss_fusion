@@ -51,16 +51,16 @@ pub const EKF_COMPARE_DEFAULTS: EkfCompareConfigSnapshot = EkfCompareConfigSnaps
     mount_settle_time_s: 0.0,
     mount_settle_release_sigma_deg: 7.5,
     mount_settle_zero_cross_covariance: true,
-    r_zero_vel: 0.0,
+    r_zero_vel: 0.01,
     r_stationary_accel: 0.0,
     vehicle_meas_lpf_cutoff_hz: 35.0,
     predict_imu_lpf_cutoff_hz: None,
     predict_imu_decimation: 1,
     yaw_init_speed_mps: 0.0,
-    gnss_pos_r_scale: 0.05,
+    gnss_pos_r_scale: 0.01,
     gnss_vel_r_scale: 2.5,
-    predict_noise_configured: false,
-    loose_predict_noise_configured: false,
+    predict_noise_configured: true,
+    loose_predict_noise_configured: true,
 };
 
 pub fn snapshot_ekf_compare_config(cfg: &EkfCompareConfig) -> EkfCompareConfigSnapshot {

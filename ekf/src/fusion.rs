@@ -183,8 +183,8 @@ impl Default for FusionConfig {
             align: AlignConfig::default(),
             bootstrap: BootstrapConfig::default(),
             predict_noise: PredictNoise {
-                gyro_var: 2.287_311_3e-7,
-                accel_var: 2.450_421_4e-5,
+                gyro_var: 2.287_311_3e-7 * 10.0_f32,
+                accel_var: 2.450_421_4e-5 * 15.0_f32,
                 gyro_bias_rw_var: 0.0002e-9,
                 accel_bias_rw_var: 0.002e-9,
                 mount_align_rw_var: 1.0e-7,
@@ -209,7 +209,7 @@ impl Default for FusionConfig {
             mount_settle_release_sigma_rad: 7.5_f32.to_radians(),
             mount_settle_zero_cross_covariance: true,
             r_vehicle_speed: 0.04,
-            r_zero_vel: 0.0,
+            r_zero_vel: 0.01,
             r_stationary_accel: 0.0,
             yaw_init_speed_mps: 0.0,
         }
