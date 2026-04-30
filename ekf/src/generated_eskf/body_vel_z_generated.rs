@@ -81,18 +81,8 @@ H[2] = -2.0_f32*ESKF_HK_BODY_Z38;
 H[3] = -2.0_f32*ESKF_HK_BODY_Z42;
 H[4] = -2.0_f32*ESKF_HK_BODY_Z45;
 H[5] = ESKF_HK_BODY_Z47;
-H[6] = 0.0_f32;
-H[7] = 0.0_f32;
-H[8] = 0.0_f32;
-H[9] = 0.0_f32;
-H[10] = 0.0_f32;
-H[11] = 0.0_f32;
-H[12] = 0.0_f32;
-H[13] = 0.0_f32;
-H[14] = 0.0_f32;
 H[15] = ESKF_HK_BODY_Z57;
 H[16] = -ESKF_HK_BODY_Z58;
-H[17] = 0.0_f32;
 
 
 // Kalman gains

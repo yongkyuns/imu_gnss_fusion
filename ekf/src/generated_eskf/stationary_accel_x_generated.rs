@@ -11,24 +11,8 @@ let ESKF_HK_STAT_AX7: f32 = -g/ESKF_HK_STAT_AX6;
 
 
 // Observation Jacobians
-H[0] = 0.0_f32;
 H[1] = ESKF_HK_STAT_AX1*g;
 H[2] = -ESKF_HK_STAT_AX3*g;
-H[3] = 0.0_f32;
-H[4] = 0.0_f32;
-H[5] = 0.0_f32;
-H[6] = 0.0_f32;
-H[7] = 0.0_f32;
-H[8] = 0.0_f32;
-H[9] = 0.0_f32;
-H[10] = 0.0_f32;
-H[11] = 0.0_f32;
-H[12] = 0.0_f32;
-H[13] = 0.0_f32;
-H[14] = 0.0_f32;
-H[15] = 0.0_f32;
-H[16] = 0.0_f32;
-H[17] = 0.0_f32;
 
 
 // Kalman gains

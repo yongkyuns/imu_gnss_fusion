@@ -51,6 +51,8 @@ class CodeGenerator:
             )
         elif matrix.shape[0] == 1 or matrix.shape[1] == 1:
             for i in range(0, len(matrix)):
+                if matrix[i] == 0:
+                    continue
                 write_string = (
                     write_string
                     + variable_name
@@ -63,7 +65,7 @@ class CodeGenerator:
         else:
             for j in range(0, matrix.shape[1]):
                 for i in range(0, matrix.shape[0]):
-                    if j >= i or not is_symmetric:
+                    if (j >= i or not is_symmetric) and matrix[i, j] != 0:
                         write_string = (
                             write_string
                             + variable_name

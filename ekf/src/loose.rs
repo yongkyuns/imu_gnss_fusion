@@ -1133,12 +1133,14 @@ impl LooseFilter {
         let mut p = self.raw.p64;
         let mut dx = [0.0_f64; LOOSE_ERROR_STATES];
         for obs in 0..obs_count {
-            let h_obs = h[obs];
-            let dense_support = extract_support_from_row(&h_obs);
-            let support = if let Some(support) = h_supports[obs] {
-                support
-            } else {
-                &dense_support
+            let h_obs = &h[obs];
+            let mut dense_support = [0usize; LOOSE_ERROR_STATES];
+            let support = match h_supports[obs] {
+                Some(support) => support,
+                None => {
+                    let len = extract_support_from_row(h_obs, &mut dense_support);
+                    &dense_support[..len]
+                }
             };
 
             let mut ph = [0.0_f64; LOOSE_ERROR_STATES];
@@ -1497,14 +1499,18 @@ fn test_chi2_vec3(
     false
 }
 
-fn extract_support_from_row(h: &[f32; LOOSE_ERROR_STATES]) -> Vec<usize> {
-    let mut support = Vec::new();
+fn extract_support_from_row(
+    h: &[f32; LOOSE_ERROR_STATES],
+    support: &mut [usize; LOOSE_ERROR_STATES],
+) -> usize {
+    let mut len = 0;
     for (i, value) in h.iter().enumerate() {
         if *value != 0.0 {
-            support.push(i);
+            support[len] = i;
+            len += 1;
         }
     }
-    support
+    len
 }
 
 /// Splits a yaw-seeded NED vehicle attitude into ECEF seed attitude and identity residual mount.

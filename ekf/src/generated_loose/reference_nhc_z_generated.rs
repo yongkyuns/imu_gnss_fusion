@@ -49,30 +49,14 @@ let tmp_nhc_z_42: f32 = tmp_nhc_z_15 + tmp_nhc_z_37 - 1.0_f32;
 vc_est = tmp_nhc_z_18*vd - tmp_nhc_z_26*ve - tmp_nhc_z_30*tmp_nhc_z_31;
 
 // Observation Jacobian
-H[0] = 0.0_f32;
-H[1] = 0.0_f32;
-H[2] = 0.0_f32;
 H[3] = 2.0_f32*tmp_nhc_z_32;
 H[4] = -2.0_f32*tmp_nhc_z_25;
 H[5] = tmp_nhc_z_18;
 H[6] = -tmp_nhc_z_18*ve - tmp_nhc_z_26*vd;
 H[7] = tmp_nhc_z_18*vn - tmp_nhc_z_32*tmp_nhc_z_33;
 H[8] = 2.0_f32*tmp_nhc_z_25*vn - 2.0_f32*tmp_nhc_z_30*ve;
-H[9] = 0.0_f32;
-H[10] = 0.0_f32;
-H[11] = 0.0_f32;
-H[12] = 0.0_f32;
-H[13] = 0.0_f32;
-H[14] = 0.0_f32;
-H[15] = 0.0_f32;
-H[16] = 0.0_f32;
-H[17] = 0.0_f32;
-H[18] = 0.0_f32;
-H[19] = 0.0_f32;
-H[20] = 0.0_f32;
 H[21] = -tmp_nhc_z_31*(-tmp_nhc_z_27*tmp_nhc_z_38 + 2.0_f32*tmp_nhc_z_28*tmp_nhc_z_39 + tmp_nhc_z_29*tmp_nhc_z_36) - tmp_nhc_z_33*(-tmp_nhc_z_14*tmp_nhc_z_39 + tmp_nhc_z_2*tmp_nhc_z_38 + 2.0_f32*tmp_nhc_z_36*tmp_nhc_z_8) + ve*(4.0_f32*tmp_nhc_z_21*tmp_nhc_z_36 + tmp_nhc_z_23*tmp_nhc_z_38 + 4.0_f32*tmp_nhc_z_24*tmp_nhc_z_39);
 H[22] = -tmp_nhc_z_33*(-tmp_nhc_z_14*tmp_nhc_z_40 - 2.0_f32*tmp_nhc_z_2*tmp_nhc_z_41 + tmp_nhc_z_42*tmp_nhc_z_8) - 2.0_f32*ve*(-tmp_nhc_z_21*tmp_nhc_z_42 + tmp_nhc_z_23*tmp_nhc_z_41 - 2.0_f32*tmp_nhc_z_24*tmp_nhc_z_40) - vn*(4.0_f32*tmp_nhc_z_27*tmp_nhc_z_41 + 4.0_f32*tmp_nhc_z_28*tmp_nhc_z_40 + tmp_nhc_z_29*tmp_nhc_z_42);
-H[23] = 0.0_f32;
 
 
 }
