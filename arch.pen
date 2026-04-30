@@ -1,0 +1,1917 @@
+{
+  "version": "2.11",
+  "children": [
+    {
+      "type": "frame",
+      "id": "bi8Au",
+      "x": 0,
+      "y": 0,
+      "name": "IMU GNSS Fusion Architecture - Hardware Agnostic Flow",
+      "width": 1800,
+      "height": 1200,
+      "fill": "#F6F8FB",
+      "layout": "none",
+      "children": [
+        {
+          "type": "text",
+          "id": "c4TGY",
+          "x": 48,
+          "y": 34,
+          "name": "title",
+          "fill": "#142033",
+          "textGrowth": "fixed-width",
+          "width": 760,
+          "content": "imu_gnss_fusion architecture",
+          "lineHeight": 1.1,
+          "fontFamily": "Inter",
+          "fontSize": 34,
+          "fontWeight": "700"
+        },
+        {
+          "type": "text",
+          "id": "eASfY",
+          "x": 50,
+          "y": 78,
+          "name": "subtitle",
+          "fill": "#536174",
+          "textGrowth": "fixed-width",
+          "width": 800,
+          "content": "Hardware-agnostic replay, synthetic generation, filter core, visualizer, and documentation flow.",
+          "lineHeight": 1.35,
+          "fontFamily": "Inter",
+          "fontSize": 15,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "LSm1j",
+          "x": 1120,
+          "y": 38,
+          "name": "Legend",
+          "width": 620,
+          "height": 54,
+          "fill": "#FFFFFF",
+          "cornerRadius": 8,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#D8E0EA"
+          },
+          "layout": "none",
+          "children": [
+            {
+              "type": "rectangle",
+              "cornerRadius": 3,
+              "id": "Dhzh0",
+              "x": 18,
+              "y": 22,
+              "name": "l1",
+              "fill": "#DFF3E7",
+              "width": 18,
+              "height": 12
+            },
+            {
+              "type": "text",
+              "id": "MWFmI",
+              "x": 44,
+              "y": 18,
+              "name": "l1t",
+              "fill": "#536174",
+              "content": "input",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "rectangle",
+              "cornerRadius": 3,
+              "id": "qYi1a",
+              "x": 118,
+              "y": 22,
+              "name": "l2",
+              "fill": "#DCEBFF",
+              "width": 18,
+              "height": 12
+            },
+            {
+              "type": "text",
+              "id": "LAKlI",
+              "x": 144,
+              "y": 18,
+              "name": "l2t",
+              "fill": "#536174",
+              "content": "sim modules",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "rectangle",
+              "cornerRadius": 3,
+              "id": "4L5oj",
+              "x": 250,
+              "y": 22,
+              "name": "l3",
+              "fill": "#FFE0E7",
+              "width": 18,
+              "height": 12
+            },
+            {
+              "type": "text",
+              "id": "ewjRK",
+              "x": 276,
+              "y": 18,
+              "name": "l3t",
+              "fill": "#536174",
+              "content": "sensor-fusion",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "rectangle",
+              "cornerRadius": 3,
+              "id": "9c9wn",
+              "x": 398,
+              "y": 22,
+              "name": "l4",
+              "fill": "#FFF1D5",
+              "width": 18,
+              "height": 12
+            },
+            {
+              "type": "text",
+              "id": "N3QIe",
+              "x": 424,
+              "y": 18,
+              "name": "l4t",
+              "fill": "#536174",
+              "content": "outputs",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "line",
+              "id": "GTbS6",
+              "x": 520,
+              "y": 28,
+              "name": "l5",
+              "width": 54,
+              "height": 0,
+              "stroke": {
+                "align": "center",
+                "thickness": 2,
+                "fill": "#73839A"
+              }
+            },
+            {
+              "type": "text",
+              "id": "CsWBr",
+              "x": 580,
+              "y": 18,
+              "name": "l5t",
+              "fill": "#536174",
+              "content": "adjacent flow",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "b8VGg",
+          "x": 40,
+          "y": 140,
+          "name": "1 Sources",
+          "width": 285,
+          "height": 760,
+          "fill": "#EFFAF3",
+          "cornerRadius": 10,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#B9DEC7"
+          },
+          "layout": "none",
+          "children": [
+            {
+              "type": "text",
+              "id": "7iFd5",
+              "x": 18,
+              "y": 18,
+              "name": "sTitle",
+              "fill": "#173B29",
+              "content": "1 Sources",
+              "fontFamily": "Inter",
+              "fontSize": 19,
+              "fontWeight": "700"
+            },
+            {
+              "type": "frame",
+              "id": "rrSBV",
+              "x": 18,
+              "y": 68,
+              "name": "External log converters",
+              "width": 249,
+              "height": 112,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#B9DEC7"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Ljw2z",
+                  "x": 14,
+                  "y": 12,
+                  "name": "s1t",
+                  "fill": "#172033",
+                  "content": "External log converters",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "JTPd2",
+                  "x": 14,
+                  "y": 38,
+                  "name": "s1b",
+                  "fill": "#536174",
+                  "textGrowth": "fixed-width",
+                  "width": 220,
+                  "content": "device-specific capture stays outside this repo\noutputs generic replay CSV",
+                  "lineHeight": 1.35,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "3IAej",
+              "x": 18,
+              "y": 210,
+              "name": "Generic replay CSV",
+              "width": 249,
+              "height": 112,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#B9DEC7"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "9wFxR",
+                  "x": 14,
+                  "y": 12,
+                  "name": "s2t",
+                  "fill": "#172033",
+                  "content": "Generic replay CSV",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "tXL3s",
+                  "x": 14,
+                  "y": 38,
+                  "name": "s2b",
+                  "fill": "#536174",
+                  "textGrowth": "fixed-width",
+                  "width": 220,
+                  "content": "imu.csv + gnss.csv\noptional generic references",
+                  "lineHeight": 1.35,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "wxQmh",
+              "x": 18,
+              "y": 352,
+              "name": "Synthetic inputs",
+              "width": 249,
+              "height": 112,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#B9DEC7"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "cqfPq",
+                  "x": 14,
+                  "y": 12,
+                  "name": "s3t",
+                  "fill": "#172033",
+                  "content": "Synthetic scenarios",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "WorkF",
+                  "x": 14,
+                  "y": 38,
+                  "name": "s3b",
+                  "fill": "#536174",
+                  "textGrowth": "fixed-width",
+                  "width": 220,
+                  "content": "motion_profiles/*.scenario\nRust-native DSL + gnss-ins-sim parity",
+                  "lineHeight": 1.35,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "sekSO",
+              "x": 18,
+              "y": 494,
+              "name": "Phone capture",
+              "width": 249,
+              "height": 112,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#B9DEC7"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "SFHCP",
+                  "x": 14,
+                  "y": 12,
+                  "name": "s4t",
+                  "fill": "#172033",
+                  "content": "Phone capture prototype",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "C9V4t",
+                  "x": 14,
+                  "y": 38,
+                  "name": "s4b",
+                  "fill": "#536174",
+                  "textGrowth": "fixed-width",
+                  "width": 220,
+                  "content": "mobile/ios experiment\nfuture generic replay exporter",
+                  "lineHeight": 1.35,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "bB3vv",
+          "x": 380,
+          "y": 140,
+          "name": "2 Ingest and normalize",
+          "width": 285,
+          "height": 760,
+          "fill": "#EEF6FF",
+          "cornerRadius": 10,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#BAD1EE"
+          },
+          "layout": "none",
+          "children": [
+            {
+              "type": "text",
+              "id": "qdLSL",
+              "x": 18,
+              "y": 18,
+              "name": "nTitle",
+              "fill": "#173A63",
+              "content": "2 Ingest + normalize",
+              "fontFamily": "Inter",
+              "fontSize": 19,
+              "fontWeight": "700"
+            },
+            {
+              "type": "frame",
+              "id": "wtkbN",
+              "x": 18,
+              "y": 68,
+              "name": "generic_replay.rs",
+              "width": 249,
+              "height": 112,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#BAD1EE"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "xELIa",
+                  "x": 14,
+                  "y": 12,
+                  "name": "n1t",
+                  "fill": "#172033",
+                  "content": "generic_replay.rs",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "evoQu",
+                  "x": 14,
+                  "y": 38,
+                  "name": "n1b",
+                  "fill": "#536174",
+                  "textGrowth": "fixed-width",
+                  "width": 220,
+                  "content": "CSV loaders\nIMU, GNSS, optional references",
+                  "lineHeight": 1.35,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "rxcjW",
+              "x": 18,
+              "y": 210,
+              "name": "gnss_ins_sim.rs",
+              "width": 249,
+              "height": 112,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#BAD1EE"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "wDSqE",
+                  "x": 14,
+                  "y": 12,
+                  "name": "n2t",
+                  "fill": "#172033",
+                  "content": "gnss_ins_sim.rs",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "guD9k",
+                  "x": 14,
+                  "y": 38,
+                  "name": "n2b",
+                  "fill": "#536174",
+                  "textGrowth": "fixed-width",
+                  "width": 220,
+                  "content": "legacy simulator exports\nconverted into generic replay rows",
+                  "lineHeight": 1.35,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "zWb6M",
+              "x": 18,
+              "y": 352,
+              "name": "synthetic/*",
+              "width": 249,
+              "height": 112,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#BAD1EE"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "TUgxm",
+                  "x": 14,
+                  "y": 12,
+                  "name": "n3t",
+                  "fill": "#172033",
+                  "content": "synthetic/*",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "iaYwY",
+                  "x": 14,
+                  "y": 38,
+                  "name": "n3b",
+                  "fill": "#536174",
+                  "textGrowth": "fixed-width",
+                  "width": 220,
+                  "content": "Motion DSL\ntruth + noisy IMU/GNSS generation",
+                  "lineHeight": 1.35,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "hsxBt",
+              "x": 18,
+              "y": 494,
+              "name": "package_dataset.py",
+              "width": 249,
+              "height": 112,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#BAD1EE"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "tlZYB",
+                  "x": 14,
+                  "y": 12,
+                  "name": "n4t",
+                  "fill": "#172033",
+                  "content": "package_dataset.py",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "gY3zp",
+                  "x": 14,
+                  "y": 38,
+                  "name": "n4b",
+                  "fill": "#536174",
+                  "textGrowth": "fixed-width",
+                  "width": 220,
+                  "content": "gzip CSVs + manifest\nstatic web/CI dataset layout",
+                  "lineHeight": 1.35,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "7kZ1e",
+          "x": 720,
+          "y": 140,
+          "name": "3 Replay orchestration",
+          "width": 285,
+          "height": 760,
+          "fill": "#F3F7FF",
+          "cornerRadius": 10,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#C3D1EF"
+          },
+          "layout": "none",
+          "children": [
+            {
+              "type": "text",
+              "id": "xGIvK",
+              "x": 18,
+              "y": 18,
+              "name": "rTitle",
+              "fill": "#23385F",
+              "content": "3 Replay + analysis",
+              "fontFamily": "Inter",
+              "fontSize": 19,
+              "fontWeight": "700"
+            },
+            {
+              "type": "frame",
+              "id": "sbjYb",
+              "x": 18,
+              "y": 68,
+              "name": "GenericReplay",
+              "width": 249,
+              "height": 112,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#C3D1EF"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "REHut",
+                  "x": 14,
+                  "y": 12,
+                  "name": "r1t",
+                  "fill": "#172033",
+                  "content": "GenericReplay schema",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "tjVQa",
+                  "x": 14,
+                  "y": 38,
+                  "name": "r1b",
+                  "fill": "#536174",
+                  "textGrowth": "fixed-width",
+                  "width": 220,
+                  "content": "GenericImuSample\nGenericGnssSample\nreference RPY samples",
+                  "lineHeight": 1.35,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "aBxKp",
+              "x": 18,
+              "y": 210,
+              "name": "Replay merge",
+              "width": 249,
+              "height": 112,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#C3D1EF"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "kmvHy",
+                  "x": 14,
+                  "y": 12,
+                  "name": "r2t",
+                  "fill": "#172033",
+                  "content": "eval/replay.rs",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "VI4Iq",
+                  "x": 14,
+                  "y": 38,
+                  "name": "r2b",
+                  "fill": "#536174",
+                  "textGrowth": "fixed-width",
+                  "width": 220,
+                  "content": "time-ordered IMU/GNSS events\none public sensor-fusion feed",
+                  "lineHeight": 1.35,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "Cpa6p",
+              "x": 18,
+              "y": 352,
+              "name": "Visualizer pipeline",
+              "width": 249,
+              "height": 126,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#C3D1EF"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Ri2nv",
+                  "x": 14,
+                  "y": 12,
+                  "name": "r3t",
+                  "fill": "#172033",
+                  "content": "visualizer/pipeline",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "PzGhc",
+                  "x": 14,
+                  "y": 38,
+                  "name": "r3b",
+                  "fill": "#536174",
+                  "textGrowth": "fixed-width",
+                  "width": 220,
+                  "content": "generic + synthetic builders\nPlotData, traces, summaries",
+                  "lineHeight": 1.35,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "eGnK6",
+              "x": 18,
+              "y": 520,
+              "name": "Public tools",
+              "width": 249,
+              "height": 126,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#C3D1EF"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "3snQt",
+                  "x": 14,
+                  "y": 12,
+                  "name": "r4t",
+                  "fill": "#172033",
+                  "content": "public tools",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "1FGO0",
+                  "x": 14,
+                  "y": 38,
+                  "name": "r4b",
+                  "fill": "#536174",
+                  "textGrowth": "fixed-width",
+                  "width": 220,
+                  "content": "visualizer\nexport_gnss_ins_sim_generic\npackage_dataset.py",
+                  "lineHeight": 1.35,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "Ahvn9",
+          "x": 1060,
+          "y": 140,
+          "name": "4 Fusion core",
+          "width": 285,
+          "height": 760,
+          "fill": "#FFF1F4",
+          "cornerRadius": 10,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#E9B8C2"
+          },
+          "layout": "none",
+          "children": [
+            {
+              "type": "text",
+              "id": "aNGom",
+              "x": 18,
+              "y": 18,
+              "name": "fTitle",
+              "fill": "#632032",
+              "content": "4 Fusion core",
+              "fontFamily": "Inter",
+              "fontSize": 19,
+              "fontWeight": "700"
+            },
+            {
+              "type": "frame",
+              "id": "5DfEb",
+              "x": 18,
+              "y": 68,
+              "name": "SensorFusion facade",
+              "width": 249,
+              "height": 126,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#E9B8C2"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "XG1Fi",
+                  "x": 14,
+                  "y": 12,
+                  "name": "f1t",
+                  "fill": "#172033",
+                  "content": "fusion.rs",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "NaO2T",
+                  "x": 14,
+                  "y": 38,
+                  "name": "f1b",
+                  "fill": "#536174",
+                  "textGrowth": "fixed-width",
+                  "width": 220,
+                  "content": "SensorFusion facade\nprocess_imu / process_gnss\nshared config + state access",
+                  "lineHeight": 1.35,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "68Frl",
+              "x": 18,
+              "y": 224,
+              "name": "Align",
+              "width": 249,
+              "height": 112,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#E9B8C2"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "vMZ07",
+                  "x": 14,
+                  "y": 12,
+                  "name": "f2t",
+                  "fill": "#172033",
+                  "content": "align.rs / Align",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "ZXjhu",
+                  "x": 14,
+                  "y": 38,
+                  "name": "f2b",
+                  "fill": "#536174",
+                  "textGrowth": "fixed-width",
+                  "width": 220,
+                  "content": "stationary bootstrap\nGNSS-window mount q_vb",
+                  "lineHeight": 1.35,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "INFSs",
+              "x": 18,
+              "y": 366,
+              "name": "Rust ESKF",
+              "width": 249,
+              "height": 126,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#E9B8C2"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Dqs3i",
+                  "x": 14,
+                  "y": 12,
+                  "name": "f3t",
+                  "fill": "#172033",
+                  "content": "rust_eskf.rs / ESKF",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "76KDB",
+                  "x": 14,
+                  "y": 38,
+                  "name": "f3b",
+                  "fill": "#536174",
+                  "textGrowth": "fixed-width",
+                  "width": 220,
+                  "content": "18 error states\nprediction + GNSS / NHC / ZUPT updates",
+                  "lineHeight": 1.35,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "y46it",
+              "x": 18,
+              "y": 522,
+              "name": "LooseFilter",
+              "width": 249,
+              "height": 112,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#E9B8C2"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "ntfTi",
+                  "x": 14,
+                  "y": 12,
+                  "name": "f4t",
+                  "fill": "#172033",
+                  "content": "loose.rs / LooseFilter",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "2qgKJ",
+                  "x": 14,
+                  "y": 38,
+                  "name": "f4b",
+                  "fill": "#536174",
+                  "textGrowth": "fixed-width",
+                  "width": 220,
+                  "content": "24-state reference path\nattitude, velocity, bias, mount states",
+                  "lineHeight": 1.35,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "iBO8b",
+              "x": 18,
+              "y": 664,
+              "name": "Generated models",
+              "width": 249,
+              "height": 72,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#E9B8C2"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "9IHxa",
+                  "x": 14,
+                  "y": 12,
+                  "name": "f5t",
+                  "fill": "#172033",
+                  "content": "generated models",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "ZMT0D",
+                  "x": 14,
+                  "y": 36,
+                  "name": "f5b",
+                  "fill": "#536174",
+                  "textGrowth": "fixed-width",
+                  "width": 220,
+                  "content": "generated_eskf + generated_loose\nsymbolic prediction + observations",
+                  "lineHeight": 1.3,
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "VdJy8",
+          "x": 1400,
+          "y": 140,
+          "name": "5 Outputs",
+          "width": 285,
+          "height": 760,
+          "fill": "#FFF7E8",
+          "cornerRadius": 10,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#E4C782"
+          },
+          "layout": "none",
+          "children": [
+            {
+              "type": "text",
+              "id": "O9jyc",
+              "x": 18,
+              "y": 18,
+              "name": "oTitle",
+              "fill": "#5B3E10",
+              "content": "5 Outputs",
+              "fontFamily": "Inter",
+              "fontSize": 19,
+              "fontWeight": "700"
+            },
+            {
+              "type": "frame",
+              "id": "SYRFu",
+              "x": 18,
+              "y": 68,
+              "name": "PlotData",
+              "width": 249,
+              "height": 112,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#E4C782"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "QiL20",
+                  "x": 14,
+                  "y": 12,
+                  "name": "o1t",
+                  "fill": "#172033",
+                  "content": "PlotData",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "Rjvx3",
+                  "x": 14,
+                  "y": 38,
+                  "name": "o1b",
+                  "fill": "#536174",
+                  "textGrowth": "fixed-width",
+                  "width": 220,
+                  "content": "trace groups\nmap samples\ndiagnostics + hover state",
+                  "lineHeight": 1.35,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "wyidq",
+              "x": 18,
+              "y": 210,
+              "name": "egui UI",
+              "width": 249,
+              "height": 112,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#E4C782"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "gY7TS",
+                  "x": 14,
+                  "y": 12,
+                  "name": "o2t",
+                  "fill": "#172033",
+                  "content": "egui / wasm UI",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "ZDtNb",
+                  "x": 14,
+                  "y": 38,
+                  "name": "o2b",
+                  "fill": "#536174",
+                  "textGrowth": "fixed-width",
+                  "width": 220,
+                  "content": "overview, map, attitude, mount\ntuning controls + visibility toggles",
+                  "lineHeight": 1.35,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "ZLRie",
+              "x": 18,
+              "y": 352,
+              "name": "Reports",
+              "width": 249,
+              "height": 112,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#E4C782"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "NfGqX",
+                  "x": 14,
+                  "y": 12,
+                  "name": "o3t",
+                  "fill": "#172033",
+                  "content": "evaluation summaries",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "JGgOG",
+                  "x": 14,
+                  "y": 38,
+                  "name": "o3b",
+                  "fill": "#536174",
+                  "textGrowth": "fixed-width",
+                  "width": 220,
+                  "content": "state_summary.rs\nCI smoke checks\nCSV metrics",
+                  "lineHeight": 1.35,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "NGUDt",
+              "x": 18,
+              "y": 494,
+              "name": "Hosted replay datasets",
+              "width": 249,
+              "height": 112,
+              "fill": "#FFFFFF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#E4C782"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Ys3mc",
+                  "x": 14,
+                  "y": 12,
+                  "name": "o4t",
+                  "fill": "#172033",
+                  "content": "hosted replay datasets",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "MGkWn",
+                  "x": 14,
+                  "y": 38,
+                  "name": "o4b",
+                  "fill": "#536174",
+                  "textGrowth": "fixed-width",
+                  "width": 220,
+                  "content": "web/datasets manifest\ngeneric CSV gzip bundles",
+                  "lineHeight": 1.35,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "obGCG",
+          "x": 40,
+          "y": 940,
+          "name": "Foundation modules and verification",
+          "width": 1645,
+          "height": 190,
+          "fill": "#FFFFFF",
+          "cornerRadius": 10,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#D8E0EA"
+          },
+          "layout": "none",
+          "children": [
+            {
+              "type": "text",
+              "id": "ccP44",
+              "x": 20,
+              "y": 16,
+              "name": "fdTitle",
+              "fill": "#172033",
+              "content": "Foundation modules, generated math, and verification",
+              "fontFamily": "Inter",
+              "fontSize": 18,
+              "fontWeight": "700"
+            },
+            {
+              "type": "frame",
+              "id": "xhD9h",
+              "x": 20,
+              "y": 56,
+              "name": "Data contracts",
+              "width": 380,
+              "height": 108,
+              "fill": "#F7F3FF",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D0C8F1"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "m9h6I",
+                  "x": 14,
+                  "y": 12,
+                  "name": "fd1t",
+                  "fill": "#172033",
+                  "content": "data contracts",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "yNYtQ",
+                  "x": 14,
+                  "y": 38,
+                  "name": "fd1b",
+                  "fill": "#536174",
+                  "textGrowth": "fixed-width",
+                  "width": 350,
+                  "content": "hardware-agnostic CSV schema\nmanifest validation\nCI dataset checks",
+                  "lineHeight": 1.35,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "b1hH2",
+              "x": 424,
+              "y": 56,
+              "name": "Python model generation",
+              "width": 380,
+              "height": 108,
+              "fill": "#FFF8EE",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#E7CDA0"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Os00q",
+                  "x": 14,
+                  "y": 12,
+                  "name": "fd2t",
+                  "fill": "#172033",
+                  "content": "model generation",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "SBzzR",
+                  "x": 14,
+                  "y": 38,
+                  "name": "fd2b",
+                  "fill": "#536174",
+                  "textGrowth": "fixed-width",
+                  "width": 350,
+                  "content": "ekf/code_gen.py, ekf/eskf.py, ins_gnss_loose.py\n-> generated Rust modules",
+                  "lineHeight": 1.35,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "qqQkL",
+              "x": 828,
+              "y": 56,
+              "name": "Tests",
+              "width": 380,
+              "height": 108,
+              "fill": "#F3FAF8",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#BBDDD2"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "3gBxP",
+                  "x": 14,
+                  "y": 12,
+                  "name": "fd3t",
+                  "fill": "#172033",
+                  "content": "tests",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "gKiDL",
+                  "x": 14,
+                  "y": 38,
+                  "name": "fd3b",
+                  "fill": "#536174",
+                  "textGrowth": "fixed-width",
+                  "width": 350,
+                  "content": "ekf/tests\nsim/tests\nsynthetic + replay equivalence",
+                  "lineHeight": 1.35,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "u0wkN",
+              "x": 1232,
+              "y": 56,
+              "name": "Formulation docs",
+              "width": 380,
+              "height": 108,
+              "fill": "#F6F7FB",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#D8E0EA"
+              },
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "58k5y",
+                  "x": 14,
+                  "y": 12,
+                  "name": "fd4t",
+                  "fill": "#172033",
+                  "content": "documentation",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "n6FEE",
+                  "x": 14,
+                  "y": 38,
+                  "name": "fd4b",
+                  "fill": "#536174",
+                  "textGrowth": "fixed-width",
+                  "width": 350,
+                  "content": "formulation PDFs\nframe conventions\ntesting workflow",
+                  "lineHeight": 1.35,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "line",
+          "id": "77I9n",
+          "x": 325,
+          "y": 264,
+          "name": "a1",
+          "width": 55,
+          "height": 0,
+          "stroke": {
+            "align": "center",
+            "thickness": 2,
+            "fill": "#3C8B5E"
+          }
+        },
+        {
+          "type": "text",
+          "id": "IULqP",
+          "x": 365,
+          "y": 252,
+          "name": "ah1",
+          "fill": "#3C8B5E",
+          "content": ">",
+          "fontFamily": "Inter",
+          "fontSize": 20,
+          "fontWeight": "700"
+        },
+        {
+          "type": "line",
+          "id": "BfRt3",
+          "x": 325,
+          "y": 406,
+          "name": "a2",
+          "width": 55,
+          "height": 0,
+          "stroke": {
+            "align": "center",
+            "thickness": 2,
+            "fill": "#3C8B5E"
+          }
+        },
+        {
+          "type": "text",
+          "id": "ez5qR",
+          "x": 365,
+          "y": 394,
+          "name": "ah2",
+          "fill": "#3C8B5E",
+          "content": ">",
+          "fontFamily": "Inter",
+          "fontSize": 20,
+          "fontWeight": "700"
+        },
+        {
+          "type": "line",
+          "id": "g6GUe",
+          "x": 325,
+          "y": 548,
+          "name": "a3",
+          "width": 55,
+          "height": 0,
+          "stroke": {
+            "align": "center",
+            "thickness": 2,
+            "fill": "#3C8B5E"
+          }
+        },
+        {
+          "type": "text",
+          "id": "P2D3W",
+          "x": 365,
+          "y": 536,
+          "name": "ah3",
+          "fill": "#3C8B5E",
+          "content": ">",
+          "fontFamily": "Inter",
+          "fontSize": 20,
+          "fontWeight": "700"
+        },
+        {
+          "type": "line",
+          "id": "YXSi0",
+          "x": 665,
+          "y": 264,
+          "name": "a4",
+          "width": 55,
+          "height": 0,
+          "stroke": {
+            "align": "center",
+            "thickness": 2,
+            "fill": "#2F6EA5"
+          }
+        },
+        {
+          "type": "text",
+          "id": "aXatg",
+          "x": 705,
+          "y": 252,
+          "name": "ah4",
+          "fill": "#2F6EA5",
+          "content": ">",
+          "fontFamily": "Inter",
+          "fontSize": 20,
+          "fontWeight": "700"
+        },
+        {
+          "type": "line",
+          "id": "9qg5U",
+          "x": 665,
+          "y": 406,
+          "name": "a5",
+          "width": 55,
+          "height": 0,
+          "stroke": {
+            "align": "center",
+            "thickness": 2,
+            "fill": "#2F6EA5"
+          }
+        },
+        {
+          "type": "text",
+          "id": "vPgKC",
+          "x": 705,
+          "y": 394,
+          "name": "ah5",
+          "fill": "#2F6EA5",
+          "content": ">",
+          "fontFamily": "Inter",
+          "fontSize": 20,
+          "fontWeight": "700"
+        },
+        {
+          "type": "line",
+          "id": "jIopN",
+          "x": 1005,
+          "y": 264,
+          "name": "a6",
+          "width": 55,
+          "height": 0,
+          "stroke": {
+            "align": "center",
+            "thickness": 2,
+            "fill": "#526FA6"
+          }
+        },
+        {
+          "type": "text",
+          "id": "iDWXj",
+          "x": 1045,
+          "y": 252,
+          "name": "ah6",
+          "fill": "#526FA6",
+          "content": ">",
+          "fontFamily": "Inter",
+          "fontSize": 20,
+          "fontWeight": "700"
+        },
+        {
+          "type": "line",
+          "id": "SnoYo",
+          "x": 1345,
+          "y": 264,
+          "name": "a7",
+          "width": 55,
+          "height": 0,
+          "stroke": {
+            "align": "center",
+            "thickness": 2,
+            "fill": "#A36D16"
+          }
+        },
+        {
+          "type": "text",
+          "id": "1sUkq",
+          "x": 1385,
+          "y": 252,
+          "name": "ah7",
+          "fill": "#A36D16",
+          "content": ">",
+          "fontFamily": "Inter",
+          "fontSize": 20,
+          "fontWeight": "700"
+        },
+        {
+          "type": "line",
+          "id": "FSvGx",
+          "x": 1345,
+          "y": 406,
+          "name": "a8",
+          "width": 55,
+          "height": 0,
+          "stroke": {
+            "align": "center",
+            "thickness": 2,
+            "fill": "#A36D16"
+          }
+        },
+        {
+          "type": "text",
+          "id": "RRr8d",
+          "x": 1385,
+          "y": 394,
+          "name": "ah8",
+          "fill": "#A36D16",
+          "content": ">",
+          "fontFamily": "Inter",
+          "fontSize": 20,
+          "fontWeight": "700"
+        },
+        {
+          "type": "line",
+          "id": "0D7er",
+          "x": 1345,
+          "y": 548,
+          "name": "a9",
+          "width": 55,
+          "height": 0,
+          "stroke": {
+            "align": "center",
+            "thickness": 2,
+            "fill": "#A36D16"
+          }
+        },
+        {
+          "type": "text",
+          "id": "Jq2st",
+          "x": 1385,
+          "y": 536,
+          "name": "ah9",
+          "fill": "#A36D16",
+          "content": ">",
+          "fontFamily": "Inter",
+          "fontSize": 20,
+          "fontWeight": "700"
+        },
+        {
+          "type": "line",
+          "id": "ipyWN",
+          "x": 325,
+          "y": 122,
+          "name": "a0",
+          "width": 55,
+          "height": 0,
+          "stroke": {
+            "align": "center",
+            "thickness": 2,
+            "fill": "#3C8B5E"
+          }
+        },
+        {
+          "type": "text",
+          "id": "M9Xqc",
+          "x": 365,
+          "y": 110,
+          "name": "ah0",
+          "fill": "#3C8B5E",
+          "content": ">",
+          "fontFamily": "Inter",
+          "fontSize": 20,
+          "fontWeight": "700"
+        },
+        {
+          "type": "line",
+          "id": "GqHTK",
+          "x": 665,
+          "y": 122,
+          "name": "a0b",
+          "width": 55,
+          "height": 0,
+          "stroke": {
+            "align": "center",
+            "thickness": 2,
+            "fill": "#2F6EA5"
+          }
+        },
+        {
+          "type": "text",
+          "id": "Sj7m3",
+          "x": 705,
+          "y": 110,
+          "name": "ah0b",
+          "fill": "#2F6EA5",
+          "content": ">",
+          "fontFamily": "Inter",
+          "fontSize": 20,
+          "fontWeight": "700"
+        },
+        {
+          "type": "line",
+          "id": "rv33n",
+          "x": 1005,
+          "y": 122,
+          "name": "a0c",
+          "width": 55,
+          "height": 0,
+          "stroke": {
+            "align": "center",
+            "thickness": 2,
+            "fill": "#526FA6"
+          }
+        },
+        {
+          "type": "text",
+          "id": "PbCFP",
+          "x": 1045,
+          "y": 110,
+          "name": "ah0c",
+          "fill": "#526FA6",
+          "content": ">",
+          "fontFamily": "Inter",
+          "fontSize": 20,
+          "fontWeight": "700"
+        },
+        {
+          "type": "line",
+          "id": "Y2IB2",
+          "x": 1345,
+          "y": 122,
+          "name": "a0d",
+          "width": 55,
+          "height": 0,
+          "stroke": {
+            "align": "center",
+            "thickness": 2,
+            "fill": "#A36D16"
+          }
+        },
+        {
+          "type": "text",
+          "id": "kI2De",
+          "x": 1385,
+          "y": 110,
+          "name": "ah0d",
+          "fill": "#A36D16",
+          "content": ">",
+          "fontFamily": "Inter",
+          "fontSize": 20,
+          "fontWeight": "700"
+        },
+        {
+          "type": "text",
+          "id": "aLNmD",
+          "x": 336,
+          "y": 102,
+          "name": "glab1",
+          "fill": "#607083",
+          "textGrowth": "fixed-width",
+          "width": 72,
+          "content": "generic CSV",
+          "textAlign": "center",
+          "fontFamily": "Inter",
+          "fontSize": 10,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "zInKL",
+          "x": 672,
+          "y": 102,
+          "name": "glab2",
+          "fill": "#607083",
+          "textGrowth": "fixed-width",
+          "width": 72,
+          "content": "samples",
+          "textAlign": "center",
+          "fontFamily": "Inter",
+          "fontSize": 10,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "nM3HA",
+          "x": 1012,
+          "y": 102,
+          "name": "glab3",
+          "fill": "#607083",
+          "textGrowth": "fixed-width",
+          "width": 72,
+          "content": "events",
+          "textAlign": "center",
+          "fontFamily": "Inter",
+          "fontSize": 10,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "vyhE6",
+          "x": 1352,
+          "y": 102,
+          "name": "glab4",
+          "fill": "#607083",
+          "textGrowth": "fixed-width",
+          "width": 72,
+          "content": "traces + docs",
+          "textAlign": "center",
+          "fontFamily": "Inter",
+          "fontSize": 10,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "dxypF",
+          "x": 48,
+          "y": 914,
+          "name": "route1",
+          "fill": "#536174",
+          "textGrowth": "fixed-width",
+          "width": 780,
+          "content": "Real captures and synthetic scenarios converge on the same GenericReplay -> replay merge -> SensorFusion feed.",
+          "lineHeight": 1.3,
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "uOFkm",
+          "x": 980,
+          "y": 914,
+          "name": "route2",
+          "fill": "#536174",
+          "textGrowth": "fixed-width",
+          "width": 660,
+          "content": "Device-specific parsing stays outside this repository; public artifacts are generic CSV, generated Rust, docs, and web demos.",
+          "lineHeight": 1.3,
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fontWeight": "normal"
+        }
+      ]
+    }
+  ]
+}

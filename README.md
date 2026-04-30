@@ -25,6 +25,12 @@ The project is useful for:
 
 ## Architecture
 
+![Architecture overview](docs/assets/architecture.png)
+
+The editable source for this diagram is [arch.pen](arch.pen). The exported
+screenshot above is checked in so the architecture stays visible on GitHub
+without requiring Pencil.
+
 The main replay path is:
 
 1. Data enters as hardware-agnostic `imu.csv` and `gnss.csv`, or as a synthetic scenario generated inside `sim`.
@@ -136,7 +142,7 @@ reference_attitude.csv.gz  # optional
 reference_mount.csv.gz     # optional
 ```
 
-`scripts/package_dataset.py` can stage an existing generic replay directory or call `export_gnss_ins_sim_generic` for `gnss-ins-sim` output. Raw `.bin` logs are intentionally not supported in this repository because the prior UBX path depended on deleted device-specific parsing code.
+`scripts/package_dataset.py` can stage an existing generic replay directory or call `export_gnss_ins_sim_generic` for `gnss-ins-sim` output. Raw `.bin` logs are intentionally not supported in this repository because device-specific parsing belongs outside the hardware-agnostic replay boundary.
 
 ## Generated-Code Workflow
 

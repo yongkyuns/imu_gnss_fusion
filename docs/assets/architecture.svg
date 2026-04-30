@@ -1,0 +1,333 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1200" viewBox="0 0 1800 1200">
+<defs><style>text{font-family:Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; dominant-baseline:hanging;} .label{paint-order:stroke;stroke:#fff;stroke-width:2px;stroke-linejoin:round;}</style></defs>
+<rect x="0" y="0" width="1800" height="1200" rx="0" fill="#F6F8FB" stroke="none"/>
+<text x="48" y="34" fill="#142033" font-size="34" font-weight="700" text-anchor="start">
+<tspan x="48" dy="0">imu_gnss_fusion architecture</tspan>
+</text>
+<text x="50" y="78" fill="#536174" font-size="15" font-weight="normal" text-anchor="start">
+<tspan x="50" dy="0">Hardware-agnostic replay, synthetic generation, filter core, visualizer, and documentation flow.</tspan>
+</text>
+<rect x="1120" y="38" width="620" height="54" rx="8" fill="#FFFFFF" stroke="#D8E0EA" stroke-width="1"/>
+<rect x="1138" y="60" width="18" height="12" rx="3" fill="#DFF3E7" stroke="none"/>
+<text class="label" x="1164" y="56" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="1164" dy="0">input</tspan>
+</text>
+<rect x="1238" y="60" width="18" height="12" rx="3" fill="#DCEBFF" stroke="none"/>
+<text class="label" x="1264" y="56" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="1264" dy="0">sim modules</tspan>
+</text>
+<rect x="1370" y="60" width="18" height="12" rx="3" fill="#FFE0E7" stroke="none"/>
+<text class="label" x="1396" y="56" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="1396" dy="0">sensor-fusion</tspan>
+</text>
+<rect x="1518" y="60" width="18" height="12" rx="3" fill="#FFF1D5" stroke="none"/>
+<text class="label" x="1544" y="56" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="1544" dy="0">outputs</tspan>
+</text>
+<line x1="1640" y1="66" x2="1694" y2="66" stroke="#73839A" stroke-width="2" stroke-linecap="round"/>
+<text class="label" x="1700" y="56" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="1700" dy="0">adjacent flow</tspan>
+</text>
+<rect x="40" y="140" width="285" height="760" rx="10" fill="#EFFAF3" stroke="#B9DEC7" stroke-width="1"/>
+<text x="58" y="158" fill="#173B29" font-size="19" font-weight="700" text-anchor="start">
+<tspan x="58" dy="0">1 Sources</tspan>
+</text>
+<rect x="58" y="208" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#B9DEC7" stroke-width="1"/>
+<text x="72" y="220" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
+<tspan x="72" dy="0">External log converters</tspan>
+</text>
+<text class="label" x="72" y="246" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="72" dy="0">device-specific capture stays outside this repo</tspan>
+<tspan x="72" dy="16.200000000000003">outputs generic replay CSV</tspan>
+</text>
+<rect x="58" y="350" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#B9DEC7" stroke-width="1"/>
+<text x="72" y="362" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
+<tspan x="72" dy="0">Generic replay CSV</tspan>
+</text>
+<text class="label" x="72" y="388" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="72" dy="0">imu.csv + gnss.csv</tspan>
+<tspan x="72" dy="16.200000000000003">optional generic references</tspan>
+</text>
+<rect x="58" y="492" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#B9DEC7" stroke-width="1"/>
+<text x="72" y="504" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
+<tspan x="72" dy="0">Synthetic scenarios</tspan>
+</text>
+<text class="label" x="72" y="530" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="72" dy="0">motion_profiles/*.scenario</tspan>
+<tspan x="72" dy="16.200000000000003">Rust-native DSL + gnss-ins-sim parity</tspan>
+</text>
+<rect x="58" y="634" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#B9DEC7" stroke-width="1"/>
+<text x="72" y="646" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
+<tspan x="72" dy="0">Phone capture prototype</tspan>
+</text>
+<text class="label" x="72" y="672" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="72" dy="0">mobile/ios experiment</tspan>
+<tspan x="72" dy="16.200000000000003">future generic replay exporter</tspan>
+</text>
+<rect x="380" y="140" width="285" height="760" rx="10" fill="#EEF6FF" stroke="#BAD1EE" stroke-width="1"/>
+<text x="398" y="158" fill="#173A63" font-size="19" font-weight="700" text-anchor="start">
+<tspan x="398" dy="0">2 Ingest + normalize</tspan>
+</text>
+<rect x="398" y="208" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#BAD1EE" stroke-width="1"/>
+<text x="412" y="220" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
+<tspan x="412" dy="0">generic_replay.rs</tspan>
+</text>
+<text class="label" x="412" y="246" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="412" dy="0">CSV loaders</tspan>
+<tspan x="412" dy="16.200000000000003">IMU, GNSS, optional references</tspan>
+</text>
+<rect x="398" y="350" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#BAD1EE" stroke-width="1"/>
+<text x="412" y="362" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
+<tspan x="412" dy="0">gnss_ins_sim.rs</tspan>
+</text>
+<text class="label" x="412" y="388" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="412" dy="0">legacy simulator exports</tspan>
+<tspan x="412" dy="16.200000000000003">converted into generic replay rows</tspan>
+</text>
+<rect x="398" y="492" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#BAD1EE" stroke-width="1"/>
+<text x="412" y="504" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
+<tspan x="412" dy="0">synthetic/*</tspan>
+</text>
+<text class="label" x="412" y="530" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="412" dy="0">Motion DSL</tspan>
+<tspan x="412" dy="16.200000000000003">truth + noisy IMU/GNSS generation</tspan>
+</text>
+<rect x="398" y="634" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#BAD1EE" stroke-width="1"/>
+<text x="412" y="646" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
+<tspan x="412" dy="0">package_dataset.py</tspan>
+</text>
+<text class="label" x="412" y="672" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="412" dy="0">gzip CSVs + manifest</tspan>
+<tspan x="412" dy="16.200000000000003">static web/CI dataset layout</tspan>
+</text>
+<rect x="720" y="140" width="285" height="760" rx="10" fill="#F3F7FF" stroke="#C3D1EF" stroke-width="1"/>
+<text x="738" y="158" fill="#23385F" font-size="19" font-weight="700" text-anchor="start">
+<tspan x="738" dy="0">3 Replay + analysis</tspan>
+</text>
+<rect x="738" y="208" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#C3D1EF" stroke-width="1"/>
+<text x="752" y="220" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
+<tspan x="752" dy="0">GenericReplay schema</tspan>
+</text>
+<text class="label" x="752" y="246" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="752" dy="0">GenericImuSample</tspan>
+<tspan x="752" dy="16.200000000000003">GenericGnssSample</tspan>
+<tspan x="752" dy="16.200000000000003">reference RPY samples</tspan>
+</text>
+<rect x="738" y="350" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#C3D1EF" stroke-width="1"/>
+<text x="752" y="362" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
+<tspan x="752" dy="0">eval/replay.rs</tspan>
+</text>
+<text class="label" x="752" y="388" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="752" dy="0">time-ordered IMU/GNSS events</tspan>
+<tspan x="752" dy="16.200000000000003">one public sensor-fusion feed</tspan>
+</text>
+<rect x="738" y="492" width="249" height="126" rx="8" fill="#FFFFFF" stroke="#C3D1EF" stroke-width="1"/>
+<text x="752" y="504" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
+<tspan x="752" dy="0">visualizer/pipeline</tspan>
+</text>
+<text class="label" x="752" y="530" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="752" dy="0">generic + synthetic builders</tspan>
+<tspan x="752" dy="16.200000000000003">PlotData, traces, summaries</tspan>
+</text>
+<rect x="738" y="660" width="249" height="126" rx="8" fill="#FFFFFF" stroke="#C3D1EF" stroke-width="1"/>
+<text x="752" y="672" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
+<tspan x="752" dy="0">public tools</tspan>
+</text>
+<text class="label" x="752" y="698" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="752" dy="0">visualizer</tspan>
+<tspan x="752" dy="16.200000000000003">export_gnss_ins_sim_generic</tspan>
+<tspan x="752" dy="16.200000000000003">package_dataset.py</tspan>
+</text>
+<rect x="1060" y="140" width="285" height="760" rx="10" fill="#FFF1F4" stroke="#E9B8C2" stroke-width="1"/>
+<text x="1078" y="158" fill="#632032" font-size="19" font-weight="700" text-anchor="start">
+<tspan x="1078" dy="0">4 Fusion core</tspan>
+</text>
+<rect x="1078" y="208" width="249" height="126" rx="8" fill="#FFFFFF" stroke="#E9B8C2" stroke-width="1"/>
+<text x="1092" y="220" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
+<tspan x="1092" dy="0">fusion.rs</tspan>
+</text>
+<text class="label" x="1092" y="246" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="1092" dy="0">SensorFusion facade</tspan>
+<tspan x="1092" dy="16.200000000000003">process_imu / process_gnss</tspan>
+<tspan x="1092" dy="16.200000000000003">shared config + state access</tspan>
+</text>
+<rect x="1078" y="364" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#E9B8C2" stroke-width="1"/>
+<text x="1092" y="376" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
+<tspan x="1092" dy="0">align.rs / Align</tspan>
+</text>
+<text class="label" x="1092" y="402" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="1092" dy="0">stationary bootstrap</tspan>
+<tspan x="1092" dy="16.200000000000003">GNSS-window mount q_vb</tspan>
+</text>
+<rect x="1078" y="506" width="249" height="126" rx="8" fill="#FFFFFF" stroke="#E9B8C2" stroke-width="1"/>
+<text x="1092" y="518" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
+<tspan x="1092" dy="0">rust_eskf.rs / ESKF</tspan>
+</text>
+<text class="label" x="1092" y="544" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="1092" dy="0">18 error states</tspan>
+<tspan x="1092" dy="16.200000000000003">prediction + GNSS / NHC / ZUPT updates</tspan>
+</text>
+<rect x="1078" y="662" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#E9B8C2" stroke-width="1"/>
+<text x="1092" y="674" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
+<tspan x="1092" dy="0">loose.rs / LooseFilter</tspan>
+</text>
+<text class="label" x="1092" y="700" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="1092" dy="0">24-state reference path</tspan>
+<tspan x="1092" dy="16.200000000000003">attitude, velocity, bias, mount states</tspan>
+</text>
+<rect x="1078" y="804" width="249" height="72" rx="8" fill="#FFFFFF" stroke="#E9B8C2" stroke-width="1"/>
+<text x="1092" y="816" fill="#172033" font-size="13" font-weight="700" text-anchor="start">
+<tspan x="1092" dy="0">generated models</tspan>
+</text>
+<text class="label" x="1092" y="840" fill="#536174" font-size="11" font-weight="normal" text-anchor="start">
+<tspan x="1092" dy="0">generated_eskf + generated_loose</tspan>
+<tspan x="1092" dy="14.3">symbolic prediction + observations</tspan>
+</text>
+<rect x="1400" y="140" width="285" height="760" rx="10" fill="#FFF7E8" stroke="#E4C782" stroke-width="1"/>
+<text x="1418" y="158" fill="#5B3E10" font-size="19" font-weight="700" text-anchor="start">
+<tspan x="1418" dy="0">5 Outputs</tspan>
+</text>
+<rect x="1418" y="208" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#E4C782" stroke-width="1"/>
+<text x="1432" y="220" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
+<tspan x="1432" dy="0">PlotData</tspan>
+</text>
+<text class="label" x="1432" y="246" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="1432" dy="0">trace groups</tspan>
+<tspan x="1432" dy="16.200000000000003">map samples</tspan>
+<tspan x="1432" dy="16.200000000000003">diagnostics + hover state</tspan>
+</text>
+<rect x="1418" y="350" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#E4C782" stroke-width="1"/>
+<text x="1432" y="362" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
+<tspan x="1432" dy="0">egui / wasm UI</tspan>
+</text>
+<text class="label" x="1432" y="388" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="1432" dy="0">overview, map, attitude, mount</tspan>
+<tspan x="1432" dy="16.200000000000003">tuning controls + visibility toggles</tspan>
+</text>
+<rect x="1418" y="492" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#E4C782" stroke-width="1"/>
+<text x="1432" y="504" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
+<tspan x="1432" dy="0">evaluation summaries</tspan>
+</text>
+<text class="label" x="1432" y="530" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="1432" dy="0">state_summary.rs</tspan>
+<tspan x="1432" dy="16.200000000000003">CI smoke checks</tspan>
+<tspan x="1432" dy="16.200000000000003">CSV metrics</tspan>
+</text>
+<rect x="1418" y="634" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#E4C782" stroke-width="1"/>
+<text x="1432" y="646" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
+<tspan x="1432" dy="0">hosted replay datasets</tspan>
+</text>
+<text class="label" x="1432" y="672" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="1432" dy="0">web/datasets manifest</tspan>
+<tspan x="1432" dy="16.200000000000003">generic CSV gzip bundles</tspan>
+</text>
+<rect x="40" y="940" width="1645" height="190" rx="10" fill="#FFFFFF" stroke="#D8E0EA" stroke-width="1"/>
+<text x="60" y="956" fill="#172033" font-size="18" font-weight="700" text-anchor="start">
+<tspan x="60" dy="0">Foundation modules, generated math, and verification</tspan>
+</text>
+<rect x="60" y="996" width="380" height="108" rx="8" fill="#F7F3FF" stroke="#D0C8F1" stroke-width="1"/>
+<text x="74" y="1008" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
+<tspan x="74" dy="0">data contracts</tspan>
+</text>
+<text class="label" x="74" y="1034" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="74" dy="0">hardware-agnostic CSV schema</tspan>
+<tspan x="74" dy="16.200000000000003">manifest validation</tspan>
+<tspan x="74" dy="16.200000000000003">CI dataset checks</tspan>
+</text>
+<rect x="464" y="996" width="380" height="108" rx="8" fill="#FFF8EE" stroke="#E7CDA0" stroke-width="1"/>
+<text x="478" y="1008" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
+<tspan x="478" dy="0">model generation</tspan>
+</text>
+<text class="label" x="478" y="1034" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="478" dy="0">ekf/code_gen.py, ekf/eskf.py, ins_gnss_loose.py</tspan>
+<tspan x="478" dy="16.200000000000003">-&gt; generated Rust modules</tspan>
+</text>
+<rect x="868" y="996" width="380" height="108" rx="8" fill="#F3FAF8" stroke="#BBDDD2" stroke-width="1"/>
+<text x="882" y="1008" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
+<tspan x="882" dy="0">tests</tspan>
+</text>
+<text class="label" x="882" y="1034" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="882" dy="0">ekf/tests</tspan>
+<tspan x="882" dy="16.200000000000003">sim/tests</tspan>
+<tspan x="882" dy="16.200000000000003">synthetic + replay equivalence</tspan>
+</text>
+<rect x="1272" y="996" width="380" height="108" rx="8" fill="#F6F7FB" stroke="#D8E0EA" stroke-width="1"/>
+<text x="1286" y="1008" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
+<tspan x="1286" dy="0">documentation</tspan>
+</text>
+<text class="label" x="1286" y="1034" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="1286" dy="0">formulation PDFs</tspan>
+<tspan x="1286" dy="16.200000000000003">frame conventions</tspan>
+<tspan x="1286" dy="16.200000000000003">testing workflow</tspan>
+</text>
+<line x1="325" y1="264" x2="380" y2="264" stroke="#3C8B5E" stroke-width="2" stroke-linecap="round"/>
+<text x="365" y="252" fill="#3C8B5E" font-size="20" font-weight="700" text-anchor="start">
+<tspan x="365" dy="0">&gt;</tspan>
+</text>
+<line x1="325" y1="406" x2="380" y2="406" stroke="#3C8B5E" stroke-width="2" stroke-linecap="round"/>
+<text x="365" y="394" fill="#3C8B5E" font-size="20" font-weight="700" text-anchor="start">
+<tspan x="365" dy="0">&gt;</tspan>
+</text>
+<line x1="325" y1="548" x2="380" y2="548" stroke="#3C8B5E" stroke-width="2" stroke-linecap="round"/>
+<text x="365" y="536" fill="#3C8B5E" font-size="20" font-weight="700" text-anchor="start">
+<tspan x="365" dy="0">&gt;</tspan>
+</text>
+<line x1="665" y1="264" x2="720" y2="264" stroke="#2F6EA5" stroke-width="2" stroke-linecap="round"/>
+<text x="705" y="252" fill="#2F6EA5" font-size="20" font-weight="700" text-anchor="start">
+<tspan x="705" dy="0">&gt;</tspan>
+</text>
+<line x1="665" y1="406" x2="720" y2="406" stroke="#2F6EA5" stroke-width="2" stroke-linecap="round"/>
+<text x="705" y="394" fill="#2F6EA5" font-size="20" font-weight="700" text-anchor="start">
+<tspan x="705" dy="0">&gt;</tspan>
+</text>
+<line x1="1005" y1="264" x2="1060" y2="264" stroke="#526FA6" stroke-width="2" stroke-linecap="round"/>
+<text x="1045" y="252" fill="#526FA6" font-size="20" font-weight="700" text-anchor="start">
+<tspan x="1045" dy="0">&gt;</tspan>
+</text>
+<line x1="1345" y1="264" x2="1400" y2="264" stroke="#A36D16" stroke-width="2" stroke-linecap="round"/>
+<text x="1385" y="252" fill="#A36D16" font-size="20" font-weight="700" text-anchor="start">
+<tspan x="1385" dy="0">&gt;</tspan>
+</text>
+<line x1="1345" y1="406" x2="1400" y2="406" stroke="#A36D16" stroke-width="2" stroke-linecap="round"/>
+<text x="1385" y="394" fill="#A36D16" font-size="20" font-weight="700" text-anchor="start">
+<tspan x="1385" dy="0">&gt;</tspan>
+</text>
+<line x1="1345" y1="548" x2="1400" y2="548" stroke="#A36D16" stroke-width="2" stroke-linecap="round"/>
+<text x="1385" y="536" fill="#A36D16" font-size="20" font-weight="700" text-anchor="start">
+<tspan x="1385" dy="0">&gt;</tspan>
+</text>
+<line x1="325" y1="122" x2="380" y2="122" stroke="#3C8B5E" stroke-width="2" stroke-linecap="round"/>
+<text x="365" y="110" fill="#3C8B5E" font-size="20" font-weight="700" text-anchor="start">
+<tspan x="365" dy="0">&gt;</tspan>
+</text>
+<line x1="665" y1="122" x2="720" y2="122" stroke="#2F6EA5" stroke-width="2" stroke-linecap="round"/>
+<text x="705" y="110" fill="#2F6EA5" font-size="20" font-weight="700" text-anchor="start">
+<tspan x="705" dy="0">&gt;</tspan>
+</text>
+<line x1="1005" y1="122" x2="1060" y2="122" stroke="#526FA6" stroke-width="2" stroke-linecap="round"/>
+<text x="1045" y="110" fill="#526FA6" font-size="20" font-weight="700" text-anchor="start">
+<tspan x="1045" dy="0">&gt;</tspan>
+</text>
+<line x1="1345" y1="122" x2="1400" y2="122" stroke="#A36D16" stroke-width="2" stroke-linecap="round"/>
+<text x="1385" y="110" fill="#A36D16" font-size="20" font-weight="700" text-anchor="start">
+<tspan x="1385" dy="0">&gt;</tspan>
+</text>
+<text class="label" x="372" y="102" fill="#607083" font-size="10" font-weight="normal" text-anchor="middle">
+<tspan x="372" dy="0">generic CSV</tspan>
+</text>
+<text class="label" x="708" y="102" fill="#607083" font-size="10" font-weight="normal" text-anchor="middle">
+<tspan x="708" dy="0">samples</tspan>
+</text>
+<text class="label" x="1048" y="102" fill="#607083" font-size="10" font-weight="normal" text-anchor="middle">
+<tspan x="1048" dy="0">events</tspan>
+</text>
+<text class="label" x="1388" y="102" fill="#607083" font-size="10" font-weight="normal" text-anchor="middle">
+<tspan x="1388" dy="0">traces + docs</tspan>
+</text>
+<text class="label" x="48" y="914" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="48" dy="0">Real captures and synthetic scenarios converge on the same GenericReplay -&gt; replay merge -&gt; SensorFusion feed.</tspan>
+</text>
+<text class="label" x="980" y="914" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
+<tspan x="980" dy="0">Device-specific parsing stays outside this repository; public artifacts are generic CSV, generated Rust, docs, and web demos.</tspan>
+</text>
+</svg>
