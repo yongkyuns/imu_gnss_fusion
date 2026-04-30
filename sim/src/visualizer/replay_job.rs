@@ -230,8 +230,13 @@ pub struct GenericReplayThread {
 #[cfg(not(target_arch = "wasm32"))]
 pub enum GenericReplayThreadStatus {
     Pending,
-    Complete { job_id: u64, plot_data: PlotData },
-    Disconnected { job_id: u64 },
+    Complete {
+        job_id: u64,
+        plot_data: Box<PlotData>,
+    },
+    Disconnected {
+        job_id: u64,
+    },
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -253,7 +258,7 @@ impl GenericReplayThread {
         match self.receiver.try_recv() {
             Ok(plot_data) => GenericReplayThreadStatus::Complete {
                 job_id: self.job_id,
-                plot_data,
+                plot_data: Box::new(plot_data),
             },
             Err(mpsc::TryRecvError::Empty) => GenericReplayThreadStatus::Pending,
             Err(mpsc::TryRecvError::Disconnected) => GenericReplayThreadStatus::Disconnected {

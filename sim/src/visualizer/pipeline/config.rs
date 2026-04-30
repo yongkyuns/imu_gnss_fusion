@@ -141,10 +141,12 @@ mod tests {
 
     #[test]
     fn replay_configs_round_trip_through_canonical_json() {
-        let mut cfg = EkfCompareConfig::default();
-        cfg.r_body_vel = 0.42;
-        cfg.gnss_vel_r_scale = 3.25;
-        cfg.predict_imu_lpf_cutoff_hz = Some(120.0);
+        let mut cfg = EkfCompareConfig {
+            r_body_vel: 0.42,
+            gnss_vel_r_scale: 3.25,
+            predict_imu_lpf_cutoff_hz: Some(120.0),
+            ..Default::default()
+        };
         cfg.align.min_speed_mps = 1.5;
         cfg.align.q_mount_std_rad = [1.0e-5, 2.0e-5, 3.0e-5];
         cfg.loose_init.mount_sigma_deg = 4.0;

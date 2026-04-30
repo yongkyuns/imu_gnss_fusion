@@ -9,6 +9,8 @@
 //! `docs/align_nhc_formulation.pdf`, `docs/eskf_mount_formulation.pdf`, and
 //! `docs/loose_formulation.pdf`.
 
+#![allow(clippy::needless_range_loop)]
+
 extern crate alloc;
 
 /// Mount-alignment filter used to estimate the IMU-to-vehicle rotation.

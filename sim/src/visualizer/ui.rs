@@ -4087,7 +4087,6 @@ fn angle_samples_for_axis(
     prefixes
         .iter()
         .copied()
-        .into_iter()
         .filter_map(|(prefix, label, color)| {
             find_angle_trace(traces, prefix, axis, kind).and_then(|trace| {
                 sample_trace_at(trace, t_s).map(|angle_deg| AttitudeSeriesSample {

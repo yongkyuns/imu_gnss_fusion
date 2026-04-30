@@ -996,7 +996,7 @@ fn populate_loose_traces(
     let mut bgz = Vec::new();
     let mut bax = Vec::new();
     let mut bay = Vec::new();
-    let mut baz = Vec::new();
+    let mut accel_bias_z = Vec::new();
     let mut sgx = Vec::new();
     let mut sgy = Vec::new();
     let mut sgz = Vec::new();
@@ -1094,7 +1094,7 @@ fn populate_loose_traces(
                 &mut bgz,
                 &mut bax,
                 &mut bay,
-                &mut baz,
+                &mut accel_bias_z,
                 &mut sgx,
                 &mut sgy,
                 &mut sgz,
@@ -1251,7 +1251,7 @@ fn populate_loose_traces(
         },
         Trace {
             name: "Loose accel sensor bias Z [m/s^2]".to_string(),
-            points: baz,
+            points: accel_bias_z,
         },
     ];
     data.loose_scale_gyro = vec![
@@ -1555,7 +1555,7 @@ fn append_loose_sample(
     bgz: &mut Vec<[f64; 2]>,
     bax: &mut Vec<[f64; 2]>,
     bay: &mut Vec<[f64; 2]>,
-    baz: &mut Vec<[f64; 2]>,
+    accel_bias_z: &mut Vec<[f64; 2]>,
     sgx: &mut Vec<[f64; 2]>,
     sgy: &mut Vec<[f64; 2]>,
     sgz: &mut Vec<[f64; 2]>,
@@ -1623,7 +1623,7 @@ fn append_loose_sample(
     bgz.push([t_s, gyro_sensor_bias_dps[2]]);
     bax.push([t_s, accel_sensor_bias_mps2[0]]);
     bay.push([t_s, accel_sensor_bias_mps2[1]]);
-    baz.push([t_s, accel_sensor_bias_mps2[2]]);
+    accel_bias_z.push([t_s, accel_sensor_bias_mps2[2]]);
     sgx.push([t_s, n.sgx as f64]);
     sgy.push([t_s, n.sgy as f64]);
     sgz.push([t_s, n.sgz as f64]);
@@ -2242,9 +2242,11 @@ mod tests {
 
     #[test]
     fn scaled_fusion_gnss_sample_applies_variance_scales_to_standard_deviations() {
-        let mut cfg = EkfCompareConfig::default();
-        cfg.gnss_pos_r_scale = 0.25;
-        cfg.gnss_vel_r_scale = 4.0;
+        let cfg = EkfCompareConfig {
+            gnss_pos_r_scale: 0.25,
+            gnss_vel_r_scale: 4.0,
+            ..Default::default()
+        };
         let sample = GenericGnssSample {
             t_s: 1.0,
             lat_deg: 37.0,
