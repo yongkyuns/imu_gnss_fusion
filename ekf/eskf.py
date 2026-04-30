@@ -328,6 +328,29 @@ def emit_cse_matrix_assignments(path, title, matrix, variable_name, symbol_prefi
     gen.close()
 
 
+def emit_matrix_supports(path, matrices):
+    with open(path, "w") as file:
+        file.write("// Generated ESKF transition sparsity supports\n")
+        for prefix, matrix, rows in matrices:
+            supports = []
+            max_len = 0
+            for i in range(matrix.shape[0]):
+                row_support = [j for j in range(matrix.shape[1]) if matrix[i, j] != 0]
+                supports.append(row_support)
+                max_len = max(max_len, len(row_support))
+            file.write(f"pub const {prefix}_MAX_ROW_NONZERO: usize = {max_len};\n")
+            file.write(f"pub const {prefix}_ROW_COUNTS: [usize; {rows}] = [\n")
+            file.write("    " + ", ".join(str(len(row)) for row in supports) + ",\n")
+            file.write("];\n")
+            file.write(
+                f"pub const {prefix}_ROW_COLS: [[usize; {prefix}_MAX_ROW_NONZERO]; {rows}] = [\n"
+            )
+            for row in supports:
+                padded = row + [0] * (max_len - len(row))
+                file.write("    [" + ", ".join(str(col) for col in padded) + "],\n")
+            file.write("];\n\n")
+
+
 def emit_nominal_prediction_rust(model):
     q_new = model["x_nom_new"][0:4, 0]
     v_new = model["x_nom_new"][4:7, 0]
@@ -359,6 +382,7 @@ def emit_generated_rust():
     pred_path = GENERATED_RUST_DIR / "nominal_prediction_generated.rs"
     f_path = GENERATED_RUST_DIR / "error_transition_generated.rs"
     g_path = GENERATED_RUST_DIR / "error_noise_input_generated.rs"
+    support_path = GENERATED_RUST_DIR / "error_transition_support_generated.rs"
     reset_path = GENERATED_RUST_DIR / "attitude_reset_jacobian_generated.rs"
     gps_pos_n_path = GENERATED_RUST_DIR / "gps_pos_n_generated.rs"
     gps_pos_e_path = GENERATED_RUST_DIR / "gps_pos_e_generated.rs"
@@ -386,6 +410,13 @@ def emit_generated_rust():
         model["G"],
         "G",
         "ESKF_G",
+    )
+    emit_matrix_supports(
+        support_path,
+        [
+            ("F", model["F"], "ERROR_STATES"),
+            ("G", model["G"], "ERROR_STATES"),
+        ],
     )
     emit_cse_matrix_assignments(
         reset_path,

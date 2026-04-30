@@ -25,6 +25,8 @@ pub const NOISE_STATES: usize = 15;
 /// Standard gravity used by generated ESKF equations, in meters per second squared.
 pub const GRAVITY_MSS: f32 = 9.80665;
 
+include!("generated_eskf/error_transition_support_generated.rs");
+
 /// Linearized scalar-observation terms emitted by the generated ESKF model.
 #[derive(Clone, Copy, Debug)]
 pub struct ScalarObservation {

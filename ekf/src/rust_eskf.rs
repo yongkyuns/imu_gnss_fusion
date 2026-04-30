@@ -202,7 +202,7 @@ impl RustEskf {
         q[13] = q[12];
         q[14] = q[12];
 
-        self.raw.p = predict_covariance_dense(&f, &g, &self.raw.p, &q);
+        self.raw.p = predict_covariance_sparse(&f, &g, &self.raw.p, &q);
         symmetrize_p(&mut self.raw.p);
         if self.freeze_misalignment_states {
             freeze_mount_covariance(&mut self.raw.p);
@@ -748,7 +748,7 @@ fn update_covariance_joseph_scalar(
 }
 
 #[allow(clippy::needless_range_loop)]
-fn predict_covariance_dense(
+fn predict_covariance_sparse(
     f: &[[f32; ERROR_STATES]; ERROR_STATES],
     g: &[[f32; NOISE_STATES]; ERROR_STATES],
     p: &[[f32; ERROR_STATES]; ERROR_STATES],
@@ -758,23 +758,34 @@ fn predict_covariance_dense(
     for i in 0..ERROR_STATES {
         for j in i..ERROR_STATES {
             let mut accum = 0.0;
-            for a in 0..ERROR_STATES {
+            for ia in 0..generated_eskf::F_ROW_COUNTS[i] {
+                let a = generated_eskf::F_ROW_COLS[i][ia];
                 let fi = f[i][a];
                 if fi == 0.0 {
                     continue;
                 }
-                for b in 0..ERROR_STATES {
+                for jb in 0..generated_eskf::F_ROW_COUNTS[j] {
+                    let b = generated_eskf::F_ROW_COLS[j][jb];
                     let fj = f[j][b];
                     if fj != 0.0 {
                         accum += fi * p[a][b] * fj;
                     }
                 }
             }
-            for a in 0..NOISE_STATES {
+            for ia in 0..generated_eskf::G_ROW_COUNTS[i] {
+                let a = generated_eskf::G_ROW_COLS[i][ia];
                 let gi = g[i][a];
-                let gj = g[j][a];
-                if gi != 0.0 && gj != 0.0 {
-                    accum += gi * q[a] * gj;
+                if gi == 0.0 {
+                    continue;
+                }
+                for jb in 0..generated_eskf::G_ROW_COUNTS[j] {
+                    let b = generated_eskf::G_ROW_COLS[j][jb];
+                    if a == b {
+                        let gj = g[j][b];
+                        if gj != 0.0 {
+                            accum += gi * q[a] * gj;
+                        }
+                    }
                 }
             }
             next[i][j] = accum;
