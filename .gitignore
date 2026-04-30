@@ -6,6 +6,10 @@
 **/.cargo_vcs_info.json
 **/.DS_Store
 **/__pycache__/
+**/.venv*/
+**/.mypy_cache/
+**/xcuserdata/
+*.xcuserstate
 sim/generated_*/
 logger/ubx_raw_*.bin
 logger/data/*.bin

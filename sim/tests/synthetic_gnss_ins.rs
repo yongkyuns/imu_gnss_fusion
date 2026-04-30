@@ -837,6 +837,9 @@ fn run_eskf_on_samples(
         .collect::<Vec<_>>();
 
     let mut fusion = SensorFusion::new();
+    // This idealized convergence test exercises the IMU/GNSS formulation without
+    // runtime stationary pseudo-measurements.
+    fusion.set_r_zero_vel(0.0);
     let ref_ecef = lla_to_ecef(
         reference.truth[0].lat_deg,
         reference.truth[0].lon_deg,
