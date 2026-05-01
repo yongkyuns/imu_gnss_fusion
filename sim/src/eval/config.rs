@@ -45,7 +45,7 @@ pub const EKF_COMPARE_DEFAULTS: EkfCompareConfigSnapshot = EkfCompareConfigSnaps
     mount_update_min_scale: 0.008,
     mount_update_ramp_time_s: 120.0,
     mount_update_innovation_gate_mps: 0.10,
-    mount_update_yaw_rate_gate_dps: 0.0,
+    mount_update_yaw_rate_gate_dps: 10.0,
     align_handoff_delay_s: 0.0,
     freeze_misalignment_states: false,
     mount_settle_time_s: 0.0,

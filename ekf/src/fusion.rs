@@ -201,7 +201,7 @@ impl Default for FusionConfig {
             mount_update_min_scale: 0.008,
             mount_update_ramp_time_s: 120.0,
             mount_update_innovation_gate_mps: 0.10,
-            mount_update_yaw_rate_gate_radps: 0.0,
+            mount_update_yaw_rate_gate_radps: 10.0_f32.to_radians(),
             align_handoff_delay_s: 0.0,
             freeze_misalignment_states: false,
             eskf_mount_source: EskfMountSource::LatchedSeed,
