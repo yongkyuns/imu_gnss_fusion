@@ -623,11 +623,17 @@ impl RustEskf {
         diag.last_dx_mount_roll = dx[15];
         diag.last_dx_mount_pitch = dx[16];
         diag.last_dx_mount_yaw = dx[17];
+        diag.last_dx_mount_roll_by_type[diag_type] = dx[15];
+        diag.last_dx_mount_pitch_by_type[diag_type] = dx[16];
+        diag.last_dx_mount_yaw_by_type[diag_type] = dx[17];
         diag.last_k_mount_yaw = k[17];
         diag.last_innovation = innovation;
+        diag.last_innovation_by_type[diag_type] = innovation;
         diag.last_innovation_var = innovation_var;
         diag.last_nis = nis;
+        diag.last_nis_by_type[diag_type] = nis;
         diag.last_h_mount_norm = h_mount_norm;
+        diag.last_h_mount_norm_by_type[diag_type] = h_mount_norm;
         diag.last_corr_yaw_mount_yaw = corr_yaw_mount_yaw;
         diag.last_type = diag_type as u32;
     }

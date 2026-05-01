@@ -31,6 +31,8 @@ pub struct SyntheticVisualizerConfig {
     pub motion_label: String,
     pub motion_text: Option<String>,
     pub noise_mode: SyntheticNoiseMode,
+    pub disable_imu_noise: bool,
+    pub disable_gnss_noise: bool,
     pub seed: u64,
     pub mount_rpy_deg: [f64; 3],
     pub imu_hz: f64,
@@ -85,12 +87,18 @@ fn build_synthetic_plot_data_impl(
         gnss_hz: synth_cfg.gnss_hz,
         ..PathGenConfig::default()
     };
-    let noise = match synth_cfg.noise_mode {
+    let mut noise = match synth_cfg.noise_mode {
         SyntheticNoiseMode::Truth => MeasurementNoiseConfig::zero(),
         SyntheticNoiseMode::Low => MeasurementNoiseConfig::accuracy(ImuAccuracy::Low),
         SyntheticNoiseMode::Mid => MeasurementNoiseConfig::accuracy(ImuAccuracy::Mid),
         SyntheticNoiseMode::High => MeasurementNoiseConfig::accuracy(ImuAccuracy::High),
     };
+    if synth_cfg.disable_imu_noise {
+        noise.imu = crate::synthetic::gnss_ins_path::ImuNoiseModel::zero();
+    }
+    if synth_cfg.disable_gnss_noise {
+        noise.gps = None;
+    }
     let measured = generate_with_noise(&profile, path_cfg, noise, synth_cfg.seed)?;
     let q_truth_mount = reference_mount_rpy_to_q_vb(synth_cfg.mount_rpy_deg);
     let gps_noise = noise.gps.unwrap_or(GpsNoiseModel {

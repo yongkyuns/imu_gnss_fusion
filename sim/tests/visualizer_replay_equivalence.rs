@@ -72,6 +72,8 @@ fn synthetic_generic_input_and_csv_replay_share_auxiliary_trace_outputs() -> Res
             motion_label: "equivalence.scenario".to_string(),
             motion_text: Some(EQUIVALENCE_SCENARIO.to_string()),
             noise_mode: SyntheticNoiseMode::Truth,
+            disable_imu_noise: false,
+            disable_gnss_noise: false,
             seed: 7,
             mount_rpy_deg: MOUNT_RPY_DEG,
             imu_hz: IMU_HZ,
@@ -298,6 +300,22 @@ fn assert_plot_data_close(
             &right.eskf_mount_sigma,
         ),
         ("eskf_mount_dx", &left.eskf_mount_dx, &right.eskf_mount_dx),
+        (
+            "eskf_nhc_mount_dx",
+            &left.eskf_nhc_mount_dx,
+            &right.eskf_nhc_mount_dx,
+        ),
+        (
+            "eskf_nhc_innovation",
+            &left.eskf_nhc_innovation,
+            &right.eskf_nhc_innovation,
+        ),
+        ("eskf_nhc_nis", &left.eskf_nhc_nis, &right.eskf_nhc_nis),
+        (
+            "eskf_nhc_h_mount_norm",
+            &left.eskf_nhc_h_mount_norm,
+            &right.eskf_nhc_h_mount_norm,
+        ),
         (
             "eskf_misalignment",
             &left.eskf_misalignment,
@@ -659,6 +677,45 @@ fn assert_shared_auxiliary_groups_close(
             "ESKF mount pitch correction [deg/update]",
             "ESKF mount yaw correction [deg/update]",
         ],
+    )?;
+    assert_named_traces_close(
+        left_label,
+        right_label,
+        "eskf_nhc_mount_dx",
+        &left.eskf_nhc_mount_dx,
+        &right.eskf_nhc_mount_dx,
+        &[
+            "ESKF NHC Y mount roll correction [deg/update]",
+            "ESKF NHC Y mount pitch correction [deg/update]",
+            "ESKF NHC Y mount yaw correction [deg/update]",
+            "ESKF NHC Z mount roll correction [deg/update]",
+            "ESKF NHC Z mount pitch correction [deg/update]",
+            "ESKF NHC Z mount yaw correction [deg/update]",
+        ],
+    )?;
+    assert_named_traces_close(
+        left_label,
+        right_label,
+        "eskf_nhc_innovation",
+        &left.eskf_nhc_innovation,
+        &right.eskf_nhc_innovation,
+        &["ESKF NHC Y innovation [m/s]", "ESKF NHC Z innovation [m/s]"],
+    )?;
+    assert_named_traces_close(
+        left_label,
+        right_label,
+        "eskf_nhc_nis",
+        &left.eskf_nhc_nis,
+        &right.eskf_nhc_nis,
+        &["ESKF NHC Y NIS", "ESKF NHC Z NIS"],
+    )?;
+    assert_named_traces_close(
+        left_label,
+        right_label,
+        "eskf_nhc_h_mount_norm",
+        &left.eskf_nhc_h_mount_norm,
+        &right.eskf_nhc_h_mount_norm,
+        &["ESKF NHC Y mount H norm", "ESKF NHC Z mount H norm"],
     )?;
     assert_named_traces_close(
         left_label,

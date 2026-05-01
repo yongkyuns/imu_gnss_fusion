@@ -50,6 +50,10 @@ struct Args {
     synthetic_noise: SyntheticNoiseArg,
     #[arg(long, default_value_t = 1)]
     synthetic_seed: u64,
+    #[arg(long)]
+    synthetic_disable_imu_noise: bool,
+    #[arg(long)]
+    synthetic_disable_gnss_noise: bool,
     #[arg(long, default_value_t = 5.0)]
     synthetic_mount_roll_deg: f64,
     #[arg(long, default_value_t = -5.0)]
@@ -274,6 +278,8 @@ fn main() -> Result<()> {
             motion_label: motion_def.display().to_string(),
             motion_text: None,
             noise_mode: args.synthetic_noise.into(),
+            disable_imu_noise: args.synthetic_disable_imu_noise,
+            disable_gnss_noise: args.synthetic_disable_gnss_noise,
             seed: args.synthetic_seed,
             mount_rpy_deg: [
                 args.synthetic_mount_roll_deg,
@@ -382,6 +388,10 @@ fn main() -> Result<()> {
         group_stats("eskf_cov_nonbias", &data.eskf_cov_nonbias),
         group_stats("eskf_mount_sigma", &data.eskf_mount_sigma),
         group_stats("eskf_mount_dx", &data.eskf_mount_dx),
+        group_stats("eskf_nhc_mount_dx", &data.eskf_nhc_mount_dx),
+        group_stats("eskf_nhc_innovation", &data.eskf_nhc_innovation),
+        group_stats("eskf_nhc_nis", &data.eskf_nhc_nis),
+        group_stats("eskf_nhc_h_mount_norm", &data.eskf_nhc_h_mount_norm),
         group_stats("eskf_misalignment", &data.eskf_misalignment),
         group_stats("eskf_stationary_diag", &data.eskf_stationary_diag),
         group_stats("eskf_bump_pitch_speed", &data.eskf_bump_pitch_speed),
@@ -400,6 +410,7 @@ fn main() -> Result<()> {
         group_stats("loose_cov_nonbias", &data.loose_cov_nonbias),
         group_stats("loose_mount_sigma", &data.loose_mount_sigma),
         group_stats("loose_mount_dx", &data.loose_mount_dx),
+        group_stats("loose_nhc_innovation", &data.loose_nhc_innovation),
         group_stats("loose_map", &data.loose_map),
         group_stats("align_cmp_att", &data.align_cmp_att),
         group_stats("align_res_vel", &data.align_res_vel),
@@ -460,6 +471,9 @@ fn main() -> Result<()> {
     }
     print_map_bounds("eskf_map", &data.eskf_map);
     print_map_bounds("loose_map", &data.loose_map);
+    print_eskf_nhc_window_summaries(&data, tmin);
+    print_loose_nhc_window_summaries(&data, tmin);
+    print_loose_mount_window_summaries(&data, tmin);
     if let Some(t_s) = args.dump_align_axis_time_s {
         dump_traces_near_time(
             "align_cmp_att",
@@ -1029,6 +1043,8 @@ fn build_web_synthetic_replay_job_response(
         motion_label: motion_label.to_string(),
         motion_text,
         noise_mode: noise,
+        disable_imu_noise: false,
+        disable_gnss_noise: false,
         seed: source.seed.unwrap_or(1),
         mount_rpy_deg: source.mount_rpy_deg.unwrap_or([5.0, -5.0, 5.0]),
         imu_hz: source.imu_hz.unwrap_or(100.0),
@@ -1136,6 +1152,8 @@ fn build_web_synthetic_plot_data(
         motion_label: motion_label.to_string(),
         motion_text,
         noise_mode: noise,
+        disable_imu_noise: false,
+        disable_gnss_noise: false,
         seed: source.seed.unwrap_or(1),
         mount_rpy_deg: source.mount_rpy_deg.unwrap_or([5.0, -5.0, 5.0]),
         imu_hz: source.imu_hz.unwrap_or(100.0),
@@ -1456,6 +1474,200 @@ fn print_reference_error_summaries(data: &PlotData) {
 #[cfg(not(target_arch = "wasm32"))]
 fn find_trace<'a>(traces: &'a [Trace], name: &str) -> Option<&'a Trace> {
     traces.iter().find(|trace| trace.name == name)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn print_eskf_nhc_window_summaries(data: &PlotData, t0: f64) {
+    if !t0.is_finite() {
+        return;
+    }
+    for (start_rel, end_rel) in [(0.0, 60.0), (60.0, 120.0), (120.0, 240.0), (240.0, 600.0)] {
+        let start = t0 + start_rel;
+        let end = t0 + end_rel;
+        for channel in ["Y", "Z"] {
+            let innovation = find_trace(
+                &data.eskf_nhc_innovation,
+                &format!("ESKF NHC {channel} innovation [m/s]"),
+            );
+            let nis = find_trace(&data.eskf_nhc_nis, &format!("ESKF NHC {channel} NIS"));
+            let h_mount = find_trace(
+                &data.eskf_nhc_h_mount_norm,
+                &format!("ESKF NHC {channel} mount H norm"),
+            );
+            let innovation_stats = innovation.map(|trace| window_stats(trace, start, end));
+            let nis_stats = nis.map(|trace| window_stats(trace, start, end));
+            let h_stats = h_mount.map(|trace| window_stats(trace, start, end));
+            eprintln!(
+                "[profile] eskf_nhc_window channel={} window=[{:.1},{:.1}]s updates={} innov_mean={:.6} innov_rms={:.6} innov_abs_sum={:.6} nis_mean={:.6} nis_max={:.6} h_mount_mean={:.6}",
+                channel,
+                start_rel,
+                end_rel,
+                innovation_stats.map_or(0, |s| s.count),
+                innovation_stats.map_or(f64::NAN, |s| s.mean),
+                innovation_stats.map_or(f64::NAN, |s| s.rms),
+                innovation_stats.map_or(f64::NAN, |s| s.sum_abs),
+                nis_stats.map_or(f64::NAN, |s| s.mean),
+                nis_stats.map_or(f64::NAN, |s| s.max),
+                h_stats.map_or(f64::NAN, |s| s.mean),
+            );
+            for axis in ["roll", "pitch", "yaw"] {
+                let correction = find_trace(
+                    &data.eskf_nhc_mount_dx,
+                    &format!("ESKF NHC {channel} mount {axis} correction [deg/update]"),
+                );
+                let correction_stats = correction.map(|trace| window_stats(trace, start, end));
+                eprintln!(
+                    "[profile] eskf_nhc_mount_window channel={} axis={} window=[{:.1},{:.1}]s updates={} dx_sum_deg={:.9} dx_abs_sum_deg={:.9} dx_mean_deg={:.9}",
+                    channel,
+                    axis,
+                    start_rel,
+                    end_rel,
+                    correction_stats.map_or(0, |s| s.count),
+                    correction_stats.map_or(f64::NAN, |s| s.sum),
+                    correction_stats.map_or(f64::NAN, |s| s.sum_abs),
+                    correction_stats.map_or(f64::NAN, |s| s.mean),
+                );
+            }
+        }
+        for axis in ["roll", "pitch", "yaw"] {
+            let name = format!("ESKF mount {axis} [deg]");
+            let drift = find_trace(&data.eskf_misalignment, &name)
+                .and_then(|trace| window_first_last_delta(trace, start, end));
+            if let Some((first, last, delta)) = drift {
+                eprintln!(
+                    "[profile] eskf_mount_state_window axis={} window=[{:.1},{:.1}]s first_deg={:.9} last_deg={:.9} delta_deg={:.9}",
+                    axis, start_rel, end_rel, first, last, delta
+                );
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn print_loose_mount_window_summaries(data: &PlotData, t0: f64) {
+    if !t0.is_finite() {
+        return;
+    }
+    for (start_rel, end_rel) in [(0.0, 60.0), (60.0, 120.0), (120.0, 240.0), (240.0, 600.0)] {
+        let start = t0 + start_rel;
+        let end = t0 + end_rel;
+        for axis in ["roll", "pitch", "yaw"] {
+            let correction = find_trace(
+                &data.loose_mount_dx,
+                &format!("Loose residual mount {axis} correction [deg/update]"),
+            );
+            let correction_stats = correction.map(|trace| window_stats(trace, start, end));
+            eprintln!(
+                "[profile] loose_mount_update_window axis={} window=[{:.1},{:.1}]s updates={} dx_sum_deg={:.9} dx_abs_sum_deg={:.9} dx_mean_deg={:.9}",
+                axis,
+                start_rel,
+                end_rel,
+                correction_stats.map_or(0, |s| s.count),
+                correction_stats.map_or(f64::NAN, |s| s.sum),
+                correction_stats.map_or(f64::NAN, |s| s.sum_abs),
+                correction_stats.map_or(f64::NAN, |s| s.mean),
+            );
+            let name = format!("Loose residual mount {axis} [deg]");
+            let drift = find_trace(&data.loose_misalignment, &name)
+                .and_then(|trace| window_first_last_delta(trace, start, end));
+            if let Some((first, last, delta)) = drift {
+                eprintln!(
+                    "[profile] loose_mount_state_window axis={} window=[{:.1},{:.1}]s first_deg={:.9} last_deg={:.9} delta_deg={:.9}",
+                    axis, start_rel, end_rel, first, last, delta
+                );
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn print_loose_nhc_window_summaries(data: &PlotData, t0: f64) {
+    if !t0.is_finite() {
+        return;
+    }
+    for (start_rel, end_rel) in [(0.0, 60.0), (60.0, 120.0), (120.0, 240.0), (240.0, 600.0)] {
+        let start = t0 + start_rel;
+        let end = t0 + end_rel;
+        for channel in ["Y", "Z"] {
+            let innovation = find_trace(
+                &data.loose_nhc_innovation,
+                &format!("Loose NHC {channel} innovation [m/s]"),
+            );
+            let innovation_stats = innovation.map(|trace| window_stats(trace, start, end));
+            eprintln!(
+                "[profile] loose_nhc_window channel={} window=[{:.1},{:.1}]s updates={} innov_mean={:.6} innov_rms={:.6} innov_abs_sum={:.6}",
+                channel,
+                start_rel,
+                end_rel,
+                innovation_stats.map_or(0, |s| s.count),
+                innovation_stats.map_or(f64::NAN, |s| s.mean),
+                innovation_stats.map_or(f64::NAN, |s| s.rms),
+                innovation_stats.map_or(f64::NAN, |s| s.sum_abs),
+            );
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug)]
+struct WindowStats {
+    count: usize,
+    sum: f64,
+    sum_abs: f64,
+    mean: f64,
+    rms: f64,
+    max: f64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn window_stats(trace: &Trace, start: f64, end: f64) -> WindowStats {
+    let mut count = 0usize;
+    let mut sum = 0.0;
+    let mut sum_abs = 0.0;
+    let mut sum_sq = 0.0;
+    let mut max = f64::NEG_INFINITY;
+    for point in &trace.points {
+        let t = point[0];
+        let v = point[1];
+        if t >= start && t < end && v.is_finite() {
+            count += 1;
+            sum += v;
+            sum_abs += v.abs();
+            sum_sq += v * v;
+            max = max.max(v);
+        }
+    }
+    let n = count as f64;
+    WindowStats {
+        count,
+        sum,
+        sum_abs,
+        mean: if count > 0 { sum / n } else { f64::NAN },
+        rms: if count > 0 {
+            (sum_sq / n).sqrt()
+        } else {
+            f64::NAN
+        },
+        max: if count > 0 { max } else { f64::NAN },
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn window_first_last_delta(trace: &Trace, start: f64, end: f64) -> Option<(f64, f64, f64)> {
+    let mut first = None;
+    let mut last = None;
+    for point in &trace.points {
+        let t = point[0];
+        let v = point[1];
+        if t >= start && t < end && v.is_finite() {
+            first.get_or_insert(v);
+            last = Some(v);
+        }
+    }
+    match (first, last) {
+        (Some(first), Some(last)) => Some((first, last, last - first)),
+        _ => None,
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

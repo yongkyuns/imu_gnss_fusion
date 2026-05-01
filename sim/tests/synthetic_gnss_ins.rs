@@ -461,6 +461,42 @@ fn eskf_converges_on_generated_figure8_truth_signals() -> Result<()> {
 }
 
 #[test]
+fn eskf_converges_tightly_on_long_generated_figure8_truth_signals() -> Result<()> {
+    let profile_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("motion_profiles/figure8_30min.scenario");
+    let profile = MotionProfile::from_path(&profile_path)?;
+    let generated = generate(&profile, PathGenConfig::default())?;
+    let summary = run_eskf_on_generated_path(&generated, [5.0, -5.0, 5.0])?;
+
+    assert!(
+        summary.ekf_initialized,
+        "ESKF did not initialize on long figure-eight truth data"
+    );
+    assert!(
+        summary.final_mount_quat_err_deg < 0.15,
+        "long figure-eight mount quaternion error too high: {summary:#?}"
+    );
+    assert!(
+        summary.tail_mount_quat_err_mean_deg < 0.15,
+        "long figure-eight tail mount quaternion mean error too high: {summary:#?}"
+    );
+    assert!(
+        summary.final_att_quat_err_deg < 0.15,
+        "long figure-eight attitude quaternion error too high: {summary:#?}"
+    );
+    assert!(
+        summary.final_vel_err_mps < 0.35,
+        "long figure-eight velocity error too high: {summary:#?}"
+    );
+    assert!(
+        summary.final_pos_err_m < 4.0,
+        "long figure-eight position error too high: {summary:#?}"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn eskf_converges_on_generated_city_blocks_noisy_measurements() -> Result<()> {
     let profile_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("motion_profiles/city_blocks_15min.csv");
@@ -515,6 +551,8 @@ fn synthetic_inputs_populate_visualizer_eskf_traces() -> Result<()> {
             motion_label: profile_path.display().to_string(),
             motion_text: None,
             noise_mode: SyntheticNoiseMode::Truth,
+            disable_imu_noise: false,
+            disable_gnss_noise: false,
             seed: 42,
             mount_rpy_deg: [5.0, -5.0, 5.0],
             imu_hz: 100.0,
@@ -744,6 +782,8 @@ brake 0.6666667m/s^2 for 18s
             motion_label: "symmetric_figure8.scenario".to_string(),
             motion_text: Some(scenario.to_string()),
             noise_mode: SyntheticNoiseMode::Truth,
+            disable_imu_noise: false,
+            disable_gnss_noise: false,
             seed: 42,
             mount_rpy_deg: [5.0, -5.0, 5.0],
             imu_hz: 25.0,

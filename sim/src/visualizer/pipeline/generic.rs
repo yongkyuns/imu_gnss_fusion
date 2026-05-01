@@ -1,5 +1,7 @@
 use anyhow::{Context, Result, bail};
+use sensor_fusion::eskf_types::ESKF_UPDATE_DIAG_TYPES;
 use sensor_fusion::fusion::SensorFusion;
+use sensor_fusion::generated_loose;
 use sensor_fusion::loose::{
     LOOSE_ERROR_STATES, LooseFilter, LooseImuDelta, LooseNominalState, LoosePredictNoise,
 };
@@ -13,6 +15,10 @@ use crate::eval::replay::{ReplayEvent, for_each_event};
 use crate::visualizer::math::{ecef_to_ned, lla_to_ecef, ned_to_lla_exact, quat_rpy_deg};
 use crate::visualizer::model::{EkfImuSource, HeadingSample, PlotData, Trace};
 use crate::visualizer::pipeline::{EkfCompareConfig, GnssOutageConfig};
+
+const DIAG_BODY_VEL_Y: usize = 4;
+const DIAG_BODY_VEL_Z: usize = 5;
+const NHC_DIAG_TYPES: [(usize, &str); 2] = [(DIAG_BODY_VEL_Y, "NHC Y"), (DIAG_BODY_VEL_Z, "NHC Z")];
 
 pub struct GenericReplayInput {
     pub imu: Vec<GenericImuSample>,
@@ -297,7 +303,12 @@ fn build_generic_replay_plot_data_impl(
     let mut eskf_baz = Vec::new();
     let mut eskf_cov: [Vec<[f64; 2]>; 18] = std::array::from_fn(|_| Vec::new());
     let mut eskf_mount_dx: [Vec<[f64; 2]>; 3] = std::array::from_fn(|_| Vec::new());
+    let mut eskf_nhc_mount_dx: [Vec<[f64; 2]>; 6] = std::array::from_fn(|_| Vec::new());
+    let mut eskf_nhc_innovation: [Vec<[f64; 2]>; 2] = std::array::from_fn(|_| Vec::new());
+    let mut eskf_nhc_nis: [Vec<[f64; 2]>; 2] = std::array::from_fn(|_| Vec::new());
+    let mut eskf_nhc_h_mount_norm: [Vec<[f64; 2]>; 2] = std::array::from_fn(|_| Vec::new());
     let mut last_eskf_update_count = 0u32;
+    let mut last_eskf_type_counts = [0u32; ESKF_UPDATE_DIAG_TYPES];
     let mut eskf_map = Vec::new();
     let mut eskf_outage_map = Vec::new();
     let mut eskf_heading = Vec::new();
@@ -340,6 +351,11 @@ fn build_generic_replay_plot_data_impl(
                 &mut eskf_cov,
                 &mut eskf_mount_dx,
                 &mut last_eskf_update_count,
+                &mut eskf_nhc_mount_dx,
+                &mut eskf_nhc_innovation,
+                &mut eskf_nhc_nis,
+                &mut eskf_nhc_h_mount_norm,
+                &mut last_eskf_type_counts,
                 &mut eskf_map,
                 &mut eskf_outage_map,
                 &mut eskf_heading,
@@ -575,6 +591,31 @@ fn build_generic_replay_plot_data_impl(
             .map(|(axis, points)| Trace {
                 name: format!("ESKF mount {axis} correction [deg/update]"),
                 points,
+            })
+            .collect(),
+        eskf_nhc_mount_dx: eskf_nhc_mount_dx_traces(&eskf_nhc_mount_dx),
+        eskf_nhc_innovation: NHC_DIAG_TYPES
+            .into_iter()
+            .enumerate()
+            .map(|(i, (_, label))| Trace {
+                name: format!("ESKF {label} innovation [m/s]"),
+                points: eskf_nhc_innovation[i].clone(),
+            })
+            .collect(),
+        eskf_nhc_nis: NHC_DIAG_TYPES
+            .into_iter()
+            .enumerate()
+            .map(|(i, (_, label))| Trace {
+                name: format!("ESKF {label} NIS"),
+                points: eskf_nhc_nis[i].clone(),
+            })
+            .collect(),
+        eskf_nhc_h_mount_norm: NHC_DIAG_TYPES
+            .into_iter()
+            .enumerate()
+            .map(|(i, (_, label))| Trace {
+                name: format!("ESKF {label} mount H norm"),
+                points: eskf_nhc_h_mount_norm[i].clone(),
             })
             .collect(),
         eskf_misalignment: vec![
@@ -1034,6 +1075,7 @@ fn populate_loose_traces(
     let mut cov_nonbias: [Vec<[f64; 2]>; 12] = std::array::from_fn(|_| Vec::new());
     let mut cov_mount: [Vec<[f64; 2]>; 3] = std::array::from_fn(|_| Vec::new());
     let mut dx_mount: [Vec<[f64; 2]>; 3] = std::array::from_fn(|_| Vec::new());
+    let mut nhc_innovation: [Vec<[f64; 2]>; 2] = std::array::from_fn(|_| Vec::new());
     let mut map = Vec::new();
     let mut headings = Vec::new();
 
@@ -1140,6 +1182,7 @@ fn populate_loose_traces(
                 &mut cov_nonbias,
                 &mut cov_mount,
                 &mut dx_mount,
+                &mut nhc_innovation,
                 &mut map,
                 &mut headings,
             );
@@ -1353,6 +1396,14 @@ fn populate_loose_traces(
             points,
         })
         .collect();
+    data.loose_nhc_innovation = ["Y", "Z"]
+        .into_iter()
+        .zip(nhc_innovation)
+        .map(|(axis, points)| Trace {
+            name: format!("Loose NHC {axis} innovation [m/s]"),
+            points,
+        })
+        .collect();
     data.loose_map = vec![Trace {
         name: "Loose path (lon,lat)".to_string(),
         points: map,
@@ -1406,6 +1457,19 @@ fn populate_eskf_bump_traces(data: &mut PlotData) {
     ];
 }
 
+fn eskf_nhc_mount_dx_traces(points: &[Vec<[f64; 2]>; 6]) -> Vec<Trace> {
+    let mut traces = Vec::with_capacity(6);
+    for (diag_i, (_, label)) in NHC_DIAG_TYPES.iter().copied().enumerate() {
+        for (axis_i, axis) in ["roll", "pitch", "yaw"].into_iter().enumerate() {
+            traces.push(Trace {
+                name: format!("ESKF {label} mount {axis} correction [deg/update]"),
+                points: points[diag_i * 3 + axis_i].clone(),
+            });
+        }
+    }
+    traces
+}
+
 #[allow(clippy::too_many_arguments)]
 fn append_eskf_sample(
     t_s: f64,
@@ -1433,6 +1497,11 @@ fn append_eskf_sample(
     cov: &mut [Vec<[f64; 2]>; 18],
     mount_dx: &mut [Vec<[f64; 2]>; 3],
     last_update_count: &mut u32,
+    nhc_mount_dx: &mut [Vec<[f64; 2]>; 6],
+    nhc_innovation: &mut [Vec<[f64; 2]>; 2],
+    nhc_nis: &mut [Vec<[f64; 2]>; 2],
+    nhc_h_mount_norm: &mut [Vec<[f64; 2]>; 2],
+    last_type_counts: &mut [u32; ESKF_UPDATE_DIAG_TYPES],
     map: &mut Vec<[f64; 2]>,
     outage_map: &mut Vec<[f64; 2]>,
     headings: &mut Vec<HeadingSample>,
@@ -1490,6 +1559,26 @@ fn append_eskf_sample(
         mount_dx[1].push([t_s, (diag.last_dx_mount_pitch as f64).to_degrees()]);
         mount_dx[2].push([t_s, (diag.last_dx_mount_yaw as f64).to_degrees()]);
         *last_update_count = diag.total_updates;
+    }
+    for (diag_i, (diag_type, _)) in NHC_DIAG_TYPES.iter().copied().enumerate() {
+        if diag.type_counts[diag_type] != last_type_counts[diag_type] {
+            nhc_mount_dx[diag_i * 3].push([
+                t_s,
+                (diag.last_dx_mount_roll_by_type[diag_type] as f64).to_degrees(),
+            ]);
+            nhc_mount_dx[diag_i * 3 + 1].push([
+                t_s,
+                (diag.last_dx_mount_pitch_by_type[diag_type] as f64).to_degrees(),
+            ]);
+            nhc_mount_dx[diag_i * 3 + 2].push([
+                t_s,
+                (diag.last_dx_mount_yaw_by_type[diag_type] as f64).to_degrees(),
+            ]);
+            nhc_innovation[diag_i].push([t_s, diag.last_innovation_by_type[diag_type] as f64]);
+            nhc_nis[diag_i].push([t_s, diag.last_nis_by_type[diag_type] as f64]);
+            nhc_h_mount_norm[diag_i].push([t_s, diag.last_h_mount_norm_by_type[diag_type] as f64]);
+            last_type_counts[diag_type] = diag.type_counts[diag_type];
+        }
     }
 
     if let Some([lat, lon, _]) = fusion.position_lla_f64() {
@@ -1630,6 +1719,7 @@ fn append_loose_sample(
     cov_nonbias: &mut [Vec<[f64; 2]>; 12],
     cov_mount: &mut [Vec<[f64; 2]>; 3],
     dx_mount: &mut [Vec<[f64; 2]>; 3],
+    nhc_innovation: &mut [Vec<[f64; 2]>; 2],
     map: &mut Vec<[f64; 2]>,
     headings: &mut Vec<HeadingSample>,
 ) {
@@ -1714,6 +1804,17 @@ fn append_loose_sample(
     if has_update {
         for (dst, idx) in dx_mount.iter_mut().zip([21usize, 22, 23]) {
             dst.push([t_s, (dx[idx] as f64).to_degrees()]);
+        }
+        let obs_types = loose.last_obs_types();
+        if obs_types.contains(&7) || obs_types.contains(&8) {
+            let (vc_y, _) = generated_loose::nhc_y(loose.nominal());
+            let (vc_z, _) = generated_loose::nhc_z(loose.nominal());
+            if obs_types.contains(&7) {
+                nhc_innovation[0].push([t_s, -(vc_y as f64)]);
+            }
+            if obs_types.contains(&8) {
+                nhc_innovation[1].push([t_s, -(vc_z as f64)]);
+            }
         }
     }
 }

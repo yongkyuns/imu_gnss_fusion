@@ -17,6 +17,7 @@ use crate::rust_eskf::RustEskf;
 
 const WGS84_A_M: f64 = 6378137.0;
 const WGS84_E2: f64 = 6.69437999014e-3;
+const WGS84_OMEGA_IE_RADPS: f32 = 7.292115e-5;
 const REANCHOR_DISTANCE_M: f32 = 5000.0;
 const RUNTIME_ZERO_SPEED_MPS: f32 = 0.80;
 const RUNTIME_NHC_MAX_ROLL_PITCH_GYRO_RADPS: f32 = 0.03;
@@ -540,15 +541,23 @@ impl SensorFusion {
         let c_vb = transpose3(c_bv);
         let gyro_vehicle = mat3_vec(c_vb, sample.gyro_radps);
         let accel_vehicle = mat3_vec(c_vb, sample.accel_mps2);
+        let (gyro_predict, coriolis_delta_v_n) =
+            self.eskf_navigation_rate_corrections(gyro_vehicle, dt);
         self.eskf.predict(EskfImuDelta {
-            dax: gyro_vehicle[0] * dt,
-            day: gyro_vehicle[1] * dt,
-            daz: gyro_vehicle[2] * dt,
+            dax: gyro_predict[0] * dt,
+            day: gyro_predict[1] * dt,
+            daz: gyro_predict[2] * dt,
             dvx: accel_vehicle[0] * dt,
             dvy: accel_vehicle[1] * dt,
             dvz: accel_vehicle[2] * dt,
             dt,
         });
+        {
+            let nominal = &mut self.eskf.raw_mut().nominal;
+            nominal.vn += coriolis_delta_v_n[0];
+            nominal.ve += coriolis_delta_v_n[1];
+            nominal.vd += coriolis_delta_v_n[2];
+        }
         self.clamp_eskf_biases();
 
         if self.cfg.r_body_vel > 0.0 {
@@ -1208,6 +1217,45 @@ impl SensorFusion {
         n.bay = n.bay.clamp(-max_accel, max_accel);
         n.baz = n.baz.clamp(-max_accel, max_accel);
     }
+
+    fn eskf_navigation_rate_corrections(
+        &self,
+        gyro_vehicle: [f32; 3],
+        dt: f32,
+    ) -> ([f32; 3], [f32; 3]) {
+        if !self.anchor.valid || dt <= 0.0 {
+            return (gyro_vehicle, [0.0; 3]);
+        }
+        let Some(eskf) = self.eskf() else {
+            return (gyro_vehicle, [0.0; 3]);
+        };
+        let nominal = &eskf.nominal;
+        let lla = self.position_lla_f64().unwrap_or([
+            self.anchor.lat_deg as f64,
+            self.anchor.lon_deg as f64,
+            self.anchor.height_m as f64,
+        ]);
+        let (omega_ie_n, omega_en_n) = navigation_rates_ned(
+            lla[0] as f32,
+            lla[2] as f32,
+            [nominal.vn, nominal.ve, nominal.vd],
+        );
+        // The generated ESKF propagation is a local-level NED model. The IMU
+        // gyro measures body rate relative to inertial space, so subtract the
+        // navigation frame's inertial rate before applying the flat local
+        // quaternion update, and apply the matching Coriolis/transport velocity
+        // term in NED.
+        let omega_in_n = add3(omega_ie_n, omega_en_n);
+        let c_ns = quat_to_rotmat([nominal.q0, nominal.q1, nominal.q2, nominal.q3]);
+        let omega_in_s = mat3_vec(transpose3(c_ns), omega_in_n);
+        let gyro_predict = sub3(gyro_vehicle, omega_in_s);
+        let coriolis_rate = cross3(
+            add3(scale3(omega_ie_n, 2.0), omega_en_n),
+            [nominal.vn, nominal.ve, nominal.vd],
+        );
+        let coriolis_delta_v_n = scale3(coriolis_rate, -dt);
+        (gyro_predict, coriolis_delta_v_n)
+    }
 }
 
 impl Default for SensorFusion {
@@ -1282,6 +1330,59 @@ fn body_speed_x_estimate(eskf: &EskfState) -> f32 {
     (1.0 - 2.0 * n.qcs2 * n.qcs2 - 2.0 * n.qcs3 * n.qcs3) * vs0
         + 2.0 * (n.qcs1 * n.qcs2 - n.qcs0 * n.qcs3) * vs1
         + 2.0 * (n.qcs1 * n.qcs3 + n.qcs0 * n.qcs2) * vs2
+}
+
+fn navigation_rates_ned(
+    lat_deg: f32,
+    height_m: f32,
+    vel_ned_mps: [f32; 3],
+) -> ([f32; 3], [f32; 3]) {
+    let lat = lat_deg.to_radians();
+    let (slat, clat) = lat.sin_cos();
+    let denom = (1.0 - WGS84_E2 as f32 * slat * slat).max(1.0e-6);
+    let sqrt_denom = denom.sqrt();
+    let rn = WGS84_A_M as f32 / sqrt_denom;
+    let rm = WGS84_A_M as f32 * (1.0 - WGS84_E2 as f32) / (denom * sqrt_denom);
+    let rn_h = (rn + height_m).max(1.0);
+    let rm_h = (rm + height_m).max(1.0);
+    let clat_safe = if clat.abs() > 1.0e-3 {
+        clat
+    } else if clat.is_sign_negative() {
+        -1.0e-3
+    } else {
+        1.0e-3
+    };
+    let omega_ie_n = [
+        WGS84_OMEGA_IE_RADPS * clat,
+        0.0,
+        -WGS84_OMEGA_IE_RADPS * slat,
+    ];
+    let omega_en_n = [
+        vel_ned_mps[1] / rn_h,
+        -vel_ned_mps[0] / rm_h,
+        -vel_ned_mps[1] * slat / (clat_safe * rn_h),
+    ];
+    (omega_ie_n, omega_en_n)
+}
+
+fn add3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn scale3(a: [f32; 3], s: f32) -> [f32; 3] {
+    [a[0] * s, a[1] * s, a[2] * s]
+}
+
+fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
 }
 
 fn anchor_from_lla(lat_deg: f32, lon_deg: f32, height_m: f32) -> Anchor {
