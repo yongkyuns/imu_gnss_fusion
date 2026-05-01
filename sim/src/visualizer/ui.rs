@@ -594,6 +594,12 @@ enum WebDatasetTaskResult {
 
 #[cfg(target_arch = "wasm32")]
 enum WebReplayTaskResult {
+    Progress {
+        job_id: u64,
+        progress: f32,
+        current_t_s: f64,
+        final_t_s: f64,
+    },
     Complete {
         job_id: u64,
         result: std::result::Result<WebReplayWorkerOutput, String>,
@@ -1735,45 +1741,69 @@ impl App {
         let Some(result) = self.web_datasets.pending_replay.borrow_mut().take() else {
             return;
         };
-        let WebReplayTaskResult::Complete { job_id, result } = result;
-        if job_id != self.web_datasets.replay_job_id {
-            return;
-        }
-        self.finish_web_replay_worker();
-        self.web_datasets.loading_replay = false;
-        self.web_run_progress = 1.0;
         match result {
-            Ok(output) => match serde_json::from_str::<PlotData>(&output.json) {
-                Ok(data) => {
-                    let is_synthetic = output.source == "synthetic";
-                    self.data = data;
-                    self.map_center = map_center_from_traces(&self.data.eskf_map);
-                    self.has_itow = false;
-                    self.data_origin = if is_synthetic {
-                        DataOrigin::Synthetic
-                    } else {
-                        DataOrigin::Real
-                    };
-                    self.web_input_mode = if is_synthetic {
-                        WebInputMode::Synthetic
-                    } else {
-                        WebInputMode::RealData
-                    };
-                    self.web_status = if is_synthetic {
-                        format!("Synthetic scenario loaded: {}", output.label)
-                    } else {
-                        format!(
-                            "Dataset loaded: {} ({} / {})",
-                            output.label, output.imu_name, output.gnss_name
-                        )
-                    };
+            WebReplayTaskResult::Progress {
+                job_id,
+                progress,
+                current_t_s,
+                final_t_s,
+            } => {
+                if job_id != self.web_datasets.replay_job_id {
+                    return;
                 }
-                Err(err) => {
-                    self.web_status = format!("Replay result decode failed: {err}");
+                self.web_run_progress = progress.clamp(0.0, 1.0);
+                self.web_status = if final_t_s.is_finite() && final_t_s > 0.0 {
+                    format!(
+                        "Running replay: {:.2}s / {:.2}s ({:.1}%)",
+                        current_t_s,
+                        final_t_s,
+                        100.0 * self.web_run_progress,
+                    )
+                } else {
+                    format!("Running replay: {:.1}%", 100.0 * self.web_run_progress)
                 }
-            },
-            Err(err) => {
-                self.web_status = format!("CSV replay failed: {err}");
+            }
+            WebReplayTaskResult::Complete { job_id, result } => {
+                if job_id != self.web_datasets.replay_job_id {
+                    return;
+                }
+                self.finish_web_replay_worker();
+                self.web_datasets.loading_replay = false;
+                self.web_run_progress = 1.0;
+                match result {
+                    Ok(output) => match serde_json::from_str::<PlotData>(&output.json) {
+                        Ok(data) => {
+                            let is_synthetic = output.source == "synthetic";
+                            self.data = data;
+                            self.map_center = map_center_from_traces(&self.data.eskf_map);
+                            self.has_itow = false;
+                            self.data_origin = if is_synthetic {
+                                DataOrigin::Synthetic
+                            } else {
+                                DataOrigin::Real
+                            };
+                            self.web_input_mode = if is_synthetic {
+                                WebInputMode::Synthetic
+                            } else {
+                                WebInputMode::RealData
+                            };
+                            self.web_status = if is_synthetic {
+                                format!("Synthetic scenario loaded: {}", output.label)
+                            } else {
+                                format!(
+                                    "Dataset loaded: {} ({} / {})",
+                                    output.label, output.imu_name, output.gnss_name
+                                )
+                            };
+                        }
+                        Err(err) => {
+                            self.web_status = format!("Replay result decode failed: {err}");
+                        }
+                    },
+                    Err(err) => {
+                        self.web_status = format!("CSV replay failed: {err}");
+                    }
+                }
             }
         }
     }
@@ -1899,6 +1929,33 @@ impl App {
                 .and_then(|v| v.as_f64())
                 .map(|v| v as u64)
                 .unwrap_or(job_id);
+            let is_progress = Reflect::get(&value, &JsValue::from_str("type"))
+                .ok()
+                .and_then(|v| v.as_string())
+                .is_some_and(|value| value == "progress");
+            if is_progress {
+                let progress = Reflect::get(&value, &JsValue::from_str("progress"))
+                    .ok()
+                    .and_then(|v| v.as_f64())
+                    .map(|v| v as f32)
+                    .unwrap_or(0.0);
+                let current_t_s = Reflect::get(&value, &JsValue::from_str("currentTimeS"))
+                    .ok()
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0);
+                let final_t_s = Reflect::get(&value, &JsValue::from_str("finalTimeS"))
+                    .ok()
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0);
+                *pending.borrow_mut() = Some(WebReplayTaskResult::Progress {
+                    job_id: output_job_id,
+                    progress,
+                    current_t_s,
+                    final_t_s,
+                });
+                repaint_ctx.request_repaint();
+                return;
+            }
             let ok = Reflect::get(&value, &JsValue::from_str("ok"))
                 .ok()
                 .and_then(|v| v.as_bool())

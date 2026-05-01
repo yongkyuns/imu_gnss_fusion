@@ -49,19 +49,6 @@ function normalizeReplayJob(request) {
 }
 
 function runReplayJob(request) {
-  if (visualizer.build_replay_plot_data_json) {
-    const json = visualizer.build_replay_plot_data_json(JSON.stringify(request));
-    return replayResultFromRequest(request, json);
-  }
-
-  if (visualizer.build_replay_plot_data_json_with_progress) {
-    const json = visualizer.build_replay_plot_data_json_with_progress(
-      JSON.stringify(request),
-      () => {},
-    );
-    return replayResultFromRequest(request, json);
-  }
-
   if (visualizer.build_replay_job_json_with_progress) {
     const progress = (message) => {
       self.postMessage(message);
@@ -81,6 +68,19 @@ function runReplayJob(request) {
         progress,
       ),
     );
+  }
+
+  if (visualizer.build_replay_plot_data_json) {
+    const json = visualizer.build_replay_plot_data_json(JSON.stringify(request));
+    return replayResultFromRequest(request, json);
+  }
+
+  if (visualizer.build_replay_plot_data_json_with_progress) {
+    const json = visualizer.build_replay_plot_data_json_with_progress(
+      JSON.stringify(request),
+      () => {},
+    );
+    return replayResultFromRequest(request, json);
   }
 
   if (visualizer.build_generic_replay_job_json) {
