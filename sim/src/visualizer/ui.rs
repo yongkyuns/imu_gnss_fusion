@@ -3714,8 +3714,15 @@ fn draw_loose_tuning(ui: &mut egui::Ui, cfg: &mut EkfCompareConfig) {
         );
         drag_f32(
             ui,
-            "Mount sigma deg",
+            "Mount roll/pitch sigma deg",
             &mut init.mount_sigma_deg,
+            0.5,
+            0.0..=180.0,
+        );
+        drag_f32(
+            ui,
+            "Mount yaw sigma deg",
+            &mut init.mount_yaw_sigma_deg,
             0.5,
             0.0..=180.0,
         );

@@ -1658,8 +1658,6 @@ fn default_loose_p_diag(
     gnss: GenericGnssSample,
     cfg: EkfCompareConfig,
 ) -> [f32; LOOSE_ERROR_STATES] {
-    const MIN_LOOSE_MOUNT_YAW_SIGMA_DEG: f32 = 6.0;
-
     let mut p = [1.0_f32; LOOSE_ERROR_STATES];
     let init = cfg.loose_init;
 
@@ -1704,11 +1702,7 @@ fn default_loose_p_diag(
     let mount_var = init.mount_sigma_deg.to_radians().powi(2);
     p[21] = mount_var;
     p[22] = mount_var;
-    p[23] = init
-        .mount_sigma_deg
-        .max(MIN_LOOSE_MOUNT_YAW_SIGMA_DEG)
-        .to_radians()
-        .powi(2);
+    p[23] = init.mount_yaw_sigma_deg.to_radians().powi(2);
     p
 }
 

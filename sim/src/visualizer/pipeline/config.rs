@@ -93,7 +93,11 @@ pub struct LooseInitConfig {
     pub accel_bias_sigma_mps2: f32,
     pub gyro_scale_sigma: f32,
     pub accel_scale_sigma: f32,
+    /// Initial residual mount roll/pitch sigma, in degrees.
     pub mount_sigma_deg: f32,
+    /// Initial residual mount yaw sigma, in degrees.
+    #[serde(default = "default_loose_mount_yaw_sigma_deg")]
+    pub mount_yaw_sigma_deg: f32,
 }
 
 impl Default for LooseInitConfig {
@@ -107,8 +111,13 @@ impl Default for LooseInitConfig {
             gyro_scale_sigma: 0.02,
             accel_scale_sigma: 0.0,
             mount_sigma_deg: 2.0,
+            mount_yaw_sigma_deg: default_loose_mount_yaw_sigma_deg(),
         }
     }
+}
+
+fn default_loose_mount_yaw_sigma_deg() -> f32 {
+    6.0
 }
 
 pub const fn default_eskf_predict_noise() -> PredictNoise {
@@ -148,6 +157,7 @@ mod tests {
         cfg.align.min_speed_mps = 1.5;
         cfg.align.q_mount_std_rad = [1.0e-5, 2.0e-5, 3.0e-5];
         cfg.loose_init.mount_sigma_deg = 4.0;
+        cfg.loose_init.mount_yaw_sigma_deg = 8.0;
         cfg.loose_predict_noise.as_mut().unwrap().mount_align_rw_var = 2.0e-8;
 
         let json = serde_json::to_string(&cfg).unwrap();
@@ -164,6 +174,10 @@ mod tests {
         assert_eq!(
             decoded.loose_init.mount_sigma_deg,
             cfg.loose_init.mount_sigma_deg
+        );
+        assert_eq!(
+            decoded.loose_init.mount_yaw_sigma_deg,
+            cfg.loose_init.mount_yaw_sigma_deg
         );
         assert_eq!(
             decoded.loose_predict_noise.unwrap().mount_align_rw_var,
@@ -211,12 +225,25 @@ mod tests {
             "yawInitSpeedMps": 0.0,
             "gnssPosRScale": 0.01,
             "gnssVelRScale": 2.5,
-            "looseInit": LooseInitConfig::default(),
+            "looseInit": {
+                "posMinSigmaM": 0.5,
+                "velMinSigmaMps": 0.2,
+                "attitudeSigmaDeg": 2.0,
+                "gyroBiasSigmaDps": 0.125,
+                "accelBiasSigmaMps2": 0.075,
+                "gyroScaleSigma": 0.02,
+                "accelScaleSigma": 0.0,
+                "mountSigmaDeg": 2.0
+            },
         });
 
         let decoded: EkfCompareConfig = serde_json::from_value(json).unwrap();
 
         assert_eq!(decoded.predict_imu_lpf_cutoff_hz, None);
+        assert_eq!(
+            decoded.loose_init.mount_yaw_sigma_deg,
+            default_loose_mount_yaw_sigma_deg()
+        );
         assert!(decoded.predict_noise.is_some());
         assert!(decoded.loose_predict_noise.is_some());
     }
