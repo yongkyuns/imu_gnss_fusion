@@ -21,6 +21,7 @@ const REANCHOR_DISTANCE_M: f32 = 5000.0;
 const RUNTIME_ZERO_SPEED_MPS: f32 = 0.80;
 const RUNTIME_NHC_MAX_ROLL_PITCH_GYRO_RADPS: f32 = 0.03;
 const RUNTIME_NHC_MAX_ACCEL_NORM_ERR_MPS2: f32 = 0.2;
+const BODY_VEL_REFERENCE_DT_S: f32 = 0.01;
 const CAN_SPEED_ZERO_MPS: f32 = 0.15;
 const CAN_SPEED_SIGN_INFER_MIN_MPS: f32 = 1.0;
 
@@ -565,7 +566,9 @@ impl SensorFusion {
                 if nhc_speed_scale > 0.0 {
                     let fused_body_update_scale = body_update_scale * nhc_speed_scale;
                     let mount_update_scale = fused_body_update_scale;
-                    let effective_r = self.cfg.r_body_vel / fused_body_update_scale.max(1.0e-3);
+                    let cadence_scale = BODY_VEL_REFERENCE_DT_S / dt.max(1.0e-3);
+                    let effective_r =
+                        self.cfg.r_body_vel * cadence_scale / fused_body_update_scale.max(1.0e-3);
                     self.eskf.fuse_body_vel_scaled(
                         effective_r,
                         mount_update_scale,

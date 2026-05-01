@@ -53,6 +53,7 @@ const VEL_AXIS_SUPPORT_ROW2: &[usize] = &[5];
 const MIN_NHC_UPDATE_SPEED_MPS: f32 = 0.05;
 const MAX_NHC_GYRO_NORM_RADPS: f32 = 0.2;
 const MAX_NHC_ACCEL_NORM_ERR_MPS2: f32 = 1.0;
+const NHC_REFERENCE_MAX_DT_S: f32 = 1.0;
 
 /// Process-noise variances used by [`LooseFilter::predict`].
 #[repr(C)]
@@ -753,10 +754,7 @@ impl LooseFilter {
         let (vc_z_est, h_z) = generated_loose::nhc_z(&self.raw.nominal);
         let gate_var_y = 0.1_f32 * 0.1_f32;
         let gate_var_z = 0.05_f32 * 0.05_f32;
-        let mut dt_obs = dt_s;
-        if dt_obs <= 0.0 || dt_obs >= 1.0 {
-            dt_obs = 1.0;
-        }
+        let dt_obs = nhc_observation_dt(dt_s);
         let var_y = gate_var_y / dt_obs;
         let var_z = gate_var_z / dt_obs;
         let mut h_rows = [[0.0; LOOSE_ERROR_STATES]; 8];
@@ -825,7 +823,7 @@ impl LooseFilter {
             let (vc_z_est, h_z) = generated_loose::nhc_z(&self.raw.nominal);
             let gate_var_y = 0.1_f32 * 0.1_f32;
             let gate_var_z = 0.05_f32 * 0.05_f32;
-            let dt_obs = 0.02;
+            let dt_obs = nhc_observation_dt(dt_s);
             let var_y = gate_var_y / dt_obs;
             let var_z = gate_var_z / dt_obs;
             h_rows[obs_count] = h_y;
@@ -1367,6 +1365,14 @@ fn ecef_to_llh(x_e: [f32; 3]) -> (f32, f32, f32) {
     let lat_rad = libm::atan2f(x_e[2] + (a2 / b2 - 1.0) * z0, r);
     let lon_rad = libm::atan2f(x_e[1], x_e[0]);
     (lat_rad, lon_rad, height_m)
+}
+
+fn nhc_observation_dt(dt_s: f32) -> f32 {
+    if dt_s > 0.0 && dt_s.is_finite() {
+        dt_s.min(NHC_REFERENCE_MAX_DT_S)
+    } else {
+        NHC_REFERENCE_MAX_DT_S
+    }
 }
 
 fn gravity_ecef_j2(x_e: [f32; 3]) -> [f32; 3] {
