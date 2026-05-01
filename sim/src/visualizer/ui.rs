@@ -3252,6 +3252,42 @@ fn drag_f32(
     });
 }
 
+fn drag_rw_var_deg_per_sqrt_hr(ui: &mut egui::Ui, label: &str, value_rad2_per_s: &mut f32) {
+    let mut value_deg_per_sqrt_hr = rw_var_to_deg_per_sqrt_hr(*value_rad2_per_s);
+    drag_f32(ui, label, &mut value_deg_per_sqrt_hr, 0.01, 0.0..=10.0);
+    *value_rad2_per_s = deg_per_sqrt_hr_to_rw_var(value_deg_per_sqrt_hr);
+}
+
+fn rw_var_to_deg_per_sqrt_hr(value_rad2_per_s: f32) -> f32 {
+    if value_rad2_per_s.is_finite() && value_rad2_per_s > 0.0 {
+        value_rad2_per_s.sqrt().to_degrees() * 3600.0_f32.sqrt()
+    } else {
+        0.0
+    }
+}
+
+fn deg_per_sqrt_hr_to_rw_var(value_deg_per_sqrt_hr: f32) -> f32 {
+    if value_deg_per_sqrt_hr.is_finite() && value_deg_per_sqrt_hr > 0.0 {
+        let rad_per_sqrt_s = value_deg_per_sqrt_hr.to_radians() / 3600.0_f32.sqrt();
+        rad_per_sqrt_s * rad_per_sqrt_s
+    } else {
+        0.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rw_var_ui_unit_round_trips() {
+        let q = 1.0e-8;
+        let ui_value = rw_var_to_deg_per_sqrt_hr(q);
+        assert!((ui_value - 0.343_775).abs() < 1.0e-5);
+        assert!((deg_per_sqrt_hr_to_rw_var(ui_value) - q).abs() < 1.0e-14);
+    }
+}
+
 fn drag_f64(
     ui: &mut egui::Ui,
     label: &str,
@@ -3365,12 +3401,10 @@ fn draw_eskf_tuning(
         );
     });
     ui.collapsing("Mount updates", |ui| {
-        drag_f32(
+        drag_rw_var_deg_per_sqrt_hr(
             ui,
-            "Mount random walk var",
+            "Mount RW noise deg/sqrt(hr)",
             &mut cfg.mount_align_rw_var,
-            1.0e-8,
-            0.0..=1.0e-3,
         );
         drag_f32(
             ui,
@@ -3447,12 +3481,10 @@ fn draw_eskf_tuning(
             1.0e-12,
             0.0..=1.0e-6,
         );
-        drag_f32(
+        drag_rw_var_deg_per_sqrt_hr(
             ui,
-            "Predict-noise mount RW var",
+            "Mount RW noise deg/sqrt(hr)",
             &mut noise.mount_align_rw_var,
-            1.0e-8,
-            0.0..=1.0e-3,
         );
         drag_usize(
             ui,
@@ -3653,12 +3685,10 @@ fn draw_loose_tuning(ui: &mut egui::Ui, cfg: &mut EkfCompareConfig) {
             1.0e-11,
             0.0..=1.0e-6,
         );
-        drag_f32(
+        drag_rw_var_deg_per_sqrt_hr(
             ui,
-            "Mount RW var",
+            "Mount RW noise deg/sqrt(hr)",
             &mut noise.mount_align_rw_var,
-            1.0e-8,
-            0.0..=1.0e-3,
         );
     });
     ui.collapsing("Initial covariance", |ui| {
