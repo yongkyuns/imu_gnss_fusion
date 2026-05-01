@@ -695,7 +695,7 @@ fn nhc_gate(
     ];
     let omega_norm = norm3(omega);
     let f_norm = norm3(f);
-    omega_norm < 0.03 && (f_norm - 9.81).abs() < 0.2
+    omega_norm < 0.2 && (f_norm - 9.81).abs() < 1.0
 }
 
 fn quat_to_dcm64(q: [f64; 4]) -> [[f64; 3]; 3] {

@@ -50,7 +50,9 @@ const VEL_REF_SUPPORT_ROW2: &[usize] = &[3, 4, 5];
 const VEL_AXIS_SUPPORT_ROW0: &[usize] = &[3];
 const VEL_AXIS_SUPPORT_ROW1: &[usize] = &[4];
 const VEL_AXIS_SUPPORT_ROW2: &[usize] = &[5];
-const MIN_NHC_UPDATE_SPEED_MPS: f32 = 0.5;
+const MIN_NHC_UPDATE_SPEED_MPS: f32 = 0.05;
+const MAX_NHC_GYRO_NORM_RADPS: f32 = 0.2;
+const MAX_NHC_ACCEL_NORM_ERR_MPS2: f32 = 1.0;
 
 /// Process-noise variances used by [`LooseFilter::predict`].
 #[repr(C)]
@@ -755,8 +757,8 @@ impl LooseFilter {
         if dt_obs <= 0.0 || dt_obs >= 1.0 {
             dt_obs = 1.0;
         }
-        let var_y = 0.01 * (gate_var_y / dt_obs);
-        let var_z = 0.01 * (gate_var_z / dt_obs);
+        let var_y = gate_var_y / dt_obs;
+        let var_z = gate_var_z / dt_obs;
         let mut h_rows = [[0.0; LOOSE_ERROR_STATES]; 8];
         let mut h_supports: [Option<&'static [usize]>; 8] = [None; 8];
         let mut residuals = [0.0; 8];
@@ -1083,7 +1085,8 @@ impl LooseFilter {
             self.raw.nominal.say * accel_mps2[1] + self.raw.nominal.bay,
             self.raw.nominal.saz * accel_mps2[2] + self.raw.nominal.baz,
         ];
-        vec_norm3(omega_is) < 0.03 && libm::fabsf(vec_norm3(f_s) - 9.81) < 0.2
+        vec_norm3(omega_is) < MAX_NHC_GYRO_NORM_RADPS
+            && libm::fabsf(vec_norm3(f_s) - 9.81) < MAX_NHC_ACCEL_NORM_ERR_MPS2
     }
 
     fn vehicle_speed_mps(&self) -> f32 {
