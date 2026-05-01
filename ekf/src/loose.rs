@@ -764,32 +764,16 @@ impl LooseFilter {
         let mut residuals = [0.0; 8];
         let mut variances = [0.0; 8];
         let mut obs_count = 0;
-        if !test_chi2_scalar(
-            -vc_y_est,
-            &self.raw.p,
-            &h_y,
-            gate_var_y,
-            &generated_loose::NHC_Y_SUPPORT,
-        ) {
-            h_rows[obs_count] = h_y;
-            h_supports[obs_count] = Some(&generated_loose::NHC_Y_SUPPORT);
-            residuals[obs_count] = -vc_y_est;
-            variances[obs_count] = var_y;
-            obs_count += 1;
-        }
-        if !test_chi2_scalar(
-            -vc_z_est,
-            &self.raw.p,
-            &h_z,
-            gate_var_z,
-            &generated_loose::NHC_Z_SUPPORT,
-        ) {
-            h_rows[obs_count] = h_z;
-            h_supports[obs_count] = Some(&generated_loose::NHC_Z_SUPPORT);
-            residuals[obs_count] = -vc_z_est;
-            variances[obs_count] = var_z;
-            obs_count += 1;
-        }
+        h_rows[obs_count] = h_y;
+        h_supports[obs_count] = Some(&generated_loose::NHC_Y_SUPPORT);
+        residuals[obs_count] = -vc_y_est;
+        variances[obs_count] = var_y;
+        obs_count += 1;
+        h_rows[obs_count] = h_z;
+        h_supports[obs_count] = Some(&generated_loose::NHC_Z_SUPPORT);
+        residuals[obs_count] = -vc_z_est;
+        variances[obs_count] = var_z;
+        obs_count += 1;
         if obs_count > 0 {
             self.batch_update_joseph(obs_count, &h_rows, &h_supports, &residuals, &variances);
         }
@@ -844,34 +828,18 @@ impl LooseFilter {
             let dt_obs = 0.02;
             let var_y = gate_var_y / dt_obs;
             let var_z = gate_var_z / dt_obs;
-            if !test_chi2_scalar(
-                -vc_y_est,
-                &self.raw.p,
-                &h_y,
-                gate_var_y,
-                &generated_loose::NHC_Y_SUPPORT,
-            ) {
-                h_rows[obs_count] = h_y;
-                h_supports[obs_count] = Some(&generated_loose::NHC_Y_SUPPORT);
-                residuals[obs_count] = -vc_y_est;
-                variances[obs_count] = var_y;
-                obs_types[obs_count] = 7;
-                obs_count += 1;
-            }
-            if !test_chi2_scalar(
-                -vc_z_est,
-                &self.raw.p,
-                &h_z,
-                gate_var_z,
-                &generated_loose::NHC_Z_SUPPORT,
-            ) {
-                h_rows[obs_count] = h_z;
-                h_supports[obs_count] = Some(&generated_loose::NHC_Z_SUPPORT);
-                residuals[obs_count] = -vc_z_est;
-                variances[obs_count] = var_z;
-                obs_types[obs_count] = 8;
-                obs_count += 1;
-            }
+            h_rows[obs_count] = h_y;
+            h_supports[obs_count] = Some(&generated_loose::NHC_Y_SUPPORT);
+            residuals[obs_count] = -vc_y_est;
+            variances[obs_count] = var_y;
+            obs_types[obs_count] = 7;
+            obs_count += 1;
+            h_rows[obs_count] = h_z;
+            h_supports[obs_count] = Some(&generated_loose::NHC_Z_SUPPORT);
+            residuals[obs_count] = -vc_z_est;
+            variances[obs_count] = var_z;
+            obs_types[obs_count] = 8;
+            obs_count += 1;
         }
 
         self.raw.last_obs_count = obs_count as i32;
