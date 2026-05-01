@@ -328,8 +328,26 @@ impl RustEskf {
         mount_update_scale: f32,
         mount_update_innovation_gate_mps: f32,
     ) {
-        self.fuse_body_vel_yz_batch(
+        self.fuse_body_vel_yz_scaled(
             r_body_vel,
+            r_body_vel,
+            mount_update_scale,
+            mount_update_innovation_gate_mps,
+        );
+    }
+
+    /// Fuses lateral and vertical nonholonomic body-velocity constraints with
+    /// separate measurement variances for the vehicle Y and Z axes.
+    pub fn fuse_body_vel_yz_scaled(
+        &mut self,
+        r_body_vel_y: f32,
+        r_body_vel_z: f32,
+        mount_update_scale: f32,
+        mount_update_innovation_gate_mps: f32,
+    ) {
+        self.fuse_body_vel_yz_batch(
+            r_body_vel_y,
+            r_body_vel_z,
             mount_update_scale,
             mount_update_innovation_gate_mps,
         );
@@ -478,22 +496,28 @@ impl RustEskf {
     #[allow(clippy::needless_range_loop, clippy::neg_cmp_op_on_partial_ord)]
     fn fuse_body_vel_yz_batch(
         &mut self,
-        r_body_vel: f32,
+        r_body_vel_y: f32,
+        r_body_vel_z: f32,
         mount_update_scale: f32,
         mount_update_innovation_gate_mps: f32,
     ) {
         let obs_y =
-            generated_eskf::body_vel_y_observation(&self.raw.nominal, &self.raw.p, r_body_vel);
+            generated_eskf::body_vel_y_observation(&self.raw.nominal, &self.raw.p, r_body_vel_y);
         let obs_z =
-            generated_eskf::body_vel_z_observation(&self.raw.nominal, &self.raw.p, r_body_vel);
+            generated_eskf::body_vel_z_observation(&self.raw.nominal, &self.raw.p, r_body_vel_z);
         let v_vehicle = nominal_vehicle_velocity(&self.raw.nominal);
         let observations = [
-            (obs_y, -v_vehicle[1], DIAG_BODY_VEL_Y),
-            (obs_z, -v_vehicle[2], DIAG_BODY_VEL_Z),
+            (obs_y, -v_vehicle[1], r_body_vel_y, DIAG_BODY_VEL_Y),
+            (obs_z, -v_vehicle[2], r_body_vel_z, DIAG_BODY_VEL_Z),
         ];
         let mut dx = [0.0; ERROR_STATES];
 
-        for (obs_index, (obs, residual, diag_type)) in observations.into_iter().enumerate() {
+        for (obs_index, (obs, residual, r_body_vel, diag_type)) in
+            observations.into_iter().enumerate()
+        {
+            if !(r_body_vel > 0.0) || !r_body_vel.is_finite() {
+                continue;
+            }
             let support = if obs_index == 0 {
                 &BODY_VEL_Y_SUPPORT
             } else {

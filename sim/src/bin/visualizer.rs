@@ -106,6 +106,8 @@ struct Args {
     #[arg(long)]
     r_body_vel: Option<f32>,
     #[arg(long)]
+    r_body_vel_z: Option<f32>,
+    #[arg(long)]
     gnss_pos_mount_scale: Option<f32>,
     #[arg(long)]
     gnss_vel_mount_scale: Option<f32>,
@@ -172,6 +174,9 @@ fn main() -> Result<()> {
         r_body_vel: args
             .r_body_vel
             .unwrap_or(EkfCompareConfig::default().r_body_vel),
+        r_body_vel_z: args
+            .r_body_vel_z
+            .unwrap_or(EkfCompareConfig::default().r_body_vel_z),
         gnss_pos_mount_scale: args
             .gnss_pos_mount_scale
             .unwrap_or(EkfCompareConfig::default().gnss_pos_mount_scale),
@@ -331,7 +336,7 @@ fn main() -> Result<()> {
         tmax
     );
     eprintln!(
-        "[profile] ekf-only misalignment={:?} predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} r_body_vel={:.3} gnss_pos_mount_scale={:.3} gnss_vel_mount_scale={:.3} yaw_init_sigma_deg={:.3} gyro_bias_init_sigma_dps={:.3} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} mount_update_min_scale={:.3} mount_update_ramp_time_s={:.3} mount_update_innovation_gate_mps={:.3} align_handoff_delay_s={:.3} freeze_misalignment_states={} mount_settle_time_s={:.3} mount_settle_release_sigma_deg={:.3} mount_settle_zero_cross_covariance={}",
+        "[profile] ekf-only misalignment={:?} predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} r_body_vel_y={:.3} r_body_vel_z={:.3} gnss_pos_mount_scale={:.3} gnss_vel_mount_scale={:.3} yaw_init_sigma_deg={:.3} gyro_bias_init_sigma_dps={:.3} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} mount_update_min_scale={:.3} mount_update_ramp_time_s={:.3} mount_update_innovation_gate_mps={:.3} align_handoff_delay_s={:.3} freeze_misalignment_states={} mount_settle_time_s={:.3} mount_settle_release_sigma_deg={:.3} mount_settle_zero_cross_covariance={}",
         args.misalignment,
         ekf_cfg.predict_imu_decimation,
         ekf_cfg
@@ -339,6 +344,7 @@ fn main() -> Result<()> {
             .map(|v| format!("{v:.3}"))
             .unwrap_or_else(|| "off".to_string()),
         ekf_cfg.r_body_vel,
+        ekf_cfg.r_body_vel_z,
         ekf_cfg.gnss_pos_mount_scale,
         ekf_cfg.gnss_vel_mount_scale,
         ekf_cfg.yaw_init_sigma_deg,

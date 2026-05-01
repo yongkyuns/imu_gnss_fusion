@@ -3,6 +3,7 @@ use crate::visualizer::pipeline::EkfCompareConfig;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EkfCompareConfigSnapshot {
     pub r_body_vel: f32,
+    pub r_body_vel_z: f32,
     pub gnss_pos_mount_scale: f32,
     pub gnss_vel_mount_scale: f32,
     pub yaw_init_sigma_deg: f32,
@@ -31,8 +32,9 @@ pub struct EkfCompareConfigSnapshot {
 
 pub const EKF_COMPARE_DEFAULTS: EkfCompareConfigSnapshot = EkfCompareConfigSnapshot {
     r_body_vel: 0.005,
+    r_body_vel_z: 0.005,
     gnss_pos_mount_scale: 0.0,
-    gnss_vel_mount_scale: 0.0,
+    gnss_vel_mount_scale: 1.0,
     yaw_init_sigma_deg: 2.0,
     gyro_bias_init_sigma_dps: 0.125,
     accel_bias_init_sigma_mps2: 0.20,
@@ -60,6 +62,7 @@ pub const EKF_COMPARE_DEFAULTS: EkfCompareConfigSnapshot = EkfCompareConfigSnaps
 pub fn snapshot_ekf_compare_config(cfg: &EkfCompareConfig) -> EkfCompareConfigSnapshot {
     EkfCompareConfigSnapshot {
         r_body_vel: cfg.r_body_vel,
+        r_body_vel_z: cfg.r_body_vel_z,
         gnss_pos_mount_scale: cfg.gnss_pos_mount_scale,
         gnss_vel_mount_scale: cfg.gnss_vel_mount_scale,
         yaw_init_sigma_deg: cfg.yaw_init_sigma_deg,

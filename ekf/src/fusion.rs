@@ -158,7 +158,8 @@ struct FusionConfig {
     gyro_bias_init_sigma_radps: f32,
     accel_bias_init_sigma_mps2: f32,
     mount_init_sigma_rad: f32,
-    r_body_vel: f32,
+    r_body_vel_y: f32,
+    r_body_vel_z: f32,
     gnss_pos_mount_scale: f32,
     gnss_vel_mount_scale: f32,
     gnss_vel_xy_update_min_scale: f32,
@@ -194,9 +195,10 @@ impl Default for FusionConfig {
             gyro_bias_init_sigma_radps: 0.125_f32.to_radians(),
             accel_bias_init_sigma_mps2: 0.20,
             mount_init_sigma_rad: 2.5_f32.to_radians(),
-            r_body_vel: 0.005,
+            r_body_vel_y: 0.005,
+            r_body_vel_z: 0.005,
             gnss_pos_mount_scale: 0.0,
-            gnss_vel_mount_scale: 0.0,
+            gnss_vel_mount_scale: 1.0,
             gnss_vel_xy_update_min_scale: 0.25,
             gnss_vel_update_ramp_time_s: 20.0,
             mount_update_min_scale: 0.008,
@@ -360,7 +362,19 @@ impl SensorFusion {
     /// Sets the nonholonomic body-velocity observation variance.
     pub fn set_r_body_vel(&mut self, r_body_vel: f32) {
         if r_body_vel.is_finite() && r_body_vel >= 0.0 {
-            self.cfg.r_body_vel = r_body_vel;
+            self.cfg.r_body_vel_y = r_body_vel;
+            self.cfg.r_body_vel_z = r_body_vel;
+        }
+    }
+
+    /// Sets lateral and vertical nonholonomic body-velocity measurement
+    /// variances for the vehicle Y and Z axes.
+    pub fn set_r_body_vel_yz(&mut self, r_body_vel_y: f32, r_body_vel_z: f32) {
+        if r_body_vel_y.is_finite() && r_body_vel_y >= 0.0 {
+            self.cfg.r_body_vel_y = r_body_vel_y;
+        }
+        if r_body_vel_z.is_finite() && r_body_vel_z >= 0.0 {
+            self.cfg.r_body_vel_z = r_body_vel_z;
         }
     }
 
@@ -560,7 +574,7 @@ impl SensorFusion {
         }
         self.clamp_eskf_biases();
 
-        if self.cfg.r_body_vel > 0.0 {
+        if self.cfg.r_body_vel_y > 0.0 || self.cfg.r_body_vel_z > 0.0 {
             if self.runtime_zero_velocity_active(sample.accel_mps2, sample.gyro_radps) {
                 if self.cfg.r_zero_vel > 0.0 {
                     self.eskf.fuse_zero_vel(self.cfg.r_zero_vel);
@@ -576,10 +590,10 @@ impl SensorFusion {
                     let fused_body_update_scale = body_update_scale * nhc_speed_scale;
                     let mount_update_scale = fused_body_update_scale;
                     let cadence_scale = BODY_VEL_REFERENCE_DT_S / dt.max(1.0e-3);
-                    let effective_r =
-                        self.cfg.r_body_vel * cadence_scale / fused_body_update_scale.max(1.0e-3);
-                    self.eskf.fuse_body_vel_scaled(
-                        effective_r,
+                    let effective_r_scale = cadence_scale / fused_body_update_scale.max(1.0e-3);
+                    self.eskf.fuse_body_vel_yz_scaled(
+                        self.cfg.r_body_vel_y * effective_r_scale,
+                        self.cfg.r_body_vel_z * effective_r_scale,
                         mount_update_scale,
                         self.cfg.mount_update_innovation_gate_mps,
                     );

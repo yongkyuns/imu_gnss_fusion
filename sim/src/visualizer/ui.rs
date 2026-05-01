@@ -1530,6 +1530,7 @@ impl App {
                                 self.tuning_misalignment = EkfImuSource::Internal;
                                 self.tuning_gnss_outages = GnssOutageConfig::default();
                                 self.tuning_cfg.r_body_vel = defaults.r_body_vel;
+                                self.tuning_cfg.r_body_vel_z = defaults.r_body_vel_z;
                                 self.tuning_cfg.gnss_pos_mount_scale =
                                     defaults.gnss_pos_mount_scale;
                                 self.tuning_cfg.gnss_vel_mount_scale =
@@ -3486,8 +3487,15 @@ fn draw_eskf_tuning(
     ui.collapsing("Measurement weighting", |ui| {
         drag_f32(
             ui,
-            "NHC body velocity R",
+            "NHC lateral velocity R",
             &mut cfg.r_body_vel,
+            0.001,
+            0.0..=1000.0,
+        );
+        drag_f32(
+            ui,
+            "NHC vertical velocity R",
+            &mut cfg.r_body_vel_z,
             0.001,
             0.0..=1000.0,
         );

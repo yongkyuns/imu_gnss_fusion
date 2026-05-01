@@ -2118,7 +2118,7 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig, mode: E
     if let Some(noise) = cfg.predict_noise {
         fusion.set_predict_noise(noise);
     }
-    fusion.set_r_body_vel(cfg.r_body_vel);
+    fusion.set_r_body_vel_yz(cfg.r_body_vel, cfg.r_body_vel_z);
     fusion.set_gnss_pos_mount_scale(cfg.gnss_pos_mount_scale);
     fusion.set_gnss_vel_mount_scale(cfg.gnss_vel_mount_scale);
     fusion.set_yaw_init_sigma_rad(cfg.yaw_init_sigma_deg.to_radians());

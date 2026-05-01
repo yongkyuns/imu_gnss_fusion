@@ -65,11 +65,13 @@ struct Args {
     early_fault_start_s: f64,
     #[arg(long, default_value_t = 200.0)]
     early_fault_end_s: f64,
-    #[arg(long, default_value_t = 0.001)]
+    #[arg(long, default_value_t = 0.005)]
     r_body_vel: f32,
+    #[arg(long, default_value_t = 0.005)]
+    r_body_vel_z: f32,
     #[arg(long, default_value_t = 0.0)]
     gnss_pos_mount_scale: f32,
-    #[arg(long, default_value_t = 0.0)]
+    #[arg(long, default_value_t = 1.0)]
     gnss_vel_mount_scale: f32,
     #[arg(long, default_value_t = 2.0)]
     yaw_init_sigma_deg: f32,
@@ -1027,7 +1029,7 @@ fn snapshot_state(
 }
 
 fn apply_fusion_config(fusion: &mut SensorFusion, args: &Args) {
-    fusion.set_r_body_vel(args.r_body_vel);
+    fusion.set_r_body_vel_yz(args.r_body_vel, args.r_body_vel_z);
     fusion.set_gnss_pos_mount_scale(args.gnss_pos_mount_scale);
     fusion.set_gnss_vel_mount_scale(args.gnss_vel_mount_scale);
     fusion.set_yaw_init_sigma_rad(args.yaw_init_sigma_deg.to_radians());

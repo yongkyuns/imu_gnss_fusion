@@ -6,7 +6,10 @@ use sensor_fusion::loose::LoosePredictNoise;
 #[serde(rename_all = "camelCase")]
 pub struct EkfCompareConfig {
     pub align: AlignConfig,
+    #[serde(default = "default_r_body_vel_y")]
     pub r_body_vel: f32,
+    #[serde(default = "default_r_body_vel_z")]
+    pub r_body_vel_z: f32,
     pub gnss_pos_mount_scale: f32,
     pub gnss_vel_mount_scale: f32,
     pub yaw_init_sigma_deg: f32,
@@ -41,9 +44,10 @@ impl Default for EkfCompareConfig {
     fn default() -> Self {
         Self {
             align: AlignConfig::default(),
-            r_body_vel: 0.005,
+            r_body_vel: default_r_body_vel_y(),
+            r_body_vel_z: default_r_body_vel_z(),
             gnss_pos_mount_scale: 0.0,
-            gnss_vel_mount_scale: 0.0,
+            gnss_vel_mount_scale: 1.0,
             yaw_init_sigma_deg: 2.0,
             gyro_bias_init_sigma_dps: 0.125,
             accel_bias_init_sigma_mps2: 0.20,
@@ -69,6 +73,14 @@ impl Default for EkfCompareConfig {
             loose_init: LooseInitConfig::default(),
         }
     }
+}
+
+fn default_r_body_vel_y() -> f32 {
+    0.005
+}
+
+fn default_r_body_vel_z() -> f32 {
+    0.005
 }
 
 #[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -146,6 +158,7 @@ mod tests {
     fn replay_configs_round_trip_through_canonical_json() {
         let mut cfg = EkfCompareConfig {
             r_body_vel: 0.42,
+            r_body_vel_z: 0.24,
             predict_imu_lpf_cutoff_hz: Some(120.0),
             ..Default::default()
         };
@@ -159,6 +172,7 @@ mod tests {
         let decoded: EkfCompareConfig = serde_json::from_str(&json).unwrap();
 
         assert_eq!(decoded.r_body_vel, cfg.r_body_vel);
+        assert_eq!(decoded.r_body_vel_z, cfg.r_body_vel_z);
         assert_eq!(
             decoded.predict_imu_lpf_cutoff_hz,
             cfg.predict_imu_lpf_cutoff_hz
@@ -236,6 +250,7 @@ mod tests {
             decoded.loose_init.mount_yaw_sigma_deg,
             default_loose_mount_yaw_sigma_deg()
         );
+        assert_eq!(decoded.r_body_vel_z, default_r_body_vel_z());
         assert!(decoded.predict_noise.is_some());
         assert!(decoded.loose_predict_noise.is_some());
     }
