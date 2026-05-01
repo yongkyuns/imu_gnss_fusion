@@ -49,6 +49,8 @@ const DIAG_STATIONARY_Y: usize = 7;
 const DIAG_GPS_POS_D: usize = 8;
 const DIAG_GPS_VEL_D: usize = 9;
 const DIAG_ZERO_VEL_D: usize = 10;
+const BODY_VEL_Y_SUPPORT: [usize; 8] = [0, 1, 2, 3, 4, 5, 15, 17];
+const BODY_VEL_Z_SUPPORT: [usize; 8] = [0, 1, 2, 3, 4, 5, 15, 16];
 
 /// Rust ESKF state machine with covariance and residual mount-control policy.
 #[derive(Debug, Clone)]
@@ -489,78 +491,60 @@ impl RustEskf {
             (obs_y, -v_vehicle[1], DIAG_BODY_VEL_Y),
             (obs_z, -v_vehicle[2], DIAG_BODY_VEL_Z),
         ];
-        let mut p = [[0.0_f64; ERROR_STATES]; ERROR_STATES];
-        let mut dx = [0.0_f64; ERROR_STATES];
-        for i in 0..ERROR_STATES {
-            for j in 0..ERROR_STATES {
-                p[i][j] = self.raw.p[i][j] as f64;
-            }
-        }
+        let mut dx = [0.0; ERROR_STATES];
 
-        for (obs, residual, diag_type) in observations {
-            let mut ph = [0.0_f64; ERROR_STATES];
-            let mut s = r_body_vel as f64;
-            let mut hd = 0.0_f64;
+        for (obs_index, (obs, residual, diag_type)) in observations.into_iter().enumerate() {
+            let support = if obs_index == 0 {
+                &BODY_VEL_Y_SUPPORT
+            } else {
+                &BODY_VEL_Z_SUPPORT
+            };
+            let mut ph = [0.0; ERROR_STATES];
+            let mut s = r_body_vel;
+            let mut hd = 0.0;
             for i in 0..ERROR_STATES {
-                for j in 0..ERROR_STATES {
-                    ph[i] += p[i][j] * obs.h[j] as f64;
+                for &state in support {
+                    ph[i] += self.raw.p[i][state] * obs.h[state];
                 }
             }
-            for i in 0..ERROR_STATES {
-                s += obs.h[i] as f64 * ph[i];
-                hd += obs.h[i] as f64 * dx[i];
+            for &state in support {
+                s += obs.h[state] * ph[state];
+                hd += obs.h[state] * dx[state];
             }
             if !(s > 0.0) || !s.is_finite() {
                 continue;
             }
-            let effective_residual = residual as f64 - hd;
+            let effective_residual = residual - hd;
             let alpha = effective_residual / s;
             let mut diag_k = [0.0; ERROR_STATES];
             let mut diag_dx = [0.0; ERROR_STATES];
             for i in 0..ERROR_STATES {
-                diag_k[i] = (ph[i] / s) as f32;
-                diag_dx[i] = (ph[i] * alpha) as f32;
+                diag_k[i] = ph[i] / s;
+                diag_dx[i] = ph[i] * alpha;
             }
             let mount_scale = gated_mount_update_scale(
                 mount_update_scale,
                 mount_update_innovation_gate_mps,
-                effective_residual as f32,
+                effective_residual,
             );
             scale_mount_update(&mut diag_k, &mut diag_dx, mount_scale);
             self.freeze_mount_update_if_needed(&mut diag_k, &mut diag_dx);
             for i in 0..ERROR_STATES {
-                dx[i] += diag_dx[i] as f64;
+                dx[i] += diag_dx[i];
             }
-            self.record_update_diag(
-                diag_type,
-                effective_residual as f32,
-                s as f32,
-                &obs.h,
-                &diag_k,
-                &diag_dx,
-            );
+            self.record_update_diag(diag_type, effective_residual, s, &obs.h, &diag_k, &diag_dx);
             for i in 0..ERROR_STATES {
                 for j in i..ERROR_STATES {
-                    let updated = p[i][j] - diag_k[i] as f64 * ph[j] - ph[i] * diag_k[j] as f64
-                        + s * diag_k[i] as f64 * diag_k[j] as f64;
-                    p[i][j] = updated;
-                    p[j][i] = updated;
+                    let updated = self.raw.p[i][j] - diag_k[i] * ph[j] - ph[i] * diag_k[j]
+                        + s * diag_k[i] * diag_k[j];
+                    self.raw.p[i][j] = updated;
+                    self.raw.p[j][i] = updated;
                 }
             }
         }
 
-        for i in 0..ERROR_STATES {
-            for j in 0..ERROR_STATES {
-                self.raw.p[i][j] = p[i][j] as f32;
-            }
-        }
-
-        let mut dx_f32 = [0.0; ERROR_STATES];
-        for i in 0..ERROR_STATES {
-            dx_f32[i] = dx[i] as f32;
-        }
-        inject_error_state(&mut self.raw.nominal, &dx_f32);
-        apply_reset(&mut self.raw.p, &dx_f32);
+        inject_error_state(&mut self.raw.nominal, &dx);
+        apply_reset(&mut self.raw.p, &dx);
         if self.freeze_misalignment_states {
             freeze_mount_covariance(&mut self.raw.p);
         }
