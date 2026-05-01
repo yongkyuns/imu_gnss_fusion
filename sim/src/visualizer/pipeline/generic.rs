@@ -1658,7 +1658,7 @@ fn default_loose_p_diag(
     gnss: GenericGnssSample,
     cfg: EkfCompareConfig,
 ) -> [f32; LOOSE_ERROR_STATES] {
-    const MIN_LOOSE_MOUNT_YAW_SIGMA_DEG: f32 = 12.0;
+    const MIN_LOOSE_MOUNT_YAW_SIGMA_DEG: f32 = 6.0;
 
     let mut p = [1.0_f32; LOOSE_ERROR_STATES];
     let init = cfg.loose_init;
