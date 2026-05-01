@@ -65,10 +65,6 @@ struct Args {
     early_fault_start_s: f64,
     #[arg(long, default_value_t = 200.0)]
     early_fault_end_s: f64,
-    #[arg(long, default_value_t = 0.1)]
-    gnss_pos_r_scale: f64,
-    #[arg(long, default_value_t = 1.0)]
-    gnss_vel_r_scale: f64,
     #[arg(long, default_value_t = 0.001)]
     r_body_vel: f32,
     #[arg(long, default_value_t = 0.0)]
@@ -350,16 +346,8 @@ fn prepare_scenario(args: &Args, scenario: &Path) -> Result<PreparedScenario> {
             lon_deg: s.lon_deg,
             height_m: s.height_m,
             vel_ned_mps: s.vel_ned_mps,
-            pos_std_m: [
-                gps_noise.pos_std_m[0] * args.gnss_pos_r_scale,
-                gps_noise.pos_std_m[1] * args.gnss_pos_r_scale,
-                gps_noise.pos_std_m[2] * args.gnss_pos_r_scale,
-            ],
-            vel_std_mps: [
-                gps_noise.vel_std_mps[0] * args.gnss_vel_r_scale,
-                gps_noise.vel_std_mps[1] * args.gnss_vel_r_scale,
-                gps_noise.vel_std_mps[2] * args.gnss_vel_r_scale,
-            ],
+            pos_std_m: gps_noise.pos_std_m,
+            vel_std_mps: gps_noise.vel_std_mps,
             heading_rad: None,
         })
         .collect::<Vec<_>>();

@@ -30,8 +30,6 @@ pub struct EkfCompareConfig {
     pub predict_imu_lpf_cutoff_hz: Option<f64>,
     pub predict_imu_decimation: usize,
     pub yaw_init_speed_mps: f64,
-    pub gnss_pos_r_scale: f64,
-    pub gnss_vel_r_scale: f64,
     #[serde(default = "default_eskf_predict_noise_option")]
     pub predict_noise: Option<PredictNoise>,
     #[serde(default = "default_loose_predict_noise_option")]
@@ -66,8 +64,6 @@ impl Default for EkfCompareConfig {
             predict_imu_lpf_cutoff_hz: None,
             predict_imu_decimation: 1,
             yaw_init_speed_mps: 0.0 / 3.6,
-            gnss_pos_r_scale: 0.01,
-            gnss_vel_r_scale: 2.5,
             predict_noise: Some(default_eskf_predict_noise()),
             loose_predict_noise: Some(default_loose_predict_noise()),
             loose_init: LooseInitConfig::default(),
@@ -150,7 +146,6 @@ mod tests {
     fn replay_configs_round_trip_through_canonical_json() {
         let mut cfg = EkfCompareConfig {
             r_body_vel: 0.42,
-            gnss_vel_r_scale: 3.25,
             predict_imu_lpf_cutoff_hz: Some(120.0),
             ..Default::default()
         };
@@ -164,7 +159,6 @@ mod tests {
         let decoded: EkfCompareConfig = serde_json::from_str(&json).unwrap();
 
         assert_eq!(decoded.r_body_vel, cfg.r_body_vel);
-        assert_eq!(decoded.gnss_vel_r_scale, cfg.gnss_vel_r_scale);
         assert_eq!(
             decoded.predict_imu_lpf_cutoff_hz,
             cfg.predict_imu_lpf_cutoff_hz
@@ -223,8 +217,6 @@ mod tests {
             "vehicleMeasLpfCutoffHz": 35.0,
             "predictImuDecimation": 1,
             "yawInitSpeedMps": 0.0,
-            "gnssPosRScale": 0.01,
-            "gnssVelRScale": 2.5,
             "looseInit": {
                 "posMinSigmaM": 0.5,
                 "velMinSigmaMps": 0.2,

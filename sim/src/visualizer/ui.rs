@@ -1567,8 +1567,6 @@ impl App {
                                 self.tuning_cfg.predict_imu_decimation =
                                     defaults.predict_imu_decimation;
                                 self.tuning_cfg.yaw_init_speed_mps = defaults.yaw_init_speed_mps;
-                                self.tuning_cfg.gnss_pos_r_scale = defaults.gnss_pos_r_scale;
-                                self.tuning_cfg.gnss_vel_r_scale = defaults.gnss_vel_r_scale;
                                 self.tuning_cfg.predict_noise = defaults.predict_noise;
                             }
                             TuningPanel::Align => {
@@ -3486,20 +3484,6 @@ fn draw_eskf_tuning(
         ui.selectable_value(misalignment, EkfImuSource::Ref, "reference");
     });
     ui.collapsing("Measurement weighting", |ui| {
-        drag_f64(
-            ui,
-            "GNSS pos R scale",
-            &mut cfg.gnss_pos_r_scale,
-            0.01,
-            0.001..=10.0,
-        );
-        drag_f64(
-            ui,
-            "GNSS vel R scale",
-            &mut cfg.gnss_vel_r_scale,
-            0.01,
-            0.001..=10.0,
-        );
         drag_f32(
             ui,
             "NHC body velocity R",

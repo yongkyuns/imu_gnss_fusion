@@ -25,8 +25,6 @@ pub struct EkfCompareConfigSnapshot {
     pub predict_imu_lpf_cutoff_hz: Option<f64>,
     pub predict_imu_decimation: usize,
     pub yaw_init_speed_mps: f64,
-    pub gnss_pos_r_scale: f64,
-    pub gnss_vel_r_scale: f64,
     pub predict_noise_configured: bool,
     pub loose_predict_noise_configured: bool,
 }
@@ -55,8 +53,6 @@ pub const EKF_COMPARE_DEFAULTS: EkfCompareConfigSnapshot = EkfCompareConfigSnaps
     predict_imu_lpf_cutoff_hz: None,
     predict_imu_decimation: 1,
     yaw_init_speed_mps: 0.0,
-    gnss_pos_r_scale: 0.01,
-    gnss_vel_r_scale: 2.5,
     predict_noise_configured: true,
     loose_predict_noise_configured: true,
 };
@@ -86,8 +82,6 @@ pub fn snapshot_ekf_compare_config(cfg: &EkfCompareConfig) -> EkfCompareConfigSn
         predict_imu_lpf_cutoff_hz: cfg.predict_imu_lpf_cutoff_hz,
         predict_imu_decimation: cfg.predict_imu_decimation,
         yaw_init_speed_mps: cfg.yaw_init_speed_mps,
-        gnss_pos_r_scale: cfg.gnss_pos_r_scale,
-        gnss_vel_r_scale: cfg.gnss_vel_r_scale,
         predict_noise_configured: cfg.predict_noise.is_some(),
         loose_predict_noise_configured: cfg.loose_predict_noise.is_some(),
     }
