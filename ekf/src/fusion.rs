@@ -164,7 +164,6 @@ struct FusionConfig {
     mount_update_min_scale: f32,
     mount_update_ramp_time_s: f32,
     mount_update_innovation_gate_mps: f32,
-    mount_update_yaw_rate_gate_radps: f32,
     align_handoff_delay_s: f32,
     freeze_misalignment_states: bool,
     eskf_mount_source: EskfMountSource,
@@ -201,7 +200,6 @@ impl Default for FusionConfig {
             mount_update_min_scale: 0.008,
             mount_update_ramp_time_s: 120.0,
             mount_update_innovation_gate_mps: 0.10,
-            mount_update_yaw_rate_gate_radps: 10.0_f32.to_radians(),
             align_handoff_delay_s: 0.0,
             freeze_misalignment_states: false,
             eskf_mount_source: EskfMountSource::LatchedSeed,
@@ -443,13 +441,6 @@ impl SensorFusion {
         }
     }
 
-    /// Sets the yaw-rate gate used by residual-mount updates, in radians per second.
-    pub fn set_mount_update_yaw_rate_gate_radps(&mut self, mount_update_yaw_rate_gate_radps: f32) {
-        if mount_update_yaw_rate_gate_radps.is_finite() && mount_update_yaw_rate_gate_radps >= 0.0 {
-            self.cfg.mount_update_yaw_rate_gate_radps = mount_update_yaw_rate_gate_radps;
-        }
-    }
-
     /// Sets how long coarse alignment must remain ready before handoff, in seconds.
     pub fn set_align_handoff_delay_s(&mut self, align_handoff_delay_s: f32) {
         if align_handoff_delay_s.is_finite() && align_handoff_delay_s >= 0.0 {
@@ -573,8 +564,7 @@ impl SensorFusion {
                 let nhc_speed_scale = self.runtime_nhc_speed_scale();
                 if nhc_speed_scale > 0.0 {
                     let fused_body_update_scale = body_update_scale * nhc_speed_scale;
-                    let mount_update_scale =
-                        fused_body_update_scale * self.mount_yaw_observability_scale(gyro_vehicle);
+                    let mount_update_scale = fused_body_update_scale;
                     let effective_r = self.cfg.r_body_vel / fused_body_update_scale.max(1.0e-3);
                     self.eskf.fuse_body_vel_scaled(
                         effective_r,
@@ -1203,14 +1193,6 @@ impl SensorFusion {
             t_s,
             1.0,
         )
-    }
-
-    fn mount_yaw_observability_scale(&self, gyro_vehicle: [f32; 3]) -> f32 {
-        let gate = self.cfg.mount_update_yaw_rate_gate_radps;
-        if gate <= 0.0 {
-            return 1.0;
-        }
-        (gyro_vehicle[2].abs() / gate).clamp(0.0, 1.0)
     }
 
     fn clamp_eskf_biases(&mut self) {

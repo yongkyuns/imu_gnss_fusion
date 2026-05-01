@@ -132,8 +132,6 @@ struct Args {
     #[arg(long)]
     mount_update_innovation_gate_mps: Option<f32>,
     #[arg(long)]
-    mount_update_yaw_rate_gate_dps: Option<f32>,
-    #[arg(long)]
     align_handoff_delay_s: Option<f32>,
     #[arg(long)]
     freeze_misalignment_states: bool,
@@ -213,9 +211,6 @@ fn main() -> Result<()> {
         mount_update_innovation_gate_mps: args
             .mount_update_innovation_gate_mps
             .unwrap_or(EkfCompareConfig::default().mount_update_innovation_gate_mps),
-        mount_update_yaw_rate_gate_dps: args
-            .mount_update_yaw_rate_gate_dps
-            .unwrap_or(EkfCompareConfig::default().mount_update_yaw_rate_gate_dps),
         align_handoff_delay_s: args
             .align_handoff_delay_s
             .unwrap_or(EkfCompareConfig::default().align_handoff_delay_s),
@@ -340,7 +335,7 @@ fn main() -> Result<()> {
         tmax
     );
     eprintln!(
-        "[profile] ekf-only misalignment={:?} predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} gnss_pos_r_scale={:.3} gnss_vel_r_scale={:.3} r_body_vel={:.3} gnss_pos_mount_scale={:.3} gnss_vel_mount_scale={:.3} yaw_init_sigma_deg={:.3} gyro_bias_init_sigma_dps={:.3} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} mount_update_min_scale={:.3} mount_update_ramp_time_s={:.3} mount_update_innovation_gate_mps={:.3} mount_update_yaw_rate_gate_dps={:.3} align_handoff_delay_s={:.3} freeze_misalignment_states={} mount_settle_time_s={:.3} mount_settle_release_sigma_deg={:.3} mount_settle_zero_cross_covariance={}",
+        "[profile] ekf-only misalignment={:?} predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} gnss_pos_r_scale={:.3} gnss_vel_r_scale={:.3} r_body_vel={:.3} gnss_pos_mount_scale={:.3} gnss_vel_mount_scale={:.3} yaw_init_sigma_deg={:.3} gyro_bias_init_sigma_dps={:.3} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} mount_update_min_scale={:.3} mount_update_ramp_time_s={:.3} mount_update_innovation_gate_mps={:.3} align_handoff_delay_s={:.3} freeze_misalignment_states={} mount_settle_time_s={:.3} mount_settle_release_sigma_deg={:.3} mount_settle_zero_cross_covariance={}",
         args.misalignment,
         ekf_cfg.predict_imu_decimation,
         ekf_cfg
@@ -361,7 +356,6 @@ fn main() -> Result<()> {
         ekf_cfg.mount_update_min_scale,
         ekf_cfg.mount_update_ramp_time_s,
         ekf_cfg.mount_update_innovation_gate_mps,
-        ekf_cfg.mount_update_yaw_rate_gate_dps,
         ekf_cfg.align_handoff_delay_s,
         ekf_cfg.freeze_misalignment_states,
         ekf_cfg.mount_settle_time_s,

@@ -97,8 +97,6 @@ struct Args {
     mount_update_ramp_time_s: f32,
     #[arg(long, default_value_t = 0.10)]
     mount_update_innovation_gate_mps: f32,
-    #[arg(long, default_value_t = 0.0)]
-    mount_update_yaw_rate_gate_dps: f32,
     #[arg(long, default_value_t = false)]
     freeze_misalignment_states: bool,
     #[arg(long, default_value_t = 0.0)]
@@ -248,7 +246,6 @@ struct MatrixFault {
 #[derive(Clone, Copy, Debug)]
 struct MatrixVariant {
     name: &'static str,
-    mount_update_yaw_rate_gate_dps: f32,
     mount_settle_time_s: f32,
     mount_settle_release_sigma_deg: f32,
 }
@@ -456,25 +453,11 @@ fn run_eval_matrix(args: &Args) -> Result<()> {
     let variants = [
         MatrixVariant {
             name: "baseline",
-            mount_update_yaw_rate_gate_dps: 0.0,
-            mount_settle_time_s: 0.0,
-            mount_settle_release_sigma_deg: args.mount_settle_release_sigma_deg,
-        },
-        MatrixVariant {
-            name: "mount_yaw_rate_gate_1dps",
-            mount_update_yaw_rate_gate_dps: 1.0,
-            mount_settle_time_s: 0.0,
-            mount_settle_release_sigma_deg: args.mount_settle_release_sigma_deg,
-        },
-        MatrixVariant {
-            name: "mount_yaw_rate_gate_3dps",
-            mount_update_yaw_rate_gate_dps: 3.0,
             mount_settle_time_s: 0.0,
             mount_settle_release_sigma_deg: args.mount_settle_release_sigma_deg,
         },
         MatrixVariant {
             name: "mount_settle_100s",
-            mount_update_yaw_rate_gate_dps: 0.0,
             mount_settle_time_s: 100.0,
             mount_settle_release_sigma_deg: 5.0,
         },
@@ -497,7 +480,6 @@ fn run_eval_matrix(args: &Args) -> Result<()> {
         for variant in variants {
             let mut variant_args = args.clone();
             variant_args.scenario = scenario.clone();
-            variant_args.mount_update_yaw_rate_gate_dps = variant.mount_update_yaw_rate_gate_dps;
             variant_args.mount_settle_time_s = variant.mount_settle_time_s;
             variant_args.mount_settle_release_sigma_deg = variant.mount_settle_release_sigma_deg;
             for fault in faults {
@@ -1071,7 +1053,6 @@ fn apply_fusion_config(fusion: &mut SensorFusion, args: &Args) {
     fusion.set_mount_update_min_scale(args.mount_update_min_scale);
     fusion.set_mount_update_ramp_time_s(args.mount_update_ramp_time_s);
     fusion.set_mount_update_innovation_gate_mps(args.mount_update_innovation_gate_mps);
-    fusion.set_mount_update_yaw_rate_gate_radps(args.mount_update_yaw_rate_gate_dps.to_radians());
     fusion.set_freeze_misalignment_states(args.freeze_misalignment_states);
     fusion.set_mount_settle_time_s(args.mount_settle_time_s);
     fusion.set_mount_settle_release_sigma_rad(args.mount_settle_release_sigma_deg.to_radians());

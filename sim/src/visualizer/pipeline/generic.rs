@@ -1951,7 +1951,6 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig, mode: E
     fusion.set_mount_update_min_scale(cfg.mount_update_min_scale);
     fusion.set_mount_update_ramp_time_s(cfg.mount_update_ramp_time_s);
     fusion.set_mount_update_innovation_gate_mps(cfg.mount_update_innovation_gate_mps);
-    fusion.set_mount_update_yaw_rate_gate_radps(cfg.mount_update_yaw_rate_gate_dps.to_radians());
     fusion.set_align_handoff_delay_s(cfg.align_handoff_delay_s);
     fusion.set_freeze_misalignment_states(cfg.freeze_misalignment_states);
     fusion.set_eskf_mount_source(mode.eskf_mount_source());

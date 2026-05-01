@@ -1516,8 +1516,6 @@ impl App {
                                     defaults.mount_update_ramp_time_s;
                                 self.tuning_cfg.mount_update_innovation_gate_mps =
                                     defaults.mount_update_innovation_gate_mps;
-                                self.tuning_cfg.mount_update_yaw_rate_gate_dps =
-                                    defaults.mount_update_yaw_rate_gate_dps;
                                 self.tuning_cfg.align_handoff_delay_s =
                                     defaults.align_handoff_delay_s;
                                 self.tuning_cfg.freeze_misalignment_states =
@@ -3394,13 +3392,6 @@ fn draw_eskf_tuning(
             &mut cfg.mount_update_innovation_gate_mps,
             0.001,
             0.0..=10.0,
-        );
-        drag_f32(
-            ui,
-            "Mount yaw-rate gate deg/s",
-            &mut cfg.mount_update_yaw_rate_gate_dps,
-            0.1,
-            0.0..=180.0,
         );
         drag_f32(
             ui,
