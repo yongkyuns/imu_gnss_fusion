@@ -4,13 +4,13 @@ use anyhow::{Context, Result, bail};
 use sim::datasets::generic_replay::{
     GenericGnssSample, GenericImuSample, GenericReferenceRpySample,
 };
-use sim::eval::gnss_ins::{quat_from_rpy_alg_deg, quat_rotate};
+use sim::eval::gnss_ins::quat_rotate;
 use sim::synthetic::gnss_ins_path::{
     GpsNoiseModel, MeasurementNoiseConfig, MotionProfile, PathGenConfig, generate_with_noise,
 };
 use sim::visualizer::math::quat_rpy_deg;
 use sim::visualizer::model::{EkfImuSource, HeadingSample, PlotData, Trace};
-use sim::visualizer::pipeline::generic::GenericReplayInput;
+use sim::visualizer::pipeline::generic::{GenericReplayInput, reference_mount_rpy_to_q_vb};
 use sim::visualizer::pipeline::synthetic::{
     SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_plot_data,
 };
@@ -103,7 +103,7 @@ fn generated_generic_replay() -> Result<GenericReplayInput> {
         noise,
         7,
     )?;
-    let q_truth_mount = quat_from_rpy_alg_deg(MOUNT_RPY_DEG[0], MOUNT_RPY_DEG[1], MOUNT_RPY_DEG[2]);
+    let q_truth_mount = reference_mount_rpy_to_q_vb(MOUNT_RPY_DEG);
     let gps_noise = noise.gps.unwrap_or(GpsNoiseModel {
         pos_std_m: [0.5, 0.5, 0.5],
         vel_std_mps: [0.2, 0.2, 0.2],
@@ -112,7 +112,7 @@ fn generated_generic_replay() -> Result<GenericReplayInput> {
         .imu
         .iter()
         .map(|sample| GenericImuSample {
-            t_s: sample.t_s,
+            t_s: sample.t_s + 1.0 / IMU_HZ,
             gyro_radps: quat_rotate(q_truth_mount, sample.gyro_vehicle_radps),
             accel_mps2: quat_rotate(q_truth_mount, sample.accel_vehicle_mps2),
         })
@@ -293,6 +293,12 @@ fn assert_plot_data_close(
             &right.eskf_cov_nonbias,
         ),
         (
+            "eskf_mount_sigma",
+            &left.eskf_mount_sigma,
+            &right.eskf_mount_sigma,
+        ),
+        ("eskf_mount_dx", &left.eskf_mount_dx, &right.eskf_mount_dx),
+        (
             "eskf_misalignment",
             &left.eskf_misalignment,
             &right.eskf_misalignment,
@@ -370,6 +376,16 @@ fn assert_plot_data_close(
             "loose_cov_nonbias",
             &left.loose_cov_nonbias,
             &right.loose_cov_nonbias,
+        ),
+        (
+            "loose_mount_sigma",
+            &left.loose_mount_sigma,
+            &right.loose_mount_sigma,
+        ),
+        (
+            "loose_mount_dx",
+            &left.loose_mount_dx,
+            &right.loose_mount_dx,
         ),
         ("loose_map", &left.loose_map, &right.loose_map),
         ("align_cmp_att", &left.align_cmp_att, &right.align_cmp_att),
@@ -505,7 +521,11 @@ fn assert_shared_auxiliary_groups_close(
             "align_cov",
             &left.align_cov,
             &right.align_cov,
-            &["roll sigma [deg]", "pitch sigma [deg]", "yaw sigma [deg]"],
+            &[
+                "Align roll sigma [deg]",
+                "Align pitch sigma [deg]",
+                "Align yaw sigma [deg]",
+            ],
         ),
         (
             "loose_cmp_pos",
@@ -627,6 +647,42 @@ fn assert_shared_auxiliary_groups_close(
         &left.loose_cov_nonbias,
         &right.loose_cov_nonbias,
         "Loose sigma state ",
+    )?;
+    assert_named_traces_close(
+        left_label,
+        right_label,
+        "eskf_mount_dx",
+        &left.eskf_mount_dx,
+        &right.eskf_mount_dx,
+        &[
+            "ESKF mount roll correction [deg/update]",
+            "ESKF mount pitch correction [deg/update]",
+            "ESKF mount yaw correction [deg/update]",
+        ],
+    )?;
+    assert_named_traces_close(
+        left_label,
+        right_label,
+        "loose_mount_sigma",
+        &left.loose_mount_sigma,
+        &right.loose_mount_sigma,
+        &[
+            "Loose residual mount roll sigma [deg]",
+            "Loose residual mount pitch sigma [deg]",
+            "Loose residual mount yaw sigma [deg]",
+        ],
+    )?;
+    assert_named_traces_close(
+        left_label,
+        right_label,
+        "loose_mount_dx",
+        &left.loose_mount_dx,
+        &right.loose_mount_dx,
+        &[
+            "Loose residual mount roll correction [deg/update]",
+            "Loose residual mount pitch correction [deg/update]",
+            "Loose residual mount yaw correction [deg/update]",
+        ],
     )?;
     assert_heading_samples_close(
         left_label,

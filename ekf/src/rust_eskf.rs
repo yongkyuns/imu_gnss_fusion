@@ -620,6 +620,8 @@ impl RustEskf {
         diag.sum_abs_k_yaw[diag_type] += fabsf(k[2]);
         diag.sum_k_mount_norm[diag_type] += k_mount_norm;
         diag.sum_abs_corr_yaw_mount_yaw[diag_type] += fabsf(corr_yaw_mount_yaw);
+        diag.last_dx_mount_roll = dx[15];
+        diag.last_dx_mount_pitch = dx[16];
         diag.last_dx_mount_yaw = dx[17];
         diag.last_k_mount_yaw = k[17];
         diag.last_innovation = innovation;

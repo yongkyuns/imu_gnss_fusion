@@ -296,6 +296,8 @@ fn build_generic_replay_plot_data_impl(
     let mut eskf_bay = Vec::new();
     let mut eskf_baz = Vec::new();
     let mut eskf_cov: [Vec<[f64; 2]>; 18] = std::array::from_fn(|_| Vec::new());
+    let mut eskf_mount_dx: [Vec<[f64; 2]>; 3] = std::array::from_fn(|_| Vec::new());
+    let mut last_eskf_update_count = 0u32;
     let mut eskf_map = Vec::new();
     let mut eskf_outage_map = Vec::new();
     let mut eskf_heading = Vec::new();
@@ -336,6 +338,8 @@ fn build_generic_replay_plot_data_impl(
                 &mut eskf_bay,
                 &mut eskf_baz,
                 &mut eskf_cov,
+                &mut eskf_mount_dx,
+                &mut last_eskf_update_count,
                 &mut eskf_map,
                 &mut eskf_outage_map,
                 &mut eskf_heading,
@@ -549,6 +553,28 @@ fn build_generic_replay_plot_data_impl(
             .map(|i| Trace {
                 name: format!("state_{i}"),
                 points: eskf_cov[i].clone(),
+            })
+            .collect(),
+        eskf_mount_sigma: vec![
+            Trace {
+                name: "ESKF mount roll sigma [deg]".to_string(),
+                points: sigma_rad_points_to_deg(&eskf_cov[15]),
+            },
+            Trace {
+                name: "ESKF mount pitch sigma [deg]".to_string(),
+                points: sigma_rad_points_to_deg(&eskf_cov[16]),
+            },
+            Trace {
+                name: "ESKF mount yaw sigma [deg]".to_string(),
+                points: sigma_rad_points_to_deg(&eskf_cov[17]),
+            },
+        ],
+        eskf_mount_dx: ["roll", "pitch", "yaw"]
+            .into_iter()
+            .zip(eskf_mount_dx)
+            .map(|(axis, points)| Trace {
+                name: format!("ESKF mount {axis} correction [deg/update]"),
+                points,
             })
             .collect(),
         eskf_misalignment: vec![
@@ -936,15 +962,15 @@ fn populate_align_traces(
     ];
     data.align_cov = vec![
         Trace {
-            name: "roll sigma [deg]".to_string(),
+            name: "Align roll sigma [deg]".to_string(),
             points: cov_roll,
         },
         Trace {
-            name: "pitch sigma [deg]".to_string(),
+            name: "Align pitch sigma [deg]".to_string(),
             points: cov_pitch,
         },
         Trace {
-            name: "yaw sigma [deg]".to_string(),
+            name: "Align yaw sigma [deg]".to_string(),
             points: cov_yaw,
         },
     ];
@@ -970,6 +996,7 @@ fn populate_loose_traces(
     let mut loose_ready = false;
     let mut last_imu: Option<GenericImuSample> = None;
     let mut latest_gnss: Option<GenericGnssSample> = None;
+    let mut loose_gnss_cursor = 0usize;
     let mut last_gnss_used_t_s = f64::NEG_INFINITY;
     let mut seed_mount_q_vb: Option<[f32; 4]> = None;
 
@@ -1005,6 +1032,8 @@ fn populate_loose_traces(
     let mut saz = Vec::new();
     let mut cov_bias: [Vec<[f64; 2]>; 12] = std::array::from_fn(|_| Vec::new());
     let mut cov_nonbias: [Vec<[f64; 2]>; 12] = std::array::from_fn(|_| Vec::new());
+    let mut cov_mount: [Vec<[f64; 2]>; 3] = std::array::from_fn(|_| Vec::new());
+    let mut dx_mount: [Vec<[f64; 2]>; 3] = std::array::from_fn(|_| Vec::new());
     let mut map = Vec::new();
     let mut headings = Vec::new();
 
@@ -1037,6 +1066,12 @@ fn populate_loose_traces(
                 dt,
             );
             loose.predict(imu);
+            while loose_gnss_cursor < replay.gnss.len()
+                && replay.gnss[loose_gnss_cursor].t_s <= sample.t_s + 1.0e-9
+            {
+                latest_gnss = Some(replay.gnss[loose_gnss_cursor]);
+                loose_gnss_cursor += 1;
+            }
             let mut gps_pos = None;
             let mut gps_vel = None;
             let mut gps_pos_std = 0.0f32;
@@ -1103,6 +1138,8 @@ fn populate_loose_traces(
                 &mut saz,
                 &mut cov_bias,
                 &mut cov_nonbias,
+                &mut cov_mount,
+                &mut dx_mount,
                 &mut map,
                 &mut headings,
             );
@@ -1113,7 +1150,7 @@ fn populate_loose_traces(
             accel_y.push([sample.t_s, accel_vehicle_mps2[1]]);
             accel_z.push([sample.t_s, accel_vehicle_mps2[2]]);
         }
-        ReplayEvent::Gnss(_, sample) => {
+        ReplayEvent::Gnss(index, sample) => {
             progress.report_stage(0.72, 0.26, sample.t_s);
             let _ = align_fusion.process_gnss(fusion_gnss_sample(*sample));
             latest_gnss = Some(*sample);
@@ -1139,6 +1176,8 @@ fn populate_loose_traces(
                 None,
             );
             loose_ready = true;
+            loose_gnss_cursor = index + 1;
+            last_gnss_used_t_s = sample.t_s;
         }
     });
 
@@ -1298,6 +1337,22 @@ fn populate_loose_traces(
             points,
         })
         .collect();
+    data.loose_mount_sigma = ["roll", "pitch", "yaw"]
+        .into_iter()
+        .zip(cov_mount)
+        .map(|(axis, points)| Trace {
+            name: format!("Loose residual mount {axis} sigma [deg]"),
+            points,
+        })
+        .collect();
+    data.loose_mount_dx = ["roll", "pitch", "yaw"]
+        .into_iter()
+        .zip(dx_mount)
+        .map(|(axis, points)| Trace {
+            name: format!("Loose residual mount {axis} correction [deg/update]"),
+            points,
+        })
+        .collect();
     data.loose_map = vec![Trace {
         name: "Loose path (lon,lat)".to_string(),
         points: map,
@@ -1376,6 +1431,8 @@ fn append_eskf_sample(
     accel_bias_y: &mut Vec<[f64; 2]>,
     accel_bias_z: &mut Vec<[f64; 2]>,
     cov: &mut [Vec<[f64; 2]>; 18],
+    mount_dx: &mut [Vec<[f64; 2]>; 3],
+    last_update_count: &mut u32,
     map: &mut Vec<[f64; 2]>,
     outage_map: &mut Vec<[f64; 2]>,
     headings: &mut Vec<HeadingSample>,
@@ -1426,6 +1483,13 @@ fn append_eskf_sample(
     accel_bias_z.push([t_s, eskf.nominal.baz as f64]);
     for (i, trace) in cov.iter_mut().enumerate() {
         trace.push([t_s, eskf.p[i][i].max(0.0).sqrt() as f64]);
+    }
+    let diag = eskf.update_diag;
+    if diag.total_updates != *last_update_count {
+        mount_dx[0].push([t_s, (diag.last_dx_mount_roll as f64).to_degrees()]);
+        mount_dx[1].push([t_s, (diag.last_dx_mount_pitch as f64).to_degrees()]);
+        mount_dx[2].push([t_s, (diag.last_dx_mount_yaw as f64).to_degrees()]);
+        *last_update_count = diag.total_updates;
     }
 
     if let Some([lat, lon, _]) = fusion.position_lla_f64() {
@@ -1564,6 +1628,8 @@ fn append_loose_sample(
     saz: &mut Vec<[f64; 2]>,
     cov_bias: &mut [Vec<[f64; 2]>; 12],
     cov_nonbias: &mut [Vec<[f64; 2]>; 12],
+    cov_mount: &mut [Vec<[f64; 2]>; 3],
+    dx_mount: &mut [Vec<[f64; 2]>; 3],
     map: &mut Vec<[f64; 2]>,
     headings: &mut Vec<HeadingSample>,
 ) {
@@ -1640,6 +1706,16 @@ fn append_loose_sample(
     for (idx, dst) in cov_nonbias.iter_mut().enumerate() {
         dst.push([t_s, pmat[idx][idx].max(0.0).sqrt() as f64]);
     }
+    for (dst, idx) in cov_mount.iter_mut().zip([21usize, 22, 23]) {
+        dst.push([t_s, (pmat[idx][idx].max(0.0).sqrt() as f64).to_degrees()]);
+    }
+    let dx = loose.last_dx();
+    let has_update = !loose.last_obs_types().is_empty();
+    if has_update {
+        for (dst, idx) in dx_mount.iter_mut().zip([21usize, 22, 23]) {
+            dst.push([t_s, (dx[idx] as f64).to_degrees()]);
+        }
+    }
 }
 
 fn loose_gyro_sensor_bias_dps(n: &LooseNominalState) -> [f64; 3] {
@@ -1648,6 +1724,10 @@ fn loose_gyro_sensor_bias_dps(n: &LooseNominalState) -> [f64; 3] {
         -(n.bgy as f64).to_degrees(),
         -(n.bgz as f64).to_degrees(),
     ]
+}
+
+fn sigma_rad_points_to_deg(points: &[[f64; 2]]) -> Vec<[f64; 2]> {
+    points.iter().map(|p| [p[0], p[1].to_degrees()]).collect()
 }
 
 fn loose_accel_sensor_bias_mps2(n: &LooseNominalState) -> [f64; 3] {
@@ -1741,13 +1821,13 @@ fn wrap_deg(mut x: f64) -> f64 {
     x
 }
 
-fn q_vb_to_reference_mount_rpy(q_vb: [f64; 4]) -> (f64, f64, f64) {
+pub fn q_vb_to_reference_mount_rpy(q_vb: [f64; 4]) -> (f64, f64, f64) {
     let q_x_180 = [0.0, 1.0, 0.0, 0.0];
     let q_flu = quat_mul(q_x_180, quat_conj(q_vb));
     quat_rpy_alg_deg(q_flu)
 }
 
-fn reference_mount_rpy_to_q_vb(rpy_deg: [f64; 3]) -> [f64; 4] {
+pub fn reference_mount_rpy_to_q_vb(rpy_deg: [f64; 3]) -> [f64; 4] {
     let q_x_180 = [0.0, 1.0, 0.0, 0.0];
     let q_flu = crate::eval::gnss_ins::quat_from_rpy_alg_deg(rpy_deg[0], rpy_deg[1], rpy_deg[2]);
     quat_mul(quat_conj(q_flu), q_x_180)

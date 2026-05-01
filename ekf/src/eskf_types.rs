@@ -84,6 +84,8 @@ pub struct EskfUpdateDiag {
     pub sum_abs_k_yaw: [f32; ESKF_UPDATE_DIAG_TYPES],
     pub sum_k_mount_norm: [f32; ESKF_UPDATE_DIAG_TYPES],
     pub sum_abs_corr_yaw_mount_yaw: [f32; ESKF_UPDATE_DIAG_TYPES],
+    pub last_dx_mount_roll: f32,
+    pub last_dx_mount_pitch: f32,
     pub last_dx_mount_yaw: f32,
     pub last_k_mount_yaw: f32,
     pub last_innovation: f32,

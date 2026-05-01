@@ -380,6 +380,8 @@ fn main() -> Result<()> {
         group_stats("eskf_bias_accel", &data.eskf_bias_accel),
         group_stats("eskf_cov_bias", &data.eskf_cov_bias),
         group_stats("eskf_cov_nonbias", &data.eskf_cov_nonbias),
+        group_stats("eskf_mount_sigma", &data.eskf_mount_sigma),
+        group_stats("eskf_mount_dx", &data.eskf_mount_dx),
         group_stats("eskf_misalignment", &data.eskf_misalignment),
         group_stats("eskf_stationary_diag", &data.eskf_stationary_diag),
         group_stats("eskf_bump_pitch_speed", &data.eskf_bump_pitch_speed),
@@ -396,6 +398,8 @@ fn main() -> Result<()> {
         group_stats("loose_scale_accel", &data.loose_scale_accel),
         group_stats("loose_cov_bias", &data.loose_cov_bias),
         group_stats("loose_cov_nonbias", &data.loose_cov_nonbias),
+        group_stats("loose_mount_sigma", &data.loose_mount_sigma),
+        group_stats("loose_mount_dx", &data.loose_mount_dx),
         group_stats("loose_map", &data.loose_map),
         group_stats("align_cmp_att", &data.align_cmp_att),
         group_stats("align_res_vel", &data.align_res_vel),
@@ -997,7 +1001,7 @@ fn build_web_synthetic_replay_job_response(
     let noise = match source
         .noise_mode
         .as_deref()
-        .unwrap_or("low")
+        .unwrap_or("truth")
         .to_ascii_lowercase()
         .as_str()
     {
@@ -1115,7 +1119,7 @@ fn build_web_synthetic_plot_data(
     let noise = match source
         .noise_mode
         .as_deref()
-        .unwrap_or("low")
+        .unwrap_or("truth")
         .to_ascii_lowercase()
         .as_str()
     {

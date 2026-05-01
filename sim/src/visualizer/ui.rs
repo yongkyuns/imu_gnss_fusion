@@ -37,6 +37,7 @@ const SYNTHETIC_TRAJECTORY_MAX_POINTS: usize = 2_000;
 const PLOT_GRID_MIN_SPACING_PX: f32 = 14.0;
 const PLOT_GRID_MAX_SPACING_PX: f32 = 360.0;
 const PLOT_GRID_STRENGTH_SCALE: f64 = 0.45;
+const SIGMA_LOG10_FLOOR: f64 = 1.0e-6;
 #[cfg(target_arch = "wasm32")]
 const TIME_SERIES_PLOT_FRAME_PADDING: f32 = 26.0;
 #[cfg(target_arch = "wasm32")]
@@ -422,6 +423,8 @@ pub struct App {
     #[cfg(target_arch = "wasm32")]
     web_scenario: WebSyntheticScenario,
     #[cfg(target_arch = "wasm32")]
+    web_synthetic_noise: WebSyntheticNoise,
+    #[cfg(target_arch = "wasm32")]
     web_input_mode: WebInputMode,
     #[cfg(target_arch = "wasm32")]
     web_real_data_source: WebRealDataSource,
@@ -630,6 +633,7 @@ enum WebReplayWorkerJob {
         label: String,
         motion_label: String,
         motion_text: String,
+        noise: WebSyntheticNoise,
     },
 }
 
@@ -704,6 +708,15 @@ enum WebSyntheticScenario {
     CityBlocks,
     FigureEight,
     StraightAccelBrake,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WebSyntheticNoise {
+    Truth,
+    Low,
+    Mid,
+    High,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -861,6 +874,7 @@ fn web_replay_worker_request(
             label,
             motion_label,
             motion_text,
+            noise,
         } => {
             let _ = Reflect::set(
                 &source,
@@ -885,7 +899,7 @@ fn web_replay_worker_request(
             let _ = Reflect::set(
                 &source,
                 &JsValue::from_str("noiseMode"),
-                &JsValue::from_str("low"),
+                &JsValue::from_str(noise.cli_value()),
             );
             let _ = Reflect::set(&source, &JsValue::from_str("seed"), &JsValue::from_f64(1.0));
             let mount_rpy_deg = js_number_array([5.0, -5.0, 5.0]);
@@ -955,6 +969,17 @@ fn web_query_synthetic_scenario() -> Option<WebSyntheticScenario> {
         Some("straight" | "straight_accel_brake" | "straight-accel-brake") => {
             Some(WebSyntheticScenario::StraightAccelBrake)
         }
+        _ => None,
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn web_query_synthetic_noise() -> Option<WebSyntheticNoise> {
+    match web_query_value("noise").as_deref() {
+        Some("truth" | "none" | "zero") => Some(WebSyntheticNoise::Truth),
+        Some("low") => Some(WebSyntheticNoise::Low),
+        Some("mid" | "medium") => Some(WebSyntheticNoise::Mid),
+        Some("high") => Some(WebSyntheticNoise::High),
         _ => None,
     }
 }
@@ -1414,6 +1439,8 @@ fn create_app(
         web_mapbox_token_applied: mapbox_access_token,
         #[cfg(target_arch = "wasm32")]
         web_scenario: WebSyntheticScenario::CityBlocks,
+        #[cfg(target_arch = "wasm32")]
+        web_synthetic_noise: web_query_synthetic_noise().unwrap_or(WebSyntheticNoise::Truth),
         #[cfg(target_arch = "wasm32")]
         web_input_mode: WebInputMode::Synthetic,
         #[cfg(target_arch = "wasm32")]
@@ -2059,6 +2086,7 @@ impl App {
                 label: self.web_scenario.display_label().to_string(),
                 motion_label: label.to_string(),
                 motion_text: text.to_string(),
+                noise: self.web_synthetic_noise,
             },
             4.0,
             ctx,
@@ -2533,10 +2561,31 @@ impl WebSyntheticScenario {
     fn scenario_text(self) -> (&'static str, &'static str) {
         match self {
             Self::CityBlocks => ("city_blocks_builtin.scenario", CITY_BLOCKS_SCENARIO),
-            Self::FigureEight => ("figure8_builtin.csv", FIGURE_EIGHT_CSV),
+            Self::FigureEight => ("figure8_builtin.scenario", FIGURE_EIGHT_SCENARIO),
             Self::StraightAccelBrake => {
                 ("straight_accel_brake_builtin.csv", STRAIGHT_ACCEL_BRAKE_CSV)
             }
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl WebSyntheticNoise {
+    fn display_label(self) -> &'static str {
+        match self {
+            Self::Truth => "Truth",
+            Self::Low => "Low",
+            Self::Mid => "Mid",
+            Self::High => "High",
+        }
+    }
+
+    fn cli_value(self) -> &'static str {
+        match self {
+            Self::Truth => "truth",
+            Self::Low => "low",
+            Self::Mid => "mid",
+            Self::High => "high",
         }
     }
 }
@@ -2562,17 +2611,16 @@ repeat 3 {
 "#;
 
 #[cfg(target_arch = "wasm32")]
-const FIGURE_EIGHT_CSV: &str = r#"ini lat (deg),ini lon (deg),ini alt (m),ini vx_body (m/s),ini vy_body (m/s),ini vz_body (m/s),ini yaw (deg),ini pitch (deg),ini roll (deg)
-32,120,0,0,0,0,0,0,0
-command type,yaw (deg),pitch (deg),roll (deg),vx_body (m/s),vy_body (m/s),vz_body (m/s),command duration (s),GNSS visibility
-1,0,0,0,0,0,0,20,1
-1,0,0,0,0.6,0,0,20,1
-1,0,0,0,0,0,0,10,1
-1,10,0,0,0,0,0,36,1
-1,-10,0,0,0,0,0,36,1
-1,10,0,0,0,0,0,36,1
-1,-10,0,0,0,0,0,36,1
-1,0,0,0,-0.6666667,0,0,18,1
+const FIGURE_EIGHT_SCENARIO: &str = r#"
+initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
+wait 60s
+accelerate 0.6m/s^2 for 20s
+wait 10s
+repeat 24 {
+    turn left 10dps for 36s
+    turn right 10dps for 36s
+}
+brake 0.6666667m/s^2 for 18s
 "#;
 
 #[cfg(target_arch = "wasm32")]
@@ -2750,6 +2798,31 @@ impl eframe::App for App {
                                                 WebSyntheticScenario::StraightAccelBrake,
                                                 WebSyntheticScenario::StraightAccelBrake
                                                     .display_label(),
+                                            );
+                                        });
+                                    ui.label("Noise:");
+                                    egui::ComboBox::from_id_salt("web_synthetic_noise_select")
+                                        .selected_text(self.web_synthetic_noise.display_label())
+                                        .show_ui(ui, |ui| {
+                                            ui.selectable_value(
+                                                &mut self.web_synthetic_noise,
+                                                WebSyntheticNoise::Truth,
+                                                WebSyntheticNoise::Truth.display_label(),
+                                            );
+                                            ui.selectable_value(
+                                                &mut self.web_synthetic_noise,
+                                                WebSyntheticNoise::Low,
+                                                WebSyntheticNoise::Low.display_label(),
+                                            );
+                                            ui.selectable_value(
+                                                &mut self.web_synthetic_noise,
+                                                WebSyntheticNoise::Mid,
+                                                WebSyntheticNoise::Mid.display_label(),
+                                            );
+                                            ui.selectable_value(
+                                                &mut self.web_synthetic_noise,
+                                                WebSyntheticNoise::High,
+                                                WebSyntheticNoise::High.display_label(),
                                             );
                                         });
                                 }
@@ -3080,6 +3153,11 @@ impl eframe::App for App {
                     .iter()
                     .chain(self.data.loose_scale_accel.iter())
                     .collect();
+                let mount_sigma_log = log10_sigma_traces([
+                    self.data.eskf_mount_sigma.as_slice(),
+                    self.data.loose_mount_sigma.as_slice(),
+                    self.data.align_cov.as_slice(),
+                ]);
                 egui::CentralPanel::default().show(ctx, |ui| {
                     draw_analysis_page(
                         ui,
@@ -3111,12 +3189,17 @@ impl eframe::App for App {
                                 true,
                             ),
                             plot_spec(
+                                "Mount Uncertainty: log10 sigma",
+                                trace_refs(&mount_sigma_log),
+                                true,
+                            ),
+                            plot_spec(
                                 "Non-bias Covariance: ESKF / Loose",
                                 concat_trace_refs([
                                     self.data.eskf_cov_nonbias.as_slice(),
                                     self.data.loose_cov_nonbias.as_slice(),
                                 ]),
-                                true,
+                                false,
                             ),
                             plot_spec("Loose Scale Factors", scale, true),
                         ],
@@ -3170,6 +3253,11 @@ impl eframe::App for App {
                 });
             }
             Page::Diagnostics => {
+                let mount_sigma_log = log10_sigma_traces([
+                    self.data.eskf_mount_sigma.as_slice(),
+                    self.data.loose_mount_sigma.as_slice(),
+                    self.data.align_cov.as_slice(),
+                ]);
                 let bump_pitch: Vec<&Trace> = self
                     .data
                     .eskf_bump_pitch_speed
@@ -3238,6 +3326,21 @@ impl eframe::App for App {
                             plot_spec(
                                 "Align Yaw Update Contributions",
                                 trace_refs(&self.data.align_yaw_contrib),
+                                true,
+                            ),
+                            plot_spec(
+                                "Mount Uncertainty: log10 sigma",
+                                trace_refs(&mount_sigma_log),
+                                true,
+                            ),
+                            plot_spec(
+                                "Loose Mount Correction",
+                                trace_refs(&self.data.loose_mount_dx),
+                                true,
+                            ),
+                            plot_spec(
+                                "ESKF Mount Correction",
+                                trace_refs(&self.data.eskf_mount_dx),
                                 true,
                             ),
                             plot_spec("Align Covariance", trace_refs(&self.data.align_cov), true),
@@ -4506,6 +4609,30 @@ fn plot_spec<'a>(title: &'static str, traces: Vec<&'a Trace>, show_legend: bool)
 
 fn trace_refs(traces: &[Trace]) -> Vec<&Trace> {
     traces.iter().filter(|t| !t.points.is_empty()).collect()
+}
+
+fn log10_sigma_traces<const N: usize>(groups: [&[Trace]; N]) -> Vec<Trace> {
+    let mut out = Vec::new();
+    for group in groups {
+        for trace in group {
+            if trace.points.is_empty() || out.iter().any(|t: &Trace| t.name == trace.name) {
+                continue;
+            }
+            let points = trace
+                .points
+                .iter()
+                .map(|p| {
+                    let sigma = p[1].abs().max(SIGMA_LOG10_FLOOR);
+                    [p[0], sigma.log10()]
+                })
+                .collect();
+            out.push(Trace {
+                name: format!("{} log10", trace.name),
+                points,
+            });
+        }
+    }
+    out
 }
 
 fn trace_time_range<'a>(traces: impl IntoIterator<Item = &'a Trace>) -> Option<(f64, f64)> {

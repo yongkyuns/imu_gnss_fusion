@@ -1,0 +1,9 @@
+initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
+wait 60s
+accelerate 0.6m/s^2 for 20s
+wait 10s
+repeat 24 {
+    turn left 10dps for 36s
+    turn right 10dps for 36s
+}
+brake 0.6666667m/s^2 for 18s

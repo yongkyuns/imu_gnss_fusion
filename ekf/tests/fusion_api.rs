@@ -115,9 +115,9 @@ fn mount_settle_phase_releases_with_configured_covariance() {
     let _ = system.process_gnss(gnss_sample(2.2));
     let eskf = system.eskf().unwrap();
     let release_var = 4.0_f32.to_radians().powi(2);
-    assert_eq!(eskf.p[15][15], 0.0);
-    assert!((eskf.p[16][16] - release_var).abs() < 1.0e-8);
-    assert!((eskf.p[17][17] - release_var).abs() < 1.0e-8);
+    for i in 15..18 {
+        assert!((eskf.p[i][i] - release_var).abs() < 1.0e-8);
+    }
     for i in 15..18 {
         for j in 0..15 {
             assert_eq!(eskf.p[i][j], 0.0);

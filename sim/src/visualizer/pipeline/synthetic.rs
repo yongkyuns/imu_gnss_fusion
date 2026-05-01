@@ -3,7 +3,7 @@ use anyhow::Result;
 use crate::datasets::generic_replay::{
     GenericGnssSample, GenericImuSample, GenericReferenceRpySample,
 };
-use crate::eval::gnss_ins::{quat_angle_deg, quat_from_rpy_alg_deg, quat_rotate};
+use crate::eval::gnss_ins::{quat_angle_deg, quat_rotate};
 use crate::synthetic::gnss_ins_path::{
     GpsNoiseModel, ImuAccuracy, MeasurementNoiseConfig, MotionProfile, PathGenConfig,
     generate_with_noise,
@@ -12,7 +12,8 @@ use crate::visualizer::math::{ecef_to_ned, lla_to_ecef, quat_rpy_deg};
 use crate::visualizer::model::{EkfImuSource, PlotData, Trace};
 use crate::visualizer::pipeline::generic::{
     GenericReplayInput, GenericReplayProgress, build_generic_replay_plot_data_with_eskf_mount_seed,
-    build_generic_replay_plot_data_with_progress_and_eskf_mount_seed,
+    build_generic_replay_plot_data_with_progress_and_eskf_mount_seed, q_vb_to_reference_mount_rpy,
+    reference_mount_rpy_to_q_vb,
 };
 use crate::visualizer::pipeline::{EkfCompareConfig, GnssOutageConfig};
 
@@ -91,20 +92,21 @@ fn build_synthetic_plot_data_impl(
         SyntheticNoiseMode::High => MeasurementNoiseConfig::accuracy(ImuAccuracy::High),
     };
     let measured = generate_with_noise(&profile, path_cfg, noise, synth_cfg.seed)?;
-    let q_truth_mount = quat_from_rpy_alg_deg(
-        synth_cfg.mount_rpy_deg[0],
-        synth_cfg.mount_rpy_deg[1],
-        synth_cfg.mount_rpy_deg[2],
-    );
+    let q_truth_mount = reference_mount_rpy_to_q_vb(synth_cfg.mount_rpy_deg);
     let gps_noise = noise.gps.unwrap_or(GpsNoiseModel {
         pos_std_m: [0.5, 0.5, 0.5],
         vel_std_mps: [0.2, 0.2, 0.2],
     });
+    let imu_dt_s = 1.0 / synth_cfg.imu_hz;
     let imu = measured
         .imu
         .iter()
         .map(|s| GenericImuSample {
-            t_s: s.t_s,
+            // gnss-ins-sim timestamps IMU samples at the start of the interval
+            // represented by the sample. The replay pipeline consumes IMU as
+            // an interval ending at `t_s`, so shift generated-only samples by
+            // one output period while preserving the generator's raw contract.
+            t_s: s.t_s + imu_dt_s,
             gyro_radps: quat_rotate(q_truth_mount, s.gyro_vehicle_radps),
             accel_mps2: quat_rotate(q_truth_mount, s.accel_vehicle_mps2),
         })
@@ -206,18 +208,20 @@ fn build_synthetic_plot_data_impl(
         })
         .collect::<Vec<_>>();
     let end_t_s = ref_truth.last().map(|s| s.t_s).unwrap_or(0.0);
+    let (mount_roll_deg, mount_pitch_deg, mount_yaw_deg) =
+        q_vb_to_reference_mount_rpy(q_truth_mount);
     let reference_mount = vec![
         GenericReferenceRpySample {
             t_s: 0.0,
-            roll_deg: synth_cfg.mount_rpy_deg[0],
-            pitch_deg: synth_cfg.mount_rpy_deg[1],
-            yaw_deg: synth_cfg.mount_rpy_deg[2],
+            roll_deg: mount_roll_deg,
+            pitch_deg: mount_pitch_deg,
+            yaw_deg: mount_yaw_deg,
         },
         GenericReferenceRpySample {
             t_s: end_t_s,
-            roll_deg: synth_cfg.mount_rpy_deg[0],
-            pitch_deg: synth_cfg.mount_rpy_deg[1],
-            yaw_deg: synth_cfg.mount_rpy_deg[2],
+            roll_deg: mount_roll_deg,
+            pitch_deg: mount_pitch_deg,
+            yaw_deg: mount_yaw_deg,
         },
     ];
     let replay = GenericReplayInput {
@@ -265,7 +269,6 @@ fn build_synthetic_plot_data_impl(
             truth_speed,
             gnss_map,
             gnss_speed,
-            mount_rpy_deg: synth_cfg.mount_rpy_deg,
             end_t_s,
             q_truth_mount,
         },
@@ -287,7 +290,6 @@ struct SyntheticOverlayTraces {
     truth_speed: Vec<[f64; 2]>,
     gnss_map: Vec<[f64; 2]>,
     gnss_speed: Vec<[f64; 2]>,
-    mount_rpy_deg: [f64; 3],
     end_t_s: f64,
     q_truth_mount: [f64; 4],
 }
@@ -411,7 +413,7 @@ fn add_synthetic_overlays(data: &mut PlotData, traces: SyntheticOverlayTraces) {
         points: mount_error_points(&data.eskf_misalignment, traces.q_truth_mount),
     });
     data.eskf_misalignment
-        .extend(synthetic_mount_traces(traces.mount_rpy_deg, traces.end_t_s));
+        .extend(synthetic_mount_traces(traces.q_truth_mount, traces.end_t_s));
     data.eskf_map.insert(
         0,
         Trace {
@@ -421,19 +423,20 @@ fn add_synthetic_overlays(data: &mut PlotData, traces: SyntheticOverlayTraces) {
     );
 }
 
-fn synthetic_mount_traces(mount_rpy_deg: [f64; 3], end_t_s: f64) -> [Trace; 3] {
+fn synthetic_mount_traces(q_truth_mount: [f64; 4], end_t_s: f64) -> [Trace; 3] {
+    let (roll_deg, pitch_deg, yaw_deg) = q_vb_to_reference_mount_rpy(q_truth_mount);
     [
         Trace {
             name: "Synthetic truth mount roll [deg]".to_string(),
-            points: vec![[0.0, mount_rpy_deg[0]], [end_t_s, mount_rpy_deg[0]]],
+            points: vec![[0.0, roll_deg], [end_t_s, roll_deg]],
         },
         Trace {
             name: "Synthetic truth mount pitch [deg]".to_string(),
-            points: vec![[0.0, mount_rpy_deg[1]], [end_t_s, mount_rpy_deg[1]]],
+            points: vec![[0.0, pitch_deg], [end_t_s, pitch_deg]],
         },
         Trace {
             name: "Synthetic truth mount yaw [deg]".to_string(),
-            points: vec![[0.0, mount_rpy_deg[2]], [end_t_s, mount_rpy_deg[2]]],
+            points: vec![[0.0, yaw_deg], [end_t_s, yaw_deg]],
         },
     ]
 }
@@ -463,7 +466,7 @@ fn mount_error_points(traces: &[Trace], q_truth_mount: [f64; 4]) -> Vec<[f64; 2]
             let t_s = sample[0];
             let pitch_deg = sample_trace_at(pitch, t_s)?;
             let yaw_deg = sample_trace_at(yaw, t_s)?;
-            let q_est = quat_from_rpy_alg_deg(sample[1], pitch_deg, yaw_deg);
+            let q_est = reference_mount_rpy_to_q_vb([sample[1], pitch_deg, yaw_deg]);
             Some([t_s, quat_angle_deg(q_est, q_truth_mount)])
         })
         .collect()

@@ -725,6 +725,50 @@ fn synthetic_inputs_populate_visualizer_eskf_traces() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn synthetic_symmetric_figure8_does_not_create_loose_mount_roll_drift() -> Result<()> {
+    let scenario = "\
+initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
+wait 60s
+accelerate 0.6m/s^2 for 20s
+wait 10s
+repeat 8 {
+    turn left 10dps for 36s
+    turn right 10dps for 36s
+}
+brake 0.6666667m/s^2 for 18s
+";
+    let data = build_synthetic_plot_data(
+        &SyntheticVisualizerConfig {
+            motion_def: None,
+            motion_label: "symmetric_figure8.scenario".to_string(),
+            motion_text: Some(scenario.to_string()),
+            noise_mode: SyntheticNoiseMode::Truth,
+            seed: 42,
+            mount_rpy_deg: [5.0, -5.0, 5.0],
+            imu_hz: 25.0,
+            gnss_hz: 2.0,
+            gnss_time_shift_ms: 0.0,
+            early_vel_bias_ned_mps: [0.0; 3],
+            early_fault_window_s: None,
+        },
+        EkfImuSource::Internal,
+        EkfCompareConfig::default(),
+        GnssOutageConfig::default(),
+    )?;
+
+    let loose_roll = final_trace_value(require_trace(
+        "loose_misalignment",
+        &data.loose_misalignment,
+        "Loose residual mount roll [deg]",
+    )?)?;
+    assert!(
+        (loose_roll - 5.0).abs() < 0.02,
+        "ideal symmetric figure-eight should not drive loose mount roll: final={loose_roll:.6}"
+    );
+    Ok(())
+}
+
 fn assert_eskf_converges_on_profile(profile_name: &str) -> Result<()> {
     let profile_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("motion_profiles/{profile_name}"));
@@ -766,6 +810,14 @@ fn assert_eskf_converges_on_profile(profile_name: &str) -> Result<()> {
     );
 
     Ok(())
+}
+
+fn final_trace_value(trace: &sim::visualizer::model::Trace) -> Result<f64> {
+    trace
+        .points
+        .last()
+        .map(|point| point[1])
+        .ok_or_else(|| anyhow::anyhow!("trace '{}' has no points", trace.name))
 }
 
 #[derive(Clone, Copy, Debug)]

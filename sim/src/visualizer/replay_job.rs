@@ -325,6 +325,8 @@ pub fn decimate_for_transport(data: &mut PlotData, max_points_per_trace: usize) 
     decimate_group(&mut data.eskf_bias_accel, max_points_per_trace);
     decimate_group(&mut data.eskf_cov_bias, max_points_per_trace);
     decimate_group(&mut data.eskf_cov_nonbias, max_points_per_trace);
+    decimate_group(&mut data.eskf_mount_sigma, max_points_per_trace);
+    decimate_group(&mut data.eskf_mount_dx, max_points_per_trace);
     decimate_group(&mut data.eskf_misalignment, max_points_per_trace);
     decimate_group(&mut data.eskf_stationary_diag, max_points_per_trace);
     decimate_group(&mut data.eskf_bump_pitch_speed, max_points_per_trace);
@@ -343,6 +345,8 @@ pub fn decimate_for_transport(data: &mut PlotData, max_points_per_trace: usize) 
     decimate_group(&mut data.loose_scale_accel, max_points_per_trace);
     decimate_group(&mut data.loose_cov_bias, max_points_per_trace);
     decimate_group(&mut data.loose_cov_nonbias, max_points_per_trace);
+    decimate_group(&mut data.loose_mount_sigma, max_points_per_trace);
+    decimate_group(&mut data.loose_mount_dx, max_points_per_trace);
     decimate_group(&mut data.align_cmp_att, max_points_per_trace);
     decimate_group(&mut data.align_res_vel, max_points_per_trace);
     decimate_group(&mut data.align_axis_err, max_points_per_trace);

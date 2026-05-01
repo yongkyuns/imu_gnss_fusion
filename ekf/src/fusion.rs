@@ -851,7 +851,7 @@ impl SensorFusion {
         raw.p[14][14] = raw.p[12][12];
         raw.p[2][2] = self.cfg.yaw_init_sigma_rad.powi(2);
         let mount_var = self.cfg.mount_init_sigma_rad.powi(2);
-        raw.p[15][15] = 0.0;
+        raw.p[15][15] = mount_var;
         raw.p[16][16] = mount_var;
         raw.p[17][17] = mount_var;
         if self.effective_freeze_misalignment_states() {
@@ -909,7 +909,6 @@ impl SensorFusion {
             }
             raw.p[i][i] = var;
         }
-        raw.p[15][15] = 0.0;
     }
 
     fn fuse_signed_body_speed(&mut self, t_s: f32, signed_speed_mps: f32) {
