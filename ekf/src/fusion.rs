@@ -193,7 +193,7 @@ impl Default for FusionConfig {
             gyro_bias_init_sigma_radps: 0.125_f32.to_radians(),
             accel_bias_init_sigma_mps2: 0.20,
             mount_init_sigma_rad: 2.5_f32.to_radians(),
-            r_body_vel: 0.001,
+            r_body_vel: 0.005,
             gnss_pos_mount_scale: 0.0,
             gnss_vel_mount_scale: 0.0,
             gnss_vel_xy_update_min_scale: 0.25,
