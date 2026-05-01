@@ -44,67 +44,13 @@ const WGS84_J2: f32 = 1.082_629_821_368_57e-3;
 const GPS_REF_SUPPORT_ROW0: &[usize] = &[0];
 const GPS_REF_SUPPORT_ROW1: &[usize] = &[0, 1];
 const GPS_REF_SUPPORT_ROW2: &[usize] = &[0, 1, 2];
-const NHC_Y_SUPPORT: &[usize] = &[3, 4, 5, 6, 7, 8, 21, 23];
-const NHC_Z_SUPPORT: &[usize] = &[3, 4, 5, 6, 7, 8, 21, 22];
+const VEL_REF_SUPPORT_ROW0: &[usize] = &[3];
+const VEL_REF_SUPPORT_ROW1: &[usize] = &[3, 4];
+const VEL_REF_SUPPORT_ROW2: &[usize] = &[3, 4, 5];
+const VEL_AXIS_SUPPORT_ROW0: &[usize] = &[3];
+const VEL_AXIS_SUPPORT_ROW1: &[usize] = &[4];
+const VEL_AXIS_SUPPORT_ROW2: &[usize] = &[5];
 const MIN_NHC_UPDATE_SPEED_MPS: f32 = 0.5;
-const F_ROW_COUNTS: [usize; LOOSE_ERROR_STATES] = [
-    2, 2, 2, 10, 10, 9, 8, 8, 7, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-];
-const F_ROW_COLS: [[usize; 10]; LOOSE_ERROR_STATES] = [
-    [0, 3, 0, 0, 0, 0, 0, 0, 0, 0],
-    [1, 4, 0, 0, 0, 0, 0, 0, 0, 0],
-    [2, 5, 0, 0, 0, 0, 0, 0, 0, 0],
-    [3, 4, 7, 8, 9, 10, 11, 15, 16, 17],
-    [3, 4, 6, 8, 9, 10, 11, 15, 16, 17],
-    [5, 6, 7, 9, 10, 11, 15, 16, 17, 0],
-    [6, 7, 12, 13, 14, 18, 19, 20, 0, 0],
-    [6, 7, 12, 13, 14, 18, 19, 20, 0, 0],
-    [8, 12, 13, 14, 18, 19, 20, 0, 0, 0],
-    [9, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [10, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [11, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [12, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [13, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [14, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [15, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [16, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [17, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [18, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [19, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [20, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [21, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [22, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [23, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-];
-const G_ROW_COUNTS: [usize; LOOSE_ERROR_STATES] = [
-    0, 0, 0, 3, 3, 3, 3, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-];
-const G_ROW_COLS: [[usize; 3]; LOOSE_ERROR_STATES] = [
-    [0, 0, 0],
-    [0, 0, 0],
-    [0, 0, 0],
-    [0, 1, 2],
-    [0, 1, 2],
-    [0, 1, 2],
-    [3, 4, 5],
-    [3, 4, 5],
-    [3, 4, 5],
-    [6, 0, 0],
-    [7, 0, 0],
-    [8, 0, 0],
-    [9, 0, 0],
-    [10, 0, 0],
-    [11, 0, 0],
-    [12, 0, 0],
-    [13, 0, 0],
-    [14, 0, 0],
-    [15, 0, 0],
-    [16, 0, 0],
-    [17, 0, 0],
-    [18, 0, 0],
-    [19, 0, 0],
-    [20, 0, 0],
-];
 
 /// Process-noise variances used by [`LooseFilter::predict`].
 #[repr(C)]
@@ -836,16 +782,28 @@ impl LooseFilter {
         let mut residuals = [0.0; 8];
         let mut variances = [0.0; 8];
         let mut obs_count = 0;
-        if !test_chi2_scalar(-vc_y_est, &self.raw.p, &h_y, gate_var_y) {
+        if !test_chi2_scalar(
+            -vc_y_est,
+            &self.raw.p,
+            &h_y,
+            gate_var_y,
+            &generated_loose::NHC_Y_SUPPORT,
+        ) {
             h_rows[obs_count] = h_y;
-            h_supports[obs_count] = Some(NHC_Y_SUPPORT);
+            h_supports[obs_count] = Some(&generated_loose::NHC_Y_SUPPORT);
             residuals[obs_count] = -vc_y_est;
             variances[obs_count] = var_y;
             obs_count += 1;
         }
-        if !test_chi2_scalar(-vc_z_est, &self.raw.p, &h_z, gate_var_z) {
+        if !test_chi2_scalar(
+            -vc_z_est,
+            &self.raw.p,
+            &h_z,
+            gate_var_z,
+            &generated_loose::NHC_Z_SUPPORT,
+        ) {
             h_rows[obs_count] = h_z;
-            h_supports[obs_count] = Some(NHC_Z_SUPPORT);
+            h_supports[obs_count] = Some(&generated_loose::NHC_Z_SUPPORT);
             residuals[obs_count] = -vc_z_est;
             variances[obs_count] = var_z;
             obs_count += 1;
@@ -904,17 +862,29 @@ impl LooseFilter {
             let dt_obs = 0.02;
             let var_y = gate_var_y / dt_obs;
             let var_z = gate_var_z / dt_obs;
-            if !test_chi2_scalar(-vc_y_est, &self.raw.p, &h_y, gate_var_y) {
+            if !test_chi2_scalar(
+                -vc_y_est,
+                &self.raw.p,
+                &h_y,
+                gate_var_y,
+                &generated_loose::NHC_Y_SUPPORT,
+            ) {
                 h_rows[obs_count] = h_y;
-                h_supports[obs_count] = Some(NHC_Y_SUPPORT);
+                h_supports[obs_count] = Some(&generated_loose::NHC_Y_SUPPORT);
                 residuals[obs_count] = -vc_y_est;
                 variances[obs_count] = var_y;
                 obs_types[obs_count] = 7;
                 obs_count += 1;
             }
-            if !test_chi2_scalar(-vc_z_est, &self.raw.p, &h_z, gate_var_z) {
+            if !test_chi2_scalar(
+                -vc_z_est,
+                &self.raw.p,
+                &h_z,
+                gate_var_z,
+                &generated_loose::NHC_Z_SUPPORT,
+            ) {
                 h_rows[obs_count] = h_z;
-                h_supports[obs_count] = Some(NHC_Z_SUPPORT);
+                h_supports[obs_count] = Some(&generated_loose::NHC_Z_SUPPORT);
                 residuals[obs_count] = -vc_z_est;
                 variances[obs_count] = var_z;
                 obs_types[obs_count] = 8;
@@ -1003,13 +973,19 @@ impl LooseFilter {
                         + t[2][1] as f64 * x_est[1]
                         + t[2][2] as f64 * x_est[2])) as f32,
             ];
-            if !test_chi2_vec3(residual, &self.raw.p, &h_tmp, [1.0, 1.0, 1.0]) {
+            let gps_supports = [
+                GPS_REF_SUPPORT_ROW0,
+                GPS_REF_SUPPORT_ROW1,
+                GPS_REF_SUPPORT_ROW2,
+            ];
+            if !test_chi2_vec3(
+                residual,
+                &self.raw.p,
+                &h_tmp,
+                [1.0, 1.0, 1.0],
+                &gps_supports,
+            ) {
                 let meas_var = 1.0 / libm::fminf(libm::fmaxf(dt_since_last_gnss_s, 1.0e-3), 1.0);
-                let gps_supports = [
-                    GPS_REF_SUPPORT_ROW0,
-                    GPS_REF_SUPPORT_ROW1,
-                    GPS_REF_SUPPORT_ROW2,
-                ];
                 for row in 0..3 {
                     h_rows[obs_count] = h_tmp[row];
                     h_supports[obs_count] = Some(gps_supports[row]);
@@ -1028,6 +1004,11 @@ impl LooseFilter {
             let mut vel_residual = [0.0; 3];
             let mut vel_r_diag = [1.0; 3];
             let mut vel_update_var = [1.0; 3];
+            let mut vel_supports = [
+                VEL_REF_SUPPORT_ROW0,
+                VEL_REF_SUPPORT_ROW1,
+                VEL_REF_SUPPORT_ROW2,
+            ];
             if let Some(vel_std_ned_mps) = vel_std_ned_mps {
                 let pos_for_llh = pos_ecef_m.unwrap_or(self.raw.pos_e64);
                 let (lat_meas, lon_meas, _) = ecef_to_llh([
@@ -1083,11 +1064,22 @@ impl LooseFilter {
                 vel_residual[0] = vel_ecef_mps[0] - self.raw.nominal.vn;
                 vel_residual[1] = vel_ecef_mps[1] - self.raw.nominal.ve;
                 vel_residual[2] = vel_ecef_mps[2] - self.raw.nominal.vd;
+                vel_supports = [
+                    VEL_AXIS_SUPPORT_ROW0,
+                    VEL_AXIS_SUPPORT_ROW1,
+                    VEL_AXIS_SUPPORT_ROW2,
+                ];
             }
-            if !test_chi2_vec3(vel_residual, &self.raw.p, &vel_rows, vel_r_diag) {
+            if !test_chi2_vec3(
+                vel_residual,
+                &self.raw.p,
+                &vel_rows,
+                vel_r_diag,
+                &vel_supports,
+            ) {
                 for row in 0..3 {
                     h_rows[obs_count] = vel_rows[row];
-                    h_supports[obs_count] = None;
+                    h_supports[obs_count] = Some(vel_supports[row]);
                     residuals[obs_count] = vel_residual[row];
                     variances[obs_count] = vel_update_var[row];
                     if let Some(types) = obs_types.as_deref_mut() {
@@ -1130,49 +1122,50 @@ impl LooseFilter {
         residuals: &[f32; 8],
         variances: &[f32; 8],
     ) {
-        let mut p = self.raw.p64;
         let mut dx = [0.0_f64; LOOSE_ERROR_STATES];
-        for obs in 0..obs_count {
-            let h_obs = &h[obs];
+        {
+            let p = &mut self.raw.p64;
             let mut dense_support = [0usize; LOOSE_ERROR_STATES];
-            let support = match h_supports[obs] {
-                Some(support) => support,
-                None => {
-                    let len = extract_support_from_row(h_obs, &mut dense_support);
-                    &dense_support[..len]
-                }
-            };
+            for obs in 0..obs_count {
+                let h_obs = &h[obs];
+                let support = match h_supports[obs] {
+                    Some(support) => support,
+                    None => {
+                        let len = extract_support_from_row(h_obs, &mut dense_support);
+                        &dense_support[..len]
+                    }
+                };
 
-            let mut ph = [0.0_f64; LOOSE_ERROR_STATES];
-            let mut s = variances[obs] as f64;
-            for i in 0..LOOSE_ERROR_STATES {
-                for &state in support {
-                    ph[i] += p[i][state] * h_obs[state] as f64;
+                let mut ph = [0.0_f64; LOOSE_ERROR_STATES];
+                let mut s = variances[obs] as f64;
+                for i in 0..LOOSE_ERROR_STATES {
+                    for &state in support {
+                        ph[i] += p[i][state] * h_obs[state] as f64;
+                    }
                 }
-            }
-            for &state in support {
-                s += h_obs[state] as f64 * ph[state];
-            }
-            if s <= 0.0 {
-                continue;
-            }
-            let mut hd = 0.0_f64;
-            for &state in support {
-                hd += h_obs[state] as f64 * dx[state];
-            }
-            for i in 0..LOOSE_ERROR_STATES {
-                dx[i] += (ph[i] / s) * (residuals[obs] as f64 - hd);
-            }
-            for i in 0..LOOSE_ERROR_STATES {
-                for j in i..LOOSE_ERROR_STATES {
-                    let updated = p[i][j] - (ph[i] * ph[j]) / s;
-                    p[i][j] = updated;
-                    p[j][i] = updated;
+                for &state in support {
+                    s += h_obs[state] as f64 * ph[state];
+                }
+                if s <= 0.0 {
+                    continue;
+                }
+                let mut hd = 0.0_f64;
+                for &state in support {
+                    hd += h_obs[state] as f64 * dx[state];
+                }
+                for i in 0..LOOSE_ERROR_STATES {
+                    dx[i] += (ph[i] / s) * (residuals[obs] as f64 - hd);
+                }
+                for i in 0..LOOSE_ERROR_STATES {
+                    for j in i..LOOSE_ERROR_STATES {
+                        let updated = p[i][j] - (ph[i] * ph[j]) / s;
+                        p[i][j] = updated;
+                        p[j][i] = updated;
+                    }
                 }
             }
         }
 
-        self.raw.p64 = p;
         self.sync_covariance_from_shadow();
         let mut dx_f32 = [0.0; LOOSE_ERROR_STATES];
         for i in 0..LOOSE_ERROR_STATES {
@@ -1285,7 +1278,6 @@ impl LooseFilter {
                 self.raw.p[i][j] = self.raw.p64[i][j] as f32;
             }
         }
-        symmetrize_p(&mut self.raw.p);
     }
 }
 
@@ -1301,22 +1293,22 @@ fn predict_covariance_sparse(
     for i in 0..LOOSE_ERROR_STATES {
         for j in i..LOOSE_ERROR_STATES {
             let mut accum = 0.0_f64;
-            for ia in 0..F_ROW_COUNTS[i] {
-                let a = F_ROW_COLS[i][ia];
+            for ia in 0..generated_loose::F_ROW_COUNTS[i] {
+                let a = generated_loose::F_ROW_COLS[i][ia];
                 let fia = f[i][a] as f64;
-                for jb in 0..F_ROW_COUNTS[j] {
-                    let b = F_ROW_COLS[j][jb];
+                for jb in 0..generated_loose::F_ROW_COUNTS[j] {
+                    let b = generated_loose::F_ROW_COLS[j][jb];
                     accum += fia * p[a][b] * f[j][b] as f64;
                 }
             }
-            for ia in 0..G_ROW_COUNTS[i] {
-                let a = G_ROW_COLS[i][ia];
+            for ia in 0..generated_loose::G_ROW_COUNTS[i] {
+                let a = generated_loose::G_ROW_COLS[i][ia];
                 let gia = g[i][a] as f64;
                 if q[a] == 0.0 {
                     continue;
                 }
-                for jb in 0..G_ROW_COUNTS[j] {
-                    let b = G_ROW_COLS[j][jb];
+                for jb in 0..generated_loose::G_ROW_COUNTS[j] {
+                    let b = generated_loose::G_ROW_COLS[j][jb];
                     if a == b {
                         accum += gia * q[a] as f64 * g[j][b] as f64;
                     }
@@ -1338,16 +1330,6 @@ fn normalize_quat(q: &mut [f32; 4]) {
     let inv_n = 1.0 / libm::sqrtf(n2);
     for item in q.iter_mut() {
         *item *= inv_n;
-    }
-}
-
-fn symmetrize_p(p: &mut [[f32; LOOSE_ERROR_STATES]; LOOSE_ERROR_STATES]) {
-    for i in 0..LOOSE_ERROR_STATES {
-        for j in (i + 1)..LOOSE_ERROR_STATES {
-            let sym = 0.5 * (p[i][j] + p[j][i]);
-            p[i][j] = sym;
-            p[j][i] = sym;
-        }
     }
 }
 
@@ -1475,10 +1457,11 @@ fn test_chi2_scalar(
     p: &[[f32; LOOSE_ERROR_STATES]; LOOSE_ERROR_STATES],
     h: &[f32; LOOSE_ERROR_STATES],
     r: f32,
+    support: &[usize],
 ) -> bool {
     let mut s = r;
-    for i in 0..LOOSE_ERROR_STATES {
-        for j in 0..LOOSE_ERROR_STATES {
+    for &i in support {
+        for &j in support {
             s += h[i] * p[i][j] * h[j];
         }
     }
@@ -1490,9 +1473,10 @@ fn test_chi2_vec3(
     p: &[[f32; LOOSE_ERROR_STATES]; LOOSE_ERROR_STATES],
     h: &[[f32; LOOSE_ERROR_STATES]; 3],
     r_diag: [f32; 3],
+    supports: &[&'static [usize]; 3],
 ) -> bool {
     for row in 0..3 {
-        if test_chi2_scalar(residual[row], p, &h[row], r_diag[row]) {
+        if test_chi2_scalar(residual[row], p, &h[row], r_diag[row], supports[row]) {
             return true;
         }
     }

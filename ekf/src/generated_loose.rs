@@ -16,6 +16,8 @@
 
 use crate::loose::{LOOSE_ERROR_STATES, LOOSE_NOISE_STATES, LooseImuDelta, LooseNominalState};
 
+include!("generated_loose/reference_support_generated.rs");
+
 /// Returns the generated loose-filter error-state transition and noise-input matrices.
 pub fn error_transition(
     nominal: &LooseNominalState,

@@ -137,6 +137,35 @@ def write_rust_nhc_row(path: Path, est_expr, h_row: Matrix, prefix: str):
     gen.close()
 
 
+def emit_supports(path: Path, phi: Matrix, g: Matrix, h_y: Matrix, h_z: Matrix):
+    with open(path, "w") as file:
+        file.write("// Generated loose-filter sparsity supports\n")
+        for prefix, matrix in [("F", phi), ("G", g)]:
+            supports = []
+            max_len = 0
+            for i in range(matrix.shape[0]):
+                row_support = [j for j in range(matrix.shape[1]) if matrix[i, j] != 0]
+                supports.append(row_support)
+                max_len = max(max_len, len(row_support))
+            file.write(f"pub const {prefix}_MAX_ROW_NONZERO: usize = {max_len};\n")
+            file.write(f"pub const {prefix}_ROW_COUNTS: [usize; LOOSE_ERROR_STATES] = [\n")
+            file.write("    " + ", ".join(str(len(row)) for row in supports) + ",\n")
+            file.write("];\n")
+            file.write(
+                f"pub const {prefix}_ROW_COLS: [[usize; {prefix}_MAX_ROW_NONZERO]; LOOSE_ERROR_STATES] = [\n"
+            )
+            for row in supports:
+                padded = row + [0] * (max_len - len(row))
+                file.write("    [" + ", ".join(str(col) for col in padded) + "],\n")
+            file.write("];\n\n")
+
+        for name, row in [("NHC_Y_SUPPORT", h_y), ("NHC_Z_SUPPORT", h_z)]:
+            support = [j for j in range(row.shape[1]) if row[0, j] != 0]
+            file.write(f"pub const {name}: [usize; {len(support)}] = [")
+            file.write(", ".join(str(col) for col in support))
+            file.write("];\n")
+
+
 def emit_reference_rust():
     GENERATED_RUST_DIR.mkdir(parents=True, exist_ok=True)
     phi, g = create_reference_transition_and_noise()
@@ -157,6 +186,8 @@ def emit_reference_rust():
     gen.print_string("G")
     gen.write_matrix(Matrix(reduced), "G")
     gen.close()
+
+    emit_supports(GENERATED_RUST_DIR / "reference_support_generated.rs", phi, g, h_y, h_z)
 
     write_rust_nhc_row(GENERATED_RUST_DIR / "reference_nhc_y_generated.rs", v_c[1], h_y, "tmp_nhc_y")
     write_rust_nhc_row(GENERATED_RUST_DIR / "reference_nhc_z_generated.rs", v_c[2], h_z, "tmp_nhc_z")
