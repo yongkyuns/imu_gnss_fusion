@@ -2,8 +2,8 @@
 //!
 //! This module implements a loose-coupled ECEF reference filter used for
 //! diagnostics and comparison against the runtime ESKF. It keeps a single
-//! precision public state plus f64 shadow position, mount quaternion, and
-//! covariance fields used internally for numerically sensitive propagation.
+//! precision public state plus f64 shadow position and mount quaternion fields
+//! used internally for numerically sensitive propagation.
 //!
 //! See `docs/loose_formulation.pdf` for the PDF-first derivation. The nominal
 //! state is:
@@ -212,8 +212,6 @@ pub struct LooseState {
     pub pos_e64: [f64; 3],
     /// f64 residual mount quaternion shadow.
     pub qcs64: [f64; 4],
-    /// f64 covariance shadow used by propagation and updates.
-    pub p64: [[f64; LOOSE_ERROR_STATES]; LOOSE_ERROR_STATES],
     /// Last injected error-state correction.
     pub last_dx: [f32; LOOSE_ERROR_STATES],
     /// Number of observation rows used by the last batch update.
@@ -225,10 +223,8 @@ pub struct LooseState {
 impl Default for LooseState {
     fn default() -> Self {
         let mut p = [[0.0; LOOSE_ERROR_STATES]; LOOSE_ERROR_STATES];
-        let mut p64 = [[0.0; LOOSE_ERROR_STATES]; LOOSE_ERROR_STATES];
         for i in 0..LOOSE_ERROR_STATES {
             p[i][i] = 1.0;
-            p64[i][i] = 1.0;
         }
         Self {
             nominal: LooseNominalState {
@@ -240,7 +236,6 @@ impl Default for LooseState {
             noise: LoosePredictNoise::reference_nsr_demo(),
             pos_e64: [0.0; 3],
             qcs64: [1.0, 0.0, 0.0, 0.0],
-            p64,
             last_dx: [0.0; LOOSE_ERROR_STATES],
             last_obs_count: 0,
             last_obs_types: [0; 8],
@@ -301,14 +296,9 @@ impl LooseFilter {
         &self.raw.last_dx
     }
 
-    /// Replaces covariance and synchronizes the f64 covariance shadow.
+    /// Replaces covariance.
     pub fn set_covariance(&mut self, p: [[f32; LOOSE_ERROR_STATES]; LOOSE_ERROR_STATES]) {
         self.raw.p = p;
-        for i in 0..LOOSE_ERROR_STATES {
-            for j in 0..LOOSE_ERROR_STATES {
-                self.raw.p64[i][j] = self.raw.p[i][j] as f64;
-            }
-        }
     }
 
     /// Sets the residual seed-to-vehicle mount quaternion.
@@ -385,18 +375,10 @@ impl LooseFilter {
             for i in 0..LOOSE_ERROR_STATES {
                 for j in 0..LOOSE_ERROR_STATES {
                     self.raw.p[i][j] = 0.0;
-                    self.raw.p64[i][j] = 0.0;
                 }
             }
             for (i, value) in p_diag.into_iter().enumerate() {
                 self.raw.p[i][i] = value;
-                self.raw.p64[i][i] = value as f64;
-            }
-        } else {
-            for i in 0..LOOSE_ERROR_STATES {
-                for j in 0..LOOSE_ERROR_STATES {
-                    self.raw.p64[i][j] = self.raw.p[i][j] as f64;
-                }
             }
         }
     }
@@ -493,9 +475,7 @@ impl LooseFilter {
         q[19] = q[18];
         q[20] = q[18];
 
-        let next_p = predict_covariance_sparse(&f, &g, &self.raw.p64, &q);
-        self.raw.p64 = next_p;
-        self.sync_covariance_from_shadow();
+        self.raw.p = predict_covariance_sparse(&f, &g, &self.raw.p, &q);
     }
 
     /// Predicts only the loose nominal state from one two-sample IMU delta.
@@ -1122,9 +1102,9 @@ impl LooseFilter {
         residuals: &[f32; 8],
         variances: &[f32; 8],
     ) {
-        let mut dx = [0.0_f64; LOOSE_ERROR_STATES];
+        let mut dx = [0.0; LOOSE_ERROR_STATES];
         {
-            let p = &mut self.raw.p64;
+            let p = &mut self.raw.p;
             let mut dense_support = [0usize; LOOSE_ERROR_STATES];
             for obs in 0..obs_count {
                 let h_obs = &h[obs];
@@ -1136,25 +1116,25 @@ impl LooseFilter {
                     }
                 };
 
-                let mut ph = [0.0_f64; LOOSE_ERROR_STATES];
-                let mut s = variances[obs] as f64;
+                let mut ph = [0.0; LOOSE_ERROR_STATES];
+                let mut s = variances[obs];
                 for i in 0..LOOSE_ERROR_STATES {
                     for &state in support {
-                        ph[i] += p[i][state] * h_obs[state] as f64;
+                        ph[i] += p[i][state] * h_obs[state];
                     }
                 }
                 for &state in support {
-                    s += h_obs[state] as f64 * ph[state];
+                    s += h_obs[state] * ph[state];
                 }
                 if s <= 0.0 {
                     continue;
                 }
-                let mut hd = 0.0_f64;
+                let mut hd = 0.0;
                 for &state in support {
-                    hd += h_obs[state] as f64 * dx[state];
+                    hd += h_obs[state] * dx[state];
                 }
                 for i in 0..LOOSE_ERROR_STATES {
-                    dx[i] += (ph[i] / s) * (residuals[obs] as f64 - hd);
+                    dx[i] += (ph[i] / s) * (residuals[obs] - hd);
                 }
                 for i in 0..LOOSE_ERROR_STATES {
                     for j in i..LOOSE_ERROR_STATES {
@@ -1166,13 +1146,10 @@ impl LooseFilter {
             }
         }
 
-        self.sync_covariance_from_shadow();
-        let mut dx_f32 = [0.0; LOOSE_ERROR_STATES];
         for i in 0..LOOSE_ERROR_STATES {
-            dx_f32[i] = dx[i] as f32;
-            self.raw.last_dx[i] = dx_f32[i];
+            self.raw.last_dx[i] = dx[i];
         }
-        self.inject_error_state(dx_f32);
+        self.inject_error_state(dx);
     }
 
     fn inject_error_state(&mut self, dx: [f32; LOOSE_ERROR_STATES]) {
@@ -1271,14 +1248,6 @@ impl LooseFilter {
         self.raw.nominal.qcs2 = self.raw.qcs64[2] as f32;
         self.raw.nominal.qcs3 = self.raw.qcs64[3] as f32;
     }
-
-    fn sync_covariance_from_shadow(&mut self) {
-        for i in 0..LOOSE_ERROR_STATES {
-            for j in 0..LOOSE_ERROR_STATES {
-                self.raw.p[i][j] = self.raw.p64[i][j] as f32;
-            }
-        }
-    }
 }
 
 pub type LooseWrapper = LooseFilter;
@@ -1286,31 +1255,31 @@ pub type LooseWrapper = LooseFilter;
 fn predict_covariance_sparse(
     f: &[[f32; LOOSE_ERROR_STATES]; LOOSE_ERROR_STATES],
     g: &[[f32; LOOSE_NOISE_STATES]; LOOSE_ERROR_STATES],
-    p: &[[f64; LOOSE_ERROR_STATES]; LOOSE_ERROR_STATES],
+    p: &[[f32; LOOSE_ERROR_STATES]; LOOSE_ERROR_STATES],
     q: &[f32; LOOSE_NOISE_STATES],
-) -> [[f64; LOOSE_ERROR_STATES]; LOOSE_ERROR_STATES] {
+) -> [[f32; LOOSE_ERROR_STATES]; LOOSE_ERROR_STATES] {
     let mut next_p = [[0.0; LOOSE_ERROR_STATES]; LOOSE_ERROR_STATES];
     for i in 0..LOOSE_ERROR_STATES {
         for j in i..LOOSE_ERROR_STATES {
-            let mut accum = 0.0_f64;
+            let mut accum = 0.0;
             for ia in 0..generated_loose::F_ROW_COUNTS[i] {
                 let a = generated_loose::F_ROW_COLS[i][ia];
-                let fia = f[i][a] as f64;
+                let fia = f[i][a];
                 for jb in 0..generated_loose::F_ROW_COUNTS[j] {
                     let b = generated_loose::F_ROW_COLS[j][jb];
-                    accum += fia * p[a][b] * f[j][b] as f64;
+                    accum += fia * p[a][b] * f[j][b];
                 }
             }
             for ia in 0..generated_loose::G_ROW_COUNTS[i] {
                 let a = generated_loose::G_ROW_COLS[i][ia];
-                let gia = g[i][a] as f64;
+                let gia = g[i][a];
                 if q[a] == 0.0 {
                     continue;
                 }
                 for jb in 0..generated_loose::G_ROW_COUNTS[j] {
                     let b = generated_loose::G_ROW_COLS[j][jb];
                     if a == b {
-                        accum += gia * q[a] as f64 * g[j][b] as f64;
+                        accum += gia * q[a] * g[j][b];
                     }
                 }
             }

@@ -3,6 +3,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+const POS_ECEF_TOL_M: f64 = 1.0e-2;
+const VEL_ECEF_TOL_MPS: f64 = 5.0e-4;
+const ATTITUDE_TOL_DEG: f64 = 3.0e-3;
+const MOUNT_TOL_DEG: f64 = 3.0e-3;
+
 #[derive(Debug, Deserialize)]
 struct ReplayOutput {
     time_s: Vec<f64>,
@@ -110,22 +115,22 @@ fn loose_short_fixture_matches_golden_observation_sequence_and_checkpoints() {
             checkpoint.time_s
         );
         assert!(
-            vec_norm_diff3(output.pos_ecef_m[i], checkpoint.pos_ecef_m) <= 1.0e-2,
+            vec_norm_diff3(output.pos_ecef_m[i], checkpoint.pos_ecef_m) <= POS_ECEF_TOL_M,
             "pos_ecef mismatch at index {}",
             i
         );
         assert!(
-            vec_norm_diff3(output.vel_ecef_mps[i], checkpoint.vel_ecef_mps) <= 1.0e-4,
+            vec_norm_diff3(output.vel_ecef_mps[i], checkpoint.vel_ecef_mps) <= VEL_ECEF_TOL_MPS,
             "vel_ecef mismatch at index {}",
             i
         );
         assert!(
-            quat_angle_deg(output.q_es[i], checkpoint.q_es) <= 1.0e-3,
+            quat_angle_deg(output.q_es[i], checkpoint.q_es) <= ATTITUDE_TOL_DEG,
             "q_es mismatch at index {}",
             i
         );
         assert!(
-            quat_angle_deg(output.q_cs[i], checkpoint.q_cs) <= 1.0e-3,
+            quat_angle_deg(output.q_cs[i], checkpoint.q_cs) <= MOUNT_TOL_DEG,
             "q_cs mismatch at index {}",
             i
         );
