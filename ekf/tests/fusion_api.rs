@@ -167,6 +167,58 @@ fn zero_mount_update_scale_does_not_shrink_mount_covariance() {
 }
 
 #[test]
+fn zero_velocity_update_does_not_inject_mount_error() {
+    const DIAG_ZERO_VEL: usize = 2;
+    const DIAG_ZERO_VEL_D: usize = 10;
+
+    let mut eskf = RustEskf::new(PredictNoise::default());
+    {
+        let raw = eskf.raw_mut();
+        raw.nominal.vn = 0.7;
+        raw.nominal.ve = -0.3;
+        raw.nominal.vd = 0.2;
+        raw.p = [[0.0; 18]; 18];
+        for i in 0..18 {
+            raw.p[i][i] = 0.1;
+        }
+        raw.p[3][15] = 0.02;
+        raw.p[15][3] = 0.02;
+        raw.p[4][16] = -0.015;
+        raw.p[16][4] = -0.015;
+        raw.p[5][17] = 0.01;
+        raw.p[17][5] = 0.01;
+    }
+
+    let qcs_before = {
+        let n = &eskf.raw().nominal;
+        [n.qcs0, n.qcs1, n.qcs2, n.qcs3]
+    };
+    let mount_cov_before = [
+        eskf.raw().p[15][15],
+        eskf.raw().p[16][16],
+        eskf.raw().p[17][17],
+    ];
+
+    eskf.fuse_zero_vel(0.01);
+
+    let raw = eskf.raw();
+    let n = &raw.nominal;
+    assert_ne!(n.vn, 0.7);
+    assert_ne!(n.ve, -0.3);
+    assert_ne!(n.vd, 0.2);
+    assert_eq!([n.qcs0, n.qcs1, n.qcs2, n.qcs3], qcs_before);
+    assert_eq!(
+        [raw.p[15][15], raw.p[16][16], raw.p[17][17]],
+        mount_cov_before
+    );
+    assert_eq!(raw.update_diag.sum_abs_dx_mount_norm[DIAG_ZERO_VEL], 0.0);
+    assert_eq!(raw.update_diag.sum_abs_dx_mount_norm[DIAG_ZERO_VEL_D], 0.0);
+    assert_eq!(raw.update_diag.last_dx_mount_roll, 0.0);
+    assert_eq!(raw.update_diag.last_dx_mount_pitch, 0.0);
+    assert_eq!(raw.update_diag.last_dx_mount_yaw, 0.0);
+}
+
+#[test]
 fn unknown_direction_uses_predicted_sign_when_state_is_confident() {
     let mut system = SensorFusion::with_misalignment([1.0, 0.0, 0.0, 0.0]);
     let mut gnss = gnss_sample(1.0);

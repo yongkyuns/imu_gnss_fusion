@@ -391,9 +391,7 @@ impl RustEskf {
         let obs = generated_eskf::gps_vel_n_observation(&self.raw.p, r_vel_n);
         let mut k = obs.k;
         let mut dx = gain_dx(k, innovation);
-        if r_vel_n != RUNTIME_ZERO_VEL_R_DIAG {
-            scale_mount_update(&mut k, &mut dx, gnss_vel_mount_scale);
-        }
+        scale_mount_update(&mut k, &mut dx, gnss_vel_mount_scale);
         self.freeze_mount_update_if_needed(&mut k, &mut dx);
         let diag = if r_vel_n == RUNTIME_ZERO_VEL_R_DIAG {
             DIAG_ZERO_VEL
@@ -409,9 +407,7 @@ impl RustEskf {
         let obs = generated_eskf::gps_vel_e_observation(&self.raw.p, r_vel_e);
         let mut k = obs.k;
         let mut dx = gain_dx(k, innovation);
-        if r_vel_e != RUNTIME_ZERO_VEL_R_DIAG {
-            scale_mount_update(&mut k, &mut dx, gnss_vel_mount_scale);
-        }
+        scale_mount_update(&mut k, &mut dx, gnss_vel_mount_scale);
         self.freeze_mount_update_if_needed(&mut k, &mut dx);
         let diag = if r_vel_e == RUNTIME_ZERO_VEL_R_DIAG {
             DIAG_ZERO_VEL
@@ -427,9 +423,7 @@ impl RustEskf {
         let obs = generated_eskf::gps_vel_d_observation(&self.raw.p, r_vel_d);
         let mut k = obs.k;
         let mut dx = gain_dx(k, innovation);
-        if r_vel_d != RUNTIME_ZERO_VEL_R_DIAG {
-            scale_mount_update(&mut k, &mut dx, gnss_vel_mount_scale);
-        }
+        scale_mount_update(&mut k, &mut dx, gnss_vel_mount_scale);
         self.freeze_mount_update_if_needed(&mut k, &mut dx);
         let diag = if r_vel_d == RUNTIME_ZERO_VEL_R_DIAG {
             DIAG_ZERO_VEL_D
