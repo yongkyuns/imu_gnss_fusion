@@ -1540,6 +1540,8 @@ impl App {
                                     defaults.gyro_bias_init_sigma_dps;
                                 self.tuning_cfg.accel_bias_init_sigma_mps2 =
                                     defaults.accel_bias_init_sigma_mps2;
+                                self.tuning_cfg.mount_roll_pitch_init_sigma_deg =
+                                    defaults.mount_roll_pitch_init_sigma_deg;
                                 self.tuning_cfg.mount_init_sigma_deg =
                                     defaults.mount_init_sigma_deg;
                                 self.tuning_cfg.r_vehicle_speed = defaults.r_vehicle_speed;
@@ -3487,16 +3489,16 @@ fn draw_eskf_tuning(
     ui.collapsing("Measurement weighting", |ui| {
         drag_f32(
             ui,
-            "NHC lateral velocity R",
+            "NHC lateral R @100 Hz",
             &mut cfg.r_body_vel,
-            0.001,
+            0.01,
             0.0..=1000.0,
         );
         drag_f32(
             ui,
-            "NHC vertical velocity R",
+            "NHC vertical R @100 Hz",
             &mut cfg.r_body_vel_z,
-            0.001,
+            0.01,
             0.0..=1000.0,
         );
         drag_f32(
@@ -3546,7 +3548,14 @@ fn draw_eskf_tuning(
         );
         drag_f32(
             ui,
-            "Mount sigma deg",
+            "Mount roll/pitch sigma deg",
+            &mut cfg.mount_roll_pitch_init_sigma_deg,
+            0.5,
+            0.0..=180.0,
+        );
+        drag_f32(
+            ui,
+            "Mount yaw sigma deg",
             &mut cfg.mount_init_sigma_deg,
             0.5,
             0.0..=180.0,

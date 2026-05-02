@@ -157,6 +157,7 @@ struct FusionConfig {
     yaw_init_sigma_rad: f32,
     gyro_bias_init_sigma_radps: f32,
     accel_bias_init_sigma_mps2: f32,
+    mount_roll_pitch_init_sigma_rad: f32,
     mount_init_sigma_rad: f32,
     r_body_vel_y: f32,
     r_body_vel_z: f32,
@@ -193,10 +194,11 @@ impl Default for FusionConfig {
             },
             yaw_init_sigma_rad: 2.0_f32.to_radians(),
             gyro_bias_init_sigma_radps: 0.125_f32.to_radians(),
-            accel_bias_init_sigma_mps2: 0.20,
-            mount_init_sigma_rad: 2.5_f32.to_radians(),
-            r_body_vel_y: 0.005,
-            r_body_vel_z: 0.005,
+            accel_bias_init_sigma_mps2: 0.075,
+            mount_roll_pitch_init_sigma_rad: 2.0_f32.to_radians(),
+            mount_init_sigma_rad: 6.0_f32.to_radians(),
+            r_body_vel_y: 0.5,
+            r_body_vel_z: 0.125,
             gnss_pos_mount_scale: 0.0,
             gnss_vel_mount_scale: 1.0,
             gnss_vel_xy_update_min_scale: 0.25,
@@ -413,10 +415,17 @@ impl SensorFusion {
         }
     }
 
-    /// Sets initial residual-mount one-sigma uncertainty, in radians.
+    /// Sets initial residual-mount yaw one-sigma uncertainty, in radians.
     pub fn set_mount_init_sigma_rad(&mut self, mount_init_sigma_rad: f32) {
         if mount_init_sigma_rad.is_finite() && mount_init_sigma_rad >= 0.0 {
             self.cfg.mount_init_sigma_rad = mount_init_sigma_rad;
+        }
+    }
+
+    /// Sets initial residual-mount roll/pitch one-sigma uncertainty, in radians.
+    pub fn set_mount_roll_pitch_init_sigma_rad(&mut self, mount_init_sigma_rad: f32) {
+        if mount_init_sigma_rad.is_finite() && mount_init_sigma_rad >= 0.0 {
+            self.cfg.mount_roll_pitch_init_sigma_rad = mount_init_sigma_rad;
         }
     }
 
@@ -877,8 +886,9 @@ impl SensorFusion {
         raw.p[14][14] = raw.p[12][12];
         raw.p[2][2] = self.cfg.yaw_init_sigma_rad.powi(2);
         let mount_var = self.cfg.mount_init_sigma_rad.powi(2);
-        raw.p[15][15] = mount_var;
-        raw.p[16][16] = mount_var;
+        let mount_roll_pitch_var = self.cfg.mount_roll_pitch_init_sigma_rad.powi(2);
+        raw.p[15][15] = mount_roll_pitch_var;
+        raw.p[16][16] = mount_roll_pitch_var;
         raw.p[17][17] = mount_var;
         if self.effective_freeze_misalignment_states() {
             self.eskf.set_freeze_misalignment_states(true);

@@ -118,7 +118,7 @@ impl RustEskf {
     /// Initializes nominal attitude, velocity, and position from a GNSS sample.
     pub fn init_nominal_from_gnss(&mut self, q_bn: [f32; 4], gnss: EskfGnssSample) {
         const DEFAULT_GYRO_BIAS_SIGMA_DPS: f32 = 0.125;
-        const DEFAULT_ACCEL_BIAS_SIGMA_MPS2: f32 = 0.20;
+        const DEFAULT_ACCEL_BIAS_SIGMA_MPS2: f32 = 0.075;
 
         self.raw.nominal.q0 = q_bn[0];
         self.raw.nominal.q1 = q_bn[1];
@@ -184,10 +184,13 @@ impl RustEskf {
 
         let dt = imu.dt;
         let mut q = [0.0; NOISE_STATES];
-        q[0] = self.raw.noise.gyro_var * dt * dt;
+        // `gyro_var` and `accel_var` are continuous white-noise densities.
+        // The generated G matrix maps those noises directly into attitude and
+        // velocity error, so the discrete covariance is density * dt.
+        q[0] = self.raw.noise.gyro_var * dt;
         q[1] = q[0];
         q[2] = q[0];
-        q[3] = self.raw.noise.accel_var * dt * dt;
+        q[3] = self.raw.noise.accel_var * dt;
         q[4] = q[3];
         q[5] = q[3];
         q[6] = self.raw.noise.gyro_bias_rw_var * dt;

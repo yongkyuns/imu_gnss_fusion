@@ -65,9 +65,9 @@ struct Args {
     early_fault_start_s: f64,
     #[arg(long, default_value_t = 200.0)]
     early_fault_end_s: f64,
-    #[arg(long, default_value_t = 0.005)]
+    #[arg(long, default_value_t = 0.5)]
     r_body_vel: f32,
-    #[arg(long, default_value_t = 0.005)]
+    #[arg(long, default_value_t = 0.125)]
     r_body_vel_z: f32,
     #[arg(long, default_value_t = 0.0)]
     gnss_pos_mount_scale: f32,
@@ -77,9 +77,9 @@ struct Args {
     yaw_init_sigma_deg: f32,
     #[arg(long, default_value_t = 0.125)]
     gyro_bias_init_sigma_dps: f32,
-    #[arg(long, default_value_t = 0.20)]
+    #[arg(long, default_value_t = 0.075)]
     accel_bias_init_sigma_mps2: f32,
-    #[arg(long, default_value_t = 2.5)]
+    #[arg(long, default_value_t = 6.0)]
     mount_init_sigma_deg: f32,
     #[arg(long, default_value_t = 0.04)]
     r_vehicle_speed: f32,

@@ -118,6 +118,8 @@ struct Args {
     #[arg(long)]
     accel_bias_init_sigma_mps2: Option<f32>,
     #[arg(long)]
+    mount_roll_pitch_init_sigma_deg: Option<f32>,
+    #[arg(long)]
     mount_init_sigma_deg: Option<f32>,
     #[arg(long)]
     r_vehicle_speed: Option<f32>,
@@ -192,6 +194,9 @@ fn main() -> Result<()> {
         accel_bias_init_sigma_mps2: args
             .accel_bias_init_sigma_mps2
             .unwrap_or(EkfCompareConfig::default().accel_bias_init_sigma_mps2),
+        mount_roll_pitch_init_sigma_deg: args
+            .mount_roll_pitch_init_sigma_deg
+            .unwrap_or(EkfCompareConfig::default().mount_roll_pitch_init_sigma_deg),
         mount_init_sigma_deg: args
             .mount_init_sigma_deg
             .unwrap_or(EkfCompareConfig::default().mount_init_sigma_deg),
@@ -336,7 +341,7 @@ fn main() -> Result<()> {
         tmax
     );
     eprintln!(
-        "[profile] ekf-only misalignment={:?} predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} r_body_vel_y={:.3} r_body_vel_z={:.3} gnss_pos_mount_scale={:.3} gnss_vel_mount_scale={:.3} yaw_init_sigma_deg={:.3} gyro_bias_init_sigma_dps={:.3} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} mount_update_min_scale={:.3} mount_update_ramp_time_s={:.3} mount_update_innovation_gate_mps={:.3} align_handoff_delay_s={:.3} freeze_misalignment_states={} mount_settle_time_s={:.3} mount_settle_release_sigma_deg={:.3} mount_settle_zero_cross_covariance={}",
+        "[profile] ekf-only misalignment={:?} predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} r_body_vel_y={:.3} r_body_vel_z={:.3} gnss_pos_mount_scale={:.3} gnss_vel_mount_scale={:.3} yaw_init_sigma_deg={:.3} gyro_bias_init_sigma_dps={:.3} mount_roll_pitch_init_sigma_deg={:.3} mount_yaw_init_sigma_deg={:.3} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} mount_update_min_scale={:.3} mount_update_ramp_time_s={:.3} mount_update_innovation_gate_mps={:.3} align_handoff_delay_s={:.3} freeze_misalignment_states={} mount_settle_time_s={:.3} mount_settle_release_sigma_deg={:.3} mount_settle_zero_cross_covariance={}",
         args.misalignment,
         ekf_cfg.predict_imu_decimation,
         ekf_cfg
@@ -349,6 +354,8 @@ fn main() -> Result<()> {
         ekf_cfg.gnss_vel_mount_scale,
         ekf_cfg.yaw_init_sigma_deg,
         ekf_cfg.gyro_bias_init_sigma_dps,
+        ekf_cfg.mount_roll_pitch_init_sigma_deg,
+        ekf_cfg.mount_init_sigma_deg,
         ekf_cfg.r_vehicle_speed,
         ekf_cfg.r_zero_vel,
         ekf_cfg.r_stationary_accel,
@@ -1459,6 +1466,41 @@ fn print_reference_error_summaries(data: &PlotData) {
                 summary.rmse_error.unwrap_or(f64::NAN),
                 summary.p95_abs_error.unwrap_or(f64::NAN),
                 summary.tail_span_error.unwrap_or(f64::NAN),
+                summary.tail_drift_value,
+            );
+        }
+    }
+    for (system, traces, trace_name) in [
+        (
+            "ESKF",
+            data.eskf_misalignment.as_slice(),
+            "ESKF mount quaternion error [deg]",
+        ),
+        (
+            "Loose",
+            data.loose_misalignment.as_slice(),
+            "Loose mount quaternion error [deg]",
+        ),
+        (
+            "Align",
+            data.align_cmp_att.as_slice(),
+            "Align mount quaternion error [deg]",
+        ),
+    ] {
+        let Some(trace) = find_trace(traces, trace_name) else {
+            continue;
+        };
+        if let Some(summary) =
+            summarize_trace_pair(system, "mount_qerr", trace, None, SummaryMode::Linear, None)
+        {
+            eprintln!(
+                "[profile] qerr system={} samples={} final={:.6} mean={:.6} max={:.6} tail_span={:.6} tail_drift={:.6}",
+                system,
+                summary.sample_count,
+                summary.final_value,
+                summary.mean_value,
+                summary.max_value,
+                summary.tail_span_value,
                 summary.tail_drift_value,
             );
         }

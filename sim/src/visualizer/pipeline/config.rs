@@ -15,6 +15,10 @@ pub struct EkfCompareConfig {
     pub yaw_init_sigma_deg: f32,
     pub gyro_bias_init_sigma_dps: f32,
     pub accel_bias_init_sigma_mps2: f32,
+    /// Initial residual mount roll/pitch sigma, in degrees.
+    #[serde(default = "default_mount_roll_pitch_init_sigma_deg")]
+    pub mount_roll_pitch_init_sigma_deg: f32,
+    /// Initial residual mount yaw sigma, in degrees.
     pub mount_init_sigma_deg: f32,
     pub r_vehicle_speed: f32,
     pub mount_align_rw_var: f32,
@@ -50,8 +54,9 @@ impl Default for EkfCompareConfig {
             gnss_vel_mount_scale: 1.0,
             yaw_init_sigma_deg: 2.0,
             gyro_bias_init_sigma_dps: 0.125,
-            accel_bias_init_sigma_mps2: 0.20,
-            mount_init_sigma_deg: 2.5,
+            accel_bias_init_sigma_mps2: 0.075,
+            mount_roll_pitch_init_sigma_deg: default_mount_roll_pitch_init_sigma_deg(),
+            mount_init_sigma_deg: 6.0,
             r_vehicle_speed: 0.04,
             mount_align_rw_var: 1.0e-7,
             mount_update_min_scale: 0.008,
@@ -76,11 +81,15 @@ impl Default for EkfCompareConfig {
 }
 
 fn default_r_body_vel_y() -> f32 {
-    0.005
+    0.5
 }
 
 fn default_r_body_vel_z() -> f32 {
-    0.005
+    0.125
+}
+
+fn default_mount_roll_pitch_init_sigma_deg() -> f32 {
+    2.0
 }
 
 #[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -174,6 +183,10 @@ mod tests {
         assert_eq!(decoded.r_body_vel, cfg.r_body_vel);
         assert_eq!(decoded.r_body_vel_z, cfg.r_body_vel_z);
         assert_eq!(
+            decoded.mount_roll_pitch_init_sigma_deg,
+            cfg.mount_roll_pitch_init_sigma_deg
+        );
+        assert_eq!(
             decoded.predict_imu_lpf_cutoff_hz,
             cfg.predict_imu_lpf_cutoff_hz
         );
@@ -213,8 +226,8 @@ mod tests {
             "gnssVelMountScale": 0.0,
             "yawInitSigmaDeg": 2.0,
             "gyroBiasInitSigmaDps": 0.125,
-            "accelBiasInitSigmaMps2": 0.20,
-            "mountInitSigmaDeg": 2.5,
+            "accelBiasInitSigmaMps2": 0.075,
+            "mountInitSigmaDeg": 6.0,
             "rVehicleSpeed": 0.04,
             "mountAlignRwVar": 1.0e-7,
             "mountUpdateMinScale": 0.008,
@@ -251,6 +264,10 @@ mod tests {
             default_loose_mount_yaw_sigma_deg()
         );
         assert_eq!(decoded.r_body_vel_z, default_r_body_vel_z());
+        assert_eq!(
+            decoded.mount_roll_pitch_init_sigma_deg,
+            default_mount_roll_pitch_init_sigma_deg()
+        );
         assert!(decoded.predict_noise.is_some());
         assert!(decoded.loose_predict_noise.is_some());
     }

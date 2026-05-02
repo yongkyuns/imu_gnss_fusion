@@ -2211,6 +2211,7 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig, mode: E
     fusion.set_yaw_init_sigma_rad(cfg.yaw_init_sigma_deg.to_radians());
     fusion.set_gyro_bias_init_sigma_radps(cfg.gyro_bias_init_sigma_dps.to_radians());
     fusion.set_accel_bias_init_sigma_mps2(cfg.accel_bias_init_sigma_mps2);
+    fusion.set_mount_roll_pitch_init_sigma_rad(cfg.mount_roll_pitch_init_sigma_deg.to_radians());
     fusion.set_mount_init_sigma_rad(cfg.mount_init_sigma_deg.to_radians());
     fusion.set_r_vehicle_speed(cfg.r_vehicle_speed);
     fusion.set_r_zero_vel(cfg.r_zero_vel);
