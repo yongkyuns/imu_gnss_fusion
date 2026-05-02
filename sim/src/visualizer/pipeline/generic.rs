@@ -10,7 +10,7 @@ use crate::datasets::generic_replay::{
     GenericGnssSample, GenericImuSample, GenericReferenceRpySample, fusion_gnss_sample,
     fusion_imu_sample,
 };
-use crate::eval::gnss_ins::{as_q64, quat_conj, quat_mul};
+use crate::eval::gnss_ins::{as_q64, quat_angle_deg, quat_conj, quat_mul};
 use crate::eval::replay::{ReplayEvent, for_each_event};
 use crate::visualizer::math::{ecef_to_ned, lla_to_ecef, ned_to_lla_exact, quat_rpy_deg};
 use crate::visualizer::model::{EkfImuSource, HeadingSample, PlotData, Trace};
@@ -724,6 +724,27 @@ fn add_auxiliary_generic_traces_impl(
         data.loose_cmp_att.extend(traces);
     }
     if let Some(reference) = reference_mount_series {
+        push_mount_quaternion_error_trace(
+            &mut data.eskf_misalignment,
+            "ESKF",
+            "ESKF mount",
+            reference_mount_rpy_deg,
+            replay.reference_mount.as_slice(),
+        );
+        push_mount_quaternion_error_trace(
+            &mut data.loose_misalignment,
+            "Loose",
+            "Loose residual mount",
+            reference_mount_rpy_deg,
+            replay.reference_mount.as_slice(),
+        );
+        push_mount_quaternion_error_trace(
+            &mut data.align_cmp_att,
+            "Align",
+            "Align",
+            reference_mount_rpy_deg,
+            replay.reference_mount.as_slice(),
+        );
         let traces = [
             Trace {
                 name: "Reference mount roll [deg]".to_string(),
@@ -741,6 +762,72 @@ fn add_auxiliary_generic_traces_impl(
         data.eskf_misalignment.extend(traces.clone());
         data.loose_misalignment.extend(traces);
     }
+}
+
+fn push_mount_quaternion_error_trace(
+    traces: &mut Vec<Trace>,
+    system_label: &str,
+    trace_prefix: &str,
+    reference_mount_rpy_deg: Option<[f64; 3]>,
+    reference_mount_series: &[GenericReferenceRpySample],
+) {
+    if traces
+        .iter()
+        .any(|trace| trace.name == format!("{system_label} mount quaternion error [deg]"))
+    {
+        return;
+    }
+    let Some(roll) = trace_by_name(traces, &format!("{trace_prefix} roll [deg]")) else {
+        return;
+    };
+    let Some(pitch) = trace_by_name(traces, &format!("{trace_prefix} pitch [deg]")) else {
+        return;
+    };
+    let Some(yaw) = trace_by_name(traces, &format!("{trace_prefix} yaw [deg]")) else {
+        return;
+    };
+    let points = roll
+        .points
+        .iter()
+        .filter_map(|sample| {
+            let t_s = sample[0];
+            let pitch_deg = sample_trace_at(pitch, t_s)?;
+            let yaw_deg = sample_trace_at(yaw, t_s)?;
+            let reference = reference_mount_rpy_deg
+                .or_else(|| reference_rpy_at(reference_mount_series, t_s))?;
+            let q_est = reference_mount_rpy_to_q_vb([sample[1], pitch_deg, yaw_deg]);
+            let q_ref = reference_mount_rpy_to_q_vb(reference);
+            Some([t_s, quat_angle_deg(q_est, q_ref)])
+        })
+        .collect::<Vec<_>>();
+    if !points.is_empty() {
+        traces.push(Trace {
+            name: format!("{system_label} mount quaternion error [deg]"),
+            points,
+        });
+    }
+}
+
+fn trace_by_name<'a>(traces: &'a [Trace], name: &str) -> Option<&'a Trace> {
+    traces.iter().find(|trace| trace.name == name)
+}
+
+fn sample_trace_at(trace: &Trace, t_s: f64) -> Option<f64> {
+    let idx = trace.points.partition_point(|point| point[0] < t_s);
+    let point = match (idx.checked_sub(1), trace.points.get(idx)) {
+        (Some(prev_idx), Some(next)) => {
+            let prev = trace.points[prev_idx];
+            if (t_s - prev[0]).abs() <= (next[0] - t_s).abs() {
+                prev
+            } else {
+                *next
+            }
+        }
+        (Some(prev_idx), None) => trace.points[prev_idx],
+        (None, Some(next)) => *next,
+        (None, None) => return None,
+    };
+    point[1].is_finite().then_some(point[1])
 }
 
 fn populate_align_traces(
