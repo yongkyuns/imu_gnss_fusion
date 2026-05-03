@@ -710,6 +710,7 @@ impl LooseFilter {
             speed_acc_mps,
             None,
             dt_since_last_gnss_s,
+            reference_speed_mps(vel_ecef_mps),
             gyro_radps,
             accel_mps2,
             dt_s,
@@ -729,6 +730,31 @@ impl LooseFilter {
         accel_mps2: [f32; 3],
         dt_s: f32,
     ) {
+        self.fuse_reference_batch_full_with_nhc_speed(
+            pos_ecef_m,
+            vel_ecef_mps,
+            h_acc_m,
+            vel_std_ned_mps,
+            dt_since_last_gnss_s,
+            reference_speed_mps(vel_ecef_mps),
+            gyro_radps,
+            accel_mps2,
+            dt_s,
+        );
+    }
+
+    pub fn fuse_reference_batch_full_with_nhc_speed(
+        &mut self,
+        pos_ecef_m: Option<[f64; 3]>,
+        vel_ecef_mps: Option<[f32; 3]>,
+        h_acc_m: f32,
+        vel_std_ned_mps: Option<[f32; 3]>,
+        dt_since_last_gnss_s: f32,
+        nhc_gate_speed_mps: Option<f32>,
+        gyro_radps: [f32; 3],
+        accel_mps2: [f32; 3],
+        dt_s: f32,
+    ) {
         self.fuse_reference_batch_impl(
             pos_ecef_m,
             vel_ecef_mps,
@@ -736,6 +762,7 @@ impl LooseFilter {
             0.0,
             vel_std_ned_mps,
             dt_since_last_gnss_s,
+            nhc_gate_speed_mps,
             gyro_radps,
             accel_mps2,
             dt_s,
@@ -744,9 +771,20 @@ impl LooseFilter {
 
     /// Fuses loose-filter nonholonomic lateral and vertical velocity constraints.
     pub fn fuse_nhc_reference(&mut self, gyro_radps: [f32; 3], accel_mps2: [f32; 3], dt_s: f32) {
+        self.fuse_nhc_reference_with_speed(None, gyro_radps, accel_mps2, dt_s);
+    }
+
+    /// Fuses loose-filter nonholonomic constraints using an external speed gate.
+    pub fn fuse_nhc_reference_with_speed(
+        &mut self,
+        nhc_gate_speed_mps: Option<f32>,
+        gyro_radps: [f32; 3],
+        accel_mps2: [f32; 3],
+        dt_s: f32,
+    ) {
         if dt_s <= 0.0
             || !self.nhc_gate_allows(gyro_radps, accel_mps2)
-            || self.vehicle_speed_mps() < MIN_NHC_UPDATE_SPEED_MPS
+            || !nhc_speed_gate_allows(nhc_gate_speed_mps)
         {
             return;
         }
@@ -786,6 +824,7 @@ impl LooseFilter {
         speed_acc_mps: f32,
         vel_std_ned_mps: Option<[f32; 3]>,
         dt_since_last_gnss_s: f32,
+        nhc_gate_speed_mps: Option<f32>,
         gyro_radps: [f32; 3],
         accel_mps2: [f32; 3],
         dt_s: f32,
@@ -816,8 +855,7 @@ impl LooseFilter {
             0,
         );
 
-        if self.nhc_gate_allows(gyro_radps, accel_mps2)
-            && self.vehicle_speed_mps() >= MIN_NHC_UPDATE_SPEED_MPS
+        if self.nhc_gate_allows(gyro_radps, accel_mps2) && nhc_speed_gate_allows(nhc_gate_speed_mps)
         {
             let (vc_y_est, h_y) = generated_loose::nhc_y(&self.raw.nominal);
             let (vc_z_est, h_z) = generated_loose::nhc_z(&self.raw.nominal);
@@ -1053,14 +1091,6 @@ impl LooseFilter {
         ];
         vec_norm3(omega_is) < MAX_NHC_GYRO_NORM_RADPS
             && libm::fabsf(vec_norm3(f_s) - 9.81) < MAX_NHC_ACCEL_NORM_ERR_MPS2
-    }
-
-    fn vehicle_speed_mps(&self) -> f32 {
-        vec_norm3([
-            self.raw.nominal.vn,
-            self.raw.nominal.ve,
-            self.raw.nominal.vd,
-        ])
     }
 
     fn batch_update_joseph(
@@ -1373,6 +1403,17 @@ fn nhc_observation_dt(dt_s: f32) -> f32 {
     } else {
         NHC_REFERENCE_MAX_DT_S
     }
+}
+
+fn reference_speed_mps(vel_ecef_mps: Option<[f32; 3]>) -> Option<f32> {
+    vel_ecef_mps.map(vec_norm3)
+}
+
+fn nhc_speed_gate_allows(external_speed_mps: Option<f32>) -> bool {
+    let Some(speed_mps) = external_speed_mps else {
+        return false;
+    };
+    speed_mps.is_finite() && speed_mps >= MIN_NHC_UPDATE_SPEED_MPS
 }
 
 fn gravity_ecef_j2(x_e: [f32; 3]) -> [f32; 3] {

@@ -24,7 +24,9 @@ use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{ErrorEvent, MessageEvent, Worker, WorkerOptions, WorkerType};
 
 use super::math::{ecef_to_ned, heading_endpoint, lla_to_ecef};
-use super::model::{EkfImuSource, HeadingSample, Page, PlotData, Trace};
+use super::model::{
+    EkfImuSource, HeadingSample, Page, PlotData, StateContribution, Trace, UpdateInspectorSample,
+};
 use super::pipeline::synthetic::{SyntheticVisualizerConfig, build_synthetic_plot_data};
 use super::pipeline::{EkfCompareConfig, GnssOutageConfig};
 use super::stats::map_center_from_traces;
@@ -38,6 +40,7 @@ const PLOT_GRID_MIN_SPACING_PX: f32 = 14.0;
 const PLOT_GRID_MAX_SPACING_PX: f32 = 360.0;
 const PLOT_GRID_STRENGTH_SCALE: f64 = 0.45;
 const SIGMA_LOG10_FLOOR: f64 = 1.0e-6;
+const UPDATE_INSPECTOR_WINDOW_S: f64 = 2.0;
 #[cfg(target_arch = "wasm32")]
 const TIME_SERIES_PLOT_FRAME_PADDING: f32 = 26.0;
 #[cfg(target_arch = "wasm32")]
@@ -2433,6 +2436,9 @@ impl App {
                     self.overview_cursor_t_s = hovered_t_s;
                     ui.ctx().request_repaint();
                 }
+                if let Some(t_s) = hovered_t_s {
+                    draw_update_inspector_popup(ui, &self.data, t_s);
+                }
             });
     }
 
@@ -2995,7 +3001,7 @@ impl eframe::App for App {
             }
             Page::Motion => {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    draw_analysis_page(
+                    let _ = draw_analysis_page(
                         ui,
                         "Motion",
                         "Velocity and vehicle attitude comparisons.",
@@ -3076,8 +3082,17 @@ impl eframe::App for App {
                 });
             }
             Page::Mount => {
+                let mount_quat_error_log = log10_abs_traces_matching(
+                    [
+                        self.data.eskf_misalignment.as_slice(),
+                        self.data.loose_misalignment.as_slice(),
+                        self.data.align_cmp_att.as_slice(),
+                    ],
+                    &["quaternion error"],
+                );
+                let mut hovered_t_s = None;
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    draw_analysis_page(
+                    hovered_t_s = draw_analysis_page(
                         ui,
                         "Mount",
                         "Mount angle estimates and alignment diagnostics.",
@@ -3119,15 +3134,8 @@ impl eframe::App for App {
                                 true,
                             ),
                             plot_spec(
-                                "Mount Quaternion Error",
-                                concat_trace_refs_matching(
-                                    [
-                                        self.data.eskf_misalignment.as_slice(),
-                                        self.data.loose_misalignment.as_slice(),
-                                        self.data.align_cmp_att.as_slice(),
-                                    ],
-                                    &["quaternion error"],
-                                ),
+                                "Mount Quaternion Error: log10 deg",
+                                trace_refs(&mount_quat_error_log),
                                 true,
                             ),
                             plot_spec(
@@ -3145,7 +3153,11 @@ impl eframe::App for App {
                         self.max_points_per_trace,
                         self.trace_visibility(),
                     );
+                    if let Some(t_s) = hovered_t_s {
+                        draw_update_inspector_popup(ui, &self.data, t_s);
+                    }
                 });
+                self.overview_cursor_t_s = hovered_t_s;
             }
             Page::Calibration => {
                 let scale: Vec<&Trace> = self
@@ -3159,8 +3171,9 @@ impl eframe::App for App {
                     self.data.loose_mount_sigma.as_slice(),
                     self.data.align_cov.as_slice(),
                 ]);
+                let mut hovered_t_s = None;
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    draw_analysis_page(
+                    hovered_t_s = draw_analysis_page(
                         ui,
                         "Calibration",
                         "Biases, scale factors, and covariance diagonals.",
@@ -3207,11 +3220,15 @@ impl eframe::App for App {
                         self.max_points_per_trace,
                         self.trace_visibility(),
                     );
+                    if let Some(t_s) = hovered_t_s {
+                        draw_update_inspector_popup(ui, &self.data, t_s);
+                    }
                 });
+                self.overview_cursor_t_s = hovered_t_s;
             }
             Page::Sensors => {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    draw_analysis_page(
+                    let _ = draw_analysis_page(
                         ui,
                         "Sensors",
                         "Raw, calibrated, and filter input sensor signals.",
@@ -3284,7 +3301,7 @@ impl eframe::App for App {
                     .filter(|t| t.name.contains("FFT dom"))
                     .collect();
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    draw_analysis_page(
+                    let _ = draw_analysis_page(
                         ui,
                         "Diagnostics",
                         "Alignment windows, bump detector signals, and update contributions.",
@@ -4608,6 +4625,235 @@ fn plot_spec<'a>(title: &'static str, traces: Vec<&'a Trace>, show_legend: bool)
     }
 }
 
+fn draw_update_inspector_popup(ui: &mut egui::Ui, data: &PlotData, t_s: f64) {
+    let samples = window_update_inspector_samples(
+        &data.update_inspector,
+        t_s - UPDATE_INSPECTOR_WINDOW_S,
+        t_s,
+    );
+    if samples.is_empty() {
+        return;
+    }
+    let columns = top_inspector_states(&samples, 8);
+    if columns.is_empty() {
+        return;
+    }
+    let max_abs = samples
+        .iter()
+        .flat_map(|sample| sample.contributions.iter())
+        .filter(|contribution| columns.iter().any(|name| name == &contribution.state))
+        .map(|contribution| contribution.value.abs())
+        .fold(0.0_f64, f64::max)
+        .max(1.0e-12);
+
+    let ctx = ui.ctx().clone();
+    let screen_rect = ctx.content_rect();
+    let popup_width = (screen_rect.width() - 16.0).clamp(320.0, 780.0);
+    let popup_height = 228.0;
+    let pos = egui::pos2(
+        screen_rect.right() - popup_width - 8.0,
+        screen_rect.top() + 8.0,
+    );
+    egui::Area::new(egui::Id::new("update_inspector_popup"))
+        .order(egui::Order::Tooltip)
+        .fixed_pos(pos)
+        .show(&ctx, |ui| {
+            egui::Frame::popup(ui.style())
+                .inner_margin(egui::Margin::same(8))
+                .show(ui, |ui| {
+                    ui.set_min_size(egui::vec2(popup_width, popup_height));
+                    render_update_inspector_contents(ui, t_s, &samples, &columns, max_abs);
+                });
+        });
+}
+
+fn render_update_inspector_contents(
+    ui: &mut egui::Ui,
+    t_s: f64,
+    samples: &[UpdateInspectorSample],
+    columns: &[String],
+    max_abs: f64,
+) {
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Update Inspector").strong());
+        ui.label(
+            egui::RichText::new(format!(
+                "window = {:.2}-{t_s:.2} s",
+                t_s - UPDATE_INSPECTOR_WINDOW_S
+            ))
+            .weak(),
+        );
+    });
+    ui.add_space(4.0);
+    egui::ScrollArea::horizontal()
+        .id_salt("update_inspector_heatmap")
+        .max_height(154.0)
+        .show(ui, |ui| {
+            egui::Grid::new("update_inspector_grid")
+                .striped(false)
+                .spacing(egui::vec2(4.0, 4.0))
+                .show(ui, |ui| {
+                    ui.label("");
+                    for column in columns {
+                        ui.label(egui::RichText::new(column).small().strong());
+                    }
+                    ui.end_row();
+
+                    for sample in samples {
+                        let residual = sample
+                            .residual
+                            .map(|v| format!(" r={v:+.3}"))
+                            .unwrap_or_default();
+                        let nis = sample
+                            .nis
+                            .map(|v| format!(" NIS={v:.2}"))
+                            .unwrap_or_default();
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} {} ({:+.3}s){}{}",
+                                sample.filter,
+                                sample.update,
+                                sample.t_s - t_s,
+                                residual,
+                                nis
+                            ))
+                            .small(),
+                        );
+                        for column in columns {
+                            let contribution = sample
+                                .contributions
+                                .iter()
+                                .find(|contribution| &contribution.state == column);
+                            draw_inspector_cell(ui, contribution, max_abs);
+                        }
+                        ui.end_row();
+                    }
+                });
+        });
+    if let Some(sample) = samples.first() {
+        let mut ranked = sample.contributions.clone();
+        ranked.sort_by(|a, b| b.value.abs().total_cmp(&a.value.abs()));
+        let summary = ranked
+            .into_iter()
+            .filter(|c| c.value.abs() > 0.0)
+            .take(5)
+            .map(|c| format!("{} {:+.4} {}", c.state, c.value, c.unit))
+            .collect::<Vec<_>>()
+            .join("  ");
+        if !summary.is_empty() {
+            ui.label(egui::RichText::new(summary).small().weak());
+        }
+    }
+}
+
+fn window_update_inspector_samples(
+    samples: &[UpdateInspectorSample],
+    start_t_s: f64,
+    end_t_s: f64,
+) -> Vec<UpdateInspectorSample> {
+    let mut out = Vec::<UpdateInspectorSample>::new();
+    for sample in samples
+        .iter()
+        .filter(|sample| sample.t_s >= start_t_s && sample.t_s <= end_t_s)
+    {
+        let Some(existing) = out
+            .iter_mut()
+            .find(|existing| existing.filter == sample.filter && existing.update == sample.update)
+        else {
+            let mut sample = sample.clone();
+            sample.residual = sample.residual.map(f64::abs);
+            sample.nis = sample.nis.map(f64::abs);
+            out.push(sample);
+            continue;
+        };
+        existing.t_s = sample.t_s;
+        existing.residual = match (existing.residual, sample.residual) {
+            (Some(a), Some(b)) => Some(a + b.abs()),
+            (None, Some(b)) => Some(b.abs()),
+            (value, None) => value,
+        };
+        existing.nis = match (existing.nis, sample.nis) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (None, Some(b)) => Some(b),
+            (value, None) => value,
+        };
+        for contribution in &sample.contributions {
+            if let Some(existing_contribution) = existing
+                .contributions
+                .iter_mut()
+                .find(|existing| existing.state == contribution.state)
+            {
+                existing_contribution.value += contribution.value;
+            } else {
+                existing.contributions.push(contribution.clone());
+            }
+        }
+    }
+    out.sort_by(|a, b| {
+        a.filter
+            .cmp(&b.filter)
+            .then_with(|| a.update.cmp(&b.update))
+    });
+    out
+}
+
+fn top_inspector_states(samples: &[UpdateInspectorSample], max_states: usize) -> Vec<String> {
+    let mut totals = Vec::<(String, f64)>::new();
+    for sample in samples {
+        for contribution in &sample.contributions {
+            if let Some((_, total)) = totals
+                .iter_mut()
+                .find(|(state, _)| state == &contribution.state)
+            {
+                *total += contribution.value.abs();
+            } else {
+                totals.push((contribution.state.clone(), contribution.value.abs()));
+            }
+        }
+    }
+    totals.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    totals
+        .into_iter()
+        .filter(|(_, value)| *value > 0.0)
+        .take(max_states)
+        .map(|(state, _)| state)
+        .collect()
+}
+
+fn draw_inspector_cell(ui: &mut egui::Ui, contribution: Option<&StateContribution>, max_abs: f64) {
+    let Some(contribution) = contribution else {
+        ui.label(egui::RichText::new(" ").small());
+        return;
+    };
+    let normalized = (contribution.value.abs() / max_abs).clamp(0.0, 1.0) as f32;
+    let alpha = (38.0 + 170.0 * normalized) as u8;
+    let color = if contribution.value >= 0.0 {
+        egui::Color32::from_rgba_premultiplied(186, 62, 70, alpha)
+    } else {
+        egui::Color32::from_rgba_premultiplied(53, 112, 190, alpha)
+    };
+    let text_color = if normalized > 0.55 {
+        egui::Color32::WHITE
+    } else {
+        ui.visuals().text_color()
+    };
+    egui::Frame::new()
+        .fill(color)
+        .corner_radius(egui::CornerRadius::same(3))
+        .inner_margin(egui::Margin::symmetric(5, 2))
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(format!("{:+.3}", contribution.value))
+                    .small()
+                    .color(text_color),
+            )
+            .on_hover_text(format!(
+                "{} / {}: {:+.6} {}",
+                contribution.group, contribution.state, contribution.value, contribution.unit
+            ));
+        });
+}
+
 fn trace_refs(traces: &[Trace]) -> Vec<&Trace> {
     traces.iter().filter(|t| !t.points.is_empty()).collect()
 }
@@ -4626,6 +4872,30 @@ fn log10_sigma_traces<const N: usize>(groups: [&[Trace]; N]) -> Vec<Trace> {
                     let sigma = p[1].abs().max(SIGMA_LOG10_FLOOR);
                     [p[0], sigma.log10()]
                 })
+                .collect();
+            out.push(Trace {
+                name: format!("{} log10", trace.name),
+                points,
+            });
+        }
+    }
+    out
+}
+
+fn log10_abs_traces_matching<const N: usize>(groups: [&[Trace]; N], tokens: &[&str]) -> Vec<Trace> {
+    let mut out = Vec::new();
+    for group in groups {
+        for trace in group {
+            if trace.points.is_empty()
+                || !tokens.iter().any(|token| trace.name.contains(token))
+                || out.iter().any(|t: &Trace| t.name == trace.name)
+            {
+                continue;
+            }
+            let points = trace
+                .points
+                .iter()
+                .map(|p| [p[0], p[1].abs().max(SIGMA_LOG10_FLOOR).log10()])
                 .collect();
             out.push(Trace {
                 name: format!("{} log10", trace.name),
@@ -4728,10 +4998,11 @@ fn draw_analysis_page(
     plots: Vec<PlotSpec<'_>>,
     max_points_per_trace: usize,
     visibility: TraceVisibility,
-) {
+) -> Option<f64> {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            let mut hovered_t_s = None;
             page_header(ui, title, subtitle);
             let plots: Vec<PlotSpec<'_>> = plots
                 .into_iter()
@@ -4746,7 +5017,7 @@ fn draw_analysis_page(
                 ui.centered_and_justified(|ui| {
                     ui.label(egui::RichText::new("No data").weak());
                 });
-                return;
+                return None;
             }
             let min_plot_width = 560.0;
             let column_count =
@@ -4754,16 +5025,21 @@ fn draw_analysis_page(
             ui.columns(column_count, |cols| {
                 for (idx, spec) in plots.into_iter().enumerate() {
                     let column = idx % column_count;
-                    draw_plot(
+                    if let Some(t_s) = draw_plot_with_cursor_time(
                         &mut cols[column],
                         spec.title,
                         spec.traces.iter().copied(),
                         spec.show_legend,
                         max_points_per_trace,
-                    );
+                        hovered_t_s,
+                    ) {
+                        hovered_t_s = Some(t_s);
+                    }
                 }
             });
-        });
+            hovered_t_s
+        })
+        .inner
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -4775,18 +5051,6 @@ fn responsive_plot_height(width: f32) -> f32 {
     } else {
         TIME_SERIES_PLOT_HEIGHT
     }
-}
-
-fn draw_plot<'a, I>(
-    ui: &mut egui::Ui,
-    title: &str,
-    traces: I,
-    show_legend: bool,
-    max_points_per_trace: usize,
-) where
-    I: IntoIterator<Item = &'a Trace>,
-{
-    let _ = draw_plot_with_cursor_time(ui, title, traces, show_legend, max_points_per_trace, None);
 }
 
 fn draw_plot_with_cursor_time<'a, I>(

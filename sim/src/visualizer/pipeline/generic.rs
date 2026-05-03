@@ -13,12 +13,15 @@ use crate::datasets::generic_replay::{
 use crate::eval::gnss_ins::{as_q64, quat_angle_deg, quat_conj, quat_mul};
 use crate::eval::replay::{ReplayEvent, for_each_event};
 use crate::visualizer::math::{ecef_to_ned, lla_to_ecef, ned_to_lla_exact, quat_rpy_deg};
-use crate::visualizer::model::{EkfImuSource, HeadingSample, PlotData, Trace};
+use crate::visualizer::model::{
+    EkfImuSource, HeadingSample, PlotData, StateContribution, Trace, UpdateInspectorSample,
+};
 use crate::visualizer::pipeline::{EkfCompareConfig, GnssOutageConfig};
 
 const DIAG_BODY_VEL_Y: usize = 4;
 const DIAG_BODY_VEL_Z: usize = 5;
 const NHC_DIAG_TYPES: [(usize, &str); 2] = [(DIAG_BODY_VEL_Y, "NHC Y"), (DIAG_BODY_VEL_Z, "NHC Z")];
+const LOOSE_NHC_GNSS_SPEED_MAX_AGE_S: f64 = 1.0;
 
 pub struct GenericReplayInput {
     pub imu: Vec<GenericImuSample>,
@@ -307,6 +310,7 @@ fn build_generic_replay_plot_data_impl(
     let mut eskf_nhc_innovation: [Vec<[f64; 2]>; 2] = std::array::from_fn(|_| Vec::new());
     let mut eskf_nhc_nis: [Vec<[f64; 2]>; 2] = std::array::from_fn(|_| Vec::new());
     let mut eskf_nhc_h_mount_norm: [Vec<[f64; 2]>; 2] = std::array::from_fn(|_| Vec::new());
+    let mut update_inspector = Vec::new();
     let mut last_eskf_update_count = 0u32;
     let mut last_eskf_type_counts = [0u32; ESKF_UPDATE_DIAG_TYPES];
     let mut eskf_map = Vec::new();
@@ -355,6 +359,7 @@ fn build_generic_replay_plot_data_impl(
                 &mut eskf_nhc_innovation,
                 &mut eskf_nhc_nis,
                 &mut eskf_nhc_h_mount_norm,
+                &mut update_inspector,
                 &mut last_eskf_type_counts,
                 &mut eskf_map,
                 &mut eskf_outage_map,
@@ -647,6 +652,7 @@ fn build_generic_replay_plot_data_impl(
             },
         ],
         eskf_map_heading: eskf_heading,
+        update_inspector,
         ..PlotData::default()
     };
     add_auxiliary_generic_traces_impl(
@@ -1225,12 +1231,19 @@ fn populate_loose_traces(
                 };
                 last_gnss_used_t_s = gnss.t_s;
             }
-            loose.fuse_reference_batch_full(
+            let nhc_gate_speed_mps = latest_gnss.and_then(|gnss| {
+                let age_s = sample.t_s - gnss.t_s;
+                (0.0..=LOOSE_NHC_GNSS_SPEED_MAX_AGE_S)
+                    .contains(&age_s)
+                    .then(|| gnss.vel_ned_mps[0].hypot(gnss.vel_ned_mps[1]) as f32)
+            });
+            loose.fuse_reference_batch_full_with_nhc_speed(
                 gps_pos,
                 gps_vel,
                 gps_pos_std,
                 gps_vel_std,
                 dt_since_gnss,
+                nhc_gate_speed_mps,
                 gyro_vehicle_radps.map(|v| v as f32),
                 accel_vehicle_mps2.map(|v| v as f32),
                 dt as f32,
@@ -1270,6 +1283,7 @@ fn populate_loose_traces(
                 &mut cov_mount,
                 &mut dx_mount,
                 &mut nhc_innovation,
+                &mut data.update_inspector,
                 &mut map,
                 &mut headings,
             );
@@ -1588,6 +1602,7 @@ fn append_eskf_sample(
     nhc_innovation: &mut [Vec<[f64; 2]>; 2],
     nhc_nis: &mut [Vec<[f64; 2]>; 2],
     nhc_h_mount_norm: &mut [Vec<[f64; 2]>; 2],
+    update_inspector: &mut Vec<UpdateInspectorSample>,
     last_type_counts: &mut [u32; ESKF_UPDATE_DIAG_TYPES],
     map: &mut Vec<[f64; 2]>,
     outage_map: &mut Vec<[f64; 2]>,
@@ -1647,7 +1662,7 @@ fn append_eskf_sample(
         mount_dx[2].push([t_s, (diag.last_dx_mount_yaw as f64).to_degrees()]);
         *last_update_count = diag.total_updates;
     }
-    for (diag_i, (diag_type, _)) in NHC_DIAG_TYPES.iter().copied().enumerate() {
+    for (diag_i, (diag_type, label)) in NHC_DIAG_TYPES.iter().copied().enumerate() {
         if diag.type_counts[diag_type] != last_type_counts[diag_type] {
             nhc_mount_dx[diag_i * 3].push([
                 t_s,
@@ -1664,6 +1679,15 @@ fn append_eskf_sample(
             nhc_innovation[diag_i].push([t_s, diag.last_innovation_by_type[diag_type] as f64]);
             nhc_nis[diag_i].push([t_s, diag.last_nis_by_type[diag_type] as f64]);
             nhc_h_mount_norm[diag_i].push([t_s, diag.last_h_mount_norm_by_type[diag_type] as f64]);
+            update_inspector.push(eskf_nhc_inspector_sample(
+                t_s,
+                label,
+                diag.last_innovation_by_type[diag_type],
+                diag.last_nis_by_type[diag_type],
+                diag.last_dx_mount_roll_by_type[diag_type],
+                diag.last_dx_mount_pitch_by_type[diag_type],
+                diag.last_dx_mount_yaw_by_type[diag_type],
+            ));
             last_type_counts[diag_type] = diag.type_counts[diag_type];
         }
     }
@@ -1807,6 +1831,7 @@ fn append_loose_sample(
     cov_mount: &mut [Vec<[f64; 2]>; 3],
     dx_mount: &mut [Vec<[f64; 2]>; 3],
     nhc_innovation: &mut [Vec<[f64; 2]>; 2],
+    update_inspector: &mut Vec<UpdateInspectorSample>,
     map: &mut Vec<[f64; 2]>,
     headings: &mut Vec<HeadingSample>,
 ) {
@@ -1892,6 +1917,7 @@ fn append_loose_sample(
         for (dst, idx) in dx_mount.iter_mut().zip([21usize, 22, 23]) {
             dst.push([t_s, (dx[idx] as f64).to_degrees()]);
         }
+        update_inspector.push(loose_inspector_sample(t_s, loose));
         let obs_types = loose.last_obs_types();
         if obs_types.contains(&7) || obs_types.contains(&8) {
             let (vc_y, _) = generated_loose::nhc_y(loose.nominal());
@@ -1904,6 +1930,148 @@ fn append_loose_sample(
             }
         }
     }
+}
+
+fn eskf_nhc_inspector_sample(
+    t_s: f64,
+    label: &str,
+    innovation: f32,
+    nis: f32,
+    mount_roll_dx_rad: f32,
+    mount_pitch_dx_rad: f32,
+    mount_yaw_dx_rad: f32,
+) -> UpdateInspectorSample {
+    let contributions = [
+        ("mount roll", mount_roll_dx_rad),
+        ("mount pitch", mount_pitch_dx_rad),
+        ("mount yaw", mount_yaw_dx_rad),
+    ]
+    .into_iter()
+    .map(|(state, value)| StateContribution {
+        state: state.to_string(),
+        group: "mount".to_string(),
+        unit: "deg".to_string(),
+        value: (value as f64).to_degrees(),
+    })
+    .collect();
+    UpdateInspectorSample {
+        t_s,
+        filter: "ESKF".to_string(),
+        update: label.to_string(),
+        residual: Some(innovation as f64),
+        nis: Some(nis as f64),
+        contributions,
+    }
+}
+
+fn loose_inspector_sample(t_s: f64, loose: &LooseFilter) -> UpdateInspectorSample {
+    let obs_types = loose.last_obs_types();
+    let update = if obs_types.contains(&7) || obs_types.contains(&8) {
+        "batch + NHC"
+    } else {
+        "GNSS batch"
+    };
+    let dx = loose.last_dx();
+    UpdateInspectorSample {
+        t_s,
+        filter: "Loose".to_string(),
+        update: update.to_string(),
+        residual: None,
+        nis: None,
+        contributions: loose_state_contributions(dx),
+    }
+}
+
+fn loose_state_contributions(dx: &[f32; LOOSE_ERROR_STATES]) -> Vec<StateContribution> {
+    const STATES: [(&str, &str, &str, usize, f64); 24] = [
+        ("pos X", "position", "m", 0, 1.0),
+        ("pos Y", "position", "m", 1, 1.0),
+        ("pos Z", "position", "m", 2, 1.0),
+        ("vel X", "velocity", "m/s", 3, 1.0),
+        ("vel Y", "velocity", "m/s", 4, 1.0),
+        ("vel Z", "velocity", "m/s", 5, 1.0),
+        (
+            "att roll",
+            "attitude",
+            "deg",
+            6,
+            180.0 / core::f64::consts::PI,
+        ),
+        (
+            "att pitch",
+            "attitude",
+            "deg",
+            7,
+            180.0 / core::f64::consts::PI,
+        ),
+        (
+            "att yaw",
+            "attitude",
+            "deg",
+            8,
+            180.0 / core::f64::consts::PI,
+        ),
+        ("accel bias X", "accel bias", "m/s^2", 9, 1.0),
+        ("accel bias Y", "accel bias", "m/s^2", 10, 1.0),
+        ("accel bias Z", "accel bias", "m/s^2", 11, 1.0),
+        (
+            "gyro bias X",
+            "gyro bias",
+            "deg/s",
+            12,
+            180.0 / core::f64::consts::PI,
+        ),
+        (
+            "gyro bias Y",
+            "gyro bias",
+            "deg/s",
+            13,
+            180.0 / core::f64::consts::PI,
+        ),
+        (
+            "gyro bias Z",
+            "gyro bias",
+            "deg/s",
+            14,
+            180.0 / core::f64::consts::PI,
+        ),
+        ("accel scale X", "accel scale", "", 15, 1.0),
+        ("accel scale Y", "accel scale", "", 16, 1.0),
+        ("accel scale Z", "accel scale", "", 17, 1.0),
+        ("gyro scale X", "gyro scale", "", 18, 1.0),
+        ("gyro scale Y", "gyro scale", "", 19, 1.0),
+        ("gyro scale Z", "gyro scale", "", 20, 1.0),
+        (
+            "mount roll",
+            "mount",
+            "deg",
+            21,
+            180.0 / core::f64::consts::PI,
+        ),
+        (
+            "mount pitch",
+            "mount",
+            "deg",
+            22,
+            180.0 / core::f64::consts::PI,
+        ),
+        (
+            "mount yaw",
+            "mount",
+            "deg",
+            23,
+            180.0 / core::f64::consts::PI,
+        ),
+    ];
+    STATES
+        .into_iter()
+        .map(|(state, group, unit, idx, scale)| StateContribution {
+            state: state.to_string(),
+            group: group.to_string(),
+            unit: unit.to_string(),
+            value: dx[idx] as f64 * scale,
+        })
+        .collect()
 }
 
 fn loose_gyro_sensor_bias_dps(n: &LooseNominalState) -> [f64; 3] {

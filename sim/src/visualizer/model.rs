@@ -67,6 +67,27 @@ pub struct PlotData {
     pub align_pitch_contrib: Vec<Trace>,
     pub align_yaw_contrib: Vec<Trace>,
     pub align_cov: Vec<Trace>,
+    pub update_inspector: Vec<UpdateInspectorSample>,
+}
+
+#[cfg_attr(target_arch = "wasm32", derive(serde::Deserialize, serde::Serialize))]
+#[derive(Clone, Default)]
+pub struct UpdateInspectorSample {
+    pub t_s: f64,
+    pub filter: String,
+    pub update: String,
+    pub residual: Option<f64>,
+    pub nis: Option<f64>,
+    pub contributions: Vec<StateContribution>,
+}
+
+#[cfg_attr(target_arch = "wasm32", derive(serde::Deserialize, serde::Serialize))]
+#[derive(Clone, Default)]
+pub struct StateContribution {
+    pub state: String,
+    pub group: String,
+    pub unit: String,
+    pub value: f64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
