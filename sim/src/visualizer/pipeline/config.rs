@@ -51,7 +51,7 @@ impl Default for EkfCompareConfig {
             r_body_vel: default_r_body_vel_y(),
             r_body_vel_z: default_r_body_vel_z(),
             gnss_pos_mount_scale: 0.0,
-            gnss_vel_mount_scale: 1.0,
+            gnss_vel_mount_scale: 0.0,
             yaw_init_sigma_deg: 2.0,
             gyro_bias_init_sigma_dps: 0.125,
             accel_bias_init_sigma_mps2: 0.15,

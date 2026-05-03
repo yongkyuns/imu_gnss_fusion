@@ -71,7 +71,7 @@ struct Args {
     r_body_vel_z: f32,
     #[arg(long, default_value_t = 0.0)]
     gnss_pos_mount_scale: f32,
-    #[arg(long, default_value_t = 1.0)]
+    #[arg(long, default_value_t = 0.0)]
     gnss_vel_mount_scale: f32,
     #[arg(long, default_value_t = 2.0)]
     yaw_init_sigma_deg: f32,

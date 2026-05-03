@@ -640,6 +640,8 @@ enum WebReplayWorkerJob {
         motion_label: String,
         motion_text: String,
         noise: WebSyntheticNoise,
+        early_vel_bias_ned_mps: [f64; 3],
+        early_fault_window_s: Option<[f64; 2]>,
     },
 }
 
@@ -713,6 +715,7 @@ enum WebRealDataSource {
 enum WebSyntheticScenario {
     CityBlocks,
     FigureEight,
+    FigureEightEarlyVelocityFault,
     StraightAccelBrake,
 }
 
@@ -881,6 +884,8 @@ fn web_replay_worker_request(
             motion_label,
             motion_text,
             noise,
+            early_vel_bias_ned_mps,
+            early_fault_window_s,
         } => {
             let _ = Reflect::set(
                 &source,
@@ -908,7 +913,7 @@ fn web_replay_worker_request(
                 &JsValue::from_str(noise.cli_value()),
             );
             let _ = Reflect::set(&source, &JsValue::from_str("seed"), &JsValue::from_f64(1.0));
-            let mount_rpy_deg = js_number_array([5.0, -5.0, 5.0]);
+            let mount_rpy_deg = js_number_array(&[5.0, -5.0, 5.0]);
             let _ = Reflect::set(
                 &source,
                 &JsValue::from_str("mountRpyDeg"),
@@ -929,12 +934,20 @@ fn web_replay_worker_request(
                 &JsValue::from_str("gnssTimeShiftMs"),
                 &JsValue::from_f64(0.0),
             );
-            let early_vel_bias_ned_mps = js_number_array([0.0, 0.0, 0.0]);
+            let early_vel_bias_ned_mps = js_number_array(early_vel_bias_ned_mps);
             let _ = Reflect::set(
                 &source,
                 &JsValue::from_str("earlyVelBiasNedMps"),
                 early_vel_bias_ned_mps.as_ref(),
             );
+            if let Some(window) = early_fault_window_s {
+                let early_fault_window_s = js_number_array(window);
+                let _ = Reflect::set(
+                    &source,
+                    &JsValue::from_str("earlyFaultWindowS"),
+                    early_fault_window_s.as_ref(),
+                );
+            }
         }
     }
     let _ = Reflect::set(&request, &JsValue::from_str("source"), source.as_ref());
@@ -957,10 +970,10 @@ fn web_replay_worker_request(
 }
 
 #[cfg(target_arch = "wasm32")]
-fn js_number_array(values: [f64; 3]) -> Array {
+fn js_number_array(values: &[f64]) -> Array {
     let array = Array::new();
     for value in values {
-        array.push(&JsValue::from_f64(value));
+        array.push(&JsValue::from_f64(*value));
     }
     array
 }
@@ -971,6 +984,9 @@ fn web_query_synthetic_scenario() -> Option<WebSyntheticScenario> {
         Some("city" | "city_blocks" | "city-blocks") => Some(WebSyntheticScenario::CityBlocks),
         Some("figure8" | "figure_eight" | "figure-eight") => {
             Some(WebSyntheticScenario::FigureEight)
+        }
+        Some("figure8_fault" | "figure-eight-fault" | "fig8_fault" | "bad_basin") => {
+            Some(WebSyntheticScenario::FigureEightEarlyVelocityFault)
         }
         Some("straight" | "straight_accel_brake" | "straight-accel-brake") => {
             Some(WebSyntheticScenario::StraightAccelBrake)
@@ -2123,6 +2139,7 @@ impl App {
     #[cfg(target_arch = "wasm32")]
     fn refresh_from_web_synthetic(&mut self, ctx: &egui::Context) {
         let (label, text) = self.web_scenario.scenario_text();
+        let (early_vel_bias_ned_mps, early_fault_window_s) = self.web_scenario.early_fault();
         self.web_input_mode = WebInputMode::Synthetic;
         self.start_web_replay_worker(
             WebReplayWorkerJob::Synthetic {
@@ -2130,6 +2147,8 @@ impl App {
                 motion_label: label.to_string(),
                 motion_text: text.to_string(),
                 noise: self.web_synthetic_noise,
+                early_vel_bias_ned_mps,
+                early_fault_window_s,
             },
             4.0,
             ctx,
@@ -2600,6 +2619,7 @@ impl WebSyntheticScenario {
         match self {
             Self::CityBlocks => "City blocks",
             Self::FigureEight => "Figure eight",
+            Self::FigureEightEarlyVelocityFault => "Figure eight early GNSS fault",
             Self::StraightAccelBrake => "Straight accel/brake",
         }
     }
@@ -2608,8 +2628,21 @@ impl WebSyntheticScenario {
         match self {
             Self::CityBlocks => ("city_blocks_builtin.scenario", CITY_BLOCKS_SCENARIO),
             Self::FigureEight => ("figure8_builtin.scenario", FIGURE_EIGHT_SCENARIO),
+            Self::FigureEightEarlyVelocityFault => (
+                "figure8_early_gnss_fault_builtin.scenario",
+                FIGURE_EIGHT_SCENARIO,
+            ),
             Self::StraightAccelBrake => {
                 ("straight_accel_brake_builtin.csv", STRAIGHT_ACCEL_BRAKE_CSV)
+            }
+        }
+    }
+
+    fn early_fault(self) -> ([f64; 3], Option<[f64; 2]>) {
+        match self {
+            Self::FigureEightEarlyVelocityFault => ([0.5, 0.0, 0.0], Some([0.0, 360.0])),
+            Self::CityBlocks | Self::FigureEight | Self::StraightAccelBrake => {
+                ([0.0, 0.0, 0.0], None)
             }
         }
     }
@@ -2840,6 +2873,12 @@ impl eframe::App for App {
                                                 &mut self.web_scenario,
                                                 WebSyntheticScenario::FigureEight,
                                                 WebSyntheticScenario::FigureEight.display_label(),
+                                            );
+                                            ui.selectable_value(
+                                                &mut self.web_scenario,
+                                                WebSyntheticScenario::FigureEightEarlyVelocityFault,
+                                                WebSyntheticScenario::FigureEightEarlyVelocityFault
+                                                    .display_label(),
                                             );
                                             ui.selectable_value(
                                                 &mut self.web_scenario,

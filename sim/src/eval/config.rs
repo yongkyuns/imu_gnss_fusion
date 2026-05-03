@@ -35,7 +35,7 @@ pub const EKF_COMPARE_DEFAULTS: EkfCompareConfigSnapshot = EkfCompareConfigSnaps
     r_body_vel: 0.5,
     r_body_vel_z: 0.125,
     gnss_pos_mount_scale: 0.0,
-    gnss_vel_mount_scale: 1.0,
+    gnss_vel_mount_scale: 0.0,
     yaw_init_sigma_deg: 2.0,
     gyro_bias_init_sigma_dps: 0.125,
     accel_bias_init_sigma_mps2: 0.15,

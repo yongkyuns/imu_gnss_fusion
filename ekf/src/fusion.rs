@@ -200,7 +200,7 @@ impl Default for FusionConfig {
             r_body_vel_y: 0.5,
             r_body_vel_z: 0.125,
             gnss_pos_mount_scale: 0.0,
-            gnss_vel_mount_scale: 1.0,
+            gnss_vel_mount_scale: 0.0,
             gnss_vel_xy_update_min_scale: 0.25,
             gnss_vel_update_ramp_time_s: 20.0,
             mount_update_min_scale: 0.008,

@@ -539,6 +539,48 @@ fn eskf_converges_on_generated_city_blocks_noisy_measurements() -> Result<()> {
 }
 
 #[test]
+fn synthetic_early_velocity_fault_does_not_drive_eskf_mount_by_default() -> Result<()> {
+    let profile_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("motion_profiles/figure8_15min.csv");
+    let profile = MotionProfile::from_csv(&profile_path)?;
+    let generated = generate(&profile, PathGenConfig::default())?;
+    let faulted_gnss = gnss_with_early_velocity_bias(&generated.gnss, [0.5, 0.0, 0.0], 360.0);
+
+    let clean = run_eskf_on_generated_path(&generated, [5.0, -5.0, 5.0])?;
+    let faulted_default = run_eskf_on_samples(
+        &generated,
+        &generated.imu,
+        &faulted_gnss,
+        [5.0, -5.0, 5.0],
+        [0.5, 0.5, 0.5],
+        [0.2, 0.2, 0.2],
+    )?;
+    let faulted_legacy_gnss_vel_mount_coupling = run_eskf_on_samples_configured(
+        &generated,
+        &generated.imu,
+        &faulted_gnss,
+        [5.0, -5.0, 5.0],
+        [0.5, 0.5, 0.5],
+        [0.2, 0.2, 0.2],
+        |fusion| fusion.set_gnss_vel_mount_scale(1.0),
+    )?;
+
+    assert!(
+        clean.tail_mount_quat_err_mean_deg < 0.15,
+        "clean figure-eight should not create a mount basin error: {clean:#?}"
+    );
+    assert!(
+        faulted_default.tail_mount_quat_err_mean_deg < 0.25,
+        "default ESKF should not let an early GNSS velocity fault directly push mount into a wrong basin: {faulted_default:#?}"
+    );
+    assert!(
+        (1.0..=2.5).contains(&faulted_legacy_gnss_vel_mount_coupling.tail_mount_quat_err_mean_deg),
+        "legacy direct GNSS velocity-to-mount coupling should reproduce the 1-2 deg wrong-basin behavior: {faulted_legacy_gnss_vel_mount_coupling:#?}"
+    );
+    Ok(())
+}
+
+#[test]
 fn synthetic_inputs_populate_visualizer_eskf_traces() -> Result<()> {
     let profile_path = std::env::temp_dir().join(format!(
         "imu_gnss_fusion_visualizer_short_{}.scenario",
@@ -905,6 +947,26 @@ fn run_eskf_on_samples(
     pos_std_m: [f64; 3],
     vel_std_mps: [f64; 3],
 ) -> Result<EskfSyntheticSummary> {
+    run_eskf_on_samples_configured(
+        reference,
+        imu_samples,
+        gnss_samples,
+        mount_rpy_deg,
+        pos_std_m,
+        vel_std_mps,
+        |_| {},
+    )
+}
+
+fn run_eskf_on_samples_configured(
+    reference: &sim::synthetic::gnss_ins_path::GeneratedPath,
+    imu_samples: &[sim::datasets::gnss_ins_sim::ImuSample],
+    gnss_samples: &[sim::datasets::gnss_ins_sim::GnssSample],
+    mount_rpy_deg: [f64; 3],
+    pos_std_m: [f64; 3],
+    vel_std_mps: [f64; 3],
+    configure: impl FnOnce(&mut SensorFusion),
+) -> Result<EskfSyntheticSummary> {
     let q_truth = quat_from_rpy_alg_deg(mount_rpy_deg[0], mount_rpy_deg[1], mount_rpy_deg[2]);
     let imu = imu_samples
         .iter()
@@ -932,6 +994,7 @@ fn run_eskf_on_samples(
     // This idealized convergence test exercises the IMU/GNSS formulation without
     // runtime stationary pseudo-measurements.
     fusion.set_r_zero_vel(0.0);
+    configure(&mut fusion);
     let ref_ecef = lla_to_ecef(
         reference.truth[0].lat_deg,
         reference.truth[0].lon_deg,
@@ -1023,6 +1086,24 @@ fn run_eskf_on_samples(
         final_gyro_bias_norm_dps: final_err.gyro_bias_norm_dps,
         final_accel_bias_norm_mps2: final_err.accel_bias_norm_mps2,
     })
+}
+
+fn gnss_with_early_velocity_bias(
+    gnss: &[sim::datasets::gnss_ins_sim::GnssSample],
+    bias_ned_mps: [f64; 3],
+    end_t_s: f64,
+) -> Vec<sim::datasets::gnss_ins_sim::GnssSample> {
+    gnss.iter()
+        .map(|sample| {
+            let mut sample = *sample;
+            if sample.t_s <= end_t_s {
+                for (velocity, bias) in sample.vel_ned_mps.iter_mut().zip(bias_ned_mps) {
+                    *velocity += bias;
+                }
+            }
+            sample
+        })
+        .collect()
 }
 
 fn assert_vec_close(label: &str, actual: [f64; 3], expected: [f64; 3], tol: f64) {
