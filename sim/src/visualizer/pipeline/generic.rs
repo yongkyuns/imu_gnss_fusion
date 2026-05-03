@@ -23,6 +23,9 @@ const DIAG_BODY_VEL_Y: usize = 4;
 const DIAG_BODY_VEL_Z: usize = 5;
 const NHC_DIAG_TYPES: [(usize, &str); 2] = [(DIAG_BODY_VEL_Y, "NHC Y"), (DIAG_BODY_VEL_Z, "NHC Z")];
 const LOOSE_NHC_GNSS_SPEED_MAX_AGE_S: f64 = 1.0;
+#[cfg(target_arch = "wasm32")]
+const WEB_BUILD_MAX_POINTS_PER_TRACE: usize =
+    crate::visualizer::replay_job::WEB_TRANSPORT_MAX_POINTS_PER_TRACE;
 
 pub struct GenericReplayInput {
     pub imu: Vec<GenericImuSample>,
@@ -98,6 +101,34 @@ impl GenericReplayInput {
             reference_attitude: Vec::new(),
             reference_mount: Vec::new(),
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ReplayOutputSampling {
+    imu_stride: usize,
+}
+
+impl ReplayOutputSampling {
+    fn for_replay(replay: &GenericReplayInput) -> Self {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let imu_stride = replay
+                .imu
+                .len()
+                .div_ceil(WEB_BUILD_MAX_POINTS_PER_TRACE)
+                .max(1);
+            Self { imu_stride }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = replay;
+            Self { imu_stride: 1 }
+        }
+    }
+
+    fn keep_imu(self, index: usize, total: usize) -> bool {
+        self.imu_stride <= 1 || index == 0 || index + 1 == total || index % self.imu_stride == 0
     }
 }
 
@@ -253,6 +284,8 @@ fn build_generic_replay_plot_data_impl(
     let ref_gnss = replay.gnss.first().copied();
     let ref_ecef = ref_gnss.map(|s| lla_to_ecef(s.lat_deg, s.lon_deg, s.height_m));
     let outage_windows = sample_outage_windows(&replay.gnss, gnss_outages);
+    let output_sampling = ReplayOutputSampling::for_replay(replay);
+    let imu_total = replay.imu.len();
 
     let mut raw_gyro_x = Vec::new();
     let mut raw_gyro_y = Vec::new();
@@ -321,9 +354,12 @@ fn build_generic_replay_plot_data_impl(
     let mut ekf_init_marker = Vec::new();
 
     for_each_event(&replay.imu, &replay.gnss, |event| match event {
-        ReplayEvent::Imu(_, sample) => {
+        ReplayEvent::Imu(index, sample) => {
             progress.report_stage(0.0, 0.55, sample.t_s);
             let _ = fusion.process_imu(fusion_imu_sample(*sample));
+            if !output_sampling.keep_imu(index, imu_total) {
+                return;
+            }
             raw_gyro_x.push([sample.t_s, sample.gyro_radps[0].to_degrees()]);
             raw_gyro_y.push([sample.t_s, sample.gyro_radps[1].to_degrees()]);
             raw_gyro_z.push([sample.t_s, sample.gyro_radps[2].to_degrees()]);
@@ -1170,11 +1206,15 @@ fn populate_loose_traces(
     let mut cov_mount: [Vec<[f64; 2]>; 3] = std::array::from_fn(|_| Vec::new());
     let mut dx_mount: [Vec<[f64; 2]>; 3] = std::array::from_fn(|_| Vec::new());
     let mut nhc_innovation: [Vec<[f64; 2]>; 2] = std::array::from_fn(|_| Vec::new());
+    let mut gnss_pos_gate_norm: [Vec<[f64; 2]>; 3] = std::array::from_fn(|_| Vec::new());
+    let mut gnss_pos_gate_status = Vec::new();
     let mut map = Vec::new();
     let mut headings = Vec::new();
+    let output_sampling = ReplayOutputSampling::for_replay(replay);
+    let imu_total = replay.imu.len();
 
     for_each_event(&replay.imu, &replay.gnss, |event| match event {
-        ReplayEvent::Imu(_, sample) => {
+        ReplayEvent::Imu(index, sample) => {
             progress.report_stage(0.72, 0.26, sample.t_s);
             let _ = align_fusion.process_imu(fusion_imu_sample(*sample));
             let Some(prev) = last_imu.replace(*sample) else {
@@ -1251,6 +1291,9 @@ fn populate_loose_traces(
                 accel_vehicle_mps2.map(|v| v as f32),
                 dt as f32,
             );
+            if !output_sampling.keep_imu(index, imu_total) {
+                return;
+            }
             append_loose_sample(
                 sample.t_s,
                 &loose,
@@ -1286,6 +1329,8 @@ fn populate_loose_traces(
                 &mut cov_mount,
                 &mut dx_mount,
                 &mut nhc_innovation,
+                &mut gnss_pos_gate_norm,
+                &mut gnss_pos_gate_status,
                 &mut data.update_inspector,
                 &mut map,
                 &mut headings,
@@ -1507,6 +1552,18 @@ fn populate_loose_traces(
             name: format!("Loose NHC {axis} innovation [m/s]"),
             points,
         })
+        .collect();
+    data.loose_gnss_pos_gate = ["row 0", "row 1", "row 2"]
+        .into_iter()
+        .zip(gnss_pos_gate_norm)
+        .map(|(row, points)| Trace {
+            name: format!("Loose GNSS position gate normalized residual {row}"),
+            points,
+        })
+        .chain(std::iter::once(Trace {
+            name: "Loose GNSS position accepted".to_string(),
+            points: gnss_pos_gate_status,
+        }))
         .collect();
     data.loose_map = vec![Trace {
         name: "Loose path (lon,lat)".to_string(),
@@ -1835,6 +1892,8 @@ fn append_loose_sample(
     cov_mount: &mut [Vec<[f64; 2]>; 3],
     dx_mount: &mut [Vec<[f64; 2]>; 3],
     nhc_innovation: &mut [Vec<[f64; 2]>; 2],
+    gnss_pos_gate_norm: &mut [Vec<[f64; 2]>; 3],
+    gnss_pos_gate_status: &mut Vec<[f64; 2]>,
     update_inspector: &mut Vec<UpdateInspectorSample>,
     map: &mut Vec<[f64; 2]>,
     headings: &mut Vec<HeadingSample>,
@@ -1933,6 +1992,16 @@ fn append_loose_sample(
                 nhc_innovation[1].push([t_s, -(vc_z as f64)]);
             }
         }
+    }
+    let gnss_gate = loose.last_gnss_position_gate();
+    if gnss_gate.attempted {
+        for (dst, value) in gnss_pos_gate_norm
+            .iter_mut()
+            .zip(gnss_gate.normalized_residual)
+        {
+            dst.push([t_s, value as f64]);
+        }
+        gnss_pos_gate_status.push([t_s, if gnss_gate.accepted { 1.0 } else { 0.0 }]);
     }
 }
 
@@ -2481,8 +2550,6 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig, mode: E
         fusion.set_predict_noise(noise);
     }
     fusion.set_r_body_vel_yz(cfg.r_body_vel, cfg.r_body_vel_z);
-    fusion.set_gnss_pos_mount_scale(cfg.gnss_pos_mount_scale);
-    fusion.set_gnss_vel_mount_scale(cfg.gnss_vel_mount_scale);
     fusion.set_yaw_init_sigma_rad(cfg.yaw_init_sigma_deg.to_radians());
     fusion.set_gyro_bias_init_sigma_radps(cfg.gyro_bias_init_sigma_dps.to_radians());
     fusion.set_accel_bias_init_sigma_mps2(cfg.accel_bias_init_sigma_mps2);
@@ -2492,9 +2559,6 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig, mode: E
     fusion.set_r_zero_vel(cfg.r_zero_vel);
     fusion.set_r_stationary_accel(cfg.r_stationary_accel);
     fusion.set_mount_align_rw_var(cfg.mount_align_rw_var);
-    fusion.set_mount_update_min_scale(cfg.mount_update_min_scale);
-    fusion.set_mount_update_ramp_time_s(cfg.mount_update_ramp_time_s);
-    fusion.set_mount_update_innovation_gate_mps(cfg.mount_update_innovation_gate_mps);
     fusion.set_align_handoff_delay_s(cfg.align_handoff_delay_s);
     fusion.set_freeze_misalignment_states(cfg.freeze_misalignment_states);
     fusion.set_eskf_mount_source(mode.eskf_mount_source());

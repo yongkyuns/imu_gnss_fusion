@@ -10,8 +10,6 @@ pub struct EkfCompareConfig {
     pub r_body_vel: f32,
     #[serde(default = "default_r_body_vel_z")]
     pub r_body_vel_z: f32,
-    pub gnss_pos_mount_scale: f32,
-    pub gnss_vel_mount_scale: f32,
     pub yaw_init_sigma_deg: f32,
     pub gyro_bias_init_sigma_dps: f32,
     pub accel_bias_init_sigma_mps2: f32,
@@ -22,9 +20,6 @@ pub struct EkfCompareConfig {
     pub mount_init_sigma_deg: f32,
     pub r_vehicle_speed: f32,
     pub mount_align_rw_var: f32,
-    pub mount_update_min_scale: f32,
-    pub mount_update_ramp_time_s: f32,
-    pub mount_update_innovation_gate_mps: f32,
     pub align_handoff_delay_s: f32,
     pub freeze_misalignment_states: bool,
     pub mount_settle_time_s: f32,
@@ -50,8 +45,6 @@ impl Default for EkfCompareConfig {
             align: AlignConfig::default(),
             r_body_vel: default_r_body_vel_y(),
             r_body_vel_z: default_r_body_vel_z(),
-            gnss_pos_mount_scale: 0.0,
-            gnss_vel_mount_scale: 0.0,
             yaw_init_sigma_deg: 2.0,
             gyro_bias_init_sigma_dps: 0.125,
             accel_bias_init_sigma_mps2: 0.15,
@@ -59,9 +52,6 @@ impl Default for EkfCompareConfig {
             mount_init_sigma_deg: 6.0,
             r_vehicle_speed: 0.04,
             mount_align_rw_var: 0.0,
-            mount_update_min_scale: 0.008,
-            mount_update_ramp_time_s: 120.0,
-            mount_update_innovation_gate_mps: 0.10,
             align_handoff_delay_s: 0.0,
             freeze_misalignment_states: false,
             mount_settle_time_s: 0.0,
@@ -89,7 +79,7 @@ fn default_r_body_vel_z() -> f32 {
 }
 
 fn default_mount_roll_pitch_init_sigma_deg() -> f32 {
-    2.0
+    0.5
 }
 
 #[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -222,17 +212,12 @@ mod tests {
         let json = serde_json::json!({
             "align": AlignConfig::default(),
             "rBodyVel": 0.001,
-            "gnssPosMountScale": 0.0,
-            "gnssVelMountScale": 0.0,
             "yawInitSigmaDeg": 2.0,
             "gyroBiasInitSigmaDps": 0.125,
             "accelBiasInitSigmaMps2": 0.075,
             "mountInitSigmaDeg": 6.0,
             "rVehicleSpeed": 0.04,
             "mountAlignRwVar": 1.0e-7,
-            "mountUpdateMinScale": 0.008,
-            "mountUpdateRampTimeS": 120.0,
-            "mountUpdateInnovationGateMps": 0.10,
             "mountUpdateYawRateGateDps": 10.0,
             "alignHandoffDelayS": 0.0,
             "freezeMisalignmentStates": false,

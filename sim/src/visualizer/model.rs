@@ -56,6 +56,7 @@ pub struct PlotData {
     pub loose_mount_sigma: Vec<Trace>,
     pub loose_mount_dx: Vec<Trace>,
     pub loose_nhc_innovation: Vec<Trace>,
+    pub loose_gnss_pos_gate: Vec<Trace>,
     pub loose_map: Vec<Trace>,
     pub loose_map_heading: Vec<HeadingSample>,
     pub align_cmp_att: Vec<Trace>,

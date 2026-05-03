@@ -1,0 +1,17 @@
+# Figure-eight diagnostic with explicit vehicle roll excitation.
+#
+# This intentionally adds symmetric roll-rate motion during the turns. It is
+# useful for observability experiments: if mount roll still trades against
+# vehicle roll here, then roll motion alone is not enough and an independent
+# attitude/gravity/mount constraint is needed.
+initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
+wait 60s
+accelerate 0.6m/s^2 for 20s
+wait 10s
+repeat 24 {
+    drive yaw=10 roll=0.25 for=18s
+    drive yaw=10 roll=-0.25 for=18s
+    drive yaw=-10 roll=-0.25 for=18s
+    drive yaw=-10 roll=0.25 for=18s
+}
+brake 0.6666667m/s^2 for 18s

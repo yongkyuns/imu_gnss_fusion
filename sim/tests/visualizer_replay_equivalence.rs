@@ -405,6 +405,11 @@ fn assert_plot_data_close(
             &left.loose_mount_dx,
             &right.loose_mount_dx,
         ),
+        (
+            "loose_gnss_pos_gate",
+            &left.loose_gnss_pos_gate,
+            &right.loose_gnss_pos_gate,
+        ),
         ("loose_map", &left.loose_map, &right.loose_map),
         ("align_cmp_att", &left.align_cmp_att, &right.align_cmp_att),
         ("align_res_vel", &left.align_res_vel, &right.align_res_vel),
@@ -739,6 +744,19 @@ fn assert_shared_auxiliary_groups_close(
             "Loose residual mount roll correction [deg/update]",
             "Loose residual mount pitch correction [deg/update]",
             "Loose residual mount yaw correction [deg/update]",
+        ],
+    )?;
+    assert_named_traces_close(
+        left_label,
+        right_label,
+        "loose_gnss_pos_gate",
+        &left.loose_gnss_pos_gate,
+        &right.loose_gnss_pos_gate,
+        &[
+            "Loose GNSS position gate normalized residual row 0",
+            "Loose GNSS position gate normalized residual row 1",
+            "Loose GNSS position gate normalized residual row 2",
+            "Loose GNSS position accepted",
         ],
     )?;
     assert_heading_samples_close(

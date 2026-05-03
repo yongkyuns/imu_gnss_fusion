@@ -160,13 +160,8 @@ struct FusionConfig {
     mount_init_sigma_rad: f32,
     r_body_vel_y: f32,
     r_body_vel_z: f32,
-    gnss_pos_mount_scale: f32,
-    gnss_vel_mount_scale: f32,
     gnss_vel_xy_update_min_scale: f32,
     gnss_vel_update_ramp_time_s: f32,
-    mount_update_min_scale: f32,
-    mount_update_ramp_time_s: f32,
-    mount_update_innovation_gate_mps: f32,
     align_handoff_delay_s: f32,
     freeze_misalignment_states: bool,
     eskf_mount_source: EskfMountSource,
@@ -194,17 +189,12 @@ impl Default for FusionConfig {
             yaw_init_sigma_rad: 2.0_f32.to_radians(),
             gyro_bias_init_sigma_radps: 0.125_f32.to_radians(),
             accel_bias_init_sigma_mps2: 0.15,
-            mount_roll_pitch_init_sigma_rad: 2.0_f32.to_radians(),
+            mount_roll_pitch_init_sigma_rad: 0.5_f32.to_radians(),
             mount_init_sigma_rad: 6.0_f32.to_radians(),
             r_body_vel_y: 0.5,
             r_body_vel_z: 0.125,
-            gnss_pos_mount_scale: 0.0,
-            gnss_vel_mount_scale: 0.0,
             gnss_vel_xy_update_min_scale: 0.25,
             gnss_vel_update_ramp_time_s: 20.0,
-            mount_update_min_scale: 0.008,
-            mount_update_ramp_time_s: 120.0,
-            mount_update_innovation_gate_mps: 0.10,
             align_handoff_delay_s: 0.0,
             freeze_misalignment_states: false,
             eskf_mount_source: EskfMountSource::LatchedSeed,
@@ -246,6 +236,7 @@ pub struct SensorFusion {
     mount_settle_released: bool,
     last_imu_t_s: Option<f32>,
     last_gnss: Option<EskfGnssSample>,
+    pending_ekf_gnss: Option<EskfGnssSample>,
     bootstrap_prev_gnss: Option<EskfGnssSample>,
     anchor: Anchor,
     interval_imu_sum_gyro: [f32; 3],
@@ -293,6 +284,7 @@ impl SensorFusion {
             mount_settle_released: false,
             last_imu_t_s: None,
             last_gnss: None,
+            pending_ekf_gnss: None,
             bootstrap_prev_gnss: None,
             anchor: Anchor::default(),
             interval_imu_sum_gyro: [0.0; 3],
@@ -379,20 +371,6 @@ impl SensorFusion {
         }
     }
 
-    /// Sets how strongly GNSS position rows may update residual mount states.
-    pub fn set_gnss_pos_mount_scale(&mut self, gnss_pos_mount_scale: f32) {
-        if gnss_pos_mount_scale.is_finite() && (0.0..=1.0).contains(&gnss_pos_mount_scale) {
-            self.cfg.gnss_pos_mount_scale = gnss_pos_mount_scale;
-        }
-    }
-
-    /// Sets how strongly GNSS velocity rows may update residual mount states.
-    pub fn set_gnss_vel_mount_scale(&mut self, gnss_vel_mount_scale: f32) {
-        if gnss_vel_mount_scale.is_finite() && (0.0..=1.0).contains(&gnss_vel_mount_scale) {
-            self.cfg.gnss_vel_mount_scale = gnss_vel_mount_scale;
-        }
-    }
-
     /// Sets initial gyro-bias one-sigma uncertainty, in radians per second.
     pub fn set_gyro_bias_init_sigma_radps(&mut self, gyro_bias_init_sigma_radps: f32) {
         if gyro_bias_init_sigma_radps.is_finite() && gyro_bias_init_sigma_radps >= 0.0 {
@@ -441,27 +419,6 @@ impl SensorFusion {
         if mount_align_rw_var.is_finite() && mount_align_rw_var >= 0.0 {
             self.cfg.predict_noise.mount_align_rw_var = mount_align_rw_var;
             self.eskf.raw_mut().noise.mount_align_rw_var = mount_align_rw_var;
-        }
-    }
-
-    /// Sets the minimum residual-mount update scale during the runtime ramp.
-    pub fn set_mount_update_min_scale(&mut self, mount_update_min_scale: f32) {
-        if mount_update_min_scale.is_finite() && (0.0..=1.0).contains(&mount_update_min_scale) {
-            self.cfg.mount_update_min_scale = mount_update_min_scale;
-        }
-    }
-
-    /// Sets the residual-mount update ramp duration, in seconds.
-    pub fn set_mount_update_ramp_time_s(&mut self, mount_update_ramp_time_s: f32) {
-        if mount_update_ramp_time_s.is_finite() && mount_update_ramp_time_s >= 0.0 {
-            self.cfg.mount_update_ramp_time_s = mount_update_ramp_time_s;
-        }
-    }
-
-    /// Sets the innovation magnitude at which residual-mount updates begin to be attenuated.
-    pub fn set_mount_update_innovation_gate_mps(&mut self, mount_update_innovation_gate_mps: f32) {
-        if mount_update_innovation_gate_mps.is_finite() && mount_update_innovation_gate_mps >= 0.0 {
-            self.cfg.mount_update_innovation_gate_mps = mount_update_innovation_gate_mps;
         }
     }
 
@@ -584,6 +541,7 @@ impl SensorFusion {
 
         if self.cfg.r_body_vel_y > 0.0 || self.cfg.r_body_vel_z > 0.0 {
             if self.runtime_zero_velocity_active(sample.accel_mps2, sample.gyro_radps) {
+                self.fuse_pending_gnss_at_imu(sample.t_s, None);
                 if self.cfg.r_zero_vel > 0.0 {
                     self.eskf.fuse_zero_vel(self.cfg.r_zero_vel);
                 }
@@ -591,23 +549,18 @@ impl SensorFusion {
                     self.eskf
                         .fuse_stationary_gravity(accel_vehicle, self.cfg.r_stationary_accel);
                 }
-            } else if runtime_nhc_active(accel_vehicle, gyro_vehicle) {
-                let body_update_scale = self.mount_update_scale(sample.t_s);
-                let nhc_speed_scale = self.runtime_nhc_speed_scale();
-                if nhc_speed_scale > 0.0 {
-                    let fused_body_update_scale = body_update_scale * nhc_speed_scale;
-                    let mount_update_scale = fused_body_update_scale;
-                    let effective_r_scale =
-                        nhc_observation_r_scale(dt) / fused_body_update_scale.max(1.0e-3);
-                    self.eskf.fuse_body_vel_yz_scaled(
-                        self.cfg.r_body_vel_y * effective_r_scale,
-                        self.cfg.r_body_vel_z * effective_r_scale,
-                        mount_update_scale,
-                        self.cfg.mount_update_innovation_gate_mps,
-                    );
+            } else {
+                let nhc = self.imu_epoch_nhc_variances(dt, accel_vehicle, gyro_vehicle);
+                let used_nhc_with_gnss = self.fuse_pending_gnss_at_imu(sample.t_s, nhc);
+                if let Some(r) = nhc
+                    && !used_nhc_with_gnss
+                {
+                    self.eskf.fuse_body_vel_yz(r[0], r[1]);
                 }
             }
             self.clamp_eskf_biases();
+        } else {
+            self.fuse_pending_gnss_at_imu(sample.t_s, None);
         }
 
         self.update(false, false)
@@ -661,11 +614,7 @@ impl SensorFusion {
         } else {
             self.refresh_follow_align_mount_source();
             self.refresh_mount_settle_state(local.t_s);
-            self.eskf.fuse_gps_scaled(
-                local,
-                self.cfg.gnss_pos_mount_scale,
-                self.cfg.gnss_vel_mount_scale,
-            );
+            self.pending_ekf_gnss = Some(local);
             false
         };
 
@@ -684,10 +633,10 @@ impl SensorFusion {
 
         match speed.direction {
             FusionVehicleSpeedDirection::Forward => {
-                self.fuse_signed_body_speed(speed.t_s, speed.speed_mps);
+                self.fuse_signed_body_speed(speed.speed_mps);
             }
             FusionVehicleSpeedDirection::Reverse => {
-                self.fuse_signed_body_speed(speed.t_s, -speed.speed_mps);
+                self.fuse_signed_body_speed(-speed.speed_mps);
             }
             FusionVehicleSpeedDirection::Unknown => {
                 if speed.speed_mps <= CAN_SPEED_ZERO_MPS {
@@ -695,7 +644,7 @@ impl SensorFusion {
                 } else {
                     let predicted = body_speed_x_estimate(self.eskf.raw());
                     if predicted.abs() >= CAN_SPEED_SIGN_INFER_MIN_MPS {
-                        self.fuse_signed_body_speed(speed.t_s, speed.speed_mps.copysign(predicted));
+                        self.fuse_signed_body_speed(speed.speed_mps.copysign(predicted));
                     }
                 }
             }
@@ -946,15 +895,9 @@ impl SensorFusion {
         }
     }
 
-    fn fuse_signed_body_speed(&mut self, t_s: f32, signed_speed_mps: f32) {
-        let scale = self.mount_update_scale(t_s);
-        let effective_r = self.cfg.r_vehicle_speed / scale.max(1.0e-3);
-        self.eskf.fuse_body_speed_x_scaled(
-            signed_speed_mps,
-            effective_r,
-            scale,
-            self.cfg.mount_update_innovation_gate_mps,
-        );
+    fn fuse_signed_body_speed(&mut self, signed_speed_mps: f32) {
+        self.eskf
+            .fuse_body_speed_x(signed_speed_mps, self.cfg.r_vehicle_speed);
     }
 
     fn try_bootstrap_align(&mut self, accel_b: [f32; 3], gyro_radps: [f32; 3]) {
@@ -1194,27 +1137,48 @@ impl SensorFusion {
         low_dynamic && low_speed
     }
 
-    fn runtime_nhc_speed_scale(&self) -> f32 {
-        let Some(last) = self.last_gnss else {
-            return 0.0;
+    fn imu_epoch_nhc_variances(
+        &self,
+        dt: f32,
+        accel_vehicle: [f32; 3],
+        gyro_vehicle: [f32; 3],
+    ) -> Option<[f32; 2]> {
+        if !runtime_nhc_active(accel_vehicle, gyro_vehicle) {
+            return None;
+        }
+        let speed_scale = self
+            .last_gnss
+            .map(|g| nhc_speed_scale_from_horiz_speed(horiz_speed(g.vel_ned_mps)))
+            .unwrap_or(0.0);
+        if speed_scale <= 0.0 {
+            return None;
+        }
+        let r_scale = nhc_observation_r_scale(dt) / speed_scale.max(1.0e-3);
+        Some([
+            self.cfg.r_body_vel_y * r_scale,
+            self.cfg.r_body_vel_z * r_scale,
+        ])
+    }
+
+    fn fuse_pending_gnss_at_imu(&mut self, imu_t_s: f32, nhc: Option<[f32; 2]>) -> bool {
+        let Some(gnss) = self.pending_ekf_gnss else {
+            return false;
         };
-        nhc_speed_scale_from_horiz_speed(horiz_speed(last.vel_ned_mps))
+        let age_s = imu_t_s - gnss.t_s;
+        if age_s < -1.0e-6 {
+            return false;
+        }
+        self.pending_ekf_gnss = None;
+        let use_nhc = (0.0..=0.05).contains(&age_s).then_some(nhc).flatten();
+        self.eskf
+            .fuse_gps_nhc_batch(gnss, use_nhc.map(|r| r[0]), use_nhc.map(|r| r[1]));
+        use_nhc.is_some()
     }
 
     fn gnss_vel_update_scale_xy(&self, t_s: f32) -> f32 {
         ramp_scale(
             self.cfg.gnss_vel_xy_update_min_scale,
             self.cfg.gnss_vel_update_ramp_time_s,
-            self.ekf_mount_handoff_t_s,
-            t_s,
-            1.0,
-        )
-    }
-
-    fn mount_update_scale(&self, t_s: f32) -> f32 {
-        ramp_scale(
-            self.cfg.mount_update_min_scale,
-            self.cfg.mount_update_ramp_time_s,
             self.ekf_mount_handoff_t_s,
             t_s,
             1.0,

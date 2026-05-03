@@ -716,6 +716,7 @@ enum WebSyntheticScenario {
     CityBlocks,
     FigureEight,
     FigureEightEarlyVelocityFault,
+    FigureEightRollExcitation,
     StraightAccelBrake,
 }
 
@@ -988,6 +989,12 @@ fn web_query_synthetic_scenario() -> Option<WebSyntheticScenario> {
         Some("figure8_fault" | "figure-eight-fault" | "fig8_fault" | "bad_basin") => {
             Some(WebSyntheticScenario::FigureEightEarlyVelocityFault)
         }
+        Some(
+            "figure8_roll"
+            | "figure-eight-roll"
+            | "figure8_roll_excitation"
+            | "figure-eight-roll-excitation",
+        ) => Some(WebSyntheticScenario::FigureEightRollExcitation),
         Some("straight" | "straight_accel_brake" | "straight-accel-brake") => {
             Some(WebSyntheticScenario::StraightAccelBrake)
         }
@@ -1555,10 +1562,6 @@ impl App {
                                 self.tuning_gnss_outages = GnssOutageConfig::default();
                                 self.tuning_cfg.r_body_vel = defaults.r_body_vel;
                                 self.tuning_cfg.r_body_vel_z = defaults.r_body_vel_z;
-                                self.tuning_cfg.gnss_pos_mount_scale =
-                                    defaults.gnss_pos_mount_scale;
-                                self.tuning_cfg.gnss_vel_mount_scale =
-                                    defaults.gnss_vel_mount_scale;
                                 self.tuning_cfg.yaw_init_sigma_deg = defaults.yaw_init_sigma_deg;
                                 self.tuning_cfg.gyro_bias_init_sigma_dps =
                                     defaults.gyro_bias_init_sigma_dps;
@@ -1570,12 +1573,6 @@ impl App {
                                     defaults.mount_init_sigma_deg;
                                 self.tuning_cfg.r_vehicle_speed = defaults.r_vehicle_speed;
                                 self.tuning_cfg.mount_align_rw_var = defaults.mount_align_rw_var;
-                                self.tuning_cfg.mount_update_min_scale =
-                                    defaults.mount_update_min_scale;
-                                self.tuning_cfg.mount_update_ramp_time_s =
-                                    defaults.mount_update_ramp_time_s;
-                                self.tuning_cfg.mount_update_innovation_gate_mps =
-                                    defaults.mount_update_innovation_gate_mps;
                                 self.tuning_cfg.align_handoff_delay_s =
                                     defaults.align_handoff_delay_s;
                                 self.tuning_cfg.freeze_misalignment_states =
@@ -2620,6 +2617,7 @@ impl WebSyntheticScenario {
             Self::CityBlocks => "City blocks",
             Self::FigureEight => "Figure eight",
             Self::FigureEightEarlyVelocityFault => "Figure eight early GNSS fault",
+            Self::FigureEightRollExcitation => "Figure eight roll excitation + GNSS fault",
             Self::StraightAccelBrake => "Straight accel/brake",
         }
     }
@@ -2632,6 +2630,10 @@ impl WebSyntheticScenario {
                 "figure8_early_gnss_fault_builtin.scenario",
                 FIGURE_EIGHT_SCENARIO,
             ),
+            Self::FigureEightRollExcitation => (
+                "figure8_roll_excitation_builtin.scenario",
+                FIGURE_EIGHT_ROLL_EXCITATION_SCENARIO,
+            ),
             Self::StraightAccelBrake => {
                 ("straight_accel_brake_builtin.csv", STRAIGHT_ACCEL_BRAKE_CSV)
             }
@@ -2640,7 +2642,9 @@ impl WebSyntheticScenario {
 
     fn early_fault(self) -> ([f64; 3], Option<[f64; 2]>) {
         match self {
-            Self::FigureEightEarlyVelocityFault => ([0.5, 0.0, 0.0], Some([0.0, 360.0])),
+            Self::FigureEightEarlyVelocityFault | Self::FigureEightRollExcitation => {
+                ([0.5, 0.0, 0.0], Some([0.0, 360.0]))
+            }
             Self::CityBlocks | Self::FigureEight | Self::StraightAccelBrake => {
                 ([0.0, 0.0, 0.0], None)
             }
@@ -2698,6 +2702,21 @@ wait 10s
 repeat 24 {
     turn left 10dps for 36s
     turn right 10dps for 36s
+}
+brake 0.6666667m/s^2 for 18s
+"#;
+
+#[cfg(target_arch = "wasm32")]
+const FIGURE_EIGHT_ROLL_EXCITATION_SCENARIO: &str = r#"
+initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
+wait 60s
+accelerate 0.6m/s^2 for 20s
+wait 10s
+repeat 24 {
+    drive yaw=10 roll=0.25 for=18s
+    drive yaw=10 roll=-0.25 for=18s
+    drive yaw=-10 roll=-0.25 for=18s
+    drive yaw=-10 roll=0.25 for=18s
 }
 brake 0.6666667m/s^2 for 18s
 "#;
@@ -2878,6 +2897,12 @@ impl eframe::App for App {
                                                 &mut self.web_scenario,
                                                 WebSyntheticScenario::FigureEightEarlyVelocityFault,
                                                 WebSyntheticScenario::FigureEightEarlyVelocityFault
+                                                    .display_label(),
+                                            );
+                                            ui.selectable_value(
+                                                &mut self.web_scenario,
+                                                WebSyntheticScenario::FigureEightRollExcitation,
+                                                WebSyntheticScenario::FigureEightRollExcitation
                                                     .display_label(),
                                             );
                                             ui.selectable_value(
@@ -3438,6 +3463,11 @@ impl eframe::App for App {
                                 true,
                             ),
                             plot_spec(
+                                "Loose GNSS Position Gate",
+                                trace_refs(&self.data.loose_gnss_pos_gate),
+                                true,
+                            ),
+                            plot_spec(
                                 "ESKF Mount Correction",
                                 trace_refs(&self.data.eskf_mount_dx),
                                 true,
@@ -3664,41 +3694,6 @@ fn draw_eskf_tuning(
             ui,
             "Mount RW noise deg/sqrt(hr)",
             &mut cfg.mount_align_rw_var,
-        );
-        drag_f32(
-            ui,
-            "Mount min update scale",
-            &mut cfg.mount_update_min_scale,
-            0.001,
-            0.0..=1.0,
-        );
-        drag_f32(
-            ui,
-            "Mount update ramp s",
-            &mut cfg.mount_update_ramp_time_s,
-            10.0,
-            0.0..=20000.0,
-        );
-        drag_f32(
-            ui,
-            "Mount innovation gate m/s",
-            &mut cfg.mount_update_innovation_gate_mps,
-            0.001,
-            0.0..=10.0,
-        );
-        drag_f32(
-            ui,
-            "GNSS pos mount scale",
-            &mut cfg.gnss_pos_mount_scale,
-            0.01,
-            0.0..=1.0,
-        );
-        drag_f32(
-            ui,
-            "GNSS vel mount scale",
-            &mut cfg.gnss_vel_mount_scale,
-            0.01,
-            0.0..=1.0,
         );
         ui.checkbox(&mut cfg.freeze_misalignment_states, "Freeze mount states");
         drag_f32(

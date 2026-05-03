@@ -51,6 +51,7 @@ const DIAG_GPS_VEL_D: usize = 9;
 const DIAG_ZERO_VEL_D: usize = 10;
 const BODY_VEL_Y_SUPPORT: [usize; 8] = [0, 1, 2, 3, 4, 5, 15, 17];
 const BODY_VEL_Z_SUPPORT: [usize; 8] = [0, 1, 2, 3, 4, 5, 15, 16];
+const MAX_BATCH_OBS: usize = 8;
 
 /// Rust ESKF state machine with covariance and residual mount-control policy.
 #[derive(Debug, Clone)]
@@ -233,55 +234,157 @@ impl RustEskf {
         generated_eskf::error_transition(&self.raw.nominal, imu)
     }
 
-    /// Fuses GNSS position and velocity with no residual-mount update scaling.
+    /// Fuses GNSS position and velocity.
     pub fn fuse_gps(&mut self, sample: EskfGnssSample) {
-        self.fuse_gps_scaled(sample, 0.0, 0.0);
-    }
-
-    /// Fuses GNSS position and velocity with explicit residual-mount update scales.
-    pub fn fuse_gps_scaled(
-        &mut self,
-        sample: EskfGnssSample,
-        gnss_pos_mount_scale: f32,
-        gnss_vel_mount_scale: f32,
-    ) {
         self.fuse_gps_pos_n(
             sample.pos_ned_m[0],
             sample.pos_std_m[0] * sample.pos_std_m[0],
-            gnss_pos_mount_scale,
         );
         self.fuse_gps_pos_e(
             sample.pos_ned_m[1],
             sample.pos_std_m[1] * sample.pos_std_m[1],
-            gnss_pos_mount_scale,
         );
         self.fuse_gps_pos_d(
             sample.pos_ned_m[2],
             sample.pos_std_m[2] * sample.pos_std_m[2],
-            gnss_pos_mount_scale,
         );
         self.fuse_gps_vel_n(
             sample.vel_ned_mps[0],
             sample.vel_std_mps[0] * sample.vel_std_mps[0],
-            gnss_vel_mount_scale,
         );
         self.fuse_gps_vel_e(
             sample.vel_ned_mps[1],
             sample.vel_std_mps[1] * sample.vel_std_mps[1],
-            gnss_vel_mount_scale,
         );
         self.fuse_gps_vel_d(
             sample.vel_ned_mps[2],
             sample.vel_std_mps[2] * sample.vel_std_mps[2],
-            gnss_vel_mount_scale,
         );
+    }
+
+    /// Fuses GNSS position/velocity and optional lateral/vertical NHC rows as one batch.
+    ///
+    /// This mirrors the loose filter's coupled reference update: all rows are
+    /// linearized at the same nominal state, one error state is solved, and the
+    /// nominal is injected once. Running this at GNSS rate keeps the cost bounded
+    /// while preserving the important GNSS/NHC covariance allocation.
+    pub fn fuse_gps_nhc_batch(
+        &mut self,
+        sample: EskfGnssSample,
+        r_body_vel_y: Option<f32>,
+        r_body_vel_z: Option<f32>,
+    ) {
+        let mut h_rows = [[0.0; ERROR_STATES]; MAX_BATCH_OBS];
+        let mut residuals = [0.0; MAX_BATCH_OBS];
+        let mut variances = [0.0; MAX_BATCH_OBS];
+        let mut diag_types = [0usize; MAX_BATCH_OBS];
+        let mut obs_count = 0usize;
+
+        push_batch_row(
+            &mut h_rows,
+            &mut residuals,
+            &mut variances,
+            &mut diag_types,
+            &mut obs_count,
+            gps_axis_h(6),
+            sample.pos_ned_m[0] - self.raw.nominal.pn,
+            sample.pos_std_m[0] * sample.pos_std_m[0],
+            DIAG_GPS_POS,
+        );
+        push_batch_row(
+            &mut h_rows,
+            &mut residuals,
+            &mut variances,
+            &mut diag_types,
+            &mut obs_count,
+            gps_axis_h(7),
+            sample.pos_ned_m[1] - self.raw.nominal.pe,
+            sample.pos_std_m[1] * sample.pos_std_m[1],
+            DIAG_GPS_POS,
+        );
+        push_batch_row(
+            &mut h_rows,
+            &mut residuals,
+            &mut variances,
+            &mut diag_types,
+            &mut obs_count,
+            gps_axis_h(8),
+            sample.pos_ned_m[2] - self.raw.nominal.pd,
+            sample.pos_std_m[2] * sample.pos_std_m[2],
+            DIAG_GPS_POS_D,
+        );
+        push_batch_row(
+            &mut h_rows,
+            &mut residuals,
+            &mut variances,
+            &mut diag_types,
+            &mut obs_count,
+            gps_axis_h(3),
+            sample.vel_ned_mps[0] - self.raw.nominal.vn,
+            sample.vel_std_mps[0] * sample.vel_std_mps[0],
+            DIAG_GPS_VEL,
+        );
+        push_batch_row(
+            &mut h_rows,
+            &mut residuals,
+            &mut variances,
+            &mut diag_types,
+            &mut obs_count,
+            gps_axis_h(4),
+            sample.vel_ned_mps[1] - self.raw.nominal.ve,
+            sample.vel_std_mps[1] * sample.vel_std_mps[1],
+            DIAG_GPS_VEL,
+        );
+        push_batch_row(
+            &mut h_rows,
+            &mut residuals,
+            &mut variances,
+            &mut diag_types,
+            &mut obs_count,
+            gps_axis_h(5),
+            sample.vel_ned_mps[2] - self.raw.nominal.vd,
+            sample.vel_std_mps[2] * sample.vel_std_mps[2],
+            DIAG_GPS_VEL_D,
+        );
+
+        let v_vehicle = nominal_vehicle_velocity(&self.raw.nominal);
+        if let Some(r) = r_body_vel_y.filter(|r| *r > 0.0 && r.is_finite()) {
+            let obs = generated_eskf::body_vel_y_observation(&self.raw.nominal, &self.raw.p, r);
+            push_batch_row(
+                &mut h_rows,
+                &mut residuals,
+                &mut variances,
+                &mut diag_types,
+                &mut obs_count,
+                obs.h,
+                -v_vehicle[1],
+                r,
+                DIAG_BODY_VEL_Y,
+            );
+        }
+        if let Some(r) = r_body_vel_z.filter(|r| *r > 0.0 && r.is_finite()) {
+            let obs = generated_eskf::body_vel_z_observation(&self.raw.nominal, &self.raw.p, r);
+            push_batch_row(
+                &mut h_rows,
+                &mut residuals,
+                &mut variances,
+                &mut diag_types,
+                &mut obs_count,
+                obs.h,
+                -v_vehicle[2],
+                r,
+                DIAG_BODY_VEL_Z,
+            );
+        }
+
+        self.fuse_batch(obs_count, &h_rows, &residuals, &variances, &diag_types);
     }
 
     /// Applies a zero-velocity pseudo-measurement on all NED velocity axes.
     pub fn fuse_zero_vel(&mut self, r_zero_vel: f32) {
-        self.fuse_gps_vel_n(0.0, r_zero_vel, 0.0);
-        self.fuse_gps_vel_e(0.0, r_zero_vel, 0.0);
-        self.fuse_gps_vel_d(0.0, r_zero_vel, 0.0);
+        self.fuse_gps_vel_n_impl(0.0, r_zero_vel, true);
+        self.fuse_gps_vel_e_impl(0.0, r_zero_vel, true);
+        self.fuse_gps_vel_d_impl(0.0, r_zero_vel, true);
     }
 
     /// Applies stationary gravity pseudo-measurements from body-frame acceleration.
@@ -292,28 +395,11 @@ impl RustEskf {
 
     /// Fuses forward vehicle speed as a body-frame X velocity observation.
     pub fn fuse_body_speed_x(&mut self, speed_mps: f32, r_speed: f32) {
-        self.fuse_body_speed_x_scaled(speed_mps, r_speed, 1.0, 0.0);
-    }
-
-    /// Fuses forward vehicle speed with residual-mount update scaling and innovation gating.
-    pub fn fuse_body_speed_x_scaled(
-        &mut self,
-        speed_mps: f32,
-        r_speed: f32,
-        mount_update_scale: f32,
-        mount_update_innovation_gate_mps: f32,
-    ) {
         let obs = generated_eskf::body_vel_x_observation(&self.raw.nominal, &self.raw.p, r_speed);
         let v_vehicle = nominal_vehicle_velocity(&self.raw.nominal);
         let innovation = speed_mps - v_vehicle[0];
         let mut k = obs.k;
         let mut dx = gain_dx(k, innovation);
-        let mount_scale = gated_mount_update_scale(
-            mount_update_scale,
-            mount_update_innovation_gate_mps,
-            innovation,
-        );
-        scale_mount_update(&mut k, &mut dx, mount_scale);
         self.freeze_mount_update_if_needed(&mut k, &mut dx);
         self.record_update_diag(DIAG_BODY_SPEED_X, innovation, obs.s, &obs.h, &k, &dx);
         self.fuse_measurement(obs.s, &obs.h, &k, &dx);
@@ -321,80 +407,58 @@ impl RustEskf {
 
     /// Fuses lateral and vertical nonholonomic body-velocity constraints.
     pub fn fuse_body_vel(&mut self, r_body_vel: f32) {
-        self.fuse_body_vel_scaled(r_body_vel, 1.0, 0.0);
-    }
-
-    /// Fuses nonholonomic body-velocity constraints with residual-mount update controls.
-    pub fn fuse_body_vel_scaled(
-        &mut self,
-        r_body_vel: f32,
-        mount_update_scale: f32,
-        mount_update_innovation_gate_mps: f32,
-    ) {
-        self.fuse_body_vel_yz_scaled(
-            r_body_vel,
-            r_body_vel,
-            mount_update_scale,
-            mount_update_innovation_gate_mps,
-        );
+        self.fuse_body_vel_yz(r_body_vel, r_body_vel);
     }
 
     /// Fuses lateral and vertical nonholonomic body-velocity constraints with
     /// separate measurement variances for the vehicle Y and Z axes.
-    pub fn fuse_body_vel_yz_scaled(
-        &mut self,
-        r_body_vel_y: f32,
-        r_body_vel_z: f32,
-        mount_update_scale: f32,
-        mount_update_innovation_gate_mps: f32,
-    ) {
-        self.fuse_body_vel_yz_batch(
-            r_body_vel_y,
-            r_body_vel_z,
-            mount_update_scale,
-            mount_update_innovation_gate_mps,
-        );
+    pub fn fuse_body_vel_yz(&mut self, r_body_vel_y: f32, r_body_vel_z: f32) {
+        self.fuse_body_vel_yz_batch(r_body_vel_y, r_body_vel_z);
     }
 
-    fn fuse_gps_pos_n(&mut self, pos_n: f32, r_pos_n: f32, gnss_pos_mount_scale: f32) {
+    fn fuse_gps_pos_n(&mut self, pos_n: f32, r_pos_n: f32) {
         let obs = generated_eskf::gps_pos_n_observation(&self.raw.p, r_pos_n);
         let innovation = pos_n - self.raw.nominal.pn;
         let mut k = obs.k;
         let mut dx = gain_dx(k, innovation);
-        scale_mount_update(&mut k, &mut dx, gnss_pos_mount_scale);
         self.freeze_mount_update_if_needed(&mut k, &mut dx);
         self.record_update_diag(DIAG_GPS_POS, innovation, obs.s, &obs.h, &k, &dx);
         self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
-    fn fuse_gps_pos_e(&mut self, pos_e: f32, r_pos_e: f32, gnss_pos_mount_scale: f32) {
+    fn fuse_gps_pos_e(&mut self, pos_e: f32, r_pos_e: f32) {
         let obs = generated_eskf::gps_pos_e_observation(&self.raw.p, r_pos_e);
         let innovation = pos_e - self.raw.nominal.pe;
         let mut k = obs.k;
         let mut dx = gain_dx(k, innovation);
-        scale_mount_update(&mut k, &mut dx, gnss_pos_mount_scale);
         self.freeze_mount_update_if_needed(&mut k, &mut dx);
         self.record_update_diag(DIAG_GPS_POS, innovation, obs.s, &obs.h, &k, &dx);
         self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
-    fn fuse_gps_pos_d(&mut self, pos_d: f32, r_pos_d: f32, gnss_pos_mount_scale: f32) {
+    fn fuse_gps_pos_d(&mut self, pos_d: f32, r_pos_d: f32) {
         let obs = generated_eskf::gps_pos_d_observation(&self.raw.p, r_pos_d);
         let innovation = pos_d - self.raw.nominal.pd;
         let mut k = obs.k;
         let mut dx = gain_dx(k, innovation);
-        scale_mount_update(&mut k, &mut dx, gnss_pos_mount_scale);
         self.freeze_mount_update_if_needed(&mut k, &mut dx);
         self.record_update_diag(DIAG_GPS_POS_D, innovation, obs.s, &obs.h, &k, &dx);
         self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
-    fn fuse_gps_vel_n(&mut self, vel_n: f32, r_vel_n: f32, gnss_vel_mount_scale: f32) {
+    fn fuse_gps_vel_n(&mut self, vel_n: f32, r_vel_n: f32) {
+        self.fuse_gps_vel_n_impl(vel_n, r_vel_n, false);
+    }
+
+    fn fuse_gps_vel_n_impl(&mut self, vel_n: f32, r_vel_n: f32, block_mount: bool) {
         let innovation = vel_n - self.raw.nominal.vn;
         let obs = generated_eskf::gps_vel_n_observation(&self.raw.p, r_vel_n);
         let mut k = obs.k;
         let mut dx = gain_dx(k, innovation);
-        scale_mount_update(&mut k, &mut dx, gnss_vel_mount_scale);
+        if block_mount {
+            block_mount_injection(&mut k);
+            block_mount_injection(&mut dx);
+        }
         self.freeze_mount_update_if_needed(&mut k, &mut dx);
         let diag = if r_vel_n == RUNTIME_ZERO_VEL_R_DIAG {
             DIAG_ZERO_VEL
@@ -405,12 +469,19 @@ impl RustEskf {
         self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
-    fn fuse_gps_vel_e(&mut self, vel_e: f32, r_vel_e: f32, gnss_vel_mount_scale: f32) {
+    fn fuse_gps_vel_e(&mut self, vel_e: f32, r_vel_e: f32) {
+        self.fuse_gps_vel_e_impl(vel_e, r_vel_e, false);
+    }
+
+    fn fuse_gps_vel_e_impl(&mut self, vel_e: f32, r_vel_e: f32, block_mount: bool) {
         let innovation = vel_e - self.raw.nominal.ve;
         let obs = generated_eskf::gps_vel_e_observation(&self.raw.p, r_vel_e);
         let mut k = obs.k;
         let mut dx = gain_dx(k, innovation);
-        scale_mount_update(&mut k, &mut dx, gnss_vel_mount_scale);
+        if block_mount {
+            block_mount_injection(&mut k);
+            block_mount_injection(&mut dx);
+        }
         self.freeze_mount_update_if_needed(&mut k, &mut dx);
         let diag = if r_vel_e == RUNTIME_ZERO_VEL_R_DIAG {
             DIAG_ZERO_VEL
@@ -421,12 +492,19 @@ impl RustEskf {
         self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
-    fn fuse_gps_vel_d(&mut self, vel_d: f32, r_vel_d: f32, gnss_vel_mount_scale: f32) {
+    fn fuse_gps_vel_d(&mut self, vel_d: f32, r_vel_d: f32) {
+        self.fuse_gps_vel_d_impl(vel_d, r_vel_d, false);
+    }
+
+    fn fuse_gps_vel_d_impl(&mut self, vel_d: f32, r_vel_d: f32, block_mount: bool) {
         let innovation = vel_d - self.raw.nominal.vd;
         let obs = generated_eskf::gps_vel_d_observation(&self.raw.p, r_vel_d);
         let mut k = obs.k;
         let mut dx = gain_dx(k, innovation);
-        scale_mount_update(&mut k, &mut dx, gnss_vel_mount_scale);
+        if block_mount {
+            block_mount_injection(&mut k);
+            block_mount_injection(&mut dx);
+        }
         self.freeze_mount_update_if_needed(&mut k, &mut dx);
         let diag = if r_vel_d == RUNTIME_ZERO_VEL_R_DIAG {
             DIAG_ZERO_VEL_D
@@ -491,13 +569,7 @@ impl RustEskf {
     }
 
     #[allow(clippy::needless_range_loop, clippy::neg_cmp_op_on_partial_ord)]
-    fn fuse_body_vel_yz_batch(
-        &mut self,
-        r_body_vel_y: f32,
-        r_body_vel_z: f32,
-        mount_update_scale: f32,
-        mount_update_innovation_gate_mps: f32,
-    ) {
+    fn fuse_body_vel_yz_batch(&mut self, r_body_vel_y: f32, r_body_vel_z: f32) {
         let obs_y =
             generated_eskf::body_vel_y_observation(&self.raw.nominal, &self.raw.p, r_body_vel_y);
         let obs_z =
@@ -543,12 +615,6 @@ impl RustEskf {
                 diag_k[i] = ph[i] / s;
                 diag_dx[i] = ph[i] * alpha;
             }
-            let mount_scale = gated_mount_update_scale(
-                mount_update_scale,
-                mount_update_innovation_gate_mps,
-                effective_residual,
-            );
-            scale_mount_update(&mut diag_k, &mut diag_dx, mount_scale);
             self.freeze_mount_update_if_needed(&mut diag_k, &mut diag_dx);
             for i in 0..ERROR_STATES {
                 dx[i] += diag_dx[i];
@@ -581,6 +647,108 @@ impl RustEskf {
         update_covariance_joseph_scalar(&mut self.raw.p, innovation_var, h, k);
         inject_error_state(&mut self.raw.nominal, dx);
         apply_reset(&mut self.raw.p, dx);
+        if self.freeze_misalignment_states {
+            freeze_mount_covariance(&mut self.raw.p);
+        }
+    }
+
+    fn fuse_batch(
+        &mut self,
+        obs_count: usize,
+        h_rows: &[[f32; ERROR_STATES]; MAX_BATCH_OBS],
+        residuals: &[f32; MAX_BATCH_OBS],
+        variances: &[f32; MAX_BATCH_OBS],
+        diag_types: &[usize; MAX_BATCH_OBS],
+    ) {
+        if obs_count == 0 || obs_count > MAX_BATCH_OBS {
+            return;
+        }
+        let mut ph_t = [[0.0; MAX_BATCH_OBS]; ERROR_STATES];
+        for i in 0..ERROR_STATES {
+            for row in 0..obs_count {
+                let mut value = 0.0;
+                for state in 0..ERROR_STATES {
+                    value += self.raw.p[i][state] * h_rows[row][state];
+                }
+                ph_t[i][row] = value;
+            }
+        }
+
+        let mut s = [[0.0; MAX_BATCH_OBS]; MAX_BATCH_OBS];
+        for row in 0..obs_count {
+            for col in 0..obs_count {
+                let mut value = if row == col { variances[row] } else { 0.0 };
+                for state in 0..ERROR_STATES {
+                    value += h_rows[row][state] * ph_t[state][col];
+                }
+                s[row][col] = value;
+            }
+        }
+
+        let Some(s_inv) = invert_batch_matrix(s, obs_count) else {
+            return;
+        };
+
+        let mut k = [[0.0; MAX_BATCH_OBS]; ERROR_STATES];
+        for i in 0..ERROR_STATES {
+            for row in 0..obs_count {
+                let mut value = 0.0;
+                for col in 0..obs_count {
+                    value += ph_t[i][col] * s_inv[col][row];
+                }
+                k[i][row] = value;
+            }
+        }
+
+        let mut dx = [0.0; ERROR_STATES];
+        for i in 0..ERROR_STATES {
+            for row in 0..obs_count {
+                dx[i] += k[i][row] * residuals[row];
+            }
+        }
+        if self.freeze_misalignment_states {
+            block_mount_injection(&mut dx);
+            for row in 0..obs_count {
+                for i in 15..18 {
+                    k[i][row] = 0.0;
+                }
+            }
+        }
+
+        for row in 0..obs_count {
+            let mut row_k = [0.0; ERROR_STATES];
+            let mut row_dx = [0.0; ERROR_STATES];
+            for i in 0..ERROR_STATES {
+                row_k[i] = k[i][row];
+                row_dx[i] = k[i][row] * residuals[row];
+            }
+            self.record_update_diag(
+                diag_types[row],
+                residuals[row],
+                s[row][row],
+                &h_rows[row],
+                &row_k,
+                &row_dx,
+            );
+        }
+
+        let mut updated_p = self.raw.p;
+        for i in 0..ERROR_STATES {
+            for j in i..ERROR_STATES {
+                let mut correction = 0.0;
+                for row in 0..obs_count {
+                    for col in 0..obs_count {
+                        correction += k[i][row] * s[row][col] * k[j][col];
+                    }
+                }
+                let value = self.raw.p[i][j] - correction;
+                updated_p[i][j] = value;
+                updated_p[j][i] = value;
+            }
+        }
+        self.raw.p = updated_p;
+        inject_error_state(&mut self.raw.nominal, &dx);
+        apply_reset(&mut self.raw.p, &dx);
         if self.freeze_misalignment_states {
             freeze_mount_covariance(&mut self.raw.p);
         }
@@ -677,40 +845,84 @@ fn gain_dx(k: [f32; ERROR_STATES], innovation: f32) -> [f32; ERROR_STATES] {
     dx
 }
 
-fn scale_mount_update(k: &mut [f32; ERROR_STATES], dx: &mut [f32; ERROR_STATES], mount_scale: f32) {
-    let scale = sanitized_mount_scale(mount_scale);
-    if scale <= 0.0 {
-        block_mount_injection(k);
-        block_mount_injection(dx);
-    } else if scale < 1.0 {
-        for i in 15..18 {
-            k[i] *= scale;
-            dx[i] *= scale;
-        }
+fn gps_axis_h(axis: usize) -> [f32; ERROR_STATES] {
+    let mut h = [0.0; ERROR_STATES];
+    if axis < ERROR_STATES {
+        h[axis] = 1.0;
     }
+    h
 }
 
-fn sanitized_mount_scale(mount_scale: f32) -> f32 {
-    if mount_scale >= 0.0 && mount_scale.is_finite() {
-        mount_scale.min(1.0)
-    } else {
-        0.0
+#[allow(clippy::too_many_arguments)]
+fn push_batch_row(
+    h_rows: &mut [[f32; ERROR_STATES]; MAX_BATCH_OBS],
+    residuals: &mut [f32; MAX_BATCH_OBS],
+    variances: &mut [f32; MAX_BATCH_OBS],
+    diag_types: &mut [usize; MAX_BATCH_OBS],
+    obs_count: &mut usize,
+    h: [f32; ERROR_STATES],
+    residual: f32,
+    variance: f32,
+    diag_type: usize,
+) {
+    if *obs_count >= MAX_BATCH_OBS || !(variance > 0.0) || !variance.is_finite() {
+        return;
     }
+    h_rows[*obs_count] = h;
+    residuals[*obs_count] = residual;
+    variances[*obs_count] = variance;
+    diag_types[*obs_count] = diag_type;
+    *obs_count += 1;
 }
 
-fn gated_mount_update_scale(
-    mount_update_scale: f32,
-    mount_update_innovation_gate_mps: f32,
-    innovation: f32,
-) -> f32 {
-    let mut obs_mount_scale = sanitized_mount_scale(mount_update_scale);
-    if mount_update_innovation_gate_mps > 0.0 {
-        let innov_abs = fabsf(innovation);
-        if innov_abs > mount_update_innovation_gate_mps {
-            obs_mount_scale *= mount_update_innovation_gate_mps / innov_abs;
+fn invert_batch_matrix(
+    input: [[f32; MAX_BATCH_OBS]; MAX_BATCH_OBS],
+    n: usize,
+) -> Option<[[f32; MAX_BATCH_OBS]; MAX_BATCH_OBS]> {
+    let mut a = input;
+    let mut inv = [[0.0; MAX_BATCH_OBS]; MAX_BATCH_OBS];
+    for i in 0..n {
+        inv[i][i] = 1.0;
+    }
+
+    for col in 0..n {
+        let mut pivot = col;
+        let mut pivot_abs = fabsf(a[col][col]);
+        for row in (col + 1)..n {
+            let candidate = fabsf(a[row][col]);
+            if candidate > pivot_abs {
+                pivot = row;
+                pivot_abs = candidate;
+            }
+        }
+        if pivot_abs < 1.0e-12 || !pivot_abs.is_finite() {
+            return None;
+        }
+        if pivot != col {
+            a.swap(col, pivot);
+            inv.swap(col, pivot);
+        }
+
+        let scale = a[col][col];
+        for j in 0..n {
+            a[col][j] /= scale;
+            inv[col][j] /= scale;
+        }
+        for row in 0..n {
+            if row == col {
+                continue;
+            }
+            let factor = a[row][col];
+            if factor == 0.0 {
+                continue;
+            }
+            for j in 0..n {
+                a[row][j] -= factor * a[col][j];
+                inv[row][j] -= factor * inv[col][j];
+            }
         }
     }
-    obs_mount_scale
+    Some(inv)
 }
 
 fn block_mount_injection(dx: &mut [f32; ERROR_STATES]) {

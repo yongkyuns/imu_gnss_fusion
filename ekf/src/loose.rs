@@ -203,6 +203,21 @@ pub struct LooseImuDelta {
     pub dt: f32,
 }
 
+/// Diagnostic snapshot for the most recent loose GNSS position gate attempt.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LooseGnssPositionGateDiag {
+    /// True when a GNSS position measurement was tested in the last update.
+    pub attempted: bool,
+    /// True when all three whitened position rows passed the gate.
+    pub accepted: bool,
+    /// Whitened position residual before covariance normalization.
+    pub whitened_residual: [f32; 3],
+    /// One-sigma innovation scale after adding covariance.
+    pub innovation_sigma: [f32; 3],
+    /// Residual divided by innovation sigma for each row.
+    pub normalized_residual: [f32; 3],
+}
+
 /// Complete loose-filter state and diagnostics.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -223,6 +238,8 @@ pub struct LooseState {
     pub last_obs_count: i32,
     /// Observation type identifiers used by the last batch update.
     pub last_obs_types: [i32; 8],
+    /// Diagnostic state for the most recent GNSS position gate check.
+    pub last_gnss_pos_gate: LooseGnssPositionGateDiag,
 }
 
 impl Default for LooseState {
@@ -244,6 +261,7 @@ impl Default for LooseState {
             last_dx: [0.0; LOOSE_ERROR_STATES],
             last_obs_count: 0,
             last_obs_types: [0; 8],
+            last_gnss_pos_gate: LooseGnssPositionGateDiag::default(),
         }
     }
 }
@@ -299,6 +317,11 @@ impl LooseFilter {
     /// Returns the last injected error-state correction.
     pub fn last_dx(&self) -> &[f32; LOOSE_ERROR_STATES] {
         &self.raw.last_dx
+    }
+
+    /// Returns diagnostics for the most recent GNSS position gate attempt.
+    pub fn last_gnss_position_gate(&self) -> LooseGnssPositionGateDiag {
+        self.raw.last_gnss_pos_gate
     }
 
     /// Replaces covariance.
@@ -899,6 +922,7 @@ impl LooseFilter {
         }
         self.raw.last_obs_count = 0;
         self.raw.last_obs_types = [0; 8];
+        self.raw.last_gnss_pos_gate = LooseGnssPositionGateDiag::default();
 
         let mut h_rows = [[0.0; LOOSE_ERROR_STATES]; 8];
         let mut h_supports: [Option<&'static [usize]>; 8] = [None; 8];
@@ -954,7 +978,7 @@ impl LooseFilter {
 
     #[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
     fn append_reference_gps_observations(
-        &self,
+        &mut self,
         pos_ecef_m: Option<[f64; 3]>,
         vel_ecef_mps: Option<[f32; 3]>,
         h_acc_m: f32,
@@ -1031,13 +1055,15 @@ impl LooseFilter {
                 GPS_REF_SUPPORT_ROW1,
                 GPS_REF_SUPPORT_ROW2,
             ];
-            if !test_chi2_vec3(
+            let gate = gnss_position_gate_diag(
                 residual,
                 &self.raw.p,
                 &h_tmp,
                 [1.0, 1.0, 1.0],
                 &gps_supports,
-            ) {
+            );
+            self.raw.last_gnss_pos_gate = gate;
+            if gate.accepted {
                 let meas_var = 1.0 / libm::fminf(libm::fmaxf(dt_since_last_gnss_s, 1.0e-3), 1.0);
                 for row in 0..3 {
                     h_rows[obs_count] = h_tmp[row];
@@ -1524,6 +1550,43 @@ fn test_chi2_scalar(
         }
     }
     libm::fabsf(residual) > 3.0 * libm::sqrtf(libm::fmaxf(s, 0.0))
+}
+
+fn gnss_position_gate_diag(
+    residual: [f32; 3],
+    p: &[[f32; LOOSE_ERROR_STATES]; LOOSE_ERROR_STATES],
+    h: &[[f32; LOOSE_ERROR_STATES]; 3],
+    r_diag: [f32; 3],
+    supports: &[&'static [usize]; 3],
+) -> LooseGnssPositionGateDiag {
+    let mut innovation_sigma = [0.0; 3];
+    let mut normalized_residual = [0.0; 3];
+    let mut accepted = true;
+    for row in 0..3 {
+        let mut s = r_diag[row];
+        for &i in supports[row] {
+            for &j in supports[row] {
+                s += h[row][i] * p[i][j] * h[row][j];
+            }
+        }
+        let sigma = libm::sqrtf(libm::fmaxf(s, 0.0));
+        innovation_sigma[row] = sigma;
+        normalized_residual[row] = if sigma > 0.0 {
+            residual[row] / sigma
+        } else {
+            f32::INFINITY.copysign(residual[row])
+        };
+        if libm::fabsf(normalized_residual[row]) > 3.0 {
+            accepted = false;
+        }
+    }
+    LooseGnssPositionGateDiag {
+        attempted: true,
+        accepted,
+        whitened_residual: residual,
+        innovation_sigma,
+        normalized_residual,
+    }
 }
 
 fn test_chi2_vec3(

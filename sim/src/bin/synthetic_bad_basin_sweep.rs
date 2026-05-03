@@ -69,10 +69,6 @@ struct Args {
     r_body_vel: f32,
     #[arg(long, default_value_t = 0.125)]
     r_body_vel_z: f32,
-    #[arg(long, default_value_t = 0.0)]
-    gnss_pos_mount_scale: f32,
-    #[arg(long, default_value_t = 0.0)]
-    gnss_vel_mount_scale: f32,
     #[arg(long, default_value_t = 2.0)]
     yaw_init_sigma_deg: f32,
     #[arg(long, default_value_t = 0.125)]
@@ -89,12 +85,6 @@ struct Args {
     r_stationary_accel: f32,
     #[arg(long, default_value_t = 0.0)]
     mount_align_rw_var: f32,
-    #[arg(long, default_value_t = 0.008)]
-    mount_update_min_scale: f32,
-    #[arg(long, default_value_t = 120.0)]
-    mount_update_ramp_time_s: f32,
-    #[arg(long, default_value_t = 0.10)]
-    mount_update_innovation_gate_mps: f32,
     #[arg(long, default_value_t = false)]
     freeze_misalignment_states: bool,
     #[arg(long, default_value_t = 0.0)]
@@ -1030,8 +1020,6 @@ fn snapshot_state(
 
 fn apply_fusion_config(fusion: &mut SensorFusion, args: &Args) {
     fusion.set_r_body_vel_yz(args.r_body_vel, args.r_body_vel_z);
-    fusion.set_gnss_pos_mount_scale(args.gnss_pos_mount_scale);
-    fusion.set_gnss_vel_mount_scale(args.gnss_vel_mount_scale);
     fusion.set_yaw_init_sigma_rad(args.yaw_init_sigma_deg.to_radians());
     fusion.set_gyro_bias_init_sigma_radps(args.gyro_bias_init_sigma_dps.to_radians());
     fusion.set_accel_bias_init_sigma_mps2(args.accel_bias_init_sigma_mps2);
@@ -1040,9 +1028,6 @@ fn apply_fusion_config(fusion: &mut SensorFusion, args: &Args) {
     fusion.set_r_zero_vel(args.r_zero_vel);
     fusion.set_r_stationary_accel(args.r_stationary_accel);
     fusion.set_mount_align_rw_var(args.mount_align_rw_var);
-    fusion.set_mount_update_min_scale(args.mount_update_min_scale);
-    fusion.set_mount_update_ramp_time_s(args.mount_update_ramp_time_s);
-    fusion.set_mount_update_innovation_gate_mps(args.mount_update_innovation_gate_mps);
     fusion.set_freeze_misalignment_states(args.freeze_misalignment_states);
     fusion.set_mount_settle_time_s(args.mount_settle_time_s);
     fusion.set_mount_settle_release_sigma_rad(args.mount_settle_release_sigma_deg.to_radians());

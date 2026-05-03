@@ -351,6 +351,7 @@ pub fn decimate_for_transport(data: &mut PlotData, max_points_per_trace: usize) 
     decimate_group(&mut data.loose_cov_nonbias, max_points_per_trace);
     decimate_group(&mut data.loose_mount_sigma, max_points_per_trace);
     decimate_group(&mut data.loose_mount_dx, max_points_per_trace);
+    decimate_group(&mut data.loose_gnss_pos_gate, max_points_per_trace);
     decimate_group(&mut data.align_cmp_att, max_points_per_trace);
     decimate_group(&mut data.align_res_vel, max_points_per_trace);
     decimate_group(&mut data.align_axis_err, max_points_per_trace);

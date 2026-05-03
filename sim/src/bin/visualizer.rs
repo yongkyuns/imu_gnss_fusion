@@ -15,7 +15,11 @@ use sim::datasets::generic_replay::{
     load_reference_mount_samples,
 };
 #[cfg(not(target_arch = "wasm32"))]
+use sim::eval::gnss_ins::wrap_deg180;
+#[cfg(not(target_arch = "wasm32"))]
 use sim::eval::state_summary::{SummaryMode, summarize_trace_pair};
+#[cfg(not(target_arch = "wasm32"))]
+use sim::eval::trace::sample_nearest_value;
 #[cfg(not(target_arch = "wasm32"))]
 use sim::visualizer::model::{EkfImuSource, PlotData, Trace};
 #[cfg(not(target_arch = "wasm32"))]
@@ -108,10 +112,6 @@ struct Args {
     #[arg(long)]
     r_body_vel_z: Option<f32>,
     #[arg(long)]
-    gnss_pos_mount_scale: Option<f32>,
-    #[arg(long)]
-    gnss_vel_mount_scale: Option<f32>,
-    #[arg(long)]
     yaw_init_sigma_deg: Option<f32>,
     #[arg(long)]
     gyro_bias_init_sigma_dps: Option<f32>,
@@ -129,12 +129,6 @@ struct Args {
     r_stationary_accel: Option<f32>,
     #[arg(long)]
     mount_align_rw_var: Option<f32>,
-    #[arg(long)]
-    mount_update_min_scale: Option<f32>,
-    #[arg(long)]
-    mount_update_ramp_time_s: Option<f32>,
-    #[arg(long)]
-    mount_update_innovation_gate_mps: Option<f32>,
     #[arg(long)]
     align_handoff_delay_s: Option<f32>,
     #[arg(long)]
@@ -179,12 +173,6 @@ fn main() -> Result<()> {
         r_body_vel_z: args
             .r_body_vel_z
             .unwrap_or(EkfCompareConfig::default().r_body_vel_z),
-        gnss_pos_mount_scale: args
-            .gnss_pos_mount_scale
-            .unwrap_or(EkfCompareConfig::default().gnss_pos_mount_scale),
-        gnss_vel_mount_scale: args
-            .gnss_vel_mount_scale
-            .unwrap_or(EkfCompareConfig::default().gnss_vel_mount_scale),
         yaw_init_sigma_deg: args
             .yaw_init_sigma_deg
             .unwrap_or(EkfCompareConfig::default().yaw_init_sigma_deg),
@@ -212,15 +200,6 @@ fn main() -> Result<()> {
         mount_align_rw_var: args
             .mount_align_rw_var
             .unwrap_or(EkfCompareConfig::default().mount_align_rw_var),
-        mount_update_min_scale: args
-            .mount_update_min_scale
-            .unwrap_or(EkfCompareConfig::default().mount_update_min_scale),
-        mount_update_ramp_time_s: args
-            .mount_update_ramp_time_s
-            .unwrap_or(EkfCompareConfig::default().mount_update_ramp_time_s),
-        mount_update_innovation_gate_mps: args
-            .mount_update_innovation_gate_mps
-            .unwrap_or(EkfCompareConfig::default().mount_update_innovation_gate_mps),
         align_handoff_delay_s: args
             .align_handoff_delay_s
             .unwrap_or(EkfCompareConfig::default().align_handoff_delay_s),
@@ -341,7 +320,7 @@ fn main() -> Result<()> {
         tmax
     );
     eprintln!(
-        "[profile] ekf-only misalignment={:?} predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} r_body_vel_y={:.3} r_body_vel_z={:.3} gnss_pos_mount_scale={:.3} gnss_vel_mount_scale={:.3} yaw_init_sigma_deg={:.3} gyro_bias_init_sigma_dps={:.3} mount_roll_pitch_init_sigma_deg={:.3} mount_yaw_init_sigma_deg={:.3} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} mount_update_min_scale={:.3} mount_update_ramp_time_s={:.3} mount_update_innovation_gate_mps={:.3} align_handoff_delay_s={:.3} freeze_misalignment_states={} mount_settle_time_s={:.3} mount_settle_release_sigma_deg={:.3} mount_settle_zero_cross_covariance={}",
+        "[profile] ekf-only misalignment={:?} predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} r_body_vel_y={:.3} r_body_vel_z={:.3} yaw_init_sigma_deg={:.3} gyro_bias_init_sigma_dps={:.3} mount_roll_pitch_init_sigma_deg={:.3} mount_yaw_init_sigma_deg={:.3} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} align_handoff_delay_s={:.3} freeze_misalignment_states={} mount_settle_time_s={:.3} mount_settle_release_sigma_deg={:.3} mount_settle_zero_cross_covariance={}",
         args.misalignment,
         ekf_cfg.predict_imu_decimation,
         ekf_cfg
@@ -350,8 +329,6 @@ fn main() -> Result<()> {
             .unwrap_or_else(|| "off".to_string()),
         ekf_cfg.r_body_vel,
         ekf_cfg.r_body_vel_z,
-        ekf_cfg.gnss_pos_mount_scale,
-        ekf_cfg.gnss_vel_mount_scale,
         ekf_cfg.yaw_init_sigma_deg,
         ekf_cfg.gyro_bias_init_sigma_dps,
         ekf_cfg.mount_roll_pitch_init_sigma_deg,
@@ -360,9 +337,6 @@ fn main() -> Result<()> {
         ekf_cfg.r_zero_vel,
         ekf_cfg.r_stationary_accel,
         ekf_cfg.mount_align_rw_var,
-        ekf_cfg.mount_update_min_scale,
-        ekf_cfg.mount_update_ramp_time_s,
-        ekf_cfg.mount_update_innovation_gate_mps,
         ekf_cfg.align_handoff_delay_s,
         ekf_cfg.freeze_misalignment_states,
         ekf_cfg.mount_settle_time_s,
@@ -412,6 +386,7 @@ fn main() -> Result<()> {
         group_stats("loose_mount_sigma", &data.loose_mount_sigma),
         group_stats("loose_mount_dx", &data.loose_mount_dx),
         group_stats("loose_nhc_innovation", &data.loose_nhc_innovation),
+        group_stats("loose_gnss_pos_gate", &data.loose_gnss_pos_gate),
         group_stats("loose_map", &data.loose_map),
         group_stats("align_cmp_att", &data.align_cmp_att),
         group_stats("align_res_vel", &data.align_res_vel),
@@ -449,6 +424,7 @@ fn main() -> Result<()> {
         ("loose_meas_accel", &data.loose_meas_accel),
         ("loose_scale_gyro", &data.loose_scale_gyro),
         ("loose_scale_accel", &data.loose_scale_accel),
+        ("loose_gnss_pos_gate", &data.loose_gnss_pos_gate),
         ("align_roll_contrib", &data.align_roll_contrib),
         ("align_pitch_contrib", &data.align_pitch_contrib),
         ("align_yaw_contrib", &data.align_yaw_contrib),
@@ -474,7 +450,9 @@ fn main() -> Result<()> {
     print_map_bounds("loose_map", &data.loose_map);
     print_eskf_nhc_window_summaries(&data, tmin);
     print_loose_nhc_window_summaries(&data, tmin);
+    print_loose_gnss_gate_window_summaries(&data, tmin);
     print_loose_mount_window_summaries(&data, tmin);
+    print_mount_allocation_summaries(&data, tmin, tmax);
     if let Some(t_s) = args.dump_align_axis_time_s {
         dump_traces_near_time(
             "align_cmp_att",
@@ -1645,6 +1623,241 @@ fn print_loose_nhc_window_summaries(data: &PlotData, t0: f64) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn print_loose_gnss_gate_window_summaries(data: &PlotData, t0: f64) {
+    for (start_rel, end_rel) in [
+        (0.0, 60.0),
+        (60.0, 120.0),
+        (120.0, 240.0),
+        (240.0, 600.0),
+        (600.0, 1200.0),
+        (1200.0, 1740.0),
+    ] {
+        let start = t0 + start_rel;
+        let end = t0 + end_rel;
+        let accepted = find_trace(&data.loose_gnss_pos_gate, "Loose GNSS position accepted");
+        let accepted_stats = accepted.map(|trace| {
+            let mut attempts = 0usize;
+            let mut accepts = 0usize;
+            for point in &trace.points {
+                if point[0] >= start && point[0] < end && point[1].is_finite() {
+                    attempts += 1;
+                    if point[1] > 0.5 {
+                        accepts += 1;
+                    }
+                }
+            }
+            (attempts, accepts)
+        });
+        let max_norm = ["row 0", "row 1", "row 2"].map(|row| {
+            let name = format!("Loose GNSS position gate normalized residual {row}");
+            find_trace(&data.loose_gnss_pos_gate, &name)
+                .map(|trace| {
+                    trace
+                        .points
+                        .iter()
+                        .filter(|point| point[0] >= start && point[0] < end && point[1].is_finite())
+                        .map(|point| point[1].abs())
+                        .fold(0.0_f64, f64::max)
+                })
+                .unwrap_or(f64::NAN)
+        });
+        let (attempts, accepts) = accepted_stats.unwrap_or((0, 0));
+        let rejects = attempts.saturating_sub(accepts);
+        eprintln!(
+            "[profile] loose_gnss_pos_gate_window window=[{:.1},{:.1}]s attempts={} accepts={} rejects={} accept_rate={:.3} max_abs_norm=[{:.3},{:.3},{:.3}]",
+            start_rel,
+            end_rel,
+            attempts,
+            accepts,
+            rejects,
+            if attempts > 0 {
+                accepts as f64 / attempts as f64
+            } else {
+                f64::NAN
+            },
+            max_norm[0],
+            max_norm[1],
+            max_norm[2],
+        );
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn print_mount_allocation_summaries(data: &PlotData, t0: f64, tmax: f64) {
+    if !t0.is_finite() || !tmax.is_finite() {
+        return;
+    }
+    let windows = [
+        (120.0, 240.0),
+        (240.0, 600.0),
+        (600.0, 1200.0),
+        (1200.0, 1740.0),
+    ];
+    for (start_rel, end_rel) in windows {
+        let start = t0 + start_rel;
+        let end = (t0 + end_rel).min(tmax);
+        if end <= start {
+            continue;
+        }
+        for axis in ["roll", "pitch", "yaw"] {
+            print_align_allocation_window(data, axis, start_rel, end_rel, start, end);
+            print_filter_allocation_window(data, "ESKF", axis, start_rel, end_rel, start, end);
+            print_filter_allocation_window(data, "Loose", axis, start_rel, end_rel, start, end);
+        }
+        print_accel_bias_allocation_window(data, "ESKF", start_rel, end_rel, start, end);
+        print_accel_bias_allocation_window(data, "Loose", start_rel, end_rel, start, end);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn print_align_allocation_window(
+    data: &PlotData,
+    axis: &str,
+    start_rel: f64,
+    end_rel: f64,
+    start: f64,
+    end: f64,
+) {
+    let Some(err_trace) = find_trace(&data.align_axis_err, &format!("Align {axis} error [deg]"))
+    else {
+        return;
+    };
+    let Some(err) = window_error_stats(err_trace, None, start, end, SummaryMode::AngleDeg) else {
+        return;
+    };
+    let sigma = find_trace(&data.align_cov, &format!("Align {axis} sigma [deg]"))
+        .map(|trace| window_stats(trace, start, end));
+    eprintln!(
+        "[profile] allocation_window system=Align axis={} window=[{:.1},{:.1}]s samples={} mount_err_mean={:.6} mount_err_rms={:.6} mount_err_final={:.6} mount_err_delta={:.6} mount_sigma_mean={:.6}",
+        axis,
+        start_rel,
+        end_rel,
+        err.count,
+        err.mean,
+        err.rms,
+        err.final_value,
+        err.delta,
+        sigma.map_or(f64::NAN, |s| s.mean),
+    );
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn print_filter_allocation_window(
+    data: &PlotData,
+    system: &str,
+    axis: &str,
+    start_rel: f64,
+    end_rel: f64,
+    start: f64,
+    end: f64,
+) {
+    let (mount_group, mount_name, att_group, att_name, sigma_group, sigma_name) = match system {
+        "ESKF" => (
+            data.eskf_misalignment.as_slice(),
+            format!("ESKF mount {axis} [deg]"),
+            data.eskf_cmp_att.as_slice(),
+            format!("ESKF {axis} [deg]"),
+            data.eskf_mount_sigma.as_slice(),
+            format!("ESKF mount {axis} sigma [deg]"),
+        ),
+        "Loose" => (
+            data.loose_misalignment.as_slice(),
+            format!("Loose residual mount {axis} [deg]"),
+            data.loose_cmp_att.as_slice(),
+            format!("Loose {axis} [deg]"),
+            data.loose_mount_sigma.as_slice(),
+            format!("Loose residual mount {axis} sigma [deg]"),
+        ),
+        _ => return,
+    };
+    let Some(mount) = find_trace(mount_group, &mount_name) else {
+        return;
+    };
+    let Some(mount_reference) = find_trace(mount_group, &format!("Reference mount {axis} [deg]"))
+    else {
+        return;
+    };
+    let Some(att) = find_trace(att_group, &att_name) else {
+        return;
+    };
+    let Some(att_reference) = find_trace(att_group, &format!("Reference {axis} [deg]")) else {
+        return;
+    };
+    let Some(mount_err) = window_error_stats(
+        mount,
+        Some(mount_reference),
+        start,
+        end,
+        SummaryMode::AngleDeg,
+    ) else {
+        return;
+    };
+    let Some(att_err) =
+        window_error_stats(att, Some(att_reference), start, end, SummaryMode::AngleDeg)
+    else {
+        return;
+    };
+    let sigma = find_trace(sigma_group, &sigma_name).map(|trace| window_stats(trace, start, end));
+    eprintln!(
+        "[profile] allocation_window system={} axis={} window=[{:.1},{:.1}]s samples={} mount_err_mean={:.6} mount_err_rms={:.6} mount_err_final={:.6} mount_err_delta={:.6} att_err_mean={:.6} att_err_rms={:.6} att_err_final={:.6} att_err_delta={:.6} split_sum_final={:.6} split_sum_mean={:.6} mount_sigma_mean={:.6}",
+        system,
+        axis,
+        start_rel,
+        end_rel,
+        mount_err.count.min(att_err.count),
+        mount_err.mean,
+        mount_err.rms,
+        mount_err.final_value,
+        mount_err.delta,
+        att_err.mean,
+        att_err.rms,
+        att_err.final_value,
+        att_err.delta,
+        wrap_deg180(mount_err.final_value + att_err.final_value),
+        wrap_deg180(mount_err.mean + att_err.mean),
+        sigma.map_or(f64::NAN, |s| s.mean),
+    );
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn print_accel_bias_allocation_window(
+    data: &PlotData,
+    system: &str,
+    start_rel: f64,
+    end_rel: f64,
+    start: f64,
+    end: f64,
+) {
+    let (traces, prefix) = match system {
+        "ESKF" => (data.eskf_bias_accel.as_slice(), "ESKF accel bias"),
+        "Loose" => (data.loose_bias_accel.as_slice(), "Loose accel sensor bias"),
+        _ => return,
+    };
+    let stats = ["X", "Y", "Z"].map(|axis| {
+        find_trace(traces, &format!("{prefix} {axis} [m/s^2]"))
+            .map(|trace| window_stats(trace, start, end))
+    });
+    eprintln!(
+        "[profile] allocation_bias_window system={} window=[{:.1},{:.1}]s bax_mean={:.6} bay_mean={:.6} baz_mean={:.6} bax_final={:.6} bay_final={:.6} baz_final={:.6}",
+        system,
+        start_rel,
+        end_rel,
+        stats[0].map_or(f64::NAN, |s| s.mean),
+        stats[1].map_or(f64::NAN, |s| s.mean),
+        stats[2].map_or(f64::NAN, |s| s.mean),
+        find_trace(traces, &format!("{prefix} X [m/s^2]"))
+            .and_then(|trace| window_last_value(trace, start, end))
+            .unwrap_or(f64::NAN),
+        find_trace(traces, &format!("{prefix} Y [m/s^2]"))
+            .and_then(|trace| window_last_value(trace, start, end))
+            .unwrap_or(f64::NAN),
+        find_trace(traces, &format!("{prefix} Z [m/s^2]"))
+            .and_then(|trace| window_last_value(trace, start, end))
+            .unwrap_or(f64::NAN),
+    );
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug)]
 struct WindowStats {
     count: usize,
@@ -1653,6 +1866,70 @@ struct WindowStats {
     mean: f64,
     rms: f64,
     max: f64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug)]
+struct WindowErrorStats {
+    count: usize,
+    mean: f64,
+    rms: f64,
+    final_value: f64,
+    delta: f64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn window_error_stats(
+    trace: &Trace,
+    reference: Option<&Trace>,
+    start: f64,
+    end: f64,
+    mode: SummaryMode,
+) -> Option<WindowErrorStats> {
+    let mut count = 0usize;
+    let mut sum = 0.0;
+    let mut sum_sq = 0.0;
+    let mut first = None;
+    let mut last = None;
+    for point in &trace.points {
+        let t = point[0];
+        if !(t >= start && t < end) || !point[1].is_finite() {
+            continue;
+        }
+        let value = if let Some(reference) = reference {
+            let reference_value = sample_nearest_value(reference, t)?;
+            diff_value(point[1], reference_value, mode)
+        } else {
+            point[1]
+        };
+        if !value.is_finite() {
+            continue;
+        }
+        count += 1;
+        sum += value;
+        sum_sq += value * value;
+        first.get_or_insert(value);
+        last = Some(value);
+    }
+    let (Some(first), Some(last)) = (first, last) else {
+        return None;
+    };
+    let n = count as f64;
+    Some(WindowErrorStats {
+        count,
+        mean: sum / n,
+        rms: (sum_sq / n).sqrt(),
+        final_value: last,
+        delta: diff_value(last, first, mode),
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn diff_value(value: f64, reference: f64, mode: SummaryMode) -> f64 {
+    match mode {
+        SummaryMode::Linear => value - reference,
+        SummaryMode::AngleDeg => wrap_deg180(value - reference),
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1686,6 +1963,16 @@ fn window_stats(trace: &Trace, start: f64, end: f64) -> WindowStats {
         },
         max: if count > 0 { max } else { f64::NAN },
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn window_last_value(trace: &Trace, start: f64, end: f64) -> Option<f64> {
+    trace
+        .points
+        .iter()
+        .filter(|point| point[0] >= start && point[0] < end && point[1].is_finite())
+        .map(|point| point[1])
+        .last()
 }
 
 #[cfg(not(target_arch = "wasm32"))]

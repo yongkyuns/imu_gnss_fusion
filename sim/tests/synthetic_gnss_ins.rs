@@ -555,16 +555,6 @@ fn synthetic_early_velocity_fault_does_not_drive_eskf_mount_by_default() -> Resu
         [0.5, 0.5, 0.5],
         [0.2, 0.2, 0.2],
     )?;
-    let faulted_legacy_gnss_vel_mount_coupling = run_eskf_on_samples_configured(
-        &generated,
-        &generated.imu,
-        &faulted_gnss,
-        [5.0, -5.0, 5.0],
-        [0.5, 0.5, 0.5],
-        [0.2, 0.2, 0.2],
-        |fusion| fusion.set_gnss_vel_mount_scale(1.0),
-    )?;
-
     assert!(
         clean.tail_mount_quat_err_mean_deg < 0.15,
         "clean figure-eight should not create a mount basin error: {clean:#?}"
@@ -572,10 +562,6 @@ fn synthetic_early_velocity_fault_does_not_drive_eskf_mount_by_default() -> Resu
     assert!(
         faulted_default.tail_mount_quat_err_mean_deg < 0.25,
         "default ESKF should not let an early GNSS velocity fault directly push mount into a wrong basin: {faulted_default:#?}"
-    );
-    assert!(
-        (1.0..=2.5).contains(&faulted_legacy_gnss_vel_mount_coupling.tail_mount_quat_err_mean_deg),
-        "legacy direct GNSS velocity-to-mount coupling should reproduce the 1-2 deg wrong-basin behavior: {faulted_legacy_gnss_vel_mount_coupling:#?}"
     );
     Ok(())
 }
@@ -847,6 +833,43 @@ brake 0.6666667m/s^2 for 18s
     assert!(
         (loose_roll - 5.0).abs() < 0.02,
         "ideal symmetric figure-eight should not drive loose mount roll: final={loose_roll:.6}"
+    );
+    Ok(())
+}
+
+#[test]
+fn synthetic_roll_excitation_alone_does_not_make_mount_roll_observable() -> Result<()> {
+    let profile_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("motion_profiles/figure8_roll_excitation_30min.scenario");
+    let data = build_synthetic_plot_data(
+        &SyntheticVisualizerConfig {
+            motion_def: Some(profile_path),
+            motion_label: "figure8_roll_excitation_30min.scenario".to_string(),
+            motion_text: None,
+            noise_mode: SyntheticNoiseMode::Truth,
+            disable_imu_noise: false,
+            disable_gnss_noise: false,
+            seed: 42,
+            mount_rpy_deg: [5.0, -5.0, 5.0],
+            imu_hz: 25.0,
+            gnss_hz: 2.0,
+            gnss_time_shift_ms: 0.0,
+            early_vel_bias_ned_mps: [0.5, 0.0, 0.0],
+            early_fault_window_s: Some((0.0, 360.0)),
+        },
+        EkfImuSource::Internal,
+        EkfCompareConfig::default(),
+        GnssOutageConfig::default(),
+    )?;
+
+    let eskf_mount_qerr = final_trace_value(require_trace(
+        "eskf_misalignment",
+        &data.eskf_misalignment,
+        "ESKF mount quaternion error [deg]",
+    )?)?;
+    assert!(
+        eskf_mount_qerr > 0.1,
+        "roll excitation alone unexpectedly made ESKF mount converge; qerr={eskf_mount_qerr:.6}"
     );
     Ok(())
 }
