@@ -14,7 +14,8 @@ use crate::eval::gnss_ins::{as_q64, quat_angle_deg, quat_conj, quat_mul};
 use crate::eval::replay::{ReplayEvent, for_each_event};
 use crate::visualizer::math::{ecef_to_ned, lla_to_ecef, ned_to_lla_exact, quat_rpy_deg};
 use crate::visualizer::model::{
-    EkfImuSource, HeadingSample, PlotData, StateContribution, Trace, UpdateInspectorSample,
+    EkfImuSource, HeadingSample, PlotData, StateContribution, StateCorrelation, Trace,
+    UpdateInspectorSample,
 };
 use crate::visualizer::pipeline::{EkfCompareConfig, GnssOutageConfig};
 
@@ -1237,13 +1238,15 @@ fn populate_loose_traces(
                     .contains(&age_s)
                     .then(|| gnss.vel_ned_mps[0].hypot(gnss.vel_ned_mps[1]) as f32)
             });
-            loose.fuse_reference_batch_full_with_nhc_speed(
+            loose.fuse_reference_batch_full_with_nhc_speed_and_r(
                 gps_pos,
                 gps_vel,
                 gps_pos_std,
                 gps_vel_std,
                 dt_since_gnss,
                 nhc_gate_speed_mps,
+                ekf_cfg.r_body_vel,
+                ekf_cfg.r_body_vel_z,
                 gyro_vehicle_radps.map(|v| v as f32),
                 accel_vehicle_mps2.map(|v| v as f32),
                 dt as f32,
@@ -1687,6 +1690,7 @@ fn append_eskf_sample(
                 diag.last_dx_mount_roll_by_type[diag_type],
                 diag.last_dx_mount_pitch_by_type[diag_type],
                 diag.last_dx_mount_yaw_by_type[diag_type],
+                &eskf.p,
             ));
             last_type_counts[diag_type] = diag.type_counts[diag_type];
         }
@@ -1940,6 +1944,7 @@ fn eskf_nhc_inspector_sample(
     mount_roll_dx_rad: f32,
     mount_pitch_dx_rad: f32,
     mount_yaw_dx_rad: f32,
+    p: &[[f32; 18]; 18],
 ) -> UpdateInspectorSample {
     let contributions = [
         ("mount roll", mount_roll_dx_rad),
@@ -1961,6 +1966,7 @@ fn eskf_nhc_inspector_sample(
         residual: Some(innovation as f64),
         nis: Some(nis as f64),
         contributions,
+        correlations: eskf_mount_correlations(p),
     }
 }
 
@@ -1979,7 +1985,108 @@ fn loose_inspector_sample(t_s: f64, loose: &LooseFilter) -> UpdateInspectorSampl
         residual: None,
         nis: None,
         contributions: loose_state_contributions(dx),
+        correlations: loose_mount_correlations(loose.covariance()),
     }
+}
+
+fn eskf_mount_correlations(p: &[[f32; 18]; 18]) -> Vec<StateCorrelation> {
+    const STATES: [(&str, &str, usize); 18] = [
+        ("att roll", "attitude", 0),
+        ("att pitch", "attitude", 1),
+        ("att yaw", "attitude", 2),
+        ("vel N", "velocity", 3),
+        ("vel E", "velocity", 4),
+        ("vel D", "velocity", 5),
+        ("pos N", "position", 6),
+        ("pos E", "position", 7),
+        ("pos D", "position", 8),
+        ("gyro bias X", "gyro bias", 9),
+        ("gyro bias Y", "gyro bias", 10),
+        ("gyro bias Z", "gyro bias", 11),
+        ("accel bias X", "accel bias", 12),
+        ("accel bias Y", "accel bias", 13),
+        ("accel bias Z", "accel bias", 14),
+        ("mount roll", "mount", 15),
+        ("mount pitch", "mount", 16),
+        ("mount yaw", "mount", 17),
+    ];
+    covariance_mount_correlations(p, &STATES, &[(15, "roll"), (16, "pitch"), (17, "yaw")])
+}
+
+fn loose_mount_correlations(
+    p: &[[f32; LOOSE_ERROR_STATES]; LOOSE_ERROR_STATES],
+) -> Vec<StateCorrelation> {
+    const STATES: [(&str, &str, usize); LOOSE_ERROR_STATES] = [
+        ("pos X", "position", 0),
+        ("pos Y", "position", 1),
+        ("pos Z", "position", 2),
+        ("vel X", "velocity", 3),
+        ("vel Y", "velocity", 4),
+        ("vel Z", "velocity", 5),
+        ("att roll", "attitude", 6),
+        ("att pitch", "attitude", 7),
+        ("att yaw", "attitude", 8),
+        ("accel bias X", "accel bias", 9),
+        ("accel bias Y", "accel bias", 10),
+        ("accel bias Z", "accel bias", 11),
+        ("gyro bias X", "gyro bias", 12),
+        ("gyro bias Y", "gyro bias", 13),
+        ("gyro bias Z", "gyro bias", 14),
+        ("accel scale X", "accel scale", 15),
+        ("accel scale Y", "accel scale", 16),
+        ("accel scale Z", "accel scale", 17),
+        ("gyro scale X", "gyro scale", 18),
+        ("gyro scale Y", "gyro scale", 19),
+        ("gyro scale Z", "gyro scale", 20),
+        ("mount roll", "mount", 21),
+        ("mount pitch", "mount", 22),
+        ("mount yaw", "mount", 23),
+    ];
+    covariance_mount_correlations(p, &STATES, &[(21, "roll"), (22, "pitch"), (23, "yaw")])
+}
+
+fn covariance_mount_correlations<const N: usize>(
+    p: &[[f32; N]; N],
+    states: &[(&str, &str, usize)],
+    mount_axes: &[(usize, &str)],
+) -> Vec<StateCorrelation> {
+    let mut correlations = Vec::new();
+    for &(mount_idx, mount_axis) in mount_axes {
+        for &(state, group, idx) in states {
+            if idx == mount_idx {
+                continue;
+            }
+            let value = covariance_correlation(p, idx, mount_idx);
+            if !value.is_finite() {
+                continue;
+            }
+            correlations.push(StateCorrelation {
+                state: state.to_string(),
+                group: group.to_string(),
+                mount_axis: mount_axis.to_string(),
+                value,
+            });
+        }
+    }
+    correlations.sort_by(|a, b| {
+        b.value
+            .abs()
+            .total_cmp(&a.value.abs())
+            .then_with(|| a.mount_axis.cmp(&b.mount_axis))
+            .then_with(|| a.state.cmp(&b.state))
+    });
+    correlations.truncate(6);
+    correlations
+}
+
+fn covariance_correlation<const N: usize>(p: &[[f32; N]; N], i: usize, j: usize) -> f64 {
+    let pii = p[i][i].max(0.0) as f64;
+    let pjj = p[j][j].max(0.0) as f64;
+    let denom = (pii * pjj).sqrt();
+    if denom <= 0.0 {
+        return f64::NAN;
+    }
+    (p[i][j] as f64 / denom).clamp(-1.0, 1.0)
 }
 
 fn loose_state_contributions(dx: &[f32; LOOSE_ERROR_STATES]) -> Vec<StateContribution> {

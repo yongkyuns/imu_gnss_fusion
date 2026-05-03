@@ -360,6 +360,7 @@ pub fn decimate_for_transport(data: &mut PlotData, max_points_per_trace: usize) 
     decimate_group(&mut data.align_pitch_contrib, max_points_per_trace);
     decimate_group(&mut data.align_yaw_contrib, max_points_per_trace);
     decimate_group(&mut data.align_cov, max_points_per_trace);
+    decimate_update_inspector(&mut data.update_inspector, max_points_per_trace.min(2000));
 }
 
 fn decimate_group(group: &mut [Trace], max_points: usize) {
@@ -381,4 +382,25 @@ fn decimate_trace(trace: &mut Trace, max_points: usize) {
         points.push(last);
     }
     trace.points = points;
+}
+
+fn decimate_update_inspector(
+    samples: &mut Vec<super::model::UpdateInspectorSample>,
+    max_samples: usize,
+) {
+    if samples.len() <= max_samples || max_samples < 2 {
+        return;
+    }
+
+    let step = ((samples.len() - 1) as f64 / (max_samples - 1) as f64).ceil() as usize;
+    let mut decimated: Vec<_> = samples.iter().step_by(step.max(1)).cloned().collect();
+    if let Some(last) = samples.last().cloned()
+        && decimated
+            .last()
+            .map(|sample| sample.t_s != last.t_s || sample.filter != last.filter)
+            .unwrap_or(true)
+    {
+        decimated.push(last);
+    }
+    *samples = decimated;
 }

@@ -25,7 +25,8 @@ use web_sys::{ErrorEvent, MessageEvent, Worker, WorkerOptions, WorkerType};
 
 use super::math::{ecef_to_ned, heading_endpoint, lla_to_ecef};
 use super::model::{
-    EkfImuSource, HeadingSample, Page, PlotData, StateContribution, Trace, UpdateInspectorSample,
+    EkfImuSource, HeadingSample, Page, PlotData, StateContribution, StateCorrelation, Trace,
+    UpdateInspectorSample,
 };
 use super::pipeline::synthetic::{SyntheticVisualizerConfig, build_synthetic_plot_data};
 use super::pipeline::{EkfCompareConfig, GnssOutageConfig};
@@ -40,7 +41,7 @@ const PLOT_GRID_MIN_SPACING_PX: f32 = 14.0;
 const PLOT_GRID_MAX_SPACING_PX: f32 = 360.0;
 const PLOT_GRID_STRENGTH_SCALE: f64 = 0.45;
 const SIGMA_LOG10_FLOOR: f64 = 1.0e-6;
-const UPDATE_INSPECTOR_WINDOW_S: f64 = 2.0;
+const UPDATE_INSPECTOR_WINDOW_S: f64 = 5.0;
 #[cfg(target_arch = "wasm32")]
 const TIME_SERIES_PLOT_FRAME_PADDING: f32 = 26.0;
 #[cfg(target_arch = "wasm32")]
@@ -405,6 +406,8 @@ pub struct App {
     show_eskf: bool,
     show_loose: bool,
     overview_cursor_t_s: Option<f64>,
+    update_inspector_cursor_t_s: Option<f64>,
+    show_update_inspector: bool,
     tuning_cfg: EkfCompareConfig,
     tuning_gnss_outages: GnssOutageConfig,
     tuning_misalignment: EkfImuSource,
@@ -1422,6 +1425,8 @@ fn create_app(
         show_eskf: true,
         show_loose: true,
         overview_cursor_t_s: None,
+        update_inspector_cursor_t_s: None,
+        show_update_inspector: false,
         tuning_cfg,
         tuning_gnss_outages,
         tuning_misalignment,
@@ -1594,6 +1599,40 @@ impl App {
         }
         if apply_replay {
             self.refresh_from_replay();
+        }
+    }
+
+    fn draw_update_inspector_window(&mut self, ctx: &egui::Context) {
+        if !self.show_update_inspector {
+            return;
+        }
+        let mut open = true;
+        egui::Window::new("Update Inspector")
+            .open(&mut open)
+            .resizable(true)
+            .default_size(egui::vec2(820.0, 320.0))
+            .min_size(egui::vec2(420.0, 160.0))
+            .vscroll(true)
+            .show(ctx, |ui| {
+                let Some(t_s) = self.update_inspector_cursor_t_s else {
+                    ui.label(egui::RichText::new("Hover a plot to inspect recent updates.").weak());
+                    return;
+                };
+                let Some((samples, columns, max_abs)) =
+                    update_inspector_view_model(&self.data, t_s)
+                else {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "No update inspector samples near t={t_s:.2}s."
+                        ))
+                        .weak(),
+                    );
+                    return;
+                };
+                render_update_inspector_contents(ui, &self.data, t_s, &samples, &columns, max_abs);
+            });
+        if !open {
+            self.show_update_inspector = false;
         }
     }
 
@@ -2437,7 +2476,7 @@ impl App {
                     ui.ctx().request_repaint();
                 }
                 if let Some(t_s) = hovered_t_s {
-                    draw_update_inspector_popup(ui, &self.data, t_s);
+                    self.update_inspector_cursor_t_s = Some(t_s);
                 }
             });
     }
@@ -2753,6 +2792,8 @@ impl eframe::App for App {
                 if ui.button("Loose").clicked() {
                     self.tuning_panel = Some(TuningPanel::Loose);
                 }
+                ui.separator();
+                ui.toggle_value(&mut self.show_update_inspector, "Inspector");
             });
             ui.horizontal_wrapped(|ui| {
                 ui.selectable_value(&mut self.page, Page::Overview, "Overview");
@@ -2963,6 +3004,7 @@ impl eframe::App for App {
             }
         });
         self.draw_tuning_window(ctx);
+        self.draw_update_inspector_window(ctx);
 
         #[cfg(target_arch = "wasm32")]
         if self.web_datasets.loading_dataset || self.web_datasets.loading_replay {
@@ -3153,11 +3195,11 @@ impl eframe::App for App {
                         self.max_points_per_trace,
                         self.trace_visibility(),
                     );
-                    if let Some(t_s) = hovered_t_s {
-                        draw_update_inspector_popup(ui, &self.data, t_s);
-                    }
                 });
                 self.overview_cursor_t_s = hovered_t_s;
+                if let Some(t_s) = hovered_t_s {
+                    self.update_inspector_cursor_t_s = Some(t_s);
+                }
             }
             Page::Calibration => {
                 let scale: Vec<&Trace> = self
@@ -3220,11 +3262,11 @@ impl eframe::App for App {
                         self.max_points_per_trace,
                         self.trace_visibility(),
                     );
-                    if let Some(t_s) = hovered_t_s {
-                        draw_update_inspector_popup(ui, &self.data, t_s);
-                    }
                 });
                 self.overview_cursor_t_s = hovered_t_s;
+                if let Some(t_s) = hovered_t_s {
+                    self.update_inspector_cursor_t_s = Some(t_s);
+                }
             }
             Page::Sensors => {
                 egui::CentralPanel::default().show(ctx, |ui| {
@@ -4625,18 +4667,21 @@ fn plot_spec<'a>(title: &'static str, traces: Vec<&'a Trace>, show_legend: bool)
     }
 }
 
-fn draw_update_inspector_popup(ui: &mut egui::Ui, data: &PlotData, t_s: f64) {
+fn update_inspector_view_model(
+    data: &PlotData,
+    t_s: f64,
+) -> Option<(Vec<UpdateInspectorSample>, Vec<String>, f64)> {
     let samples = window_update_inspector_samples(
         &data.update_inspector,
         t_s - UPDATE_INSPECTOR_WINDOW_S,
         t_s,
     );
     if samples.is_empty() {
-        return;
+        return None;
     }
-    let columns = top_inspector_states(&samples, 8);
+    let columns = top_inspector_states(&samples, 6);
     if columns.is_empty() {
-        return;
+        return None;
     }
     let max_abs = samples
         .iter()
@@ -4645,30 +4690,12 @@ fn draw_update_inspector_popup(ui: &mut egui::Ui, data: &PlotData, t_s: f64) {
         .map(|contribution| contribution.value.abs())
         .fold(0.0_f64, f64::max)
         .max(1.0e-12);
-
-    let ctx = ui.ctx().clone();
-    let screen_rect = ctx.content_rect();
-    let popup_width = (screen_rect.width() - 16.0).clamp(320.0, 780.0);
-    let popup_height = 228.0;
-    let pos = egui::pos2(
-        screen_rect.right() - popup_width - 8.0,
-        screen_rect.top() + 8.0,
-    );
-    egui::Area::new(egui::Id::new("update_inspector_popup"))
-        .order(egui::Order::Tooltip)
-        .fixed_pos(pos)
-        .show(&ctx, |ui| {
-            egui::Frame::popup(ui.style())
-                .inner_margin(egui::Margin::same(8))
-                .show(ui, |ui| {
-                    ui.set_min_size(egui::vec2(popup_width, popup_height));
-                    render_update_inspector_contents(ui, t_s, &samples, &columns, max_abs);
-                });
-        });
+    Some((samples, columns, max_abs))
 }
 
 fn render_update_inspector_contents(
     ui: &mut egui::Ui,
+    data: &PlotData,
     t_s: f64,
     samples: &[UpdateInspectorSample],
     columns: &[String],
@@ -4678,12 +4705,21 @@ fn render_update_inspector_contents(
         ui.label(egui::RichText::new("Update Inspector").strong());
         ui.label(
             egui::RichText::new(format!(
-                "window = {:.2}-{t_s:.2} s",
+                "last {:.1}s, {:.2}-{t_s:.2} s",
+                UPDATE_INSPECTOR_WINDOW_S,
                 t_s - UPDATE_INSPECTOR_WINDOW_S
             ))
             .weak(),
         );
     });
+    ui.label(
+        egui::RichText::new(
+            "Mount error change and signed update allocation over the hover interval.",
+        )
+        .small()
+        .weak(),
+    );
+    render_mount_error_ledger(ui, data, t_s, samples);
     ui.add_space(4.0);
     egui::ScrollArea::horizontal()
         .id_salt("update_inspector_heatmap")
@@ -4710,7 +4746,7 @@ fn render_update_inspector_contents(
                             .unwrap_or_default();
                         ui.label(
                             egui::RichText::new(format!(
-                                "{} {} ({:+.3}s){}{}",
+                                "{} {}  dt={:+.2}s{}{}",
                                 sample.filter,
                                 sample.update,
                                 sample.t_s - t_s,
@@ -4744,6 +4780,348 @@ fn render_update_inspector_contents(
             ui.label(egui::RichText::new(summary).small().weak());
         }
     }
+    render_update_inspector_correlations(ui, samples);
+}
+
+fn render_mount_error_ledger(
+    ui: &mut egui::Ui,
+    data: &PlotData,
+    t_s: f64,
+    samples: &[UpdateInspectorSample],
+) {
+    let start_t_s = t_s - UPDATE_INSPECTOR_WINDOW_S;
+    let rows = mount_error_rows(data, start_t_s, t_s);
+    if rows.is_empty() {
+        return;
+    }
+
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new("Mount error ledger").small().strong());
+    egui::Grid::new("mount_error_ledger_grid")
+        .striped(false)
+        .spacing(egui::vec2(8.0, 3.0))
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new("filter").small().weak());
+            ui.label(egui::RichText::new("axis").small().weak());
+            ui.label(egui::RichText::new("error start").small().weak());
+            ui.label(egui::RichText::new("error end").small().weak());
+            ui.label(egui::RichText::new("delta").small().weak());
+            ui.label(egui::RichText::new("net").small().weak());
+            ui.end_row();
+
+            for row in &rows {
+                let net = if row.abs_delta > 0.05 {
+                    "away"
+                } else if row.abs_delta < -0.05 {
+                    "toward"
+                } else {
+                    "flat"
+                };
+                ui.label(egui::RichText::new(row.filter).small());
+                ui.label(egui::RichText::new(row.axis).small());
+                ui.label(egui::RichText::new(format!("{:+.2} deg", row.start_error_deg)).small());
+                ui.label(egui::RichText::new(format!("{:+.2} deg", row.end_error_deg)).small());
+                draw_signed_status_value(ui, row.delta_error_deg, row.abs_delta);
+                ui.label(egui::RichText::new(net).small());
+                ui.end_row();
+            }
+        });
+
+    let pushes = mount_update_push_rows(samples, &rows);
+    if pushes.is_empty() {
+        return;
+    }
+    ui.add_space(3.0);
+    ui.label(egui::RichText::new("Mount update pushes").small().strong());
+    egui::Grid::new("mount_update_push_grid")
+        .striped(false)
+        .spacing(egui::vec2(8.0, 3.0))
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new("update").small().weak());
+            ui.label(egui::RichText::new("axis").small().weak());
+            ui.label(egui::RichText::new("push").small().weak());
+            ui.label(egui::RichText::new("effect").small().weak());
+            ui.end_row();
+            for push in pushes.into_iter().take(8) {
+                ui.label(egui::RichText::new(push.update).small());
+                ui.label(egui::RichText::new(push.axis).small());
+                draw_signed_status_value(ui, push.dx_deg, push.away_score);
+                ui.label(egui::RichText::new(push.effect).small());
+                ui.end_row();
+            }
+        });
+}
+
+struct MountErrorLedgerRow {
+    filter: &'static str,
+    axis: &'static str,
+    start_error_deg: f64,
+    end_error_deg: f64,
+    delta_error_deg: f64,
+    abs_delta: f64,
+}
+
+struct MountUpdatePushRow {
+    update: String,
+    axis: &'static str,
+    dx_deg: f64,
+    away_score: f64,
+    effect: &'static str,
+}
+
+fn mount_error_rows(data: &PlotData, start_t_s: f64, end_t_s: f64) -> Vec<MountErrorLedgerRow> {
+    let mut rows = Vec::new();
+    for filter in ["ESKF", "Loose"] {
+        for axis in ["roll", "pitch", "yaw"] {
+            let Some((estimate, reference)) = mount_estimate_reference_traces(data, filter, axis)
+            else {
+                continue;
+            };
+            let Some(start_estimate) = sample_trace_at(estimate, start_t_s) else {
+                continue;
+            };
+            let Some(end_estimate) = sample_trace_at(estimate, end_t_s) else {
+                continue;
+            };
+            let Some(start_reference) = sample_trace_at(reference, start_t_s) else {
+                continue;
+            };
+            let Some(end_reference) = sample_trace_at(reference, end_t_s) else {
+                continue;
+            };
+            let start_error_deg = wrap_degrees(start_estimate - start_reference);
+            let end_error_deg = wrap_degrees(end_estimate - end_reference);
+            let delta_error_deg = wrap_degrees(end_error_deg - start_error_deg);
+            rows.push(MountErrorLedgerRow {
+                filter,
+                axis,
+                start_error_deg,
+                end_error_deg,
+                delta_error_deg,
+                abs_delta: end_error_deg.abs() - start_error_deg.abs(),
+            });
+        }
+    }
+    rows
+}
+
+fn mount_update_push_rows(
+    samples: &[UpdateInspectorSample],
+    error_rows: &[MountErrorLedgerRow],
+) -> Vec<MountUpdatePushRow> {
+    let mut pushes = Vec::new();
+    for sample in samples {
+        for axis in ["roll", "pitch", "yaw"] {
+            let state = format!("mount {axis}");
+            let Some(contribution) = sample
+                .contributions
+                .iter()
+                .find(|contribution| contribution.state == state)
+            else {
+                continue;
+            };
+            if contribution.value.abs() < 1.0e-6 {
+                continue;
+            }
+            let Some(error) = error_rows
+                .iter()
+                .find(|row| row.filter == sample.filter && row.axis == axis)
+            else {
+                continue;
+            };
+            let before = error.start_error_deg.abs();
+            let after = wrap_degrees(error.start_error_deg + contribution.value).abs();
+            let away_score = after - before;
+            let effect = if away_score > 0.01 {
+                "away"
+            } else if away_score < -0.01 {
+                "toward"
+            } else {
+                "flat"
+            };
+            pushes.push(MountUpdatePushRow {
+                update: format!("{} {}", sample.filter, sample.update),
+                axis,
+                dx_deg: contribution.value,
+                away_score,
+                effect,
+            });
+        }
+    }
+    pushes.sort_by(|a, b| {
+        b.away_score
+            .abs()
+            .total_cmp(&a.away_score.abs())
+            .then_with(|| b.dx_deg.abs().total_cmp(&a.dx_deg.abs()))
+    });
+    pushes
+}
+
+fn mount_estimate_reference_traces<'a>(
+    data: &'a PlotData,
+    filter: &str,
+    axis: &str,
+) -> Option<(&'a Trace, &'a Trace)> {
+    let estimate = match filter {
+        "ESKF" => find_trace_exact(&data.eskf_misalignment, &format!("ESKF mount {axis} [deg]")),
+        "Loose" => find_trace_exact(
+            &data.loose_misalignment,
+            &format!("Loose residual mount {axis} [deg]"),
+        ),
+        _ => None,
+    }?;
+    let reference_name = format!("Reference mount {axis} [deg]");
+    let reference = find_trace_exact(&data.eskf_misalignment, &reference_name)
+        .or_else(|| find_trace_exact(&data.loose_misalignment, &reference_name))
+        .or_else(|| find_trace_exact(&data.align_cmp_att, &reference_name))?;
+    Some((estimate, reference))
+}
+
+fn find_trace_exact<'a>(traces: &'a [Trace], name: &str) -> Option<&'a Trace> {
+    traces.iter().find(|trace| trace.name == name)
+}
+
+fn draw_signed_status_value(ui: &mut egui::Ui, value: f64, bad_score: f64) -> egui::Response {
+    let normalized = (bad_score.abs() / 1.0).clamp(0.0, 1.0) as f32;
+    let alpha = (28.0 + 150.0 * normalized) as u8;
+    let color = if bad_score > 0.0 {
+        egui::Color32::from_rgba_premultiplied(186, 62, 70, alpha)
+    } else if bad_score < 0.0 {
+        egui::Color32::from_rgba_premultiplied(44, 132, 94, alpha)
+    } else {
+        ui.visuals().faint_bg_color
+    };
+    let text_color = if normalized > 0.55 {
+        egui::Color32::WHITE
+    } else {
+        ui.visuals().text_color()
+    };
+    egui::Frame::new()
+        .fill(color)
+        .corner_radius(egui::CornerRadius::same(3))
+        .inner_margin(egui::Margin::symmetric(5, 1))
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(format!("{value:+.3} deg"))
+                    .small()
+                    .monospace()
+                    .color(text_color),
+            )
+        })
+        .inner
+}
+
+fn wrap_degrees(value: f64) -> f64 {
+    (value + 180.0).rem_euclid(360.0) - 180.0
+}
+
+fn render_update_inspector_correlations(ui: &mut egui::Ui, samples: &[UpdateInspectorSample]) {
+    let mut correlations = samples
+        .iter()
+        .flat_map(|sample| {
+            sample
+                .correlations
+                .iter()
+                .map(|correlation| (sample.filter.as_str(), sample.update.as_str(), correlation))
+        })
+        .filter(|(_, _, correlation)| {
+            correlation.value.is_finite() && correlation.value.abs() >= 0.15
+        })
+        .collect::<Vec<_>>();
+    if correlations.is_empty() {
+        return;
+    }
+    correlations.sort_by(|a, b| {
+        b.2.value
+            .abs()
+            .total_cmp(&a.2.value.abs())
+            .then_with(|| a.0.cmp(b.0))
+            .then_with(|| a.2.mount_axis.cmp(&b.2.mount_axis))
+            .then_with(|| a.2.state.cmp(&b.2.state))
+    });
+    ui.add_space(6.0);
+    ui.label(
+        egui::RichText::new("Top covariance correlations to mount")
+            .small()
+            .strong(),
+    );
+    egui::ScrollArea::vertical()
+        .id_salt("update_inspector_correlations")
+        .max_height(96.0)
+        .show(ui, |ui| {
+            egui::Grid::new("update_inspector_correlations_grid")
+                .striped(false)
+                .spacing(egui::vec2(8.0, 3.0))
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new("filter").small().weak());
+                    ui.label(egui::RichText::new("mount").small().weak());
+                    ui.label(egui::RichText::new("state").small().weak());
+                    ui.label(egui::RichText::new("rho").small().weak());
+                    ui.end_row();
+                    for (filter, update, correlation) in correlations.into_iter().take(10) {
+                        draw_correlation_row(ui, filter, update, correlation);
+                    }
+                });
+        });
+}
+
+fn draw_correlation_row(
+    ui: &mut egui::Ui,
+    filter: &str,
+    update: &str,
+    correlation: &StateCorrelation,
+) {
+    ui.label(egui::RichText::new(filter).small());
+    ui.label(egui::RichText::new(&correlation.mount_axis).small());
+    ui.label(
+        egui::RichText::new(compact_correlation_state(&correlation.state))
+            .small()
+            .monospace(),
+    );
+    draw_correlation_value(ui, correlation.value).on_hover_text(format!(
+        "{filter} {update}: rho({} / {}, mount {}) = {:+.4}",
+        correlation.group, correlation.state, correlation.mount_axis, correlation.value
+    ));
+    ui.end_row();
+}
+
+fn compact_correlation_state(state: &str) -> String {
+    state
+        .replace("gyro bias ", "gb")
+        .replace("accel bias ", "ab")
+        .replace("gyro scale ", "gs")
+        .replace("accel scale ", "as")
+        .replace("mount ", "m")
+        .replace("vel ", "v")
+        .replace("pos ", "p")
+}
+
+fn draw_correlation_value(ui: &mut egui::Ui, value: f64) -> egui::Response {
+    let normalized = value.abs().clamp(0.0, 1.0) as f32;
+    let alpha = (42.0 + 160.0 * normalized) as u8;
+    let color = if value >= 0.0 {
+        egui::Color32::from_rgba_premultiplied(186, 62, 70, alpha)
+    } else {
+        egui::Color32::from_rgba_premultiplied(53, 112, 190, alpha)
+    };
+    let text_color = if normalized > 0.55 {
+        egui::Color32::WHITE
+    } else {
+        ui.visuals().text_color()
+    };
+    egui::Frame::new()
+        .fill(color)
+        .corner_radius(egui::CornerRadius::same(3))
+        .inner_margin(egui::Margin::symmetric(5, 1))
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(format!("{value:+.2}"))
+                    .small()
+                    .monospace()
+                    .color(text_color),
+            )
+        })
+        .inner
 }
 
 fn window_update_inspector_samples(
@@ -4786,6 +5164,19 @@ fn window_update_inspector_samples(
                 existing_contribution.value += contribution.value;
             } else {
                 existing.contributions.push(contribution.clone());
+            }
+        }
+        for correlation in &sample.correlations {
+            if let Some(existing_correlation) = existing.correlations.iter_mut().find(|existing| {
+                existing.group == correlation.group
+                    && existing.state == correlation.state
+                    && existing.mount_axis == correlation.mount_axis
+            }) {
+                if correlation.value.abs() > existing_correlation.value.abs() {
+                    *existing_correlation = correlation.clone();
+                }
+            } else {
+                existing.correlations.push(correlation.clone());
             }
         }
     }

@@ -79,6 +79,7 @@ pub struct UpdateInspectorSample {
     pub residual: Option<f64>,
     pub nis: Option<f64>,
     pub contributions: Vec<StateContribution>,
+    pub correlations: Vec<StateCorrelation>,
 }
 
 #[cfg_attr(target_arch = "wasm32", derive(serde::Deserialize, serde::Serialize))]
@@ -87,6 +88,15 @@ pub struct StateContribution {
     pub state: String,
     pub group: String,
     pub unit: String,
+    pub value: f64,
+}
+
+#[cfg_attr(target_arch = "wasm32", derive(serde::Deserialize, serde::Serialize))]
+#[derive(Clone, Default)]
+pub struct StateCorrelation {
+    pub state: String,
+    pub group: String,
+    pub mount_axis: String,
     pub value: f64,
 }
 

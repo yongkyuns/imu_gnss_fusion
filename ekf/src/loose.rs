@@ -54,6 +54,8 @@ const MIN_NHC_UPDATE_SPEED_MPS: f32 = 0.05;
 const MAX_NHC_GYRO_NORM_RADPS: f32 = 0.2;
 const MAX_NHC_ACCEL_NORM_ERR_MPS2: f32 = 1.0;
 const NHC_REFERENCE_MAX_DT_S: f32 = 1.0;
+const DEFAULT_NHC_R_Y: f32 = 0.1_f32 * 0.1_f32;
+const DEFAULT_NHC_R_Z: f32 = 0.05_f32 * 0.05_f32;
 
 /// Process-noise variances used by [`LooseFilter::predict`].
 #[repr(C)]
@@ -711,6 +713,8 @@ impl LooseFilter {
             None,
             dt_since_last_gnss_s,
             reference_speed_mps(vel_ecef_mps),
+            DEFAULT_NHC_R_Y,
+            DEFAULT_NHC_R_Z,
             gyro_radps,
             accel_mps2,
             dt_s,
@@ -743,6 +747,39 @@ impl LooseFilter {
         );
     }
 
+    /// Fuses a full reference batch with optional per-axis velocity standard deviations and
+    /// caller-provided nonholonomic lateral/vertical observation variances.
+    #[allow(clippy::too_many_arguments)]
+    pub fn fuse_reference_batch_full_with_nhc_speed_and_r(
+        &mut self,
+        pos_ecef_m: Option<[f64; 3]>,
+        vel_ecef_mps: Option<[f32; 3]>,
+        h_acc_m: f32,
+        vel_std_ned_mps: Option<[f32; 3]>,
+        dt_since_last_gnss_s: f32,
+        nhc_gate_speed_mps: Option<f32>,
+        r_nhc_y: f32,
+        r_nhc_z: f32,
+        gyro_radps: [f32; 3],
+        accel_mps2: [f32; 3],
+        dt_s: f32,
+    ) {
+        self.fuse_reference_batch_impl(
+            pos_ecef_m,
+            vel_ecef_mps,
+            h_acc_m,
+            0.0,
+            vel_std_ned_mps,
+            dt_since_last_gnss_s,
+            nhc_gate_speed_mps,
+            r_nhc_y,
+            r_nhc_z,
+            gyro_radps,
+            accel_mps2,
+            dt_s,
+        );
+    }
+
     pub fn fuse_reference_batch_full_with_nhc_speed(
         &mut self,
         pos_ecef_m: Option<[f64; 3]>,
@@ -763,6 +800,8 @@ impl LooseFilter {
             vel_std_ned_mps,
             dt_since_last_gnss_s,
             nhc_gate_speed_mps,
+            DEFAULT_NHC_R_Y,
+            DEFAULT_NHC_R_Z,
             gyro_radps,
             accel_mps2,
             dt_s,
@@ -782,6 +821,28 @@ impl LooseFilter {
         accel_mps2: [f32; 3],
         dt_s: f32,
     ) {
+        self.fuse_nhc_reference_with_speed_and_r(
+            nhc_gate_speed_mps,
+            DEFAULT_NHC_R_Y,
+            DEFAULT_NHC_R_Z,
+            gyro_radps,
+            accel_mps2,
+            dt_s,
+        );
+    }
+
+    /// Fuses loose-filter nonholonomic constraints using caller-provided lateral/vertical
+    /// observation variances.
+    #[allow(clippy::too_many_arguments)]
+    pub fn fuse_nhc_reference_with_speed_and_r(
+        &mut self,
+        nhc_gate_speed_mps: Option<f32>,
+        r_nhc_y: f32,
+        r_nhc_z: f32,
+        gyro_radps: [f32; 3],
+        accel_mps2: [f32; 3],
+        dt_s: f32,
+    ) {
         if dt_s <= 0.0
             || !self.nhc_gate_allows(gyro_radps, accel_mps2)
             || !nhc_speed_gate_allows(nhc_gate_speed_mps)
@@ -790,26 +851,28 @@ impl LooseFilter {
         }
         let (vc_y_est, h_y) = generated_loose::nhc_y(&self.raw.nominal);
         let (vc_z_est, h_z) = generated_loose::nhc_z(&self.raw.nominal);
-        let gate_var_y = 0.1_f32 * 0.1_f32;
-        let gate_var_z = 0.05_f32 * 0.05_f32;
         let dt_obs = nhc_observation_dt(dt_s);
-        let var_y = gate_var_y / dt_obs;
-        let var_z = gate_var_z / dt_obs;
+        let var_y = sanitize_nhc_variance(r_nhc_y) / dt_obs;
+        let var_z = sanitize_nhc_variance(r_nhc_z) / dt_obs;
         let mut h_rows = [[0.0; LOOSE_ERROR_STATES]; 8];
         let mut h_supports: [Option<&'static [usize]>; 8] = [None; 8];
         let mut residuals = [0.0; 8];
         let mut variances = [0.0; 8];
         let mut obs_count = 0;
-        h_rows[obs_count] = h_y;
-        h_supports[obs_count] = Some(&generated_loose::NHC_Y_SUPPORT);
-        residuals[obs_count] = -vc_y_est;
-        variances[obs_count] = var_y;
-        obs_count += 1;
-        h_rows[obs_count] = h_z;
-        h_supports[obs_count] = Some(&generated_loose::NHC_Z_SUPPORT);
-        residuals[obs_count] = -vc_z_est;
-        variances[obs_count] = var_z;
-        obs_count += 1;
+        if var_y > 0.0 {
+            h_rows[obs_count] = h_y;
+            h_supports[obs_count] = Some(&generated_loose::NHC_Y_SUPPORT);
+            residuals[obs_count] = -vc_y_est;
+            variances[obs_count] = var_y;
+            obs_count += 1;
+        }
+        if var_z > 0.0 {
+            h_rows[obs_count] = h_z;
+            h_supports[obs_count] = Some(&generated_loose::NHC_Z_SUPPORT);
+            residuals[obs_count] = -vc_z_est;
+            variances[obs_count] = var_z;
+            obs_count += 1;
+        }
         if obs_count > 0 {
             self.batch_update_joseph(obs_count, &h_rows, &h_supports, &residuals, &variances);
         }
@@ -825,6 +888,8 @@ impl LooseFilter {
         vel_std_ned_mps: Option<[f32; 3]>,
         dt_since_last_gnss_s: f32,
         nhc_gate_speed_mps: Option<f32>,
+        r_nhc_y: f32,
+        r_nhc_z: f32,
         gyro_radps: [f32; 3],
         accel_mps2: [f32; 3],
         dt_s: f32,
@@ -859,23 +924,25 @@ impl LooseFilter {
         {
             let (vc_y_est, h_y) = generated_loose::nhc_y(&self.raw.nominal);
             let (vc_z_est, h_z) = generated_loose::nhc_z(&self.raw.nominal);
-            let gate_var_y = 0.1_f32 * 0.1_f32;
-            let gate_var_z = 0.05_f32 * 0.05_f32;
             let dt_obs = nhc_observation_dt(dt_s);
-            let var_y = gate_var_y / dt_obs;
-            let var_z = gate_var_z / dt_obs;
-            h_rows[obs_count] = h_y;
-            h_supports[obs_count] = Some(&generated_loose::NHC_Y_SUPPORT);
-            residuals[obs_count] = -vc_y_est;
-            variances[obs_count] = var_y;
-            obs_types[obs_count] = 7;
-            obs_count += 1;
-            h_rows[obs_count] = h_z;
-            h_supports[obs_count] = Some(&generated_loose::NHC_Z_SUPPORT);
-            residuals[obs_count] = -vc_z_est;
-            variances[obs_count] = var_z;
-            obs_types[obs_count] = 8;
-            obs_count += 1;
+            let var_y = sanitize_nhc_variance(r_nhc_y) / dt_obs;
+            let var_z = sanitize_nhc_variance(r_nhc_z) / dt_obs;
+            if var_y > 0.0 {
+                h_rows[obs_count] = h_y;
+                h_supports[obs_count] = Some(&generated_loose::NHC_Y_SUPPORT);
+                residuals[obs_count] = -vc_y_est;
+                variances[obs_count] = var_y;
+                obs_types[obs_count] = 7;
+                obs_count += 1;
+            }
+            if var_z > 0.0 {
+                h_rows[obs_count] = h_z;
+                h_supports[obs_count] = Some(&generated_loose::NHC_Z_SUPPORT);
+                residuals[obs_count] = -vc_z_est;
+                variances[obs_count] = var_z;
+                obs_types[obs_count] = 8;
+                obs_count += 1;
+            }
         }
 
         self.raw.last_obs_count = obs_count as i32;
@@ -1403,6 +1470,10 @@ fn nhc_observation_dt(dt_s: f32) -> f32 {
     } else {
         NHC_REFERENCE_MAX_DT_S
     }
+}
+
+fn sanitize_nhc_variance(r: f32) -> f32 {
+    if r > 0.0 && r.is_finite() { r } else { 0.0 }
 }
 
 fn reference_speed_mps(vel_ecef_mps: Option<[f32; 3]>) -> Option<f32> {

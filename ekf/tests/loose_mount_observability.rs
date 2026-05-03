@@ -132,3 +132,42 @@ fn external_moving_speed_allows_batched_nhc() {
     assert!(loose.last_obs_types().contains(&7));
     assert!(loose.last_obs_types().contains(&8));
 }
+
+#[test]
+fn caller_provided_nhc_r_reduces_batched_mount_correction() {
+    let mut default_r = initialized_loose([5.0, 1.0, 0.0]);
+    default_r.fuse_reference_batch_full_with_nhc_speed(
+        None,
+        None,
+        1.0,
+        None,
+        0.02,
+        Some(5.0),
+        [0.0; 3],
+        [0.0, 0.0, 9.81],
+        0.02,
+    );
+
+    let mut matched_r = initialized_loose([5.0, 1.0, 0.0]);
+    matched_r.fuse_reference_batch_full_with_nhc_speed_and_r(
+        None,
+        None,
+        1.0,
+        None,
+        0.02,
+        Some(5.0),
+        0.5,
+        0.125,
+        [0.0; 3],
+        [0.0, 0.0, 9.81],
+        0.02,
+    );
+
+    let default_mount_abs: f32 = default_r.last_dx()[21..24].iter().map(|v| v.abs()).sum();
+    let matched_mount_abs: f32 = matched_r.last_dx()[21..24].iter().map(|v| v.abs()).sum();
+
+    assert!(
+        matched_mount_abs < default_mount_abs * 0.25,
+        "expected larger caller-provided NHC R to reduce mount correction, default={default_mount_abs}, matched={matched_mount_abs}"
+    );
+}
