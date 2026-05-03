@@ -3587,14 +3587,14 @@ fn draw_eskf_tuning(
     ui.collapsing("Measurement weighting", |ui| {
         drag_f32(
             ui,
-            "NHC lateral R @100 Hz",
+            "NHC lateral R density",
             &mut cfg.r_body_vel,
             0.01,
             0.0..=1000.0,
         );
         drag_f32(
             ui,
-            "NHC vertical R @100 Hz",
+            "NHC vertical R density",
             &mut cfg.r_body_vel_z,
             0.01,
             0.0..=1000.0,

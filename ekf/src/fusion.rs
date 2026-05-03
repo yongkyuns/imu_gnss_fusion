@@ -20,9 +20,8 @@ const WGS84_E2: f64 = 6.69437999014e-3;
 const WGS84_OMEGA_IE_RADPS: f32 = 7.292115e-5;
 const REANCHOR_DISTANCE_M: f32 = 5000.0;
 const RUNTIME_ZERO_SPEED_MPS: f32 = 0.80;
-const RUNTIME_NHC_MAX_ROLL_PITCH_GYRO_RADPS: f32 = 0.03;
-const RUNTIME_NHC_MAX_ACCEL_NORM_ERR_MPS2: f32 = 0.2;
-const BODY_VEL_REFERENCE_DT_S: f32 = 0.01;
+const RUNTIME_NHC_MAX_GYRO_NORM_RADPS: f32 = 0.2;
+const RUNTIME_NHC_MAX_ACCEL_NORM_ERR_MPS2: f32 = 1.0;
 const CAN_SPEED_ZERO_MPS: f32 = 0.15;
 const CAN_SPEED_SIGN_INFER_MIN_MPS: f32 = 1.0;
 
@@ -598,8 +597,8 @@ impl SensorFusion {
                 if nhc_speed_scale > 0.0 {
                     let fused_body_update_scale = body_update_scale * nhc_speed_scale;
                     let mount_update_scale = fused_body_update_scale;
-                    let cadence_scale = BODY_VEL_REFERENCE_DT_S / dt.max(1.0e-3);
-                    let effective_r_scale = cadence_scale / fused_body_update_scale.max(1.0e-3);
+                    let effective_r_scale =
+                        nhc_observation_r_scale(dt) / fused_body_update_scale.max(1.0e-3);
                     self.eskf.fuse_body_vel_yz_scaled(
                         self.cfg.r_body_vel_y * effective_r_scale,
                         self.cfg.r_body_vel_z * effective_r_scale,
@@ -1199,15 +1198,7 @@ impl SensorFusion {
         let Some(last) = self.last_gnss else {
             return 0.0;
         };
-        let speed = horiz_speed(last.vel_ned_mps);
-        let full = 15.0 / 3.6;
-        if speed <= 0.0 {
-            0.0
-        } else if speed >= full {
-            1.0
-        } else {
-            speed / full
-        }
+        nhc_speed_scale_from_horiz_speed(horiz_speed(last.vel_ned_mps))
     }
 
     fn gnss_vel_update_scale_xy(&self, t_s: f32) -> f32 {
@@ -1307,6 +1298,26 @@ impl Ema {
     }
 }
 
+fn nhc_speed_scale_from_horiz_speed(speed: f32) -> f32 {
+    let full = 15.0 / 3.6;
+    if speed <= 0.0 {
+        0.0
+    } else if speed >= full {
+        1.0
+    } else {
+        speed / full
+    }
+}
+
+fn nhc_observation_r_scale(dt_s: f32) -> f32 {
+    let dt_obs = if dt_s > 0.0 && dt_s.is_finite() {
+        dt_s.min(1.0)
+    } else {
+        1.0
+    };
+    1.0 / dt_obs
+}
+
 fn ramp_scale(
     min_scale: f32,
     ramp_time_s: f32,
@@ -1335,8 +1346,7 @@ fn ramp_scale(
 }
 
 fn runtime_nhc_active(accel_v: [f32; 3], gyro_v: [f32; 3]) -> bool {
-    let roll_pitch_rate = (gyro_v[0] * gyro_v[0] + gyro_v[1] * gyro_v[1]).sqrt();
-    roll_pitch_rate < RUNTIME_NHC_MAX_ROLL_PITCH_GYRO_RADPS
+    norm3(gyro_v) < RUNTIME_NHC_MAX_GYRO_NORM_RADPS
         && (norm3(accel_v) - GRAVITY_MPS2).abs() < RUNTIME_NHC_MAX_ACCEL_NORM_ERR_MPS2
 }
 
