@@ -63,6 +63,7 @@ def skew(v):
 def create_reference_transition_and_noise():
     dt = Symbol("dt", real=True)
     q_es = Matrix(symbols("q0 q1 q2 q3", real=True))
+    q_vb = Matrix(symbols("qcs0 qcs1 qcs2 qcs3", real=True))
     v_e = Matrix(symbols("vn ve vd", real=True))
     b_f = Matrix(symbols("bax bay baz", real=True))
     b_w = Matrix(symbols("bgx bgy bgz", real=True))
@@ -72,6 +73,7 @@ def create_reference_transition_and_noise():
     gyro_raw = Matrix([Symbol("dax", real=True) / dt, Symbol("day", real=True) / dt, Symbol("daz", real=True) / dt])
 
     c_es = quat_to_rot(q_es)
+    c_vb = quat_to_rot(q_vb).T
     f_s = Matrix(
         [
             s_f[0] * accel_raw[0] + b_f[0],
@@ -79,22 +81,33 @@ def create_reference_transition_and_noise():
             s_f[2] * accel_raw[2] + b_f[2],
         ]
     )
+    w_s = Matrix(
+        [
+            s_w[0] * gyro_raw[0] + b_w[0],
+            s_w[1] * gyro_raw[1] + b_w[1],
+            s_w[2] * gyro_raw[2] + b_w[2],
+        ]
+    )
+    f_v = c_vb * f_s
+    w_v = c_vb * w_s
 
     phi_cont = Matrix.zeros(24, 24)
     phi_cont[POS_E, V_E] = Matrix.eye(3)
     phi_cont[V_E, V_E] = skew(Matrix([0, 0, -2 * WGS84_OMEGA_IE]))
-    phi_cont[V_E, PSI_EE] = skew(c_es * (-f_s))
-    phi_cont[V_E, B_F] = c_es
-    phi_cont[V_E, S_F] = c_es * Matrix.diag(accel_raw[0], accel_raw[1], accel_raw[2])
+    phi_cont[V_E, PSI_EE] = skew(c_es * (-f_v))
+    phi_cont[V_E, B_F] = c_es * c_vb
+    phi_cont[V_E, S_F] = c_es * c_vb * Matrix.diag(accel_raw[0], accel_raw[1], accel_raw[2])
+    phi_cont[V_E, PSI_CC] = c_es * c_vb * skew(f_s)
     phi_cont[PSI_EE, PSI_EE] = skew(Matrix([0, 0, -WGS84_OMEGA_IE]))
-    phi_cont[PSI_EE, B_W] = c_es
-    phi_cont[PSI_EE, S_W] = c_es * Matrix.diag(gyro_raw[0], gyro_raw[1], gyro_raw[2])
+    phi_cont[PSI_EE, B_W] = c_es * c_vb
+    phi_cont[PSI_EE, S_W] = c_es * c_vb * Matrix.diag(gyro_raw[0], gyro_raw[1], gyro_raw[2])
+    phi_cont[PSI_EE, PSI_CC] = c_es * c_vb * skew(w_s)
 
     phi = Matrix.eye(24) + dt * phi_cont
 
     g = Matrix.zeros(24, 21)
-    g[V_E, 0:3] = c_es
-    g[PSI_EE, 3:6] = c_es
+    g[V_E, 0:3] = c_es * c_vb
+    g[PSI_EE, 3:6] = c_es * c_vb
     g[B_F, 6:9] = Matrix.eye(3)
     g[B_W, 9:12] = Matrix.eye(3)
     g[S_F, 12:15] = Matrix.eye(3)
@@ -106,18 +119,15 @@ def create_reference_transition_and_noise():
 
 def create_reference_nhc_rows():
     q_es = Matrix(symbols("q0 q1 q2 q3", real=True))
-    q_cs = Matrix(symbols("qcs0 qcs1 qcs2 qcs3", real=True))
     v_e = Matrix(symbols("vn ve vd", real=True))
 
     c_es = quat_to_rot(q_es)
-    c_cs = quat_to_rot(q_cs)
-    c_ce = c_cs * c_es.T
-    v_c = c_ce * v_e
+    c_ve = c_es.T
+    v_c = c_ve * v_e
 
     h = Matrix.zeros(3, 24)
-    h[:, V_E] = c_ce
-    h[:, PSI_EE] = c_ce * skew(v_e)
-    h[:, PSI_CC] = skew(-v_c)
+    h[:, V_E] = c_ve
+    h[:, PSI_EE] = c_ve * skew(v_e)
     return v_c, h[1, :], h[2, :]
 
 

@@ -1227,18 +1227,11 @@ fn populate_loose_traces(
             if dt <= 0.0 || dt > 1.0 {
                 return;
             }
-            let (gyro_vehicle_radps, accel_vehicle_mps2) = vehicle_measurements_from_mount(
-                seed_mount_q_vb,
+            let imu = loose_imu_delta_from_vehicle(
+                prev.gyro_radps,
+                prev.accel_mps2,
                 sample.gyro_radps,
                 sample.accel_mps2,
-            );
-            let (prev_gyro_vehicle_radps, prev_accel_vehicle_mps2) =
-                vehicle_measurements_from_mount(seed_mount_q_vb, prev.gyro_radps, prev.accel_mps2);
-            let imu = loose_imu_delta_from_vehicle(
-                prev_gyro_vehicle_radps,
-                prev_accel_vehicle_mps2,
-                gyro_vehicle_radps,
-                accel_vehicle_mps2,
                 dt,
             );
             loose.predict(imu);
@@ -1287,8 +1280,8 @@ fn populate_loose_traces(
                 nhc_gate_speed_mps,
                 ekf_cfg.r_body_vel,
                 ekf_cfg.r_body_vel_z,
-                gyro_vehicle_radps.map(|v| v as f32),
-                accel_vehicle_mps2.map(|v| v as f32),
+                sample.gyro_radps.map(|v| v as f32),
+                sample.accel_mps2.map(|v| v as f32),
                 dt as f32,
             );
             if !output_sampling.keep_imu(index, imu_total) {
@@ -1335,12 +1328,12 @@ fn populate_loose_traces(
                 &mut map,
                 &mut headings,
             );
-            gyro_x.push([sample.t_s, gyro_vehicle_radps[0].to_degrees()]);
-            gyro_y.push([sample.t_s, gyro_vehicle_radps[1].to_degrees()]);
-            gyro_z.push([sample.t_s, gyro_vehicle_radps[2].to_degrees()]);
-            accel_x.push([sample.t_s, accel_vehicle_mps2[0]]);
-            accel_y.push([sample.t_s, accel_vehicle_mps2[1]]);
-            accel_z.push([sample.t_s, accel_vehicle_mps2[2]]);
+            gyro_x.push([sample.t_s, sample.gyro_radps[0].to_degrees()]);
+            gyro_y.push([sample.t_s, sample.gyro_radps[1].to_degrees()]);
+            gyro_z.push([sample.t_s, sample.gyro_radps[2].to_degrees()]);
+            accel_x.push([sample.t_s, sample.accel_mps2[0]]);
+            accel_y.push([sample.t_s, sample.accel_mps2[1]]);
+            accel_z.push([sample.t_s, sample.accel_mps2[2]]);
         }
         ReplayEvent::Gnss(index, sample) => {
             progress.report_stage(0.72, 0.26, sample.t_s);
@@ -1367,6 +1360,9 @@ fn populate_loose_traces(
                 Some(default_loose_p_diag(*sample, ekf_cfg)),
                 None,
             );
+            if let Some(seed_q) = seed_mount_q_vb {
+                loose.set_mount_quat(seed_q);
+            }
             loose_ready = true;
             loose_gnss_cursor = index + 1;
             last_gnss_used_t_s = sample.t_s;
@@ -1692,19 +1688,16 @@ fn append_eskf_sample(
     pitch.push([t_s, p]);
     yaw.push([t_s, y]);
 
-    if let Some(seed_q) = fusion.eskf_mount_q_vb().or_else(|| fusion.mount_q_vb()) {
-        let q_cs = [
-            eskf.nominal.qcs0 as f64,
-            eskf.nominal.qcs1 as f64,
-            eskf.nominal.qcs2 as f64,
-            eskf.nominal.qcs3 as f64,
-        ];
-        let q_total_vb = quat_mul(as_q64(seed_q), quat_conj(q_cs));
-        let (mr, mp, my) = q_vb_to_reference_mount_rpy(q_total_vb);
-        mount_roll.push([t_s, mr]);
-        mount_pitch.push([t_s, mp]);
-        mount_yaw.push([t_s, my]);
-    }
+    let q_vb = [
+        eskf.nominal.qcs0 as f64,
+        eskf.nominal.qcs1 as f64,
+        eskf.nominal.qcs2 as f64,
+        eskf.nominal.qcs3 as f64,
+    ];
+    let (mr, mp, my) = q_vb_to_reference_mount_rpy(q_vb);
+    mount_roll.push([t_s, mr]);
+    mount_pitch.push([t_s, mp]);
+    mount_yaw.push([t_s, my]);
 
     bgx.push([t_s, (eskf.nominal.bgx as f64).to_degrees()]);
     bgy.push([t_s, (eskf.nominal.bgy as f64).to_degrees()]);
@@ -1817,19 +1810,12 @@ fn eskf_display_velocity_ned(
 }
 
 fn eskf_vehicle_attitude_q(eskf: &sensor_fusion::eskf_types::EskfState) -> [f64; 4] {
-    let q_seed_frame = as_q64([
+    as_q64([
         eskf.nominal.q0,
         eskf.nominal.q1,
         eskf.nominal.q2,
         eskf.nominal.q3,
-    ]);
-    let q_cs = as_q64([
-        eskf.nominal.qcs0,
-        eskf.nominal.qcs1,
-        eskf.nominal.qcs2,
-        eskf.nominal.qcs3,
-    ]);
-    quat_mul(q_seed_frame, quat_conj(q_cs))
+    ])
 }
 
 fn loose_imu_delta_from_vehicle(
@@ -1862,7 +1848,7 @@ fn append_loose_sample(
     loose: &LooseFilter,
     ref_gnss: GenericGnssSample,
     ref_ecef: [f64; 3],
-    seed_mount_q_vb: Option<[f32; 4]>,
+    _seed_mount_q_vb: Option<[f32; 4]>,
     pos_n: &mut Vec<[f64; 2]>,
     pos_e: &mut Vec<[f64; 2]>,
     pos_d: &mut Vec<[f64; 2]>,
@@ -1923,7 +1909,7 @@ fn append_loose_sample(
     let q_es = [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64];
     let q_cs = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
     let q_ns = quat_mul(q_ne, q_es);
-    let q_vehicle = quat_mul(q_ns, quat_conj(q_cs));
+    let q_vehicle = q_ns;
     let (r, p, y) = quat_rpy_deg(
         q_vehicle[0] as f32,
         q_vehicle[1] as f32,
@@ -1940,9 +1926,7 @@ fn append_loose_sample(
         yaw_deg: y,
     });
 
-    let q_seed = seed_mount_q_vb.map(as_q64).unwrap_or([1.0, 0.0, 0.0, 0.0]);
-    let q_total_vb = quat_mul(q_seed, quat_conj(q_cs));
-    let (mr, mp, my) = q_vb_to_reference_mount_rpy(q_total_vb);
+    let (mr, mp, my) = q_vb_to_reference_mount_rpy(q_cs);
     mount_roll.push([t_s, mr]);
     mount_pitch.push([t_s, mp]);
     mount_yaw.push([t_s, my]);
@@ -2408,63 +2392,6 @@ fn quat_rpy_alg_deg(q: [f64; 4]) -> (f64, f64, f64) {
         pitch.to_degrees(),
         crate::visualizer::math::normalize_heading_deg(yaw.to_degrees()),
     )
-}
-
-fn vehicle_measurements_from_mount(
-    q_vb: Option<[f32; 4]>,
-    raw_gyro_radps: [f64; 3],
-    raw_accel_mps2: [f64; 3],
-) -> ([f64; 3], [f64; 3]) {
-    let Some(q_vb) = q_vb else {
-        return (raw_gyro_radps, raw_accel_mps2);
-    };
-    let c_bv = transpose3(quat_to_rotmat_f64(as_q64(q_vb)));
-    (
-        mat_vec3(c_bv, raw_gyro_radps),
-        mat_vec3(c_bv, raw_accel_mps2),
-    )
-}
-
-fn quat_to_rotmat_f64(q: [f64; 4]) -> [[f64; 3]; 3] {
-    let n = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
-    let (w, x, y, z) = if n > 1.0e-12 {
-        (q[0] / n, q[1] / n, q[2] / n, q[3] / n)
-    } else {
-        (1.0, 0.0, 0.0, 0.0)
-    };
-    [
-        [
-            1.0 - 2.0 * (y * y + z * z),
-            2.0 * (x * y - w * z),
-            2.0 * (x * z + w * y),
-        ],
-        [
-            2.0 * (x * y + w * z),
-            1.0 - 2.0 * (x * x + z * z),
-            2.0 * (y * z - w * x),
-        ],
-        [
-            2.0 * (x * z - w * y),
-            2.0 * (y * z + w * x),
-            1.0 - 2.0 * (x * x + y * y),
-        ],
-    ]
-}
-
-fn transpose3(a: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
-    [
-        [a[0][0], a[1][0], a[2][0]],
-        [a[0][1], a[1][1], a[2][1]],
-        [a[0][2], a[1][2], a[2][2]],
-    ]
-}
-
-fn mat_vec3(r: [[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
-    [
-        r[0][0] * v[0] + r[0][1] * v[1] + r[0][2] * v[2],
-        r[1][0] * v[0] + r[1][1] * v[1] + r[1][2] * v[2],
-        r[2][0] * v[0] + r[2][1] * v[1] + r[2][2] * v[2],
-    ]
 }
 
 fn ned_vector_to_ecef(lat_deg: f64, lon_deg: f64, v_ned: [f64; 3]) -> [f64; 3] {

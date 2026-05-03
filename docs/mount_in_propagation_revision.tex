@@ -1,0 +1,455 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{hyperref}
+
+\title{Mount-In-Propagation Formulation Revision}
+\author{sensor-fusion documentation}
+\date{\today}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\T}{^{T}}
+\newcommand{\dt}{\Delta t}
+\newcommand{\crossmat}[1]{\left[#1\right]_\times}
+\newcommand{\dq}{\delta q}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+\section{Scope}
+
+This document records the formulation change that moved mount alignment into
+the inertial propagation model for both the runtime ESKF and the loose
+reference filter. It is intentionally a before/after document. The full
+steady-state formulations remain in the dedicated ESKF and loose formulation
+PDFs, while this document explains why the revision was needed, what changed
+mathematically, and how the implementation maps to the revised equations.
+
+The motivating failure was observed on a synthetic figure-eight profile with
+explicit vehicle roll excitation. With truth-quality inputs, both filters
+previously converged to a near-correct composed vehicle attitude while retaining
+a persistent mount roll error. The old formulation allowed vehicle roll error
+and residual mount roll error to trade against each other. The revised
+formulation removes that practical gauge by making mount errors affect
+strapdown attitude and velocity propagation.
+
+\section{Notation and Frames}
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.16\linewidth} >{\raggedright\arraybackslash}p{0.74\linewidth}}
+\toprule
+\textbf{Symbol} & \textbf{Meaning} \\
+\midrule
+\(b\) & Raw IMU body frame. \\
+\(v\) & Physical vehicle frame, forward-right-down. \\
+\(n\) & Local NED navigation frame used by the ESKF. \\
+\(e\) & ECEF frame used by the loose reference filter. \\
+\(s\) & Old seeded frame produced by pre-rotating raw IMU with a coarse mount seed. \\
+\(c\) & Old corrected vehicle frame after applying residual mount. \\
+\(q_{vb}\) & Physical vehicle-to-body mount quaternion, with \(x_b=C_{bv}x_v\). \\
+\(q_{nv}\) & Vehicle-to-NED attitude quaternion, with \(x_n=C_{nv}x_v\). \\
+\(q_{ev}\) & Vehicle-to-ECEF attitude quaternion, with \(x_e=C_{ev}x_v\). \\
+\bottomrule
+\end{longtable}
+
+Rotations follow the project convention
+\begin{equation}
+  x_a = C_{ab}x_b,
+  \qquad
+  C(q_1\otimes q_2)=C(q_1)C(q_2).
+\end{equation}
+
+Small-angle perturbations use the first-order quaternion
+\begin{equation}
+  \dq(\delta\theta) \approx
+  \begin{bmatrix}1 & \frac{1}{2}\delta\theta\T\end{bmatrix}\T .
+\end{equation}
+
+\section{Old Formulation}
+
+\subsection{State Split}
+
+The old ESKF nominal state was
+\begin{equation}
+  x_{\mathrm{old}} =
+  \begin{bmatrix}
+  q_{ns} & v_n\T & p_n\T & b_g\T & b_a\T & q_{cs}
+  \end{bmatrix}\T ,
+\end{equation}
+where \(q_{ns}\) rotated the seeded frame into NED and \(q_{cs}\) rotated the
+seeded frame into the corrected vehicle frame. The corresponding error state
+was
+\begin{equation}
+  \delta x_{\mathrm{old}} =
+  \begin{bmatrix}
+  \delta\theta_s &
+  \delta v_n &
+  \delta p_n &
+  \delta b_g &
+  \delta b_a &
+  \delta\psi_{cs}
+  \end{bmatrix}\T .
+\end{equation}
+
+The loose filter had the same structure in ECEF:
+\begin{equation}
+  x_{\mathrm{old,loose}} =
+  \begin{bmatrix}
+  q_{es} & v_e\T & p_e\T & b_g\T & b_a\T &
+  s_g\T & s_a\T & q_{cs}
+  \end{bmatrix}\T .
+\end{equation}
+
+\subsection{IMU Pre-Rotation}
+
+The align filter provided a coarse physical mount seed \(q_{vb}^{0}\). Before
+the ESKF or loose propagation step, the runtime converted raw IMU samples into
+the seeded frame:
+\begin{align}
+  \Delta\theta_s &= C_{bv}^{0\T}\Delta\theta_b,\\
+  \Delta v_s &= C_{bv}^{0\T}\Delta v_b.
+\end{align}
+The filters then propagated using \(\Delta\theta_s\) and \(\Delta v_s\). The
+residual mount \(q_{cs}\) was held constant during propagation:
+\begin{equation}
+  q_{cs}^{+}=q_{cs}^{-}.
+\end{equation}
+
+\subsection{Old ESKF Propagation}
+
+The old ESKF prediction was effectively
+\begin{align}
+  \Delta\theta_s^c &= \Delta\theta_s - b_g\dt,\\
+  \Delta v_s^c &= \Delta v_s - b_a\dt,\\
+  q_{ns}^{+} &= \operatorname{normalize}
+    \left(q_{ns}^{-}\otimes\dq(\Delta\theta_s^c)\right),\\
+  v_n^{+} &= v_n^{-}+C_{ns}\Delta v_s^c+g_n\dt,\\
+  p_n^{+} &= p_n^{-}+v_n^{-}\dt.
+\end{align}
+
+The important structural point is that \(q_{cs}\) did not appear in these
+equations. Therefore the generated propagation Jacobian had no dynamic
+sensitivity from mount error into attitude or velocity:
+\begin{equation}
+  \frac{\partial q_{ns}^{+}}{\partial \delta\psi_{cs}} \approx 0,
+  \qquad
+  \frac{\partial v_n^{+}}{\partial \delta\psi_{cs}} \approx 0.
+\end{equation}
+
+\subsection{Old NHC Measurement}
+
+The old non-holonomic constraint used the corrected vehicle velocity
+\begin{equation}
+  v_c = C_{cs}C_{ns}\T v_n .
+\end{equation}
+The lateral and vertical constraints were
+\begin{equation}
+  z_y = e_y\T v_c = 0,\qquad z_z = e_z\T v_c = 0.
+\end{equation}
+This gave a direct residual-mount measurement Jacobian:
+\begin{equation}
+  H_{\psi_{cs}} =
+  \frac{\partial(e_i\T C_{cs}C_{ns}\T v_n)}
+       {\partial \delta\psi_{cs}}.
+\end{equation}
+
+\subsection{Why This Was Insufficient}
+
+The old model could produce a correct composed vehicle-frame quantity while
+splitting the error incorrectly:
+\begin{equation}
+  C_{cv}=C_{cs}C_{sn}
+\end{equation}
+could remain nearly correct even if the attitude and residual mount separately
+were wrong. In the observed synthetic roll-excitation case, the filters settled
+to approximately
+\begin{align}
+  \text{mount roll error} &\approx +0.45^\circ,\\
+  \text{vehicle roll error} &\approx -0.45^\circ,
+\end{align}
+with a near-zero sum. Since \(q_{cs}\) did not affect propagation, the IMU
+dynamics did not provide an independent signal to decide whether the correction
+belonged in attitude or mount. Tuning covariance could change allocation, but
+it could not remove the structural ambiguity.
+
+\section{Revised Formulation}
+
+\subsection{State Meaning}
+
+The revised ESKF keeps the same state dimension and Rust field layout, but
+changes the meaning of the quaternion formerly named \texttt{qcs}:
+\begin{equation}
+  q_{cs}\quad\hbox{is now interpreted as}\quad q_{vb}.
+\end{equation}
+That is, \texttt{qcs0..qcs3} store the physical vehicle-to-body mount, not a
+residual seeded-frame-to-vehicle correction.
+
+The revised ESKF nominal state is
+\begin{equation}
+  x_{\mathrm{new}} =
+  \begin{bmatrix}
+  q_{nv} & v_n\T & p_n\T & b_g\T & b_a\T & q_{vb}
+  \end{bmatrix}\T ,
+\end{equation}
+and the revised error state is
+\begin{equation}
+  \delta x_{\mathrm{new}} =
+  \begin{bmatrix}
+  \delta\theta_v &
+  \delta v_n &
+  \delta p_n &
+  \delta b_g &
+  \delta b_a &
+  \delta\psi_{vb}
+  \end{bmatrix}\T .
+\end{equation}
+
+The loose filter analog is
+\begin{equation}
+  x_{\mathrm{new,loose}} =
+  \begin{bmatrix}
+  q_{ev} & v_e\T & p_e\T & b_g\T & b_a\T &
+  s_g\T & s_a\T & q_{vb}
+  \end{bmatrix}\T .
+\end{equation}
+
+\subsection{Raw IMU Propagation Through Mount}
+
+The filters now consume raw body-frame IMU increments. Bias-corrected body-frame
+increments are
+\begin{align}
+  \Delta\theta_b^c &= \Delta\theta_b - b_g\dt,\\
+  \Delta v_b^c &= \Delta v_b - b_a\dt.
+\end{align}
+The current mount rotates them into the vehicle frame:
+\begin{align}
+  \Delta\theta_v^c &= C_{bv}(q_{vb})\T \Delta\theta_b^c,\\
+  \Delta v_v^c &= C_{bv}(q_{vb})\T \Delta v_b^c.
+\end{align}
+
+The revised ESKF propagation is
+\begin{align}
+  q_{nv}^{+} &=
+    \operatorname{normalize}\left(q_{nv}^{-}\otimes
+    \dq(\Delta\theta_v^c)\right),\\
+  v_n^{+} &= v_n^{-}+C_{nv}\Delta v_v^c+g_n\dt,\\
+  p_n^{+} &= p_n^{-}+v_n^{-}\dt,\\
+  q_{vb}^{+} &= q_{vb}^{-}.
+\end{align}
+
+For loose, the same structure is used with ECEF gravity and Earth rotation
+terms:
+\begin{align}
+  \omega_v &= C_{bv}(q_{vb})\T\omega_b^c,\\
+  f_v &= C_{bv}(q_{vb})\T f_b^c,\\
+  \dot q_{ev} &=
+    \frac{1}{2}q_{ev}\otimes
+    \begin{bmatrix}0 & \omega_v\T\end{bmatrix}\T
+    + \hbox{Earth-rate correction},\\
+  \dot v_e &= C_{ev}f_v + g_e(p_e) - 2\omega_{ie,e}\times v_e,\\
+  \dot p_e &= v_e.
+\end{align}
+
+\subsection{New Propagation Sensitivities}
+
+The essential new Jacobian blocks are the mount sensitivities in propagation.
+For a small mount perturbation,
+\begin{equation}
+  C_{bv}(\dq(\delta\psi_{vb})\otimes q_{vb})\T x_b
+  \approx
+  C_{bv}(q_{vb})\T x_b
+  - C_{bv}(q_{vb})\T \crossmat{x_b}\delta\psi_{vb}.
+\end{equation}
+Therefore, to first order,
+\begin{align}
+  \frac{\partial \Delta\theta_v^c}{\partial \delta\psi_{vb}}
+    &\approx -C_{bv}\T\crossmat{\Delta\theta_b^c},\\
+  \frac{\partial \Delta v_v^c}{\partial \delta\psi_{vb}}
+    &\approx -C_{bv}\T\crossmat{\Delta v_b^c}.
+\end{align}
+
+These terms create covariance between mount error, attitude error, and velocity
+error during propagation. GNSS position/velocity and NHC can then correct mount
+through this propagated cross-covariance. This is the observability path that
+was missing before.
+
+\subsection{Revised NHC Measurement}
+
+Since \(q_{nv}\) now represents the physical vehicle attitude, NHC no longer
+needs the mount quaternion directly:
+\begin{equation}
+  v_v = C_{nv}\T v_n.
+\end{equation}
+The ESKF NHC rows are
+\begin{equation}
+  z_y=e_y\T C_{nv}\T v_n=0,\qquad
+  z_z=e_z\T C_{nv}\T v_n=0.
+\end{equation}
+The loose rows are
+\begin{equation}
+  z_y=e_y\T C_{ev}\T v_e=0,\qquad
+  z_z=e_z\T C_{ev}\T v_e=0.
+\end{equation}
+Thus
+\begin{equation}
+  \frac{\partial z_i}{\partial\delta\psi_{vb}} = 0
+\end{equation}
+for the instantaneous NHC row. This is expected and desired. Mount is no
+longer directly nudged by NHC in a single update; it is corrected through the
+state correlations generated by propagation.
+
+\section{Before/After Comparison}
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.28\linewidth} >{\raggedright\arraybackslash}p{0.31\linewidth} >{\raggedright\arraybackslash}p{0.31\linewidth}}
+\toprule
+\textbf{Aspect} & \textbf{Before} & \textbf{After} \\
+\midrule
+Mount state meaning &
+Residual seeded-frame-to-vehicle \(q_{cs}\). &
+Physical vehicle-to-body \(q_{vb}\), stored in the same Rust fields. \\
+\addlinespace
+IMU input to propagation &
+Raw body IMU was pre-rotated by align seed before entering filter. &
+Raw body IMU enters filter; generated propagation rotates through current \(q_{vb}\). \\
+\addlinespace
+Mount in propagation &
+No direct appearance in attitude or velocity propagation. &
+Directly affects attitude and velocity propagation through \(C_{bv}\T\). \\
+\addlinespace
+NHC measurement &
+\(v_c=C_{cs}C_{ns}\T v_n\), direct residual-mount Jacobian. &
+\(v_v=C_{nv}\T v_n\), no direct mount Jacobian. \\
+\addlinespace
+Mount observability path &
+Mostly NHC direct row plus covariance artifacts. &
+Propagation cross-covariance plus GNSS/NHC corrections. \\
+\addlinespace
+Failure mode &
+Vehicle attitude and residual mount could absorb equal/opposite errors. &
+Wrong mount causes wrong inertial propagation, so residuals push mount. \\
+\bottomrule
+\end{longtable}
+
+\section{Implementation Mapping}
+
+\subsection{Generated ESKF}
+
+The symbolic source is \path{ekf/eskf.py}. The generated Rust fragments are
+included by \path{ekf/src/generated_eskf.rs}. The important changes are:
+\begin{itemize}[leftmargin=*]
+  \item \texttt{propagate\_nominal(...)} now takes \texttt{qcs} as \(q_{vb}\).
+  \item Nominal prediction rotates \(\Delta\theta_b\) and \(\Delta v_b\)
+        through \(C_{bv}\T\).
+  \item Error transition and noise input include mount-to-attitude and
+        mount-to-velocity propagation sensitivity.
+  \item Body velocity observations no longer depend on \texttt{qcs}.
+\end{itemize}
+
+\subsection{Runtime ESKF Facade}
+
+\texttt{ekf/src/fusion.rs} no longer pre-rotates IMU before calling
+\texttt{RustEskf::predict}. It initializes \texttt{nominal.qcs*} from the align
+or reference mount seed. In follow-align mode, the facade writes the current
+align mount into \texttt{nominal.qcs*} and keeps mount error states frozen.
+
+\subsection{Loose Reference Filter}
+
+The symbolic source is \texttt{ekf/ins\_gnss\_loose.py}. The generated Rust
+fragments are included by \texttt{ekf/src/generated\_loose.rs}. The important
+changes are:
+\begin{itemize}[leftmargin=*]
+  \item The transition matrix uses \texttt{qcs} as \(q_{vb}\) in the IMU
+        rotation terms.
+  \item Loose nominal propagation in \texttt{ekf/src/loose.rs} rotates raw
+        body-frame gyro and accelerometer measurements into the vehicle frame.
+  \item Loose NHC rows observe \(C_{ev}\T v_e\) and have no direct mount
+        support.
+  \item The visualizer seeds loose \texttt{qcs} with align mount and plots it
+        directly as physical mount.
+\end{itemize}
+
+\section{Covariance and Initialization Implications}
+
+Moving mount into propagation makes mount observable through cross-covariance,
+so the initial covariance must allow the filter to adjust the attitude/mount
+split. This matters most for the loose filter because it initializes vehicle
+attitude from a yaw-only state. If the loose vehicle-attitude covariance is too
+small, the filter remains overconfident in an attitude that cannot yet be known
+well enough, and the mount state cannot fully absorb the coarse seed error.
+
+The visualizer default was therefore changed from
+\begin{equation}
+  \sigma_{\theta,\mathrm{loose}}=2^\circ
+\end{equation}
+to
+\begin{equation}
+  \sigma_{\theta,\mathrm{loose}}=20^\circ.
+\end{equation}
+This is not an ad-hoc correction to one maneuver. It reflects the weaker
+initial information content of the loose yaw-only attitude seed.
+
+\section{Synthetic Validation}
+
+On the truth-input figure-eight roll-excitation profile without GNSS fault, the
+old filters settled at nonzero mount roll error:
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+Filter & Old final mount qerr & New final mount qerr \\
+\midrule
+ESKF & approximately \(0.46^\circ\) & \(0.0277^\circ\) \\
+Loose & approximately \(0.45^\circ\) & \(0.0321^\circ\) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+With an early GNSS velocity fault of \(+0.5\,\mathrm{m/s}\) north over
+\(0\ldots360\,\mathrm{s}\), the revised formulation still converges:
+\begin{center}
+\begin{tabular}{lc}
+\toprule
+Filter & Final mount qerr \\
+\midrule
+ESKF & \(0.0887^\circ\) \\
+Loose & \(0.0545^\circ\) \\
+\bottomrule
+\end{tabular}
+\end{center}
+In that same faulted case, the loose GNSS position gate accepted all GNSS
+position updates after the revision. Before this change, the bad state split
+could drive the loose prediction far enough away that the full 3D position gate
+rejected valid measurements for the rest of the run.
+
+\section{Test Coverage}
+
+The following tests exercise the revised model:
+\begin{itemize}[leftmargin=*]
+  \item \texttt{ekf/tests/eskf\_nhc\_jacobian.rs}: finite-difference check for
+        the direct vehicle-frame ESKF NHC Jacobians.
+  \item \texttt{ekf/tests/nhc\_eskf\_loose\_equivalence.rs}: verifies ESKF and
+        loose NHC rows and updates remain equivalent after the attitude basis
+        transform.
+  \item \texttt{ekf/tests/loose\_mount\_observability.rs}: verifies NHC does
+        not directly move mount under the new formulation; mount is corrected
+        through propagation correlations.
+  \item The synthetic GNSS/INS test verifies that roll-excitation now makes
+        internal mount estimates converge.
+\end{itemize}
+
+\section{Remaining Follow-Up}
+
+The existing ESKF and loose formulation PDFs still describe portions of the old
+seeded-frame terminology. They should be updated to use this document as the
+source of truth for mount semantics, or merged into a single current
+formulation reference after the revised behavior is accepted on the full
+experimental data suite.
+
+\end{document}

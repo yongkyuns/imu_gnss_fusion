@@ -6,7 +6,7 @@
 //! include files from the Python source instead of hand-editing formulas.
 //!
 //! The generated model follows `docs/loose_formulation.pdf`: 24 error states
-//! `[dp_e, dv_e, dtheta_s, dba, dbg, dsa, dsg, dpsi_cs]` and 21 process-noise
+//! `[dp_e, dv_e, dtheta_v, dba, dbg, dsa, dsg, dpsi_vb]` and 21 process-noise
 //! states for accel/gyro white noise plus bias, scale, and mount random walks.
 
 #![allow(non_snake_case)]
@@ -35,12 +35,22 @@ pub fn error_transition(
     let q1 = nominal.q1;
     let q2 = nominal.q2;
     let q3 = nominal.q3;
+    let qcs0 = nominal.qcs0;
+    let qcs1 = nominal.qcs1;
+    let qcs2 = nominal.qcs2;
+    let qcs3 = nominal.qcs3;
     let bax = nominal.bax;
     let bay = nominal.bay;
     let baz = nominal.baz;
+    let bgx = nominal.bgx;
+    let bgy = nominal.bgy;
+    let bgz = nominal.bgz;
     let sax = nominal.sax;
     let say = nominal.say;
     let saz = nominal.saz;
+    let sgx = nominal.sgx;
+    let sgy = nominal.sgy;
+    let sgz = nominal.sgz;
     let dax = imu.dax_2;
     let day = imu.day_2;
     let daz = imu.daz_2;

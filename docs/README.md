@@ -12,9 +12,11 @@ This directory collects project-level notes for the IMU/GNSS fusion workspace. T
 
 ## Detailed Math Notes
 
+- [Mount-in-propagation revision PDF](mount_in_propagation_revision.pdf) and [TEX](mount_in_propagation_revision.tex).
 - [ESKF mount formulation PDF](eskf_mount_formulation.pdf) and [TEX](eskf_mount_formulation.tex).
 - [Align/NHC formulation PDF](align_nhc_formulation.pdf) and [TEX](align_nhc_formulation.tex).
 - [Loose INS/GNSS formulation PDF](loose_formulation.pdf) and [TEX](loose_formulation.tex).
+
 ## Documentation Conventions
 
 - Keep README-level material short and operational.

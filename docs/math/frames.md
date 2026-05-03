@@ -7,6 +7,7 @@ notes:
 - [Align/NHC formulation](../align_nhc_formulation.pdf)
 - [Augmented ESKF formulation](../eskf_mount_formulation.pdf)
 - [Loose INS/GNSS formulation](../loose_formulation.pdf)
+- [Mount-in-propagation revision](../mount_in_propagation_revision.pdf)
 
 Quick reference:
 

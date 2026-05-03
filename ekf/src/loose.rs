@@ -545,6 +545,13 @@ impl LooseFilter {
             self.raw.nominal.say,
             self.raw.nominal.saz,
         ];
+        let c_bv = quat_to_dcm([
+            self.raw.nominal.qcs0,
+            self.raw.nominal.qcs1,
+            self.raw.nominal.qcs2,
+            self.raw.nominal.qcs3,
+        ]);
+        let c_vb = transpose3(c_bv);
         let omega1 = [
             s_w[0] * (imu.dax_1 / dt) + b_w[0],
             s_w[1] * (imu.day_1 / dt) + b_w[1],
@@ -555,6 +562,8 @@ impl LooseFilter {
             s_f[1] * (imu.dvy_1 / dt) + b_f[1],
             s_f[2] * (imu.dvz_1 / dt) + b_f[2],
         ];
+        let omega1_v = mat_vec3(c_vb, omega1);
+        let f1_v = mat_vec3(c_vb, f1);
         let omega2 = [
             s_w[0] * (imu.dax_2 / dt) + b_w[0],
             s_w[1] * (imu.day_2 / dt) + b_w[1],
@@ -565,17 +574,19 @@ impl LooseFilter {
             s_f[1] * (imu.dvy_2 / dt) + b_f[1],
             s_f[2] * (imu.dvz_2 / dt) + b_f[2],
         ];
+        let omega2_v = mat_vec3(c_vb, omega2);
+        let f2_v = mat_vec3(c_vb, f2);
 
         let x_e_f = [x_e[0] as f32, x_e[1] as f32, x_e[2] as f32];
         let c_es = quat_to_dcm(q_es);
         let g_e1 = gravity_ecef_j2(x_e_f);
-        let f1_e = mat_vec3(c_es, f1);
+        let f1_e = mat_vec3(c_es, f1_v);
         let vdot1 = [
             g_e1[0] + f1_e[0] + 2.0 * WGS84_OMEGA_IE * v_e[1],
             g_e1[1] + f1_e[1] - 2.0 * WGS84_OMEGA_IE * v_e[0],
             g_e1[2] + f1_e[2],
         ];
-        let qdot1_raw = quat_multiply(q_es, [0.0, omega1[0], omega1[1], omega1[2]]);
+        let qdot1_raw = quat_multiply(q_es, [0.0, omega1_v[0], omega1_v[1], omega1_v[2]]);
         let qdot1 = [
             0.5 * (qdot1_raw[0] + WGS84_OMEGA_IE * q_es[3]),
             0.5 * (qdot1_raw[1] + WGS84_OMEGA_IE * q_es[2]),
@@ -604,13 +615,13 @@ impl LooseFilter {
         let c_es_tmp = quat_to_dcm(q_tmp);
         let x_tmp_f = [x_tmp[0] as f32, x_tmp[1] as f32, x_tmp[2] as f32];
         let g_e2 = gravity_ecef_j2(x_tmp_f);
-        let f2_e = mat_vec3(c_es_tmp, f2);
+        let f2_e = mat_vec3(c_es_tmp, f2_v);
         let vdot2 = [
             g_e2[0] + f2_e[0] + 2.0 * WGS84_OMEGA_IE * v_tmp[1],
             g_e2[1] + f2_e[1] - 2.0 * WGS84_OMEGA_IE * v_tmp[0],
             g_e2[2] + f2_e[2],
         ];
-        let qdot2_raw = quat_multiply(q_tmp, [0.0, omega2[0], omega2[1], omega2[2]]);
+        let qdot2_raw = quat_multiply(q_tmp, [0.0, omega2_v[0], omega2_v[1], omega2_v[2]]);
         let qdot2 = [
             0.5 * (qdot2_raw[0] + WGS84_OMEGA_IE * q_tmp[3]),
             0.5 * (qdot2_raw[1] + WGS84_OMEGA_IE * q_tmp[2]),
@@ -1448,6 +1459,14 @@ fn mat_vec3(m: [[f32; 3]; 3], v: [f32; 3]) -> [f32; 3] {
         m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
         m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
         m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2],
+    ]
+}
+
+fn transpose3(m: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
+    [
+        [m[0][0], m[1][0], m[2][0]],
+        [m[0][1], m[1][1], m[2][1]],
+        [m[0][2], m[1][2], m[2][2]],
     ]
 }
 

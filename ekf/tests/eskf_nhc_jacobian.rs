@@ -60,25 +60,16 @@ fn apply_error(nominal: &mut EskfNominalState, state: usize, dx: f32) {
 }
 
 fn vehicle_velocity(n: &EskfNominalState) -> [f32; 3] {
-    let vs0 = (1.0 - 2.0 * n.q2 * n.q2 - 2.0 * n.q3 * n.q3) * n.vn
-        + 2.0 * (n.q1 * n.q2 + n.q0 * n.q3) * n.ve
-        + 2.0 * (n.q1 * n.q3 - n.q0 * n.q2) * n.vd;
-    let vs1 = 2.0 * (n.q1 * n.q2 - n.q0 * n.q3) * n.vn
-        + (1.0 - 2.0 * n.q1 * n.q1 - 2.0 * n.q3 * n.q3) * n.ve
-        + 2.0 * (n.q2 * n.q3 + n.q0 * n.q1) * n.vd;
-    let vs2 = 2.0 * (n.q1 * n.q3 + n.q0 * n.q2) * n.vn
-        + 2.0 * (n.q2 * n.q3 - n.q0 * n.q1) * n.ve
-        + (1.0 - 2.0 * n.q1 * n.q1 - 2.0 * n.q2 * n.q2) * n.vd;
     [
-        (1.0 - 2.0 * n.qcs2 * n.qcs2 - 2.0 * n.qcs3 * n.qcs3) * vs0
-            + 2.0 * (n.qcs1 * n.qcs2 - n.qcs0 * n.qcs3) * vs1
-            + 2.0 * (n.qcs1 * n.qcs3 + n.qcs0 * n.qcs2) * vs2,
-        2.0 * (n.qcs1 * n.qcs2 + n.qcs0 * n.qcs3) * vs0
-            + (1.0 - 2.0 * n.qcs1 * n.qcs1 - 2.0 * n.qcs3 * n.qcs3) * vs1
-            + 2.0 * (n.qcs2 * n.qcs3 - n.qcs0 * n.qcs1) * vs2,
-        2.0 * (n.qcs1 * n.qcs3 - n.qcs0 * n.qcs2) * vs0
-            + 2.0 * (n.qcs2 * n.qcs3 + n.qcs0 * n.qcs1) * vs1
-            + (1.0 - 2.0 * n.qcs1 * n.qcs1 - 2.0 * n.qcs2 * n.qcs2) * vs2,
+        (1.0 - 2.0 * n.q2 * n.q2 - 2.0 * n.q3 * n.q3) * n.vn
+            + 2.0 * (n.q1 * n.q2 + n.q0 * n.q3) * n.ve
+            + 2.0 * (n.q1 * n.q3 - n.q0 * n.q2) * n.vd,
+        2.0 * (n.q1 * n.q2 - n.q0 * n.q3) * n.vn
+            + (1.0 - 2.0 * n.q1 * n.q1 - 2.0 * n.q3 * n.q3) * n.ve
+            + 2.0 * (n.q2 * n.q3 + n.q0 * n.q1) * n.vd,
+        2.0 * (n.q1 * n.q3 + n.q0 * n.q2) * n.vn
+            + 2.0 * (n.q2 * n.q3 - n.q0 * n.q1) * n.ve
+            + (1.0 - 2.0 * n.q1 * n.q1 - 2.0 * n.q2 * n.q2) * n.vd,
     ]
 }
 

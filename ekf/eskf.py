@@ -98,13 +98,15 @@ def skew(v):
     return Matrix([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
 
 
-def propagate_nominal(q, v, p, bg, ba, d_ang, d_vel, dt, g_n):
-    r_to_n = quat_to_rot(q)
-    d_ang_true = d_ang - bg * dt
-    d_vel_true_b = d_vel - ba * dt + r_to_n.T * g_n * dt
+def propagate_nominal(q, v, p, bg, ba, q_vb, d_ang, d_vel, dt, g_n):
+    r_v_to_n = quat_to_rot(q)
+    r_v_to_b = quat_to_rot(q_vb)
+    r_b_to_v = r_v_to_b.T
+    d_ang_true = r_b_to_v * (d_ang - bg * dt)
+    d_vel_true_v = r_b_to_v * (d_vel - ba * dt)
 
     q_new = quat_mult(q, delta_quat(d_ang_true))
-    v_new = v + r_to_n * d_vel_true_b
+    v_new = v + r_v_to_n * d_vel_true_v + g_n * dt
     p_new = p + v * dt
     bg_new = bg
     ba_new = ba
@@ -157,7 +159,7 @@ def build_symbolic_model():
 
     g_n = Matrix([0, 0, g])
     q_new, v_new, p_new, bg_new, ba_new = propagate_nominal(
-        q, v, p, bg, ba, d_ang, d_vel, dt, g_n
+        q, v, p, bg, ba, qcs, d_ang, d_vel, dt, g_n
     )
 
     x_nom = Matrix.vstack(q, v, p, bg, ba, qcs)
@@ -230,7 +232,7 @@ def derive_error_dynamics():
     )
 
     q_nom_new, v_nom_new, p_nom_new, bg_nom_new, ba_nom_new = propagate_nominal(
-        model["q"], model["v"], model["p"], bg, ba, d_ang, d_vel, dt, g_n
+        model["q"], model["v"], model["p"], bg, ba, model["qcs"], d_ang, d_vel, dt, g_n
     )
     q_true_new, v_true_new, p_true_new, bg_true_new, ba_true_new = propagate_nominal(
         q_true,
@@ -238,6 +240,7 @@ def derive_error_dynamics():
         p_true,
         bg_true,
         ba_true,
+        qcs_true,
         d_ang + n_dang,
         d_vel + n_dvel,
         dt,
@@ -295,10 +298,9 @@ def derive_measurement_model():
         model["dpsi_cs"],
     )
     r_true_to_n = quat_to_rot(q_true)
-    v_true_b = r_true_to_n.T * v_true
-    v_true_c = quat_to_rot(qcs_true) * v_true_b
-    g_true_b = r_true_to_n.T * model["g_n"]
-    stationary_gravity_b = -g_true_b
+    v_true_v = r_true_to_n.T * v_true
+    g_true_v = r_true_to_n.T * model["g_n"]
+    stationary_gravity_v = -g_true_v
     return {
         **model,
         "P_cov": p_cov,
@@ -308,11 +310,11 @@ def derive_measurement_model():
         "gps_vel_n": generate_observation_equations(p_cov, model["dx"], v_true[0], Symbol("R_VEL_N", real=True), "ESKF_HK_VEL_N", zero_error_subs),
         "gps_vel_e": generate_observation_equations(p_cov, model["dx"], v_true[1], Symbol("R_VEL_E", real=True), "ESKF_HK_VEL_E", zero_error_subs),
         "gps_vel_d": generate_observation_equations(p_cov, model["dx"], v_true[2], Symbol("R_VEL_D", real=True), "ESKF_HK_VEL_D", zero_error_subs),
-        "stationary_accel_x": generate_observation_equations(p_cov, model["dx"], stationary_gravity_b[0], Symbol("R_STATIONARY_ACCEL", real=True), "ESKF_HK_STAT_AX", zero_error_subs),
-        "stationary_accel_y": generate_observation_equations(p_cov, model["dx"], stationary_gravity_b[1], Symbol("R_STATIONARY_ACCEL", real=True), "ESKF_HK_STAT_AY", zero_error_subs),
-        "body_vel_x": generate_observation_equations(p_cov, model["dx"], v_true_c[0], Symbol("R_BODY_VEL", real=True), "ESKF_HK_BODY_X", zero_error_subs),
-        "body_vel_y": generate_observation_equations(p_cov, model["dx"], v_true_c[1], Symbol("R_BODY_VEL", real=True), "ESKF_HK_BODY_Y", zero_error_subs),
-        "body_vel_z": generate_observation_equations(p_cov, model["dx"], v_true_c[2], Symbol("R_BODY_VEL", real=True), "ESKF_HK_BODY_Z", zero_error_subs),
+        "stationary_accel_x": generate_observation_equations(p_cov, model["dx"], stationary_gravity_v[0], Symbol("R_STATIONARY_ACCEL", real=True), "ESKF_HK_STAT_AX", zero_error_subs),
+        "stationary_accel_y": generate_observation_equations(p_cov, model["dx"], stationary_gravity_v[1], Symbol("R_STATIONARY_ACCEL", real=True), "ESKF_HK_STAT_AY", zero_error_subs),
+        "body_vel_x": generate_observation_equations(p_cov, model["dx"], v_true_v[0], Symbol("R_BODY_VEL", real=True), "ESKF_HK_BODY_X", zero_error_subs),
+        "body_vel_y": generate_observation_equations(p_cov, model["dx"], v_true_v[1], Symbol("R_BODY_VEL", real=True), "ESKF_HK_BODY_Y", zero_error_subs),
+        "body_vel_z": generate_observation_equations(p_cov, model["dx"], v_true_v[2], Symbol("R_BODY_VEL", real=True), "ESKF_HK_BODY_Z", zero_error_subs),
     }
 
 

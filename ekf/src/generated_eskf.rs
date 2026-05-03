@@ -7,7 +7,7 @@
 //!
 //! The generated model implements the augmented ESKF documented in
 //! `docs/eskf_mount_formulation.pdf`: 18 error states
-//! `[dtheta_s, dv_n, dp_n, dbg, dba, dpsi_cs]` and 15 process-noise states
+//! `[dtheta_v, dv_n, dp_n, dbg, dba, dpsi_vb]` and 15 process-noise states
 //! `[gyro, accel, gyro_bias_rw, accel_bias_rw, mount_rw]`.
 
 #![allow(non_snake_case)]
@@ -56,6 +56,10 @@ pub fn predict_nominal(nominal: &mut EskfNominalState, imu: EskfImuDelta) {
     let bax = nominal.bax;
     let bay = nominal.bay;
     let baz = nominal.baz;
+    let qcs0 = nominal.qcs0;
+    let qcs1 = nominal.qcs1;
+    let qcs2 = nominal.qcs2;
+    let qcs3 = nominal.qcs3;
     let dax = imu.dax;
     let day = imu.day;
     let daz = imu.daz;

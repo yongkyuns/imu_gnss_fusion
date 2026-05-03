@@ -36,18 +36,23 @@ fn weak_nhc_direct_mount_sensitivity_does_not_move_mount() {
 }
 
 #[test]
-fn moving_nhc_with_direct_mount_sensitivity_can_still_move_mount() {
+fn moving_nhc_updates_attitude_but_not_mount_directly() {
     let mut loose = initialized_loose([5.0, 1.0, 0.0]);
 
     loose.fuse_nhc_reference_with_speed(Some(5.0), [0.0; 3], [0.0, 0.0, 9.81], 0.02);
 
-    let dx_mount = &loose.last_dx()[21..24];
-    let max_abs = dx_mount
+    let dx_att = &loose.last_dx()[6..9];
+    let att_max_abs = dx_att
         .iter()
         .fold(0.0_f32, |acc, value| acc.max(value.abs()));
     assert!(
-        max_abs > 1.0e-6,
-        "expected observable moving NHC update to move mount, dx={dx_mount:?}"
+        att_max_abs > 1.0e-6,
+        "expected observable moving NHC update to move attitude, dx={dx_att:?}"
+    );
+    let dx_mount = &loose.last_dx()[21..24];
+    assert!(
+        dx_mount.iter().all(|v| *v == 0.0),
+        "NHC no longer has direct mount sensitivity; dx={dx_mount:?}"
     );
 }
 
@@ -134,7 +139,7 @@ fn external_moving_speed_allows_batched_nhc() {
 }
 
 #[test]
-fn caller_provided_nhc_r_reduces_batched_mount_correction() {
+fn caller_provided_nhc_r_reduces_batched_attitude_correction() {
     let mut default_r = initialized_loose([5.0, 1.0, 0.0]);
     default_r.fuse_reference_batch_full_with_nhc_speed(
         None,
@@ -163,11 +168,11 @@ fn caller_provided_nhc_r_reduces_batched_mount_correction() {
         0.02,
     );
 
-    let default_mount_abs: f32 = default_r.last_dx()[21..24].iter().map(|v| v.abs()).sum();
-    let matched_mount_abs: f32 = matched_r.last_dx()[21..24].iter().map(|v| v.abs()).sum();
+    let default_att_abs: f32 = default_r.last_dx()[6..9].iter().map(|v| v.abs()).sum();
+    let matched_att_abs: f32 = matched_r.last_dx()[6..9].iter().map(|v| v.abs()).sum();
 
     assert!(
-        matched_mount_abs < default_mount_abs * 0.25,
-        "expected larger caller-provided NHC R to reduce mount correction, default={default_mount_abs}, matched={matched_mount_abs}"
+        matched_att_abs < default_att_abs * 0.25,
+        "expected larger caller-provided NHC R to reduce attitude correction, default={default_att_abs}, matched={matched_att_abs}"
     );
 }

@@ -838,7 +838,7 @@ brake 0.6666667m/s^2 for 18s
 }
 
 #[test]
-fn synthetic_roll_excitation_alone_does_not_make_mount_roll_observable() -> Result<()> {
+fn synthetic_roll_excitation_makes_internal_mount_observable() -> Result<()> {
     let profile_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("motion_profiles/figure8_roll_excitation_30min.scenario");
     let data = build_synthetic_plot_data(
@@ -868,8 +868,17 @@ fn synthetic_roll_excitation_alone_does_not_make_mount_roll_observable() -> Resu
         "ESKF mount quaternion error [deg]",
     )?)?;
     assert!(
-        eskf_mount_qerr > 0.1,
-        "roll excitation alone unexpectedly made ESKF mount converge; qerr={eskf_mount_qerr:.6}"
+        eskf_mount_qerr < 0.1,
+        "roll excitation should make ESKF mount converge; qerr={eskf_mount_qerr:.6}"
+    );
+    let loose_mount_qerr = final_trace_value(require_trace(
+        "loose_misalignment",
+        &data.loose_misalignment,
+        "Loose mount quaternion error [deg]",
+    )?)?;
+    assert!(
+        loose_mount_qerr < 0.25,
+        "roll excitation should make loose mount converge; qerr={loose_mount_qerr:.6}"
     );
     Ok(())
 }

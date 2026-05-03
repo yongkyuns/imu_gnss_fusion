@@ -1174,32 +1174,18 @@ fn nominal_vehicle_velocity(nominal: &EskfNominalState) -> [f32; 3] {
     let q1 = nominal.q1;
     let q2 = nominal.q2;
     let q3 = nominal.q3;
-    let qcs0 = nominal.qcs0;
-    let qcs1 = nominal.qcs1;
-    let qcs2 = nominal.qcs2;
-    let qcs3 = nominal.qcs3;
     let vn = nominal.vn;
     let ve = nominal.ve;
     let vd = nominal.vd;
-    let vs0 = (1.0 - 2.0 * q2 * q2 - 2.0 * q3 * q3) * vn
-        + 2.0 * (q1 * q2 + q0 * q3) * ve
-        + 2.0 * (q1 * q3 - q0 * q2) * vd;
-    let vs1 = 2.0 * (q1 * q2 - q0 * q3) * vn
-        + (1.0 - 2.0 * q1 * q1 - 2.0 * q3 * q3) * ve
-        + 2.0 * (q2 * q3 + q0 * q1) * vd;
-    let vs2 = 2.0 * (q1 * q3 + q0 * q2) * vn
-        + 2.0 * (q2 * q3 - q0 * q1) * ve
-        + (1.0 - 2.0 * q1 * q1 - 2.0 * q2 * q2) * vd;
-
     [
-        (1.0 - 2.0 * qcs2 * qcs2 - 2.0 * qcs3 * qcs3) * vs0
-            + 2.0 * (qcs1 * qcs2 - qcs0 * qcs3) * vs1
-            + 2.0 * (qcs1 * qcs3 + qcs0 * qcs2) * vs2,
-        2.0 * (qcs1 * qcs2 + qcs0 * qcs3) * vs0
-            + (1.0 - 2.0 * qcs1 * qcs1 - 2.0 * qcs3 * qcs3) * vs1
-            + 2.0 * (qcs2 * qcs3 - qcs0 * qcs1) * vs2,
-        2.0 * (qcs1 * qcs3 - qcs0 * qcs2) * vs0
-            + 2.0 * (qcs2 * qcs3 + qcs0 * qcs1) * vs1
-            + (1.0 - 2.0 * qcs1 * qcs1 - 2.0 * qcs2 * qcs2) * vs2,
+        (1.0 - 2.0 * q2 * q2 - 2.0 * q3 * q3) * vn
+            + 2.0 * (q1 * q2 + q0 * q3) * ve
+            + 2.0 * (q1 * q3 - q0 * q2) * vd,
+        2.0 * (q1 * q2 - q0 * q3) * vn
+            + (1.0 - 2.0 * q1 * q1 - 2.0 * q3 * q3) * ve
+            + 2.0 * (q2 * q3 + q0 * q1) * vd,
+        2.0 * (q1 * q3 + q0 * q2) * vn
+            + 2.0 * (q2 * q3 - q0 * q1) * ve
+            + (1.0 - 2.0 * q1 * q1 - 2.0 * q2 * q2) * vd,
     ]
 }

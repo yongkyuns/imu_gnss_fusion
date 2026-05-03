@@ -112,7 +112,7 @@ impl Default for LooseInitConfig {
         Self {
             pos_min_sigma_m: 0.5,
             vel_min_sigma_mps: 0.2,
-            attitude_sigma_deg: 2.0,
+            attitude_sigma_deg: 20.0,
             gyro_bias_sigma_dps: 0.125,
             accel_bias_sigma_mps2: 0.15,
             gyro_scale_sigma: 0.02,

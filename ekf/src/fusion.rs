@@ -6,9 +6,9 @@
 //! latest initialized ESKF state and mount estimates from the accessors.
 //!
 //! The facade bridges the PDF formulations in `docs/`: align estimates the
-//! physical vehicle-to-body seed `q_vb`, IMU deltas are pre-rotated into the
-//! ESKF seeded frame, and the runtime ESKF may then estimate residual mount
-//! `q_cs` through vehicle-speed and NHC measurements.
+//! physical vehicle-to-body seed `q_vb`, and the runtime ESKF uses that mount
+//! inside inertial propagation so mount errors affect attitude and velocity
+//! dynamics directly.
 
 use crate::align::{Align, AlignConfig, AlignUpdateTrace, AlignWindowSummary, GRAVITY_MPS2};
 use crate::ekf::PredictNoise;
@@ -318,10 +318,10 @@ impl SensorFusion {
         self.ekf_mount_handoff_t_s = None;
         self.mount_settle_released = false;
         let n = &mut self.eskf.raw_mut().nominal;
-        n.qcs0 = 1.0;
-        n.qcs1 = 0.0;
-        n.qcs2 = 0.0;
-        n.qcs3 = 0.0;
+        n.qcs0 = q_vb[0];
+        n.qcs1 = q_vb[1];
+        n.qcs2 = q_vb[2];
+        n.qcs3 = q_vb[3];
     }
 
     /// Replaces the ESKF prediction-noise configuration.
@@ -512,23 +512,17 @@ impl SensorFusion {
             return self.update(false, false);
         }
 
-        let mount_q = self
-            .eskf_mount_q_vb
-            .or(self.mount_q_vb)
-            .unwrap_or([1.0, 0.0, 0.0, 0.0]);
-        let c_bv = quat_to_rotmat(mount_q);
-        let c_vb = transpose3(c_bv);
-        let gyro_vehicle = mat3_vec(c_vb, sample.gyro_radps);
-        let accel_vehicle = mat3_vec(c_vb, sample.accel_mps2);
+        let gyro_vehicle = self.current_vehicle_vector_from_body(sample.gyro_radps);
+        let accel_vehicle = self.current_vehicle_vector_from_body(sample.accel_mps2);
         let (gyro_predict, coriolis_delta_v_n) =
-            self.eskf_navigation_rate_corrections(gyro_vehicle, dt);
+            self.eskf_navigation_rate_corrections(sample.gyro_radps, dt);
         self.eskf.predict(EskfImuDelta {
             dax: gyro_predict[0] * dt,
             day: gyro_predict[1] * dt,
             daz: gyro_predict[2] * dt,
-            dvx: accel_vehicle[0] * dt,
-            dvy: accel_vehicle[1] * dt,
-            dvz: accel_vehicle[2] * dt,
+            dvx: sample.accel_mps2[0] * dt,
+            dvy: sample.accel_mps2[1] * dt,
+            dvz: sample.accel_mps2[2] * dt,
             dt,
         });
         {
@@ -662,7 +656,7 @@ impl SensorFusion {
         self.mount_q_vb
     }
 
-    /// Returns the mount quaternion currently used to pre-rotate IMU into the ESKF frame.
+    /// Returns the mount quaternion currently used by the ESKF propagation model.
     pub fn eskf_mount_q_vb(&self) -> Option<[f32; 4]> {
         self.eskf_mount_q_vb
     }
@@ -740,15 +734,15 @@ impl SensorFusion {
         })
     }
 
-    /// Diagnostic hook that directly sets the ESKF residual mount quaternion.
-    pub fn analysis_set_eskf_mount_quat(&mut self, q_cs: [f32; 4]) {
+    /// Diagnostic hook that directly sets the ESKF mount quaternion.
+    pub fn analysis_set_eskf_mount_quat(&mut self, q_vb: [f32; 4]) {
         if !self.ekf_initialized {
             return;
         }
         if self.cfg.eskf_mount_source == EskfMountSource::FollowAlign {
             return;
         }
-        let mut q = q_cs;
+        let mut q = q_vb;
         quat_normalize(&mut q);
         let n = &mut self.eskf.raw_mut().nominal;
         n.qcs0 = q[0];
@@ -789,15 +783,16 @@ impl SensorFusion {
         if let Some(q_vb) = self.mount_q_vb {
             self.eskf_mount_q_vb = Some(q_vb);
         }
-        self.reset_eskf_mount_residual();
+        self.set_eskf_mount_to_current_source();
     }
 
-    fn reset_eskf_mount_residual(&mut self) {
+    fn set_eskf_mount_to_current_source(&mut self) {
+        let q = self.eskf_mount_q_vb.unwrap_or([1.0, 0.0, 0.0, 0.0]);
         let n = &mut self.eskf.raw_mut().nominal;
-        n.qcs0 = 1.0;
-        n.qcs1 = 0.0;
-        n.qcs2 = 0.0;
-        n.qcs3 = 0.0;
+        n.qcs0 = q[0];
+        n.qcs1 = q[1];
+        n.qcs2 = q[2];
+        n.qcs3 = q[3];
     }
 
     fn update(&self, mount_ready_changed: bool, ekf_initialized_now: bool) -> FusionUpdate {
@@ -826,6 +821,12 @@ impl SensorFusion {
         });
         self.eskf.init_nominal_from_gnss(quat_from_yaw(yaw), gnss);
         let raw = self.eskf.raw_mut();
+        if let Some(q_vb) = self.eskf_mount_q_vb.or(self.mount_q_vb) {
+            raw.nominal.qcs0 = q_vb[0];
+            raw.nominal.qcs1 = q_vb[1];
+            raw.nominal.qcs2 = q_vb[2];
+            raw.nominal.qcs3 = q_vb[3];
+        }
         raw.p[9][9] = self.cfg.gyro_bias_init_sigma_radps.powi(2);
         raw.p[10][10] = raw.p[9][9];
         raw.p[11][11] = raw.p[9][9];
@@ -898,6 +899,12 @@ impl SensorFusion {
     fn fuse_signed_body_speed(&mut self, signed_speed_mps: f32) {
         self.eskf
             .fuse_body_speed_x(signed_speed_mps, self.cfg.r_vehicle_speed);
+    }
+
+    fn current_vehicle_vector_from_body(&self, vector_b: [f32; 3]) -> [f32; 3] {
+        let n = &self.eskf.raw().nominal;
+        let c_bv = quat_to_rotmat([n.qcs0, n.qcs1, n.qcs2, n.qcs3]);
+        mat3_vec(transpose3(c_bv), vector_b)
     }
 
     fn try_bootstrap_align(&mut self, accel_b: [f32; 3], gyro_radps: [f32; 3]) {
@@ -1199,14 +1206,14 @@ impl SensorFusion {
 
     fn eskf_navigation_rate_corrections(
         &self,
-        gyro_vehicle: [f32; 3],
+        gyro_body: [f32; 3],
         dt: f32,
     ) -> ([f32; 3], [f32; 3]) {
         if !self.anchor.valid || dt <= 0.0 {
-            return (gyro_vehicle, [0.0; 3]);
+            return (gyro_body, [0.0; 3]);
         }
         let Some(eskf) = self.eskf() else {
-            return (gyro_vehicle, [0.0; 3]);
+            return (gyro_body, [0.0; 3]);
         };
         let nominal = &eskf.nominal;
         let lla = self.position_lla_f64().unwrap_or([
@@ -1223,11 +1230,14 @@ impl SensorFusion {
         // gyro measures body rate relative to inertial space, so subtract the
         // navigation frame's inertial rate before applying the flat local
         // quaternion update, and apply the matching Coriolis/transport velocity
-        // term in NED.
+        // term in NED. Propagation now consumes raw body-frame IMU, so the
+        // navigation rate is converted back through the current mount.
         let omega_in_n = add3(omega_ie_n, omega_en_n);
-        let c_ns = quat_to_rotmat([nominal.q0, nominal.q1, nominal.q2, nominal.q3]);
-        let omega_in_s = mat3_vec(transpose3(c_ns), omega_in_n);
-        let gyro_predict = sub3(gyro_vehicle, omega_in_s);
+        let c_nv = quat_to_rotmat([nominal.q0, nominal.q1, nominal.q2, nominal.q3]);
+        let omega_in_v = mat3_vec(transpose3(c_nv), omega_in_n);
+        let c_bv = quat_to_rotmat([nominal.qcs0, nominal.qcs1, nominal.qcs2, nominal.qcs3]);
+        let omega_in_b = mat3_vec(c_bv, omega_in_v);
+        let gyro_predict = sub3(gyro_body, omega_in_b);
         let coriolis_rate = cross3(
             add3(scale3(omega_ie_n, 2.0), omega_en_n),
             [nominal.vn, nominal.ve, nominal.vd],
@@ -1316,18 +1326,9 @@ fn runtime_nhc_active(accel_v: [f32; 3], gyro_v: [f32; 3]) -> bool {
 
 fn body_speed_x_estimate(eskf: &EskfState) -> f32 {
     let n = &eskf.nominal;
-    let vs0 = (1.0 - 2.0 * n.q2 * n.q2 - 2.0 * n.q3 * n.q3) * n.vn
+    (1.0 - 2.0 * n.q2 * n.q2 - 2.0 * n.q3 * n.q3) * n.vn
         + 2.0 * (n.q1 * n.q2 + n.q0 * n.q3) * n.ve
-        + 2.0 * (n.q1 * n.q3 - n.q0 * n.q2) * n.vd;
-    let vs1 = 2.0 * (n.q1 * n.q2 - n.q0 * n.q3) * n.vn
-        + (1.0 - 2.0 * n.q1 * n.q1 - 2.0 * n.q3 * n.q3) * n.ve
-        + 2.0 * (n.q2 * n.q3 + n.q0 * n.q1) * n.vd;
-    let vs2 = 2.0 * (n.q1 * n.q3 + n.q0 * n.q2) * n.vn
-        + 2.0 * (n.q2 * n.q3 - n.q0 * n.q1) * n.ve
-        + (1.0 - 2.0 * n.q1 * n.q1 - 2.0 * n.q2 * n.q2) * n.vd;
-    (1.0 - 2.0 * n.qcs2 * n.qcs2 - 2.0 * n.qcs3 * n.qcs3) * vs0
-        + 2.0 * (n.qcs1 * n.qcs2 - n.qcs0 * n.qcs3) * vs1
-        + 2.0 * (n.qcs1 * n.qcs3 + n.qcs0 * n.qcs2) * vs2
+        + 2.0 * (n.q1 * n.q3 - n.q0 * n.q2) * n.vd
 }
 
 fn navigation_rates_ned(

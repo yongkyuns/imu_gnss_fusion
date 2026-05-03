@@ -183,6 +183,7 @@ See [docs/testing.md](docs/testing.md) for focused test groups, fixtures, and ex
 - [docs/testing.md](docs/testing.md): testing workflow.
 - [docs/math/frames.md](docs/math/frames.md): frame and quaternion conventions.
 - [docs/math/loose.md](docs/math/loose.md): loose INS/GNSS operational links.
+- [docs/mount_in_propagation_revision.pdf](docs/mount_in_propagation_revision.pdf): before/after derivation for the mount-in-propagation revision.
 - [docs/eskf_mount_formulation.pdf](docs/eskf_mount_formulation.pdf): detailed ESKF mount formulation.
 - [docs/align_nhc_formulation.pdf](docs/align_nhc_formulation.pdf): detailed Align/NHC formulation.
 - [docs/loose_formulation.pdf](docs/loose_formulation.pdf): detailed loose INS/GNSS formulation.
