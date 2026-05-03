@@ -54,11 +54,11 @@ impl Default for EkfCompareConfig {
             gnss_vel_mount_scale: 1.0,
             yaw_init_sigma_deg: 2.0,
             gyro_bias_init_sigma_dps: 0.125,
-            accel_bias_init_sigma_mps2: 0.075,
+            accel_bias_init_sigma_mps2: 0.15,
             mount_roll_pitch_init_sigma_deg: default_mount_roll_pitch_init_sigma_deg(),
             mount_init_sigma_deg: 6.0,
             r_vehicle_speed: 0.04,
-            mount_align_rw_var: 1.0e-7,
+            mount_align_rw_var: 0.0,
             mount_update_min_scale: 0.008,
             mount_update_ramp_time_s: 120.0,
             mount_update_innovation_gate_mps: 0.10,
@@ -124,7 +124,7 @@ impl Default for LooseInitConfig {
             vel_min_sigma_mps: 0.2,
             attitude_sigma_deg: 2.0,
             gyro_bias_sigma_dps: 0.125,
-            accel_bias_sigma_mps2: 0.075,
+            accel_bias_sigma_mps2: 0.15,
             gyro_scale_sigma: 0.02,
             accel_scale_sigma: 0.0,
             mount_sigma_deg: 2.0,
@@ -143,7 +143,7 @@ pub const fn default_eskf_predict_noise() -> PredictNoise {
         accel_var: 2.450_421_4e-5 * 15.0_f32,
         gyro_bias_rw_var: 0.0002e-9,
         accel_bias_rw_var: 0.002e-9,
-        mount_align_rw_var: 1.0e-7,
+        mount_align_rw_var: 0.0,
     }
 }
 

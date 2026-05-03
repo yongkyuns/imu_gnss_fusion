@@ -95,7 +95,7 @@ impl LoosePredictNoise {
             accel_bias_rw_var: 1.0e-10,
             gyro_scale_rw_var: 1.0e-10,
             accel_scale_rw_var: 1.0e-10,
-            mount_align_rw_var: 1.0e-8,
+            mount_align_rw_var: 0.0,
         }
     }
 
@@ -108,7 +108,7 @@ impl LoosePredictNoise {
             accel_bias_rw_var: 0.002e-9,
             gyro_scale_rw_var: 1.0e-10,
             accel_scale_rw_var: 1.0e-10,
-            mount_align_rw_var: 1.0e-8,
+            mount_align_rw_var: 0.0,
         }
     }
 }

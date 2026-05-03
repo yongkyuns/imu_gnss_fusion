@@ -77,7 +77,7 @@ struct Args {
     yaw_init_sigma_deg: f32,
     #[arg(long, default_value_t = 0.125)]
     gyro_bias_init_sigma_dps: f32,
-    #[arg(long, default_value_t = 0.075)]
+    #[arg(long, default_value_t = 0.15)]
     accel_bias_init_sigma_mps2: f32,
     #[arg(long, default_value_t = 6.0)]
     mount_init_sigma_deg: f32,
@@ -87,7 +87,7 @@ struct Args {
     r_zero_vel: f32,
     #[arg(long, default_value_t = 0.0)]
     r_stationary_accel: f32,
-    #[arg(long, default_value_t = 1.0e-7)]
+    #[arg(long, default_value_t = 0.0)]
     mount_align_rw_var: f32,
     #[arg(long, default_value_t = 0.008)]
     mount_update_min_scale: f32,

@@ -118,7 +118,7 @@ impl RustEskf {
     /// Initializes nominal attitude, velocity, and position from a GNSS sample.
     pub fn init_nominal_from_gnss(&mut self, q_bn: [f32; 4], gnss: EskfGnssSample) {
         const DEFAULT_GYRO_BIAS_SIGMA_DPS: f32 = 0.125;
-        const DEFAULT_ACCEL_BIAS_SIGMA_MPS2: f32 = 0.075;
+        const DEFAULT_ACCEL_BIAS_SIGMA_MPS2: f32 = 0.15;
 
         self.raw.nominal.q0 = q_bn[0];
         self.raw.nominal.q1 = q_bn[1];

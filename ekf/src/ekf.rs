@@ -17,7 +17,7 @@ impl Default for PredictNoise {
             accel_var: 12.0,
             gyro_bias_rw_var: 0.002e-9,
             accel_bias_rw_var: 0.2e-9,
-            mount_align_rw_var: 1.0e-8,
+            mount_align_rw_var: 0.0,
         }
     }
 }
@@ -29,7 +29,7 @@ impl PredictNoise {
             accel_var: 2.450_421_4e-5 * 15.0_f32,
             gyro_bias_rw_var: 0.0002e-9,
             accel_bias_rw_var: 0.002e-9,
-            mount_align_rw_var: 1.0e-8,
+            mount_align_rw_var: 0.0,
         }
     }
 }
