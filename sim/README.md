@@ -90,7 +90,7 @@ Prefer these shared modules instead of duplicating replay logic in new tools:
 
 ## Loose Diagnostics
 
-Loose accel and gyro diagnostic plots use the same pre-rotated IMU stream that is fed to the loose filter. The full loose mount plot composes the latched seed and residual correction as `q_seed * inv(qcs)`, matching the physical mount convention used by the ESKF plots.
+Loose accel and gyro diagnostic plots use the same pre-rotated IMU stream that is fed to the loose filter. ESKF and loose mount plots use the current `qcs` mount quaternion directly, matching the convention used by the visualizer.
 
 The loose accel-bias states are additive correction states:
 

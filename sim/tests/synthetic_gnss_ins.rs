@@ -9,9 +9,7 @@ use sensor_fusion::fusion::SensorFusion;
 use sim::datasets::generic_replay::{
     GenericGnssSample, GenericImuSample, fusion_gnss_sample, fusion_imu_sample,
 };
-use sim::eval::gnss_ins::{
-    as_q64, quat_angle_deg, quat_conj, quat_from_rpy_alg_deg, quat_mul, quat_rotate,
-};
+use sim::eval::gnss_ins::{as_q64, quat_angle_deg, quat_rotate};
 use sim::eval::replay::{ReplayEvent, for_each_event};
 use sim::eval::trace::{
     require_trace, require_trace_points, require_trace_schema, sample_nearest_value,
@@ -22,6 +20,7 @@ use sim::synthetic::gnss_ins_path::{
 };
 use sim::visualizer::math::{ecef_to_ned, lla_to_ecef};
 use sim::visualizer::model::EkfImuSource;
+use sim::visualizer::pipeline::generic::reference_mount_rpy_to_q_vb;
 use sim::visualizer::pipeline::synthetic::{
     SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_plot_data,
 };
@@ -999,7 +998,7 @@ fn run_eskf_on_samples_configured(
     vel_std_mps: [f64; 3],
     configure: impl FnOnce(&mut SensorFusion),
 ) -> Result<EskfSyntheticSummary> {
-    let q_truth = quat_from_rpy_alg_deg(mount_rpy_deg[0], mount_rpy_deg[1], mount_rpy_deg[2]);
+    let q_truth = reference_mount_rpy_to_q_vb(mount_rpy_deg);
     let imu = imu_samples
         .iter()
         .map(|s| GenericImuSample {
@@ -1046,18 +1045,12 @@ fn run_eskf_on_samples_configured(
                     reference.truth[0].lat_deg,
                     reference.truth[0].lon_deg,
                 );
-                let q_seed = fusion
-                    .eskf_mount_q_vb()
-                    .or_else(|| fusion.mount_q_vb())
-                    .map(as_q64)
-                    .unwrap_or(q_truth);
                 let q_cs = as_q64([
                     eskf.nominal.qcs0,
                     eskf.nominal.qcs1,
                     eskf.nominal.qcs2,
                     eskf.nominal.qcs3,
                 ]);
-                let q_full_mount = quat_mul(q_seed, quat_conj(q_cs));
                 let q_est_att = as_q64([
                     eskf.nominal.q0,
                     eskf.nominal.q1,
@@ -1066,7 +1059,7 @@ fn run_eskf_on_samples_configured(
                 ]);
                 errors.push(StateErr {
                     t_s: sample.t_s,
-                    mount_quat_err_deg: quat_angle_deg(q_full_mount, q_truth),
+                    mount_quat_err_deg: quat_angle_deg(q_cs, q_truth),
                     att_quat_err_deg: quat_angle_deg(q_est_att, truth.q_bn),
                     vel_err_mps: norm3([
                         eskf.nominal.vn as f64 - truth.vel_ned_mps[0],

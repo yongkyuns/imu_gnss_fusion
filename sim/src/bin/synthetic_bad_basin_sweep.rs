@@ -7,7 +7,7 @@ use sim::datasets::generic_replay::{
     GenericGnssSample, GenericImuSample, fusion_gnss_sample, fusion_imu_sample,
 };
 use sim::eval::gnss_ins::{
-    as_q64, quat_angle_deg, quat_conj, quat_from_rpy_alg_deg, quat_mul, quat_rotate, wrap_deg180,
+    as_q64, quat_angle_deg, quat_from_rpy_alg_deg, quat_mul, quat_rotate, wrap_deg180,
 };
 use sim::eval::replay::{ReplayEvent, for_each_event};
 use sim::synthetic::gnss_ins_path::{
@@ -15,6 +15,7 @@ use sim::synthetic::gnss_ins_path::{
     PathGenConfig, generate_with_noise,
 };
 use sim::visualizer::math::{ecef_to_ned, lla_to_ecef, quat_rpy_deg};
+use sim::visualizer::pipeline::generic::reference_mount_rpy_to_q_vb;
 
 const DIAG_GPS_VEL: usize = 1;
 const DIAG_BODY_VEL_Y: usize = 4;
@@ -315,11 +316,11 @@ fn prepare_scenario(args: &Args, scenario: &Path) -> Result<PreparedScenario> {
         noise,
         args.seed,
     )?;
-    let q_truth_mount = quat_from_rpy_alg_deg(
+    let q_truth_mount = reference_mount_rpy_to_q_vb([
         args.mount_roll_deg,
         args.mount_pitch_deg,
         args.mount_yaw_deg,
-    );
+    ]);
     let imu = generated
         .imu
         .iter()
@@ -665,11 +666,11 @@ fn run_case(
     shift_ms: f64,
     early_vel_bias_ned_mps: [f64; 3],
 ) -> Result<SweepResult> {
-    let q_truth_mount = quat_from_rpy_alg_deg(
+    let q_truth_mount = reference_mount_rpy_to_q_vb([
         args.mount_roll_deg,
         args.mount_pitch_deg,
         args.mount_yaw_deg,
-    );
+    ]);
     let q_seed = match args.seed_mode {
         SeedMode::InternalAlign => None,
         SeedMode::Truth => Some(q_truth_mount),
@@ -894,27 +895,18 @@ fn snapshot_state(
 ) -> Option<Snapshot> {
     let eskf = fusion.eskf()?;
     let truth = truth?;
-    let q_seed = fusion
-        .eskf_mount_q_vb()
-        .or_else(|| fusion.mount_q_vb())
-        .map(as_q64)
-        .unwrap_or(q_truth_mount);
     let q_cs = as_q64([
         eskf.nominal.qcs0,
         eskf.nominal.qcs1,
         eskf.nominal.qcs2,
         eskf.nominal.qcs3,
     ]);
-    let q_full_mount = quat_mul(q_seed, quat_conj(q_cs));
-    let q_vehicle = quat_mul(
-        as_q64([
-            eskf.nominal.q0,
-            eskf.nominal.q1,
-            eskf.nominal.q2,
-            eskf.nominal.q3,
-        ]),
-        quat_conj(q_cs),
-    );
+    let q_vehicle = as_q64([
+        eskf.nominal.q0,
+        eskf.nominal.q1,
+        eskf.nominal.q2,
+        eskf.nominal.q3,
+    ]);
     let (ref_ecef, ref_lat_deg, ref_lon_deg) = fusion
         .anchor_lla_debug()
         .map(|anchor| {
@@ -976,7 +968,7 @@ fn snapshot_state(
         nominal_course_gnss_deg: wrap_deg180(nominal_course_deg - gnss_course_deg),
         yaw_nominal_course_deg: wrap_deg180(yaw - nominal_course_deg),
         lat_vel_mps: vel_vehicle[1],
-        mount_qerr_deg: quat_angle_deg(q_full_mount, q_truth_mount),
+        mount_qerr_deg: quat_angle_deg(q_cs, q_truth_mount),
         att_qerr_deg: quat_angle_deg(q_vehicle, truth.q_bn),
         yaw_err_deg: wrap_deg180(yaw - truth_yaw),
         vel_err_mps: norm3([
