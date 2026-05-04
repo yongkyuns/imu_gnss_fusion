@@ -23,6 +23,7 @@ const WGS84_NORMAL_GRAVITY_K: f64 = 0.001_931_852_652_41;
 const WGS84_NORMAL_GRAVITY_M: f64 = 0.003_449_786_506_84;
 const REANCHOR_DISTANCE_M: f32 = 5000.0;
 const RUNTIME_ZERO_SPEED_MPS: f32 = 0.80;
+const RUNTIME_NHC_MIN_SPEED_MPS: f32 = 0.05;
 const RUNTIME_NHC_MAX_GYRO_NORM_RADPS: f32 = 0.2;
 const RUNTIME_NHC_MAX_ACCEL_NORM_ERR_MPS2: f32 = 1.0;
 const CAN_SPEED_ZERO_MPS: f32 = 0.15;
@@ -1154,14 +1155,13 @@ impl SensorFusion {
         if !runtime_nhc_active(accel_vehicle, gyro_vehicle) {
             return None;
         }
-        let speed_scale = self
+        let speed_allows_nhc = self
             .last_gnss
-            .map(|g| nhc_speed_scale_from_horiz_speed(horiz_speed(g.vel_ned_mps)))
-            .unwrap_or(0.0);
-        if speed_scale <= 0.0 {
+            .is_some_and(|g| nhc_speed_allows_update(horiz_speed(g.vel_ned_mps)));
+        if !speed_allows_nhc {
             return None;
         }
-        let r_scale = nhc_observation_r_scale(dt) / speed_scale.max(1.0e-3);
+        let r_scale = nhc_observation_r_scale(dt);
         Some([
             self.cfg.r_body_vel_y * r_scale,
             self.cfg.r_body_vel_z * r_scale,
@@ -1263,15 +1263,8 @@ impl Ema {
     }
 }
 
-fn nhc_speed_scale_from_horiz_speed(speed: f32) -> f32 {
-    let full = 15.0 / 3.6;
-    if speed <= 0.0 {
-        0.0
-    } else if speed >= full {
-        1.0
-    } else {
-        speed / full
-    }
+fn nhc_speed_allows_update(speed: f32) -> bool {
+    speed > RUNTIME_NHC_MIN_SPEED_MPS
 }
 
 fn nhc_observation_r_scale(dt_s: f32) -> f32 {
