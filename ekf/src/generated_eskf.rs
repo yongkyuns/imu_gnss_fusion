@@ -40,6 +40,15 @@ pub struct ScalarObservation {
 
 /// Applies the generated nominal-state prediction to the ESKF nominal state.
 pub fn predict_nominal(nominal: &mut EskfNominalState, imu: EskfImuDelta) {
+    predict_nominal_with_gravity(nominal, imu, GRAVITY_MSS);
+}
+
+/// Applies the generated nominal-state prediction with a caller-supplied local gravity magnitude.
+pub fn predict_nominal_with_gravity(
+    nominal: &mut EskfNominalState,
+    imu: EskfImuDelta,
+    gravity_mss: f32,
+) {
     let q0 = nominal.q0;
     let q1 = nominal.q1;
     let q2 = nominal.q2;
@@ -67,7 +76,7 @@ pub fn predict_nominal(nominal: &mut EskfNominalState, imu: EskfImuDelta) {
     let dvy = imu.dvy;
     let dvz = imu.dvz;
     let dt = imu.dt;
-    let g = GRAVITY_MSS;
+    let g = gravity_mss;
 
     include!("generated_eskf/nominal_prediction_generated.rs");
 }
@@ -76,6 +85,18 @@ pub fn predict_nominal(nominal: &mut EskfNominalState, imu: EskfImuDelta) {
 pub fn error_transition(
     nominal: &EskfNominalState,
     imu: EskfImuDelta,
+) -> (
+    [[f32; ERROR_STATES]; ERROR_STATES],
+    [[f32; NOISE_STATES]; ERROR_STATES],
+) {
+    error_transition_with_gravity(nominal, imu, GRAVITY_MSS)
+}
+
+/// Returns generated error-state transition/noise matrices with caller-supplied local gravity.
+pub fn error_transition_with_gravity(
+    nominal: &EskfNominalState,
+    imu: EskfImuDelta,
+    gravity_mss: f32,
 ) -> (
     [[f32; ERROR_STATES]; ERROR_STATES],
     [[f32; NOISE_STATES]; ERROR_STATES],
@@ -112,7 +133,7 @@ pub fn error_transition(
     let dvy = imu.dvy;
     let dvz = imu.dvz;
     let dt = imu.dt;
-    let g = GRAVITY_MSS;
+    let g = gravity_mss;
 
     include!("generated_eskf/error_transition_generated.rs");
     include!("generated_eskf/error_noise_input_generated.rs");

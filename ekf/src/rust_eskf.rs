@@ -58,6 +58,7 @@ const MAX_BATCH_OBS: usize = 8;
 pub struct RustEskf {
     raw: EskfState,
     freeze_misalignment_states: bool,
+    gravity_mss: f32,
 }
 
 impl RustEskf {
@@ -80,6 +81,7 @@ impl RustEskf {
         Self {
             raw,
             freeze_misalignment_states: false,
+            gravity_mss: generated_eskf::GRAVITY_MSS,
         }
     }
 
@@ -91,6 +93,13 @@ impl RustEskf {
     /// Returns mutable access to the full raw ESKF state for integration code and diagnostics.
     pub fn raw_mut(&mut self) -> &mut EskfState {
         &mut self.raw
+    }
+
+    /// Sets the local gravity magnitude used by nominal prediction and gravity observations.
+    pub fn set_gravity_mss(&mut self, gravity_mss: f32) {
+        if gravity_mss.is_finite() && gravity_mss > 0.0 {
+            self.gravity_mss = gravity_mss;
+        }
     }
 
     /// Returns the nominal navigation state.
@@ -180,7 +189,7 @@ impl RustEskf {
     /// Predicts nominal state and covariance from one IMU delta.
     pub fn predict(&mut self, imu: EskfImuDelta) {
         let (f, g) = self.compute_error_transition_with_noise(imu);
-        generated_eskf::predict_nominal(&mut self.raw.nominal, imu);
+        generated_eskf::predict_nominal_with_gravity(&mut self.raw.nominal, imu, self.gravity_mss);
         normalize_nominal_quat(&mut self.raw.nominal);
 
         let dt = imu.dt;
@@ -231,7 +240,7 @@ impl RustEskf {
         [[f32; ERROR_STATES]; ERROR_STATES],
         [[f32; NOISE_STATES]; ERROR_STATES],
     ) {
-        generated_eskf::error_transition(&self.raw.nominal, imu)
+        generated_eskf::error_transition_with_gravity(&self.raw.nominal, imu, self.gravity_mss)
     }
 
     /// Fuses GNSS position and velocity.
@@ -526,7 +535,7 @@ impl RustEskf {
         let q1 = self.raw.nominal.q1;
         let q2 = self.raw.nominal.q2;
         let q3 = self.raw.nominal.q3;
-        let gravity_x = 2.0 * (q1 * q3 - q0 * q2) * generated_eskf::GRAVITY_MSS;
+        let gravity_x = 2.0 * (q1 * q3 - q0 * q2) * self.gravity_mss;
         let innovation = (accel_x - self.raw.nominal.bax) - (-gravity_x);
         let mut k = obs.k;
         let mut dx = gain_dx(k, innovation);
@@ -552,7 +561,7 @@ impl RustEskf {
         let q1 = self.raw.nominal.q1;
         let q2 = self.raw.nominal.q2;
         let q3 = self.raw.nominal.q3;
-        let gravity_y = 2.0 * (q2 * q3 + q0 * q1) * generated_eskf::GRAVITY_MSS;
+        let gravity_y = 2.0 * (q2 * q3 + q0 * q1) * self.gravity_mss;
         let innovation = (accel_y - self.raw.nominal.bay) - (-gravity_y);
         let mut k = obs.k;
         let mut dx = gain_dx(k, innovation);
@@ -630,6 +639,9 @@ impl RustEskf {
             }
         }
 
+        self.raw.update_diag.last_dx_mount_roll = dx[15];
+        self.raw.update_diag.last_dx_mount_pitch = dx[16];
+        self.raw.update_diag.last_dx_mount_yaw = dx[17];
         inject_error_state(&mut self.raw.nominal, &dx);
         apply_reset(&mut self.raw.p, &dx);
         if self.freeze_misalignment_states {
@@ -663,90 +675,55 @@ impl RustEskf {
         if obs_count == 0 || obs_count > MAX_BATCH_OBS {
             return;
         }
-        let mut ph_t = [[0.0; MAX_BATCH_OBS]; ERROR_STATES];
-        for i in 0..ERROR_STATES {
-            for row in 0..obs_count {
-                let mut value = 0.0;
-                for state in 0..ERROR_STATES {
-                    value += self.raw.p[i][state] * h_rows[row][state];
-                }
-                ph_t[i][row] = value;
-            }
-        }
-
-        let mut s = [[0.0; MAX_BATCH_OBS]; MAX_BATCH_OBS];
-        for row in 0..obs_count {
-            for col in 0..obs_count {
-                let mut value = if row == col { variances[row] } else { 0.0 };
-                for state in 0..ERROR_STATES {
-                    value += h_rows[row][state] * ph_t[state][col];
-                }
-                s[row][col] = value;
-            }
-        }
-
-        let Some(s_inv) = invert_batch_matrix(s, obs_count) else {
-            return;
-        };
-
-        let mut k = [[0.0; MAX_BATCH_OBS]; ERROR_STATES];
-        for i in 0..ERROR_STATES {
-            for row in 0..obs_count {
-                let mut value = 0.0;
-                for col in 0..obs_count {
-                    value += ph_t[i][col] * s_inv[col][row];
-                }
-                k[i][row] = value;
-            }
-        }
-
         let mut dx = [0.0; ERROR_STATES];
-        for i in 0..ERROR_STATES {
-            for row in 0..obs_count {
-                dx[i] += k[i][row] * residuals[row];
-            }
-        }
-        if self.freeze_misalignment_states {
-            block_mount_injection(&mut dx);
-            for row in 0..obs_count {
-                for i in 15..18 {
-                    k[i][row] = 0.0;
-                }
-            }
-        }
 
         for row in 0..obs_count {
-            let mut row_k = [0.0; ERROR_STATES];
+            let h = &h_rows[row];
+            let mut ph = [0.0; ERROR_STATES];
+            let mut s = variances[row];
+            for i in 0..ERROR_STATES {
+                for state in 0..ERROR_STATES {
+                    ph[i] += self.raw.p[i][state] * h[state];
+                }
+            }
+            for state in 0..ERROR_STATES {
+                s += h[state] * ph[state];
+            }
+            if !(s > 0.0) || !s.is_finite() {
+                continue;
+            }
+            let mut hd = 0.0;
+            for state in 0..ERROR_STATES {
+                hd += h[state] * dx[state];
+            }
+            let effective_residual = residuals[row] - hd;
+            let alpha = effective_residual / s;
+            let mut k = [0.0; ERROR_STATES];
             let mut row_dx = [0.0; ERROR_STATES];
             for i in 0..ERROR_STATES {
-                row_k[i] = k[i][row];
-                row_dx[i] = k[i][row] * residuals[row];
+                k[i] = ph[i] / s;
+                row_dx[i] = ph[i] * alpha;
             }
-            self.record_update_diag(
-                diag_types[row],
-                residuals[row],
-                s[row][row],
-                &h_rows[row],
-                &row_k,
-                &row_dx,
-            );
-        }
-
-        let mut updated_p = self.raw.p;
-        for i in 0..ERROR_STATES {
-            for j in i..ERROR_STATES {
-                let mut correction = 0.0;
-                for row in 0..obs_count {
-                    for col in 0..obs_count {
-                        correction += k[i][row] * s[row][col] * k[j][col];
-                    }
+            if self.freeze_misalignment_states {
+                block_mount_injection(&mut k);
+                block_mount_injection(&mut row_dx);
+            }
+            for i in 0..ERROR_STATES {
+                dx[i] += row_dx[i];
+            }
+            self.record_update_diag(diag_types[row], effective_residual, s, h, &k, &row_dx);
+            for i in 0..ERROR_STATES {
+                for j in i..ERROR_STATES {
+                    let value = self.raw.p[i][j] - ph[i] * ph[j] / s;
+                    self.raw.p[i][j] = value;
+                    self.raw.p[j][i] = value;
                 }
-                let value = self.raw.p[i][j] - correction;
-                updated_p[i][j] = value;
-                updated_p[j][i] = value;
             }
         }
-        self.raw.p = updated_p;
+        self.raw.update_diag.last_dx_mount_roll = dx[15];
+        self.raw.update_diag.last_dx_mount_pitch = dx[16];
+        self.raw.update_diag.last_dx_mount_yaw = dx[17];
+
         inject_error_state(&mut self.raw.nominal, &dx);
         apply_reset(&mut self.raw.p, &dx);
         if self.freeze_misalignment_states {
@@ -789,7 +766,11 @@ impl RustEskf {
         diag.sum_abs_dx_gyro_bias_z[diag_type] += fabsf(dx[11]);
         diag.sum_abs_dx_mount_norm[diag_type] +=
             sqrtf(dx[15] * dx[15] + dx[16] * dx[16] + dx[17] * dx[17]);
+        diag.sum_dx_mount_roll[diag_type] += dx[15];
+        diag.sum_dx_mount_pitch[diag_type] += dx[16];
         diag.sum_dx_mount_yaw[diag_type] += dx[17];
+        diag.sum_abs_dx_mount_roll[diag_type] += fabsf(dx[15]);
+        diag.sum_abs_dx_mount_pitch[diag_type] += fabsf(dx[16]);
         diag.sum_abs_dx_mount_yaw[diag_type] += fabsf(dx[17]);
         diag.sum_innovation[diag_type] += innovation;
         diag.sum_abs_innovation[diag_type] += fabsf(innovation);
@@ -873,56 +854,6 @@ fn push_batch_row(
     variances[*obs_count] = variance;
     diag_types[*obs_count] = diag_type;
     *obs_count += 1;
-}
-
-fn invert_batch_matrix(
-    input: [[f32; MAX_BATCH_OBS]; MAX_BATCH_OBS],
-    n: usize,
-) -> Option<[[f32; MAX_BATCH_OBS]; MAX_BATCH_OBS]> {
-    let mut a = input;
-    let mut inv = [[0.0; MAX_BATCH_OBS]; MAX_BATCH_OBS];
-    for i in 0..n {
-        inv[i][i] = 1.0;
-    }
-
-    for col in 0..n {
-        let mut pivot = col;
-        let mut pivot_abs = fabsf(a[col][col]);
-        for row in (col + 1)..n {
-            let candidate = fabsf(a[row][col]);
-            if candidate > pivot_abs {
-                pivot = row;
-                pivot_abs = candidate;
-            }
-        }
-        if pivot_abs < 1.0e-12 || !pivot_abs.is_finite() {
-            return None;
-        }
-        if pivot != col {
-            a.swap(col, pivot);
-            inv.swap(col, pivot);
-        }
-
-        let scale = a[col][col];
-        for j in 0..n {
-            a[col][j] /= scale;
-            inv[col][j] /= scale;
-        }
-        for row in 0..n {
-            if row == col {
-                continue;
-            }
-            let factor = a[row][col];
-            if factor == 0.0 {
-                continue;
-            }
-            for j in 0..n {
-                a[row][j] -= factor * a[col][j];
-                inv[row][j] -= factor * inv[col][j];
-            }
-        }
-    }
-    Some(inv)
 }
 
 fn block_mount_injection(dx: &mut [f32; ERROR_STATES]) {

@@ -45,7 +45,7 @@ impl Default for EkfCompareConfig {
             align: AlignConfig::default(),
             r_body_vel: default_r_body_vel_y(),
             r_body_vel_z: default_r_body_vel_z(),
-            yaw_init_sigma_deg: 2.0,
+            yaw_init_sigma_deg: 6.0,
             gyro_bias_init_sigma_dps: 0.125,
             accel_bias_init_sigma_mps2: 0.15,
             mount_roll_pitch_init_sigma_deg: default_mount_roll_pitch_init_sigma_deg(),
@@ -79,7 +79,7 @@ fn default_r_body_vel_z() -> f32 {
 }
 
 fn default_mount_roll_pitch_init_sigma_deg() -> f32 {
-    0.5
+    0.8
 }
 
 #[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]

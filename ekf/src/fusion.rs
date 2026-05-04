@@ -18,6 +18,9 @@ use crate::rust_eskf::RustEskf;
 const WGS84_A_M: f64 = 6378137.0;
 const WGS84_E2: f64 = 6.69437999014e-3;
 const WGS84_OMEGA_IE_RADPS: f32 = 7.292115e-5;
+const WGS84_NORMAL_GRAVITY_EQUATOR: f64 = 9.780_325_335_9;
+const WGS84_NORMAL_GRAVITY_K: f64 = 0.001_931_852_652_41;
+const WGS84_NORMAL_GRAVITY_M: f64 = 0.003_449_786_506_84;
 const REANCHOR_DISTANCE_M: f32 = 5000.0;
 const RUNTIME_ZERO_SPEED_MPS: f32 = 0.80;
 const RUNTIME_NHC_MAX_GYRO_NORM_RADPS: f32 = 0.2;
@@ -160,8 +163,6 @@ struct FusionConfig {
     mount_init_sigma_rad: f32,
     r_body_vel_y: f32,
     r_body_vel_z: f32,
-    gnss_vel_xy_update_min_scale: f32,
-    gnss_vel_update_ramp_time_s: f32,
     align_handoff_delay_s: f32,
     freeze_misalignment_states: bool,
     eskf_mount_source: EskfMountSource,
@@ -186,15 +187,13 @@ impl Default for FusionConfig {
                 accel_bias_rw_var: 0.002e-9,
                 mount_align_rw_var: 0.0,
             },
-            yaw_init_sigma_rad: 2.0_f32.to_radians(),
+            yaw_init_sigma_rad: 6.0_f32.to_radians(),
             gyro_bias_init_sigma_radps: 0.125_f32.to_radians(),
             accel_bias_init_sigma_mps2: 0.15,
-            mount_roll_pitch_init_sigma_rad: 0.5_f32.to_radians(),
+            mount_roll_pitch_init_sigma_rad: 0.8_f32.to_radians(),
             mount_init_sigma_rad: 6.0_f32.to_radians(),
             r_body_vel_y: 0.5,
             r_body_vel_z: 0.125,
-            gnss_vel_xy_update_min_scale: 0.25,
-            gnss_vel_update_ramp_time_s: 20.0,
             align_handoff_delay_s: 0.0,
             freeze_misalignment_states: false,
             eskf_mount_source: EskfMountSource::LatchedSeed,
@@ -217,6 +216,7 @@ struct Anchor {
     height_m: f32,
     ecef_m: [f64; 3],
     c_ne: [[f32; 3]; 3],
+    gravity_mss: f32,
 }
 
 /// Streaming fusion state for vehicle IMU, GNSS, and optional vehicle-speed inputs.
@@ -562,13 +562,9 @@ impl SensorFusion {
 
     /// Processes one GNSS sample and returns updated runtime status.
     pub fn process_gnss(&mut self, gnss: FusionGnssSample) -> FusionUpdate {
-        let Some(mut local) = self.prepare_local_gnss_sample(gnss) else {
+        let Some(local) = self.prepare_local_gnss_sample(gnss) else {
             return self.update(false, false);
         };
-        let vel_scale_xy = self.gnss_vel_update_scale_xy(local.t_s);
-        let vel_std_scale_xy = vel_scale_xy.sqrt();
-        local.vel_std_mps[0] *= vel_std_scale_xy;
-        local.vel_std_mps[1] *= vel_std_scale_xy;
         self.last_gnss = Some(local);
 
         let prev_mount_ready = self.mount_ready;
@@ -807,6 +803,9 @@ impl SensorFusion {
 
     fn initialize_eskf_from_gnss(&mut self, gnss: EskfGnssSample) {
         self.eskf = RustEskf::new(self.cfg.predict_noise);
+        if self.anchor.valid {
+            self.eskf.set_gravity_mss(self.anchor.gravity_mss);
+        }
         self.eskf
             .set_freeze_misalignment_states(self.effective_freeze_misalignment_states());
         let speed_h = (gnss.vel_ned_mps[0] * gnss.vel_ned_mps[0]
@@ -927,6 +926,7 @@ impl SensorFusion {
     fn prepare_local_gnss_sample(&mut self, sample: FusionGnssSample) -> Option<EskfGnssSample> {
         if !self.anchor.valid {
             self.anchor = anchor_from_lla(sample.lat_deg, sample.lon_deg, sample.height_m);
+            self.eskf.set_gravity_mss(self.anchor.gravity_mss);
         }
         let ecef = lla_to_ecef(
             sample.lat_deg as f64,
@@ -939,6 +939,7 @@ impl SensorFusion {
             let new_anchor = anchor_from_lla(sample.lat_deg, sample.lon_deg, sample.height_m);
             self.rotate_nav_state_to_new_anchor(&new_anchor);
             self.anchor = new_anchor;
+            self.eskf.set_gravity_mss(self.anchor.gravity_mss);
             self.reanchor_count += 1;
             self.last_reanchor = Some((sample.t_s, horiz_dist));
             self.bootstrap_prev_gnss = None;
@@ -1182,16 +1183,6 @@ impl SensorFusion {
         use_nhc.is_some()
     }
 
-    fn gnss_vel_update_scale_xy(&self, t_s: f32) -> f32 {
-        ramp_scale(
-            self.cfg.gnss_vel_xy_update_min_scale,
-            self.cfg.gnss_vel_update_ramp_time_s,
-            self.ekf_mount_handoff_t_s,
-            t_s,
-            1.0,
-        )
-    }
-
     fn clamp_eskf_biases(&mut self) {
         let n = &mut self.eskf.raw_mut().nominal;
         let max_gyro = 1.5_f32.to_radians();
@@ -1292,33 +1283,6 @@ fn nhc_observation_r_scale(dt_s: f32) -> f32 {
     1.0 / dt_obs
 }
 
-fn ramp_scale(
-    min_scale: f32,
-    ramp_time_s: f32,
-    handoff_t_s: Option<f32>,
-    t_s: f32,
-    fallback: f32,
-) -> f32 {
-    let mut min_scale = if min_scale.is_finite() {
-        min_scale
-    } else {
-        fallback
-    };
-    min_scale = min_scale.clamp(0.0, 1.0);
-    let Some(handoff) = handoff_t_s else {
-        return fallback;
-    };
-    if ramp_time_s <= 0.0 || !ramp_time_s.is_finite() {
-        return fallback;
-    }
-    let age = t_s - handoff;
-    if age <= 0.0 {
-        return min_scale;
-    }
-    let ramp = (age / ramp_time_s).clamp(0.0, 1.0);
-    min_scale + (1.0 - min_scale) * ramp
-}
-
 fn runtime_nhc_active(accel_v: [f32; 3], gyro_v: [f32; 3]) -> bool {
     norm3(gyro_v) < RUNTIME_NHC_MAX_GYRO_NORM_RADPS
         && (norm3(accel_v) - GRAVITY_MPS2).abs() < RUNTIME_NHC_MAX_ACCEL_NORM_ERR_MPS2
@@ -1392,7 +1356,25 @@ fn anchor_from_lla(lat_deg: f32, lon_deg: f32, height_m: f32) -> Anchor {
         height_m,
         ecef_m: lla_to_ecef(lat_deg as f64, lon_deg as f64, height_m as f64),
         c_ne: ecef_to_ned_matrix(lat_deg, lon_deg),
+        gravity_mss: normal_gravity_mss(lat_deg, height_m),
     }
+}
+
+fn normal_gravity_mss(lat_deg: f32, height_m: f32) -> f32 {
+    let lat = (lat_deg as f64).to_radians();
+    let slat = lat.sin();
+    let slat2 = slat * slat;
+    let sqrt_term = (1.0 - WGS84_E2 * slat2).sqrt();
+    let surface_g =
+        WGS84_NORMAL_GRAVITY_EQUATOR * (1.0 + WGS84_NORMAL_GRAVITY_K * slat2) / sqrt_term;
+    let flattening = 1.0 - (1.0 - WGS84_E2).sqrt();
+    let h = height_m as f64;
+    let height_scale = 1.0
+        - (2.0 / WGS84_A_M)
+            * (1.0 + flattening + WGS84_NORMAL_GRAVITY_M - 2.0 * flattening * slat2)
+            * h
+        + 3.0 * h * h / (WGS84_A_M * WGS84_A_M);
+    (surface_g * height_scale) as f32
 }
 
 fn lla_to_ecef(lat_deg: f64, lon_deg: f64, height_m: f64) -> [f64; 3] {

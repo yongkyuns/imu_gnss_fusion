@@ -51,6 +51,137 @@ pub fn build_synthetic_plot_data(
     build_synthetic_plot_data_impl(synth_cfg, ekf_imu_source, ekf_cfg, gnss_outages, None)
 }
 
+pub fn build_synthetic_replay_input(
+    synth_cfg: &SyntheticVisualizerConfig,
+) -> Result<(GenericReplayInput, [f32; 4])> {
+    let profile = match (&synth_cfg.motion_text, &synth_cfg.motion_def) {
+        (Some(text), _) if synth_cfg.motion_label.ends_with(".csv") => {
+            MotionProfile::from_csv_str(text)?
+        }
+        (Some(text), _) => MotionProfile::from_dsl_str(text)?,
+        (None, Some(path)) => MotionProfile::from_path(path)?,
+        (None, None) => anyhow::bail!("synthetic scenario has no path or inline text"),
+    };
+    let path_cfg = PathGenConfig {
+        imu_hz: synth_cfg.imu_hz,
+        gnss_hz: synth_cfg.gnss_hz,
+        ..PathGenConfig::default()
+    };
+    let mut noise = match synth_cfg.noise_mode {
+        SyntheticNoiseMode::Truth => MeasurementNoiseConfig::zero(),
+        SyntheticNoiseMode::Low => MeasurementNoiseConfig::accuracy(ImuAccuracy::Low),
+        SyntheticNoiseMode::Mid => MeasurementNoiseConfig::accuracy(ImuAccuracy::Mid),
+        SyntheticNoiseMode::High => MeasurementNoiseConfig::accuracy(ImuAccuracy::High),
+    };
+    if synth_cfg.disable_imu_noise {
+        noise.imu = crate::synthetic::gnss_ins_path::ImuNoiseModel::zero();
+    }
+    if synth_cfg.disable_gnss_noise {
+        noise.gps = None;
+    }
+    let measured = generate_with_noise(&profile, path_cfg, noise, synth_cfg.seed)?;
+    let q_truth_mount = reference_mount_rpy_to_q_vb(synth_cfg.mount_rpy_deg);
+    let gps_noise = noise.gps.unwrap_or(GpsNoiseModel {
+        pos_std_m: [0.5, 0.5, 0.5],
+        vel_std_mps: [0.2, 0.2, 0.2],
+    });
+    let imu_dt_s = 1.0 / synth_cfg.imu_hz;
+    let imu = measured
+        .imu
+        .iter()
+        .map(|s| GenericImuSample {
+            // gnss-ins-sim timestamps IMU samples at the start of the interval
+            // represented by the sample. The replay pipeline consumes IMU as
+            // an interval ending at `t_s`, so shift generated-only samples by
+            // one output period while preserving the generator's raw contract.
+            t_s: s.t_s + imu_dt_s,
+            gyro_radps: quat_rotate(q_truth_mount, s.gyro_vehicle_radps),
+            accel_mps2: quat_rotate(q_truth_mount, s.accel_vehicle_mps2),
+        })
+        .collect::<Vec<_>>();
+    let gnss = measured
+        .gnss
+        .iter()
+        .filter_map(|s| {
+            let t_s = s.t_s + synth_cfg.gnss_time_shift_ms * 1.0e-3;
+            if !t_s.is_finite() || t_s < 0.0 {
+                return None;
+            }
+            let mut vel_ned_mps = s.vel_ned_mps;
+            if let Some((start_s, end_s)) = synth_cfg.early_fault_window_s
+                && (start_s..=end_s).contains(&t_s)
+            {
+                for (v, bias) in vel_ned_mps.iter_mut().zip(synth_cfg.early_vel_bias_ned_mps) {
+                    *v += bias;
+                }
+            }
+            Some(GenericGnssSample {
+                t_s,
+                lat_deg: s.lat_deg,
+                lon_deg: s.lon_deg,
+                height_m: s.height_m,
+                vel_ned_mps,
+                pos_std_m: gps_noise.pos_std_m,
+                vel_std_mps: gps_noise.vel_std_mps,
+                heading_rad: None,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let ref_truth = &measured.reference.truth;
+    let Some(first_truth) = ref_truth.first() else {
+        anyhow::bail!("synthetic scenario produced no reference truth samples");
+    };
+    let reference_attitude = ref_truth
+        .iter()
+        .map(|truth| {
+            let (roll_deg, pitch_deg, yaw_deg) = quat_rpy_deg(
+                truth.q_bn[0] as f32,
+                truth.q_bn[1] as f32,
+                truth.q_bn[2] as f32,
+                truth.q_bn[3] as f32,
+            );
+            GenericReferenceRpySample {
+                t_s: truth.t_s,
+                roll_deg,
+                pitch_deg,
+                yaw_deg,
+            }
+        })
+        .collect::<Vec<_>>();
+    let end_t_s = ref_truth.last().map(|s| s.t_s).unwrap_or(first_truth.t_s);
+    let (mount_roll_deg, mount_pitch_deg, mount_yaw_deg) =
+        q_vb_to_reference_mount_rpy(q_truth_mount);
+    let reference_mount = vec![
+        GenericReferenceRpySample {
+            t_s: first_truth.t_s,
+            roll_deg: mount_roll_deg,
+            pitch_deg: mount_pitch_deg,
+            yaw_deg: mount_yaw_deg,
+        },
+        GenericReferenceRpySample {
+            t_s: end_t_s,
+            roll_deg: mount_roll_deg,
+            pitch_deg: mount_pitch_deg,
+            yaw_deg: mount_yaw_deg,
+        },
+    ];
+    Ok((
+        GenericReplayInput {
+            imu,
+            gnss,
+            reference_attitude,
+            reference_mount,
+        },
+        [
+            q_truth_mount[0] as f32,
+            q_truth_mount[1] as f32,
+            q_truth_mount[2] as f32,
+            q_truth_mount[3] as f32,
+        ],
+    ))
+}
+
 pub fn build_synthetic_plot_data_with_progress(
     synth_cfg: &SyntheticVisualizerConfig,
     ekf_imu_source: EkfImuSource,
