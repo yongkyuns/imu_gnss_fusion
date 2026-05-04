@@ -188,6 +188,9 @@ impl RustEskf {
 
     /// Predicts nominal state and covariance from one IMU delta.
     pub fn predict(&mut self, imu: EskfImuDelta) {
+        if imu.dt <= 0.0 || !imu.dt.is_finite() {
+            return;
+        }
         let (f, g) = self.compute_error_transition_with_noise(imu);
         generated_eskf::predict_nominal_with_gravity(&mut self.raw.nominal, imu, self.gravity_mss);
         normalize_nominal_quat(&mut self.raw.nominal);
@@ -203,10 +206,13 @@ impl RustEskf {
         q[3] = self.raw.noise.accel_var * dt;
         q[4] = q[3];
         q[5] = q[3];
-        q[6] = self.raw.noise.gyro_bias_rw_var * dt;
+        // Generated bias RW columns include a `dt` factor because the symbolic
+        // model injects continuous bias-rate noise as `db = w_b * dt`. Use
+        // density / dt here so G Q G^T contributes density * dt.
+        q[6] = self.raw.noise.gyro_bias_rw_var / dt;
         q[7] = q[6];
         q[8] = q[6];
-        q[9] = self.raw.noise.accel_bias_rw_var * dt;
+        q[9] = self.raw.noise.accel_bias_rw_var / dt;
         q[10] = q[9];
         q[11] = q[9];
         q[12] = if self.freeze_misalignment_states {
