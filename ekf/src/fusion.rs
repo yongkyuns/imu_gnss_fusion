@@ -28,6 +28,9 @@ const RUNTIME_NHC_MAX_GYRO_NORM_RADPS: f32 = 0.2;
 const RUNTIME_NHC_MAX_ACCEL_NORM_ERR_MPS2: f32 = 1.0;
 const CAN_SPEED_ZERO_MPS: f32 = 0.15;
 const CAN_SPEED_SIGN_INFER_MIN_MPS: f32 = 1.0;
+const LOOSE_GNSS_POS_MIN_STD_M: f32 = 0.1;
+const LOOSE_GNSS_VEL_MIN_STD_MPS: f32 = 0.01;
+const LOOSE_GNSS_VERTICAL_POS_STD_SCALE: f32 = 2.5;
 
 /// One timestamped IMU sample in the sensor/body frame.
 #[derive(Clone, Copy, Debug)]
@@ -952,6 +955,8 @@ impl SensorFusion {
             self.reset_interval_summary();
             pos_ned = [0.0; 3];
         }
+        let (pos_std_m, vel_std_mps) =
+            loose_equivalent_gnss_sigmas(sample.pos_std_m, sample.vel_std_mps);
         Some(EskfGnssSample {
             t_s: sample.t_s,
             pos_ned_m: pos_ned,
@@ -961,8 +966,8 @@ impl SensorFusion {
                 sample.lon_deg,
                 sample.vel_ned_mps,
             ),
-            pos_std_m: sample.pos_std_m,
-            vel_std_mps: sample.vel_std_mps,
+            pos_std_m,
+            vel_std_mps,
             heading_rad: sample
                 .heading_rad
                 .map(|h| heading_local_to_anchor(&self.anchor, sample.lat_deg, sample.lon_deg, h)),
@@ -1635,6 +1640,21 @@ fn rotate_eskf_covariance_nav_blocks(p: &mut [[f32; 18]; 18], r_n1_n0: [[f32; 3]
         }
     }
     *p = out;
+}
+
+fn loose_equivalent_gnss_sigmas(
+    pos_std_m: [f32; 3],
+    vel_std_mps: [f32; 3],
+) -> ([f32; 3], [f32; 3]) {
+    let pos_avg =
+        ((pos_std_m[0] + pos_std_m[1] + pos_std_m[2]) / 3.0).max(LOOSE_GNSS_POS_MIN_STD_M);
+    let pos_std_m = [
+        pos_avg,
+        pos_avg,
+        LOOSE_GNSS_VERTICAL_POS_STD_SCALE * pos_avg,
+    ];
+    let vel_std_mps = vel_std_mps.map(|v| v.max(LOOSE_GNSS_VEL_MIN_STD_MPS));
+    (pos_std_m, vel_std_mps)
 }
 
 fn norm3(v: [f32; 3]) -> f32 {
