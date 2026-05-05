@@ -46,11 +46,11 @@ pub struct FusionGnssSample {
     /// Sample timestamp, in seconds.
     pub t_s: f32,
     /// Geodetic latitude, in degrees.
-    pub lat_deg: f32,
+    pub lat_deg: f64,
     /// Geodetic longitude, in degrees.
-    pub lon_deg: f32,
+    pub lon_deg: f64,
     /// Ellipsoidal height, in meters.
-    pub height_m: f32,
+    pub height_m: f64,
     /// Velocity in local NED coordinates, in meters per second.
     pub vel_ned_mps: [f32; 3],
     /// One-sigma position standard deviation for NED axes, in meters.
@@ -191,7 +191,7 @@ impl Default for FusionConfig {
             yaw_init_sigma_rad: 6.0_f32.to_radians(),
             gyro_bias_init_sigma_radps: 0.125_f32.to_radians(),
             accel_bias_init_sigma_mps2: 0.15,
-            mount_roll_pitch_init_sigma_rad: 0.8_f32.to_radians(),
+            mount_roll_pitch_init_sigma_rad: 1.2_f32.to_radians(),
             mount_init_sigma_rad: 6.0_f32.to_radians(),
             r_body_vel_y: 0.5,
             r_body_vel_z: 0.125,
@@ -212,9 +212,9 @@ impl Default for FusionConfig {
 #[derive(Clone, Copy, Debug, Default)]
 struct Anchor {
     valid: bool,
-    lat_deg: f32,
-    lon_deg: f32,
-    height_m: f32,
+    lat_deg: f64,
+    lon_deg: f64,
+    height_m: f64,
     ecef_m: [f64; 3],
     c_ne: [[f32; 3]; 3],
     gravity_mss: f32,
@@ -236,8 +236,10 @@ pub struct SensorFusion {
     ekf_mount_handoff_t_s: Option<f32>,
     mount_settle_released: bool,
     last_imu_t_s: Option<f32>,
+    last_imu_sample: Option<FusionImuSample>,
     last_gnss: Option<EskfGnssSample>,
     pending_ekf_gnss: Option<EskfGnssSample>,
+    last_ekf_gnss_fuse_t_s: Option<f32>,
     bootstrap_prev_gnss: Option<EskfGnssSample>,
     anchor: Anchor,
     interval_imu_sum_gyro: [f32; 3],
@@ -284,8 +286,10 @@ impl SensorFusion {
             ekf_mount_handoff_t_s: None,
             mount_settle_released: false,
             last_imu_t_s: None,
+            last_imu_sample: None,
             last_gnss: None,
             pending_ekf_gnss: None,
+            last_ekf_gnss_fuse_t_s: None,
             bootstrap_prev_gnss: None,
             anchor: Anchor::default(),
             interval_imu_sum_gyro: [0.0; 3],
@@ -318,6 +322,7 @@ impl SensorFusion {
         self.align_ready_since_t_s = None;
         self.ekf_mount_handoff_t_s = None;
         self.mount_settle_released = false;
+        self.last_ekf_gnss_fuse_t_s = None;
         let n = &mut self.eskf.raw_mut().nominal;
         n.qcs0 = q_vb[0];
         n.qcs1 = q_vb[1];
@@ -351,6 +356,7 @@ impl SensorFusion {
         self.bootstrap_accel_err_ema = Ema::default();
         self.bootstrap_stationary_accel_sum = [0.0; 3];
         self.bootstrap_stationary_count = 0;
+        self.last_ekf_gnss_fuse_t_s = None;
     }
 
     /// Sets the nonholonomic body-velocity observation variance.
@@ -489,11 +495,13 @@ impl SensorFusion {
 
     /// Processes one IMU sample and returns updated runtime status.
     pub fn process_imu(&mut self, sample: FusionImuSample) -> FusionUpdate {
+        let prev_sample = self.last_imu_sample.replace(sample);
         let Some(last_t) = self.last_imu_t_s.replace(sample.t_s) else {
             self.try_bootstrap_align(sample.accel_mps2, sample.gyro_radps);
             return self.update(false, false);
         };
         let dt = sample.t_s - last_t;
+        let prev_sample = prev_sample.unwrap_or(sample);
 
         self.interval_imu_sum_gyro[0] += sample.gyro_radps[0];
         self.interval_imu_sum_gyro[1] += sample.gyro_radps[1];
@@ -521,9 +529,9 @@ impl SensorFusion {
             dax: gyro_predict[0] * dt,
             day: gyro_predict[1] * dt,
             daz: gyro_predict[2] * dt,
-            dvx: sample.accel_mps2[0] * dt,
-            dvy: sample.accel_mps2[1] * dt,
-            dvz: sample.accel_mps2[2] * dt,
+            dvx: 0.5 * (prev_sample.accel_mps2[0] + sample.accel_mps2[0]) * dt,
+            dvy: 0.5 * (prev_sample.accel_mps2[1] + sample.accel_mps2[1]) * dt,
+            dvz: 0.5 * (prev_sample.accel_mps2[2] + sample.accel_mps2[2]) * dt,
             dt,
         });
         {
@@ -661,9 +669,9 @@ impl SensorFusion {
     /// Returns the current local-origin anchor `[lat_deg, lon_deg, height_m]` for diagnostics.
     pub fn anchor_lla_debug(&self) -> Option<[f32; 3]> {
         self.anchor.valid.then_some([
-            self.anchor.lat_deg,
-            self.anchor.lon_deg,
-            self.anchor.height_m,
+            self.anchor.lat_deg as f32,
+            self.anchor.lon_deg as f32,
+            self.anchor.height_m as f32,
         ])
     }
 
@@ -842,6 +850,7 @@ impl SensorFusion {
         if self.effective_freeze_misalignment_states() {
             self.eskf.set_freeze_misalignment_states(true);
         }
+        self.last_ekf_gnss_fuse_t_s = Some(gnss.t_s);
     }
 
     fn align_handoff_ready(&mut self, coarse_ready: bool, t_s: f32) -> bool {
@@ -929,11 +938,7 @@ impl SensorFusion {
             self.anchor = anchor_from_lla(sample.lat_deg, sample.lon_deg, sample.height_m);
             self.eskf.set_gravity_mss(self.anchor.gravity_mss);
         }
-        let ecef = lla_to_ecef(
-            sample.lat_deg as f64,
-            sample.lon_deg as f64,
-            sample.height_m as f64,
-        );
+        let ecef = lla_to_ecef(sample.lat_deg, sample.lon_deg, sample.height_m);
         let mut pos_ned = ecef_to_anchor_ned(&self.anchor, ecef);
         let horiz_dist = (pos_ned[0] * pos_ned[0] + pos_ned[1] * pos_ned[1]).sqrt();
         if horiz_dist > REANCHOR_DISTANCE_M {
@@ -1178,9 +1183,31 @@ impl SensorFusion {
         }
         self.pending_ekf_gnss = None;
         let use_nhc = (0.0..=0.05).contains(&age_s).then_some(nhc).flatten();
+        let gnss = self.rate_normalized_eskf_gnss(gnss);
+        self.last_ekf_gnss_fuse_t_s = Some(gnss.t_s);
         self.eskf
             .fuse_gps_nhc_batch(gnss, use_nhc.map(|r| r[0]), use_nhc.map(|r| r[1]));
         use_nhc.is_some()
+    }
+
+    fn rate_normalized_eskf_gnss(&self, mut gnss: EskfGnssSample) -> EskfGnssSample {
+        let Some(prev_t_s) = self.last_ekf_gnss_fuse_t_s else {
+            return gnss;
+        };
+        let dt_s = gnss.t_s - prev_t_s;
+        if !dt_s.is_finite() || dt_s <= 0.0 {
+            return gnss;
+        }
+
+        // Match the loose reference update's information-rate normalization:
+        // position rows use R scaled by 1 / clamp(dt, 1e-3, 1.0), so higher
+        // GNSS rates do not make position residuals disproportionately stiff.
+        let r_scale = 1.0 / dt_s.clamp(1.0e-3, 1.0);
+        let std_scale = r_scale.sqrt();
+        for std_m in &mut gnss.pos_std_m {
+            *std_m *= std_scale;
+        }
+        gnss
     }
 
     fn clamp_eskf_biases(&mut self) {
@@ -1208,9 +1235,9 @@ impl SensorFusion {
         };
         let nominal = &eskf.nominal;
         let lla = self.position_lla_f64().unwrap_or([
-            self.anchor.lat_deg as f64,
-            self.anchor.lon_deg as f64,
-            self.anchor.height_m as f64,
+            self.anchor.lat_deg,
+            self.anchor.lon_deg,
+            self.anchor.height_m,
         ]);
         let (omega_ie_n, omega_en_n) = navigation_rates_ned(
             lla[0] as f32,
@@ -1341,27 +1368,27 @@ fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     ]
 }
 
-fn anchor_from_lla(lat_deg: f32, lon_deg: f32, height_m: f32) -> Anchor {
+fn anchor_from_lla(lat_deg: f64, lon_deg: f64, height_m: f64) -> Anchor {
     Anchor {
         valid: true,
         lat_deg,
         lon_deg,
         height_m,
-        ecef_m: lla_to_ecef(lat_deg as f64, lon_deg as f64, height_m as f64),
+        ecef_m: lla_to_ecef(lat_deg, lon_deg, height_m),
         c_ne: ecef_to_ned_matrix(lat_deg, lon_deg),
         gravity_mss: normal_gravity_mss(lat_deg, height_m),
     }
 }
 
-fn normal_gravity_mss(lat_deg: f32, height_m: f32) -> f32 {
-    let lat = (lat_deg as f64).to_radians();
+fn normal_gravity_mss(lat_deg: f64, height_m: f64) -> f32 {
+    let lat = lat_deg.to_radians();
     let slat = lat.sin();
     let slat2 = slat * slat;
     let sqrt_term = (1.0 - WGS84_E2 * slat2).sqrt();
     let surface_g =
         WGS84_NORMAL_GRAVITY_EQUATOR * (1.0 + WGS84_NORMAL_GRAVITY_K * slat2) / sqrt_term;
     let flattening = 1.0 - (1.0 - WGS84_E2).sqrt();
-    let h = height_m as f64;
+    let h = height_m;
     let height_scale = 1.0
         - (2.0 / WGS84_A_M)
             * (1.0 + flattening + WGS84_NORMAL_GRAVITY_M - 2.0 * flattening * slat2)
@@ -1409,8 +1436,8 @@ fn ecef_to_anchor_ned(anchor: &Anchor, ecef_m: [f64; 3]) -> [f32; 3] {
 
 fn velocity_local_ned_to_anchor_ned(
     anchor: &Anchor,
-    lat_deg: f32,
-    lon_deg: f32,
+    lat_deg: f64,
+    lon_deg: f64,
     vel_local_ned_mps: [f32; 3],
 ) -> [f32; 3] {
     let c_ne_local = ecef_to_ned_matrix(lat_deg, lon_deg);
@@ -1421,8 +1448,8 @@ fn velocity_local_ned_to_anchor_ned(
 
 fn heading_local_to_anchor(
     anchor: &Anchor,
-    lat_deg: f32,
-    lon_deg: f32,
+    lat_deg: f64,
+    lon_deg: f64,
     heading_local_rad: f32,
 ) -> f32 {
     let forward_local = [heading_local_rad.cos(), heading_local_rad.sin(), 0.0];
@@ -1433,15 +1460,15 @@ fn heading_local_to_anchor(
     forward_anchor[1].atan2(forward_anchor[0])
 }
 
-fn ecef_to_ned_matrix(lat_deg: f32, lon_deg: f32) -> [[f32; 3]; 3] {
+fn ecef_to_ned_matrix(lat_deg: f64, lon_deg: f64) -> [[f32; 3]; 3] {
     let lat = lat_deg.to_radians();
     let lon = lon_deg.to_radians();
     let (slat, clat) = lat.sin_cos();
     let (slon, clon) = lon.sin_cos();
     [
-        [-slat * clon, -slat * slon, clat],
-        [-slon, clon, 0.0],
-        [-clat * clon, -clat * slon, -slat],
+        [(-slat * clon) as f32, (-slat * slon) as f32, clat as f32],
+        [-slon as f32, clon as f32, 0.0],
+        [(-clat * clon) as f32, (-clat * slon) as f32, -slat as f32],
     ]
 }
 

@@ -2,8 +2,9 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use sensor_fusion::eskf_types::{ESKF_UPDATE_DIAG_TYPES, EskfState};
+use sensor_fusion::eskf_types::{ESKF_UPDATE_DIAG_TYPES, EskfImuDelta, EskfState};
 use sensor_fusion::fusion::SensorFusion;
+use sensor_fusion::generated_eskf;
 use sensor_fusion::generated_loose;
 use sensor_fusion::loose::{LOOSE_ERROR_STATES, LooseFilter, LooseImuDelta, LoosePredictNoise};
 use sim::datasets::generic_replay::{
@@ -134,6 +135,18 @@ struct Args {
     /// Diagnostic-only override for loose accel-scale initial sigma.
     #[arg(long)]
     loose_accel_scale_sigma: Option<f32>,
+
+    /// Diagnostic-only scale applied to ESKF GNSS position standard deviations.
+    #[arg(long, default_value_t = 1.0)]
+    eskf_gnss_pos_std_scale: f64,
+
+    /// Diagnostic-only scale applied to ESKF GNSS down-position standard deviations.
+    #[arg(long, default_value_t = 1.0)]
+    eskf_gnss_pos_d_std_scale: f64,
+
+    /// Diagnostic-only scale applied to ESKF GNSS velocity standard deviations.
+    #[arg(long, default_value_t = 1.0)]
+    eskf_gnss_vel_std_scale: f64,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -169,6 +182,7 @@ struct Snapshot {
     t_s: f64,
     eskf: Option<EskfState>,
     loose: Option<LooseSnapshot>,
+    transition: Option<TransitionSnapshot>,
     reference_mount_q_vb: Option<[f64; 4]>,
     reference_att_q: Option<[f64; 4]>,
     eskf_type_counts: [u32; ESKF_UPDATE_DIAG_TYPES],
@@ -181,6 +195,23 @@ struct Snapshot {
     loose_vel_dx_abs_sum: [f32; 3],
     loose_mount_dx_sum_by_type: [[f32; 3]; 9],
     loose_mount_dx_abs_sum_by_type: [[f32; 3]; 9],
+    loose_residual_sum_by_type: [f32; 9],
+    loose_residual_abs_sum_by_type: [f32; 9],
+    loose_effective_residual_sum_by_type: [f32; 9],
+    loose_effective_residual_abs_sum_by_type: [f32; 9],
+    loose_nis_sum_by_type: [f32; 9],
+    loose_nis_max_by_type: [f32; 9],
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TransitionSnapshot {
+    dt_s: f32,
+    eskf_mount_to_att: [[f32; 3]; 3],
+    eskf_mount_to_vel: [[f32; 3]; 3],
+    eskf_mount_to_pos: [[f32; 3]; 3],
+    loose_mount_to_att: [[f32; 3]; 3],
+    loose_mount_to_vel: [[f32; 3]; 3],
+    loose_mount_to_pos: [[f32; 3]; 3],
 }
 
 #[derive(Clone)]
@@ -288,6 +319,31 @@ fn load_synthetic_replay(args: &Args, motion_def: &PathBuf) -> Result<Replay> {
         reference_attitude: replay.reference_attitude,
         reference_mount: replay.reference_mount,
     })
+}
+
+fn scaled_fusion_gnss_sample(
+    sample: GenericGnssSample,
+    pos_std_scale: f64,
+    pos_d_std_scale: f64,
+    vel_std_scale: f64,
+) -> sensor_fusion::fusion::FusionGnssSample {
+    let mut out = fusion_gnss_sample(sample);
+    if pos_std_scale.is_finite() && pos_std_scale > 0.0 {
+        let scale = pos_std_scale as f32;
+        for axis in 0..3 {
+            out.pos_std_m[axis] *= scale;
+        }
+    }
+    if pos_d_std_scale.is_finite() && pos_d_std_scale > 0.0 {
+        out.pos_std_m[2] *= pos_d_std_scale as f32;
+    }
+    if vel_std_scale.is_finite() && vel_std_scale > 0.0 {
+        let scale = vel_std_scale as f32;
+        for axis in 0..3 {
+            out.vel_std_mps[axis] *= scale;
+        }
+    }
+    out
 }
 
 fn sort_replay(replay: &mut Replay) {
@@ -410,7 +466,14 @@ fn run_diagnostics(
     let mut loose_vel_dx_abs_sum = [0.0f32; 3];
     let mut loose_mount_dx_sum_by_type = [[0.0f32; 3]; 9];
     let mut loose_mount_dx_abs_sum_by_type = [[0.0f32; 3]; 9];
+    let mut loose_residual_sum_by_type = [0.0f32; 9];
+    let mut loose_residual_abs_sum_by_type = [0.0f32; 9];
+    let mut loose_effective_residual_sum_by_type = [0.0f32; 9];
+    let mut loose_effective_residual_abs_sum_by_type = [0.0f32; 9];
+    let mut loose_nis_sum_by_type = [0.0f32; 9];
+    let mut loose_nis_max_by_type = [0.0f32; 9];
     let mut trace_state = TraceState::default();
+    let mut latest_transition: Option<TransitionSnapshot> = None;
 
     let mut snapshots = Vec::new();
     let mut target_idx = 0usize;
@@ -434,6 +497,13 @@ fn run_diagnostics(
                     loose_vel_dx_abs_sum,
                     loose_mount_dx_sum_by_type,
                     loose_mount_dx_abs_sum_by_type,
+                    loose_residual_sum_by_type,
+                    loose_residual_abs_sum_by_type,
+                    loose_effective_residual_sum_by_type,
+                    loose_effective_residual_abs_sum_by_type,
+                    loose_nis_sum_by_type,
+                    loose_nis_max_by_type,
+                    latest_transition,
                     targets_abs,
                     &mut target_idx,
                     sample.t_s,
@@ -537,6 +607,20 @@ fn run_diagnostics(
                                 sum[axis] += value;
                                 abs_sum[axis] += value.abs();
                             }
+                            let ty = ty as usize;
+                            let residual = loose.last_residuals()[obs_idx];
+                            let effective_residual = loose.last_effective_residuals()[obs_idx];
+                            let innovation_var = loose.last_innovation_vars()[obs_idx];
+                            loose_residual_sum_by_type[ty] += residual;
+                            loose_residual_abs_sum_by_type[ty] += residual.abs();
+                            loose_effective_residual_sum_by_type[ty] += effective_residual;
+                            loose_effective_residual_abs_sum_by_type[ty] +=
+                                effective_residual.abs();
+                            if innovation_var > 0.0 {
+                                let nis = effective_residual * effective_residual / innovation_var;
+                                loose_nis_sum_by_type[ty] += nis;
+                                loose_nis_max_by_type[ty] = loose_nis_max_by_type[ty].max(nis);
+                            }
                         }
                     }
                     for ty in loose.last_obs_types() {
@@ -544,6 +628,8 @@ fn run_diagnostics(
                             *count += 1;
                         }
                     }
+                    latest_transition =
+                        transition_snapshot(&fusion, &loose, *sample, prev, dt, ref_gnss);
                 }
             }
             capture_due_snapshots(
@@ -560,6 +646,13 @@ fn run_diagnostics(
                 loose_vel_dx_abs_sum,
                 loose_mount_dx_sum_by_type,
                 loose_mount_dx_abs_sum_by_type,
+                loose_residual_sum_by_type,
+                loose_residual_abs_sum_by_type,
+                loose_effective_residual_sum_by_type,
+                loose_effective_residual_abs_sum_by_type,
+                loose_nis_sum_by_type,
+                loose_nis_max_by_type,
+                latest_transition,
                 targets_abs,
                 &mut target_idx,
                 sample.t_s,
@@ -580,7 +673,12 @@ fn run_diagnostics(
             );
         }
         ReplayEvent::Gnss(index, sample) => {
-            let _ = fusion.process_gnss(fusion_gnss_sample(*sample));
+            let _ = fusion.process_gnss(scaled_fusion_gnss_sample(
+                *sample,
+                args.eskf_gnss_pos_std_scale,
+                args.eskf_gnss_pos_d_std_scale,
+                args.eskf_gnss_vel_std_scale,
+            ));
             let _ = align_fusion.process_gnss(fusion_gnss_sample(*sample));
             latest_gnss = Some(*sample);
             if !loose_ready && align_fusion.mount_ready() {
@@ -622,6 +720,13 @@ fn run_diagnostics(
                 loose_vel_dx_abs_sum,
                 loose_mount_dx_sum_by_type,
                 loose_mount_dx_abs_sum_by_type,
+                loose_residual_sum_by_type,
+                loose_residual_abs_sum_by_type,
+                loose_effective_residual_sum_by_type,
+                loose_effective_residual_abs_sum_by_type,
+                loose_nis_sum_by_type,
+                loose_nis_max_by_type,
+                latest_transition,
                 targets_abs,
                 &mut target_idx,
                 sample.t_s,
@@ -663,6 +768,13 @@ fn run_diagnostics(
         loose_vel_dx_abs_sum,
         loose_mount_dx_sum_by_type,
         loose_mount_dx_abs_sum_by_type,
+        loose_residual_sum_by_type,
+        loose_residual_abs_sum_by_type,
+        loose_effective_residual_sum_by_type,
+        loose_effective_residual_abs_sum_by_type,
+        loose_nis_sum_by_type,
+        loose_nis_max_by_type,
+        latest_transition,
         targets_abs,
         &mut target_idx,
         final_t,
@@ -708,6 +820,13 @@ fn capture_due_snapshots(
     loose_vel_dx_abs_sum: [f32; 3],
     loose_mount_dx_sum_by_type: [[f32; 3]; 9],
     loose_mount_dx_abs_sum_by_type: [[f32; 3]; 9],
+    loose_residual_sum_by_type: [f32; 9],
+    loose_residual_abs_sum_by_type: [f32; 9],
+    loose_effective_residual_sum_by_type: [f32; 9],
+    loose_effective_residual_abs_sum_by_type: [f32; 9],
+    loose_nis_sum_by_type: [f32; 9],
+    loose_nis_max_by_type: [f32; 9],
+    transition: Option<TransitionSnapshot>,
     targets_abs: &[f64],
     target_idx: &mut usize,
     t_s: f64,
@@ -728,6 +847,7 @@ fn capture_due_snapshots(
                 last_dx: *loose.last_dx(),
                 last_obs_types: loose.last_obs_types().to_vec(),
             }),
+            transition,
             reference_mount_q_vb: reference_mount_at(&replay.reference_mount, t_s),
             reference_att_q: reference_attitude_at(&replay.reference_attitude, t_s),
             eskf_type_counts: fusion
@@ -743,6 +863,12 @@ fn capture_due_snapshots(
             loose_vel_dx_abs_sum,
             loose_mount_dx_sum_by_type,
             loose_mount_dx_abs_sum_by_type,
+            loose_residual_sum_by_type,
+            loose_residual_abs_sum_by_type,
+            loose_effective_residual_sum_by_type,
+            loose_effective_residual_abs_sum_by_type,
+            loose_nis_sum_by_type,
+            loose_nis_max_by_type,
         });
         *target_idx += 1;
     }
@@ -763,6 +889,10 @@ fn print_snapshots(snapshots: &[Snapshot], replay: &Replay) {
             print_covariance_summary(eskf, &p_loose_as_eskf);
             print_mount_correlations("ESKF", &eskf.p);
             print_mount_correlations("LooseAsESKF", &p_loose_as_eskf);
+            print_common_gnss_gain_summary(snapshot, replay, &eskf.p, &p_loose_as_eskf);
+            if let Some(transition) = snapshot.transition {
+                print_transition_summary(transition);
+            }
             print_update_summary(snapshot, loose);
         }
     }
@@ -1057,6 +1187,18 @@ fn print_interval_update_summary(start: &Snapshot, end: &Snapshot) {
             rad_f32_to_deg(abs[0]),
             rad_f32_to_deg(abs[1]),
             rad_f32_to_deg(abs[2]),
+        );
+        println!(
+            "[covhist-interval] loose_residual type={} net={:.6} abs={:.6} eff_net={:.6} eff_abs={:.6} nis_sum={:.6} nis_max={:.6}",
+            label,
+            end.loose_residual_sum_by_type[ty] - start.loose_residual_sum_by_type[ty],
+            end.loose_residual_abs_sum_by_type[ty] - start.loose_residual_abs_sum_by_type[ty],
+            end.loose_effective_residual_sum_by_type[ty]
+                - start.loose_effective_residual_sum_by_type[ty],
+            end.loose_effective_residual_abs_sum_by_type[ty]
+                - start.loose_effective_residual_abs_sum_by_type[ty],
+            end.loose_nis_sum_by_type[ty] - start.loose_nis_sum_by_type[ty],
+            end.loose_nis_max_by_type[ty],
         );
     }
     println!(
@@ -1669,6 +1811,237 @@ fn transform_loose_dx_to_eskf(
         out[15 + i] = dx[21 + i];
     }
     out
+}
+
+fn transition_snapshot(
+    fusion: &SensorFusion,
+    loose: &LooseFilter,
+    curr: GenericImuSample,
+    prev: GenericImuSample,
+    dt: f64,
+    ref_gnss: GenericGnssSample,
+) -> Option<TransitionSnapshot> {
+    let eskf = fusion.eskf()?;
+    if dt <= 0.0 || dt > 1.0 || !dt.is_finite() {
+        return None;
+    }
+
+    let eskf_imu = EskfImuDelta {
+        dax: (curr.gyro_radps[0] * dt) as f32,
+        day: (curr.gyro_radps[1] * dt) as f32,
+        daz: (curr.gyro_radps[2] * dt) as f32,
+        dvx: (curr.accel_mps2[0] * dt) as f32,
+        dvy: (curr.accel_mps2[1] * dt) as f32,
+        dvz: (curr.accel_mps2[2] * dt) as f32,
+        dt: dt as f32,
+    };
+    let f_eskf = generated_eskf::error_transition_with_gravity(
+        &eskf.nominal,
+        eskf_imu,
+        generated_eskf::GRAVITY_MSS,
+    )
+    .0;
+    let loose_imu = loose_imu_delta_from_vehicle(
+        prev.gyro_radps,
+        prev.accel_mps2,
+        curr.gyro_radps,
+        curr.accel_mps2,
+        dt,
+    );
+    let (f_loose, _) = generated_loose::error_transition(loose.nominal(), loose_imu);
+    let loose_snap = LooseSnapshot {
+        nominal: *loose.nominal(),
+        p: *loose.covariance(),
+        pos_ecef: loose.shadow_pos_ecef(),
+        last_dx: *loose.last_dx(),
+        last_obs_types: loose.last_obs_types().to_vec(),
+    };
+
+    let mut out = TransitionSnapshot {
+        dt_s: dt as f32,
+        eskf_mount_to_att: [[0.0; 3]; 3],
+        eskf_mount_to_vel: [[0.0; 3]; 3],
+        eskf_mount_to_pos: [[0.0; 3]; 3],
+        loose_mount_to_att: [[0.0; 3]; 3],
+        loose_mount_to_vel: [[0.0; 3]; 3],
+        loose_mount_to_pos: [[0.0; 3]; 3],
+    };
+
+    for mount_axis in 0..3 {
+        for row in 0..3 {
+            out.eskf_mount_to_att[row][mount_axis] = f_eskf[row][15 + mount_axis];
+            out.eskf_mount_to_vel[row][mount_axis] = f_eskf[3 + row][15 + mount_axis];
+            out.eskf_mount_to_pos[row][mount_axis] = f_eskf[6 + row][15 + mount_axis];
+        }
+
+        let mut loose_col = [0.0f32; LOOSE_ERROR_STATES];
+        for row in 0..LOOSE_ERROR_STATES {
+            loose_col[row] = f_loose[row][21 + mount_axis];
+        }
+        let loose_as_eskf = transform_loose_dx_to_eskf(&loose_snap, &loose_col, ref_gnss);
+        for row in 0..3 {
+            out.loose_mount_to_att[row][mount_axis] = loose_as_eskf[row];
+            out.loose_mount_to_vel[row][mount_axis] = loose_as_eskf[3 + row];
+            out.loose_mount_to_pos[row][mount_axis] = loose_as_eskf[6 + row];
+        }
+    }
+    Some(out)
+}
+
+fn print_transition_summary(transition: TransitionSnapshot) {
+    for (label, eskf, loose) in [
+        (
+            "att",
+            transition.eskf_mount_to_att,
+            transition.loose_mount_to_att,
+        ),
+        (
+            "vel",
+            transition.eskf_mount_to_vel,
+            transition.loose_mount_to_vel,
+        ),
+        (
+            "pos",
+            transition.eskf_mount_to_pos,
+            transition.loose_mount_to_pos,
+        ),
+    ] {
+        println!(
+            "[covhist] transition_mount_block block={} dt={:.6} rms_abs_diff={:.6e} eskf_col_norms=[{:.6e},{:.6e},{:.6e}] loose_col_norms=[{:.6e},{:.6e},{:.6e}]",
+            label,
+            transition.dt_s,
+            mat3_rms_abs_diff(&eskf, &loose),
+            col_norm3(&eskf, 0),
+            col_norm3(&eskf, 1),
+            col_norm3(&eskf, 2),
+            col_norm3(&loose, 0),
+            col_norm3(&loose, 1),
+            col_norm3(&loose, 2),
+        );
+    }
+    for mount_axis in 0..3 {
+        println!(
+            "[covhist] transition_mount_col axis={} eskf_vel=[{:.6e},{:.6e},{:.6e}] loose_vel=[{:.6e},{:.6e},{:.6e}] eskf_pos=[{:.6e},{:.6e},{:.6e}] loose_pos=[{:.6e},{:.6e},{:.6e}]",
+            ["roll", "pitch", "yaw"][mount_axis],
+            transition.eskf_mount_to_vel[0][mount_axis],
+            transition.eskf_mount_to_vel[1][mount_axis],
+            transition.eskf_mount_to_vel[2][mount_axis],
+            transition.loose_mount_to_vel[0][mount_axis],
+            transition.loose_mount_to_vel[1][mount_axis],
+            transition.loose_mount_to_vel[2][mount_axis],
+            transition.eskf_mount_to_pos[0][mount_axis],
+            transition.eskf_mount_to_pos[1][mount_axis],
+            transition.eskf_mount_to_pos[2][mount_axis],
+            transition.loose_mount_to_pos[0][mount_axis],
+            transition.loose_mount_to_pos[1][mount_axis],
+            transition.loose_mount_to_pos[2][mount_axis],
+        );
+    }
+}
+
+fn print_common_gnss_gain_summary(
+    snapshot: &Snapshot,
+    replay: &Replay,
+    p_eskf: &[[f32; 18]; 18],
+    p_loose: &[[f32; 18]; 18],
+) {
+    let Some((gnss, dt_since_gnss)) = nearest_gnss_with_period(&replay.gnss, snapshot.t_s) else {
+        return;
+    };
+    let pos_r_scale = 1.0 / (dt_since_gnss as f32).clamp(1.0e-3, 1.0);
+    let rows = [
+        (
+            "pos_n",
+            6usize,
+            gnss.pos_std_m[0] as f32 * gnss.pos_std_m[0] as f32 * pos_r_scale,
+        ),
+        (
+            "pos_e",
+            7usize,
+            gnss.pos_std_m[1] as f32 * gnss.pos_std_m[1] as f32 * pos_r_scale,
+        ),
+        (
+            "vel_n",
+            3usize,
+            gnss.vel_std_mps[0] as f32 * gnss.vel_std_mps[0] as f32,
+        ),
+        (
+            "vel_e",
+            4usize,
+            gnss.vel_std_mps[1] as f32 * gnss.vel_std_mps[1] as f32,
+        ),
+    ];
+    for (label, state, r) in rows {
+        let eskf_gain = scalar_mount_gain(p_eskf, state, r);
+        let loose_gain = scalar_mount_gain(p_loose, state, r);
+        println!(
+            "[covhist] common_gnss_mount_gain row={} dt_gnss={:.3} r={:.6e} eskf=[{:.6e},{:.6e},{:.6e}] loose=[{:.6e},{:.6e},{:.6e}] norm_ratio={:.3}",
+            label,
+            dt_since_gnss,
+            r,
+            eskf_gain[0],
+            eskf_gain[1],
+            eskf_gain[2],
+            loose_gain[0],
+            loose_gain[1],
+            loose_gain[2],
+            norm3(eskf_gain) / norm3(loose_gain).max(1.0e-12),
+        );
+    }
+}
+
+fn nearest_gnss_with_period(
+    samples: &[GenericGnssSample],
+    t_s: f64,
+) -> Option<(GenericGnssSample, f64)> {
+    if samples.is_empty() {
+        return None;
+    }
+    let idx = samples.partition_point(|s| s.t_s <= t_s);
+    let current_idx = idx.saturating_sub(1);
+    let current = *samples.get(current_idx)?;
+    let period = current_idx
+        .checked_sub(1)
+        .and_then(|prev| samples.get(prev).map(|sample| current.t_s - sample.t_s))
+        .filter(|dt| dt.is_finite() && *dt > 0.0)
+        .unwrap_or(1.0);
+    Some((current, period))
+}
+
+fn scalar_mount_gain(p: &[[f32; 18]; 18], state: usize, r: f32) -> [f64; 3] {
+    let s = p[state][state] + r;
+    if !(s > 0.0) || !s.is_finite() {
+        return [0.0; 3];
+    }
+    [
+        p[15][state] as f64 / s as f64,
+        p[16][state] as f64 / s as f64,
+        p[17][state] as f64 / s as f64,
+    ]
+}
+
+fn norm3(v: [f64; 3]) -> f64 {
+    (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+}
+
+fn mat3_rms_abs_diff(a: &[[f32; 3]; 3], b: &[[f32; 3]; 3]) -> f64 {
+    let mut sum = 0.0;
+    for row in 0..3 {
+        for col in 0..3 {
+            let d = a[row][col] as f64 - b[row][col] as f64;
+            sum += d * d;
+        }
+    }
+    (sum / 9.0).sqrt()
+}
+
+fn col_norm3(a: &[[f32; 3]; 3], col: usize) -> f64 {
+    let mut sum = 0.0;
+    for row in 0..3 {
+        let v = a[row][col] as f64;
+        sum += v * v;
+    }
+    sum.sqrt()
 }
 
 fn default_loose_p_diag(

@@ -79,7 +79,7 @@ fn default_r_body_vel_z() -> f32 {
 }
 
 fn default_mount_roll_pitch_init_sigma_deg() -> f32 {
-    0.8
+    1.2
 }
 
 #[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]

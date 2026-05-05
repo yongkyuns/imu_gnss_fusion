@@ -240,6 +240,12 @@ pub struct LooseState {
     pub last_obs_count: i32,
     /// Observation type identifiers used by the last batch update.
     pub last_obs_types: [i32; 8],
+    /// Raw residuals for the observation rows used by the last batch update.
+    pub last_residuals: [f32; 8],
+    /// Effective residuals after preceding rows in the last sequential batch update.
+    pub last_effective_residuals: [f32; 8],
+    /// Scalar innovation variances for the observation rows in the last batch update.
+    pub last_innovation_vars: [f32; 8],
     /// Diagnostic state for the most recent GNSS position gate check.
     pub last_gnss_pos_gate: LooseGnssPositionGateDiag,
 }
@@ -264,6 +270,9 @@ impl Default for LooseState {
             last_dx_by_obs: [[0.0; LOOSE_ERROR_STATES]; 8],
             last_obs_count: 0,
             last_obs_types: [0; 8],
+            last_residuals: [0.0; 8],
+            last_effective_residuals: [0.0; 8],
+            last_innovation_vars: [0.0; 8],
             last_gnss_pos_gate: LooseGnssPositionGateDiag::default(),
         }
     }
@@ -325,6 +334,33 @@ impl LooseFilter {
     /// Returns per-observation-row contributions from the last batch update.
     pub fn last_dx_by_obs(&self) -> &[[f32; LOOSE_ERROR_STATES]; 8] {
         &self.raw.last_dx_by_obs
+    }
+
+    /// Returns raw residuals from the last batch update.
+    pub fn last_residuals(&self) -> &[f32] {
+        let count = self
+            .raw
+            .last_obs_count
+            .clamp(0, self.raw.last_residuals.len() as i32) as usize;
+        &self.raw.last_residuals[..count]
+    }
+
+    /// Returns effective residuals after preceding rows in the last sequential batch update.
+    pub fn last_effective_residuals(&self) -> &[f32] {
+        let count = self
+            .raw
+            .last_obs_count
+            .clamp(0, self.raw.last_effective_residuals.len() as i32) as usize;
+        &self.raw.last_effective_residuals[..count]
+    }
+
+    /// Returns scalar innovation variances from the last batch update.
+    pub fn last_innovation_vars(&self) -> &[f32] {
+        let count = self
+            .raw
+            .last_obs_count
+            .clamp(0, self.raw.last_innovation_vars.len() as i32) as usize;
+        &self.raw.last_innovation_vars[..count]
     }
 
     /// Returns diagnostics for the most recent GNSS position gate attempt.
@@ -942,6 +978,9 @@ impl LooseFilter {
         self.raw.last_obs_count = 0;
         self.raw.last_obs_types = [0; 8];
         self.raw.last_dx_by_obs = [[0.0; LOOSE_ERROR_STATES]; 8];
+        self.raw.last_residuals = [0.0; 8];
+        self.raw.last_effective_residuals = [0.0; 8];
+        self.raw.last_innovation_vars = [0.0; 8];
         self.raw.last_gnss_pos_gate = LooseGnssPositionGateDiag::default();
 
         let mut h_rows = [[0.0; LOOSE_ERROR_STATES]; 8];
@@ -1216,6 +1255,9 @@ impl LooseFilter {
     ) {
         let mut dx = [0.0; LOOSE_ERROR_STATES];
         let mut dx_by_obs = [[0.0; LOOSE_ERROR_STATES]; 8];
+        let mut residual_diag = [0.0; 8];
+        let mut effective_residual_diag = [0.0; 8];
+        let mut innovation_var_diag = [0.0; 8];
         {
             let p = &mut self.raw.p;
             let mut dense_support = [0usize; LOOSE_ERROR_STATES];
@@ -1246,7 +1288,11 @@ impl LooseFilter {
                 for &state in support {
                     hd += h_obs[state] * dx[state];
                 }
-                let alpha = (residuals[obs] - hd) / s;
+                let effective_residual = residuals[obs] - hd;
+                residual_diag[obs] = residuals[obs];
+                effective_residual_diag[obs] = effective_residual;
+                innovation_var_diag[obs] = s;
+                let alpha = effective_residual / s;
                 for i in 0..LOOSE_ERROR_STATES {
                     let row_dx = ph[i] * alpha;
                     dx_by_obs[obs][i] = row_dx;
@@ -1266,6 +1312,9 @@ impl LooseFilter {
             self.raw.last_dx[i] = dx[i];
         }
         self.raw.last_dx_by_obs = dx_by_obs;
+        self.raw.last_residuals = residual_diag;
+        self.raw.last_effective_residuals = effective_residual_diag;
+        self.raw.last_innovation_vars = innovation_var_diag;
         self.inject_error_state(dx);
     }
 

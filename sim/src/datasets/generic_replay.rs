@@ -103,9 +103,9 @@ pub fn fusion_imu_sample(sample: GenericImuSample) -> FusionImuSample {
 pub fn fusion_gnss_sample(sample: GenericGnssSample) -> FusionGnssSample {
     FusionGnssSample {
         t_s: sample.t_s as f32,
-        lat_deg: sample.lat_deg as f32,
-        lon_deg: sample.lon_deg as f32,
-        height_m: sample.height_m as f32,
+        lat_deg: sample.lat_deg,
+        lon_deg: sample.lon_deg,
+        height_m: sample.height_m,
         vel_ned_mps: [
             sample.vel_ned_mps[0] as f32,
             sample.vel_ned_mps[1] as f32,

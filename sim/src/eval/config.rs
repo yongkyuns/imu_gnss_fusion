@@ -32,7 +32,7 @@ pub const EKF_COMPARE_DEFAULTS: EkfCompareConfigSnapshot = EkfCompareConfigSnaps
     yaw_init_sigma_deg: 6.0,
     gyro_bias_init_sigma_dps: 0.125,
     accel_bias_init_sigma_mps2: 0.15,
-    mount_roll_pitch_init_sigma_deg: 0.8,
+    mount_roll_pitch_init_sigma_deg: 1.2,
     mount_init_sigma_deg: 6.0,
     r_vehicle_speed: 0.04,
     mount_align_rw_var: 0.0,
