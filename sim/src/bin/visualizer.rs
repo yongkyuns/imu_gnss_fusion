@@ -1424,10 +1424,12 @@ fn print_reference_error_summaries(data: &PlotData) {
             "vel" => data.eskf_cmp_vel.as_slice(),
             _ => traces,
         };
-        let Some(trace) = find_trace(traces, trace_name) else {
+        let Some(trace) = find_profile_trace(traces, group, system, state, trace_name) else {
             continue;
         };
-        let Some(reference) = find_trace(reference_traces, reference_name) else {
+        let Some(reference) =
+            find_profile_reference_trace(reference_traces, group, state, reference_name)
+        else {
             continue;
         };
         if let Some(summary) =
@@ -1488,6 +1490,54 @@ fn print_reference_error_summaries(data: &PlotData) {
 #[cfg(not(target_arch = "wasm32"))]
 fn find_trace<'a>(traces: &'a [Trace], name: &str) -> Option<&'a Trace> {
     traces.iter().find(|trace| trace.name == name)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn find_profile_trace<'a>(
+    traces: &'a [Trace],
+    group: &str,
+    system: &str,
+    state: &str,
+    preferred_name: &str,
+) -> Option<&'a Trace> {
+    find_trace(traces, preferred_name).or_else(|| {
+        profile_trace_alias(group, system, state).and_then(|name| find_trace(traces, name))
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn find_profile_reference_trace<'a>(
+    traces: &'a [Trace],
+    group: &str,
+    state: &str,
+    preferred_name: &str,
+) -> Option<&'a Trace> {
+    profile_reference_alias(group, state)
+        .and_then(|name| find_trace(traces, name))
+        .or_else(|| find_trace(traces, preferred_name))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn profile_trace_alias(group: &str, system: &str, state: &str) -> Option<&'static str> {
+    match (group, system, state) {
+        ("vel", "ESKF", "N") => Some("ESKF vN [m/s]"),
+        ("vel", "ESKF", "E") => Some("ESKF vE [m/s]"),
+        ("vel", "ESKF", "D") => Some("ESKF vD [m/s]"),
+        _ => None,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn profile_reference_alias(group: &str, state: &str) -> Option<&'static str> {
+    match (group, state) {
+        ("pos", "N") => Some("Synthetic truth posN [m]"),
+        ("pos", "E") => Some("Synthetic truth posE [m]"),
+        ("pos", "D") => Some("Synthetic truth posD [m]"),
+        ("vel", "N") => Some("Synthetic truth vN [m/s]"),
+        ("vel", "E") => Some("Synthetic truth vE [m/s]"),
+        ("vel", "D") => Some("Synthetic truth vD [m/s]"),
+        _ => None,
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

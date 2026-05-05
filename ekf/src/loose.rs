@@ -234,6 +234,8 @@ pub struct LooseState {
     pub qcs64: [f64; 4],
     /// Last injected error-state correction.
     pub last_dx: [f32; LOOSE_ERROR_STATES],
+    /// Per-observation-row contributions to the last injected correction.
+    pub last_dx_by_obs: [[f32; LOOSE_ERROR_STATES]; 8],
     /// Number of observation rows used by the last batch update.
     pub last_obs_count: i32,
     /// Observation type identifiers used by the last batch update.
@@ -259,6 +261,7 @@ impl Default for LooseState {
             pos_e64: [0.0; 3],
             qcs64: [1.0, 0.0, 0.0, 0.0],
             last_dx: [0.0; LOOSE_ERROR_STATES],
+            last_dx_by_obs: [[0.0; LOOSE_ERROR_STATES]; 8],
             last_obs_count: 0,
             last_obs_types: [0; 8],
             last_gnss_pos_gate: LooseGnssPositionGateDiag::default(),
@@ -317,6 +320,11 @@ impl LooseFilter {
     /// Returns the last injected error-state correction.
     pub fn last_dx(&self) -> &[f32; LOOSE_ERROR_STATES] {
         &self.raw.last_dx
+    }
+
+    /// Returns per-observation-row contributions from the last batch update.
+    pub fn last_dx_by_obs(&self) -> &[[f32; LOOSE_ERROR_STATES]; 8] {
+        &self.raw.last_dx_by_obs
     }
 
     /// Returns diagnostics for the most recent GNSS position gate attempt.
@@ -933,6 +941,7 @@ impl LooseFilter {
         }
         self.raw.last_obs_count = 0;
         self.raw.last_obs_types = [0; 8];
+        self.raw.last_dx_by_obs = [[0.0; LOOSE_ERROR_STATES]; 8];
         self.raw.last_gnss_pos_gate = LooseGnssPositionGateDiag::default();
 
         let mut h_rows = [[0.0; LOOSE_ERROR_STATES]; 8];
@@ -1206,6 +1215,7 @@ impl LooseFilter {
         variances: &[f32; 8],
     ) {
         let mut dx = [0.0; LOOSE_ERROR_STATES];
+        let mut dx_by_obs = [[0.0; LOOSE_ERROR_STATES]; 8];
         {
             let p = &mut self.raw.p;
             let mut dense_support = [0usize; LOOSE_ERROR_STATES];
@@ -1236,8 +1246,11 @@ impl LooseFilter {
                 for &state in support {
                     hd += h_obs[state] * dx[state];
                 }
+                let alpha = (residuals[obs] - hd) / s;
                 for i in 0..LOOSE_ERROR_STATES {
-                    dx[i] += (ph[i] / s) * (residuals[obs] - hd);
+                    let row_dx = ph[i] * alpha;
+                    dx_by_obs[obs][i] = row_dx;
+                    dx[i] += row_dx;
                 }
                 for i in 0..LOOSE_ERROR_STATES {
                     for j in i..LOOSE_ERROR_STATES {
@@ -1252,6 +1265,7 @@ impl LooseFilter {
         for i in 0..LOOSE_ERROR_STATES {
             self.raw.last_dx[i] = dx[i];
         }
+        self.raw.last_dx_by_obs = dx_by_obs;
         self.inject_error_state(dx);
     }
 

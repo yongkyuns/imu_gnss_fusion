@@ -41,7 +41,7 @@ pub const EKF_COMPARE_DEFAULTS: EkfCompareConfigSnapshot = EkfCompareConfigSnaps
     mount_settle_time_s: 0.0,
     mount_settle_release_sigma_deg: 7.5,
     mount_settle_zero_cross_covariance: true,
-    r_zero_vel: 0.01,
+    r_zero_vel: 0.0,
     r_stationary_accel: 0.0,
     vehicle_meas_lpf_cutoff_hz: 35.0,
     predict_imu_lpf_cutoff_hz: None,

@@ -202,7 +202,7 @@ impl Default for FusionConfig {
             mount_settle_release_sigma_rad: 7.5_f32.to_radians(),
             mount_settle_zero_cross_covariance: true,
             r_vehicle_speed: 0.04,
-            r_zero_vel: 0.01,
+            r_zero_vel: 0.0,
             r_stationary_accel: 0.0,
             yaw_init_speed_mps: 0.0,
         }

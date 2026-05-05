@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use sensor_fusion::eskf_types::{ESKF_UPDATE_DIAG_TYPES, EskfState};
-use sensor_fusion::fusion::{EskfMountSource, SensorFusion};
+use sensor_fusion::fusion::SensorFusion;
 use sensor_fusion::generated_loose;
 use sensor_fusion::loose::{LOOSE_ERROR_STATES, LooseFilter, LooseImuDelta, LoosePredictNoise};
 use sim::datasets::generic_replay::{
@@ -14,6 +14,7 @@ use sim::datasets::generic_replay::{
 use sim::eval::gnss_ins::{as_q64, quat_angle_deg, quat_mul};
 use sim::eval::replay::{ReplayEvent, for_each_event};
 use sim::visualizer::math::{ecef_to_ned, lla_to_ecef};
+use sim::visualizer::model::EkfImuSource;
 use sim::visualizer::pipeline::EkfCompareConfig;
 use sim::visualizer::pipeline::generic::reference_mount_rpy_to_q_vb;
 use sim::visualizer::pipeline::synthetic::{
@@ -73,6 +74,66 @@ struct Args {
     /// Minimum spacing for periodic trace lines. Update events are printed regardless.
     #[arg(long, default_value_t = 0.10)]
     trace_interval_s: f64,
+
+    /// Mount source for the ESKF diagnostic path: internal, external, or ref.
+    #[arg(
+        long,
+        default_value = "internal",
+        value_parser = EkfImuSource::from_cli_value
+    )]
+    misalignment: EkfImuSource,
+
+    /// Freeze residual mount states in the ESKF diagnostic path.
+    #[arg(long)]
+    freeze_misalignment_states: bool,
+
+    /// Override ESKF/loose lateral no-motion measurement standard deviation.
+    #[arg(long)]
+    r_body_vel: Option<f32>,
+
+    /// Override ESKF/loose vertical no-motion measurement standard deviation.
+    #[arg(long)]
+    r_body_vel_z: Option<f32>,
+
+    /// Override ESKF residual mount roll/pitch initial sigma, in degrees.
+    #[arg(long)]
+    mount_roll_pitch_init_sigma_deg: Option<f32>,
+
+    /// Override ESKF residual mount yaw initial sigma, in degrees.
+    #[arg(long)]
+    mount_init_sigma_deg: Option<f32>,
+
+    /// Override ESKF initial yaw sigma, in degrees.
+    #[arg(long)]
+    yaw_init_sigma_deg: Option<f32>,
+
+    /// Override ESKF initial gyro-bias sigma, in deg/s.
+    #[arg(long)]
+    gyro_bias_init_sigma_dps: Option<f32>,
+
+    /// Override ESKF initial accelerometer-bias sigma, in m/s^2.
+    #[arg(long)]
+    accel_bias_init_sigma_mps2: Option<f32>,
+
+    /// Diagnostic override for ESKF runtime zero-velocity measurement variance.
+    #[arg(long)]
+    r_zero_vel: Option<f32>,
+
+    /// Diagnostic-only scale applied to ESKF accelerometer white-noise variance.
+    #[arg(long, default_value_t = 1.0)]
+    eskf_accel_var_scale: f32,
+
+    /// Diagnostic-only scale applied to ESKF gyro white-noise variance.
+    #[arg(long, default_value_t = 1.0)]
+    eskf_gyro_var_scale: f32,
+
+    /// Diagnostic-only override for loose gyro-scale initial sigma.
+    #[arg(long)]
+    loose_gyro_scale_sigma: Option<f32>,
+
+    /// Diagnostic-only override for loose accel-scale initial sigma.
+    #[arg(long)]
+    loose_accel_scale_sigma: Option<f32>,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -114,6 +175,12 @@ struct Snapshot {
     loose_obs_counts: [u32; 9],
     loose_mount_dx_sum: [f32; 3],
     loose_mount_dx_abs_sum: [f32; 3],
+    loose_att_dx_sum: [f32; 3],
+    loose_att_dx_abs_sum: [f32; 3],
+    loose_vel_dx_sum: [f32; 3],
+    loose_vel_dx_abs_sum: [f32; 3],
+    loose_mount_dx_sum_by_type: [[f32; 3]; 9],
+    loose_mount_dx_abs_sum_by_type: [[f32; 3]; 9],
 }
 
 #[derive(Clone)]
@@ -161,12 +228,7 @@ fn main() -> Result<()> {
     targets_abs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     targets_abs.dedup_by(|a, b| (*a - *b).abs() < 1.0e-9);
     let trace_window_abs = args.trace_window.as_ref().map(|w| [t0 + w[0], t0 + w[1]]);
-    let snapshots = run_diagnostics(
-        &replay,
-        &targets_abs,
-        trace_window_abs,
-        args.trace_interval_s,
-    )?;
+    let snapshots = run_diagnostics(&replay, &args, &targets_abs, trace_window_abs)?;
     print_snapshots(&snapshots, &replay);
     if let Some(window) = args.summary_window.as_ref() {
         print_interval_summary(&snapshots, &replay, [window[0], window[1]]);
@@ -263,20 +325,72 @@ fn replay_start_t_s(replay: &Replay) -> Option<f64> {
 
 fn run_diagnostics(
     replay: &Replay,
+    args: &Args,
     targets_abs: &[f64],
     trace_window_abs: Option<[f64; 2]>,
-    trace_interval_s: f64,
 ) -> Result<Vec<Snapshot>> {
-    let cfg = EkfCompareConfig::default();
+    let mut cfg = EkfCompareConfig {
+        freeze_misalignment_states: args.freeze_misalignment_states,
+        ..EkfCompareConfig::default()
+    };
+    if let Some(r) = args.r_body_vel {
+        cfg.r_body_vel = r;
+    }
+    if let Some(r) = args.r_body_vel_z {
+        cfg.r_body_vel_z = r;
+    }
+    if let Some(sigma) = args.mount_roll_pitch_init_sigma_deg {
+        cfg.mount_roll_pitch_init_sigma_deg = sigma;
+    }
+    if let Some(sigma) = args.mount_init_sigma_deg {
+        cfg.mount_init_sigma_deg = sigma;
+    }
+    if let Some(sigma) = args.yaw_init_sigma_deg {
+        cfg.yaw_init_sigma_deg = sigma;
+    }
+    if let Some(sigma) = args.gyro_bias_init_sigma_dps {
+        cfg.gyro_bias_init_sigma_dps = sigma;
+    }
+    if let Some(sigma) = args.accel_bias_init_sigma_mps2 {
+        cfg.accel_bias_init_sigma_mps2 = sigma;
+    }
+    if let Some(r) = args.r_zero_vel.filter(|v| v.is_finite() && *v >= 0.0) {
+        cfg.r_zero_vel = r;
+    }
+    if args.eskf_accel_var_scale.is_finite() && args.eskf_accel_var_scale > 0.0 {
+        if let Some(noise) = cfg.predict_noise.as_mut() {
+            noise.accel_var *= args.eskf_accel_var_scale;
+        }
+    }
+    if args.eskf_gyro_var_scale.is_finite() && args.eskf_gyro_var_scale > 0.0 {
+        if let Some(noise) = cfg.predict_noise.as_mut() {
+            noise.gyro_var *= args.eskf_gyro_var_scale;
+        }
+    }
+    if let Some(sigma) = args
+        .loose_gyro_scale_sigma
+        .filter(|v| v.is_finite() && *v >= 0.0)
+    {
+        cfg.loose_init.gyro_scale_sigma = sigma;
+    }
+    if let Some(sigma) = args
+        .loose_accel_scale_sigma
+        .filter(|v| v.is_finite() && *v >= 0.0)
+    {
+        cfg.loose_init.accel_scale_sigma = sigma;
+    }
     let Some(ref_gnss) = replay.gnss.first().copied() else {
         anyhow::bail!("gnss replay is empty");
     };
 
     let mut fusion = SensorFusion::new();
-    apply_fusion_config(&mut fusion, cfg);
+    apply_fusion_config(&mut fusion, cfg, args.misalignment);
+    if let Some(seed_q_vb) = reference_mount_seed_q_vb(replay, args.misalignment) {
+        fusion.set_misalignment(seed_q_vb);
+    }
 
     let mut align_fusion = SensorFusion::new();
-    apply_fusion_config(&mut align_fusion, cfg);
+    apply_fusion_config(&mut align_fusion, cfg, EkfImuSource::Internal);
 
     let mut loose = LooseFilter::new(
         cfg.loose_predict_noise
@@ -290,6 +404,12 @@ fn run_diagnostics(
     let mut loose_obs_counts = [0u32; 9];
     let mut loose_mount_dx_sum = [0.0f32; 3];
     let mut loose_mount_dx_abs_sum = [0.0f32; 3];
+    let mut loose_att_dx_sum = [0.0f32; 3];
+    let mut loose_att_dx_abs_sum = [0.0f32; 3];
+    let mut loose_vel_dx_sum = [0.0f32; 3];
+    let mut loose_vel_dx_abs_sum = [0.0f32; 3];
+    let mut loose_mount_dx_sum_by_type = [[0.0f32; 3]; 9];
+    let mut loose_mount_dx_abs_sum_by_type = [[0.0f32; 3]; 9];
     let mut trace_state = TraceState::default();
 
     let mut snapshots = Vec::new();
@@ -308,6 +428,12 @@ fn run_diagnostics(
                     loose_obs_counts,
                     loose_mount_dx_sum,
                     loose_mount_dx_abs_sum,
+                    loose_att_dx_sum,
+                    loose_att_dx_abs_sum,
+                    loose_vel_dx_sum,
+                    loose_vel_dx_abs_sum,
+                    loose_mount_dx_sum_by_type,
+                    loose_mount_dx_abs_sum_by_type,
                     targets_abs,
                     &mut target_idx,
                     sample.t_s,
@@ -378,10 +504,39 @@ fn run_diagnostics(
                     );
                     if !loose.last_obs_types().is_empty() {
                         let dx = loose.last_dx();
+                        let loose_snap = LooseSnapshot {
+                            nominal: *loose.nominal(),
+                            p: *loose.covariance(),
+                            pos_ecef: loose.shadow_pos_ecef(),
+                            last_dx: *dx,
+                            last_obs_types: loose.last_obs_types().to_vec(),
+                        };
+                        let dx_as_eskf = transform_loose_dx_to_eskf(&loose_snap, dx, ref_gnss);
                         for axis in 0..3 {
                             let value = dx[21 + axis];
                             loose_mount_dx_sum[axis] += value;
                             loose_mount_dx_abs_sum[axis] += value.abs();
+                            let att_value = dx_as_eskf[axis];
+                            loose_att_dx_sum[axis] += att_value;
+                            loose_att_dx_abs_sum[axis] += att_value.abs();
+                            let vel_value = dx_as_eskf[3 + axis];
+                            loose_vel_dx_sum[axis] += vel_value;
+                            loose_vel_dx_abs_sum[axis] += vel_value.abs();
+                        }
+                        for (obs_idx, ty) in loose.last_obs_types().iter().copied().enumerate() {
+                            let Some(sum) = loose_mount_dx_sum_by_type.get_mut(ty as usize) else {
+                                continue;
+                            };
+                            let Some(abs_sum) = loose_mount_dx_abs_sum_by_type.get_mut(ty as usize)
+                            else {
+                                continue;
+                            };
+                            let row_dx = &loose.last_dx_by_obs()[obs_idx];
+                            for axis in 0..3 {
+                                let value = row_dx[21 + axis];
+                                sum[axis] += value;
+                                abs_sum[axis] += value.abs();
+                            }
                         }
                     }
                     for ty in loose.last_obs_types() {
@@ -399,6 +554,12 @@ fn run_diagnostics(
                 loose_obs_counts,
                 loose_mount_dx_sum,
                 loose_mount_dx_abs_sum,
+                loose_att_dx_sum,
+                loose_att_dx_abs_sum,
+                loose_vel_dx_sum,
+                loose_vel_dx_abs_sum,
+                loose_mount_dx_sum_by_type,
+                loose_mount_dx_abs_sum_by_type,
                 targets_abs,
                 &mut target_idx,
                 sample.t_s,
@@ -408,7 +569,7 @@ fn run_diagnostics(
                 replay,
                 ref_gnss,
                 trace_window_abs,
-                trace_interval_s,
+                args.trace_interval_s,
                 &mut trace_state,
                 "imu",
                 sample.t_s,
@@ -455,6 +616,12 @@ fn run_diagnostics(
                 loose_obs_counts,
                 loose_mount_dx_sum,
                 loose_mount_dx_abs_sum,
+                loose_att_dx_sum,
+                loose_att_dx_abs_sum,
+                loose_vel_dx_sum,
+                loose_vel_dx_abs_sum,
+                loose_mount_dx_sum_by_type,
+                loose_mount_dx_abs_sum_by_type,
                 targets_abs,
                 &mut target_idx,
                 sample.t_s,
@@ -464,7 +631,7 @@ fn run_diagnostics(
                 replay,
                 ref_gnss,
                 trace_window_abs,
-                trace_interval_s,
+                args.trace_interval_s,
                 &mut trace_state,
                 "gnss",
                 sample.t_s,
@@ -490,6 +657,12 @@ fn run_diagnostics(
         loose_obs_counts,
         loose_mount_dx_sum,
         loose_mount_dx_abs_sum,
+        loose_att_dx_sum,
+        loose_att_dx_abs_sum,
+        loose_vel_dx_sum,
+        loose_vel_dx_abs_sum,
+        loose_mount_dx_sum_by_type,
+        loose_mount_dx_abs_sum_by_type,
         targets_abs,
         &mut target_idx,
         final_t,
@@ -498,7 +671,7 @@ fn run_diagnostics(
     Ok(snapshots)
 }
 
-fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig) {
+fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig, mode: EkfImuSource) {
     fusion.set_align_config(cfg.align);
     if let Some(noise) = cfg.predict_noise {
         fusion.set_predict_noise(noise);
@@ -515,7 +688,7 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig) {
     fusion.set_mount_align_rw_var(cfg.mount_align_rw_var);
     fusion.set_align_handoff_delay_s(cfg.align_handoff_delay_s);
     fusion.set_freeze_misalignment_states(cfg.freeze_misalignment_states);
-    fusion.set_eskf_mount_source(EskfMountSource::LatchedSeed);
+    fusion.set_eskf_mount_source(mode.eskf_mount_source());
     fusion.set_mount_settle_time_s(cfg.mount_settle_time_s);
     fusion.set_mount_settle_release_sigma_rad(cfg.mount_settle_release_sigma_deg.to_radians());
     fusion.set_mount_settle_zero_cross_covariance(cfg.mount_settle_zero_cross_covariance);
@@ -529,6 +702,12 @@ fn capture_due_snapshots(
     loose_obs_counts: [u32; 9],
     loose_mount_dx_sum: [f32; 3],
     loose_mount_dx_abs_sum: [f32; 3],
+    loose_att_dx_sum: [f32; 3],
+    loose_att_dx_abs_sum: [f32; 3],
+    loose_vel_dx_sum: [f32; 3],
+    loose_vel_dx_abs_sum: [f32; 3],
+    loose_mount_dx_sum_by_type: [[f32; 3]; 9],
+    loose_mount_dx_abs_sum_by_type: [[f32; 3]; 9],
     targets_abs: &[f64],
     target_idx: &mut usize,
     t_s: f64,
@@ -558,6 +737,12 @@ fn capture_due_snapshots(
             loose_obs_counts,
             loose_mount_dx_sum,
             loose_mount_dx_abs_sum,
+            loose_att_dx_sum,
+            loose_att_dx_abs_sum,
+            loose_vel_dx_sum,
+            loose_vel_dx_abs_sum,
+            loose_mount_dx_sum_by_type,
+            loose_mount_dx_abs_sum_by_type,
         });
         *target_idx += 1;
     }
@@ -727,11 +912,13 @@ fn print_interval_update_summary(start: &Snapshot, end: &Snapshot) {
     let eskf_delta = count_delta(&end.eskf_type_counts, &start.eskf_type_counts);
     let loose_delta = count_delta(&end.loose_obs_counts, &start.loose_obs_counts);
     println!(
-        "[covhist-interval] eskf_update_delta pos_xy={} pos_d={} vel_xy={} vel_d={} nhc_y={} nhc_z={}",
+        "[covhist-interval] eskf_update_delta pos_xy={} pos_d={} vel_xy={} vel_d={} zero_xy={} zero_d={} nhc_y={} nhc_z={}",
         eskf_delta[0],
         eskf_delta[8],
         eskf_delta[1],
         eskf_delta[9],
+        eskf_delta[2],
+        eskf_delta[10],
         eskf_delta[DIAG_BODY_VEL_Y],
         eskf_delta[DIAG_BODY_VEL_Z]
     );
@@ -777,6 +964,59 @@ fn print_interval_update_summary(start: &Snapshot, end: &Snapshot) {
                         - start_eskf.update_diag.sum_abs_dx_mount_yaw[idx]
                 ),
             );
+            println!(
+                "[covhist-interval] eskf_att_dx type={} count_delta={} net_deg=[{:.6},{:.6},{:.6}] abs_deg=[{:.6},{:.6},{:.6}]",
+                label,
+                eskf_delta[idx],
+                rad_f32_to_deg(
+                    end_eskf.update_diag.sum_dx_att_roll[idx]
+                        - start_eskf.update_diag.sum_dx_att_roll[idx]
+                ),
+                rad_f32_to_deg(
+                    end_eskf.update_diag.sum_dx_pitch[idx]
+                        - start_eskf.update_diag.sum_dx_pitch[idx]
+                ),
+                rad_f32_to_deg(
+                    end_eskf.update_diag.sum_dx_yaw[idx] - start_eskf.update_diag.sum_dx_yaw[idx]
+                ),
+                rad_f32_to_deg(
+                    end_eskf.update_diag.sum_abs_dx_att_roll[idx]
+                        - start_eskf.update_diag.sum_abs_dx_att_roll[idx]
+                ),
+                rad_f32_to_deg(
+                    end_eskf.update_diag.sum_abs_dx_pitch[idx]
+                        - start_eskf.update_diag.sum_abs_dx_pitch[idx]
+                ),
+                rad_f32_to_deg(
+                    end_eskf.update_diag.sum_abs_dx_yaw[idx]
+                        - start_eskf.update_diag.sum_abs_dx_yaw[idx]
+                ),
+            );
+            println!(
+                "[covhist-interval] eskf_vel_dx type={} count_delta={} net_mps=[{:.6},{:.6},{:.6}] abs_mps=[{:.6},{:.6},{:.6}]",
+                label,
+                eskf_delta[idx],
+                end_eskf.update_diag.sum_dx_vel_n[idx] - start_eskf.update_diag.sum_dx_vel_n[idx],
+                end_eskf.update_diag.sum_dx_vel_e[idx] - start_eskf.update_diag.sum_dx_vel_e[idx],
+                end_eskf.update_diag.sum_dx_vel_d[idx] - start_eskf.update_diag.sum_dx_vel_d[idx],
+                end_eskf.update_diag.sum_abs_dx_vel_n[idx]
+                    - start_eskf.update_diag.sum_abs_dx_vel_n[idx],
+                end_eskf.update_diag.sum_abs_dx_vel_e[idx]
+                    - start_eskf.update_diag.sum_abs_dx_vel_e[idx],
+                end_eskf.update_diag.sum_abs_dx_vel_d[idx]
+                    - start_eskf.update_diag.sum_abs_dx_vel_d[idx],
+            );
+            println!(
+                "[covhist-interval] eskf_innov type={} count_delta={} net={:.6} abs={:.6} nis_sum={:.6} nis_max={:.6}",
+                label,
+                eskf_delta[idx],
+                end_eskf.update_diag.sum_innovation[idx]
+                    - start_eskf.update_diag.sum_innovation[idx],
+                end_eskf.update_diag.sum_abs_innovation[idx]
+                    - start_eskf.update_diag.sum_abs_innovation[idx],
+                end_eskf.update_diag.sum_nis[idx] - start_eskf.update_diag.sum_nis[idx],
+                end_eskf.update_diag.max_nis[idx],
+            );
         }
     }
     println!(
@@ -787,6 +1027,55 @@ fn print_interval_update_summary(start: &Snapshot, end: &Snapshot) {
         rad_f32_to_deg(end.loose_mount_dx_abs_sum[0] - start.loose_mount_dx_abs_sum[0]),
         rad_f32_to_deg(end.loose_mount_dx_abs_sum[1] - start.loose_mount_dx_abs_sum[1]),
         rad_f32_to_deg(end.loose_mount_dx_abs_sum[2] - start.loose_mount_dx_abs_sum[2]),
+    );
+    for (ty, label) in [
+        (1usize, "pos_x"),
+        (2, "pos_y"),
+        (3, "pos_z"),
+        (4, "vel_x"),
+        (5, "vel_y"),
+        (6, "vel_z"),
+        (7, "nhc_y"),
+        (8, "nhc_z"),
+    ] {
+        let net = [
+            end.loose_mount_dx_sum_by_type[ty][0] - start.loose_mount_dx_sum_by_type[ty][0],
+            end.loose_mount_dx_sum_by_type[ty][1] - start.loose_mount_dx_sum_by_type[ty][1],
+            end.loose_mount_dx_sum_by_type[ty][2] - start.loose_mount_dx_sum_by_type[ty][2],
+        ];
+        let abs = [
+            end.loose_mount_dx_abs_sum_by_type[ty][0] - start.loose_mount_dx_abs_sum_by_type[ty][0],
+            end.loose_mount_dx_abs_sum_by_type[ty][1] - start.loose_mount_dx_abs_sum_by_type[ty][1],
+            end.loose_mount_dx_abs_sum_by_type[ty][2] - start.loose_mount_dx_abs_sum_by_type[ty][2],
+        ];
+        println!(
+            "[covhist-interval] loose_mount_dx type={} net_deg=[{:.6},{:.6},{:.6}] abs_deg=[{:.6},{:.6},{:.6}]",
+            label,
+            rad_f32_to_deg(net[0]),
+            rad_f32_to_deg(net[1]),
+            rad_f32_to_deg(net[2]),
+            rad_f32_to_deg(abs[0]),
+            rad_f32_to_deg(abs[1]),
+            rad_f32_to_deg(abs[2]),
+        );
+    }
+    println!(
+        "[covhist-interval] loose_att_dx_as_eskf total_net_deg=[{:.6},{:.6},{:.6}] total_abs_deg=[{:.6},{:.6},{:.6}]",
+        rad_f32_to_deg(end.loose_att_dx_sum[0] - start.loose_att_dx_sum[0]),
+        rad_f32_to_deg(end.loose_att_dx_sum[1] - start.loose_att_dx_sum[1]),
+        rad_f32_to_deg(end.loose_att_dx_sum[2] - start.loose_att_dx_sum[2]),
+        rad_f32_to_deg(end.loose_att_dx_abs_sum[0] - start.loose_att_dx_abs_sum[0]),
+        rad_f32_to_deg(end.loose_att_dx_abs_sum[1] - start.loose_att_dx_abs_sum[1]),
+        rad_f32_to_deg(end.loose_att_dx_abs_sum[2] - start.loose_att_dx_abs_sum[2]),
+    );
+    println!(
+        "[covhist-interval] loose_vel_dx_as_eskf total_net_mps=[{:.6},{:.6},{:.6}] total_abs_mps=[{:.6},{:.6},{:.6}]",
+        end.loose_vel_dx_sum[0] - start.loose_vel_dx_sum[0],
+        end.loose_vel_dx_sum[1] - start.loose_vel_dx_sum[1],
+        end.loose_vel_dx_sum[2] - start.loose_vel_dx_sum[2],
+        end.loose_vel_dx_abs_sum[0] - start.loose_vel_dx_abs_sum[0],
+        end.loose_vel_dx_abs_sum[1] - start.loose_vel_dx_abs_sum[1],
+        end.loose_vel_dx_abs_sum[2] - start.loose_vel_dx_abs_sum[2],
     );
 }
 
@@ -966,11 +1255,13 @@ fn print_update_summary(snapshot: &Snapshot, loose: &LooseSnapshot) {
     let dy = DIAG_BODY_VEL_Y;
     let dz = DIAG_BODY_VEL_Z;
     println!(
-        "[covhist] eskf_update_counts pos_xy={} pos_d={} vel_xy={} vel_d={} nhc_y={} nhc_z={}",
+        "[covhist] eskf_update_counts pos_xy={} pos_d={} vel_xy={} vel_d={} zero_xy={} zero_d={} nhc_y={} nhc_z={}",
         snapshot.eskf_type_counts[0],
         snapshot.eskf_type_counts[8],
         snapshot.eskf_type_counts[1],
         snapshot.eskf_type_counts[9],
+        snapshot.eskf_type_counts[2],
+        snapshot.eskf_type_counts[10],
         snapshot.eskf_type_counts[dy],
         snapshot.eskf_type_counts[dz]
     );
@@ -1014,12 +1305,14 @@ fn print_eskf_mount_dx_by_type(prefix: &str, eskf: &EskfState) {
     }
 }
 
-fn selected_eskf_diag_types() -> [(&'static str, usize); 6] {
+fn selected_eskf_diag_types() -> [(&'static str, usize); 8] {
     [
         ("pos_xy", 0),
         ("pos_d", 8),
         ("vel_xy", 1),
         ("vel_d", 9),
+        ("zero_xy", 2),
+        ("zero_d", 10),
         ("nhc_y", DIAG_BODY_VEL_Y),
         ("nhc_z", DIAG_BODY_VEL_Z),
     ]
@@ -1330,6 +1623,54 @@ fn transform_loose_cov_to_eskf(
     out
 }
 
+fn transform_loose_dx_to_eskf(
+    loose: &LooseSnapshot,
+    dx: &[f32; LOOSE_ERROR_STATES],
+    ref_gnss: GenericGnssSample,
+) -> [f32; 18] {
+    let q_es = as_q64([
+        loose.nominal.q0,
+        loose.nominal.q1,
+        loose.nominal.q2,
+        loose.nominal.q3,
+    ]);
+    let c_es = quat_to_rot(q_es);
+    let pos_ned = ecef_to_ned(
+        loose.pos_ecef,
+        lla_to_ecef(ref_gnss.lat_deg, ref_gnss.lon_deg, ref_gnss.height_m),
+        ref_gnss.lat_deg,
+        ref_gnss.lon_deg,
+    );
+    let (lat, lon, _) = sim::visualizer::math::ned_to_lla_exact(
+        pos_ned[0],
+        pos_ned[1],
+        pos_ned[2],
+        ref_gnss.lat_deg,
+        ref_gnss.lon_deg,
+        ref_gnss.height_m,
+    );
+    let c_ne = ecef_to_ned_matrix(lat, lon);
+
+    let mut out = [0.0f32; 18];
+    for eskf_i in 0..3 {
+        for loose_i in 0..3 {
+            out[eskf_i] += c_es[loose_i][eskf_i] as f32 * dx[6 + loose_i];
+        }
+    }
+    for r in 0..3 {
+        for c in 0..3 {
+            out[3 + r] += c_ne[r][c] as f32 * dx[3 + c];
+            out[6 + r] += c_ne[r][c] as f32 * dx[c];
+        }
+    }
+    for i in 0..3 {
+        out[9 + i] = -dx[12 + i];
+        out[12 + i] = -dx[9 + i];
+        out[15 + i] = dx[21 + i];
+    }
+    out
+}
+
 fn default_loose_p_diag(
     gnss: GenericGnssSample,
     cfg: EkfCompareConfig,
@@ -1438,6 +1779,26 @@ fn loose_att_q_ned(loose: &LooseSnapshot, ref_gnss: GenericGnssSample) -> [f64; 
 fn reference_mount_at(samples: &[GenericReferenceRpySample], t_s: f64) -> Option<[f64; 4]> {
     nearest_rpy(samples, t_s)
         .map(|s| reference_mount_rpy_to_q_vb([s.roll_deg, s.pitch_deg, s.yaw_deg]))
+}
+
+fn reference_mount_seed_q_vb(replay: &Replay, mode: EkfImuSource) -> Option<[f32; 4]> {
+    if !mode.uses_ref_mount() {
+        return None;
+    }
+    replay
+        .reference_mount
+        .iter()
+        .rev()
+        .find(|sample| {
+            sample.roll_deg.is_finite()
+                && sample.pitch_deg.is_finite()
+                && sample.yaw_deg.is_finite()
+        })
+        .map(|sample| {
+            let q =
+                reference_mount_rpy_to_q_vb([sample.roll_deg, sample.pitch_deg, sample.yaw_deg]);
+            [q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32]
+        })
 }
 
 fn reference_attitude_at(samples: &[GenericReferenceRpySample], t_s: f64) -> Option<[f64; 4]> {
