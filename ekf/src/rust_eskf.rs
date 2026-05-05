@@ -767,6 +767,12 @@ impl RustEskf {
         diag.sum_abs_dx_vel_h[diag_type] += sqrtf(dx[3] * dx[3] + dx[4] * dx[4]);
         diag.sum_dx_gyro_bias_z[diag_type] += dx[11];
         diag.sum_abs_dx_gyro_bias_z[diag_type] += fabsf(dx[11]);
+        for axis in 0..3 {
+            diag.sum_dx_gyro_bias[diag_type][axis] += dx[9 + axis];
+            diag.sum_abs_dx_gyro_bias[diag_type][axis] += fabsf(dx[9 + axis]);
+            diag.sum_dx_accel_bias[diag_type][axis] += dx[12 + axis];
+            diag.sum_abs_dx_accel_bias[diag_type][axis] += fabsf(dx[12 + axis]);
+        }
         diag.sum_abs_dx_mount_norm[diag_type] +=
             sqrtf(dx[15] * dx[15] + dx[16] * dx[16] + dx[17] * dx[17]);
         diag.sum_dx_mount_roll[diag_type] += dx[15];

@@ -2043,73 +2043,81 @@ fn loose_inspector_sample(t_s: f64, loose: &LooseFilter) -> UpdateInspectorSampl
 }
 
 fn eskf_mount_correlations(p: &[[f32; 18]; 18]) -> Vec<StateCorrelation> {
-    const STATES: [(&str, &str, usize); 18] = [
-        ("att roll", "attitude", 0),
-        ("att pitch", "attitude", 1),
-        ("att yaw", "attitude", 2),
-        ("vel N", "velocity", 3),
-        ("vel E", "velocity", 4),
-        ("vel D", "velocity", 5),
-        ("pos N", "position", 6),
-        ("pos E", "position", 7),
-        ("pos D", "position", 8),
-        ("gyro bias X", "gyro bias", 9),
-        ("gyro bias Y", "gyro bias", 10),
-        ("gyro bias Z", "gyro bias", 11),
-        ("accel bias X", "accel bias", 12),
-        ("accel bias Y", "accel bias", 13),
-        ("accel bias Z", "accel bias", 14),
-        ("mount roll", "mount", 15),
-        ("mount pitch", "mount", 16),
-        ("mount yaw", "mount", 17),
+    const STATES: [(&str, &str, usize, f64); 18] = [
+        ("att roll", "attitude", 0, 1.0),
+        ("att pitch", "attitude", 1, 1.0),
+        ("att yaw", "attitude", 2, 1.0),
+        ("vel N", "velocity", 3, 1.0),
+        ("vel E", "velocity", 4, 1.0),
+        ("vel D", "velocity", 5, 1.0),
+        ("pos N", "position", 6, 1.0),
+        ("pos E", "position", 7, 1.0),
+        ("pos D", "position", 8, 1.0),
+        ("gyro bias X", "gyro bias", 9, 1.0),
+        ("gyro bias Y", "gyro bias", 10, 1.0),
+        ("gyro bias Z", "gyro bias", 11, 1.0),
+        ("accel bias X", "accel bias", 12, 1.0),
+        ("accel bias Y", "accel bias", 13, 1.0),
+        ("accel bias Z", "accel bias", 14, 1.0),
+        ("mount roll", "mount", 15, 1.0),
+        ("mount pitch", "mount", 16, 1.0),
+        ("mount yaw", "mount", 17, 1.0),
     ];
-    covariance_mount_correlations(p, &STATES, &[(15, "roll"), (16, "pitch"), (17, "yaw")])
+    covariance_mount_correlations(
+        p,
+        &STATES,
+        &[(15, "roll", 1.0), (16, "pitch", 1.0), (17, "yaw", 1.0)],
+    )
 }
 
 fn loose_mount_correlations(
     p: &[[f32; LOOSE_ERROR_STATES]; LOOSE_ERROR_STATES],
 ) -> Vec<StateCorrelation> {
-    const STATES: [(&str, &str, usize); LOOSE_ERROR_STATES] = [
-        ("pos X", "position", 0),
-        ("pos Y", "position", 1),
-        ("pos Z", "position", 2),
-        ("vel X", "velocity", 3),
-        ("vel Y", "velocity", 4),
-        ("vel Z", "velocity", 5),
-        ("att roll", "attitude", 6),
-        ("att pitch", "attitude", 7),
-        ("att yaw", "attitude", 8),
-        ("accel bias X", "accel bias", 9),
-        ("accel bias Y", "accel bias", 10),
-        ("accel bias Z", "accel bias", 11),
-        ("gyro bias X", "gyro bias", 12),
-        ("gyro bias Y", "gyro bias", 13),
-        ("gyro bias Z", "gyro bias", 14),
-        ("accel scale X", "accel scale", 15),
-        ("accel scale Y", "accel scale", 16),
-        ("accel scale Z", "accel scale", 17),
-        ("gyro scale X", "gyro scale", 18),
-        ("gyro scale Y", "gyro scale", 19),
-        ("gyro scale Z", "gyro scale", 20),
-        ("mount roll", "mount", 21),
-        ("mount pitch", "mount", 22),
-        ("mount yaw", "mount", 23),
+    const STATES: [(&str, &str, usize, f64); LOOSE_ERROR_STATES] = [
+        ("pos X", "position", 0, 1.0),
+        ("pos Y", "position", 1, 1.0),
+        ("pos Z", "position", 2, 1.0),
+        ("vel X", "velocity", 3, 1.0),
+        ("vel Y", "velocity", 4, 1.0),
+        ("vel Z", "velocity", 5, 1.0),
+        ("att roll", "attitude", 6, 1.0),
+        ("att pitch", "attitude", 7, 1.0),
+        ("att yaw", "attitude", 8, 1.0),
+        ("accel sensor bias X", "accel sensor bias", 9, -1.0),
+        ("accel sensor bias Y", "accel sensor bias", 10, -1.0),
+        ("accel sensor bias Z", "accel sensor bias", 11, -1.0),
+        ("gyro sensor bias X", "gyro sensor bias", 12, -1.0),
+        ("gyro sensor bias Y", "gyro sensor bias", 13, -1.0),
+        ("gyro sensor bias Z", "gyro sensor bias", 14, -1.0),
+        ("accel scale X", "accel scale", 15, 1.0),
+        ("accel scale Y", "accel scale", 16, 1.0),
+        ("accel scale Z", "accel scale", 17, 1.0),
+        ("gyro scale X", "gyro scale", 18, 1.0),
+        ("gyro scale Y", "gyro scale", 19, 1.0),
+        ("gyro scale Z", "gyro scale", 20, 1.0),
+        ("mount roll", "mount", 21, 1.0),
+        ("mount pitch", "mount", 22, 1.0),
+        ("mount yaw", "mount", 23, 1.0),
     ];
-    covariance_mount_correlations(p, &STATES, &[(21, "roll"), (22, "pitch"), (23, "yaw")])
+    covariance_mount_correlations(
+        p,
+        &STATES,
+        &[(21, "roll", 1.0), (22, "pitch", 1.0), (23, "yaw", 1.0)],
+    )
 }
 
 fn covariance_mount_correlations<const N: usize>(
     p: &[[f32; N]; N],
-    states: &[(&str, &str, usize)],
-    mount_axes: &[(usize, &str)],
+    states: &[(&str, &str, usize, f64)],
+    mount_axes: &[(usize, &str, f64)],
 ) -> Vec<StateCorrelation> {
     let mut correlations = Vec::new();
-    for &(mount_idx, mount_axis) in mount_axes {
-        for &(state, group, idx) in states {
+    for &(mount_idx, mount_axis, mount_sign) in mount_axes {
+        for &(state, group, idx, state_sign) in states {
             if idx == mount_idx {
                 continue;
             }
-            let value = covariance_correlation(p, idx, mount_idx);
+            let value = state_sign * mount_sign * covariance_correlation(p, idx, mount_idx);
             if !value.is_finite() {
                 continue;
             }
@@ -2171,29 +2179,41 @@ fn loose_state_contributions(dx: &[f32; LOOSE_ERROR_STATES]) -> Vec<StateContrib
             8,
             180.0 / core::f64::consts::PI,
         ),
-        ("accel bias X", "accel bias", "m/s^2", 9, 1.0),
-        ("accel bias Y", "accel bias", "m/s^2", 10, 1.0),
-        ("accel bias Z", "accel bias", "m/s^2", 11, 1.0),
+        ("accel sensor bias X", "accel sensor bias", "m/s^2", 9, -1.0),
         (
-            "gyro bias X",
-            "gyro bias",
+            "accel sensor bias Y",
+            "accel sensor bias",
+            "m/s^2",
+            10,
+            -1.0,
+        ),
+        (
+            "accel sensor bias Z",
+            "accel sensor bias",
+            "m/s^2",
+            11,
+            -1.0,
+        ),
+        (
+            "gyro sensor bias X",
+            "gyro sensor bias",
             "deg/s",
             12,
-            180.0 / core::f64::consts::PI,
+            -180.0 / core::f64::consts::PI,
         ),
         (
-            "gyro bias Y",
-            "gyro bias",
+            "gyro sensor bias Y",
+            "gyro sensor bias",
             "deg/s",
             13,
-            180.0 / core::f64::consts::PI,
+            -180.0 / core::f64::consts::PI,
         ),
         (
-            "gyro bias Z",
-            "gyro bias",
+            "gyro sensor bias Z",
+            "gyro sensor bias",
             "deg/s",
             14,
-            180.0 / core::f64::consts::PI,
+            -180.0 / core::f64::consts::PI,
         ),
         ("accel scale X", "accel scale", "", 15, 1.0),
         ("accel scale Y", "accel scale", "", 16, 1.0),
