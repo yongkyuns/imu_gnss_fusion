@@ -197,7 +197,7 @@ impl Default for FusionConfig {
             mount_roll_pitch_init_sigma_rad: 1.2_f32.to_radians(),
             mount_init_sigma_rad: 6.0_f32.to_radians(),
             r_body_vel_y: 0.5,
-            r_body_vel_z: 0.125,
+            r_body_vel_z: 0.05,
             align_handoff_delay_s: 0.0,
             freeze_misalignment_states: false,
             eskf_mount_source: EskfMountSource::LatchedSeed,

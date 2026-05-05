@@ -588,6 +588,7 @@ struct WebDatasetState {
     loading_dataset: bool,
     loading_replay: bool,
     replay_job_id: u64,
+    replay_cfg: EkfCompareConfig,
     pending: Rc<RefCell<Option<WebDatasetTaskResult>>>,
     pending_replay: Rc<RefCell<Option<WebReplayTaskResult>>>,
     replay_worker: Option<Worker>,
@@ -667,6 +668,7 @@ impl WebDatasetState {
             loading_dataset: false,
             loading_replay: false,
             replay_job_id: 0,
+            replay_cfg: EkfCompareConfig::default(),
             pending: Rc::new(RefCell::new(None)),
             pending_replay: Rc::new(RefCell::new(None)),
             replay_worker: None,
@@ -1835,15 +1837,23 @@ impl App {
                     return;
                 }
                 self.web_run_progress = progress.clamp(0.0, 1.0);
+                let run_cfg = self.web_datasets.replay_cfg;
                 self.web_status = if final_t_s.is_finite() && final_t_s > 0.0 {
                     format!(
-                        "Running replay: {:.2}s / {:.2}s ({:.1}%)",
+                        "Running replay: {:.2}s / {:.2}s ({:.1}%, NHC Ry={:.4}, Rz={:.4})",
                         current_t_s,
                         final_t_s,
                         100.0 * self.web_run_progress,
+                        run_cfg.r_body_vel,
+                        run_cfg.r_body_vel_z,
                     )
                 } else {
-                    format!("Running replay: {:.1}%", 100.0 * self.web_run_progress)
+                    format!(
+                        "Running replay: {:.1}% (NHC Ry={:.4}, Rz={:.4})",
+                        100.0 * self.web_run_progress,
+                        run_cfg.r_body_vel,
+                        run_cfg.r_body_vel_z,
+                    )
                 }
             }
             WebReplayTaskResult::Complete { job_id, result } => {
@@ -1857,6 +1867,7 @@ impl App {
                     Ok(output) => match serde_json::from_str::<PlotData>(&output.json) {
                         Ok(data) => {
                             let is_synthetic = output.source == "synthetic";
+                            let run_cfg = self.web_datasets.replay_cfg;
                             self.data = data;
                             self.map_center = map_center_from_traces(&self.data.eskf_map);
                             self.has_itow = false;
@@ -1870,12 +1881,28 @@ impl App {
                             } else {
                                 WebInputMode::RealData
                             };
+                            let pitch_status = web_final_mount_pitch_status(&self.data)
+                                .map(|(estimate, reference)| {
+                                    format!(", ESKF pitch={estimate:.3}, ref pitch={reference:.3}")
+                                })
+                                .unwrap_or_default();
                             self.web_status = if is_synthetic {
-                                format!("Synthetic scenario loaded: {}", output.label)
+                                format!(
+                                    "Synthetic scenario loaded: {} (NHC Ry={:.4}, Rz={:.4}{})",
+                                    output.label,
+                                    run_cfg.r_body_vel,
+                                    run_cfg.r_body_vel_z,
+                                    pitch_status
+                                )
                             } else {
                                 format!(
-                                    "Dataset loaded: {} ({} / {})",
-                                    output.label, output.imu_name, output.gnss_name
+                                    "Dataset loaded: {} ({} / {}, NHC Ry={:.4}, Rz={:.4}{})",
+                                    output.label,
+                                    output.imu_name,
+                                    output.gnss_name,
+                                    run_cfg.r_body_vel,
+                                    run_cfg.r_body_vel_z,
+                                    pitch_status
                                 )
                             };
                         }
@@ -1983,11 +2010,13 @@ impl App {
         ctx: &egui::Context,
     ) {
         let label = job.label().to_string();
+        let run_cfg = self.tuning_cfg;
         self.web_run_started_time_s = web_now_s();
         self.web_run_estimated_duration_s = estimated_duration_s;
         self.finish_web_replay_worker();
         *self.web_datasets.pending_replay.borrow_mut() = None;
         self.web_datasets.replay_job_id = self.web_datasets.replay_job_id.wrapping_add(1);
+        self.web_datasets.replay_cfg = run_cfg;
         let job_id = self.web_datasets.replay_job_id;
         self.web_run_progress = 0.02;
 
@@ -2102,7 +2131,7 @@ impl App {
             job_id,
             &job,
             self.tuning_misalignment,
-            self.tuning_cfg,
+            run_cfg,
             self.tuning_gnss_outages,
         );
         let _ = Reflect::set(
@@ -2118,7 +2147,10 @@ impl App {
         }
 
         self.web_datasets.loading_replay = true;
-        self.web_status = format!("Running replay: {label}");
+        self.web_status = format!(
+            "Running replay: {label} (NHC Ry={:.4}, Rz={:.4})",
+            run_cfg.r_body_vel, run_cfg.r_body_vel_z
+        );
         self.web_datasets.replay_worker = Some(worker);
         self.web_datasets.replay_onmessage = Some(onmessage);
         self.web_datasets.replay_onerror = Some(onerror);
@@ -5009,6 +5041,24 @@ fn mount_estimate_reference_traces<'a>(
         .or_else(|| find_trace_exact(&data.loose_misalignment, &reference_name))
         .or_else(|| find_trace_exact(&data.align_cmp_att, &reference_name))?;
     Some((estimate, reference))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn web_final_mount_pitch_status(data: &PlotData) -> Option<(f64, f64)> {
+    let (estimate, reference) = mount_estimate_reference_traces(data, "ESKF", "pitch")?;
+    Some((
+        trace_last_finite_value(estimate)?,
+        trace_last_finite_value(reference)?,
+    ))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn trace_last_finite_value(trace: &Trace) -> Option<f64> {
+    trace
+        .points
+        .iter()
+        .rev()
+        .find_map(|point| point[1].is_finite().then_some(point[1]))
 }
 
 fn find_trace_exact<'a>(traces: &'a [Trace], name: &str) -> Option<&'a Trace> {

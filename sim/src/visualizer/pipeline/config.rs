@@ -75,7 +75,7 @@ fn default_r_body_vel_y() -> f32 {
 }
 
 fn default_r_body_vel_z() -> f32 {
-    0.125
+    0.05
 }
 
 fn default_mount_roll_pitch_init_sigma_deg() -> f32 {

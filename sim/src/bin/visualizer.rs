@@ -1436,11 +1436,13 @@ fn print_reference_error_summaries(data: &PlotData) {
             summarize_trace_pair(system, state, trace, Some(reference), mode, None)
         {
             eprintln!(
-                "[profile] ref_error group={} system={} state={} samples={} final_err={:.6} mae={:.6} rmse={:.6} p95={:.6} tail_span={:.6} tail_drift={:.6}",
+                "[profile] ref_error group={} system={} state={} samples={} final={:.6} ref_final={:.6} final_err={:.6} mae={:.6} rmse={:.6} p95={:.6} tail_span={:.6} tail_drift={:.6}",
                 group,
                 system,
                 state,
                 summary.sample_count,
+                summary.final_value,
+                summary.final_reference.unwrap_or(f64::NAN),
                 summary.final_error.unwrap_or(f64::NAN),
                 summary.mean_abs_error.unwrap_or(f64::NAN),
                 summary.rmse_error.unwrap_or(f64::NAN),
@@ -1756,6 +1758,8 @@ fn print_mount_allocation_summaries(data: &PlotData, t0: f64, tmax: f64) {
         }
         print_accel_bias_allocation_window(data, "ESKF", start_rel, end_rel, start, end);
         print_accel_bias_allocation_window(data, "Loose", start_rel, end_rel, start, end);
+        print_gyro_bias_allocation_window(data, "ESKF", start_rel, end_rel, start, end);
+        print_gyro_bias_allocation_window(data, "Loose", start_rel, end_rel, start, end);
     }
 }
 
@@ -1908,6 +1912,52 @@ fn print_accel_bias_allocation_window(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn print_gyro_bias_allocation_window(
+    data: &PlotData,
+    system: &str,
+    start_rel: f64,
+    end_rel: f64,
+    start: f64,
+    end: f64,
+) {
+    let (traces, prefix) = match system {
+        "ESKF" => (data.eskf_bias_gyro.as_slice(), "ESKF gyro bias"),
+        "Loose" => (data.loose_bias_gyro.as_slice(), "Loose gyro sensor bias"),
+        _ => return,
+    };
+    let stats = ["X", "Y", "Z"].map(|axis| {
+        find_trace(traces, &format!("{prefix} {axis} [deg/s]"))
+            .map(|trace| window_stats(trace, start, end))
+    });
+    let integrals = ["X", "Y", "Z"].map(|axis| {
+        find_trace(traces, &format!("{prefix} {axis} [deg/s]"))
+            .map(|trace| window_time_integral(trace, start, end))
+            .unwrap_or(f64::NAN)
+    });
+    eprintln!(
+        "[profile] allocation_gyro_bias_window system={} window=[{:.1},{:.1}]s bgx_mean={:.9} bgy_mean={:.9} bgz_mean={:.9} bgx_final={:.9} bgy_final={:.9} bgz_final={:.9} bgx_integral_deg={:.6} bgy_integral_deg={:.6} bgz_integral_deg={:.6}",
+        system,
+        start_rel,
+        end_rel,
+        stats[0].map_or(f64::NAN, |s| s.mean),
+        stats[1].map_or(f64::NAN, |s| s.mean),
+        stats[2].map_or(f64::NAN, |s| s.mean),
+        find_trace(traces, &format!("{prefix} X [deg/s]"))
+            .and_then(|trace| window_last_value(trace, start, end))
+            .unwrap_or(f64::NAN),
+        find_trace(traces, &format!("{prefix} Y [deg/s]"))
+            .and_then(|trace| window_last_value(trace, start, end))
+            .unwrap_or(f64::NAN),
+        find_trace(traces, &format!("{prefix} Z [deg/s]"))
+            .and_then(|trace| window_last_value(trace, start, end))
+            .unwrap_or(f64::NAN),
+        integrals[0],
+        integrals[1],
+        integrals[2],
+    );
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug)]
 struct WindowStats {
     count: usize,
@@ -2023,6 +2073,27 @@ fn window_last_value(trace: &Trace, start: f64, end: f64) -> Option<f64> {
         .filter(|point| point[0] >= start && point[0] < end && point[1].is_finite())
         .map(|point| point[1])
         .last()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn window_time_integral(trace: &Trace, start: f64, end: f64) -> f64 {
+    let mut integral = 0.0;
+    let mut previous: Option<(f64, f64)> = None;
+    for point in &trace.points {
+        let t = point[0];
+        let v = point[1];
+        if !(t >= start && t < end) || !v.is_finite() {
+            continue;
+        }
+        if let Some((prev_t, prev_v)) = previous {
+            let dt = t - prev_t;
+            if dt.is_finite() && dt > 0.0 {
+                integral += 0.5 * (prev_v + v) * dt;
+            }
+        }
+        previous = Some((t, v));
+    }
+    integral
 }
 
 #[cfg(not(target_arch = "wasm32"))]
