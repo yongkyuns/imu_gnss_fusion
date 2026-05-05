@@ -305,24 +305,22 @@ impl RustEskf {
             sample.pos_std_m[1] * sample.pos_std_m[1],
             sample.pos_std_m[2] * sample.pos_std_m[2],
         ];
-        if axis_group_passes_chi2(&self.raw.p, [6, 7, 8], pos_residuals, pos_variances) {
-            for axis in 0..3 {
-                push_batch_row(
-                    &mut h_rows,
-                    &mut residuals,
-                    &mut variances,
-                    &mut diag_types,
-                    &mut obs_count,
-                    gps_axis_h(6 + axis),
-                    pos_residuals[axis],
-                    pos_variances[axis],
-                    if axis == 2 {
-                        DIAG_GPS_POS_D
-                    } else {
-                        DIAG_GPS_POS
-                    },
-                );
-            }
+        for axis in 0..3 {
+            push_batch_row(
+                &mut h_rows,
+                &mut residuals,
+                &mut variances,
+                &mut diag_types,
+                &mut obs_count,
+                gps_axis_h(6 + axis),
+                pos_residuals[axis],
+                pos_variances[axis],
+                if axis == 2 {
+                    DIAG_GPS_POS_D
+                } else {
+                    DIAG_GPS_POS
+                },
+            );
         }
 
         let vel_residuals = [
@@ -335,24 +333,22 @@ impl RustEskf {
             sample.vel_std_mps[1] * sample.vel_std_mps[1],
             sample.vel_std_mps[2] * sample.vel_std_mps[2],
         ];
-        if axis_group_passes_chi2(&self.raw.p, [3, 4, 5], vel_residuals, vel_variances) {
-            for axis in 0..3 {
-                push_batch_row(
-                    &mut h_rows,
-                    &mut residuals,
-                    &mut variances,
-                    &mut diag_types,
-                    &mut obs_count,
-                    gps_axis_h(3 + axis),
-                    vel_residuals[axis],
-                    vel_variances[axis],
-                    if axis == 2 {
-                        DIAG_GPS_VEL_D
-                    } else {
-                        DIAG_GPS_VEL
-                    },
-                );
-            }
+        for axis in 0..3 {
+            push_batch_row(
+                &mut h_rows,
+                &mut residuals,
+                &mut variances,
+                &mut diag_types,
+                &mut obs_count,
+                gps_axis_h(3 + axis),
+                vel_residuals[axis],
+                vel_variances[axis],
+                if axis == 2 {
+                    DIAG_GPS_VEL_D
+                } else {
+                    DIAG_GPS_VEL
+                },
+            );
         }
 
         let v_vehicle = nominal_vehicle_velocity(&self.raw.nominal);
@@ -839,23 +835,6 @@ fn gps_axis_h(axis: usize) -> [f32; ERROR_STATES] {
         h[axis] = 1.0;
     }
     h
-}
-
-fn axis_group_passes_chi2(
-    p: &[[f32; ERROR_STATES]; ERROR_STATES],
-    states: [usize; 3],
-    residuals: [f32; 3],
-    variances: [f32; 3],
-) -> bool {
-    for axis in 0..3 {
-        let state = states[axis];
-        let s = variances[axis] + p[state][state];
-        let sigma = s.max(0.0).sqrt();
-        if sigma <= 0.0 || residuals[axis].abs() > 3.0 * sigma {
-            return false;
-        }
-    }
-    true
 }
 
 #[allow(clippy::too_many_arguments)]
