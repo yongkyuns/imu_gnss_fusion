@@ -112,6 +112,8 @@ struct Args {
     #[arg(long)]
     r_body_vel_z: Option<f32>,
     #[arg(long)]
+    attitude_roll_pitch_init_sigma_deg: Option<f32>,
+    #[arg(long)]
     yaw_init_sigma_deg: Option<f32>,
     #[arg(long)]
     gyro_bias_init_sigma_dps: Option<f32>,
@@ -173,6 +175,9 @@ fn main() -> Result<()> {
         r_body_vel_z: args
             .r_body_vel_z
             .unwrap_or(EkfCompareConfig::default().r_body_vel_z),
+        attitude_roll_pitch_init_sigma_deg: args
+            .attitude_roll_pitch_init_sigma_deg
+            .unwrap_or(EkfCompareConfig::default().attitude_roll_pitch_init_sigma_deg),
         yaw_init_sigma_deg: args
             .yaw_init_sigma_deg
             .unwrap_or(EkfCompareConfig::default().yaw_init_sigma_deg),
@@ -320,7 +325,7 @@ fn main() -> Result<()> {
         tmax
     );
     eprintln!(
-        "[profile] ekf-only misalignment={:?} predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} r_body_vel_y={:.3} r_body_vel_z={:.3} yaw_init_sigma_deg={:.3} gyro_bias_init_sigma_dps={:.3} mount_roll_pitch_init_sigma_deg={:.3} mount_yaw_init_sigma_deg={:.3} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} align_handoff_delay_s={:.3} freeze_misalignment_states={} mount_settle_time_s={:.3} mount_settle_release_sigma_deg={:.3} mount_settle_zero_cross_covariance={}",
+        "[profile] ekf-only misalignment={:?} predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} r_body_vel_y={:.3} r_body_vel_z={:.3} attitude_roll_pitch_init_sigma_deg={:.3} yaw_init_sigma_deg={:.3} gyro_bias_init_sigma_dps={:.3} mount_roll_pitch_init_sigma_deg={:.3} mount_yaw_init_sigma_deg={:.3} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} align_handoff_delay_s={:.3} freeze_misalignment_states={} mount_settle_time_s={:.3} mount_settle_release_sigma_deg={:.3} mount_settle_zero_cross_covariance={}",
         args.misalignment,
         ekf_cfg.predict_imu_decimation,
         ekf_cfg
@@ -329,6 +334,7 @@ fn main() -> Result<()> {
             .unwrap_or_else(|| "off".to_string()),
         ekf_cfg.r_body_vel,
         ekf_cfg.r_body_vel_z,
+        ekf_cfg.attitude_roll_pitch_init_sigma_deg,
         ekf_cfg.yaw_init_sigma_deg,
         ekf_cfg.gyro_bias_init_sigma_dps,
         ekf_cfg.mount_roll_pitch_init_sigma_deg,

@@ -10,6 +10,8 @@ pub struct EkfCompareConfig {
     pub r_body_vel: f32,
     #[serde(default = "default_r_body_vel_z")]
     pub r_body_vel_z: f32,
+    #[serde(default = "default_attitude_roll_pitch_init_sigma_deg")]
+    pub attitude_roll_pitch_init_sigma_deg: f32,
     pub yaw_init_sigma_deg: f32,
     pub gyro_bias_init_sigma_dps: f32,
     pub accel_bias_init_sigma_mps2: f32,
@@ -45,6 +47,7 @@ impl Default for EkfCompareConfig {
             align: AlignConfig::default(),
             r_body_vel: default_r_body_vel_y(),
             r_body_vel_z: default_r_body_vel_z(),
+            attitude_roll_pitch_init_sigma_deg: default_attitude_roll_pitch_init_sigma_deg(),
             yaw_init_sigma_deg: 6.0,
             gyro_bias_init_sigma_dps: 0.125,
             accel_bias_init_sigma_mps2: 0.15,
@@ -80,6 +83,10 @@ fn default_r_body_vel_z() -> f32 {
 
 fn default_mount_roll_pitch_init_sigma_deg() -> f32 {
     1.2
+}
+
+fn default_attitude_roll_pitch_init_sigma_deg() -> f32 {
+    2.0
 }
 
 #[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]

@@ -160,6 +160,7 @@ struct FusionConfig {
     align: AlignConfig,
     bootstrap: BootstrapConfig,
     predict_noise: PredictNoise,
+    attitude_roll_pitch_init_sigma_rad: f32,
     yaw_init_sigma_rad: f32,
     gyro_bias_init_sigma_radps: f32,
     accel_bias_init_sigma_mps2: f32,
@@ -191,6 +192,7 @@ impl Default for FusionConfig {
                 accel_bias_rw_var: 0.002e-9,
                 mount_align_rw_var: 0.0,
             },
+            attitude_roll_pitch_init_sigma_rad: 2.0_f32.to_radians(),
             yaw_init_sigma_rad: 6.0_f32.to_radians(),
             gyro_bias_init_sigma_radps: 0.125_f32.to_radians(),
             accel_bias_init_sigma_mps2: 0.15,
@@ -392,6 +394,13 @@ impl SensorFusion {
     pub fn set_yaw_init_sigma_rad(&mut self, yaw_init_sigma_rad: f32) {
         if yaw_init_sigma_rad.is_finite() && yaw_init_sigma_rad >= 0.0 {
             self.cfg.yaw_init_sigma_rad = yaw_init_sigma_rad;
+        }
+    }
+
+    /// Sets initial roll/pitch one-sigma uncertainty, in radians.
+    pub fn set_attitude_roll_pitch_init_sigma_rad(&mut self, sigma_rad: f32) {
+        if sigma_rad.is_finite() && sigma_rad >= 0.0 {
+            self.cfg.attitude_roll_pitch_init_sigma_rad = sigma_rad;
         }
     }
 
@@ -779,6 +788,17 @@ impl SensorFusion {
         }
     }
 
+    /// Diagnostic hook that directly sets residual attitude roll/pitch covariance.
+    pub fn analysis_set_eskf_attitude_roll_pitch_covariance(&mut self, sigma_rad: f32) {
+        if !self.ekf_initialized || !sigma_rad.is_finite() || sigma_rad < 0.0 {
+            return;
+        }
+        let var = sigma_rad * sigma_rad;
+        let raw = self.eskf.raw_mut();
+        raw.p[0][0] = var;
+        raw.p[1][1] = var;
+    }
+
     fn effective_freeze_misalignment_states(&self) -> bool {
         self.cfg.freeze_misalignment_states
             || self.cfg.eskf_mount_source == EskfMountSource::FollowAlign
@@ -844,6 +864,8 @@ impl SensorFusion {
         raw.p[12][12] = self.cfg.accel_bias_init_sigma_mps2.powi(2);
         raw.p[13][13] = raw.p[12][12];
         raw.p[14][14] = raw.p[12][12];
+        raw.p[0][0] = self.cfg.attitude_roll_pitch_init_sigma_rad.powi(2);
+        raw.p[1][1] = raw.p[0][0];
         raw.p[2][2] = self.cfg.yaw_init_sigma_rad.powi(2);
         let mount_var = self.cfg.mount_init_sigma_rad.powi(2);
         let mount_roll_pitch_var = self.cfg.mount_roll_pitch_init_sigma_rad.powi(2);

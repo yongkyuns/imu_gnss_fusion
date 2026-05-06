@@ -7,6 +7,40 @@ const ESKF_NHC_Y_SUPPORT: [usize; 8] = [0, 1, 2, 3, 4, 5, 15, 17];
 const ESKF_NHC_Z_SUPPORT: [usize; 8] = [0, 1, 2, 3, 4, 5, 15, 16];
 
 #[test]
+fn declared_nhc_sparse_supports_cover_generated_rows() {
+    let p = [[0.0; ERROR_STATES]; ERROR_STATES];
+    let mut eskf_y_rows = Vec::new();
+    let mut eskf_z_rows = Vec::new();
+    let mut loose_y_rows = Vec::new();
+    let mut loose_z_rows = Vec::new();
+
+    for eskf in [sample_eskf_nominal(), alternate_eskf_nominal()] {
+        let loose = sample_loose_nominal(&eskf);
+        eskf_y_rows.push(generated_eskf::body_vel_y_observation(&eskf, &p, 1.0).h);
+        eskf_z_rows.push(generated_eskf::body_vel_z_observation(&eskf, &p, 1.0).h);
+        loose_y_rows.push(generated_loose::nhc_y(&loose).1);
+        loose_z_rows.push(generated_loose::nhc_z(&loose).1);
+    }
+
+    assert_support_covers(
+        observed_support_union::<ERROR_STATES, 5>(&eskf_y_rows),
+        &ESKF_NHC_Y_SUPPORT,
+    );
+    assert_support_covers(
+        observed_support_union::<ERROR_STATES, 5>(&eskf_z_rows),
+        &ESKF_NHC_Z_SUPPORT,
+    );
+    assert_eq!(
+        observed_support_union::<LOOSE_ERROR_STATES, 6>(&loose_y_rows),
+        generated_loose::NHC_Y_SUPPORT
+    );
+    assert_eq!(
+        observed_support_union::<LOOSE_ERROR_STATES, 6>(&loose_z_rows),
+        generated_loose::NHC_Z_SUPPORT
+    );
+}
+
+#[test]
 fn eskf_and_loose_nhc_jacobians_match_after_attitude_basis_transform() {
     let eskf = EskfNominalState {
         q0: 0.979_466,
@@ -354,6 +388,23 @@ fn sample_eskf_nominal() -> EskfNominalState {
     }
 }
 
+fn alternate_eskf_nominal() -> EskfNominalState {
+    EskfNominalState {
+        q0: 0.927_361_85,
+        q1: -0.162_134_74,
+        q2: 0.307_685_73,
+        q3: -0.130_723_83,
+        vn: -3.5,
+        ve: 7.25,
+        vd: -1.2,
+        qcs0: 0.961_256_3,
+        qcs1: -0.037_259_74,
+        qcs2: 0.128_494_34,
+        qcs3: -0.241_015_14,
+        ..EskfNominalState::default()
+    }
+}
+
 fn sample_loose_nominal(eskf: &EskfNominalState) -> LooseNominalState {
     LooseNominalState {
         q0: eskf.q0,
@@ -619,6 +670,24 @@ fn row_times_mat3(row: [f32; 3], mat: [[f32; 3]; 3]) -> [f32; 3] {
         row[0] * mat[0][1] + row[1] * mat[1][1] + row[2] * mat[2][1],
         row[0] * mat[0][2] + row[1] * mat[1][2] + row[2] * mat[2][2],
     ]
+}
+
+fn observed_support_union<const N: usize, const M: usize>(rows: &[[f32; N]]) -> [usize; M] {
+    let support: Vec<_> = (0..N)
+        .filter(|idx| rows.iter().any(|row| row[*idx].abs() > 1.0e-6))
+        .collect();
+    support
+        .try_into()
+        .unwrap_or_else(|support: Vec<usize>| panic!("unexpected support {support:?}"))
+}
+
+fn assert_support_covers<const N: usize>(observed: [usize; N], declared: &[usize]) {
+    for idx in observed {
+        assert!(
+            declared.contains(&idx),
+            "generated row contains state {idx}, but declared support is {declared:?}"
+        );
+    }
 }
 
 fn assert_close(label: &str, eskf_idx: usize, loose_idx: usize, eskf: f32, loose: f32) {

@@ -439,6 +439,9 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig) {
         fusion.set_predict_noise(noise);
     }
     fusion.set_r_body_vel_yz(cfg.r_body_vel, cfg.r_body_vel_z);
+    fusion.set_attitude_roll_pitch_init_sigma_rad(
+        cfg.attitude_roll_pitch_init_sigma_deg.to_radians(),
+    );
     fusion.set_yaw_init_sigma_rad(cfg.yaw_init_sigma_deg.to_radians());
     fusion.set_gyro_bias_init_sigma_radps(cfg.gyro_bias_init_sigma_dps.to_radians());
     fusion.set_accel_bias_init_sigma_mps2(cfg.accel_bias_init_sigma_mps2);

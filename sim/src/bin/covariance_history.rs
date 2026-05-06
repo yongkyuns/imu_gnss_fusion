@@ -1,3 +1,5 @@
+use std::fs::File;
+use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -68,9 +70,17 @@ struct Args {
     #[arg(long, value_delimiter = ',')]
     trace_window: Option<Vec<f64>>,
 
+    /// Optional CSV path for per-event update allocation diagnostics.
+    #[arg(long)]
+    allocation_csv: Option<PathBuf>,
+
     /// Optional replay-relative interval summary window, formatted as start,end seconds.
     #[arg(long, value_delimiter = ',')]
     summary_window: Option<Vec<f64>>,
+
+    /// Optional replay-relative duration cap, in seconds.
+    #[arg(long)]
+    max_time_s: Option<f64>,
 
     /// Minimum spacing for periodic trace lines. Update events are printed regardless.
     #[arg(long, default_value_t = 0.10)]
@@ -116,6 +126,10 @@ struct Args {
     #[arg(long)]
     accel_bias_init_sigma_mps2: Option<f32>,
 
+    /// Diagnostic-only override for ESKF residual attitude roll/pitch covariance after initialization.
+    #[arg(long)]
+    eskf_attitude_roll_pitch_sigma_deg: Option<f32>,
+
     /// Diagnostic override for ESKF runtime zero-velocity measurement variance.
     #[arg(long)]
     r_zero_vel: Option<f32>,
@@ -135,6 +149,18 @@ struct Args {
     /// Diagnostic-only override for loose accel-scale initial sigma.
     #[arg(long)]
     loose_accel_scale_sigma: Option<f32>,
+
+    /// Diagnostic-only override for loose attitude initial sigma, in degrees.
+    #[arg(long)]
+    loose_attitude_sigma_deg: Option<f32>,
+
+    /// Diagnostic-only override for loose residual mount roll/pitch initial sigma, in degrees.
+    #[arg(long)]
+    loose_mount_sigma_deg: Option<f32>,
+
+    /// Diagnostic-only override for loose residual mount yaw initial sigma, in degrees.
+    #[arg(long)]
+    loose_mount_yaw_sigma_deg: Option<f32>,
 
     /// Diagnostic-only scale applied to ESKF GNSS position standard deviations.
     #[arg(long, default_value_t = 1.0)]
@@ -234,6 +260,293 @@ struct TraceState {
     prev_eskf_sum_dx_mount_yaw: [f32; ESKF_UPDATE_DIAG_TYPES],
 }
 
+struct AllocationCsv {
+    writer: BufWriter<File>,
+    window_abs: Option<[f64; 2]>,
+    prev_eskf_counts: [u32; ESKF_UPDATE_DIAG_TYPES],
+    prev_sum_dx_att_roll: [f32; ESKF_UPDATE_DIAG_TYPES],
+    prev_sum_dx_pitch: [f32; ESKF_UPDATE_DIAG_TYPES],
+    prev_sum_dx_yaw: [f32; ESKF_UPDATE_DIAG_TYPES],
+    prev_sum_dx_vel_n: [f32; ESKF_UPDATE_DIAG_TYPES],
+    prev_sum_dx_vel_e: [f32; ESKF_UPDATE_DIAG_TYPES],
+    prev_sum_dx_vel_d: [f32; ESKF_UPDATE_DIAG_TYPES],
+    prev_sum_dx_mount_roll: [f32; ESKF_UPDATE_DIAG_TYPES],
+    prev_sum_dx_mount_pitch: [f32; ESKF_UPDATE_DIAG_TYPES],
+    prev_sum_dx_mount_yaw: [f32; ESKF_UPDATE_DIAG_TYPES],
+    prev_sum_dx_gyro_bias: [[f32; 3]; ESKF_UPDATE_DIAG_TYPES],
+    prev_sum_dx_accel_bias: [[f32; 3]; ESKF_UPDATE_DIAG_TYPES],
+    prev_sum_innovation: [f32; ESKF_UPDATE_DIAG_TYPES],
+    prev_sum_abs_innovation: [f32; ESKF_UPDATE_DIAG_TYPES],
+    prev_sum_nis: [f32; ESKF_UPDATE_DIAG_TYPES],
+    prev_sum_h_mount_norm: [f32; ESKF_UPDATE_DIAG_TYPES],
+    prev_sum_k_mount_norm: [f32; ESKF_UPDATE_DIAG_TYPES],
+    initialized: bool,
+}
+
+impl AllocationCsv {
+    fn create(path: &PathBuf, window_abs: Option<[f64; 2]>) -> Result<Self> {
+        let mut writer = BufWriter::new(
+            File::create(path).with_context(|| format!("failed to create {}", path.display()))?,
+        );
+        writeln!(
+            writer,
+            "rel_s,t_s,system,event,update_type,count_delta,\
+innovation_sum,innovation_abs_sum,nis_sum,h_mount_norm_sum,k_mount_norm_sum,\
+dx_att_roll_deg,dx_att_pitch_deg,dx_att_yaw_deg,\
+dx_vel_n_mps,dx_vel_e_mps,dx_vel_d_mps,\
+dx_mount_roll_deg,dx_mount_pitch_deg,dx_mount_yaw_deg,\
+dx_gyro_bias_x_dps,dx_gyro_bias_y_dps,dx_gyro_bias_z_dps,\
+dx_accel_bias_x_mps2,dx_accel_bias_y_mps2,dx_accel_bias_z_mps2,\
+mount_roll_sigma_deg,mount_pitch_sigma_deg,mount_yaw_sigma_deg,\
+att_roll_sigma_deg,att_pitch_sigma_deg,att_yaw_sigma_deg,\
+mount_qerr_deg,att_qerr_deg"
+        )?;
+        Ok(Self {
+            writer,
+            window_abs,
+            prev_eskf_counts: [0; ESKF_UPDATE_DIAG_TYPES],
+            prev_sum_dx_att_roll: [0.0; ESKF_UPDATE_DIAG_TYPES],
+            prev_sum_dx_pitch: [0.0; ESKF_UPDATE_DIAG_TYPES],
+            prev_sum_dx_yaw: [0.0; ESKF_UPDATE_DIAG_TYPES],
+            prev_sum_dx_vel_n: [0.0; ESKF_UPDATE_DIAG_TYPES],
+            prev_sum_dx_vel_e: [0.0; ESKF_UPDATE_DIAG_TYPES],
+            prev_sum_dx_vel_d: [0.0; ESKF_UPDATE_DIAG_TYPES],
+            prev_sum_dx_mount_roll: [0.0; ESKF_UPDATE_DIAG_TYPES],
+            prev_sum_dx_mount_pitch: [0.0; ESKF_UPDATE_DIAG_TYPES],
+            prev_sum_dx_mount_yaw: [0.0; ESKF_UPDATE_DIAG_TYPES],
+            prev_sum_dx_gyro_bias: [[0.0; 3]; ESKF_UPDATE_DIAG_TYPES],
+            prev_sum_dx_accel_bias: [[0.0; 3]; ESKF_UPDATE_DIAG_TYPES],
+            prev_sum_innovation: [0.0; ESKF_UPDATE_DIAG_TYPES],
+            prev_sum_abs_innovation: [0.0; ESKF_UPDATE_DIAG_TYPES],
+            prev_sum_nis: [0.0; ESKF_UPDATE_DIAG_TYPES],
+            prev_sum_h_mount_norm: [0.0; ESKF_UPDATE_DIAG_TYPES],
+            prev_sum_k_mount_norm: [0.0; ESKF_UPDATE_DIAG_TYPES],
+            initialized: false,
+        })
+    }
+
+    fn record_eskf(
+        &mut self,
+        replay: &Replay,
+        event: &str,
+        t_s: f64,
+        eskf: Option<&EskfState>,
+        loose_ready: bool,
+        ref_gnss: GenericGnssSample,
+    ) -> Result<()> {
+        let Some(eskf) = eskf else {
+            return Ok(());
+        };
+        if !self.initialized {
+            self.capture_eskf_baseline(eskf);
+            self.initialized = true;
+            return Ok(());
+        }
+
+        let in_window = self.in_window(t_s) && loose_ready;
+        for (label, idx) in selected_eskf_diag_types() {
+            let count_delta = eskf.update_diag.type_counts[idx] - self.prev_eskf_counts[idx];
+            if count_delta == 0 {
+                continue;
+            }
+            if in_window {
+                let rel_s = t_s - replay_start_t_s(replay).unwrap_or(0.0);
+                let mount_qerr = reference_mount_at(&replay.reference_mount, t_s)
+                    .map(|r| {
+                        quat_angle_deg(
+                            as_q64([
+                                eskf.nominal.qcs0,
+                                eskf.nominal.qcs1,
+                                eskf.nominal.qcs2,
+                                eskf.nominal.qcs3,
+                            ]),
+                            r,
+                        )
+                    })
+                    .unwrap_or(f64::NAN);
+                let att_qerr = reference_attitude_at(&replay.reference_attitude, t_s)
+                    .map(|r| quat_angle_deg(eskf_att_q(eskf), r))
+                    .unwrap_or(f64::NAN);
+                let dg = delta3(
+                    eskf.update_diag.sum_dx_gyro_bias[idx],
+                    self.prev_sum_dx_gyro_bias[idx],
+                );
+                let da = delta3(
+                    eskf.update_diag.sum_dx_accel_bias[idx],
+                    self.prev_sum_dx_accel_bias[idx],
+                );
+                writeln!(
+                    self.writer,
+                    "{rel_s:.6},{t_s:.6},eskf,{event},{label},{count_delta},\
+{:.9},{:.9},{:.9},{:.9},{:.9},\
+{:.9},{:.9},{:.9},\
+{:.9},{:.9},{:.9},\
+{:.9},{:.9},{:.9},\
+{:.9},{:.9},{:.9},\
+{:.9},{:.9},{:.9},\
+{:.9},{:.9},{:.9},\
+{:.9},{:.9},{:.9},\
+{mount_qerr:.9},{att_qerr:.9}",
+                    eskf.update_diag.sum_innovation[idx] - self.prev_sum_innovation[idx],
+                    eskf.update_diag.sum_abs_innovation[idx] - self.prev_sum_abs_innovation[idx],
+                    eskf.update_diag.sum_nis[idx] - self.prev_sum_nis[idx],
+                    eskf.update_diag.sum_h_mount_norm[idx] - self.prev_sum_h_mount_norm[idx],
+                    eskf.update_diag.sum_k_mount_norm[idx] - self.prev_sum_k_mount_norm[idx],
+                    rad_f32_to_deg(
+                        eskf.update_diag.sum_dx_att_roll[idx] - self.prev_sum_dx_att_roll[idx]
+                    ),
+                    rad_f32_to_deg(
+                        eskf.update_diag.sum_dx_pitch[idx] - self.prev_sum_dx_pitch[idx]
+                    ),
+                    rad_f32_to_deg(eskf.update_diag.sum_dx_yaw[idx] - self.prev_sum_dx_yaw[idx]),
+                    eskf.update_diag.sum_dx_vel_n[idx] - self.prev_sum_dx_vel_n[idx],
+                    eskf.update_diag.sum_dx_vel_e[idx] - self.prev_sum_dx_vel_e[idx],
+                    eskf.update_diag.sum_dx_vel_d[idx] - self.prev_sum_dx_vel_d[idx],
+                    rad_f32_to_deg(
+                        eskf.update_diag.sum_dx_mount_roll[idx] - self.prev_sum_dx_mount_roll[idx]
+                    ),
+                    rad_f32_to_deg(
+                        eskf.update_diag.sum_dx_mount_pitch[idx]
+                            - self.prev_sum_dx_mount_pitch[idx]
+                    ),
+                    rad_f32_to_deg(
+                        eskf.update_diag.sum_dx_mount_yaw[idx] - self.prev_sum_dx_mount_yaw[idx]
+                    ),
+                    rad_f32_to_dps(dg[0]),
+                    rad_f32_to_dps(dg[1]),
+                    rad_f32_to_dps(dg[2]),
+                    da[0],
+                    da[1],
+                    da[2],
+                    sigma_deg(&eskf.p, 15),
+                    sigma_deg(&eskf.p, 16),
+                    sigma_deg(&eskf.p, 17),
+                    sigma_deg(&eskf.p, 0),
+                    sigma_deg(&eskf.p, 1),
+                    sigma_deg(&eskf.p, 2),
+                )?;
+            }
+        }
+        self.capture_eskf_baseline(eskf);
+        let _ = ref_gnss;
+        Ok(())
+    }
+
+    fn record_loose(
+        &mut self,
+        replay: &Replay,
+        t_s: f64,
+        loose: &LooseFilter,
+        ref_gnss: GenericGnssSample,
+    ) -> Result<()> {
+        if !self.in_window(t_s) || loose.last_obs_types().is_empty() {
+            return Ok(());
+        }
+        let rel_s = t_s - replay_start_t_s(replay).unwrap_or(0.0);
+        let loose_snap = LooseSnapshot {
+            nominal: *loose.nominal(),
+            p: *loose.covariance(),
+            pos_ecef: loose.shadow_pos_ecef(),
+            last_dx: *loose.last_dx(),
+            last_obs_types: loose.last_obs_types().to_vec(),
+        };
+        let p_as_eskf = transform_loose_cov_to_eskf(&loose_snap, ref_gnss);
+        let mount_qerr = reference_mount_at(&replay.reference_mount, t_s)
+            .map(|r| {
+                quat_angle_deg(
+                    as_q64([
+                        loose_snap.nominal.qcs0,
+                        loose_snap.nominal.qcs1,
+                        loose_snap.nominal.qcs2,
+                        loose_snap.nominal.qcs3,
+                    ]),
+                    r,
+                )
+            })
+            .unwrap_or(f64::NAN);
+        let att_qerr = reference_attitude_at(&replay.reference_attitude, t_s)
+            .map(|r| quat_angle_deg(loose_att_q_ned(&loose_snap, ref_gnss), r))
+            .unwrap_or(f64::NAN);
+
+        for (obs_idx, ty) in loose.last_obs_types().iter().copied().enumerate() {
+            let ty = ty as usize;
+            let row_dx = &loose.last_dx_by_obs()[obs_idx];
+            let dx_as_eskf = transform_loose_dx_to_eskf(&loose_snap, row_dx, ref_gnss);
+            let residual = loose.last_residuals()[obs_idx];
+            let innovation_var = loose.last_innovation_vars()[obs_idx];
+            let nis = if innovation_var > 0.0 {
+                residual * residual / innovation_var
+            } else {
+                f32::NAN
+            };
+            writeln!(
+                self.writer,
+                "{rel_s:.6},{t_s:.6},loose,imu,{},1,\
+{:.9},{:.9},{:.9},NaN,NaN,\
+{:.9},{:.9},{:.9},\
+{:.9},{:.9},{:.9},\
+{:.9},{:.9},{:.9},\
+{:.9},{:.9},{:.9},\
+{:.9},{:.9},{:.9},\
+{:.9},{:.9},{:.9},\
+{:.9},{:.9},{:.9},\
+{mount_qerr:.9},{att_qerr:.9}",
+                loose_obs_type_label(ty),
+                residual,
+                residual.abs(),
+                nis,
+                rad_f32_to_deg(dx_as_eskf[0]),
+                rad_f32_to_deg(dx_as_eskf[1]),
+                rad_f32_to_deg(dx_as_eskf[2]),
+                dx_as_eskf[3],
+                dx_as_eskf[4],
+                dx_as_eskf[5],
+                rad_f32_to_deg(row_dx[21]),
+                rad_f32_to_deg(row_dx[22]),
+                rad_f32_to_deg(row_dx[23]),
+                -rad_f32_to_dps(row_dx[12]),
+                -rad_f32_to_dps(row_dx[13]),
+                -rad_f32_to_dps(row_dx[14]),
+                -row_dx[9],
+                -row_dx[10],
+                -row_dx[11],
+                sigma_deg(&p_as_eskf, 15),
+                sigma_deg(&p_as_eskf, 16),
+                sigma_deg(&p_as_eskf, 17),
+                sigma_deg(&p_as_eskf, 0),
+                sigma_deg(&p_as_eskf, 1),
+                sigma_deg(&p_as_eskf, 2),
+            )?;
+        }
+        Ok(())
+    }
+
+    fn in_window(&self, t_s: f64) -> bool {
+        self.window_abs
+            .is_none_or(|[start, end]| (start..=end).contains(&t_s))
+    }
+
+    fn capture_eskf_baseline(&mut self, eskf: &EskfState) {
+        self.prev_eskf_counts = eskf.update_diag.type_counts;
+        self.prev_sum_dx_att_roll = eskf.update_diag.sum_dx_att_roll;
+        self.prev_sum_dx_pitch = eskf.update_diag.sum_dx_pitch;
+        self.prev_sum_dx_yaw = eskf.update_diag.sum_dx_yaw;
+        self.prev_sum_dx_vel_n = eskf.update_diag.sum_dx_vel_n;
+        self.prev_sum_dx_vel_e = eskf.update_diag.sum_dx_vel_e;
+        self.prev_sum_dx_vel_d = eskf.update_diag.sum_dx_vel_d;
+        self.prev_sum_dx_mount_roll = eskf.update_diag.sum_dx_mount_roll;
+        self.prev_sum_dx_mount_pitch = eskf.update_diag.sum_dx_mount_pitch;
+        self.prev_sum_dx_mount_yaw = eskf.update_diag.sum_dx_mount_yaw;
+        self.prev_sum_dx_gyro_bias = eskf.update_diag.sum_dx_gyro_bias;
+        self.prev_sum_dx_accel_bias = eskf.update_diag.sum_dx_accel_bias;
+        self.prev_sum_innovation = eskf.update_diag.sum_innovation;
+        self.prev_sum_abs_innovation = eskf.update_diag.sum_abs_innovation;
+        self.prev_sum_nis = eskf.update_diag.sum_nis;
+        self.prev_sum_h_mount_norm = eskf.update_diag.sum_h_mount_norm;
+        self.prev_sum_k_mount_norm = eskf.update_diag.sum_k_mount_norm;
+    }
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
     if let Some(window) = args.trace_window.as_ref()
@@ -251,6 +564,9 @@ fn main() -> Result<()> {
     let Some(t0) = replay_start_t_s(&replay) else {
         anyhow::bail!("empty replay");
     };
+    if let Some(max_time_s) = args.max_time_s {
+        truncate_replay_after(&mut replay, t0 + max_time_s);
+    }
     let mut targets_abs: Vec<f64> = args.times.iter().map(|t| t0 + *t).collect();
     if let Some(window) = args.summary_window.as_ref() {
         targets_abs.push(t0 + window[0]);
@@ -259,7 +575,18 @@ fn main() -> Result<()> {
     targets_abs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     targets_abs.dedup_by(|a, b| (*a - *b).abs() < 1.0e-9);
     let trace_window_abs = args.trace_window.as_ref().map(|w| [t0 + w[0], t0 + w[1]]);
-    let snapshots = run_diagnostics(&replay, &args, &targets_abs, trace_window_abs)?;
+    let allocation_window_abs = args.summary_window.as_ref().map(|w| [t0 + w[0], t0 + w[1]]);
+    let mut allocation_csv = match &args.allocation_csv {
+        Some(path) => Some(AllocationCsv::create(path, allocation_window_abs)?),
+        None => None,
+    };
+    let snapshots = run_diagnostics(
+        &replay,
+        &args,
+        &targets_abs,
+        trace_window_abs,
+        allocation_csv.as_mut(),
+    )?;
     print_snapshots(&snapshots, &replay);
     if let Some(window) = args.summary_window.as_ref() {
         print_interval_summary(&snapshots, &replay, [window[0], window[1]]);
@@ -369,6 +696,17 @@ fn sort_replay(replay: &mut Replay) {
     });
 }
 
+fn truncate_replay_after(replay: &mut Replay, end_t_s: f64) {
+    replay.imu.retain(|sample| sample.t_s <= end_t_s);
+    replay.gnss.retain(|sample| sample.t_s <= end_t_s);
+    replay
+        .reference_attitude
+        .retain(|sample| sample.t_s <= end_t_s);
+    replay
+        .reference_mount
+        .retain(|sample| sample.t_s <= end_t_s);
+}
+
 fn replay_start_t_s(replay: &Replay) -> Option<f64> {
     replay
         .imu
@@ -384,6 +722,7 @@ fn run_diagnostics(
     args: &Args,
     targets_abs: &[f64],
     trace_window_abs: Option<[f64; 2]>,
+    mut allocation_csv: Option<&mut AllocationCsv>,
 ) -> Result<Vec<Snapshot>> {
     let mut cfg = EkfCompareConfig {
         freeze_misalignment_states: args.freeze_misalignment_states,
@@ -435,6 +774,24 @@ fn run_diagnostics(
     {
         cfg.loose_init.accel_scale_sigma = sigma;
     }
+    if let Some(sigma) = args
+        .loose_attitude_sigma_deg
+        .filter(|v| v.is_finite() && *v >= 0.0)
+    {
+        cfg.loose_init.attitude_sigma_deg = sigma;
+    }
+    if let Some(sigma) = args
+        .loose_mount_sigma_deg
+        .filter(|v| v.is_finite() && *v >= 0.0)
+    {
+        cfg.loose_init.mount_sigma_deg = sigma;
+    }
+    if let Some(sigma) = args
+        .loose_mount_yaw_sigma_deg
+        .filter(|v| v.is_finite() && *v >= 0.0)
+    {
+        cfg.loose_init.mount_yaw_sigma_deg = sigma;
+    }
     let Some(ref_gnss) = replay.gnss.first().copied() else {
         anyhow::bail!("gnss replay is empty");
     };
@@ -474,6 +831,7 @@ fn run_diagnostics(
     let mut loose_nis_max_by_type = [0.0f32; 9];
     let mut trace_state = TraceState::default();
     let mut latest_transition: Option<TransitionSnapshot> = None;
+    let mut eskf_attitude_covariance_override_applied = false;
 
     let mut snapshots = Vec::new();
     let mut target_idx = 0usize;
@@ -671,6 +1029,19 @@ fn run_diagnostics(
                 loose_ready,
                 loose_obs_counts,
             );
+            if let Some(csv) = allocation_csv.as_deref_mut() {
+                let _ = csv.record_eskf(
+                    replay,
+                    "imu",
+                    sample.t_s,
+                    fusion.eskf(),
+                    loose_ready,
+                    ref_gnss,
+                );
+                if loose_ready {
+                    let _ = csv.record_loose(replay, sample.t_s, &loose, ref_gnss);
+                }
+            }
         }
         ReplayEvent::Gnss(index, sample) => {
             let _ = fusion.process_gnss(scaled_fusion_gnss_sample(
@@ -679,6 +1050,15 @@ fn run_diagnostics(
                 args.eskf_gnss_pos_d_std_scale,
                 args.eskf_gnss_vel_std_scale,
             ));
+            if !eskf_attitude_covariance_override_applied
+                && let Some(sigma_deg) = args
+                    .eskf_attitude_roll_pitch_sigma_deg
+                    .filter(|v| v.is_finite() && *v >= 0.0)
+                && fusion.eskf().is_some()
+            {
+                fusion.analysis_set_eskf_attitude_roll_pitch_covariance(sigma_deg.to_radians());
+                eskf_attitude_covariance_override_applied = true;
+            }
             let _ = align_fusion.process_gnss(fusion_gnss_sample(*sample));
             latest_gnss = Some(*sample);
             if !loose_ready && align_fusion.mount_ready() {
@@ -745,6 +1125,16 @@ fn run_diagnostics(
                 loose_ready,
                 loose_obs_counts,
             );
+            if let Some(csv) = allocation_csv.as_deref_mut() {
+                let _ = csv.record_eskf(
+                    replay,
+                    "gnss",
+                    sample.t_s,
+                    fusion.eskf(),
+                    loose_ready,
+                    ref_gnss,
+                );
+            }
         }
     });
 
@@ -789,6 +1179,9 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig, mode: E
         fusion.set_predict_noise(noise);
     }
     fusion.set_r_body_vel_yz(cfg.r_body_vel, cfg.r_body_vel_z);
+    fusion.set_attitude_roll_pitch_init_sigma_rad(
+        cfg.attitude_roll_pitch_init_sigma_deg.to_radians(),
+    );
     fusion.set_yaw_init_sigma_rad(cfg.yaw_init_sigma_deg.to_radians());
     fusion.set_gyro_bias_init_sigma_radps(cfg.gyro_bias_init_sigma_dps.to_radians());
     fusion.set_accel_bias_init_sigma_mps2(cfg.accel_bias_init_sigma_mps2);
@@ -1223,6 +1616,32 @@ fn print_interval_update_summary(start: &Snapshot, end: &Snapshot) {
 
 fn rad_f32_to_deg(value: f32) -> f64 {
     (value as f64).to_degrees()
+}
+
+fn rad_f32_to_dps(value: f32) -> f64 {
+    (value as f64).to_degrees()
+}
+
+fn delta3(current: [f32; 3], previous: [f32; 3]) -> [f32; 3] {
+    [
+        current[0] - previous[0],
+        current[1] - previous[1],
+        current[2] - previous[2],
+    ]
+}
+
+fn loose_obs_type_label(ty: usize) -> &'static str {
+    match ty {
+        1 => "pos_x",
+        2 => "pos_y",
+        3 => "pos_z",
+        4 => "vel_x",
+        5 => "vel_y",
+        6 => "vel_z",
+        7 => "nhc_y",
+        8 => "nhc_z",
+        _ => "unknown",
+    }
 }
 
 fn print_interval_sigma_summary(

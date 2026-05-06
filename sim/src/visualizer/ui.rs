@@ -1564,6 +1564,8 @@ impl App {
                                 self.tuning_gnss_outages = GnssOutageConfig::default();
                                 self.tuning_cfg.r_body_vel = defaults.r_body_vel;
                                 self.tuning_cfg.r_body_vel_z = defaults.r_body_vel_z;
+                                self.tuning_cfg.attitude_roll_pitch_init_sigma_deg =
+                                    defaults.attitude_roll_pitch_init_sigma_deg;
                                 self.tuning_cfg.yaw_init_sigma_deg = defaults.yaw_init_sigma_deg;
                                 self.tuning_cfg.gyro_bias_init_sigma_dps =
                                     defaults.gyro_bias_init_sigma_dps;
@@ -3684,6 +3686,13 @@ fn draw_eskf_tuning(
             &mut cfg.yaw_init_speed_mps,
             0.1,
             0.0..=40.0,
+        );
+        drag_f32(
+            ui,
+            "Roll/pitch attitude sigma deg",
+            &mut cfg.attitude_roll_pitch_init_sigma_deg,
+            0.5,
+            0.0..=180.0,
         );
         drag_f32(
             ui,
