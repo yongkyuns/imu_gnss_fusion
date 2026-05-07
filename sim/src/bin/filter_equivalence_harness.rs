@@ -196,11 +196,13 @@ fn load_replay(args: &Args) -> Result<(GenericReplayInput, Option<[f32; 4]>)> {
             .with_context(|| format!("failed to read {}", dir.join("gnss.csv").display()))?;
         let reference_attitude_csv = fs::read_to_string(dir.join("reference_attitude.csv")).ok();
         let reference_mount_csv = fs::read_to_string(dir.join("reference_mount.csv")).ok();
+        let reference_position_csv = fs::read_to_string(dir.join("reference_position.csv")).ok();
         let replay = parse_generic_replay_csvs_with_refs(
             &imu_csv,
             &gnss_csv,
             reference_attitude_csv.as_deref(),
             reference_mount_csv.as_deref(),
+            reference_position_csv.as_deref(),
         )?;
         let q_mount = replay
             .reference_mount

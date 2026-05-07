@@ -1,0 +1,121 @@
+{
+  "created_utc": "2026-05-06T16:58:01Z",
+  "dataset_id": "covered-parking-urban-drive-data-gap-001",
+  "description": "Urban drive through covered parking structures with a long sensor/reference data gap.",
+  "files": {
+    "gnss": {
+      "bytes": 185536,
+      "columns": [
+        "t_s",
+        "lat_deg",
+        "lon_deg",
+        "height_m",
+        "vn_mps",
+        "ve_mps",
+        "vd_mps",
+        "pos_std_n_m",
+        "pos_std_e_m",
+        "pos_std_d_m",
+        "vel_std_n_mps",
+        "vel_std_e_mps",
+        "vel_std_d_mps",
+        "heading_rad"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 53.0,
+      "last_t_s": 2158.5,
+      "media_type": "text/csv",
+      "path": "gnss.csv.gz",
+      "rows": 3615,
+      "sha256": "20f5927c8d2e4e917c569be073d2bc6fc2a988c5450f20a8c6878da9f77347bc"
+    },
+    "imu": {
+      "bytes": 4732275,
+      "columns": [
+        "t_s",
+        "gx_radps",
+        "gy_radps",
+        "gz_radps",
+        "ax_mps2",
+        "ay_mps2",
+        "az_mps2"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.0,
+      "last_t_s": 2159.193,
+      "media_type": "text/csv",
+      "path": "imu.csv.gz",
+      "rows": 197512,
+      "sha256": "a44907c4160ee361f330ff36f79c6b70d528799ed7f1a800e79c6b1715a0cd26"
+    },
+    "reference_attitude": {
+      "bytes": 879132,
+      "columns": [
+        "t_s",
+        "roll_deg",
+        "pitch_deg",
+        "yaw_deg"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.267,
+      "last_t_s": 2159.193,
+      "media_type": "text/csv",
+      "path": "reference_attitude.csv.gz",
+      "rows": 60146,
+      "sha256": "2df9ac311637334d957fa1d6f8b7c41703f854a221fbb124c08ee92f6856990f"
+    },
+    "reference_mount": {
+      "bytes": 9927,
+      "columns": [
+        "t_s",
+        "roll_deg",
+        "pitch_deg",
+        "yaw_deg"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.0,
+      "last_t_s": 2158.5,
+      "media_type": "text/csv",
+      "path": "reference_mount.csv.gz",
+      "rows": 3970,
+      "sha256": "5b4f1c9c0cc44e20300524c0c4c6cd8a6f211b245350944ec0eefbed4f48a7bf"
+    },
+    "reference_position": {
+      "bytes": 1386367,
+      "columns": [
+        "t_s",
+        "lat_deg",
+        "lon_deg",
+        "height_m",
+        "vn_mps",
+        "ve_mps",
+        "vd_mps",
+        "heading_rad"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 53.265,
+      "last_t_s": 2159.193,
+      "media_type": "text/csv",
+      "path": "reference_position.csv.gz",
+      "rows": 58540,
+      "sha256": "68599bef2089d4bc8383331c6144e4c38f13d2c3e73379cb4ee2ec5208cfc685"
+    }
+  },
+  "manifest_version": 1,
+  "samples": {
+    "gnss": 3615,
+    "imu": 197512,
+    "reference_attitude": 60146,
+    "reference_mount": 3970,
+    "reference_position": 58540
+  },
+  "schema": "generic-replay-v1",
+  "source": {
+    "format": "generic"
+  },
+  "time_span_s": {
+    "end": 2159.193,
+    "start": 0.0
+  },
+  "title": "Covered-parking urban drive, data gap 001"
+}

@@ -46,7 +46,10 @@
       const themeStorageKey = "imu_gnss_fusion.theme";
       window.__imuGnssFusionInitialMapboxToken = () => {
         const queryToken = new URLSearchParams(window.location.search).get("mapbox_token") || "";
-        const config = window.IMU_GNSS_FUSION_CONFIG || {};
+        const config = {
+          ...(window.IMU_GNSS_FUSION_CONFIG || {}),
+          ...(window.IMU_GNSS_FUSION_LOCAL_CONFIG || {}),
+        };
         const configToken = String(config.mapboxToken || config.mapbox_token || "").trim();
         const storedToken = window.localStorage.getItem(mapboxTokenStorageKey) || "";
         return queryToken || configToken || storedToken;
@@ -60,7 +63,10 @@
       };
       window.__imuGnssFusionInitialTheme = () => {
         const queryTheme = new URLSearchParams(window.location.search).get("theme") || "";
-        const config = window.IMU_GNSS_FUSION_CONFIG || {};
+        const config = {
+          ...(window.IMU_GNSS_FUSION_CONFIG || {}),
+          ...(window.IMU_GNSS_FUSION_LOCAL_CONFIG || {}),
+        };
         const configTheme = String(config.theme || "").trim();
         const storedTheme = window.localStorage.getItem(themeStorageKey) || "";
         return queryTheme || configTheme || storedTheme || "dark";

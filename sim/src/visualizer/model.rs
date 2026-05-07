@@ -38,6 +38,7 @@ pub struct PlotData {
     pub eskf_bump_pitch_speed: Vec<Trace>,
     pub eskf_bump_diag: Vec<Trace>,
     pub eskf_map: Vec<Trace>,
+    pub map_cursor: Vec<MapCursorSample>,
     pub eskf_map_heading: Vec<HeadingSample>,
     pub loose_cmp_pos: Vec<Trace>,
     pub loose_cmp_vel: Vec<Trace>,
@@ -156,10 +157,19 @@ pub struct HeadingSample {
     pub yaw_deg: f64,
 }
 
+#[cfg_attr(target_arch = "wasm32", derive(serde::Deserialize, serde::Serialize))]
+#[derive(Clone, Default)]
+pub struct MapCursorSample {
+    pub trace_name: String,
+    pub t_s: f64,
+    pub lon_deg: f64,
+    pub lat_deg: f64,
+    pub yaw_deg: Option<f64>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Page {
     Overview,
-    Map,
     Motion,
     Mount,
     Calibration,

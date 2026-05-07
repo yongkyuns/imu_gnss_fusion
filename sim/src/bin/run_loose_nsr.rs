@@ -342,6 +342,7 @@ fn main() -> Result<()> {
 
                 let nhc_active =
                     !args.disable_nhc && nhc_gate(loose.nominal(), curr, &latest_accel);
+                let nhc_gate_speed_mps = nhc_active.then_some(1.0);
                 let t = (curr.ttag_us - init.start_ttag_us) as f64 * 1.0e-6;
                 let trace_match = args
                     .trace_time_s
@@ -439,12 +440,13 @@ fn main() -> Result<()> {
                         q_cs_post: [0.0; 4],
                     };
                     if nhc_active || gps_pos_ecef.is_some() {
-                        loose.fuse_reference_batch(
+                        loose.fuse_reference_batch_full_with_nhc_speed(
                             gps_pos_ecef,
                             None,
                             gps_h_acc_m,
-                            0.0,
+                            None,
                             dt_since_last_gnss,
+                            nhc_gate_speed_mps,
                             [
                                 curr.omega_radps[0] as f32,
                                 curr.omega_radps[1] as f32,
@@ -490,6 +492,7 @@ fn main() -> Result<()> {
                     if args.diag_json.is_some()
                         && t <= args.diag_until_s
                         && (gps_pos_ecef.is_some() || nhc_active)
+                        && !row.applied_obs_types.is_empty()
                     {
                         diag_rows.push(DiagRow {
                             time_s: row.time_s,
@@ -534,12 +537,13 @@ fn main() -> Result<()> {
                         trace_row = Some(row);
                     }
                 } else if nhc_active || gps_pos_ecef.is_some() {
-                    loose.fuse_reference_batch(
+                    loose.fuse_reference_batch_full_with_nhc_speed(
                         gps_pos_ecef,
                         None,
                         gps_h_acc_m,
-                        0.0,
+                        None,
                         dt_since_last_gnss,
+                        nhc_gate_speed_mps,
                         [
                             curr.omega_radps[0] as f32,
                             curr.omega_radps[1] as f32,

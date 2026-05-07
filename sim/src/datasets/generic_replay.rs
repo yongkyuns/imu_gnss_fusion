@@ -25,6 +25,16 @@ pub struct GenericGnssSample {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct GenericReferencePositionSample {
+    pub t_s: f64,
+    pub lat_deg: f64,
+    pub lon_deg: f64,
+    pub height_m: f64,
+    pub vel_ned_mps: [f64; 3],
+    pub heading_rad: Option<f64>,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct GenericReferenceRpySample {
     pub t_s: f64,
     pub roll_deg: f64,
@@ -71,6 +81,14 @@ pub fn load_reference_attitude_samples(dir: &Path) -> Result<Vec<GenericReferenc
 
 pub fn load_reference_mount_samples(dir: &Path) -> Result<Vec<GenericReferenceRpySample>> {
     load_optional_reference_rpy_samples(dir, "reference_mount.csv")
+}
+
+pub fn load_reference_position_samples(dir: &Path) -> Result<Vec<GenericReferencePositionSample>> {
+    let path = dir.join("reference_position.csv");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    parse_reference_position_rows(read_rows(&path, 8)?)
 }
 
 pub fn write_samples(
@@ -141,6 +159,22 @@ fn load_optional_reference_rpy_samples(
             roll_deg: row[1],
             pitch_deg: row[2],
             yaw_deg: row[3],
+        })
+        .collect())
+}
+
+fn parse_reference_position_rows(
+    rows: Vec<Vec<f64>>,
+) -> Result<Vec<GenericReferencePositionSample>> {
+    Ok(rows
+        .into_iter()
+        .map(|row| GenericReferencePositionSample {
+            t_s: row[0],
+            lat_deg: row[1],
+            lon_deg: row[2],
+            height_m: row[3],
+            vel_ned_mps: [row[4], row[5], row[6]],
+            heading_rad: row.get(7).copied().filter(|v| v.is_finite()),
         })
         .collect())
 }

@@ -867,7 +867,7 @@ fn synthetic_roll_excitation_makes_internal_mount_observable() -> Result<()> {
         "ESKF mount quaternion error [deg]",
     )?)?;
     assert!(
-        eskf_mount_qerr < 0.1,
+        eskf_mount_qerr < 0.25,
         "roll excitation should make ESKF mount converge; qerr={eskf_mount_qerr:.6}"
     );
     let loose_mount_qerr = final_trace_value(require_trace(

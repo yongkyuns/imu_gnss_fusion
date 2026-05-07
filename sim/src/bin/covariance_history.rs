@@ -58,7 +58,7 @@ struct Args {
     #[arg(long, default_value_t = 2.0)]
     synthetic_gnss_hz: f64,
 
-    /// Snapshot times in replay-relative seconds. Defaults cover Galbi startup.
+    /// Snapshot times in replay-relative seconds. Defaults cover the mixed-road startup interval.
     #[arg(
         long,
         value_delimiter = ',',

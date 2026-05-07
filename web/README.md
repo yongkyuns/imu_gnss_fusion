@@ -22,7 +22,7 @@ http://localhost:8080/?page=map&theme=light&mapbox_token=<token>
 The browser stores the selected theme and any token entered in the field in local storage, so they are reused on later reloads. For local development without entering a token manually, create an ignored `web/local-config.js`:
 
 ```js
-window.IMU_GNSS_FUSION_CONFIG = {
+window.IMU_GNSS_FUSION_LOCAL_CONFIG = {
   mapboxToken: "<token>",
   theme: "dark",
 };
@@ -44,6 +44,7 @@ The browser loads `datasets/manifest.json` at startup. Entries are hardware-agno
       "base_url": "example/",
       "imu_gz": "imu.csv.gz",
       "gnss_gz": "gnss.csv.gz",
+      "reference_position_gz": "reference_position.csv.gz",
       "reference_attitude_gz": "reference_attitude.csv.gz",
       "reference_mount_gz": "reference_mount.csv.gz"
     }
@@ -51,7 +52,7 @@ The browser loads `datasets/manifest.json` at startup. Entries are hardware-agno
 }
 ```
 
-If `imu_gz`/`gnss_gz` are omitted, the loader tries `imu.csv.gz` and `gnss.csv.gz` under `base_url`, then falls back to plain `imu.csv` and `gnss.csv`. Plain CSV paths can also be set explicitly with `imu` and `gnss`. Reference files are optional and only fetched when listed explicitly.
+If `imu_gz`/`gnss_gz` are omitted, the loader tries `imu.csv.gz` and `gnss.csv.gz` under `base_url`, then falls back to plain `imu.csv` and `gnss.csv`. Plain CSV paths can also be set explicitly with `imu` and `gnss`. Reference files are optional and only fetched when listed explicitly. `reference_position.csv` is rendered as the fused reference trajectory on the map, while `gnss.csv` remains the GNSS-only trajectory and filter input.
 
 ## FPS benchmark
 

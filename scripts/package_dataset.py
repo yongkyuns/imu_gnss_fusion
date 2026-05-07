@@ -6,6 +6,7 @@ The package format is intentionally hardware agnostic:
   manifest.json
   imu.csv.gz
   gnss.csv.gz
+  reference_position.csv.gz (optional)
   reference_attitude.csv.gz (optional)
   reference_mount.csv.gz (optional)
 
@@ -58,6 +59,16 @@ GNSS_HEADER = [
     "heading_rad",
 ]
 REFERENCE_RPY_HEADER = ["t_s", "roll_deg", "pitch_deg", "yaw_deg"]
+REFERENCE_POSITION_HEADER = [
+    "t_s",
+    "lat_deg",
+    "lon_deg",
+    "height_m",
+    "vn_mps",
+    "ve_mps",
+    "vd_mps",
+    "heading_rad",
+]
 
 
 @dataclass(frozen=True)
@@ -159,6 +170,7 @@ def package_dataset(args: argparse.Namespace) -> None:
         gnss_text = read_csv_text(generic_dir, "gnss.csv")
         reference_attitude_text = read_optional_csv_text(generic_dir, "reference_attitude.csv")
         reference_mount_text = read_optional_csv_text(generic_dir, "reference_mount.csv")
+        reference_position_text = read_optional_csv_text(generic_dir, "reference_position.csv")
         imu_stats = validate_csv(imu_text, IMU_HEADER, "imu.csv")
         gnss_stats = validate_csv(gnss_text, GNSS_HEADER, "gnss.csv")
         reference_attitude_stats = (
@@ -169,6 +181,15 @@ def package_dataset(args: argparse.Namespace) -> None:
         reference_mount_stats = (
             validate_csv(reference_mount_text, REFERENCE_RPY_HEADER, "reference_mount.csv")
             if reference_mount_text is not None
+            else None
+        )
+        reference_position_stats = (
+            validate_csv(
+                reference_position_text,
+                REFERENCE_POSITION_HEADER,
+                "reference_position.csv",
+            )
+            if reference_position_text is not None
             else None
         )
 
@@ -184,6 +205,11 @@ def package_dataset(args: argparse.Namespace) -> None:
             if reference_mount_text is not None
             else None
         )
+        reference_position_file = (
+            write_gzip_csv(output_dir / "reference_position.csv.gz", reference_position_text)
+            if reference_position_text is not None
+            else None
+        )
         if args.keep_csv:
             (output_dir / "imu.csv").write_text(imu_text, encoding="utf-8")
             (output_dir / "gnss.csv").write_text(gnss_text, encoding="utf-8")
@@ -194,6 +220,10 @@ def package_dataset(args: argparse.Namespace) -> None:
             if reference_mount_text is not None:
                 (output_dir / "reference_mount.csv").write_text(
                     reference_mount_text, encoding="utf-8"
+                )
+            if reference_position_text is not None:
+                (output_dir / "reference_position.csv").write_text(
+                    reference_position_text, encoding="utf-8"
                 )
 
         files = {
@@ -224,6 +254,16 @@ def package_dataset(args: argparse.Namespace) -> None:
             )
             samples["reference_mount"] = reference_mount_stats.rows
             time_values.extend([reference_mount_stats.first_t_s, reference_mount_stats.last_t_s])
+        if reference_position_file is not None and reference_position_stats is not None:
+            files["reference_position"] = file_manifest(
+                reference_position_file,
+                reference_position_stats,
+                REFERENCE_POSITION_HEADER,
+            )
+            samples["reference_position"] = reference_position_stats.rows
+            time_values.extend(
+                [reference_position_stats.first_t_s, reference_position_stats.last_t_s]
+            )
         manifest = {
             "manifest_version": 1,
             "dataset_id": dataset_id,
@@ -267,10 +307,12 @@ def ensure_output_dir(output_dir: Path, force: bool) -> None:
             "gnss.csv.gz",
             "reference_attitude.csv.gz",
             "reference_mount.csv.gz",
+            "reference_position.csv.gz",
             "imu.csv",
             "gnss.csv",
             "reference_attitude.csv",
             "reference_mount.csv",
+            "reference_position.csv",
         ]:
             path = output_dir / name
             if path.exists():

@@ -1,154 +1,191 @@
 {
   "datasets": [
     {
-      "id": "ubx_raw_20260312_170548",
-      "label": "Baseline 2026-03-12 17:05:48",
-      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
-      "base_url": "ubx_raw_20260312_170548",
+      "id": "urban-short-turn-loop-nominal-001",
+      "label": "Urban short turn loop 001",
+      "description": "Short urban drive with repeated low-speed turns and nominal GNSS coverage.",
+      "base_url": "urban-short-turn-loop-nominal-001",
       "imu_gz": "imu.csv.gz",
       "gnss_gz": "gnss.csv.gz",
       "reference_attitude_gz": "reference_attitude.csv.gz",
-      "reference_mount_gz": "reference_mount.csv.gz"
+      "reference_mount_gz": "reference_mount.csv.gz",
+      "reference_position_gz": "reference_position.csv.gz"
     },
     {
-      "id": "ubx_raw_20260312_170901",
-      "label": "Baseline 2026-03-12 17:09:01",
-      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
-      "base_url": "ubx_raw_20260312_170901",
+      "id": "urban-short-turn-loop-nominal-002",
+      "label": "Urban short turn loop 002",
+      "description": "Short urban drive with repeated low-speed turns and nominal GNSS coverage.",
+      "base_url": "urban-short-turn-loop-nominal-002",
       "imu_gz": "imu.csv.gz",
       "gnss_gz": "gnss.csv.gz",
       "reference_attitude_gz": "reference_attitude.csv.gz",
-      "reference_mount_gz": "reference_mount.csv.gz"
+      "reference_mount_gz": "reference_mount.csv.gz",
+      "reference_position_gz": "reference_position.csv.gz"
     },
     {
-      "id": "ubx_raw_20260312_171222",
-      "label": "Baseline 2026-03-12 17:12:22",
-      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
-      "base_url": "ubx_raw_20260312_171222",
+      "id": "urban-medium-turn-loop-nominal-001",
+      "label": "Urban medium turn loop 001",
+      "description": "Medium urban drive with repeated turns and nominal GNSS coverage.",
+      "base_url": "urban-medium-turn-loop-nominal-001",
       "imu_gz": "imu.csv.gz",
       "gnss_gz": "gnss.csv.gz",
       "reference_attitude_gz": "reference_attitude.csv.gz",
-      "reference_mount_gz": "reference_mount.csv.gz"
+      "reference_mount_gz": "reference_mount.csv.gz",
+      "reference_position_gz": "reference_position.csv.gz"
     },
     {
-      "id": "ubx_raw_20260312_171747",
-      "label": "Baseline 2026-03-12 17:17:47",
-      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
-      "base_url": "ubx_raw_20260312_171747",
+      "id": "urban-medium-turn-loop-nominal-002",
+      "label": "Urban medium turn loop 002",
+      "description": "Medium urban drive with repeated turns and nominal GNSS coverage.",
+      "base_url": "urban-medium-turn-loop-nominal-002",
       "imu_gz": "imu.csv.gz",
       "gnss_gz": "gnss.csv.gz",
       "reference_attitude_gz": "reference_attitude.csv.gz",
-      "reference_mount_gz": "reference_mount.csv.gz"
+      "reference_mount_gz": "reference_mount.csv.gz",
+      "reference_position_gz": "reference_position.csv.gz"
     },
     {
-      "id": "ubx_raw_20260312_172206",
-      "label": "Baseline 2026-03-12 17:22:06",
-      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
-      "base_url": "ubx_raw_20260312_172206",
+      "id": "urban-long-turn-loop-nominal-001",
+      "label": "Urban long turn loop 001",
+      "description": "Longer urban drive with repeated turns and nominal GNSS coverage.",
+      "base_url": "urban-long-turn-loop-nominal-001",
       "imu_gz": "imu.csv.gz",
       "gnss_gz": "gnss.csv.gz",
       "reference_attitude_gz": "reference_attitude.csv.gz",
-      "reference_mount_gz": "reference_mount.csv.gz"
+      "reference_mount_gz": "reference_mount.csv.gz",
+      "reference_position_gz": "reference_position.csv.gz"
     },
     {
-      "id": "ubx_raw_20260309_112501",
-      "label": "Baseline 2026-03-09 11:25:01",
-      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
-      "base_url": "ubx_raw_20260309_112501",
+      "id": "parking-lot-figure8-nominal-001",
+      "label": "Parking-lot figure eight 001",
+      "description": "Parking-lot figure-eight maneuver with nominal GNSS coverage.",
+      "base_url": "parking-lot-figure8-nominal-001",
       "imu_gz": "imu.csv.gz",
       "gnss_gz": "gnss.csv.gz",
       "reference_attitude_gz": "reference_attitude.csv.gz",
-      "reference_mount_gz": "reference_mount.csv.gz"
+      "reference_mount_gz": "reference_mount.csv.gz",
+      "reference_position_gz": "reference_position.csv.gz"
     },
     {
-      "id": "ubx_raw_20260307_124850",
-      "label": "Baseline 2026-03-07 12:48:50 (large forward error)",
-      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
-      "base_url": "ubx_raw_20260307_124850",
+      "id": "parking-lot-circle-turns-nominal-001",
+      "label": "Parking-lot circle turns 001",
+      "description": "Parking-lot circular turn maneuver with nominal GNSS coverage.",
+      "base_url": "parking-lot-circle-turns-nominal-001",
       "imu_gz": "imu.csv.gz",
       "gnss_gz": "gnss.csv.gz",
       "reference_attitude_gz": "reference_attitude.csv.gz",
-      "reference_mount_gz": "reference_mount.csv.gz"
+      "reference_mount_gz": "reference_mount.csv.gz",
+      "reference_position_gz": "reference_position.csv.gz"
     },
     {
-      "id": "ubx_raw_20260309_111644",
-      "label": "Baseline 2026-03-09 11:16:44 (13 deg forward error)",
-      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
-      "base_url": "ubx_raw_20260309_111644",
+      "id": "urban-mixed-turns-nominal-001",
+      "label": "Urban mixed turns 001",
+      "description": "Urban drive with mixed turns and nominal GNSS coverage.",
+      "base_url": "urban-mixed-turns-nominal-001",
       "imu_gz": "imu.csv.gz",
       "gnss_gz": "gnss.csv.gz",
       "reference_attitude_gz": "reference_attitude.csv.gz",
-      "reference_mount_gz": "reference_mount.csv.gz"
+      "reference_mount_gz": "reference_mount.csv.gz",
+      "reference_position_gz": "reference_position.csv.gz"
     },
     {
-      "id": "ubx_raw_20260326_215732",
-      "label": "Home to parking lot 2026-03-26",
-      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
-      "base_url": "ubx_raw_20260326_215732",
+      "id": "urban-stop-go-tight-turns-nominal-001",
+      "label": "Urban stop-go tight turns 001",
+      "description": "Urban stop-go drive with tight turns and nominal GNSS coverage.",
+      "base_url": "urban-stop-go-tight-turns-nominal-001",
       "imu_gz": "imu.csv.gz",
       "gnss_gz": "gnss.csv.gz",
       "reference_attitude_gz": "reference_attitude.csv.gz",
-      "reference_mount_gz": "reference_mount.csv.gz"
+      "reference_mount_gz": "reference_mount.csv.gz",
+      "reference_position_gz": "reference_position.csv.gz"
     },
     {
-      "id": "ubx_raw_20260326_220633",
-      "label": "Figure 8 2026-03-26",
-      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
-      "base_url": "ubx_raw_20260326_220633",
+      "id": "mixed-road-long-drive-nominal-001",
+      "label": "Mixed-road long drive 001",
+      "description": "Long mixed-road drive with urban and highway-speed sections.",
+      "base_url": "mixed-road-long-drive-nominal-001",
       "imu_gz": "imu.csv.gz",
       "gnss_gz": "gnss.csv.gz",
       "reference_attitude_gz": "reference_attitude.csv.gz",
-      "reference_mount_gz": "reference_mount.csv.gz"
+      "reference_mount_gz": "reference_mount.csv.gz",
+      "reference_position_gz": "reference_position.csv.gz"
     },
     {
-      "id": "ubx_raw_20260326_220916",
-      "label": "Round maneuver 2026-03-26",
-      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
-      "base_url": "ubx_raw_20260326_220916",
+      "id": "mixed-road-long-drive-large-mount-001",
+      "label": "Mixed-road long drive, large mount offset 001",
+      "description": "Long mixed-road drive with highway-speed sections and a large sensor mount offset.",
+      "base_url": "mixed-road-long-drive-large-mount-001",
       "imu_gz": "imu.csv.gz",
       "gnss_gz": "gnss.csv.gz",
       "reference_attitude_gz": "reference_attitude.csv.gz",
-      "reference_mount_gz": "reference_mount.csv.gz"
+      "reference_mount_gz": "reference_mount.csv.gz",
+      "reference_position_gz": "reference_position.csv.gz"
     },
     {
-      "id": "ubx_raw_20260326_221113",
-      "label": "Drive thru 2026-03-26",
-      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
-      "base_url": "ubx_raw_20260326_221113",
+      "id": "mixed-road-long-drive-large-mount-002",
+      "label": "Mixed-road long drive, large mount offset 002",
+      "description": "Long mixed-road drive with highway-speed sections and a large sensor mount offset.",
+      "base_url": "mixed-road-long-drive-large-mount-002",
       "imu_gz": "imu.csv.gz",
       "gnss_gz": "gnss.csv.gz",
       "reference_attitude_gz": "reference_attitude.csv.gz",
-      "reference_mount_gz": "reference_mount.csv.gz"
+      "reference_mount_gz": "reference_mount.csv.gz",
+      "reference_position_gz": "reference_position.csv.gz"
     },
     {
-      "id": "ubx_raw_20260328_153757",
-      "label": "Galbi town 2026-03-28",
-      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
-      "base_url": "ubx_raw_20260328_153757",
+      "id": "urban-stop-go-large-mount-001",
+      "label": "Urban stop-go drive, large mount offset 001",
+      "description": "Urban stop-go drive with extended stationary periods and a large sensor mount offset.",
+      "base_url": "urban-stop-go-large-mount-001",
       "imu_gz": "imu.csv.gz",
       "gnss_gz": "gnss.csv.gz",
       "reference_attitude_gz": "reference_attitude.csv.gz",
-      "reference_mount_gz": "reference_mount.csv.gz"
+      "reference_mount_gz": "reference_mount.csv.gz",
+      "reference_position_gz": "reference_position.csv.gz"
     },
     {
-      "id": "ubx_raw_20260328_173732",
-      "label": "Galbi town to Square One 2026-03-28 (low signal)",
-      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
-      "base_url": "ubx_raw_20260328_173732",
+      "id": "urban-low-speed-low-signal-001",
+      "label": "Urban low-speed drive, low signal 001",
+      "description": "Low-speed urban drive with degraded positioning/reference signal quality.",
+      "base_url": "urban-low-speed-low-signal-001",
       "imu_gz": "imu.csv.gz",
       "gnss_gz": "gnss.csv.gz",
       "reference_attitude_gz": "reference_attitude.csv.gz",
-      "reference_mount_gz": "reference_mount.csv.gz"
+      "reference_mount_gz": "reference_mount.csv.gz",
+      "reference_position_gz": "reference_position.csv.gz"
     },
     {
-      "id": "ubx_raw_20260328_185927",
-      "label": "Square One to home 2026-03-28 (low signal)",
-      "description": "Baseline experimental drive converted to hardware-agnostic generic replay CSV.",
-      "base_url": "ubx_raw_20260328_185927",
+      "id": "mixed-road-highway-low-signal-001",
+      "label": "Mixed-road highway drive, low signal 001",
+      "description": "Mixed-road drive with highway-speed sections and degraded positioning/reference signal quality.",
+      "base_url": "mixed-road-highway-low-signal-001",
       "imu_gz": "imu.csv.gz",
       "gnss_gz": "gnss.csv.gz",
       "reference_attitude_gz": "reference_attitude.csv.gz",
-      "reference_mount_gz": "reference_mount.csv.gz"
+      "reference_mount_gz": "reference_mount.csv.gz",
+      "reference_position_gz": "reference_position.csv.gz"
+    },
+    {
+      "id": "covered-parking-urban-drive-gnss-outage-001",
+      "label": "Covered-parking urban drive, GNSS outage 001",
+      "description": "Urban drive through covered parking structures with GNSS outage intervals.",
+      "base_url": "covered-parking-urban-drive-gnss-outage-001",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz",
+      "reference_attitude_gz": "reference_attitude.csv.gz",
+      "reference_mount_gz": "reference_mount.csv.gz",
+      "reference_position_gz": "reference_position.csv.gz"
+    },
+    {
+      "id": "covered-parking-urban-drive-data-gap-001",
+      "label": "Covered-parking urban drive, data gap 001",
+      "description": "Urban drive through covered parking structures with a long sensor/reference data gap.",
+      "base_url": "covered-parking-urban-drive-data-gap-001",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz",
+      "reference_attitude_gz": "reference_attitude.csv.gz",
+      "reference_mount_gz": "reference_mount.csv.gz",
+      "reference_position_gz": "reference_position.csv.gz"
     }
   ]
 }

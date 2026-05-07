@@ -16,6 +16,7 @@ const IMU_HEADER = "t_s,gx_radps,gy_radps,gz_radps,ax_mps2,ay_mps2,az_mps2";
 const GNSS_HEADER =
   "t_s,lat_deg,lon_deg,height_m,vn_mps,ve_mps,vd_mps,pos_std_n_m,pos_std_e_m,pos_std_d_m,vel_std_n_mps,vel_std_e_mps,vel_std_d_mps,heading_rad";
 const REFERENCE_RPY_HEADER = "t_s,roll_deg,pitch_deg,yaw_deg";
+const REFERENCE_POSITION_HEADER = "t_s,lat_deg,lon_deg,height_m,vn_mps,ve_mps,vd_mps,heading_rad";
 
 function usage() {
   console.log(`Usage: node scripts/validate_generic_datasets.mjs [options]
@@ -278,14 +279,18 @@ async function validateReplayCsvs(replayDir, label) {
   );
   const referenceAttitude = await readOptionalReplayCsv(replayDir, "reference_attitude.csv");
   const referenceMount = await readOptionalReplayCsv(replayDir, "reference_mount.csv");
+  const referencePosition = await readOptionalReplayCsv(replayDir, "reference_position.csv");
   const referenceAttitudeRows = referenceAttitude
     ? (await validateCsv(referenceAttitude, `${replayDir}/reference_attitude.csv`, REFERENCE_RPY_HEADER, false)).rows
     : 0;
   const referenceMountRows = referenceMount
     ? (await validateCsv(referenceMount, `${replayDir}/reference_mount.csv`, REFERENCE_RPY_HEADER, false)).rows
     : 0;
+  const referencePositionRows = referencePosition
+    ? (await validateCsv(referencePosition, `${replayDir}/reference_position.csv`, REFERENCE_POSITION_HEADER, false)).rows
+    : 0;
   console.log(
-    `${label}: imu_rows=${imu.rows} gnss_rows=${gnss.rows} reference_attitude_rows=${referenceAttitudeRows} reference_mount_rows=${referenceMountRows}`,
+    `${label}: imu_rows=${imu.rows} gnss_rows=${gnss.rows} reference_attitude_rows=${referenceAttitudeRows} reference_mount_rows=${referenceMountRows} reference_position_rows=${referencePositionRows}`,
   );
 }
 
@@ -367,6 +372,11 @@ async function makeSmokeReplay(dataset, replayDir, args) {
   await writeOptionalCsvSubset(
     path.join(replayDir, "reference_mount.csv"),
     path.join(smokeDir, "reference_mount.csv"),
+    smoke.max_gnss_rows || 200,
+  );
+  await writeOptionalCsvSubset(
+    path.join(replayDir, "reference_position.csv"),
+    path.join(smokeDir, "reference_position.csv"),
     smoke.max_gnss_rows || 200,
   );
   return smokeDir;

@@ -117,9 +117,10 @@ Replay directories can also include optional reference traces used only for eval
 ```text
 reference_attitude.csv
 reference_mount.csv
+reference_position.csv
 ```
 
-Both reference CSVs use `t_s,roll_deg,pitch_deg,yaw_deg`. They are intentionally generic: a converter may derive them from any trusted reference system, but this repository does not depend on the reference device protocol.
+Attitude and mount reference CSVs use `t_s,roll_deg,pitch_deg,yaw_deg`. Position references use `t_s,lat_deg,lon_deg,height_m,vn_mps,ve_mps,vd_mps,heading_rad`. They are intentionally generic: a converter may derive them from any trusted reference system, but this repository does not depend on the reference device protocol.
 
 Example conversions:
 
@@ -141,6 +142,7 @@ The hosted dataset layout is:
 manifest.json
 imu.csv.gz
 gnss.csv.gz
+reference_position.csv.gz  # optional
 reference_attitude.csv.gz  # optional
 reference_mount.csv.gz     # optional
 ```

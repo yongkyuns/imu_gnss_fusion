@@ -1,0 +1,121 @@
+{
+  "created_utc": "2026-05-06T16:57:56Z",
+  "dataset_id": "covered-parking-urban-drive-gnss-outage-001",
+  "description": "Urban drive through covered parking structures with GNSS outage intervals.",
+  "files": {
+    "gnss": {
+      "bytes": 212877,
+      "columns": [
+        "t_s",
+        "lat_deg",
+        "lon_deg",
+        "height_m",
+        "vn_mps",
+        "ve_mps",
+        "vd_mps",
+        "pos_std_n_m",
+        "pos_std_e_m",
+        "pos_std_d_m",
+        "vel_std_n_mps",
+        "vel_std_e_mps",
+        "vel_std_d_mps",
+        "heading_rad"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 104.5,
+      "last_t_s": 2148.0,
+      "media_type": "text/csv",
+      "path": "gnss.csv.gz",
+      "rows": 3710,
+      "sha256": "aac22e84e37e6b829d6aaa33cbb3d5c852732315a8e326012fec14d44bb96816"
+    },
+    "imu": {
+      "bytes": 6482336,
+      "columns": [
+        "t_s",
+        "gx_radps",
+        "gy_radps",
+        "gz_radps",
+        "ax_mps2",
+        "ay_mps2",
+        "az_mps2"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.19115837633609772,
+      "last_t_s": 2148.6938741134404,
+      "media_type": "text/csv",
+      "path": "imu.csv.gz",
+      "rows": 213790,
+      "sha256": "2c78534d6e163174090d40975d7d36b2911fee393b5eef278333e6783e11ddb4"
+    },
+    "reference_attitude": {
+      "bytes": 853058,
+      "columns": [
+        "t_s",
+        "roll_deg",
+        "pitch_deg",
+        "yaw_deg"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.214,
+      "last_t_s": 2148.7,
+      "media_type": "text/csv",
+      "path": "reference_attitude.csv.gz",
+      "rows": 65098,
+      "sha256": "7f6b5241a2cb3df5b7a3ca13e8913752396ca4a6f8f36985992a3866af2f685f"
+    },
+    "reference_mount": {
+      "bytes": 11564,
+      "columns": [
+        "t_s",
+        "roll_deg",
+        "pitch_deg",
+        "yaw_deg"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.0,
+      "last_t_s": 2148.0,
+      "media_type": "text/csv",
+      "path": "reference_mount.csv.gz",
+      "rows": 4297,
+      "sha256": "cf9c7b0b2bc9afae64aa48ed7d2a1da15804e8d6e9bffff9b4e6aa325f07d41a"
+    },
+    "reference_position": {
+      "bytes": 1574513,
+      "columns": [
+        "t_s",
+        "lat_deg",
+        "lon_deg",
+        "height_m",
+        "vn_mps",
+        "ve_mps",
+        "vd_mps",
+        "heading_rad"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 104.746,
+      "last_t_s": 2148.7,
+      "media_type": "text/csv",
+      "path": "reference_position.csv.gz",
+      "rows": 61833,
+      "sha256": "b2a58d5508fff6dd5df725af8bfa3196e8e9939dd63f5558230344499be7e289"
+    }
+  },
+  "manifest_version": 1,
+  "samples": {
+    "gnss": 3710,
+    "imu": 213790,
+    "reference_attitude": 65098,
+    "reference_mount": 4297,
+    "reference_position": 61833
+  },
+  "schema": "generic-replay-v1",
+  "source": {
+    "format": "generic"
+  },
+  "time_span_s": {
+    "end": 2148.7,
+    "start": 0.0
+  },
+  "title": "Covered-parking urban drive, GNSS outage 001"
+}

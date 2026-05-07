@@ -7,15 +7,15 @@ use sensor_fusion::loose::{
 };
 
 use crate::datasets::generic_replay::{
-    GenericGnssSample, GenericImuSample, GenericReferenceRpySample, fusion_gnss_sample,
-    fusion_imu_sample,
+    GenericGnssSample, GenericImuSample, GenericReferencePositionSample, GenericReferenceRpySample,
+    fusion_gnss_sample, fusion_imu_sample,
 };
 use crate::eval::gnss_ins::{as_q64, quat_angle_deg, quat_conj, quat_mul};
 use crate::eval::replay::{ReplayEvent, for_each_event};
 use crate::visualizer::math::{ecef_to_ned, lla_to_ecef, ned_to_lla_exact, quat_rpy_deg};
 use crate::visualizer::model::{
-    EkfImuSource, HeadingSample, PlotData, StateContribution, StateCorrelation, Trace,
-    UpdateInspectorSample,
+    EkfImuSource, HeadingSample, MapCursorSample, PlotData, StateContribution, StateCorrelation,
+    Trace, UpdateInspectorSample,
 };
 use crate::visualizer::pipeline::{EkfCompareConfig, GnssOutageConfig};
 
@@ -32,6 +32,7 @@ pub struct GenericReplayInput {
     pub gnss: Vec<GenericGnssSample>,
     pub reference_attitude: Vec<GenericReferenceRpySample>,
     pub reference_mount: Vec<GenericReferenceRpySample>,
+    pub reference_position: Vec<GenericReferencePositionSample>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -100,6 +101,7 @@ impl GenericReplayInput {
             gnss,
             reference_attitude: Vec::new(),
             reference_mount: Vec::new(),
+            reference_position: Vec::new(),
         }
     }
 }
@@ -150,7 +152,7 @@ fn replay_time_range(replay: &GenericReplayInput) -> Option<(f64, f64)> {
 }
 
 pub fn parse_generic_replay_csvs(imu_csv: &str, gnss_csv: &str) -> Result<GenericReplayInput> {
-    parse_generic_replay_csvs_with_refs(imu_csv, gnss_csv, None, None)
+    parse_generic_replay_csvs_with_refs(imu_csv, gnss_csv, None, None, None)
 }
 
 pub fn parse_generic_replay_csvs_with_refs(
@@ -158,6 +160,7 @@ pub fn parse_generic_replay_csvs_with_refs(
     gnss_csv: &str,
     reference_attitude_csv: Option<&str>,
     reference_mount_csv: Option<&str>,
+    reference_position_csv: Option<&str>,
 ) -> Result<GenericReplayInput> {
     let mut imu = parse_imu_csv(imu_csv)?;
     let mut gnss = parse_gnss_csv(gnss_csv)?;
@@ -167,6 +170,10 @@ pub fn parse_generic_replay_csvs_with_refs(
         .unwrap_or_default();
     let mut reference_mount = reference_mount_csv
         .map(parse_reference_rpy_csv)
+        .transpose()?
+        .unwrap_or_default();
+    let mut reference_position = reference_position_csv
+        .map(parse_reference_position_csv)
         .transpose()?
         .unwrap_or_default();
     imu.sort_by(|a, b| {
@@ -189,6 +196,11 @@ pub fn parse_generic_replay_csvs_with_refs(
             .partial_cmp(&b.t_s)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+    reference_position.sort_by(|a, b| {
+        a.t_s
+            .partial_cmp(&b.t_s)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     if imu.is_empty() {
         bail!("imu.csv contained no samples");
     }
@@ -200,6 +212,7 @@ pub fn parse_generic_replay_csvs_with_refs(
         gnss,
         reference_attitude,
         reference_mount,
+        reference_position,
     })
 }
 
@@ -300,7 +313,12 @@ fn build_generic_replay_plot_data_impl(
     let mut gnss_vel_n = Vec::new();
     let mut gnss_vel_e = Vec::new();
     let mut gnss_vel_d = Vec::new();
+    let mut reference_vel_n = Vec::new();
+    let mut reference_vel_e = Vec::new();
+    let mut reference_vel_d = Vec::new();
     let mut gnss_map = Vec::new();
+    let mut reference_position_map = Vec::new();
+    let mut map_cursor = Vec::new();
 
     for sample in &replay.gnss {
         gnss_speed.push([
@@ -311,6 +329,13 @@ fn build_generic_replay_plot_data_impl(
         gnss_vel_e.push([sample.t_s, sample.vel_ned_mps[1]]);
         gnss_vel_d.push([sample.t_s, sample.vel_ned_mps[2]]);
         gnss_map.push([sample.lon_deg, sample.lat_deg]);
+        map_cursor.push(MapCursorSample {
+            trace_name: "GNSS-only path (lon,lat)".to_string(),
+            t_s: sample.t_s,
+            lon_deg: sample.lon_deg,
+            lat_deg: sample.lat_deg,
+            yaw_deg: heading_deg_from_sample(sample.heading_rad, sample.vel_ned_mps),
+        });
         if let (Some(ref_sample), Some(ref_ecef)) = (ref_gnss, ref_ecef) {
             let ecef = lla_to_ecef(sample.lat_deg, sample.lon_deg, sample.height_m);
             let ned = ecef_to_ned(ecef, ref_ecef, ref_sample.lat_deg, ref_sample.lon_deg);
@@ -318,6 +343,19 @@ fn build_generic_replay_plot_data_impl(
             gnss_pos_e.push([sample.t_s, ned[1]]);
             gnss_pos_d.push([sample.t_s, ned[2]]);
         }
+    }
+    for sample in &replay.reference_position {
+        reference_vel_n.push([sample.t_s, sample.vel_ned_mps[0]]);
+        reference_vel_e.push([sample.t_s, sample.vel_ned_mps[1]]);
+        reference_vel_d.push([sample.t_s, sample.vel_ned_mps[2]]);
+        reference_position_map.push([sample.lon_deg, sample.lat_deg]);
+        map_cursor.push(MapCursorSample {
+            trace_name: "Reference fused path (lon,lat)".to_string(),
+            t_s: sample.t_s,
+            lon_deg: sample.lon_deg,
+            lat_deg: sample.lat_deg,
+            yaw_deg: heading_deg_from_sample(sample.heading_rad, sample.vel_ned_mps),
+        });
     }
 
     let mut eskf_pos_n = Vec::new();
@@ -401,6 +439,7 @@ fn build_generic_replay_plot_data_impl(
                 &mut eskf_map,
                 &mut eskf_outage_map,
                 &mut eskf_heading,
+                &mut map_cursor,
                 in_outage(sample.t_s, &outage_windows),
             );
         }
@@ -483,6 +522,10 @@ fn build_generic_replay_plot_data_impl(
                 points: gnss_vel_n,
             },
             Trace {
+                name: "Reference velN [m/s]".to_string(),
+                points: reference_vel_n.clone(),
+            },
+            Trace {
                 name: "ESKF velN [m/s]".to_string(),
                 points: eskf_vel_n,
             },
@@ -491,12 +534,20 @@ fn build_generic_replay_plot_data_impl(
                 points: gnss_vel_e,
             },
             Trace {
+                name: "Reference velE [m/s]".to_string(),
+                points: reference_vel_e.clone(),
+            },
+            Trace {
                 name: "ESKF velE [m/s]".to_string(),
                 points: eskf_vel_e,
             },
             Trace {
                 name: "GNSS velD [m/s]".to_string(),
                 points: gnss_vel_d,
+            },
+            Trace {
+                name: "Reference velD [m/s]".to_string(),
+                points: reference_vel_d.clone(),
             },
             Trace {
                 name: "ESKF velD [m/s]".to_string(),
@@ -676,8 +727,12 @@ fn build_generic_replay_plot_data_impl(
         ],
         eskf_map: vec![
             Trace {
-                name: "GNSS path (lon,lat)".to_string(),
+                name: "GNSS-only path (lon,lat)".to_string(),
                 points: gnss_map,
+            },
+            Trace {
+                name: "Reference fused path (lon,lat)".to_string(),
+                points: reference_position_map,
             },
             Trace {
                 name: "ESKF path (lon,lat)".to_string(),
@@ -688,6 +743,7 @@ fn build_generic_replay_plot_data_impl(
                 points: eskf_outage_map,
             },
         ],
+        map_cursor,
         eskf_map_heading: eskf_heading,
         update_inspector,
         ..PlotData::default()
@@ -1327,6 +1383,7 @@ fn populate_loose_traces(
                 &mut data.update_inspector,
                 &mut map,
                 &mut headings,
+                &mut data.map_cursor,
             );
             gyro_x.push([sample.t_s, sample.gyro_radps[0].to_degrees()]);
             gyro_y.push([sample.t_s, sample.gyro_radps[1].to_degrees()]);
@@ -1663,6 +1720,7 @@ fn append_eskf_sample(
     map: &mut Vec<[f64; 2]>,
     outage_map: &mut Vec<[f64; 2]>,
     headings: &mut Vec<HeadingSample>,
+    map_cursor: &mut Vec<MapCursorSample>,
     outage_active: bool,
 ) {
     let Some(eskf) = fusion.eskf() else {
@@ -1763,6 +1821,22 @@ fn append_eskf_sample(
             lat_deg: lat,
             yaw_deg: y,
         });
+        map_cursor.push(MapCursorSample {
+            trace_name: "ESKF path (lon,lat)".to_string(),
+            t_s,
+            lon_deg: lon,
+            lat_deg: lat,
+            yaw_deg: Some(y),
+        });
+        if outage_active {
+            map_cursor.push(MapCursorSample {
+                trace_name: "ESKF path during GNSS outage (lon,lat)".to_string(),
+                t_s,
+                lon_deg: lon,
+                lat_deg: lat,
+                yaw_deg: Some(y),
+            });
+        }
     }
 }
 
@@ -1883,6 +1957,7 @@ fn append_loose_sample(
     update_inspector: &mut Vec<UpdateInspectorSample>,
     map: &mut Vec<[f64; 2]>,
     headings: &mut Vec<HeadingSample>,
+    map_cursor: &mut Vec<MapCursorSample>,
 ) {
     let n = loose.nominal();
     let pos_ecef = loose.shadow_pos_ecef();
@@ -1924,6 +1999,13 @@ fn append_loose_sample(
         lon_deg: lon,
         lat_deg: lat,
         yaw_deg: y,
+    });
+    map_cursor.push(MapCursorSample {
+        trace_name: "Loose path (lon,lat)".to_string(),
+        t_s,
+        lon_deg: lon,
+        lat_deg: lat,
+        yaw_deg: Some(y),
     });
 
     let (mr, mp, my) = q_vb_to_reference_mount_rpy(q_cs);
@@ -2559,6 +2641,31 @@ fn parse_reference_rpy_csv(text: &str) -> Result<Vec<GenericReferenceRpySample>>
         .collect())
 }
 
+fn parse_reference_position_csv(text: &str) -> Result<Vec<GenericReferencePositionSample>> {
+    let rows = parse_numeric_rows_range(text, 7..=8, "reference_position.csv")?;
+    Ok(rows
+        .into_iter()
+        .map(|row| GenericReferencePositionSample {
+            t_s: row[0],
+            lat_deg: row[1],
+            lon_deg: row[2],
+            height_m: row[3],
+            vel_ned_mps: [row[4], row[5], row[6]],
+            heading_rad: row.get(7).copied().filter(|v| v.is_finite()),
+        })
+        .collect())
+}
+
+fn heading_deg_from_sample(heading_rad: Option<f64>, vel_ned_mps: [f64; 3]) -> Option<f64> {
+    heading_rad
+        .map(f64::to_degrees)
+        .or_else(|| {
+            let speed = vel_ned_mps[0].hypot(vel_ned_mps[1]);
+            (speed > 0.2).then(|| vel_ned_mps[1].atan2(vel_ned_mps[0]).to_degrees())
+        })
+        .filter(|heading| heading.is_finite())
+}
+
 fn rpy_series_from_samples(samples: &[GenericReferenceRpySample]) -> Option<[Vec<[f64; 2]>; 3]> {
     if samples.is_empty() {
         return None;
@@ -2756,6 +2863,7 @@ mod tests {
                     yaw_deg: 6.0,
                 },
             ],
+            reference_position: Vec::new(),
         };
 
         let seed = reference_mount_seed_q_vb(&replay, EkfImuSource::Ref).unwrap();

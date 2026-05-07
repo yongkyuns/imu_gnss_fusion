@@ -172,6 +172,7 @@ pub fn build_synthetic_replay_input(
             gnss,
             reference_attitude,
             reference_mount,
+            reference_position: Vec::new(),
         },
         [
             q_truth_mount[0] as f32,
@@ -368,6 +369,7 @@ fn build_synthetic_plot_data_impl(
         gnss,
         reference_attitude,
         reference_mount,
+        reference_position: Vec::new(),
     };
     let eskf_mount_seed = ekf_imu_source.uses_ref_mount().then_some([
         q_truth_mount[0] as f32,
@@ -452,7 +454,7 @@ fn add_synthetic_overlays(data: &mut PlotData, traces: SyntheticOverlayTraces) {
     rename_trace(&mut data.eskf_cmp_att, "ekf initialized", "EKF initialized");
     rename_trace(
         &mut data.eskf_map,
-        "GNSS path (lon,lat)",
+        "GNSS-only path (lon,lat)",
         "Synthetic GNSS path (lon,lat)",
     );
     replace_trace_points(

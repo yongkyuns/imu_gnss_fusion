@@ -44,6 +44,7 @@ function normalizeReplayJob(request) {
       gnssCsv: request.gnssCsv || "",
       referenceAttitudeCsv: request.referenceAttitudeCsv ?? null,
       referenceMountCsv: request.referenceMountCsv ?? null,
+      referencePositionCsv: request.referencePositionCsv ?? null,
     },
   };
 }
@@ -92,6 +93,7 @@ function runReplayJob(request) {
     request.gnssCsv || "",
     request.referenceAttitudeCsv ?? null,
     request.referenceMountCsv ?? null,
+    request.referencePositionCsv ?? null,
   );
   return {
     ok: true,

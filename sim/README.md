@@ -53,6 +53,9 @@ The common replay format is a directory with:
 - Optional `reference_attitude.csv` and `reference_mount.csv`
   - columns: `t_s,roll_deg,pitch_deg,yaw_deg`
   - used by visualizer comparison plots only; filter inputs still come from the public generic IMU/GNSS path
+- Optional `reference_position.csv`
+  - columns: `t_s,lat_deg,lon_deg,height_m,vn_mps,ve_mps,vd_mps,heading_rad`
+  - used by the map as a fused reference trajectory; `gnss.csv` remains the GNSS-only trajectory and filter input
 
 Hardware-specific converters should live outside this repository and emit this schema.
 
