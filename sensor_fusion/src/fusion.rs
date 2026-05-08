@@ -1224,9 +1224,7 @@ impl SensorFusion {
         let (obs_dt, last_t_s) =
             self.nhc_observation_interval(self.last_reduced_nhc_t_s, t_s, dt, nhc_active);
         self.last_reduced_nhc_t_s = last_t_s;
-        let Some(obs_dt) = obs_dt else {
-            return None;
-        };
+        let obs_dt = obs_dt?;
         let r_scale = nhc_observation_r_scale(obs_dt);
         Some([
             self.cfg.r_body_vel_y * r_scale,
