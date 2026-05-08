@@ -214,6 +214,78 @@ if let Some(reduced) = fusion.reduced() {
 }
 ```
 
+## 📈 Embedded Benchmark
+
+Reduced and full filter timing was measured on an ESP32-S3 at 240 MHz using the
+`rustcam/apps/fusion_bench` harness and this workspace's current
+`sensor_fusion` crate. The benchmark uses 200 warmup iterations, then measures
+2000 predict-only iterations and 1000 measurement-update iterations. The budget
+model assumes 100 Hz IMU and 2 Hz GNSS, or 98 IMU+NHC steps/s plus 2
+IMU+GNSS+NHC steps/s.
+
+Release build settings:
+
+| Setting | Value |
+|---|---|
+| Rust profile | `release` |
+| Optimization | `opt-level = "z"` |
+| LTO | `fat` |
+| Codegen units | `1` |
+| Panic strategy | `abort` |
+| Symbols / debug | stripped symbols, debug disabled |
+| Checks | overflow checks and debug assertions disabled |
+
+Runtime speed:
+
+| Operation | Reduced | Full |
+|---|---:|---:|
+| Predict only | 595 us | 895 us |
+| IMU + NHC step | 1500 us | 1720 us |
+| IMU + GNSS + NHC step | 2320 us | 3740 us |
+| 100 Hz IMU / 2 Hz GNSS budget | 151.640 ms/s | 176.040 ms/s |
+| CPU budget at 240 MHz | 15.164% | 17.604% |
+| Average per 10 ms IMU tick | 1516.4 us | 1760.4 us |
+
+The CPU budget is computed from the steady-state sensor schedule:
+
+```text
+Reduced = 98 * 1500 us + 2 * 2320 us = 151.640 ms/s
+Full    = 98 * 1720 us + 2 * 3740 us = 176.040 ms/s
+```
+
+The linked `sensor_fusion` footprint was decoded from the benchmark firmware
+using `rust-nm -S --demangle` and the linker map. This counts symbols and
+allocated sections belonging to the `sensor_fusion` object, not the operating
+system, benchmark harness, standard library, or logging code.
+
+| Footprint item | Size |
+|---|---:|
+| Decoded function symbols | 36.7 kB |
+| Allocated text + Xtensa literal pools | 38.6 kB |
+| Read-only data/constants | 3.0 kB |
+| Total linked flash contribution | 41.6 kB |
+| Static `.data` / `.bss` RAM | 0.0 kB |
+
+The main linked-code split is approximately 17.0 kB for reduced, 19.7 kB for
+full, and 1.8 kB for shared math/navigation/covariance helpers, with the
+remaining bytes in read-only constants and compiler-generated helpers. The
+benchmark image links both reduced and full; applications that link only one
+filter can be smaller after LTO and section garbage collection.
+
+Runtime state is owned by the caller, so it is not represented as static RAM in
+the symbol table. Current compiler type layout for the persistent state objects:
+
+| Runtime object | Size |
+|---|---:|
+| `reduced::Filter` | 3.8 kB |
+| `full::Filter` | 3.5 kB |
+| `align::Align` | 0.4 kB |
+| `SensorFusion` facade, owning align + reduced + full | 8.8 kB |
+
+The timing source on this NuttX setup reports at millisecond granularity, so
+these numbers should be treated as budget-level embedded timings rather than
+cycle-accurate microbenchmarks.
+
 ## 🚀 Quick Start
 
 Requirements:
