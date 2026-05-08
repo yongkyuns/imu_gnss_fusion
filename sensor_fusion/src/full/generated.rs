@@ -66,6 +66,18 @@ pub fn error_transition(
     (f, noise_input)
 }
 
+/// Returns the generated first-order quaternion reset Jacobian block.
+pub fn reset_jacobian(dtheta: [f32; 3]) -> [[f32; 3]; 3] {
+    let mut G_reset_theta = [[0.0; 3]; 3];
+    let dtheta_x = dtheta[0];
+    let dtheta_y = dtheta[1];
+    let dtheta_z = dtheta[2];
+
+    include!("generated/attitude_reset_jacobian_generated.rs");
+
+    G_reset_theta
+}
+
 /// Returns the generated lateral nonholonomic-constraint estimate and Jacobian row.
 pub fn nhc_y(nominal: &NominalState) -> (f32, [f32; ERROR_STATES]) {
     let q0 = nominal.q0;

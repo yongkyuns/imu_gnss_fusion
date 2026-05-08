@@ -289,9 +289,14 @@ After the batch, the accumulated error is injected:
   s_g^{+}=s_g^{-}+\delta s_g,\\
   q_{cs}^{+}&=\dq(\delta\psi_{cs})\otimes q_{cs}^{-}.
 \end{align}
-Both quaternions are normalized. Unlike the runtime Reduced implementation, the
-full batch update currently does not apply an explicit post-injection reset
-Jacobian to covariance.
+Both quaternions are normalized. After injection, the attitude and residual
+mount covariance blocks are reset with the generated first-order quaternion
+reset Jacobian
+\begin{equation}
+  G_r(\delta\theta)\simeq I-\frac{1}{2}\crossmat{\delta\theta}.
+\end{equation}
+The reset is applied to the \(q_{es}\) attitude block and to the \(q_{cs}\)
+residual-mount block, then the covariance is symmetrized.
 
 \section{Seeded ECEF/NED Initialization}
 

@@ -1099,6 +1099,7 @@ impl Filter {
         self.raw.last_effective_residuals = effective_residual_diag;
         self.raw.last_innovation_vars = innovation_var_diag;
         self.inject_error_state(dx);
+        apply_reset(&mut self.raw.p, &dx);
     }
 
     fn inject_error_state(&mut self, dx: [f32; ERROR_STATES]) {
@@ -1218,6 +1219,61 @@ fn predict_covariance_sparse(
         &generated::G_ROW_COLS,
         SparseCovariancePolicy::FULL,
     )
+}
+
+fn apply_reset(p: &mut [[f32; ERROR_STATES]; ERROR_STATES], dx: &[f32; ERROR_STATES]) {
+    apply_reset_block(p, 6, [dx[6], dx[7], dx[8]]);
+    apply_reset_block(p, 21, [dx[21], dx[22], dx[23]]);
+    covariance::symmetrize(p);
+}
+
+#[allow(clippy::needless_range_loop)]
+fn apply_reset_block(p: &mut [[f32; ERROR_STATES]; ERROR_STATES], offset: usize, dtheta: [f32; 3]) {
+    let g_reset_theta = generated::reset_jacobian(dtheta);
+    let mut p_aa = [[0.0; 3]; 3];
+    let mut p_ab = [[0.0; ERROR_STATES - 3]; 3];
+    let mut next_aa = [[0.0; 3]; 3];
+
+    for i in 0..3 {
+        for j in 0..3 {
+            p_aa[i][j] = p[offset + i][offset + j];
+        }
+        for j in 0..ERROR_STATES {
+            if j >= offset && j < offset + 3 {
+                continue;
+            }
+            p_ab[i][if j < offset { j } else { j - 3 }] = p[offset + i][j];
+        }
+    }
+
+    for i in 0..3 {
+        for j in 0..3 {
+            for k in 0..3 {
+                next_aa[i][j] += g_reset_theta[i][k] * p_aa[k][j];
+            }
+        }
+    }
+
+    for i in 0..3 {
+        for j in 0..3 {
+            let mut accum = 0.0;
+            for k in 0..3 {
+                accum += next_aa[i][k] * g_reset_theta[j][k];
+            }
+            p[offset + i][offset + j] = accum;
+        }
+        for j in 0..ERROR_STATES {
+            if j >= offset && j < offset + 3 {
+                continue;
+            }
+            let mut accum = 0.0;
+            for k in 0..3 {
+                accum += g_reset_theta[i][k] * p_ab[k][if j < offset { j } else { j - 3 }];
+            }
+            p[offset + i][j] = accum;
+            p[j][offset + i] = accum;
+        }
+    }
 }
 
 fn nhc_observation_dt(dt_s: f32) -> f32 {
@@ -1340,4 +1396,49 @@ pub fn full_seeded_vehicle_ecef_split(
         ],
         [1.0, 0.0, 0.0, 0.0],
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reset_jacobian_matches_first_order_quaternion_reset() {
+        let dtheta = [0.2, -0.1, 0.05];
+        let reset = generated::reset_jacobian(dtheta);
+        let expected = [
+            [1.0, 0.5 * dtheta[2], -0.5 * dtheta[1]],
+            [-0.5 * dtheta[2], 1.0, 0.5 * dtheta[0]],
+            [0.5 * dtheta[1], -0.5 * dtheta[0], 1.0],
+        ];
+        for i in 0..3 {
+            for j in 0..3 {
+                assert!((reset[i][j] - expected[i][j]).abs() < 1.0e-7);
+            }
+        }
+    }
+
+    #[test]
+    fn apply_reset_preserves_covariance_symmetry() {
+        let mut p = [[0.0_f32; ERROR_STATES]; ERROR_STATES];
+        for i in 0..ERROR_STATES {
+            for j in i..ERROR_STATES {
+                let value = 1.0e-4 * ((i + 1) as f32) + 1.0e-6 * ((j + 1) as f32);
+                p[i][j] = value;
+                p[j][i] = value;
+            }
+            p[i][i] += 1.0;
+        }
+        let dx = [
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.01, -0.02, 0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 0.0, -0.015, 0.005, 0.01,
+        ];
+        apply_reset(&mut p, &dx);
+        for i in 0..ERROR_STATES {
+            for j in 0..ERROR_STATES {
+                assert!(p[i][j].is_finite());
+                assert!((p[i][j] - p[j][i]).abs() < 1.0e-6);
+            }
+        }
+    }
 }

@@ -181,6 +181,8 @@ def emit_reference_rust():
     GENERATED_RUST_DIR.mkdir(parents=True, exist_ok=True)
     phi, g = create_reference_transition_and_noise()
     v_c, h_y, h_z = create_reference_nhc_rows()
+    dtheta = Matrix(symbols("dtheta_x dtheta_y dtheta_z", real=True))
+    reset = Matrix.eye(3) - skew(dtheta) / 2
 
     gen = RustCodeGenerator(str(GENERATED_RUST_DIR / "reference_error_transition_generated.rs"))
     gen.print_string("Sub Expressions")
@@ -199,6 +201,13 @@ def emit_reference_rust():
     gen.close()
 
     emit_supports(GENERATED_RUST_DIR / "reference_support_generated.rs", phi, g, h_y, h_z)
+
+    gen = RustCodeGenerator(str(GENERATED_RUST_DIR / "attitude_reset_jacobian_generated.rs"))
+    gen.print_string("Generated first-order Full quaternion reset Jacobian block")
+    subexprs, reduced = cse(reset, symbols("tmp_reset_0:2000"), optimizations="basic")
+    gen.write_subexpressions(subexprs)
+    gen.write_matrix(Matrix(reduced), "G_reset_theta")
+    gen.close()
 
     write_rust_nhc_row(GENERATED_RUST_DIR / "reference_nhc_y_generated.rs", v_c[1], h_y, "tmp_nhc_y")
     write_rust_nhc_row(GENERATED_RUST_DIR / "reference_nhc_z_generated.rs", v_c[2], h_z, "tmp_nhc_z")
