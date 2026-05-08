@@ -9,7 +9,7 @@ use sim::synthetic::gnss_ins_path::{
     GpsNoiseModel, MeasurementNoiseConfig, MotionProfile, PathGenConfig, generate_with_noise,
 };
 use sim::visualizer::math::quat_rpy_deg;
-use sim::visualizer::model::{HeadingSample, MountSourceMode, PlotData, Trace};
+use sim::visualizer::model::{HeadingSample, PlotData, Trace, VisualizerMountMode};
 use sim::visualizer::pipeline::generic::{GenericReplayInput, reference_mount_rpy_to_q_bv};
 use sim::visualizer::pipeline::synthetic::{
     SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_plot_data,
@@ -84,7 +84,7 @@ fn synthetic_generic_input_and_csv_replay_share_auxiliary_trace_outputs() -> Res
             early_vel_bias_ned_mps: [0.0; 3],
             early_fault_window_s: None,
         },
-        MountSourceMode::Internal,
+        VisualizerMountMode::Auto,
         FilterCompareConfig::default(),
         GnssOutageConfig::default(),
     )?;
@@ -186,7 +186,7 @@ fn generated_generic_replay() -> Result<GenericReplayInput> {
 
 fn replay_config() -> GenericReplayJobConfig {
     GenericReplayJobConfig::full(
-        MountSourceMode::Internal,
+        VisualizerMountMode::Auto,
         FilterCompareConfig::default(),
         GnssOutageConfig::default(),
     )

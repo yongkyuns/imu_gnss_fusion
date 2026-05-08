@@ -1,7 +1,7 @@
 //! IMU-to-vehicle mount alignment from stationary gravity and GNSS-derived motion windows.
 //!
 //! The full formulation is documented in
-//! `docs/align_nhc_formulation.pdf`. In short, the filter state is the
+//! `docs/align.pdf`. In short, the filter state is the
 //! vehicle-to-body mount quaternion `q_bv` plus a 3 by 3 covariance over the
 //! mount small angle `[roll, pitch, yaw]`.
 //!

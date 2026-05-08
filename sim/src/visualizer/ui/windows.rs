@@ -2,7 +2,7 @@
 
 use eframe::egui;
 
-use crate::visualizer::model::MountSourceMode;
+use crate::visualizer::model::VisualizerMountMode;
 use crate::visualizer::pipeline::{FilterCompareConfig, GnssOutageConfig};
 
 use super::App;
@@ -40,7 +40,7 @@ impl App {
                         let defaults = FilterCompareConfig::default();
                         match panel {
                             TuningPanel::Reduced => {
-                                self.tuning_misalignment = MountSourceMode::Internal;
+                                self.tuning_misalignment = VisualizerMountMode::Auto;
                                 self.tuning_gnss_outages = GnssOutageConfig::default();
                                 self.tuning_cfg.r_body_vel = defaults.r_body_vel;
                                 self.tuning_cfg.r_body_vel_z = defaults.r_body_vel_z;

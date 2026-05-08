@@ -1,6 +1,6 @@
 //! Reduced EKF runtime, public state structs, and standalone state helpers.
 //!
-//! Mathematical details are maintained in `docs/reduced_mount_formulation.pdf`.
+//! Mathematical details are maintained in `docs/reduced.pdf`.
 //! The runtime filter is [`Filter`]. Public structs in this module define the
 //! generated-code and diagnostics data layout. Focused state-operation helpers
 //! live under [`crate::reduced::state_ops`].

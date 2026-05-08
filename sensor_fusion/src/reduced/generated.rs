@@ -7,7 +7,7 @@
 //! from the Python source instead of hand-editing formulas.
 //!
 //! The generated model implements the augmented Reduced documented in
-//! `docs/reduced_mount_formulation.pdf`: 18 error states
+//! `docs/reduced.pdf`: 18 error states
 //! `[dtheta_v, dv_n, dp_n, dbg, dba, dpsi_vb]` and 15 process-noise states
 //! `[gyro, accel, gyro_bias_rw, accel_bias_rw, mount_rw]`.
 

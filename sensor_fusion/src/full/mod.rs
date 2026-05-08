@@ -5,7 +5,7 @@
 //! precision public state plus f64 shadow position and mount quaternion fields
 //! used internally for numerically sensitive propagation.
 //!
-//! See `docs/full_formulation.pdf` for the PDF-first derivation. The nominal
+//! See `docs/full.pdf` for the PDF-first derivation. The nominal
 //! state is:
 //!
 //! ```text
@@ -66,6 +66,7 @@ const DEFAULT_NHC_R_Z: f32 = 0.05_f32 * 0.05_f32;
 #[derive(Clone, Debug)]
 pub struct Filter {
     raw: State,
+    freeze_mount_states: bool,
 }
 
 impl Filter {
@@ -78,7 +79,10 @@ impl Filter {
         raw.nominal.q0 = 1.0;
         raw.nominal.qcs0 = 1.0;
         raw.qcs64 = [1.0, 0.0, 0.0, 0.0];
-        Self { raw }
+        Self {
+            raw,
+            freeze_mount_states: false,
+        }
     }
 
     /// Returns the full full-filter state.
@@ -171,6 +175,14 @@ impl Filter {
             q_bv[2] as f64,
             q_bv[3] as f64,
         ];
+    }
+
+    /// Enables or disables mount-state freezing.
+    pub fn set_freeze_mount_states(&mut self, freeze: bool) {
+        self.freeze_mount_states = freeze;
+        if freeze {
+            freeze_mount_covariance(&mut self.raw.p);
+        }
     }
 
     /// Zeros mount cross-covariances and sets mount variance from a degree sigma.
@@ -329,11 +341,18 @@ impl Filter {
         q[15] = self.raw.noise.gyro_scale_rw_var * dt;
         q[16] = q[15];
         q[17] = q[15];
-        q[18] = self.raw.noise.mount_align_rw_var * dt;
+        q[18] = if self.freeze_mount_states {
+            0.0
+        } else {
+            self.raw.noise.mount_align_rw_var * dt
+        };
         q[19] = q[18];
         q[20] = q[18];
 
         self.raw.p = predict_covariance_sparse(&f, &g, &self.raw.p, &q);
+        if self.freeze_mount_states {
+            freeze_mount_covariance(&mut self.raw.p);
+        }
     }
 
     /// Predicts only the full nominal state from one two-sample IMU delta.
@@ -1095,6 +1114,14 @@ impl Filter {
             }
         }
 
+        if self.freeze_mount_states {
+            block_mount_injection(&mut dx);
+            for row in &mut dx_by_obs {
+                block_mount_injection(row);
+            }
+            freeze_mount_covariance(&mut self.raw.p);
+        }
+
         self.raw.last_dx.copy_from_slice(&dx);
         self.raw.last_dx_by_obs = dx_by_obs;
         self.raw.last_residuals = residual_diag;
@@ -1102,6 +1129,9 @@ impl Filter {
         self.raw.last_innovation_vars = innovation_var_diag;
         self.inject_error_state(dx);
         apply_reset(&mut self.raw.p, &dx);
+        if self.freeze_mount_states {
+            freeze_mount_covariance(&mut self.raw.p);
+        }
     }
 
     fn inject_error_state(&mut self, dx: [f32; ERROR_STATES]) {
@@ -1227,6 +1257,21 @@ fn apply_reset(p: &mut [[f32; ERROR_STATES]; ERROR_STATES], dx: &[f32; ERROR_STA
     apply_reset_block(p, 6, [dx[6], dx[7], dx[8]]);
     apply_reset_block(p, 21, [dx[21], dx[22], dx[23]]);
     covariance::symmetrize(p);
+}
+
+fn block_mount_injection(dx: &mut [f32; ERROR_STATES]) {
+    dx[21] = 0.0;
+    dx[22] = 0.0;
+    dx[23] = 0.0;
+}
+
+fn freeze_mount_covariance(p: &mut [[f32; ERROR_STATES]; ERROR_STATES]) {
+    for i in 21..24 {
+        for j in 0..ERROR_STATES {
+            p[i][j] = 0.0;
+            p[j][i] = 0.0;
+        }
+    }
 }
 
 #[allow(clippy::needless_range_loop)]

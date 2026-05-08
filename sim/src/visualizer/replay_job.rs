@@ -6,7 +6,7 @@ use std::sync::mpsc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 
-use super::model::{MountSourceMode, PlotData, Trace};
+use super::model::{PlotData, Trace, VisualizerMountMode};
 use super::pipeline::generic::{
     GenericReplayInput, GenericReplayProgress, build_generic_replay_plot_data,
     build_generic_replay_plot_data_with_progress, parse_generic_replay_csvs_with_refs,
@@ -99,7 +99,7 @@ impl ReplayOutputPolicy {
 pub struct GenericReplayJobRequest {
     pub inputs: GenericReplayCsvInputs,
     pub labels: GenericReplayLabels,
-    pub mount_source: MountSourceMode,
+    pub mount_mode: VisualizerMountMode,
     pub filter_cfg: FilterCompareConfig,
     pub gnss_outages: GnssOutageConfig,
     pub output_policy: ReplayOutputPolicy,
@@ -107,7 +107,7 @@ pub struct GenericReplayJobRequest {
 
 #[derive(Clone, Copy, Debug)]
 pub struct GenericReplayJobConfig {
-    pub misalignment: MountSourceMode,
+    pub misalignment: VisualizerMountMode,
     pub filter_cfg: FilterCompareConfig,
     pub gnss_outages: GnssOutageConfig,
     pub output_policy: ReplayOutputPolicy,
@@ -115,7 +115,7 @@ pub struct GenericReplayJobConfig {
 
 impl GenericReplayJobConfig {
     pub fn full(
-        misalignment: MountSourceMode,
+        misalignment: VisualizerMountMode,
         filter_cfg: FilterCompareConfig,
         gnss_outages: GnssOutageConfig,
     ) -> Self {
@@ -129,7 +129,7 @@ impl GenericReplayJobConfig {
 
     pub fn web_transport() -> Self {
         Self {
-            misalignment: MountSourceMode::Internal,
+            misalignment: VisualizerMountMode::Auto,
             filter_cfg: FilterCompareConfig::default(),
             gnss_outages: GnssOutageConfig::default(),
             output_policy: ReplayOutputPolicy::web_transport(),
@@ -151,7 +151,7 @@ impl GenericReplayJobRequest {
         Self {
             inputs,
             labels: GenericReplayLabels::default(),
-            mount_source: MountSourceMode::Internal,
+            mount_mode: VisualizerMountMode::Auto,
             filter_cfg: FilterCompareConfig::default(),
             gnss_outages: GnssOutageConfig::default(),
             output_policy: ReplayOutputPolicy::Full,
@@ -177,7 +177,7 @@ pub fn run_generic_replay_request(
     )?;
     let plot_data = build_generic_replay_plot_data_from_input(
         &replay,
-        request.mount_source,
+        request.mount_mode,
         request.filter_cfg,
         request.gnss_outages,
         request.output_policy,
@@ -284,7 +284,7 @@ impl GenericReplayThread {
 
 pub fn parse_and_build_generic_replay_plot_data(
     inputs: &GenericReplayCsvInputs,
-    mount_source: MountSourceMode,
+    mount_mode: VisualizerMountMode,
     filter_cfg: FilterCompareConfig,
     gnss_outages: GnssOutageConfig,
     output_policy: ReplayOutputPolicy,
@@ -298,7 +298,7 @@ pub fn parse_and_build_generic_replay_plot_data(
     )?;
     Ok(build_generic_replay_plot_data_from_input(
         &replay,
-        mount_source,
+        mount_mode,
         filter_cfg,
         gnss_outages,
         output_policy,
@@ -307,13 +307,13 @@ pub fn parse_and_build_generic_replay_plot_data(
 
 pub fn build_generic_replay_plot_data_from_input(
     replay: &GenericReplayInput,
-    mount_source: MountSourceMode,
+    mount_mode: VisualizerMountMode,
     filter_cfg: FilterCompareConfig,
     gnss_outages: GnssOutageConfig,
     output_policy: ReplayOutputPolicy,
 ) -> PlotData {
     let mut plot_data =
-        build_generic_replay_plot_data(replay, mount_source, filter_cfg, gnss_outages);
+        build_generic_replay_plot_data(replay, mount_mode, filter_cfg, gnss_outages);
     output_policy.apply(&mut plot_data);
     plot_data
 }

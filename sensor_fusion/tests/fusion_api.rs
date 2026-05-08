@@ -1,7 +1,7 @@
 use sensor_fusion::ProcessNoise;
 use sensor_fusion::{
-    Config, Filter, GnssSample, ImuSample, MountMode, MountSource, SensorFusion,
-    VehicleSpeedDirection, VehicleSpeedSample,
+    Config, Filter, GnssSample, ImuSample, MountMode, SensorFusion, VehicleSpeedDirection,
+    VehicleSpeedSample,
 };
 
 fn gnss_sample(t_s: f32) -> GnssSample {
@@ -26,20 +26,25 @@ fn stationary_gnss_sample(t_s: f32) -> GnssSample {
 }
 
 #[test]
-fn external_misalignment_initializes_reduced_from_gnss() {
+fn manual_mount_initializes_reduced_from_gnss_and_freezes_mount_states() {
     let mut system = SensorFusion::with_mount([1.0, 0.0, 0.0, 0.0]);
     let upd = system.process_gnss(gnss_sample(1.0));
     assert!(upd.mount_ready);
     assert!(upd.reduced_initialized_now);
-    assert!(system.reduced().is_some());
+    let reduced = system.reduced().unwrap();
+    for i in 15..18 {
+        for j in 0..reduced.p.len() {
+            assert_eq!(reduced.p[i][j], 0.0);
+            assert_eq!(reduced.p[j][i], 0.0);
+        }
+    }
 }
 
 #[test]
-fn public_config_selects_filter_and_mount_source() {
+fn public_config_selects_filter_and_mount_mode() {
     let system = SensorFusion::with_config(Config {
         filter: Filter::Full,
-        mount_mode: MountMode::External([1.0, 0.0, 0.0, 0.0]),
-        mount_source: MountSource::FollowAlign,
+        mount_mode: MountMode::Manual([1.0, 0.0, 0.0, 0.0]),
     });
 
     assert_eq!(system.filter(), Filter::Full);
@@ -49,15 +54,20 @@ fn public_config_selects_filter_and_mount_source() {
 fn full_filter_initializes_through_public_sensor_fusion_api() {
     let mut system = SensorFusion::with_config(Config {
         filter: Filter::Full,
-        mount_mode: MountMode::External([1.0, 0.0, 0.0, 0.0]),
-        mount_source: MountSource::LatchedSeed,
+        mount_mode: MountMode::Manual([1.0, 0.0, 0.0, 0.0]),
     });
 
     let update = system.process_gnss(gnss_sample(1.0));
 
     assert!(update.filter_initialized);
     assert!(update.filter_initialized_now);
-    assert!(system.full().is_some());
+    let full = system.full().unwrap();
+    for i in 21..24 {
+        for j in 0..full.p.len() {
+            assert_eq!(full.p[i][j], 0.0);
+            assert_eq!(full.p[j][i], 0.0);
+        }
+    }
     assert!(system.reduced().is_none());
 }
 
@@ -120,7 +130,7 @@ fn freeze_misalignment_states_blocks_mount_updates() {
 }
 
 #[test]
-fn mount_settle_phase_releases_with_configured_covariance() {
+fn manual_mount_settle_phase_keeps_mount_states_frozen() {
     let mut system = SensorFusion::with_mount([1.0, 0.0, 0.0, 0.0]);
     system.set_mount_settle_time_s(1.0);
     system.set_mount_settle_release_sigma_rad(4.0_f32.to_radians());
@@ -138,12 +148,11 @@ fn mount_settle_phase_releases_with_configured_covariance() {
 
     let _ = system.process_gnss(gnss_sample(2.2));
     let reduced = system.reduced().unwrap();
-    let release_var = 4.0_f32.to_radians().powi(2);
     for i in 15..18 {
-        assert!((reduced.p[i][i] - release_var).abs() < 1.0e-8);
+        assert_eq!(reduced.p[i][i], 0.0);
     }
     for i in 15..18 {
-        for j in 0..15 {
+        for j in 0..18 {
             assert_eq!(reduced.p[i][j], 0.0);
             assert_eq!(reduced.p[j][i], 0.0);
         }

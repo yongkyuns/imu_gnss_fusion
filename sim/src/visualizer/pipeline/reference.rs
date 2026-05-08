@@ -2,7 +2,7 @@
 
 use crate::datasets::generic_replay::GenericReferenceRpySample;
 use crate::eval::gnss_ins::{quat_conj, quat_from_rpy_alg_deg, quat_mul};
-use crate::visualizer::model::MountSourceMode;
+use crate::visualizer::model::VisualizerMountMode;
 use crate::visualizer::pipeline::generic::GenericReplayInput;
 
 /// Converts a vehicle-to-body mount quaternion into reference mount RPY angles in degrees.
@@ -21,13 +21,19 @@ pub fn reference_mount_rpy_to_q_bv(rpy_deg: [f64; 3]) -> [f64; 4] {
 
 pub(super) fn reference_mount_seed_q_bv(
     replay: &GenericReplayInput,
-    mount_source: MountSourceMode,
+    mount_mode: VisualizerMountMode,
 ) -> Option<[f32; 4]> {
-    if !mount_source.uses_ref_mount() {
+    if !mount_mode.uses_ref_mount() {
         return None;
     }
-    replay
-        .reference_mount
+    final_reference_mount_rpy(replay.reference_mount.as_slice()).map(|sample| {
+        let q = reference_mount_rpy_to_q_bv(sample);
+        [q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32]
+    })
+}
+
+pub(super) fn final_reference_mount_rpy(samples: &[GenericReferenceRpySample]) -> Option<[f64; 3]> {
+    samples
         .iter()
         .rev()
         .find(|sample| {
@@ -35,11 +41,7 @@ pub(super) fn reference_mount_seed_q_bv(
                 && sample.pitch_deg.is_finite()
                 && sample.yaw_deg.is_finite()
         })
-        .map(|sample| {
-            let q =
-                reference_mount_rpy_to_q_bv([sample.roll_deg, sample.pitch_deg, sample.yaw_deg]);
-            [q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32]
-        })
+        .map(|sample| [sample.roll_deg, sample.pitch_deg, sample.yaw_deg])
 }
 
 pub(super) fn rpy_series_from_samples(

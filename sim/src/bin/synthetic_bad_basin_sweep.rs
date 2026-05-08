@@ -46,7 +46,7 @@ struct Args {
     imu_hz: f64,
     #[arg(long, default_value_t = 2.0)]
     gnss_hz: f64,
-    #[arg(long, value_enum, default_value_t = SeedMode::InternalAlign)]
+    #[arg(long, value_enum, default_value_t = SeedMode::Auto)]
     seed_mode: SeedMode,
     #[arg(long, default_value_t = 0.0)]
     seed_error_roll_deg: f64,
@@ -124,7 +124,7 @@ enum NoiseMode {
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum SeedMode {
-    InternalAlign,
+    Auto,
     Truth,
     PerturbedTruth,
 }
@@ -672,7 +672,7 @@ fn run_case(
         args.mount_yaw_deg,
     ]);
     let q_seed = match args.seed_mode {
-        SeedMode::InternalAlign => None,
+        SeedMode::Auto => None,
         SeedMode::Truth => Some(q_truth_mount),
         SeedMode::PerturbedTruth => {
             let dq = quat_from_rpy_alg_deg(

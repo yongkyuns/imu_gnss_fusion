@@ -2,19 +2,22 @@
 
 use eframe::egui;
 
-use crate::visualizer::model::MountSourceMode;
+use crate::visualizer::model::VisualizerMountMode;
 use crate::visualizer::pipeline::FilterCompareConfig;
 
 pub(super) fn draw_reduced_tuning(
     ui: &mut egui::Ui,
-    misalignment: &mut MountSourceMode,
+    misalignment: &mut VisualizerMountMode,
     cfg: &mut FilterCompareConfig,
 ) {
     ui.horizontal_wrapped(|ui| {
-        ui.label("Mount source");
-        ui.selectable_value(misalignment, MountSourceMode::Internal, "internal");
-        ui.selectable_value(misalignment, MountSourceMode::External, "external align");
-        ui.selectable_value(misalignment, MountSourceMode::Ref, "reference");
+        ui.label("Mount mode");
+        ui.selectable_value(misalignment, VisualizerMountMode::Auto, "auto");
+        ui.selectable_value(
+            misalignment,
+            VisualizerMountMode::Manual,
+            "manual/reference",
+        );
     });
     ui.collapsing("Measurement weighting", |ui| {
         drag_f32(

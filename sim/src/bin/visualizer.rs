@@ -22,7 +22,7 @@ use sim::eval::state_summary::{SummaryMode, summarize_trace_pair};
 #[cfg(not(target_arch = "wasm32"))]
 use sim::eval::trace::sample_nearest_value;
 #[cfg(not(target_arch = "wasm32"))]
-use sim::visualizer::model::{MountSourceMode, PlotData, Trace};
+use sim::visualizer::model::{PlotData, Trace, VisualizerMountMode};
 #[cfg(not(target_arch = "wasm32"))]
 use sim::visualizer::pipeline::generic::GenericReplayInput;
 #[cfg(not(target_arch = "wasm32"))]
@@ -88,10 +88,10 @@ struct Args {
     #[arg(
         long = "misalignment",
         alias = "ekf-imu-source",
-        default_value = "internal",
+        default_value = "auto",
         value_parser = parse_misalignment
     )]
-    misalignment: MountSourceMode,
+    misalignment: VisualizerMountMode,
     #[arg(long)]
     dump_align_axis_time_s: Option<f64>,
     #[arg(long)]
@@ -765,12 +765,12 @@ struct WebReplayInput {
 #[cfg(target_arch = "wasm32")]
 fn web_request_misalignment(
     request: &WebReplayJobRequest,
-) -> sim::visualizer::model::MountSourceMode {
+) -> sim::visualizer::model::VisualizerMountMode {
     request
         .misalignment
         .as_deref()
-        .and_then(|value| sim::visualizer::model::MountSourceMode::from_cli_value(value).ok())
-        .unwrap_or(sim::visualizer::model::MountSourceMode::Internal)
+        .and_then(|value| sim::visualizer::model::VisualizerMountMode::from_cli_value(value).ok())
+        .unwrap_or(sim::visualizer::model::VisualizerMountMode::Auto)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1199,8 +1199,8 @@ pub fn build_generic_replay_plot_data_json(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn parse_misalignment(s: &str) -> Result<MountSourceMode, String> {
-    MountSourceMode::from_cli_value(s)
+fn parse_misalignment(s: &str) -> Result<VisualizerMountMode, String> {
+    VisualizerMountMode::from_cli_value(s)
 }
 
 #[cfg(not(target_arch = "wasm32"))]

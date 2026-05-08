@@ -35,11 +35,11 @@ The same generic CSV parser is used by the native visualizer and the browser vis
 
 The visualizer uses a single `--misalignment` option:
 
-- `internal`: Align provides the initial mount seed, then Reduced EKF estimates mount states.
-- `external`: Reduced EKF continuously follows Align and freezes its mount states.
-- `ref`: Reference mount angles are used when a synthetic or converted dataset provides them.
+- `auto`: Align provides the initial mount seed, then Reduced and Full estimate mount states internally.
+- `manual`: Reference mount angles are used when a synthetic or converted dataset provides them; mount states are frozen.
 
-Full EKF keeps its historical behavior: `external` is treated like `internal`, so Full uses the latched Align seed rather than continuously following Align.
+The visualizer, covariance diagnostics, and replay helpers use the same names:
+`auto` and `manual`.
 
 ## Generic Replay Format
 

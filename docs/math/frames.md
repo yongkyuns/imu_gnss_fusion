@@ -4,10 +4,9 @@ This page is a short index for code review and operations. Detailed frame
 definitions, state layouts, and measurement derivations live in the PDF math
 notes:
 
-- [Align/NHC formulation](../align_nhc_formulation.pdf)
-- [Augmented Reduced formulation](../reduced_mount_formulation.pdf)
-- [Full INS/GNSS formulation](../full_formulation.pdf)
-- [Mount-in-propagation revision](../mount_in_propagation_revision.pdf)
+- [Align/NHC formulation](../align.pdf)
+- [Augmented Reduced formulation](../reduced.pdf)
+- [Full INS/GNSS formulation](../full.pdf)
 
 Quick reference:
 

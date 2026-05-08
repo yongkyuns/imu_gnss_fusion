@@ -84,10 +84,9 @@ review the Rust diff.
 
 ## Detailed Math Notes
 
-- [Mount-in-propagation revision PDF](mount_in_propagation_revision.pdf) and [TEX](mount_in_propagation_revision.tex).
-- [Reduced EKF mount formulation PDF](reduced_mount_formulation.pdf) and [TEX](reduced_mount_formulation.tex).
-- [Align/NHC formulation PDF](align_nhc_formulation.pdf) and [TEX](align_nhc_formulation.tex).
-- [Full EKF formulation PDF](full_formulation.pdf) and [TEX](full_formulation.tex).
+- [Reduced EKF mount formulation PDF](reduced.pdf) and [TEX](reduced.tex).
+- [Align/NHC formulation PDF](align.pdf) and [TEX](align.tex).
+- [Full EKF formulation PDF](full.pdf) and [TEX](full.tex).
 
 ## Documentation Conventions
 

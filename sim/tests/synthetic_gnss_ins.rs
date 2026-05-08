@@ -18,7 +18,7 @@ use sim::synthetic::gnss_ins_path::{
     PathGenConfig, VibrationNoise, add_measurement_noise, generate, generate_with_noise,
 };
 use sim::visualizer::math::{ecef_to_ned, lla_to_ecef};
-use sim::visualizer::model::MountSourceMode;
+use sim::visualizer::model::VisualizerMountMode;
 use sim::visualizer::pipeline::generic::reference_mount_rpy_to_q_bv;
 use sim::visualizer::pipeline::synthetic::{
     SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_plot_data,
@@ -427,7 +427,7 @@ fn synthetic_inputs_populate_visualizer_reduced_traces() -> Result<()> {
             early_vel_bias_ned_mps: [0.0; 3],
             early_fault_window_s: None,
         },
-        MountSourceMode::Ref,
+        VisualizerMountMode::Manual,
         FilterCompareConfig::default(),
         GnssOutageConfig::default(),
     );
@@ -660,7 +660,7 @@ brake 0.6666667m/s^2 for 18s
             early_vel_bias_ned_mps: [0.0; 3],
             early_fault_window_s: None,
         },
-        MountSourceMode::Internal,
+        VisualizerMountMode::Auto,
         FilterCompareConfig::default(),
         GnssOutageConfig::default(),
     )?;
@@ -697,7 +697,7 @@ fn synthetic_roll_excitation_makes_internal_mount_observable() -> Result<()> {
             early_vel_bias_ned_mps: [0.5, 0.0, 0.0],
             early_fault_window_s: Some((0.0, 360.0)),
         },
-        MountSourceMode::Internal,
+        VisualizerMountMode::Auto,
         FilterCompareConfig::default(),
         GnssOutageConfig::default(),
     )?;

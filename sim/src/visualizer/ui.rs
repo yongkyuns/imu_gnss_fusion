@@ -3,7 +3,7 @@ use anyhow::Result;
 use eframe::egui;
 use walkers::{HttpTiles, MapMemory};
 
-use super::model::{MountSourceMode, Page, PlotData};
+use super::model::{Page, PlotData, VisualizerMountMode};
 use super::pipeline::synthetic::SyntheticVisualizerConfig;
 use super::pipeline::{FilterCompareConfig, GnssOutageConfig};
 use super::theme::UiTheme;
@@ -58,7 +58,7 @@ pub struct App {
     show_update_inspector: bool,
     tuning_cfg: FilterCompareConfig,
     tuning_gnss_outages: GnssOutageConfig,
-    tuning_misalignment: MountSourceMode,
+    tuning_misalignment: VisualizerMountMode,
     tuning_panel: Option<TuningPanel>,
     replay: Option<ReplayState>,
     replay_status: Option<String>,
@@ -103,7 +103,7 @@ pub struct ReplayState {
     pub bytes: Vec<u8>,
     pub synthetic: Option<SyntheticVisualizerConfig>,
     pub max_records: Option<usize>,
-    pub misalignment: MountSourceMode,
+    pub misalignment: VisualizerMountMode,
     pub filter_cfg: FilterCompareConfig,
     pub gnss_outages: GnssOutageConfig,
 }

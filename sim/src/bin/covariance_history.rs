@@ -26,7 +26,7 @@ use sim::datasets::generic_replay::{
 use sim::eval::gnss_ins::{as_q64, quat_angle_deg, quat_mul};
 use sim::eval::replay::{ReplayEvent, for_each_event};
 use sim::visualizer::math::{ecef_to_ned, lla_to_ecef};
-use sim::visualizer::model::MountSourceMode;
+use sim::visualizer::model::VisualizerMountMode;
 use sim::visualizer::pipeline::FilterCompareConfig;
 use sim::visualizer::pipeline::generic::reference_mount_rpy_to_q_bv;
 use sim::visualizer::pipeline::synthetic::{
@@ -95,13 +95,13 @@ struct Args {
     #[arg(long, default_value_t = 0.10)]
     trace_interval_s: f64,
 
-    /// Mount source for the Reduced diagnostic path: internal, external, or ref.
+    /// Mount mode for the Reduced diagnostic path: auto or manual/reference.
     #[arg(
         long,
-        default_value = "internal",
-        value_parser = MountSourceMode::from_cli_value
+        default_value = "auto",
+        value_parser = VisualizerMountMode::from_cli_value
     )]
-    misalignment: MountSourceMode,
+    misalignment: VisualizerMountMode,
 
     /// Freeze mount states in the Reduced diagnostic path.
     #[arg(long)]
@@ -807,13 +807,13 @@ fn run_diagnostics(
     };
 
     let mut fusion = SensorFusion::new();
-    apply_fusion_config(&mut fusion, cfg, args.misalignment);
+    apply_fusion_config(&mut fusion, cfg);
     if let Some(seed_q_bv) = reference_mount_seed_q_bv(replay, args.misalignment) {
         fusion.set_misalignment(seed_q_bv);
     }
 
     let mut align_fusion = SensorFusion::new();
-    apply_fusion_config(&mut align_fusion, cfg, MountSourceMode::Internal);
+    apply_fusion_config(&mut align_fusion, cfg);
 
     let mut full = full::Filter::new(cfg.noise.full.unwrap_or_else(ProcessNoise::lsm6dso_104hz));
     let mut full_ready = false;
@@ -1179,7 +1179,7 @@ fn run_diagnostics(
     Ok(snapshots)
 }
 
-fn apply_fusion_config(fusion: &mut SensorFusion, cfg: FilterCompareConfig, mode: MountSourceMode) {
+fn apply_fusion_config(fusion: &mut SensorFusion, cfg: FilterCompareConfig) {
     fusion.set_align_config(cfg.align);
     if let Some(noise) = cfg.noise.reduced {
         fusion.set_reduced_noise(noise);
@@ -1199,7 +1199,6 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: FilterCompareConfig, mode
     fusion.set_mount_align_rw_var(cfg.mount_align_rw_var);
     fusion.set_align_handoff_delay_s(cfg.align_handoff_delay_s);
     fusion.set_freeze_misalignment_states(cfg.freeze_misalignment_states);
-    fusion.set_mount_source(mode.mount_source());
     fusion.set_mount_settle_time_s(cfg.mount_settle_time_s);
     fusion.set_mount_settle_release_sigma_rad(cfg.mount_settle_release_sigma_deg.to_radians());
     fusion.set_mount_settle_zero_cross_covariance(cfg.mount_settle_zero_cross_covariance);
@@ -2580,7 +2579,7 @@ fn reference_mount_at(samples: &[GenericReferenceRpySample], t_s: f64) -> Option
         .map(|s| reference_mount_rpy_to_q_bv([s.roll_deg, s.pitch_deg, s.yaw_deg]))
 }
 
-fn reference_mount_seed_q_bv(replay: &Replay, mode: MountSourceMode) -> Option<[f32; 4]> {
+fn reference_mount_seed_q_bv(replay: &Replay, mode: VisualizerMountMode) -> Option<[f32; 4]> {
     if !mode.uses_ref_mount() {
         return None;
     }

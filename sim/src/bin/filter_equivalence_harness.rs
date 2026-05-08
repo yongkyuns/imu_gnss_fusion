@@ -11,10 +11,10 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, ValueEnum};
 use sensor_fusion::ProcessNoise;
+use sensor_fusion::SensorFusion;
 use sensor_fusion::full::InitConfig;
 use sensor_fusion::full::{ERROR_STATES, Filter, ImuDelta};
 use sensor_fusion::reduced::State;
-use sensor_fusion::{MountSource, SensorFusion};
 use sim::datasets::generic_replay::{
     GenericGnssSample, GenericImuSample, GenericReferenceRpySample, fusion_gnss_sample,
     fusion_imu_sample,
@@ -40,8 +40,8 @@ struct Args {
     synthetic_motion_def: Option<PathBuf>,
     #[arg(long, conflicts_with = "synthetic_motion_def")]
     generic_replay_dir: Option<PathBuf>,
-    #[arg(long, value_enum, default_value_t = MountMode::Ref)]
-    mount_mode: MountMode,
+    #[arg(long, value_enum, default_value_t = HarnessMountMode::Manual)]
+    mount_mode: HarnessMountMode,
     #[arg(long, value_enum, default_value_t = SyntheticNoiseArg::Truth)]
     synthetic_noise: SyntheticNoiseArg,
     #[arg(long, default_value_t = 100.0)]
@@ -63,11 +63,12 @@ struct Args {
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
-enum MountMode {
+enum HarnessMountMode {
     /// Use reference/true mount as the seed for both filters.
-    Ref,
-    /// Let Reduced and full each use the internal align handoff path.
-    Internal,
+    #[value(alias = "ref", alias = "reference")]
+    Manual,
+    /// Let Reduced and Full estimate mount from the Align handoff seed.
+    Auto,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -112,7 +113,7 @@ struct HarnessState {
     last_reduced_vel_residual: VelResidual,
     last_full_vel_residual: VelResidual,
     cfg: FilterCompareConfig,
-    mount_mode: MountMode,
+    mount_mode: HarnessMountMode,
 }
 
 fn main() -> Result<()> {
@@ -244,11 +245,11 @@ impl HarnessState {
         ref_gnss: GenericGnssSample,
         fixed_mount_q_bv: Option<[f32; 4]>,
         cfg: FilterCompareConfig,
-        mount_mode: MountMode,
+        mount_mode: HarnessMountMode,
     ) -> Self {
         let mut fusion = SensorFusion::new();
         apply_fusion_config(&mut fusion, cfg);
-        if matches!(mount_mode, MountMode::Ref)
+        if matches!(mount_mode, HarnessMountMode::Manual)
             && let Some(q_bv) = fixed_mount_q_bv
         {
             fusion.set_misalignment(q_bv);
@@ -310,13 +311,13 @@ impl HarnessState {
             return;
         }
         let q_mount = match self.mount_mode {
-            MountMode::Ref => self.fixed_mount_q_bv,
-            MountMode::Internal => self.align_fusion.mount_q_bv(),
+            HarnessMountMode::Manual => self.fixed_mount_q_bv,
+            HarnessMountMode::Auto => self.align_fusion.mount_q_bv(),
         };
         let Some(q_mount) = q_mount else {
             return;
         };
-        if matches!(self.mount_mode, MountMode::Internal) && !self.align_fusion.mount_ready() {
+        if matches!(self.mount_mode, HarnessMountMode::Auto) && !self.align_fusion.mount_ready() {
             return;
         }
 
@@ -724,7 +725,6 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: FilterCompareConfig) {
     fusion.set_mount_align_rw_var(cfg.mount_align_rw_var);
     fusion.set_align_handoff_delay_s(cfg.align_handoff_delay_s);
     fusion.set_freeze_misalignment_states(cfg.freeze_misalignment_states);
-    fusion.set_mount_source(MountSource::LatchedSeed);
     fusion.set_mount_settle_time_s(cfg.mount_settle_time_s);
     fusion.set_mount_settle_release_sigma_rad(cfg.mount_settle_release_sigma_deg.to_radians());
     fusion.set_mount_settle_zero_cross_covariance(cfg.mount_settle_zero_cross_covariance);

@@ -150,7 +150,7 @@ use sensor_fusion::{
 let mount_q = [1.0, 0.0, 0.0, 0.0]; // x_b = C_bv(q) x_v
 let mut fusion = SensorFusion::with_config(Config {
     filter: Filter::Reduced,
-    mount_mode: MountMode::External(mount_q),
+    mount_mode: MountMode::Manual(mount_q),
     ..Config::default()
 });
 
@@ -229,13 +229,13 @@ python3 -m http.server --directory web 8080
 
 ## 🎛️ Filter And Replay Modes
 
-The visualizer and primary A/B analyzers use `--misalignment` to select the mount-angle source:
+The public `sensor_fusion::MountMode` and visualizer `--misalignment` option
+use the same two mount behaviors:
 
 | Mode | Behavior |
 | --- | --- |
-| `internal` | Align seeds the mount angle; Reduced EKF then estimates the physical mount states. |
-| `external` | Reduced EKF continuously follows Align and freezes its mount states. |
-| `ref` | Uses reference mount angles when available in synthetic or converted data. |
+| `auto` | Align seeds the mount angle; Reduced/Full then estimate the physical mount states internally. |
+| `manual` | Uses a supplied/reference vehicle-to-body mount and freezes mount states in Reduced/Full. |
 
 See [sim/README.md](sim/README.md) for the current tool map.
 
@@ -340,10 +340,9 @@ See [docs/testing.md](docs/testing.md) for focused test groups, fixtures, and ex
 - [docs/testing.md](docs/testing.md): testing workflow.
 - [docs/math/frames.md](docs/math/frames.md): frame and quaternion conventions.
 - [docs/math/full.md](docs/math/full.md): Full EKF operational links.
-- [docs/mount_in_propagation_revision.pdf](docs/mount_in_propagation_revision.pdf): before/after derivation for the mount-in-propagation revision.
-- [docs/reduced_mount_formulation.pdf](docs/reduced_mount_formulation.pdf): detailed Reduced EKF mount formulation.
-- [docs/align_nhc_formulation.pdf](docs/align_nhc_formulation.pdf): detailed Align/NHC formulation.
-- [docs/full_formulation.pdf](docs/full_formulation.pdf): detailed Full EKF formulation.
+- [docs/reduced.pdf](docs/reduced.pdf): detailed Reduced EKF mount formulation.
+- [docs/align.pdf](docs/align.pdf): detailed Align/NHC formulation.
+- [docs/full.pdf](docs/full.pdf): detailed Full EKF formulation.
 
 ## 📄 License
 

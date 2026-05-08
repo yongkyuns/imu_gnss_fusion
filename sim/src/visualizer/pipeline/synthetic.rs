@@ -9,7 +9,7 @@ use crate::synthetic::gnss_ins_path::{
     generate_with_noise,
 };
 use crate::visualizer::math::{ecef_to_ned, lla_to_ecef, quat_rpy_deg};
-use crate::visualizer::model::{MountSourceMode, PlotData, Trace};
+use crate::visualizer::model::{PlotData, Trace, VisualizerMountMode};
 use crate::visualizer::pipeline::generic::{
     GenericReplayInput, GenericReplayProgress,
     build_generic_replay_plot_data_with_progress_and_reduced_mount_seed,
@@ -56,11 +56,11 @@ pub struct SyntheticVisualizerConfig {
 
 pub fn build_synthetic_plot_data(
     synth_cfg: &SyntheticVisualizerConfig,
-    mount_source: MountSourceMode,
+    mount_mode: VisualizerMountMode,
     filter_cfg: FilterCompareConfig,
     gnss_outages: GnssOutageConfig,
 ) -> Result<PlotData> {
-    build_synthetic_plot_data_impl(synth_cfg, mount_source, filter_cfg, gnss_outages, None)
+    build_synthetic_plot_data_impl(synth_cfg, mount_mode, filter_cfg, gnss_outages, None)
 }
 
 pub fn build_synthetic_replay_input(
@@ -189,14 +189,14 @@ pub fn build_synthetic_replay_input(
 
 pub fn build_synthetic_plot_data_with_progress(
     synth_cfg: &SyntheticVisualizerConfig,
-    mount_source: MountSourceMode,
+    mount_mode: VisualizerMountMode,
     filter_cfg: FilterCompareConfig,
     gnss_outages: GnssOutageConfig,
     progress: &mut dyn FnMut(GenericReplayProgress),
 ) -> Result<PlotData> {
     build_synthetic_plot_data_impl(
         synth_cfg,
-        mount_source,
+        mount_mode,
         filter_cfg,
         gnss_outages,
         Some(progress),
@@ -205,7 +205,7 @@ pub fn build_synthetic_plot_data_with_progress(
 
 fn build_synthetic_plot_data_impl(
     synth_cfg: &SyntheticVisualizerConfig,
-    mount_source: MountSourceMode,
+    mount_mode: VisualizerMountMode,
     filter_cfg: FilterCompareConfig,
     gnss_outages: GnssOutageConfig,
     progress: Option<&mut dyn FnMut(GenericReplayProgress)>,
@@ -367,7 +367,7 @@ fn build_synthetic_plot_data_impl(
         reference_mount,
         reference_position: Vec::new(),
     };
-    let reduced_mount_seed = mount_source.uses_ref_mount().then_some([
+    let reduced_mount_seed = mount_mode.uses_ref_mount().then_some([
         q_truth_mount[0] as f32,
         q_truth_mount[1] as f32,
         q_truth_mount[2] as f32,
@@ -376,7 +376,7 @@ fn build_synthetic_plot_data_impl(
     let mut data = match progress {
         Some(progress) => build_generic_replay_plot_data_with_progress_and_reduced_mount_seed(
             &replay,
-            mount_source,
+            mount_mode,
             filter_cfg,
             gnss_outages,
             progress,
@@ -384,7 +384,7 @@ fn build_synthetic_plot_data_impl(
         ),
         None => build_generic_replay_plot_data_with_reduced_mount_seed(
             &replay,
-            mount_source,
+            mount_mode,
             filter_cfg,
             gnss_outages,
             reduced_mount_seed,

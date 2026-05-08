@@ -21,8 +21,7 @@
 //!   attitude `q0..q3` maps vehicle frame to ECEF (`q_ev`).
 //!
 //! Maintained mathematical references:
-//! `docs/align_nhc_formulation.pdf`, `docs/reduced_mount_formulation.pdf`, and
-//! `docs/full_formulation.pdf`.
+//! `docs/align.pdf`, `docs/reduced.pdf`, and `docs/full.pdf`.
 
 #![no_std]
 #![allow(clippy::needless_range_loop)]
@@ -52,7 +51,7 @@ pub mod generated_reduced {
 pub mod reduced;
 
 pub use fusion::{
-    AlignDebug, Config, Filter, GnssSample, ImuSample, MountMode, MountSource, SensorFusion,
-    Update, VehicleSpeedDirection, VehicleSpeedSample,
+    AlignDebug, Config, Filter, GnssSample, ImuSample, MountMode, SensorFusion, Update,
+    VehicleSpeedDirection, VehicleSpeedSample,
 };
 pub use noise::ProcessNoise;

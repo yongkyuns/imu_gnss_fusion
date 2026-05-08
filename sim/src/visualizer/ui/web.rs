@@ -11,7 +11,7 @@ use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{ErrorEvent, MessageEvent, Worker, WorkerOptions, WorkerType};
 
-use crate::visualizer::model::{MountSourceMode, PlotData};
+use crate::visualizer::model::{PlotData, VisualizerMountMode};
 use crate::visualizer::pipeline::{FilterCompareConfig, GnssOutageConfig};
 use crate::visualizer::stats::map_center_from_traces;
 use crate::visualizer::theme::UiTheme;
@@ -282,7 +282,7 @@ fn csv_time_span_s(csv: &str) -> f64 {
 pub(super) fn web_replay_worker_request(
     job_id: u64,
     job: &WebReplayWorkerJob,
-    misalignment: MountSourceMode,
+    misalignment: VisualizerMountMode,
     filter_cfg: FilterCompareConfig,
     gnss_outages: GnssOutageConfig,
 ) -> Object {

@@ -11,11 +11,11 @@ use crate::eval::gnss_ins::{as_q64, quat_angle_deg, quat_mul};
 use crate::eval::replay::{ReplayEvent, for_each_event};
 use crate::visualizer::math::{ecef_to_ned, lla_to_ecef, ned_to_lla_exact, quat_rpy_deg};
 use crate::visualizer::model::{
-    HeadingSample, MapCursorSample, MountSourceMode, PlotData, StateContribution, StateCorrelation,
-    Trace, UpdateInspectorSample,
+    HeadingSample, MapCursorSample, PlotData, StateContribution, StateCorrelation, Trace,
+    UpdateInspectorSample, VisualizerMountMode,
 };
 use crate::visualizer::pipeline::reference::{
-    reference_mount_seed_q_bv, reference_rpy_at, rpy_series_from_samples,
+    final_reference_mount_rpy, reference_mount_seed_q_bv, reference_rpy_at, rpy_series_from_samples,
 };
 use crate::visualizer::pipeline::{FilterCompareConfig, GnssOutageConfig};
 
@@ -112,7 +112,6 @@ impl GenericReplayInput {
 struct GenericReplayRunContext<'a> {
     replay: &'a GenericReplayInput,
     filter_cfg: FilterCompareConfig,
-    mount_source: MountSourceMode,
     gnss_outages: GnssOutageConfig,
     reference_mount_seed_q_bv: Option<[f32; 4]>,
 }
@@ -121,20 +120,19 @@ impl<'a> GenericReplayRunContext<'a> {
     fn new(
         replay: &'a GenericReplayInput,
         filter_cfg: FilterCompareConfig,
-        mount_source: MountSourceMode,
+        mount_mode: VisualizerMountMode,
         gnss_outages: GnssOutageConfig,
     ) -> Self {
         Self {
             replay,
             filter_cfg,
-            mount_source,
             gnss_outages,
-            reference_mount_seed_q_bv: reference_mount_seed_q_bv(replay, mount_source),
+            reference_mount_seed_q_bv: reference_mount_seed_q_bv(replay, mount_mode),
         }
     }
 
     fn configure_fusion(&self, fusion: &mut SensorFusion) {
-        apply_fusion_config(fusion, self.filter_cfg, self.mount_source);
+        apply_fusion_config(fusion, self.filter_cfg);
     }
 
     fn reference_mount_seed_q_bv(&self) -> Option<[f32; 4]> {
@@ -257,23 +255,23 @@ pub fn parse_generic_replay_csvs_with_refs(
 
 pub fn build_generic_replay_plot_data(
     replay: &GenericReplayInput,
-    mount_source: MountSourceMode,
+    mount_mode: VisualizerMountMode,
     filter_cfg: FilterCompareConfig,
     gnss_outages: GnssOutageConfig,
 ) -> PlotData {
-    build_generic_replay_plot_data_impl(replay, mount_source, filter_cfg, gnss_outages, None, None)
+    build_generic_replay_plot_data_impl(replay, mount_mode, filter_cfg, gnss_outages, None, None)
 }
 
 pub fn build_generic_replay_plot_data_with_reduced_mount_seed(
     replay: &GenericReplayInput,
-    mount_source: MountSourceMode,
+    mount_mode: VisualizerMountMode,
     filter_cfg: FilterCompareConfig,
     gnss_outages: GnssOutageConfig,
     reduced_mount_seed_q_bv: Option<[f32; 4]>,
 ) -> PlotData {
     build_generic_replay_plot_data_impl(
         replay,
-        mount_source,
+        mount_mode,
         filter_cfg,
         gnss_outages,
         None,
@@ -283,14 +281,14 @@ pub fn build_generic_replay_plot_data_with_reduced_mount_seed(
 
 pub fn build_generic_replay_plot_data_with_progress(
     replay: &GenericReplayInput,
-    mount_source: MountSourceMode,
+    mount_mode: VisualizerMountMode,
     filter_cfg: FilterCompareConfig,
     gnss_outages: GnssOutageConfig,
     progress: &mut dyn FnMut(GenericReplayProgress),
 ) -> PlotData {
     build_generic_replay_plot_data_impl(
         replay,
-        mount_source,
+        mount_mode,
         filter_cfg,
         gnss_outages,
         Some(progress),
@@ -300,7 +298,7 @@ pub fn build_generic_replay_plot_data_with_progress(
 
 pub fn build_generic_replay_plot_data_with_progress_and_reduced_mount_seed(
     replay: &GenericReplayInput,
-    mount_source: MountSourceMode,
+    mount_mode: VisualizerMountMode,
     filter_cfg: FilterCompareConfig,
     gnss_outages: GnssOutageConfig,
     progress: &mut dyn FnMut(GenericReplayProgress),
@@ -308,7 +306,7 @@ pub fn build_generic_replay_plot_data_with_progress_and_reduced_mount_seed(
 ) -> PlotData {
     build_generic_replay_plot_data_impl(
         replay,
-        mount_source,
+        mount_mode,
         filter_cfg,
         gnss_outages,
         Some(progress),
@@ -318,14 +316,14 @@ pub fn build_generic_replay_plot_data_with_progress_and_reduced_mount_seed(
 
 fn build_generic_replay_plot_data_impl(
     replay: &GenericReplayInput,
-    mount_source: MountSourceMode,
+    mount_mode: VisualizerMountMode,
     filter_cfg: FilterCompareConfig,
     gnss_outages: GnssOutageConfig,
     progress: Option<&mut dyn FnMut(GenericReplayProgress)>,
     reduced_mount_seed_q_bv: Option<[f32; 4]>,
 ) -> PlotData {
     let mut progress = GenericProgressReporter::new(replay, progress);
-    let ctx = GenericReplayRunContext::new(replay, filter_cfg, mount_source, gnss_outages);
+    let ctx = GenericReplayRunContext::new(replay, filter_cfg, mount_mode, gnss_outages);
     let mut fusion = SensorFusion::new();
     ctx.configure_fusion(&mut fusion);
     if let Some(seed_q_bv) = reduced_mount_seed_q_bv.or_else(|| ctx.reference_mount_seed_q_bv()) {
@@ -795,17 +793,13 @@ pub fn add_auxiliary_generic_traces(
     data: &mut PlotData,
     replay: &GenericReplayInput,
     filter_cfg: FilterCompareConfig,
-    mount_source: MountSourceMode,
+    mount_mode: VisualizerMountMode,
     reference_mount_rpy_deg: Option<[f64; 3]>,
     reference_attitude_rpy: Option<[Vec<[f64; 2]>; 3]>,
 ) {
     let mut progress = GenericProgressReporter::new(replay, None);
-    let ctx = GenericReplayRunContext::new(
-        replay,
-        filter_cfg,
-        mount_source,
-        GnssOutageConfig::default(),
-    );
+    let ctx =
+        GenericReplayRunContext::new(replay, filter_cfg, mount_mode, GnssOutageConfig::default());
     add_auxiliary_generic_traces_impl(
         data,
         &ctx,
@@ -824,6 +818,8 @@ fn add_auxiliary_generic_traces_impl(
 ) {
     let replay = ctx.replay;
     let reference_mount_series = rpy_series_from_samples(&replay.reference_mount);
+    let reference_mount_final_rpy_deg =
+        reference_mount_rpy_deg.or_else(|| final_reference_mount_rpy(&replay.reference_mount));
     let reference_attitude_series =
         reference_attitude_rpy.or_else(|| rpy_series_from_samples(&replay.reference_attitude));
     populate_align_traces(
@@ -858,22 +854,19 @@ fn add_auxiliary_generic_traces_impl(
             &mut data.reduced_misalignment,
             "Reduced",
             "Reduced mount",
-            reference_mount_rpy_deg,
-            replay.reference_mount.as_slice(),
+            reference_mount_final_rpy_deg,
         );
         push_mount_quaternion_error_trace(
             &mut data.full_misalignment,
             "Full",
             "Full mount",
-            reference_mount_rpy_deg,
-            replay.reference_mount.as_slice(),
+            reference_mount_final_rpy_deg,
         );
         push_mount_quaternion_error_trace(
             &mut data.align_cmp_att,
             "Align",
             "Align",
-            reference_mount_rpy_deg,
-            replay.reference_mount.as_slice(),
+            reference_mount_final_rpy_deg,
         );
         let traces = [
             Trace {
@@ -898,8 +891,7 @@ fn push_mount_quaternion_error_trace(
     traces: &mut Vec<Trace>,
     system_label: &str,
     trace_prefix: &str,
-    reference_mount_rpy_deg: Option<[f64; 3]>,
-    reference_mount_series: &[GenericReferenceRpySample],
+    reference_mount_final_rpy_deg: Option<[f64; 3]>,
 ) {
     if traces
         .iter()
@@ -916,6 +908,9 @@ fn push_mount_quaternion_error_trace(
     let Some(yaw) = trace_by_name(traces, &format!("{trace_prefix} yaw [deg]")) else {
         return;
     };
+    let Some(reference) = reference_mount_final_rpy_deg else {
+        return;
+    };
     let points = roll
         .points
         .iter()
@@ -923,8 +918,6 @@ fn push_mount_quaternion_error_trace(
             let t_s = sample[0];
             let pitch_deg = sample_trace_at(pitch, t_s)?;
             let yaw_deg = sample_trace_at(yaw, t_s)?;
-            let reference = reference_mount_rpy_deg
-                .or_else(|| reference_rpy_at(reference_mount_series, t_s))?;
             let q_est = reference_mount_rpy_to_q_bv([sample[1], pitch_deg, yaw_deg]);
             let q_ref = reference_mount_rpy_to_q_bv(reference);
             Some([t_s, quat_angle_deg(q_est, q_ref)])
@@ -1248,7 +1241,7 @@ fn populate_full_traces(
         filter: Filter::Full,
         ..Config::default()
     });
-    apply_fusion_config(&mut full_fusion, filter_cfg, MountSourceMode::Internal);
+    apply_fusion_config(&mut full_fusion, filter_cfg);
     if let Some(seed_q_bv) = ctx.reference_mount_seed_q_bv() {
         full_fusion.set_misalignment(seed_q_bv);
     }
@@ -2374,7 +2367,7 @@ fn dcm_to_quat(c: [[f64; 3]; 3]) -> [f64; 4] {
     }
 }
 
-fn apply_fusion_config(fusion: &mut SensorFusion, cfg: FilterCompareConfig, mode: MountSourceMode) {
+fn apply_fusion_config(fusion: &mut SensorFusion, cfg: FilterCompareConfig) {
     fusion.set_align_config(cfg.align);
     if let Some(noise) = cfg.noise.reduced {
         fusion.set_reduced_noise(noise);
@@ -2398,7 +2391,6 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: FilterCompareConfig, mode
     fusion.set_mount_align_rw_var(cfg.mount_align_rw_var);
     fusion.set_align_handoff_delay_s(cfg.align_handoff_delay_s);
     fusion.set_freeze_misalignment_states(cfg.freeze_misalignment_states);
-    fusion.set_mount_source(mode.mount_source());
     fusion.set_mount_settle_time_s(cfg.mount_settle_time_s);
     fusion.set_mount_settle_release_sigma_rad(cfg.mount_settle_release_sigma_deg.to_radians());
     fusion.set_mount_settle_zero_cross_covariance(cfg.mount_settle_zero_cross_covariance);
@@ -2635,7 +2627,7 @@ mod tests {
             reference_position: Vec::new(),
         };
 
-        let seed = reference_mount_seed_q_bv(&replay, MountSourceMode::Ref).unwrap();
+        let seed = reference_mount_seed_q_bv(&replay, VisualizerMountMode::Manual).unwrap();
         let round_trip = q_bv_to_reference_mount_rpy([
             seed[0] as f64,
             seed[1] as f64,
@@ -2646,8 +2638,7 @@ mod tests {
         assert!((wrap_deg(round_trip.0 - 2.0)).abs() < 1.0e-6);
         assert!((wrap_deg(round_trip.1 + 4.0)).abs() < 1.0e-6);
         assert!((wrap_deg(round_trip.2 - 6.0)).abs() < 1.0e-6);
-        assert!(reference_mount_seed_q_bv(&replay, MountSourceMode::Internal).is_none());
-        assert!(reference_mount_seed_q_bv(&replay, MountSourceMode::External).is_none());
+        assert!(reference_mount_seed_q_bv(&replay, VisualizerMountMode::Auto).is_none());
     }
 
     #[test]
@@ -2667,16 +2658,60 @@ mod tests {
         let ref_ctx = GenericReplayRunContext::new(
             &replay,
             FilterCompareConfig::default(),
-            MountSourceMode::Ref,
+            VisualizerMountMode::Manual,
             GnssOutageConfig::default(),
         );
         let internal_ctx = GenericReplayRunContext::new(
             &replay,
             FilterCompareConfig::default(),
-            MountSourceMode::Internal,
+            VisualizerMountMode::Auto,
             GnssOutageConfig::default(),
         );
         assert!(ref_ctx.reference_mount_seed_q_bv().is_some());
         assert!(internal_ctx.reference_mount_seed_q_bv().is_none());
+    }
+
+    #[test]
+    fn mount_quaternion_error_uses_final_reference_mount() {
+        let final_ref = [2.0, -4.0, 6.0];
+        let reference_mount = vec![
+            GenericReferenceRpySample {
+                t_s: 10.0,
+                roll_deg: 0.0,
+                pitch_deg: 0.0,
+                yaw_deg: 0.0,
+            },
+            GenericReferenceRpySample {
+                t_s: 20.0,
+                roll_deg: final_ref[0],
+                pitch_deg: final_ref[1],
+                yaw_deg: final_ref[2],
+            },
+        ];
+        let mut traces = vec![
+            Trace {
+                name: "Reduced mount roll [deg]".to_string(),
+                points: vec![[10.0, final_ref[0]], [20.0, final_ref[0]]],
+            },
+            Trace {
+                name: "Reduced mount pitch [deg]".to_string(),
+                points: vec![[10.0, final_ref[1]], [20.0, final_ref[1]]],
+            },
+            Trace {
+                name: "Reduced mount yaw [deg]".to_string(),
+                points: vec![[10.0, final_ref[2]], [20.0, final_ref[2]]],
+            },
+        ];
+
+        push_mount_quaternion_error_trace(
+            &mut traces,
+            "Reduced",
+            "Reduced mount",
+            final_reference_mount_rpy(&reference_mount),
+        );
+
+        let qerr = trace_by_name(&traces, "Reduced mount quaternion error [deg]").unwrap();
+        assert_eq!(qerr.points.len(), 2);
+        assert!(qerr.points.iter().all(|sample| sample[1].abs() < 1.0e-9));
     }
 }

@@ -2,8 +2,8 @@
 
 The Full EKF formulation is now PDF-first:
 
-- [Full EKF formulation PDF](../full_formulation.pdf)
-- [Full EKF formulation TEX](../full_formulation.tex)
+- [Full EKF formulation PDF](../full.pdf)
+- [Full EKF formulation TEX](../full.tex)
 
 Operational references:
 

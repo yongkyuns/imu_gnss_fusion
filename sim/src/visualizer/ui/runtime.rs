@@ -6,7 +6,7 @@ use std::time::Duration;
 use eframe::egui;
 use walkers::MapMemory;
 
-use crate::visualizer::model::{MountSourceMode, Page, PlotData};
+use crate::visualizer::model::{Page, PlotData, VisualizerMountMode};
 use crate::visualizer::pipeline::synthetic::build_synthetic_plot_data;
 use crate::visualizer::stats::map_center_from_traces;
 use crate::visualizer::theme::{UiDensity, UiTheme};
@@ -88,7 +88,7 @@ pub(super) fn create_app(
     let tuning_misalignment = replay
         .as_ref()
         .map(|replay| replay.misalignment)
-        .unwrap_or(MountSourceMode::Internal);
+        .unwrap_or(VisualizerMountMode::Auto);
 
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut app = App {

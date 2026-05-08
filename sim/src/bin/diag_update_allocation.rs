@@ -3,9 +3,9 @@
 use anyhow::Result;
 use clap::Parser;
 use sensor_fusion::ProcessNoise;
+use sensor_fusion::SensorFusion;
 use sensor_fusion::full::{ERROR_STATES, Filter, ImuDelta};
 use sensor_fusion::reduced::{UPDATE_DIAG_TYPES, UpdateDiag};
-use sensor_fusion::{MountSource, SensorFusion};
 use sim::datasets::generic_replay::{
     GenericGnssSample, GenericImuSample, fusion_gnss_sample, fusion_imu_sample,
 };
@@ -453,7 +453,6 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: FilterCompareConfig) {
     fusion.set_mount_align_rw_var(cfg.mount_align_rw_var);
     fusion.set_align_handoff_delay_s(cfg.align_handoff_delay_s);
     fusion.set_freeze_misalignment_states(cfg.freeze_misalignment_states);
-    fusion.set_mount_source(MountSource::LatchedSeed);
     fusion.set_mount_settle_time_s(cfg.mount_settle_time_s);
     fusion.set_mount_settle_release_sigma_rad(cfg.mount_settle_release_sigma_deg.to_radians());
     fusion.set_mount_settle_zero_cross_covariance(cfg.mount_settle_zero_cross_covariance);

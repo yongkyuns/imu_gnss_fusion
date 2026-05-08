@@ -55,10 +55,10 @@ is \(q_{bv}\):
 \begin{equation}
   x_b=C_{bv}(q_{bv})x_v,\qquad x_v=C_{bv}(q_{bv})\T x_b .
 \end{equation}
-If \texttt{MountSource::LatchedSeed} is selected, Align seeds \(q_{bv}\) and
-Reduced continues estimating it. If \texttt{MountSource::FollowAlign} is
-selected, the mount follows Align and Reduced mount states are frozen. A fixed
-external mount is also supported.
+The fusion facade exposes a single mount mode. In \texttt{MountMode::Auto},
+Align seeds \(q_{bv}\) and Reduced continues estimating mount internally. In
+\texttt{MountMode::Manual}, the caller supplies a fixed \(q_{bv}\) and Reduced
+mount states are frozen.
 
 \section{Nominal and Error States}
 
@@ -251,22 +251,20 @@ blocks and identity elsewhere:
   P^{+}\leftarrow G_{\mathrm{reset}}P^{+}G_{\mathrm{reset}}\T .
 \end{equation}
 
-\section{Initialization and Mount-Source Modes}
+\section{Initialization and Mount Modes}
 
 At GNSS initialization the filter sets \(q_{nv}\) from GNSS heading or horizontal
 velocity course, copies GNSS NED position and velocity into \(p_n,v_n\), sets
-biases to zero, and initializes \(q_{bv}\) from Align, reference data, or an
-external mount. Covariance is diagonal with configuration-controlled bias and
-mount variances.
+biases to zero, and initializes \(q_{bv}\) from Align in auto mode or from the
+caller/reference source in manual mode. Covariance is diagonal with
+configuration-controlled bias and mount variances.
 
-The fusion facade controls the mount source:
+The fusion facade controls the mount mode:
 \begin{itemize}[leftmargin=1.5em]
-\item \textbf{Latched/internal}: Align seeds \(q_{bv}\) when Reduced initializes;
-Reduced may then continue estimating mount.
-\item \textbf{FollowAlign}: \(q_{bv}\) tracks Align and Reduced mount states are
-frozen. This is useful when Reduced should not own mount estimation.
-\item \textbf{External/reference}: a fixed supplied mount or reference mount is
-used as \(q_{bv}\).
+\item \textbf{Auto}: Align seeds \(q_{bv}\) when Reduced initializes; Reduced
+then estimates mount states internally.
+\item \textbf{Manual}: a supplied or reference \(q_{bv}\) is used as a fixed
+mount and Reduced mount states are frozen.
 \end{itemize}
 
 \section{Known Modeling Boundaries}

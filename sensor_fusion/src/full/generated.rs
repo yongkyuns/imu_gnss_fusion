@@ -6,7 +6,7 @@
 //! small public functions; regenerate the include files from the Python source
 //! instead of hand-editing formulas.
 //!
-//! The generated model follows `docs/full_formulation.pdf`: 24 error states
+//! The generated model follows `docs/full.pdf`: 24 error states
 //! `[dp_e, dv_e, dtheta_v, dba, dbg, dsa, dsg, dpsi_vb]` and 21 process-noise
 //! states for accel/gyro white noise plus bias, scale, and mount random walks.
 

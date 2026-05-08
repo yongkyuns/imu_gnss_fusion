@@ -104,21 +104,16 @@ pub struct AlignDebug {
 /// Selects how the runtime obtains the physical vehicle-to-body mount estimate.
 #[derive(Clone, Copy, Debug)]
 pub enum MountMode {
-    /// Estimate mount internally with [`crate::align::Align`] before filter initialization.
-    InternalAlign,
-    /// Use the supplied vehicle-to-body mount quaternion and disable internal alignment.
+    /// Estimate mount internally.
     ///
-    /// The quaternion follows `x_b = C_bv(q) x_v`.
-    External([f32; 4]),
-}
-
-/// Selects how Reduced propagation receives the mount after alignment handoff.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MountSource {
-    /// Latch the alignment seed at Reduced initialization and let Reduced estimate mount states.
-    LatchedSeed,
-    /// Keep following the current align mount and freeze Reduced mount states.
-    FollowAlign,
+    /// Align provides the initial mount seed; the selected runtime filter then
+    /// estimates its own mount states.
+    Auto,
+    /// Use the supplied vehicle-to-body mount quaternion as a fixed mount.
+    ///
+    /// The quaternion follows `x_b = C_bv(q) x_v`; mount states are frozen for
+    /// both Reduced and Full.
+    Manual([f32; 4]),
 }
 
 /// Public construction configuration for [`crate::SensorFusion`].
@@ -128,16 +123,13 @@ pub struct Config {
     pub filter: Filter,
     /// Source used for the initial physical vehicle-to-body mount estimate.
     pub mount_mode: MountMode,
-    /// Source used by the Reduced filter after alignment handoff.
-    pub mount_source: MountSource,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             filter: Filter::Reduced,
-            mount_mode: MountMode::InternalAlign,
-            mount_source: MountSource::LatchedSeed,
+            mount_mode: MountMode::Auto,
         }
     }
 }
@@ -208,7 +200,6 @@ pub(crate) struct RuntimeConfig {
     pub(crate) r_body_vel_z: f32,
     pub(crate) align_handoff_delay_s: f32,
     pub(crate) freeze_misalignment_states: bool,
-    pub(crate) mount_source: MountSource,
     pub(crate) mount_settle_time_s: f32,
     pub(crate) mount_settle_release_sigma_rad: f32,
     pub(crate) mount_settle_zero_cross_covariance: bool,
@@ -236,7 +227,6 @@ impl Default for RuntimeConfig {
             r_body_vel_z: 0.05,
             align_handoff_delay_s: 0.0,
             freeze_misalignment_states: false,
-            mount_source: MountSource::LatchedSeed,
             mount_settle_time_s: 0.0,
             mount_settle_release_sigma_rad: 7.5_f32.to_radians(),
             mount_settle_zero_cross_covariance: true,

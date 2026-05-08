@@ -1,5 +1,3 @@
-use sensor_fusion::MountSource;
-
 #[cfg_attr(target_arch = "wasm32", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone, Default)]
 pub struct Trace {
@@ -103,47 +101,35 @@ pub struct StateCorrelation {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum MountSourceMode {
+pub enum VisualizerMountMode {
     #[default]
-    Internal,
-    External,
-    Ref,
+    Auto,
+    Manual,
 }
 
-impl MountSourceMode {
+impl VisualizerMountMode {
     pub fn from_cli_value(s: &str) -> Result<Self, String> {
         match s.to_ascii_lowercase().as_str() {
-            "internal" | "auto" | "align" | "align-seed" | "seed" => Ok(Self::Internal),
-            "external" | "follow-align" | "continuous-align" | "align-external" => {
-                Ok(Self::External)
-            }
-            "ref" | "reference" | "manual" => Ok(Self::Ref),
+            "auto" => Ok(Self::Auto),
+            "ref" | "reference" | "manual" => Ok(Self::Manual),
             _ => Err(format!(
-                "invalid misalignment '{s}', expected 'ref', 'external', or 'internal'"
+                "invalid misalignment '{s}', expected 'auto' or 'manual'"
             )),
         }
     }
 
     pub fn uses_ref_mount(self) -> bool {
-        matches!(self, Self::Ref)
+        matches!(self, Self::Manual)
     }
 
     pub fn uses_align_mount(self) -> bool {
-        matches!(self, Self::Internal | Self::External)
-    }
-
-    pub fn mount_source(self) -> MountSource {
-        match self {
-            Self::External => MountSource::FollowAlign,
-            Self::Internal | Self::Ref => MountSource::LatchedSeed,
-        }
+        matches!(self, Self::Auto)
     }
 
     pub fn cli_value(self) -> &'static str {
         match self {
-            Self::Ref => "ref",
-            Self::External => "external",
-            Self::Internal => "internal",
+            Self::Manual => "manual",
+            Self::Auto => "auto",
         }
     }
 }
