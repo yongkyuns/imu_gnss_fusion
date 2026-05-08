@@ -1,3 +1,5 @@
+#![allow(clippy::items_after_test_module)]
+
 use anyhow::Result;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc;

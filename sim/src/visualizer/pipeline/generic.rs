@@ -166,7 +166,10 @@ impl ReplayOutputSampling {
     }
 
     fn keep_imu(self, index: usize, total: usize) -> bool {
-        self.imu_stride <= 1 || index == 0 || index + 1 == total || index % self.imu_stride == 0
+        self.imu_stride <= 1
+            || index == 0
+            || index + 1 == total
+            || index.is_multiple_of(self.imu_stride)
     }
 }
 
@@ -1977,6 +1980,7 @@ fn append_full_sample(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn reduced_nhc_inspector_sample(
     t_s: f64,
     label: &str,

@@ -1,4 +1,5 @@
 //! Shared WGS84 and ECEF navigation helpers.
+#![allow(clippy::excessive_precision)]
 
 use crate::math::{atan2_f64, cos_f64, dcm_to_quat_f64, sin_cos_f64, sin_f64, sqrt_f32, sqrt_f64};
 

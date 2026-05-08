@@ -379,6 +379,7 @@ fn time_in_range(t_s: f64, range: Option<(f64, f64)>) -> bool {
     t_s.is_finite() && t_s >= min_t && t_s <= max_t
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_plot_with_cursor_time<'a, I>(
     ui: &mut egui::Ui,
     title: &str,
@@ -621,7 +622,7 @@ where
             .inner;
     }
 
-    #[allow(unreachable_code)]
+    #[allow(clippy::too_many_arguments, unreachable_code)]
     fn draw_plot_body<'a, I>(
         ui: &mut egui::Ui,
         title: &str,

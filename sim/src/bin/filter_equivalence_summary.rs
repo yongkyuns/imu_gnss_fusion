@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
@@ -257,7 +257,7 @@ fn accumulate(stat: &mut MetricStats, values: [f64; 3], t_s: f64, threshold: f64
     }
 }
 
-fn print_text(path: &PathBuf, specs: &[MetricSpec], stats: &[MetricStats], ready: ReadyStats) {
+fn print_text(path: &Path, specs: &[MetricSpec], stats: &[MetricStats], ready: ReadyStats) {
     println!("file={}", path.display());
     println!(
         "rows total={} both_ready={} reduced_ready={} full_ready={}",
@@ -298,7 +298,7 @@ fn print_text(path: &PathBuf, specs: &[MetricSpec], stats: &[MetricStats], ready
     }
 }
 
-fn print_markdown(path: &PathBuf, specs: &[MetricSpec], stats: &[MetricStats], ready: ReadyStats) {
+fn print_markdown(path: &Path, specs: &[MetricSpec], stats: &[MetricStats], ready: ReadyStats) {
     println!("### {}", path.display());
     println!();
     println!(

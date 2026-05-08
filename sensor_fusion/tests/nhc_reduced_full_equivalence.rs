@@ -1,3 +1,5 @@
+#![allow(clippy::needless_range_loop)]
+
 use sensor_fusion::{full, generated_full, generated_reduced, reduced};
 
 const REDUCED_STATES: usize = generated_reduced::ERROR_STATES;

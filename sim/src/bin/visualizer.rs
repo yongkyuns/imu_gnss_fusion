@@ -1,4 +1,5 @@
 #![recursion_limit = "1024"]
+#![allow(clippy::double_ended_iterator_last, clippy::nonminimal_bool)]
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;

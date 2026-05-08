@@ -1,3 +1,11 @@
+#![allow(
+    clippy::collapsible_if,
+    clippy::needless_range_loop,
+    clippy::neg_cmp_op_on_partial_ord,
+    clippy::ptr_arg,
+    clippy::too_many_arguments
+)]
+
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
@@ -807,10 +815,7 @@ fn run_diagnostics(
     let mut align_fusion = SensorFusion::new();
     apply_fusion_config(&mut align_fusion, cfg, MountSourceMode::Internal);
 
-    let mut full = full::Filter::new(
-        cfg.noise.full
-            .unwrap_or_else(ProcessNoise::lsm6dso_104hz),
-    );
+    let mut full = full::Filter::new(cfg.noise.full.unwrap_or_else(ProcessNoise::lsm6dso_104hz));
     let mut full_ready = false;
     let mut last_imu: Option<GenericImuSample> = None;
     let mut latest_gnss: Option<GenericGnssSample> = None;

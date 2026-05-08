@@ -641,6 +641,7 @@ impl Filter {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn fuse_reference_batch_full_with_nhc_speed(
         &mut self,
         pos_ecef_m: Option<[f64; 3]>,
@@ -1091,9 +1092,7 @@ impl Filter {
             }
         }
 
-        for i in 0..ERROR_STATES {
-            self.raw.last_dx[i] = dx[i];
-        }
+        self.raw.last_dx.copy_from_slice(&dx);
         self.raw.last_dx_by_obs = dx_by_obs;
         self.raw.last_residuals = residual_diag;
         self.raw.last_effective_residuals = effective_residual_diag;

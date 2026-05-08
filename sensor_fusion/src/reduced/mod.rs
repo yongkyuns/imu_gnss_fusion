@@ -3,7 +3,7 @@
 //! Mathematical details are maintained in `docs/reduced_mount_formulation.pdf`.
 //! The runtime filter is [`Filter`]. Public structs in this module define the
 //! generated-code and diagnostics data layout. Focused state-operation helpers
-//! live under [`state_ops`].
+//! live under [`crate::reduced::state_ops`].
 
 use libm::{fabsf, sqrtf};
 
@@ -567,7 +567,7 @@ impl Filter {
         for (obs_index, (obs, residual, r_body_vel, diag_type)) in
             observations.into_iter().enumerate()
         {
-            if !(r_body_vel > 0.0) || !r_body_vel.is_finite() {
+            if r_body_vel <= 0.0 || !r_body_vel.is_finite() {
                 continue;
             }
             let support = if obs_index == 0 {
@@ -587,7 +587,7 @@ impl Filter {
                 s += obs.h[state] * ph[state];
                 hd += obs.h[state] * dx[state];
             }
-            if !(s > 0.0) || !s.is_finite() {
+            if s <= 0.0 || !s.is_finite() {
                 continue;
             }
             let effective_residual = residual - hd;
@@ -663,7 +663,7 @@ impl Filter {
             for state in 0..ERROR_STATES {
                 s += h[state] * ph[state];
             }
-            if !(s > 0.0) || !s.is_finite() {
+            if s <= 0.0 || !s.is_finite() {
                 continue;
             }
             let mut hd = 0.0;
@@ -834,7 +834,7 @@ fn push_batch_row(
     variance: f32,
     diag_type: usize,
 ) {
-    if *obs_count >= MAX_BATCH_OBS || !(variance > 0.0) || !variance.is_finite() {
+    if *obs_count >= MAX_BATCH_OBS || variance <= 0.0 || !variance.is_finite() {
         return;
     }
     h_rows[*obs_count] = h;

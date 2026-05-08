@@ -1,3 +1,5 @@
+#![allow(clippy::needless_range_loop)]
+
 use anyhow::Result;
 use clap::Parser;
 use sensor_fusion::ProcessNoise;
@@ -196,10 +198,7 @@ fn run_full_allocation(
     cfg: FilterCompareConfig,
     args: &Args,
 ) -> (Allocation<FULL_OBS_TYPES>, ResidualSummary) {
-    let mut full = Filter::new(
-        cfg.noise.full
-            .unwrap_or_else(ProcessNoise::lsm6dso_104hz),
-    );
+    let mut full = Filter::new(cfg.noise.full.unwrap_or_else(ProcessNoise::lsm6dso_104hz));
     let mut out = Allocation::default();
     let mut residuals = ResidualSummary::default();
     let mut ready = false;

@@ -1,4 +1,4 @@
-#![allow(clippy::excessive_precision)]
+#![allow(clippy::excessive_precision, dead_code)]
 
 use std::fs;
 use std::path::Path;

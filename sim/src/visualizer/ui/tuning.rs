@@ -126,7 +126,8 @@ pub(super) fn draw_reduced_tuning(
     });
     ui.collapsing("Prediction", |ui| {
         let noise = cfg
-            .noise.reduced
+            .noise
+            .reduced
             .get_or_insert_with(|| FilterCompareConfig::default().noise.reduced.unwrap());
         drag_f32(ui, "Gyro var", &mut noise.gyro_var, 1.0e-7, 0.0..=1.0);
         drag_f32(ui, "Accel var", &mut noise.accel_var, 1.0e-5, 0.0..=100.0);
@@ -316,7 +317,8 @@ pub(super) fn draw_align_tuning(ui: &mut egui::Ui, cfg: &mut FilterCompareConfig
 pub(super) fn draw_full_tuning(ui: &mut egui::Ui, cfg: &mut FilterCompareConfig) {
     ui.collapsing("Prediction noise", |ui| {
         let noise = cfg
-            .noise.full
+            .noise
+            .full
             .get_or_insert_with(|| FilterCompareConfig::default().noise.full.unwrap());
         drag_f32(ui, "Gyro var", &mut noise.gyro_var, 1.0e-7, 0.0..=1.0);
         drag_f32(ui, "Accel var", &mut noise.accel_var, 1.0e-5, 0.0..=100.0);

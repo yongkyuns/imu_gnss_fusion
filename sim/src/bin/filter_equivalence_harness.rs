@@ -1,3 +1,9 @@
+#![allow(
+    clippy::manual_is_multiple_of,
+    clippy::obfuscated_if_else,
+    clippy::unnecessary_cast
+)]
+
 use std::fs;
 use std::io::{self, BufWriter, Write};
 use std::path::PathBuf;
@@ -254,10 +260,7 @@ impl HarnessState {
         Self {
             fusion,
             align_fusion,
-            full: Filter::new(
-                cfg.noise.full
-                    .unwrap_or_else(ProcessNoise::lsm6dso_104hz),
-            ),
+            full: Filter::new(cfg.noise.full.unwrap_or_else(ProcessNoise::lsm6dso_104hz)),
             full_ready: false,
             last_imu: None,
             latest_gnss: None,
