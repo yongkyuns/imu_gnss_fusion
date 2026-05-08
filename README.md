@@ -7,6 +7,8 @@
 
 🌐 **Hosted web app:** [yongkyuns.github.io/imu_gnss_fusion](https://yongkyuns.github.io/imu_gnss_fusion/)
 
+![imu_gnss_fusion web visualizer](screenshot.png)
+
 `imu_gnss_fusion` is a Rust workspace for experimenting with IMU, GNSS, and wheel-speed sensor fusion. It contains an embedded-oriented filter crate, offline replay and visualization tools, synthetic trajectory generation, and hardware-agnostic CSV replay support.
 
 The project is currently an active filter-development workspace rather than a
