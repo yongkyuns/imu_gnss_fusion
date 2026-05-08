@@ -308,17 +308,17 @@ def derive_measurement_model():
     return {
         **model,
         "P_cov": p_cov,
-        "gps_pos_n": generate_observation_equations(p_cov, model["dx"], p_true[0], Symbol("R_POS_N", real=True), "REDUCED_HK_POS_N", zero_error_subs),
-        "gps_pos_e": generate_observation_equations(p_cov, model["dx"], p_true[1], Symbol("R_POS_E", real=True), "REDUCED_HK_POS_E", zero_error_subs),
-        "gps_pos_d": generate_observation_equations(p_cov, model["dx"], p_true[2], Symbol("R_POS_D", real=True), "REDUCED_HK_POS_D", zero_error_subs),
-        "gps_vel_n": generate_observation_equations(p_cov, model["dx"], v_true[0], Symbol("R_VEL_N", real=True), "REDUCED_HK_VEL_N", zero_error_subs),
-        "gps_vel_e": generate_observation_equations(p_cov, model["dx"], v_true[1], Symbol("R_VEL_E", real=True), "REDUCED_HK_VEL_E", zero_error_subs),
-        "gps_vel_d": generate_observation_equations(p_cov, model["dx"], v_true[2], Symbol("R_VEL_D", real=True), "REDUCED_HK_VEL_D", zero_error_subs),
-        "stationary_accel_x": generate_observation_equations(p_cov, model["dx"], stationary_gravity_v[0], Symbol("R_STATIONARY_ACCEL", real=True), "REDUCED_HK_STAT_AX", zero_error_subs),
-        "stationary_accel_y": generate_observation_equations(p_cov, model["dx"], stationary_gravity_v[1], Symbol("R_STATIONARY_ACCEL", real=True), "REDUCED_HK_STAT_AY", zero_error_subs),
-        "body_vel_x": generate_observation_equations(p_cov, model["dx"], v_true_v[0], Symbol("R_BODY_VEL", real=True), "REDUCED_HK_BODY_X", zero_error_subs),
-        "body_vel_y": generate_observation_equations(p_cov, model["dx"], v_true_v[1], Symbol("R_BODY_VEL", real=True), "REDUCED_HK_BODY_Y", zero_error_subs),
-        "body_vel_z": generate_observation_equations(p_cov, model["dx"], v_true_v[2], Symbol("R_BODY_VEL", real=True), "REDUCED_HK_BODY_Z", zero_error_subs),
+        "gps_pos_n": generate_observation_equations(p_cov, model["dx"], p_true[0], Symbol("R_POS_N", real=True), "tmp_hk_pos_n", zero_error_subs),
+        "gps_pos_e": generate_observation_equations(p_cov, model["dx"], p_true[1], Symbol("R_POS_E", real=True), "tmp_hk_pos_e", zero_error_subs),
+        "gps_pos_d": generate_observation_equations(p_cov, model["dx"], p_true[2], Symbol("R_POS_D", real=True), "tmp_hk_pos_d", zero_error_subs),
+        "gps_vel_n": generate_observation_equations(p_cov, model["dx"], v_true[0], Symbol("R_VEL_N", real=True), "tmp_hk_vel_n", zero_error_subs),
+        "gps_vel_e": generate_observation_equations(p_cov, model["dx"], v_true[1], Symbol("R_VEL_E", real=True), "tmp_hk_vel_e", zero_error_subs),
+        "gps_vel_d": generate_observation_equations(p_cov, model["dx"], v_true[2], Symbol("R_VEL_D", real=True), "tmp_hk_vel_d", zero_error_subs),
+        "stationary_accel_x": generate_observation_equations(p_cov, model["dx"], stationary_gravity_v[0], Symbol("R_STATIONARY_ACCEL", real=True), "tmp_hk_stat_ax", zero_error_subs),
+        "stationary_accel_y": generate_observation_equations(p_cov, model["dx"], stationary_gravity_v[1], Symbol("R_STATIONARY_ACCEL", real=True), "tmp_hk_stat_ay", zero_error_subs),
+        "body_vel_x": generate_observation_equations(p_cov, model["dx"], v_true_v[0], Symbol("R_BODY_VEL", real=True), "tmp_hk_body_x", zero_error_subs),
+        "body_vel_y": generate_observation_equations(p_cov, model["dx"], v_true_v[1], Symbol("R_BODY_VEL", real=True), "tmp_hk_body_y", zero_error_subs),
+        "body_vel_z": generate_observation_equations(p_cov, model["dx"], v_true_v[2], Symbol("R_BODY_VEL", real=True), "tmp_hk_body_z", zero_error_subs),
     }
 
 
@@ -362,7 +362,7 @@ def emit_nominal_prediction_rust(model):
     v_new = model["x_nom_new"][4:7, 0]
     p_new = model["x_nom_new"][7:10, 0]
     state_new = Matrix.vstack(q_new, v_new, p_new)
-    expr = cse(state_new, symbols("REDUCED_PRED0:2000"), optimizations="basic")
+    expr = cse(state_new, symbols("tmp_pred0:2000"), optimizations="basic")
     pred_path = GENERATED_RUST_DIR / "nominal_prediction_generated.rs"
     gen = RustCodeGenerator(str(pred_path))
     gen.print_string("Generated Reduced nominal-state prediction")
@@ -408,14 +408,14 @@ def emit_generated_rust():
         "Generated Reduced error-state transition matrix",
         model["F"],
         "F",
-        "REDUCED_F",
+        "tmp_f",
     )
     emit_cse_matrix_assignments(
         g_path,
         "Generated Reduced error-state noise input matrix",
         model["G"],
         "G",
-        "REDUCED_G",
+        "tmp_g",
     )
     emit_matrix_supports(
         support_path,
@@ -429,7 +429,7 @@ def emit_generated_rust():
         "Generated first-order Reduced attitude reset Jacobian block",
         model["attitude_reset_jacobian"],
         "G_reset_theta",
-        "REDUCED_RESET",
+        "tmp_reset",
     )
     state_dim = model["state_dim_error"]
     write_observation_equations(gps_pos_n_path, meas["gps_pos_n"], state_dim)

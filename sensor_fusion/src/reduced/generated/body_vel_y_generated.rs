@@ -1,58 +1,58 @@
 {
 // Sub Expressions
-let REDUCED_HK_BODY_Y0: f32 = q0*q2;
-let REDUCED_HK_BODY_Y1: f32 = q1*q3;
-let REDUCED_HK_BODY_Y2: f32 = q0*q1;
-let REDUCED_HK_BODY_Y3: f32 = q2*q3;
-let REDUCED_HK_BODY_Y4: f32 = 2.0_f32*ve;
-let REDUCED_HK_BODY_Y5: f32 = q3*q3;
-let REDUCED_HK_BODY_Y6: f32 = q1*q1;
-let REDUCED_HK_BODY_Y7: f32 = q0*q0 - q2*q2;
-let REDUCED_HK_BODY_Y8: f32 = -REDUCED_HK_BODY_Y4*(REDUCED_HK_BODY_Y2 - REDUCED_HK_BODY_Y3) + 1.0_f32*vd*(REDUCED_HK_BODY_Y5 - REDUCED_HK_BODY_Y6 + REDUCED_HK_BODY_Y7) + 2.0_f32*vn*(REDUCED_HK_BODY_Y0 + REDUCED_HK_BODY_Y1);
-let REDUCED_HK_BODY_Y9: f32 = q0*q3;
-let REDUCED_HK_BODY_Y10: f32 = REDUCED_HK_BODY_Y4*(REDUCED_HK_BODY_Y9 + q1*q2) - 2.0_f32*vd*(REDUCED_HK_BODY_Y0 - REDUCED_HK_BODY_Y1) + 1.0_f32*vn*(-REDUCED_HK_BODY_Y5 + REDUCED_HK_BODY_Y6 + REDUCED_HK_BODY_Y7);
-let REDUCED_HK_BODY_Y11: f32 = REDUCED_HK_BODY_Y9 - q1*q2;
-let REDUCED_HK_BODY_Y12: f32 = 2.0_f32*REDUCED_HK_BODY_Y5 + 2.0_f32*REDUCED_HK_BODY_Y6 - 1.0_f32;
-let REDUCED_HK_BODY_Y13: f32 = REDUCED_HK_BODY_Y2 + REDUCED_HK_BODY_Y3;
-let REDUCED_HK_BODY_Y14: f32 = 2.0_f32*REDUCED_HK_BODY_Y11;
-let REDUCED_HK_BODY_Y15: f32 = -REDUCED_HK_BODY_Y10*P[0][2] - REDUCED_HK_BODY_Y12*P[0][4] + 2.0_f32*REDUCED_HK_BODY_Y13*P[0][5] - REDUCED_HK_BODY_Y14*P[0][3] + REDUCED_HK_BODY_Y8*P[0][0];
-let REDUCED_HK_BODY_Y16: f32 = -REDUCED_HK_BODY_Y10*P[2][5] - REDUCED_HK_BODY_Y12*P[4][5] + 2.0_f32*REDUCED_HK_BODY_Y13*P[5][5] - REDUCED_HK_BODY_Y14*P[3][5] + REDUCED_HK_BODY_Y8*P[0][5];
-let REDUCED_HK_BODY_Y17: f32 = -REDUCED_HK_BODY_Y10*P[2][3] - REDUCED_HK_BODY_Y12*P[3][4] + 2.0_f32*REDUCED_HK_BODY_Y13*P[3][5] - REDUCED_HK_BODY_Y14*P[3][3] + REDUCED_HK_BODY_Y8*P[0][3];
-let REDUCED_HK_BODY_Y18: f32 = -REDUCED_HK_BODY_Y10*P[2][4] - REDUCED_HK_BODY_Y12*P[4][4] + 2.0_f32*REDUCED_HK_BODY_Y13*P[4][5] - REDUCED_HK_BODY_Y14*P[3][4] + REDUCED_HK_BODY_Y8*P[0][4];
-let REDUCED_HK_BODY_Y19: f32 = -REDUCED_HK_BODY_Y10*P[2][2] - REDUCED_HK_BODY_Y12*P[2][4] + 2.0_f32*REDUCED_HK_BODY_Y13*P[2][5] - REDUCED_HK_BODY_Y14*P[2][3] + REDUCED_HK_BODY_Y8*P[0][2];
-let REDUCED_HK_BODY_Y20: f32 = -REDUCED_HK_BODY_Y10*REDUCED_HK_BODY_Y19 - REDUCED_HK_BODY_Y12*REDUCED_HK_BODY_Y18 + 2.0_f32*REDUCED_HK_BODY_Y13*REDUCED_HK_BODY_Y16 - REDUCED_HK_BODY_Y14*REDUCED_HK_BODY_Y17 + REDUCED_HK_BODY_Y15*REDUCED_HK_BODY_Y8 + R_BODY_VEL;
-let REDUCED_HK_BODY_Y21: f32 = 1.0_f32/REDUCED_HK_BODY_Y20;
+let tmp_hk_body_y0: f32 = q0*q2;
+let tmp_hk_body_y1: f32 = q1*q3;
+let tmp_hk_body_y2: f32 = q0*q1;
+let tmp_hk_body_y3: f32 = q2*q3;
+let tmp_hk_body_y4: f32 = 2.0_f32*ve;
+let tmp_hk_body_y5: f32 = q3*q3;
+let tmp_hk_body_y6: f32 = q1*q1;
+let tmp_hk_body_y7: f32 = q0*q0 - q2*q2;
+let tmp_hk_body_y8: f32 = -tmp_hk_body_y4*(tmp_hk_body_y2 - tmp_hk_body_y3) + 1.0_f32*vd*(tmp_hk_body_y5 - tmp_hk_body_y6 + tmp_hk_body_y7) + 2.0_f32*vn*(tmp_hk_body_y0 + tmp_hk_body_y1);
+let tmp_hk_body_y9: f32 = q0*q3;
+let tmp_hk_body_y10: f32 = tmp_hk_body_y4*(q1*q2 + tmp_hk_body_y9) - 2.0_f32*vd*(tmp_hk_body_y0 - tmp_hk_body_y1) + 1.0_f32*vn*(-tmp_hk_body_y5 + tmp_hk_body_y6 + tmp_hk_body_y7);
+let tmp_hk_body_y11: f32 = -q1*q2 + tmp_hk_body_y9;
+let tmp_hk_body_y12: f32 = 2.0_f32*tmp_hk_body_y5 + 2.0_f32*tmp_hk_body_y6 - 1.0_f32;
+let tmp_hk_body_y13: f32 = tmp_hk_body_y2 + tmp_hk_body_y3;
+let tmp_hk_body_y14: f32 = 2.0_f32*tmp_hk_body_y11;
+let tmp_hk_body_y15: f32 = P[0][0]*tmp_hk_body_y8 - P[0][2]*tmp_hk_body_y10 - P[0][3]*tmp_hk_body_y14 - P[0][4]*tmp_hk_body_y12 + 2.0_f32*P[0][5]*tmp_hk_body_y13;
+let tmp_hk_body_y16: f32 = P[0][5]*tmp_hk_body_y8 - P[2][5]*tmp_hk_body_y10 - P[3][5]*tmp_hk_body_y14 - P[4][5]*tmp_hk_body_y12 + 2.0_f32*P[5][5]*tmp_hk_body_y13;
+let tmp_hk_body_y17: f32 = P[0][3]*tmp_hk_body_y8 - P[2][3]*tmp_hk_body_y10 - P[3][3]*tmp_hk_body_y14 - P[3][4]*tmp_hk_body_y12 + 2.0_f32*P[3][5]*tmp_hk_body_y13;
+let tmp_hk_body_y18: f32 = P[0][4]*tmp_hk_body_y8 - P[2][4]*tmp_hk_body_y10 - P[3][4]*tmp_hk_body_y14 - P[4][4]*tmp_hk_body_y12 + 2.0_f32*P[4][5]*tmp_hk_body_y13;
+let tmp_hk_body_y19: f32 = P[0][2]*tmp_hk_body_y8 - P[2][2]*tmp_hk_body_y10 - P[2][3]*tmp_hk_body_y14 - P[2][4]*tmp_hk_body_y12 + 2.0_f32*P[2][5]*tmp_hk_body_y13;
+let tmp_hk_body_y20: f32 = R_BODY_VEL - tmp_hk_body_y10*tmp_hk_body_y19 - tmp_hk_body_y12*tmp_hk_body_y18 + 2.0_f32*tmp_hk_body_y13*tmp_hk_body_y16 - tmp_hk_body_y14*tmp_hk_body_y17 + tmp_hk_body_y15*tmp_hk_body_y8;
+let tmp_hk_body_y21: f32 = 1.0_f32/tmp_hk_body_y20;
 
 
 // Observation Jacobians
-H[0] = REDUCED_HK_BODY_Y8;
-H[2] = -REDUCED_HK_BODY_Y10;
-H[3] = -2.0_f32*REDUCED_HK_BODY_Y11;
-H[4] = -REDUCED_HK_BODY_Y12;
-H[5] = 2.0_f32*REDUCED_HK_BODY_Y13;
+H[0] = tmp_hk_body_y8;
+H[2] = -tmp_hk_body_y10;
+H[3] = -2.0_f32*tmp_hk_body_y11;
+H[4] = -tmp_hk_body_y12;
+H[5] = 2.0_f32*tmp_hk_body_y13;
 
 
 // Kalman gains
-K[0] = REDUCED_HK_BODY_Y15*REDUCED_HK_BODY_Y21;
-K[1] = REDUCED_HK_BODY_Y21*(-REDUCED_HK_BODY_Y10*P[1][2] - REDUCED_HK_BODY_Y12*P[1][4] + 2.0_f32*REDUCED_HK_BODY_Y13*P[1][5] - REDUCED_HK_BODY_Y14*P[1][3] + REDUCED_HK_BODY_Y8*P[0][1]);
-K[2] = REDUCED_HK_BODY_Y19*REDUCED_HK_BODY_Y21;
-K[3] = REDUCED_HK_BODY_Y17*REDUCED_HK_BODY_Y21;
-K[4] = REDUCED_HK_BODY_Y18*REDUCED_HK_BODY_Y21;
-K[5] = REDUCED_HK_BODY_Y16*REDUCED_HK_BODY_Y21;
-K[6] = REDUCED_HK_BODY_Y21*(-REDUCED_HK_BODY_Y10*P[2][6] - REDUCED_HK_BODY_Y12*P[4][6] + 2.0_f32*REDUCED_HK_BODY_Y13*P[5][6] - REDUCED_HK_BODY_Y14*P[3][6] + REDUCED_HK_BODY_Y8*P[0][6]);
-K[7] = REDUCED_HK_BODY_Y21*(-REDUCED_HK_BODY_Y10*P[2][7] - REDUCED_HK_BODY_Y12*P[4][7] + 2.0_f32*REDUCED_HK_BODY_Y13*P[5][7] - REDUCED_HK_BODY_Y14*P[3][7] + REDUCED_HK_BODY_Y8*P[0][7]);
-K[8] = REDUCED_HK_BODY_Y21*(-REDUCED_HK_BODY_Y10*P[2][8] - REDUCED_HK_BODY_Y12*P[4][8] + 2.0_f32*REDUCED_HK_BODY_Y13*P[5][8] - REDUCED_HK_BODY_Y14*P[3][8] + REDUCED_HK_BODY_Y8*P[0][8]);
-K[9] = REDUCED_HK_BODY_Y21*(-REDUCED_HK_BODY_Y10*P[2][9] - REDUCED_HK_BODY_Y12*P[4][9] + 2.0_f32*REDUCED_HK_BODY_Y13*P[5][9] - REDUCED_HK_BODY_Y14*P[3][9] + REDUCED_HK_BODY_Y8*P[0][9]);
-K[10] = REDUCED_HK_BODY_Y21*(-REDUCED_HK_BODY_Y10*P[2][10] - REDUCED_HK_BODY_Y12*P[4][10] + 2.0_f32*REDUCED_HK_BODY_Y13*P[5][10] - REDUCED_HK_BODY_Y14*P[3][10] + REDUCED_HK_BODY_Y8*P[0][10]);
-K[11] = REDUCED_HK_BODY_Y21*(-REDUCED_HK_BODY_Y10*P[2][11] - REDUCED_HK_BODY_Y12*P[4][11] + 2.0_f32*REDUCED_HK_BODY_Y13*P[5][11] - REDUCED_HK_BODY_Y14*P[3][11] + REDUCED_HK_BODY_Y8*P[0][11]);
-K[12] = REDUCED_HK_BODY_Y21*(-REDUCED_HK_BODY_Y10*P[2][12] - REDUCED_HK_BODY_Y12*P[4][12] + 2.0_f32*REDUCED_HK_BODY_Y13*P[5][12] - REDUCED_HK_BODY_Y14*P[3][12] + REDUCED_HK_BODY_Y8*P[0][12]);
-K[13] = REDUCED_HK_BODY_Y21*(-REDUCED_HK_BODY_Y10*P[2][13] - REDUCED_HK_BODY_Y12*P[4][13] + 2.0_f32*REDUCED_HK_BODY_Y13*P[5][13] - REDUCED_HK_BODY_Y14*P[3][13] + REDUCED_HK_BODY_Y8*P[0][13]);
-K[14] = REDUCED_HK_BODY_Y21*(-REDUCED_HK_BODY_Y10*P[2][14] - REDUCED_HK_BODY_Y12*P[4][14] + 2.0_f32*REDUCED_HK_BODY_Y13*P[5][14] - REDUCED_HK_BODY_Y14*P[3][14] + REDUCED_HK_BODY_Y8*P[0][14]);
-K[15] = REDUCED_HK_BODY_Y21*(-REDUCED_HK_BODY_Y10*P[2][15] - REDUCED_HK_BODY_Y12*P[4][15] + 2.0_f32*REDUCED_HK_BODY_Y13*P[5][15] - REDUCED_HK_BODY_Y14*P[3][15] + REDUCED_HK_BODY_Y8*P[0][15]);
-K[16] = REDUCED_HK_BODY_Y21*(-REDUCED_HK_BODY_Y10*P[2][16] - REDUCED_HK_BODY_Y12*P[4][16] + 2.0_f32*REDUCED_HK_BODY_Y13*P[5][16] - REDUCED_HK_BODY_Y14*P[3][16] + REDUCED_HK_BODY_Y8*P[0][16]);
-K[17] = REDUCED_HK_BODY_Y21*(-REDUCED_HK_BODY_Y10*P[2][17] - REDUCED_HK_BODY_Y12*P[4][17] + 2.0_f32*REDUCED_HK_BODY_Y13*P[5][17] - REDUCED_HK_BODY_Y14*P[3][17] + REDUCED_HK_BODY_Y8*P[0][17]);
+K[0] = tmp_hk_body_y15*tmp_hk_body_y21;
+K[1] = tmp_hk_body_y21*(P[0][1]*tmp_hk_body_y8 - P[1][2]*tmp_hk_body_y10 - P[1][3]*tmp_hk_body_y14 - P[1][4]*tmp_hk_body_y12 + 2.0_f32*P[1][5]*tmp_hk_body_y13);
+K[2] = tmp_hk_body_y19*tmp_hk_body_y21;
+K[3] = tmp_hk_body_y17*tmp_hk_body_y21;
+K[4] = tmp_hk_body_y18*tmp_hk_body_y21;
+K[5] = tmp_hk_body_y16*tmp_hk_body_y21;
+K[6] = tmp_hk_body_y21*(P[0][6]*tmp_hk_body_y8 - P[2][6]*tmp_hk_body_y10 - P[3][6]*tmp_hk_body_y14 - P[4][6]*tmp_hk_body_y12 + 2.0_f32*P[5][6]*tmp_hk_body_y13);
+K[7] = tmp_hk_body_y21*(P[0][7]*tmp_hk_body_y8 - P[2][7]*tmp_hk_body_y10 - P[3][7]*tmp_hk_body_y14 - P[4][7]*tmp_hk_body_y12 + 2.0_f32*P[5][7]*tmp_hk_body_y13);
+K[8] = tmp_hk_body_y21*(P[0][8]*tmp_hk_body_y8 - P[2][8]*tmp_hk_body_y10 - P[3][8]*tmp_hk_body_y14 - P[4][8]*tmp_hk_body_y12 + 2.0_f32*P[5][8]*tmp_hk_body_y13);
+K[9] = tmp_hk_body_y21*(P[0][9]*tmp_hk_body_y8 - P[2][9]*tmp_hk_body_y10 - P[3][9]*tmp_hk_body_y14 - P[4][9]*tmp_hk_body_y12 + 2.0_f32*P[5][9]*tmp_hk_body_y13);
+K[10] = tmp_hk_body_y21*(P[0][10]*tmp_hk_body_y8 - P[2][10]*tmp_hk_body_y10 - P[3][10]*tmp_hk_body_y14 - P[4][10]*tmp_hk_body_y12 + 2.0_f32*P[5][10]*tmp_hk_body_y13);
+K[11] = tmp_hk_body_y21*(P[0][11]*tmp_hk_body_y8 - P[2][11]*tmp_hk_body_y10 - P[3][11]*tmp_hk_body_y14 - P[4][11]*tmp_hk_body_y12 + 2.0_f32*P[5][11]*tmp_hk_body_y13);
+K[12] = tmp_hk_body_y21*(P[0][12]*tmp_hk_body_y8 - P[2][12]*tmp_hk_body_y10 - P[3][12]*tmp_hk_body_y14 - P[4][12]*tmp_hk_body_y12 + 2.0_f32*P[5][12]*tmp_hk_body_y13);
+K[13] = tmp_hk_body_y21*(P[0][13]*tmp_hk_body_y8 - P[2][13]*tmp_hk_body_y10 - P[3][13]*tmp_hk_body_y14 - P[4][13]*tmp_hk_body_y12 + 2.0_f32*P[5][13]*tmp_hk_body_y13);
+K[14] = tmp_hk_body_y21*(P[0][14]*tmp_hk_body_y8 - P[2][14]*tmp_hk_body_y10 - P[3][14]*tmp_hk_body_y14 - P[4][14]*tmp_hk_body_y12 + 2.0_f32*P[5][14]*tmp_hk_body_y13);
+K[15] = tmp_hk_body_y21*(P[0][15]*tmp_hk_body_y8 - P[2][15]*tmp_hk_body_y10 - P[3][15]*tmp_hk_body_y14 - P[4][15]*tmp_hk_body_y12 + 2.0_f32*P[5][15]*tmp_hk_body_y13);
+K[16] = tmp_hk_body_y21*(P[0][16]*tmp_hk_body_y8 - P[2][16]*tmp_hk_body_y10 - P[3][16]*tmp_hk_body_y14 - P[4][16]*tmp_hk_body_y12 + 2.0_f32*P[5][16]*tmp_hk_body_y13);
+K[17] = tmp_hk_body_y21*(P[0][17]*tmp_hk_body_y8 - P[2][17]*tmp_hk_body_y10 - P[3][17]*tmp_hk_body_y14 - P[4][17]*tmp_hk_body_y12 + 2.0_f32*P[5][17]*tmp_hk_body_y13);
 
 
 // Innovation Variance
-S = REDUCED_HK_BODY_Y20;
+S = tmp_hk_body_y20;
 }
