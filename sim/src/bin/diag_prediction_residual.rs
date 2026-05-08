@@ -4,7 +4,7 @@ use sensor_fusion::{ProcessNoise, full, reduced};
 use sim::eval::gnss_ins::{as_q64, quat_angle_deg, quat_conj, quat_mul};
 use sim::synthetic::gnss_ins_path::{MotionProfile, PathGenConfig, generate};
 use sim::visualizer::math::lla_to_ecef;
-use sim::visualizer::pipeline::generic::reference_mount_rpy_to_q_vb;
+use sim::visualizer::pipeline::generic::reference_mount_rpy_to_q_bv;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -68,7 +68,7 @@ fn main() -> Result<()> {
             ..PathGenConfig::default()
         },
     )?;
-    let q_mount = reference_mount_rpy_to_q_vb([
+    let q_mount = reference_mount_rpy_to_q_bv([
         args.mount_roll_deg,
         args.mount_pitch_deg,
         args.mount_yaw_deg,

@@ -98,6 +98,97 @@ Plots, controls, modules, binaries, and generated-code paths consistently use
 **Reduced** for the reduced-state local-NED EKF and **Full** for the full-state
 ECEF EKF.
 
+## 🧭 Coordinate And API Conventions
+
+The filters use active rotations: `x_a = C_ab x_b`, and quaternion products
+compose as `C(q1 * q2) = C(q1) C(q2)`. Quaternions are scalar-first
+`[w, x, y, z]`.
+
+| Symbol | Meaning |
+| --- | --- |
+| `b` | Raw IMU body/sensor frame. Public `ImuSample` gyro and accel are expressed here. |
+| `v` | Vehicle frame, forward-right-down. Vehicle speed and non-holonomic constraints are expressed here. |
+| `n` | Local NED navigation frame used by Reduced and GNSS velocities. |
+| `e` | ECEF frame used internally by Full. |
+
+The current implementation follows the mount-in-propagation convention used by
+Full. The mount quaternion returned by Align and stored in the `qcs0..qcs3`
+fields of both filters is the physical vehicle-to-body mount:
+
+```text
+x_b = C_bv(q_mount) x_v
+x_v = C_bv(q_mount)^T x_b
+```
+
+Raw IMU samples are not pre-rotated by callers. Reduced and Full rotate them
+into the vehicle frame inside propagation. Reduced attitude `q0..q3` is the
+vehicle-to-NED quaternion `q_nv`; Full attitude `q0..q3` is the vehicle-to-ECEF
+quaternion `q_ev`. NHC velocity is `C_nv^T v_n` for Reduced and `C_ev^T v_e`
+for Full.
+
+Expected `sensor_fusion` inputs:
+
+| Input | Required convention |
+| --- | --- |
+| `ImuSample::gyro_radps` | Raw body-frame angular rate `[x_b, y_b, z_b]`, rad/s. |
+| `ImuSample::accel_mps2` | Raw body-frame specific force `[x_b, y_b, z_b]`, m/s². |
+| `GnssSample::lat/lon/height` | WGS84 latitude/longitude degrees and ellipsoidal height meters. |
+| `GnssSample::vel_ned_mps` | Local `[north, east, down]` velocity, m/s. |
+| `GnssSample::pos_std_m` | One-sigma local NED position standard deviations, meters. |
+| `GnssSample::vel_std_mps` | One-sigma local NED velocity standard deviations, m/s. |
+| `GnssSample::heading_rad` | Optional vehicle heading in NED, radians clockwise from north toward east. |
+| `VehicleSpeedSample` | Nonnegative speed magnitude along vehicle `+X`; direction selects forward/reverse. |
+
+Minimal `sensor_fusion` API example:
+
+```rust
+use sensor_fusion::{
+    Config, Filter, GnssSample, ImuSample, MountMode, SensorFusion,
+    VehicleSpeedDirection, VehicleSpeedSample,
+};
+
+let mount_q = [1.0, 0.0, 0.0, 0.0]; // x_b = C_bv(q) x_v
+let mut fusion = SensorFusion::with_config(Config {
+    filter: Filter::Reduced,
+    mount_mode: MountMode::External(mount_q),
+    ..Config::default()
+});
+
+fusion.process_imu(ImuSample {
+    t_s: 0.00,
+    gyro_radps: [0.0, 0.0, 0.0],
+    accel_mps2: [0.0, 0.0, -9.80665],
+});
+
+fusion.process_gnss(GnssSample {
+    t_s: 0.01,
+    lat_deg: 37.0,
+    lon_deg: -122.0,
+    height_m: 10.0,
+    vel_ned_mps: [5.0, 0.0, 0.0],
+    pos_std_m: [1.0, 1.0, 2.5],
+    vel_std_mps: [0.1, 0.1, 0.2],
+    heading_rad: Some(0.0),
+});
+
+fusion.process_vehicle_speed(VehicleSpeedSample {
+    t_s: 0.02,
+    speed_mps: 5.0,
+    direction: VehicleSpeedDirection::Forward,
+});
+
+if let Some(reduced) = fusion.reduced() {
+    let vn = reduced.nominal.vn;
+    let mount_q = [
+        reduced.nominal.qcs0,
+        reduced.nominal.qcs1,
+        reduced.nominal.qcs2,
+        reduced.nominal.qcs3,
+    ];
+    let _ = (vn, mount_q);
+}
+```
+
 ## 🚀 Quick Start
 
 Requirements:
@@ -142,8 +233,8 @@ The visualizer and primary A/B analyzers use `--misalignment` to select the moun
 
 | Mode | Behavior |
 | --- | --- |
-| `internal` | Align seeds the mount angle; Reduced EKF then estimates residual mount states. |
-| `external` | Reduced EKF continuously follows Align and freezes its residual mount states. |
+| `internal` | Align seeds the mount angle; Reduced EKF then estimates the physical mount states. |
+| `external` | Reduced EKF continuously follows Align and freezes its mount states. |
 | `ref` | Uses reference mount angles when available in synthetic or converted data. |
 
 See [sim/README.md](sim/README.md) for the current tool map.
@@ -164,7 +255,11 @@ t_s,gx_radps,gy_radps,gz_radps,ax_mps2,ay_mps2,az_mps2
 t_s,lat_deg,lon_deg,height_m,vn_mps,ve_mps,vd_mps,pos_std_n_m,pos_std_e_m,pos_std_d_m,vel_std_n_mps,vel_std_e_mps,vel_std_d_mps,heading_rad
 ```
 
-`heading_rad` may be `NaN` when heading is unavailable. Producers include `export_synthetic_replay_generic`; hardware-specific converters should live outside this repository and emit this schema.
+`imu.csv` gyro and accel columns are raw body-frame samples. `gnss.csv`
+velocity and standard-deviation columns are local NED. `heading_rad` may be
+`NaN` when heading is unavailable. Producers include
+`export_synthetic_replay_generic`; hardware-specific converters should live
+outside this repository and emit this schema.
 
 Replay directories can also include optional reference traces used only for evaluation and visualization:
 
@@ -174,7 +269,13 @@ reference_mount.csv
 reference_position.csv
 ```
 
-Attitude and mount reference CSVs use `t_s,roll_deg,pitch_deg,yaw_deg`. Position references use `t_s,lat_deg,lon_deg,height_m,vn_mps,ve_mps,vd_mps,heading_rad`. They are intentionally generic: a converter may derive them from any trusted reference system, but this repository does not depend on the reference device protocol.
+Attitude and mount reference CSVs use `t_s,roll_deg,pitch_deg,yaw_deg`.
+Attitude references describe vehicle attitude in the local NED convention.
+Mount references describe the physical vehicle-to-body mount. Position
+references use
+`t_s,lat_deg,lon_deg,height_m,vn_mps,ve_mps,vd_mps,heading_rad`. They are
+intentionally generic: a converter may derive them from any trusted reference
+system, but this repository does not depend on the reference device protocol.
 
 Example conversions:
 

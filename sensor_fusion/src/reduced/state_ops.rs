@@ -1,7 +1,10 @@
 //! Standalone Reduced-state operation helpers.
 //!
 //! These types are useful for focused tests and derivation checks. The
-//! production runtime is [`crate::reduced::Filter`].
+//! production runtime is [`crate::reduced::Filter`]. Names match the current
+//! mount-in-propagation convention: `q_nv` is vehicle-to-NED attitude and
+//! `q_bv` is the physical vehicle-to-body mount stored in runtime `qcs*`
+//! fields.
 
 use crate::math::{
     mat_vec3_f32, normalize_quat_f32, normalized_quat_f32, quat_multiply_f32, quat_to_dcm_f32,
@@ -26,28 +29,34 @@ pub const IDX_DBG_Z: usize = 11;
 pub const IDX_DBA_X: usize = 12;
 pub const IDX_DBA_Y: usize = 13;
 pub const IDX_DBA_Z: usize = 14;
-pub const IDX_DPSI_CS_X: usize = 15;
-pub const IDX_DPSI_CS_Y: usize = 16;
-pub const IDX_DPSI_CS_Z: usize = 17;
+pub const IDX_DPSI_BV_X: usize = 15;
+pub const IDX_DPSI_BV_Y: usize = 16;
+pub const IDX_DPSI_BV_Z: usize = 17;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct NominalState {
-    pub q_bn: [f32; 4],
+    /// Vehicle-to-local-NED attitude quaternion.
+    pub q_nv: [f32; 4],
     pub vel_n: [f32; 3],
     pub pos_n: [f32; 3],
+    /// Additive gyro correction in the IMU body frame.
     pub gyro_bias_b: [f32; 3],
+    /// Additive accelerometer correction in the IMU body frame.
     pub accel_bias_b: [f32; 3],
-    pub q_cs: [f32; 4],
+    /// Physical vehicle-to-body mount quaternion.
+    pub q_bv: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ErrorState {
+    /// Small attitude error applied in the vehicle attitude tangent frame.
     pub dtheta_b: [f32; 3],
     pub dvel_n: [f32; 3],
     pub dpos_n: [f32; 3],
     pub dgyro_bias_b: [f32; 3],
     pub daccel_bias_b: [f32; 3],
-    pub dpsi_cs: [f32; 3],
+    /// Small mount error applied to the vehicle-to-body mount quaternion.
+    pub dpsi_bv: [f32; 3],
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -60,23 +69,23 @@ pub struct ImuDelta {
 impl NominalState {
     pub fn identity() -> Self {
         Self {
-            q_bn: [1.0, 0.0, 0.0, 0.0],
-            q_cs: [1.0, 0.0, 0.0, 0.0],
+            q_nv: [1.0, 0.0, 0.0, 0.0],
+            q_bv: [1.0, 0.0, 0.0, 0.0],
             ..Self::default()
         }
     }
 
     pub fn inject_error(&mut self, dx: ErrorState) {
         let dq = quat_from_delta_theta(dx.dtheta_b);
-        self.q_bn = quat_multiply(self.q_bn, dq);
-        normalize_quat(&mut self.q_bn);
+        self.q_nv = quat_multiply(self.q_nv, dq);
+        normalize_quat(&mut self.q_nv);
         add_assign3(&mut self.vel_n, dx.dvel_n);
         add_assign3(&mut self.pos_n, dx.dpos_n);
         add_assign3(&mut self.gyro_bias_b, dx.dgyro_bias_b);
         add_assign3(&mut self.accel_bias_b, dx.daccel_bias_b);
-        let dq_cs = quat_from_delta_theta(dx.dpsi_cs);
-        self.q_cs = quat_multiply(dq_cs, self.q_cs);
-        normalize_quat(&mut self.q_cs);
+        let dq_bv = quat_from_delta_theta(dx.dpsi_bv);
+        self.q_bv = quat_multiply(dq_bv, self.q_bv);
+        normalize_quat(&mut self.q_bv);
     }
 
     pub fn predict(&mut self, imu: ImuDelta, gravity_n: [f32; 3]) {
@@ -92,10 +101,10 @@ impl NominalState {
         ];
 
         let dq = quat_from_delta_theta(unbiased_dtheta);
-        self.q_bn = quat_multiply(self.q_bn, dq);
-        normalize_quat(&mut self.q_bn);
+        self.q_nv = quat_multiply(self.q_nv, dq);
+        normalize_quat(&mut self.q_nv);
 
-        let dvel_n = mat3_mul_vec3(quat_to_rot(self.q_bn), unbiased_dvel_b);
+        let dvel_n = mat3_mul_vec3(quat_to_rot(self.q_nv), unbiased_dvel_b);
         self.vel_n[0] += dvel_n[0] + gravity_n[0] * imu.dt;
         self.vel_n[1] += dvel_n[1] + gravity_n[1] * imu.dt;
         self.vel_n[2] += dvel_n[2] + gravity_n[2] * imu.dt;
@@ -118,7 +127,7 @@ impl ErrorState {
             dpos_n: [dx[IDX_DPOS_N], dx[IDX_DPOS_E], dx[IDX_DPOS_D]],
             dgyro_bias_b: [dx[IDX_DBG_X], dx[IDX_DBG_Y], dx[IDX_DBG_Z]],
             daccel_bias_b: [dx[IDX_DBA_X], dx[IDX_DBA_Y], dx[IDX_DBA_Z]],
-            dpsi_cs: [dx[IDX_DPSI_CS_X], dx[IDX_DPSI_CS_Y], dx[IDX_DPSI_CS_Z]],
+            dpsi_bv: [dx[IDX_DPSI_BV_X], dx[IDX_DPSI_BV_Y], dx[IDX_DPSI_BV_Z]],
         }
     }
 
@@ -139,9 +148,9 @@ impl ErrorState {
             self.daccel_bias_b[0],
             self.daccel_bias_b[1],
             self.daccel_bias_b[2],
-            self.dpsi_cs[0],
-            self.dpsi_cs[1],
-            self.dpsi_cs[2],
+            self.dpsi_bv[0],
+            self.dpsi_bv[1],
+            self.dpsi_bv[2],
         ]
     }
 }

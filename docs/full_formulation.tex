@@ -11,7 +11,7 @@
 \usepackage{hyperref}
 
 \title{Full INS/GNSS Reference Filter Mathematical Formulation}
-\author{sensor_fusion documentation}
+\author{sensor\_fusion documentation}
 \date{\today}
 
 \newcommand{\R}{\mathbb{R}}
@@ -28,10 +28,10 @@
 \section{Scope}
 
 This document describes the Full INS/GNSS filter implemented in
-\texttt{sensor_fusion/src/full/} and \texttt{sensor_fusion/src/full/generated.rs}. It is used
-for seeded replay, diagnostics, and comparison with the runtime augmented Reduced.
-It carries ECEF navigation states, IMU bias and scale correction states, and a
-residual mount quaternion for vehicle-frame non-holonomic constraints.
+\path{sensor_fusion/src/full/} and \path{sensor_fusion/src/full/generated.rs}. It is used
+for replay, diagnostics, and comparison with the runtime Reduced. It carries
+ECEF navigation states, IMU bias and scale correction states, and the physical
+vehicle-to-body mount used by inertial propagation.
 
 \section{Frames and Conventions}
 
@@ -41,8 +41,8 @@ residual mount quaternion for vehicle-frame non-holonomic constraints.
 \midrule
 \(e\) & ECEF frame. Full nominal position and velocity are propagated in this frame. \\
 \(n\) & Local NED frame. GNSS standard deviations may be supplied in this frame and are rotated into ECEF. \\
-\(s\) & Seeded sensor/vehicle frame of the IMU deltas consumed by the full filter. \\
-\(c\) & Corrected vehicle frame after residual mount correction. \\
+\(b\) & Raw IMU body/sensor frame. Full IMU deltas are supplied in this frame. \\
+\(v\) & Vehicle frame, forward-right-down. NHC is expressed in this frame. \\
 \bottomrule
 \end{longtable}
 
@@ -50,14 +50,14 @@ Rotations follow the project convention
 \begin{equation}
   x_a=C_{ab}x_b,\qquad C(q_1\otimes q_2)=C(q_1)C(q_2).
 \end{equation}
-The full attitude quaternion \(q_{es}\) maps seeded-frame vectors into ECEF:
+The full attitude quaternion \(q_{ev}\) maps vehicle-frame vectors into ECEF:
 \begin{equation}
-  x_e=C_{es}(q_{es})x_s .
+  x_e=C_{ev}(q_{ev})x_v .
 \end{equation}
-The residual mount quaternion \(q_{cs}\) maps seeded-frame velocity into the
-corrected vehicle frame:
+The mount quaternion stored in the Rust fields \texttt{qcs0..qcs3} is the
+physical vehicle-to-body mount \(q_{bv}\):
 \begin{equation}
-  x_c=C_{cs}(q_{cs})x_s .
+  x_b=C_{bv}(q_{bv})x_v,\qquad x_v=C_{bv}(q_{bv})\T x_b .
 \end{equation}
 
 The local NED-to-ECEF relation is represented by
@@ -71,8 +71,8 @@ The nominal state contains 26 scalar fields:
 \begin{equation}
   x=
   \begin{bmatrix}
-  q_{es} & v_e\T & p_e\T & b_g\T & b_a\T &
-  s_g\T & s_a\T & q_{cs}
+  q_{ev} & v_e\T & p_e\T & b_g\T & b_a\T &
+  s_g\T & s_a\T & q_{bv}
   \end{bmatrix}\T .
 \end{equation}
 The public Rust fields are:
@@ -81,14 +81,14 @@ The public Rust fields are:
 \toprule
 Fields & Meaning \\
 \midrule
-\texttt{q0..q3} & \(q_{es}\), seeded frame to ECEF attitude \\
+\texttt{q0..q3} & \(q_{ev}\), vehicle frame to ECEF attitude \\
 \texttt{vn,ve,vd} & ECEF velocity \(v_e\), meters per second \\
 \texttt{pn,pe,pd} & ECEF position \(p_e\), meters \\
 \texttt{bgx..bgz} & gyro additive correction \(b_g\), radians per second \\
 \texttt{bax..baz} & accelerometer additive correction \(b_a\), meters per second squared \\
 \texttt{sgx..sgz} & gyro scale correction \(s_g\) \\
 \texttt{sax..saz} & accelerometer scale correction \(s_a\) \\
-\texttt{qcs0..qcs3} & residual seeded-frame-to-vehicle quaternion \(q_{cs}\) \\
+\texttt{qcs0..qcs3} & physical vehicle-to-body mount quaternion \(q_{bv}\) \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -96,8 +96,8 @@ Fields & Meaning \\
 The code applies scale and additive correction directly to IMU rates and
 specific force:
 \begin{align}
-  \omega_s &= s_g\odot\omega_{\mathrm{raw},s}+b_g,\\
-  f_s &= s_a\odot f_{\mathrm{raw},s}+b_a.
+  \omega_b^c &= s_g\odot\omega_{\mathrm{raw},b}+b_g,\\
+  f_b^c &= s_a\odot f_{\mathrm{raw},b}+b_a.
 \end{align}
 Consequently, these are correction states. A physical sensor bias appears with
 the opposite sign of the additive correction required to remove it.
@@ -111,12 +111,12 @@ is
   \begin{bmatrix}
   \delta p_e &
   \delta v_e &
-  \delta\theta_s &
+  \delta\theta_v &
   \delta b_a &
   \delta b_g &
   \delta s_a &
   \delta s_g &
-  \delta\psi_{cs}
+  \delta\psi_{bv}
   \end{bmatrix}\T .
 \end{equation}
 Index ranges are:
@@ -127,12 +127,12 @@ Indices & Error component \\
 \midrule
 0..2 & ECEF position error \(\delta p_e\) \\
 3..5 & ECEF velocity error \(\delta v_e\) \\
-6..8 & attitude small angle \(\delta\theta_s\) \\
+6..8 & vehicle-attitude small angle \(\delta\theta_v\) \\
 9..11 & accelerometer-bias correction error \(\delta b_a\) \\
 12..14 & gyro-bias correction error \(\delta b_g\) \\
 15..17 & accelerometer-scale error \(\delta s_a\) \\
 18..20 & gyro-scale error \(\delta s_g\) \\
-21..23 & residual mount error \(\delta\psi_{cs}\) \\
+21..23 & vehicle-to-body mount error \(\delta\psi_{bv}\) \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -142,14 +142,16 @@ Indices & Error component \\
 The full filter uses a two-sample IMU increment. For each half-step \(i\in
 \{1,2\}\),
 \begin{align}
-  \omega_{s,i} &= s_g\odot\left(\frac{\Delta\theta_{s,i}}{\dt}\right)+b_g,\\
-  f_{s,i} &= s_a\odot\left(\frac{\Delta v_{s,i}}{\dt}\right)+b_a .
+  \omega_{b,i}^{c} &= s_g\odot\left(\frac{\Delta\theta_{b,i}}{\dt}\right)+b_g,\\
+  f_{b,i}^{c} &= s_a\odot\left(\frac{\Delta v_{b,i}}{\dt}\right)+b_a,\\
+  \omega_{v,i} &= C_{bv}(q_{bv})\T\omega_{b,i}^{c},\\
+  f_{v,i} &= C_{bv}(q_{bv})\T f_{b,i}^{c}.
 \end{align}
 The attitude derivative includes Earth rotation:
 \begin{equation}
-  \dot q_{es} =
-  \frac{1}{2}q_{es}\otimes
-  \begin{bmatrix}0&\omega_s\T\end{bmatrix}\T
+  \dot q_{ev} =
+  \frac{1}{2}q_{ev}\otimes
+  \begin{bmatrix}0&\omega_v\T\end{bmatrix}\T
   +\frac{1}{2}
   \begin{bmatrix}
   \omega_{ie} q_3 &
@@ -160,7 +162,7 @@ The attitude derivative includes Earth rotation:
 \end{equation}
 Specific force is rotated into ECEF:
 \begin{equation}
-  f_e=C_{es}f_s .
+  f_e=C_{ev}f_v .
 \end{equation}
 Velocity dynamics use the J2 ECEF gravity model and Coriolis terms:
 \begin{equation}
@@ -243,27 +245,26 @@ that scalar variance directly.
 
 \section{Non-Holonomic Constraint}
 
-The full NHC predicts corrected vehicle-frame velocity from ECEF velocity:
+The full NHC predicts vehicle-frame velocity from ECEF velocity:
 \begin{equation}
-  v_s=C_{es}\T v_e,\qquad v_c=C_{cs}v_s .
+  v_v=C_{ev}\T v_e .
 \end{equation}
 The lateral and vertical constraints are
 \begin{equation}
-  h_y=e_y\T v_c\approx 0,\qquad
-  h_z=e_z\T v_c\approx 0 .
+  h_y=e_y\T v_v\approx 0,\qquad
+  h_z=e_z\T v_v\approx 0 .
 \end{equation}
-The generated rows include derivatives with respect to velocity, attitude, and
-residual mount. For the mount block, with left perturbation
-\(q_{cs}^{true}=\dq(\delta\psi_{cs})\otimes q_{cs}\),
+The generated rows include derivatives with respect to velocity and vehicle
+attitude. They have no direct mount block because mount affects NHC through
+propagation-induced covariance, not through the instantaneous NHC measurement:
 \begin{equation}
-  \frac{\partial(e_i\T v_c)}{\partial\delta\psi_{cs}}
-  =-e_i\T\crossmat{v_c},\qquad i\in\{y,z\}.
+  \frac{\partial(e_i\T v_v)}{\partial\delta\psi_{bv}} = 0,\qquad i\in\{y,z\}.
 \end{equation}
 NHC rows are gated by speed and a quasi-static IMU check:
 \begin{equation}
   \|v_e\| \ge 0.5\ \mathrm{m/s},\qquad
-  \|\omega_s\|<0.03\ \mathrm{rad/s},\qquad
-  \left|\|f_s\|-9.81\right|<0.2\ \mathrm{m/s^2}.
+  \|\omega_b\|<0.2\ \mathrm{rad/s},\qquad
+  \left|\|f_b\|-9.81\right|<1.0\ \mathrm{m/s^2}.
 \end{equation}
 A scalar chi-square gate prevents large residuals from being fused.
 
@@ -282,30 +283,29 @@ After the batch, the accumulated error is injected:
 \begin{align}
   p_e^{+}&=p_e^{-}+\delta p_e,\qquad
   v_e^{+}=v_e^{-}+\delta v_e,\\
-  q_{es}^{+}&=\dq(\delta\theta_s)\otimes q_{es}^{-},\\
+  q_{ev}^{+}&=\dq(\delta\theta_v)\otimes q_{ev}^{-},\\
   b_a^{+}&=b_a^{-}+\delta b_a,\qquad
   b_g^{+}=b_g^{-}+\delta b_g,\\
   s_a^{+}&=s_a^{-}+\delta s_a,\qquad
   s_g^{+}=s_g^{-}+\delta s_g,\\
-  q_{cs}^{+}&=\dq(\delta\psi_{cs})\otimes q_{cs}^{-}.
+  q_{bv}^{+}&=\dq(\delta\psi_{bv})\otimes q_{bv}^{-}.
 \end{align}
-Both quaternions are normalized. After injection, the attitude and residual
-mount covariance blocks are reset with the generated first-order quaternion
+Both quaternions are normalized. After injection, the attitude and mount
+covariance blocks are reset with the generated first-order quaternion
 reset Jacobian
 \begin{equation}
   G_r(\delta\theta)\simeq I-\frac{1}{2}\crossmat{\delta\theta}.
 \end{equation}
-The reset is applied to the \(q_{es}\) attitude block and to the \(q_{cs}\)
-residual-mount block, then the covariance is symmetrized.
+The reset is applied to the \(q_{ev}\) attitude block and to the \(q_{bv}\)
+mount block, then the covariance is symmetrized.
 
-\section{Seeded ECEF/NED Initialization}
+\section{ECEF/NED Initialization}
 
-For visualizer seeded replay, a yaw in the local NED frame is split into an
-ECEF seed attitude and an identity residual mount. The utility constructs a
-local NED-to-ECEF attitude from latitude and longitude, applies the yaw, and
-initializes \(q_{cs}=1\). This lets the full path consume the same
-pre-rotated IMU stream used by Reduced comparisons while propagating navigation in
-ECEF.
+For visualizer replay, a vehicle yaw in the local NED frame is converted to
+vehicle-to-ECEF attitude \(q_{ev}\) using latitude and longitude. The physical
+mount \(q_{bv}\) is then initialized from Align, reference data, or an external
+caller-supplied mount. Raw body-frame IMU samples are supplied directly to the
+Full filter.
 
 \section{Observability and Known Limitations}
 
@@ -313,16 +313,15 @@ ECEF.
 \item GNSS position and velocity directly observe only ECEF position and
 velocity. Attitude, biases, scales, and mount are updated through covariance
 coupling and inertial dynamics.
-\item Lateral and vertical NHC rows are the direct measurement path for
-residual mount. They are weak during low speed, poor seed attitude, or
-high-dynamic maneuvers outside the gate.
+\item Lateral and vertical NHC rows do not directly observe mount. Mount is
+updated through propagation-induced covariance with attitude and velocity.
 \item Accelerometer vertical bias and accelerometer vertical scale are strongly
 coupled in ground-vehicle motion dominated by gravity. The visualizer commonly
 keeps accelerometer scale fixed for diagnostics.
 \item The additive bias states are correction states. Diagnostic plots should
 not be interpreted as physical sensor bias without applying the sign convention.
 \item Mount, attitude, gyro bias, and gyro scale can become correlated during
-turns. Compare seed, residual, and composed mount separately when diagnosing
+turns. Compare vehicle attitude and physical mount separately when diagnosing
 mount convergence.
 \end{itemize}
 

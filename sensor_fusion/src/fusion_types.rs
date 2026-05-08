@@ -3,18 +3,18 @@
 use crate::align::{AlignConfig, AlignUpdateTrace, AlignWindowSummary};
 use crate::{ProcessNoise, full};
 
-/// One timestamped IMU sample in the sensor/body frame.
+/// One timestamped IMU sample in the raw IMU body frame `b`.
 #[derive(Clone, Copy, Debug)]
 pub struct ImuSample {
     /// Sample timestamp, in seconds.
     pub t_s: f32,
-    /// Angular rate in the body frame, in radians per second.
+    /// Angular rate in body frame `b`, in radians per second.
     pub gyro_radps: [f32; 3],
-    /// Specific force in the body frame, in meters per second squared.
+    /// Specific force in body frame `b`, in meters per second squared.
     pub accel_mps2: [f32; 3],
 }
 
-/// One timestamped GNSS sample in geodetic coordinates with NED velocity.
+/// One timestamped GNSS sample in geodetic coordinates with local-NED velocity.
 #[derive(Clone, Copy, Debug)]
 pub struct GnssSample {
     /// Sample timestamp, in seconds.
@@ -25,13 +25,14 @@ pub struct GnssSample {
     pub lon_deg: f64,
     /// Ellipsoidal height, in meters.
     pub height_m: f64,
-    /// Velocity in local NED coordinates, in meters per second.
+    /// Velocity `[north, east, down]` in the local NED frame at this sample.
     pub vel_ned_mps: [f32; 3],
     /// One-sigma position standard deviation for NED axes, in meters.
     pub pos_std_m: [f32; 3],
     /// One-sigma velocity standard deviation for NED axes, in meters per second.
     pub vel_std_mps: [f32; 3],
-    /// Optional heading observation, in radians.
+    /// Optional vehicle yaw/course heading in local NED, in radians clockwise
+    /// from north toward east.
     pub heading_rad: Option<f32>,
 }
 
@@ -52,9 +53,9 @@ pub enum VehicleSpeedDirection {
     /// Direction is unknown and may be inferred from the current filter state.
     #[default]
     Unknown,
-    /// Speed is forward along the vehicle X axis.
+    /// Speed is forward along vehicle-frame `+X` (forward).
     Forward,
-    /// Speed is reverse along the vehicle X axis.
+    /// Speed is reverse along vehicle-frame `-X`.
     Reverse,
 }
 
@@ -73,8 +74,12 @@ pub struct Update {
     pub filter_initialized: bool,
     /// Whether the configured runtime filter initialized during this input sample.
     pub filter_initialized_now: bool,
-    /// Current vehicle-to-body mount quaternion, when available.
-    pub mount_q_vb: Option<[f32; 4]>,
+    /// Current physical vehicle-to-body mount quaternion, when available.
+    ///
+    /// Its DCM maps vehicle-frame vectors into raw IMU body-frame vectors:
+    /// `x_b = C_bv(q) x_v`. Runtime propagation uses `C_bv(q)^T` to rotate
+    /// IMU samples into the vehicle frame.
+    pub mount_q_bv: Option<[f32; 4]>,
 }
 
 /// Runtime filter selected by [`Config`].
@@ -96,21 +101,23 @@ pub struct AlignDebug {
     pub trace: AlignUpdateTrace,
 }
 
-/// Selects how the runtime obtains the IMU-to-vehicle mount estimate.
+/// Selects how the runtime obtains the physical vehicle-to-body mount estimate.
 #[derive(Clone, Copy, Debug)]
 pub enum MountMode {
-    /// Estimate mount internally with [`crate::align::Align`] before Reduced initialization.
+    /// Estimate mount internally with [`crate::align::Align`] before filter initialization.
     InternalAlign,
     /// Use the supplied vehicle-to-body mount quaternion and disable internal alignment.
+    ///
+    /// The quaternion follows `x_b = C_bv(q) x_v`.
     External([f32; 4]),
 }
 
 /// Selects how Reduced propagation receives the mount after alignment handoff.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MountSource {
-    /// Latch the alignment seed at Reduced initialization and let residual Reduced mount states evolve.
+    /// Latch the alignment seed at Reduced initialization and let Reduced estimate mount states.
     LatchedSeed,
-    /// Keep following the current align mount and freeze residual Reduced mount states.
+    /// Keep following the current align mount and freeze Reduced mount states.
     FollowAlign,
 }
 

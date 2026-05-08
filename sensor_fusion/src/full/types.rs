@@ -28,9 +28,9 @@ pub struct InitConfig {
     pub gyro_scale_sigma: f32,
     /// Initial accelerometer-scale one-sigma uncertainty.
     pub accel_scale_sigma: f32,
-    /// Initial residual mount roll/pitch one-sigma uncertainty, in degrees.
+    /// Initial mount roll/pitch one-sigma uncertainty, in degrees.
     pub mount_sigma_deg: f32,
-    /// Initial residual mount yaw one-sigma uncertainty, in degrees.
+    /// Initial mount yaw one-sigma uncertainty, in degrees.
     pub mount_yaw_sigma_deg: f32,
 }
 
@@ -104,28 +104,39 @@ pub(crate) fn default_full_p_diag(
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NominalState {
+    /// Vehicle-to-ECEF attitude quaternion `q_ev`, scalar-first.
     pub q0: f32,
     pub q1: f32,
     pub q2: f32,
     pub q3: f32,
+    /// ECEF velocity `[x, y, z]`, meters per second.
     pub vn: f32,
     pub ve: f32,
     pub vd: f32,
+    /// ECEF position `[x, y, z]`, meters.
     pub pn: f32,
     pub pe: f32,
     pub pd: f32,
+    /// Gyro additive correction in the raw IMU body frame, radians per second.
     pub bgx: f32,
     pub bgy: f32,
     pub bgz: f32,
+    /// Accelerometer additive correction in the raw IMU body frame, meters per second squared.
     pub bax: f32,
     pub bay: f32,
     pub baz: f32,
+    /// Gyro scale correction in the raw IMU body frame.
     pub sgx: f32,
     pub sgy: f32,
     pub sgz: f32,
+    /// Accelerometer scale correction in the raw IMU body frame.
     pub sax: f32,
     pub say: f32,
     pub saz: f32,
+    /// Physical vehicle-to-body mount quaternion, stored in legacy `qcs*` fields.
+    ///
+    /// Its DCM maps `x_v` into `x_b`; propagation uses its transpose to rotate
+    /// raw IMU samples into the vehicle frame.
     pub qcs0: f32,
     pub qcs1: f32,
     pub qcs2: f32,
@@ -136,18 +147,23 @@ pub struct NominalState {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ImuDelta {
+    /// First body-frame delta angle sample, radians.
     pub dax_1: f32,
     pub day_1: f32,
     pub daz_1: f32,
+    /// First body-frame delta velocity sample, meters per second.
     pub dvx_1: f32,
     pub dvy_1: f32,
     pub dvz_1: f32,
+    /// Second body-frame delta angle sample, radians.
     pub dax_2: f32,
     pub day_2: f32,
     pub daz_2: f32,
+    /// Second body-frame delta velocity sample, meters per second.
     pub dvx_2: f32,
     pub dvy_2: f32,
     pub dvz_2: f32,
+    /// Integration interval, seconds.
     pub dt: f32,
 }
 

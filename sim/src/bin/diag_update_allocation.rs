@@ -301,7 +301,7 @@ fn run_full_allocation(
             let yaw_rad = sample.vel_ned_mps[1].atan2(sample.vel_ned_mps[0]) as f32;
             let pos_ecef = lla_to_ecef(sample.lat_deg, sample.lon_deg, sample.height_m);
             let vel_ecef = ned_vector_to_ecef(sample.lat_deg, sample.lon_deg, sample.vel_ned_mps);
-            full.init_seeded_vehicle_from_nav_ecef_state(
+            full.init_vehicle_from_nav_ecef_state(
                 yaw_rad,
                 sample.lat_deg,
                 sample.lon_deg,

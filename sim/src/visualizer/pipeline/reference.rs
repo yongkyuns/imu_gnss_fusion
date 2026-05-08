@@ -6,20 +6,20 @@ use crate::visualizer::model::MountSourceMode;
 use crate::visualizer::pipeline::generic::GenericReplayInput;
 
 /// Converts a vehicle-to-body mount quaternion into reference mount RPY angles in degrees.
-pub fn q_vb_to_reference_mount_rpy(q_vb: [f64; 4]) -> (f64, f64, f64) {
+pub fn q_bv_to_reference_mount_rpy(q_bv: [f64; 4]) -> (f64, f64, f64) {
     let q_x_180 = [0.0, 1.0, 0.0, 0.0];
-    let q_flu = quat_mul(q_x_180, quat_conj(q_vb));
+    let q_flu = quat_mul(q_x_180, quat_conj(q_bv));
     quat_rpy_alg_deg(q_flu)
 }
 
 /// Converts reference mount RPY angles in degrees into a vehicle-to-body mount quaternion.
-pub fn reference_mount_rpy_to_q_vb(rpy_deg: [f64; 3]) -> [f64; 4] {
+pub fn reference_mount_rpy_to_q_bv(rpy_deg: [f64; 3]) -> [f64; 4] {
     let q_x_180 = [0.0, 1.0, 0.0, 0.0];
     let q_flu = quat_from_rpy_alg_deg(rpy_deg[0], rpy_deg[1], rpy_deg[2]);
     quat_mul(quat_conj(q_flu), q_x_180)
 }
 
-pub(super) fn reference_mount_seed_q_vb(
+pub(super) fn reference_mount_seed_q_bv(
     replay: &GenericReplayInput,
     mount_source: MountSourceMode,
 ) -> Option<[f32; 4]> {
@@ -37,7 +37,7 @@ pub(super) fn reference_mount_seed_q_vb(
         })
         .map(|sample| {
             let q =
-                reference_mount_rpy_to_q_vb([sample.roll_deg, sample.pitch_deg, sample.yaw_deg]);
+                reference_mount_rpy_to_q_bv([sample.roll_deg, sample.pitch_deg, sample.yaw_deg]);
             [q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32]
         })
 }

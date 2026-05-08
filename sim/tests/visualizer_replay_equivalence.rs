@@ -10,7 +10,7 @@ use sim::synthetic::gnss_ins_path::{
 };
 use sim::visualizer::math::quat_rpy_deg;
 use sim::visualizer::model::{HeadingSample, MountSourceMode, PlotData, Trace};
-use sim::visualizer::pipeline::generic::{GenericReplayInput, reference_mount_rpy_to_q_vb};
+use sim::visualizer::pipeline::generic::{GenericReplayInput, reference_mount_rpy_to_q_bv};
 use sim::visualizer::pipeline::synthetic::{
     SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_plot_data,
 };
@@ -107,7 +107,7 @@ fn generated_generic_replay() -> Result<GenericReplayInput> {
         noise,
         7,
     )?;
-    let q_truth_mount = reference_mount_rpy_to_q_vb(MOUNT_RPY_DEG);
+    let q_truth_mount = reference_mount_rpy_to_q_bv(MOUNT_RPY_DEG);
     let gps_noise = noise.gps.unwrap_or(GpsNoiseModel {
         pos_std_m: [0.5, 0.5, 0.5],
         vel_std_mps: [0.2, 0.2, 0.2],
@@ -372,11 +372,7 @@ fn assert_plot_data_close(
             &left.full_nominal_att,
             &right.full_nominal_att,
         ),
-        (
-            "full_residual_mount",
-            &left.full_residual_mount,
-            &right.full_residual_mount,
-        ),
+        ("full_mount", &left.full_mount, &right.full_mount),
         (
             "full_misalignment",
             &left.full_misalignment,
@@ -599,9 +595,9 @@ fn assert_shared_auxiliary_groups_close(
             &left.full_misalignment,
             &right.full_misalignment,
             &[
-                "Full residual mount roll [deg]",
-                "Full residual mount pitch [deg]",
-                "Full residual mount yaw [deg]",
+                "Full mount roll [deg]",
+                "Full mount pitch [deg]",
+                "Full mount yaw [deg]",
             ],
         ),
         (
@@ -751,9 +747,9 @@ fn assert_shared_auxiliary_groups_close(
         &left.full_mount_sigma,
         &right.full_mount_sigma,
         &[
-            "Full residual mount roll sigma [deg]",
-            "Full residual mount pitch sigma [deg]",
-            "Full residual mount yaw sigma [deg]",
+            "Full mount roll sigma [deg]",
+            "Full mount pitch sigma [deg]",
+            "Full mount yaw sigma [deg]",
         ],
     )?;
     assert_named_traces_close(
@@ -763,9 +759,9 @@ fn assert_shared_auxiliary_groups_close(
         &left.full_mount_dx,
         &right.full_mount_dx,
         &[
-            "Full residual mount roll correction [deg/update]",
-            "Full residual mount pitch correction [deg/update]",
-            "Full residual mount yaw correction [deg/update]",
+            "Full mount roll correction [deg/update]",
+            "Full mount pitch correction [deg/update]",
+            "Full mount yaw correction [deg/update]",
         ],
     )?;
     assert_named_traces_close(

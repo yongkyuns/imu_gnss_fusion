@@ -23,8 +23,8 @@ use sim::eval::replay::{ReplayEvent, for_each_event};
 use sim::visualizer::math::{ecef_to_lla, ecef_to_ned, lla_to_ecef, quat_rpy_deg};
 use sim::visualizer::pipeline::FilterCompareConfig;
 use sim::visualizer::pipeline::generic::{
-    GenericReplayInput, parse_generic_replay_csvs_with_refs, q_vb_to_reference_mount_rpy,
-    reference_mount_rpy_to_q_vb,
+    GenericReplayInput, parse_generic_replay_csvs_with_refs, q_bv_to_reference_mount_rpy,
+    reference_mount_rpy_to_q_bv,
 };
 use sim::visualizer::pipeline::synthetic::{
     SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_replay_input,
@@ -108,7 +108,7 @@ struct HarnessState {
     last_full_gnss_used_t_s: f64,
     ref_gnss: GenericGnssSample,
     ref_ecef: [f64; 3],
-    fixed_mount_q_vb: Option<[f32; 4]>,
+    fixed_mount_q_bv: Option<[f32; 4]>,
     last_reduced_vel_residual: VelResidual,
     last_full_vel_residual: VelResidual,
     cfg: FilterCompareConfig,
@@ -117,7 +117,7 @@ struct HarnessState {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let (mut replay, fixed_mount_q_vb) = load_replay(&args)?;
+    let (mut replay, fixed_mount_q_bv) = load_replay(&args)?;
     if let Some(limit) = args.max_time_s {
         let start_t_s = replay_limit_anchor_t_s(&replay)?;
         let end_t_s = start_t_s + limit;
@@ -143,7 +143,7 @@ fn main() -> Result<()> {
     if args.freeze_misalignment_states {
         cfg.freeze_misalignment_states = true;
     }
-    let mut state = HarnessState::new(ref_gnss, fixed_mount_q_vb, cfg, args.mount_mode);
+    let mut state = HarnessState::new(ref_gnss, fixed_mount_q_bv, cfg, args.mount_mode);
 
     let mut writer: Box<dyn Write> = match &args.output {
         Some(path) => Box::new(BufWriter::new(
@@ -221,7 +221,7 @@ fn load_replay(args: &Args) -> Result<(GenericReplayInput, Option<[f32; 4]>)> {
                     && sample.yaw_deg.is_finite()
             })
             .map(|sample| {
-                reference_mount_rpy_to_q_vb([sample.roll_deg, sample.pitch_deg, sample.yaw_deg])
+                reference_mount_rpy_to_q_bv([sample.roll_deg, sample.pitch_deg, sample.yaw_deg])
                     .map(|v| v as f32)
             });
         return Ok((replay, q_mount));
@@ -242,16 +242,16 @@ fn replay_limit_anchor_t_s(replay: &GenericReplayInput) -> Result<f64> {
 impl HarnessState {
     fn new(
         ref_gnss: GenericGnssSample,
-        fixed_mount_q_vb: Option<[f32; 4]>,
+        fixed_mount_q_bv: Option<[f32; 4]>,
         cfg: FilterCompareConfig,
         mount_mode: MountMode,
     ) -> Self {
         let mut fusion = SensorFusion::new();
         apply_fusion_config(&mut fusion, cfg);
         if matches!(mount_mode, MountMode::Ref)
-            && let Some(q_vb) = fixed_mount_q_vb
+            && let Some(q_bv) = fixed_mount_q_bv
         {
-            fusion.set_misalignment(q_vb);
+            fusion.set_misalignment(q_bv);
         }
 
         let mut align_fusion = SensorFusion::new();
@@ -267,7 +267,7 @@ impl HarnessState {
             last_full_gnss_used_t_s: f64::NEG_INFINITY,
             ref_gnss,
             ref_ecef: lla_to_ecef(ref_gnss.lat_deg, ref_gnss.lon_deg, ref_gnss.height_m),
-            fixed_mount_q_vb,
+            fixed_mount_q_bv,
             last_reduced_vel_residual: VelResidual::default(),
             last_full_vel_residual: VelResidual::default(),
             cfg,
@@ -310,8 +310,8 @@ impl HarnessState {
             return;
         }
         let q_mount = match self.mount_mode {
-            MountMode::Ref => self.fixed_mount_q_vb,
-            MountMode::Internal => self.align_fusion.mount_q_vb(),
+            MountMode::Ref => self.fixed_mount_q_bv,
+            MountMode::Internal => self.align_fusion.mount_q_bv(),
         };
         let Some(q_mount) = q_mount else {
             return;
@@ -323,7 +323,7 @@ impl HarnessState {
         let yaw_rad = sample.vel_ned_mps[1].atan2(sample.vel_ned_mps[0]) as f32;
         let pos_ecef = lla_to_ecef(sample.lat_deg, sample.lon_deg, sample.height_m);
         let vel_ecef = ned_vector_to_ecef(sample.lat_deg, sample.lon_deg, sample.vel_ned_mps);
-        self.full.init_seeded_vehicle_from_nav_ecef_state(
+        self.full.init_vehicle_from_nav_ecef_state(
             yaw_rad,
             sample.lat_deg,
             sample.lon_deg,
@@ -558,7 +558,7 @@ impl HarnessState {
             reduced.nominal.qcs2 as f64,
             reduced.nominal.qcs3 as f64,
         ];
-        let (mr, mp, my) = q_vb_to_reference_mount_rpy(q_mount);
+        let (mr, mp, my) = q_bv_to_reference_mount_rpy(q_mount);
         Some(CommonSnapshot {
             pos_ned_m: pos,
             vel_ned_mps: vel,
@@ -608,7 +608,7 @@ impl HarnessState {
             q_ns[2] as f32,
             q_ns[3] as f32,
         );
-        let (mr, mp, my) = q_vb_to_reference_mount_rpy([
+        let (mr, mp, my) = q_bv_to_reference_mount_rpy([
             n.qcs0 as f64,
             n.qcs1 as f64,
             n.qcs2 as f64,
@@ -677,11 +677,11 @@ impl HarnessState {
 
     fn align_snapshot(&self) -> Option<([f64; 3], [f64; 3])> {
         let align = self.align_fusion.align()?;
-        let (roll_deg, pitch_deg, yaw_deg) = q_vb_to_reference_mount_rpy([
-            align.q_vb[0] as f64,
-            align.q_vb[1] as f64,
-            align.q_vb[2] as f64,
-            align.q_vb[3] as f64,
+        let (roll_deg, pitch_deg, yaw_deg) = q_bv_to_reference_mount_rpy([
+            align.q_bv[0] as f64,
+            align.q_bv[1] as f64,
+            align.q_bv[2] as f64,
+            align.q_bv[3] as f64,
         ]);
         let rpy = [roll_deg, pitch_deg, yaw_deg];
         let sigma = align.sigma_deg().map(|v| v as f64);

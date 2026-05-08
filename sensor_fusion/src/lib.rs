@@ -5,6 +5,21 @@
 //! work and diagnostics. Public APIs use SI units unless a field name states
 //! otherwise.
 //!
+//! Frame and quaternion convention:
+//!
+//! - `b`: raw IMU body/sensor frame.
+//! - `v`: vehicle frame, forward-right-down.
+//! - `n`: local NED navigation frame used by [`reduced`].
+//! - `e`: ECEF frame used by [`full`].
+//! - Active rotations use `x_a = C_ab x_b` and quaternion products compose as
+//!   `C(q1 * q2) = C(q1) C(q2)`.
+//! - The mount quaternion stored in `qcs0..qcs3` by both filters is the current
+//!   physical vehicle-to-body mount. Its DCM maps `x_v` into `x_b`; the filters
+//!   use its transpose to rotate raw IMU vectors into the vehicle frame during
+//!   propagation.
+//! - Reduced attitude `q0..q3` maps vehicle frame to local NED (`q_nv`). Full
+//!   attitude `q0..q3` maps vehicle frame to ECEF (`q_ev`).
+//!
 //! Maintained mathematical references:
 //! `docs/align_nhc_formulation.pdf`, `docs/reduced_mount_formulation.pdf`, and
 //! `docs/full_formulation.pdf`.

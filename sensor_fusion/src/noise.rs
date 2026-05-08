@@ -21,7 +21,7 @@ pub struct ProcessNoise {
     pub gyro_scale_rw_var: f32,
     /// Accelerometer-scale random-walk variance. Ignored by Reduced.
     pub accel_scale_rw_var: f32,
-    /// Residual mount-alignment random-walk variance.
+    /// Mount-alignment random-walk variance.
     pub mount_align_rw_var: f32,
 }
 

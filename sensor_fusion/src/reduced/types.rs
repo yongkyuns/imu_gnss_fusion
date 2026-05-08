@@ -8,22 +8,31 @@ pub const UPDATE_DIAG_TYPES: usize = 11;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NominalState {
+    /// Vehicle-to-local-NED attitude quaternion `q_nv`, scalar-first.
     pub q0: f32,
     pub q1: f32,
     pub q2: f32,
     pub q3: f32,
+    /// Local-NED velocity `[north, east, down]`, meters per second.
     pub vn: f32,
     pub ve: f32,
     pub vd: f32,
+    /// Local-NED position `[north, east, down]`, meters from the current anchor.
     pub pn: f32,
     pub pe: f32,
     pub pd: f32,
+    /// Gyro additive correction in the raw IMU body frame, radians per second.
     pub bgx: f32,
     pub bgy: f32,
     pub bgz: f32,
+    /// Accelerometer additive correction in the raw IMU body frame, meters per second squared.
     pub bax: f32,
     pub bay: f32,
     pub baz: f32,
+    /// Physical vehicle-to-body mount quaternion, stored in legacy `qcs*` fields.
+    ///
+    /// Its DCM maps `x_v` into `x_b`; propagation uses its transpose to rotate
+    /// raw IMU increments into the vehicle frame.
     pub qcs0: f32,
     pub qcs1: f32,
     pub qcs2: f32,
@@ -139,21 +148,30 @@ impl Default for State {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ImuDelta {
+    /// Body-frame delta angle `[x, y, z]`, radians.
     pub dax: f32,
     pub day: f32,
     pub daz: f32,
+    /// Body-frame delta velocity `[x, y, z]`, meters per second.
     pub dvx: f32,
     pub dvy: f32,
     pub dvz: f32,
+    /// Integration interval, seconds.
     pub dt: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct GnssSample {
+    /// Timestamp, seconds.
     pub t_s: f32,
+    /// Local-NED position `[north, east, down]`, meters from the current anchor.
     pub pos_ned_m: [f32; 3],
+    /// Local-NED velocity `[north, east, down]`, meters per second.
     pub vel_ned_mps: [f32; 3],
+    /// One-sigma local-NED position standard deviations, meters.
     pub pos_std_m: [f32; 3],
+    /// One-sigma local-NED velocity standard deviations, meters per second.
     pub vel_std_mps: [f32; 3],
+    /// Optional local-NED heading, radians clockwise from north toward east.
     pub heading_rad: Option<f32>,
 }

@@ -104,7 +104,7 @@ fn angle_samples_for_axis(
             ("Synthetic truth mount", "Reference", SeriesColor::Reference),
             ("Align", "Align", SeriesColor::Align),
             ("Reduced mount", "Reduced", SeriesColor::Reduced),
-            ("Full residual mount", "Full", SeriesColor::Full),
+            ("Full mount", "Full", SeriesColor::Full),
         ],
     };
     prefixes

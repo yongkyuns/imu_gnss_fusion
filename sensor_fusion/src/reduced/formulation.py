@@ -102,9 +102,9 @@ def skew(v):
     return Matrix([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
 
 
-def propagate_nominal(q, v, p, bg, ba, q_vb, d_ang, d_vel, dt, g_n):
+def propagate_nominal(q, v, p, bg, ba, q_bv, d_ang, d_vel, dt, g_n):
     r_v_to_n = quat_to_rot(q)
-    r_v_to_b = quat_to_rot(q_vb)
+    r_v_to_b = quat_to_rot(q_bv)
     r_b_to_v = r_v_to_b.T
     d_ang_true = r_b_to_v * (d_ang - bg * dt)
     d_vel_true_v = r_b_to_v * (d_vel - ba * dt)

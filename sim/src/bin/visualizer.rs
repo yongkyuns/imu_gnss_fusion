@@ -1402,7 +1402,7 @@ fn print_reference_error_summaries(data: &PlotData) {
             "mount",
             "Full",
             "roll",
-            "Full residual mount roll [deg]",
+            "Full mount roll [deg]",
             "Reference mount roll [deg]",
             SummaryMode::AngleDeg,
         ),
@@ -1410,7 +1410,7 @@ fn print_reference_error_summaries(data: &PlotData) {
             "mount",
             "Full",
             "pitch",
-            "Full residual mount pitch [deg]",
+            "Full mount pitch [deg]",
             "Reference mount pitch [deg]",
             SummaryMode::AngleDeg,
         ),
@@ -1418,7 +1418,7 @@ fn print_reference_error_summaries(data: &PlotData) {
             "mount",
             "Full",
             "yaw",
-            "Full residual mount yaw [deg]",
+            "Full mount yaw [deg]",
             "Reference mount yaw [deg]",
             SummaryMode::AngleDeg,
         ),
@@ -1634,7 +1634,7 @@ fn print_full_mount_window_summaries(data: &PlotData, t0: f64) {
         for axis in ["roll", "pitch", "yaw"] {
             let correction = find_trace(
                 &data.full_mount_dx,
-                &format!("Full residual mount {axis} correction [deg/update]"),
+                &format!("Full mount {axis} correction [deg/update]"),
             );
             let correction_stats = correction.map(|trace| window_stats(trace, start, end));
             eprintln!(
@@ -1647,7 +1647,7 @@ fn print_full_mount_window_summaries(data: &PlotData, t0: f64) {
                 correction_stats.map_or(f64::NAN, |s| s.sum_abs),
                 correction_stats.map_or(f64::NAN, |s| s.mean),
             );
-            let name = format!("Full residual mount {axis} [deg]");
+            let name = format!("Full mount {axis} [deg]");
             let drift = find_trace(&data.full_misalignment, &name)
                 .and_then(|trace| window_first_last_delta(trace, start, end));
             if let Some((first, last, delta)) = drift {
@@ -1830,11 +1830,11 @@ fn print_filter_allocation_window(
         ),
         "Full" => (
             data.full_misalignment.as_slice(),
-            format!("Full residual mount {axis} [deg]"),
+            format!("Full mount {axis} [deg]"),
             data.full_cmp_att.as_slice(),
             format!("Full {axis} [deg]"),
             data.full_mount_sigma.as_slice(),
-            format!("Full residual mount {axis} sigma [deg]"),
+            format!("Full mount {axis} sigma [deg]"),
         ),
         _ => return,
     };

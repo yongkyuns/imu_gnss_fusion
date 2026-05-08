@@ -97,10 +97,7 @@ pub(super) fn mount_estimate_reference_traces<'a>(
             &data.reduced_misalignment,
             &format!("Reduced mount {axis} [deg]"),
         ),
-        "Full" => find_trace_exact(
-            &data.full_misalignment,
-            &format!("Full residual mount {axis} [deg]"),
-        ),
+        "Full" => find_trace_exact(&data.full_misalignment, &format!("Full mount {axis} [deg]")),
         _ => None,
     }?;
     let reference_name = format!("Reference mount {axis} [deg]");

@@ -20,12 +20,12 @@ WGS84_OMEGA_IE = 7.292115e-5
 
 POS_E = slice(0, 3)
 V_E = slice(3, 6)
-PSI_EE = slice(6, 9)
+PSI_EV = slice(6, 9)
 B_F = slice(9, 12)
 B_W = slice(12, 15)
 S_F = slice(15, 18)
 S_W = slice(18, 21)
-PSI_CC = slice(21, 24)
+PSI_BV = slice(21, 24)
 
 
 def quat_to_rot(q):
@@ -63,8 +63,8 @@ def skew(v):
 
 def create_reference_transition_and_noise():
     dt = Symbol("dt", real=True)
-    q_es = Matrix(symbols("q0 q1 q2 q3", real=True))
-    q_vb = Matrix(symbols("qcs0 qcs1 qcs2 qcs3", real=True))
+    q_ev = Matrix(symbols("q0 q1 q2 q3", real=True))
+    q_bv = Matrix(symbols("qcs0 qcs1 qcs2 qcs3", real=True))
     v_e = Matrix(symbols("vn ve vd", real=True))
     b_f = Matrix(symbols("bax bay baz", real=True))
     b_w = Matrix(symbols("bgx bgy bgz", real=True))
@@ -73,62 +73,62 @@ def create_reference_transition_and_noise():
     accel_raw = Matrix([Symbol("dvx", real=True) / dt, Symbol("dvy", real=True) / dt, Symbol("dvz", real=True) / dt])
     gyro_raw = Matrix([Symbol("dax", real=True) / dt, Symbol("day", real=True) / dt, Symbol("daz", real=True) / dt])
 
-    c_es = quat_to_rot(q_es)
-    c_vb = quat_to_rot(q_vb).T
-    f_s = Matrix(
+    c_ev = quat_to_rot(q_ev)
+    c_vb = quat_to_rot(q_bv).T
+    f_b = Matrix(
         [
             s_f[0] * accel_raw[0] + b_f[0],
             s_f[1] * accel_raw[1] + b_f[1],
             s_f[2] * accel_raw[2] + b_f[2],
         ]
     )
-    w_s = Matrix(
+    w_b = Matrix(
         [
             s_w[0] * gyro_raw[0] + b_w[0],
             s_w[1] * gyro_raw[1] + b_w[1],
             s_w[2] * gyro_raw[2] + b_w[2],
         ]
     )
-    f_v = c_vb * f_s
-    w_v = c_vb * w_s
+    f_v = c_vb * f_b
+    w_v = c_vb * w_b
 
     phi_cont = Matrix.zeros(24, 24)
     phi_cont[POS_E, V_E] = Matrix.eye(3)
     phi_cont[V_E, V_E] = skew(Matrix([0, 0, -2 * WGS84_OMEGA_IE]))
-    phi_cont[V_E, PSI_EE] = skew(c_es * (-f_v))
-    phi_cont[V_E, B_F] = c_es * c_vb
-    phi_cont[V_E, S_F] = c_es * c_vb * Matrix.diag(accel_raw[0], accel_raw[1], accel_raw[2])
-    phi_cont[V_E, PSI_CC] = c_es * c_vb * skew(f_s)
-    phi_cont[PSI_EE, PSI_EE] = skew(Matrix([0, 0, -WGS84_OMEGA_IE]))
-    phi_cont[PSI_EE, B_W] = c_es * c_vb
-    phi_cont[PSI_EE, S_W] = c_es * c_vb * Matrix.diag(gyro_raw[0], gyro_raw[1], gyro_raw[2])
-    phi_cont[PSI_EE, PSI_CC] = c_es * c_vb * skew(w_s)
+    phi_cont[V_E, PSI_EV] = skew(c_ev * (-f_v))
+    phi_cont[V_E, B_F] = c_ev * c_vb
+    phi_cont[V_E, S_F] = c_ev * c_vb * Matrix.diag(accel_raw[0], accel_raw[1], accel_raw[2])
+    phi_cont[V_E, PSI_BV] = c_ev * c_vb * skew(f_b)
+    phi_cont[PSI_EV, PSI_EV] = skew(Matrix([0, 0, -WGS84_OMEGA_IE]))
+    phi_cont[PSI_EV, B_W] = c_ev * c_vb
+    phi_cont[PSI_EV, S_W] = c_ev * c_vb * Matrix.diag(gyro_raw[0], gyro_raw[1], gyro_raw[2])
+    phi_cont[PSI_EV, PSI_BV] = c_ev * c_vb * skew(w_b)
 
     phi = Matrix.eye(24) + dt * phi_cont
 
     g = Matrix.zeros(24, 21)
-    g[V_E, 0:3] = c_es * c_vb
-    g[PSI_EE, 3:6] = c_es * c_vb
+    g[V_E, 0:3] = c_ev * c_vb
+    g[PSI_EV, 3:6] = c_ev * c_vb
     g[B_F, 6:9] = Matrix.eye(3)
     g[B_W, 9:12] = Matrix.eye(3)
     g[S_F, 12:15] = Matrix.eye(3)
     g[S_W, 15:18] = Matrix.eye(3)
-    g[PSI_CC, 18:21] = Matrix.eye(3)
+    g[PSI_BV, 18:21] = Matrix.eye(3)
 
     return phi, g
 
 
 def create_reference_nhc_rows():
-    q_es = Matrix(symbols("q0 q1 q2 q3", real=True))
+    q_ev = Matrix(symbols("q0 q1 q2 q3", real=True))
     v_e = Matrix(symbols("vn ve vd", real=True))
 
-    c_es = quat_to_rot(q_es)
-    c_ve = c_es.T
+    c_ev = quat_to_rot(q_ev)
+    c_ve = c_ev.T
     v_c = c_ve * v_e
 
     h = Matrix.zeros(3, 24)
     h[:, V_E] = c_ve
-    h[:, PSI_EE] = c_ve * skew(v_e)
+    h[:, PSI_EV] = c_ve * skew(v_e)
     return v_c, h[1, :], h[2, :]
 
 
@@ -142,7 +142,7 @@ def write_rust_nhc_row(path: Path, est_expr, h_row: Matrix, prefix: str):
     if len(values) == 1 and isinstance(values[0], Matrix):
         values = values[0]
     gen.print_string("Estimated Measurement")
-    gen.file.write(f"vc_est = {gen.get_ccode(values[0])};\n\n")
+    gen.file.write(f"vc_evt = {gen.get_ccode(values[0])};\n\n")
     gen.print_string("Observation Jacobian")
     gen.write_matrix(Matrix(values[1:25]), "H")
     gen.close()

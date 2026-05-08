@@ -13,8 +13,8 @@ use crate::visualizer::model::{MountSourceMode, PlotData, Trace};
 use crate::visualizer::pipeline::generic::{
     GenericReplayInput, GenericReplayProgress,
     build_generic_replay_plot_data_with_progress_and_reduced_mount_seed,
-    build_generic_replay_plot_data_with_reduced_mount_seed, q_vb_to_reference_mount_rpy,
-    reference_mount_rpy_to_q_vb,
+    build_generic_replay_plot_data_with_reduced_mount_seed, q_bv_to_reference_mount_rpy,
+    reference_mount_rpy_to_q_bv,
 };
 use crate::visualizer::pipeline::{FilterCompareConfig, GnssOutageConfig};
 
@@ -84,7 +84,7 @@ pub fn build_synthetic_replay_input(
         noise.gps = None;
     }
     let measured = generate_with_noise(&profile, path_cfg, noise, synth_cfg.seed)?;
-    let q_truth_mount = reference_mount_rpy_to_q_vb(synth_cfg.mount_rpy_deg);
+    let q_truth_mount = reference_mount_rpy_to_q_bv(synth_cfg.mount_rpy_deg);
     let gps_noise = noise.gps.unwrap_or(GpsNoiseModel {
         pos_std_m: [0.5, 0.5, 0.5],
         vel_std_mps: [0.2, 0.2, 0.2],
@@ -155,7 +155,7 @@ pub fn build_synthetic_replay_input(
         .collect::<Vec<_>>();
     let end_t_s = ref_truth.last().map(|s| s.t_s).unwrap_or(first_truth.t_s);
     let (mount_roll_deg, mount_pitch_deg, mount_yaw_deg) =
-        q_vb_to_reference_mount_rpy(q_truth_mount);
+        q_bv_to_reference_mount_rpy(q_truth_mount);
     let reference_mount = vec![
         GenericReferenceRpySample {
             t_s: first_truth.t_s,
@@ -228,7 +228,7 @@ fn build_synthetic_plot_data_impl(
         noise.gps = None;
     }
     let measured = generate_with_noise(&profile, path_cfg, noise, synth_cfg.seed)?;
-    let q_truth_mount = reference_mount_rpy_to_q_vb(synth_cfg.mount_rpy_deg);
+    let q_truth_mount = reference_mount_rpy_to_q_bv(synth_cfg.mount_rpy_deg);
     let gps_noise = noise.gps.unwrap_or(GpsNoiseModel {
         pos_std_m: [0.5, 0.5, 0.5],
         vel_std_mps: [0.2, 0.2, 0.2],
@@ -345,7 +345,7 @@ fn build_synthetic_plot_data_impl(
         .collect::<Vec<_>>();
     let end_t_s = ref_truth.last().map(|s| s.t_s).unwrap_or(0.0);
     let (mount_roll_deg, mount_pitch_deg, mount_yaw_deg) =
-        q_vb_to_reference_mount_rpy(q_truth_mount);
+        q_bv_to_reference_mount_rpy(q_truth_mount);
     let reference_mount = vec![
         GenericReferenceRpySample {
             t_s: 0.0,
@@ -577,7 +577,7 @@ fn add_synthetic_overlays(data: &mut PlotData, traces: SyntheticOverlayTraces) {
 }
 
 fn synthetic_mount_traces(q_truth_mount: [f64; 4], end_t_s: f64) -> [Trace; 3] {
-    let (roll_deg, pitch_deg, yaw_deg) = q_vb_to_reference_mount_rpy(q_truth_mount);
+    let (roll_deg, pitch_deg, yaw_deg) = q_bv_to_reference_mount_rpy(q_truth_mount);
     [
         Trace {
             name: "Synthetic truth mount roll [deg]".to_string(),
@@ -619,7 +619,7 @@ fn mount_error_points(traces: &[Trace], q_truth_mount: [f64; 4]) -> Vec<[f64; 2]
             let t_s = sample[0];
             let pitch_deg = sample_trace_at(pitch, t_s)?;
             let yaw_deg = sample_trace_at(yaw, t_s)?;
-            let q_est = reference_mount_rpy_to_q_vb([sample[1], pitch_deg, yaw_deg]);
+            let q_est = reference_mount_rpy_to_q_bv([sample[1], pitch_deg, yaw_deg]);
             Some([t_s, quat_angle_deg(q_est, q_truth_mount)])
         })
         .collect()

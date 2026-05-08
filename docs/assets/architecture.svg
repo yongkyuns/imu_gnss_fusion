@@ -157,7 +157,7 @@
 </text>
 <text class="label" x="1092" y="402" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
 <tspan x="1092" dy="0">stationary bootstrap</tspan>
-<tspan x="1092" dy="16.200000000000003">GNSS-window mount q_vb</tspan>
+<tspan x="1092" dy="16.200000000000003">GNSS-window mount q_bv</tspan>
 </text>
 <rect x="1078" y="506" width="249" height="126" rx="8" fill="#FFFFFF" stroke="#E9B8C2" stroke-width="1"/>
 <text x="1092" y="518" fill="#172033" font-size="15" font-weight="700" text-anchor="start">

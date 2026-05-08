@@ -5,7 +5,7 @@ This directory collects project-level notes for the IMU/GNSS fusion workspace. T
 ## Start Here
 
 - [Testing](testing.md): local test commands, targeted suites, fixtures, and expensive-data notes.
-- [Frame conventions](math/frames.md): short index for navigation, ECEF, body, vehicle, seeded, and corrected frames.
+- [Frame conventions](math/frames.md): short index for navigation, ECEF, raw body, vehicle, and mount frames.
 - [Full EKF notes](math/full.md): concise operational links for the Full EKF.
 - [Simulation tooling map](../sim/README.md): stable `sim` binaries, generic replay schema, and supported visualizer modes.
 - [Browser visualizer](../web/README.md): wasm build and static hosting instructions.

@@ -2,12 +2,12 @@
 //!
 //! The full formulation is documented in
 //! `docs/align_nhc_formulation.pdf`. In short, the filter state is the
-//! vehicle-to-body mount quaternion `q_vb` plus a 3 by 3 covariance over the
+//! vehicle-to-body mount quaternion `q_bv` plus a 3 by 3 covariance over the
 //! mount small angle `[roll, pitch, yaw]`.
 //!
 //! ```text
-//! x_b = C_bv(q_vb) x_v
-//! x_v = C_bv(q_vb)^T x_b
+//! x_b = C_bv(q_bv) x_v
+//! x_v = C_bv(q_bv)^T x_b
 //! ```
 //!
 //! Stationary gravity constrains roll and pitch, GNSS-derived horizontal
@@ -177,7 +177,7 @@ struct TurnConsistencySample {
 #[derive(Debug, Clone)]
 pub struct Align {
     /// Vehicle-to-body mount quaternion `[w, x, y, z]`.
-    pub q_vb: [f32; 4],
+    pub q_bv: [f32; 4],
     /// Small-angle mount covariance for roll, pitch, and yaw.
     pub P: [[f32; ALIGN_N_STATES]; ALIGN_N_STATES],
     /// Low-pass stationary gravity vector in the IMU body frame.
@@ -200,7 +200,7 @@ impl Align {
     /// Creates an alignment filter with identity mount and the provided configuration.
     pub fn new(cfg: AlignConfig) -> Self {
         Self {
-            q_vb: [1.0, 0.0, 0.0, 0.0],
+            q_bv: [1.0, 0.0, 0.0, 0.0],
             P: diag3([
                 sq_f32(20.0_f32.to_radians()),
                 sq_f32(20.0_f32.to_radians()),
@@ -224,7 +224,7 @@ impl Align {
         let mean = mean_accel(accel_samples_b).ok_or("stationary bootstrap failed")?;
         let c_bv =
             stationary_mount_rotmat(mean, yaw_seed_rad).ok_or("stationary bootstrap failed")?;
-        self.q_vb = rotmat_to_quat(c_bv);
+        self.q_bv = rotmat_to_quat(c_bv);
         self.P = diag3([
             sq_f32(0.2_f32.to_radians()),
             sq_f32(0.2_f32.to_radians()),
@@ -256,7 +256,7 @@ impl Align {
         window: &AlignWindowSummary,
     ) -> (f32, AlignUpdateTrace) {
         let mut trace = AlignUpdateTrace {
-            q_start: self.q_vb,
+            q_start: self.q_bv,
             ..AlignUpdateTrace::default()
         };
         self.predict(window.dt);
@@ -289,8 +289,8 @@ impl Align {
 
         let gyro_norm = vec3_norm(window.mean_gyro_b);
         let accel_norm = vec3_norm(window.mean_accel_b);
-        let horiz_accel_b = remove_gravity_axis(self.q_vb, window.mean_accel_b);
-        let horiz_obs = align_obs(self.q_vb, window.mean_gyro_b, horiz_accel_b);
+        let horiz_accel_b = remove_gravity_axis(self.q_bv, window.mean_accel_b);
+        let horiz_obs = align_obs(self.q_bv, window.mean_gyro_b, horiz_accel_b);
 
         let stationary = gyro_norm <= self.cfg.max_stationary_gyro_radps
             && (accel_norm - GRAVITY_MPS2).abs() <= self.cfg.max_stationary_accel_norm_err_mps2
@@ -316,7 +316,7 @@ impl Align {
             let gravity_state_mask = [true, true, false];
             let r_gravity = self.cfg.r_gravity_std_mps2 * self.cfg.r_gravity_std_mps2;
             score += apply_update2_scaled_masked(
-                &mut self.q_vb,
+                &mut self.q_bv,
                 &mut self.P,
                 [0.0, 0.0],
                 [3, 4],
@@ -327,7 +327,7 @@ impl Align {
                 [1.0, 1.0, 1.0],
             );
             score += apply_update1_masked(
-                &mut self.q_vb,
+                &mut self.q_bv,
                 &mut self.P,
                 -vec3_norm(self.gravity_lp_b),
                 5,
@@ -336,7 +336,7 @@ impl Align {
                 r_gravity,
                 gravity_state_mask,
             );
-            trace.after_gravity = Some(self.q_vb);
+            trace.after_gravity = Some(self.q_bv);
             trace.after_gravity_quasi_static = false;
         }
 
@@ -390,13 +390,13 @@ impl Align {
             trace.horiz_angle_err_rad = Some(angle_err);
             trace.horiz_effective_std_rad = Some(effective_std);
             score += apply_vehicle_yaw_angle(
-                &mut self.q_vb,
+                &mut self.q_bv,
                 &mut self.P,
                 angle_err,
                 effective_std * effective_std,
             );
             self.yaw_observed = true;
-            trace.after_horiz_accel = Some(self.q_vb);
+            trace.after_horiz_accel = Some(self.q_bv);
         }
 
         if turn_valid && self.cfg.use_turn_gyro {
@@ -409,7 +409,7 @@ impl Align {
             let state_scale = [1.0, 1.0, turn_gyro_yaw_scale];
             let r_turn_gyro = self.cfg.r_turn_gyro_std_radps * self.cfg.r_turn_gyro_std_radps;
             score += apply_update2_scaled_masked(
-                &mut self.q_vb,
+                &mut self.q_bv,
                 &mut self.P,
                 [0.0, 0.0],
                 [0, 1],
@@ -422,7 +422,7 @@ impl Align {
             if state_mask[2] {
                 self.yaw_observed = true;
             }
-            trace.after_turn_gyro = Some(self.q_vb);
+            trace.after_turn_gyro = Some(self.q_bv);
         }
 
         self.coarse_aligned = self.compute_coarse_alignment_ready();
@@ -432,7 +432,7 @@ impl Align {
 
     /// Returns mount Euler angles `[roll, pitch, yaw]` in radians.
     pub fn mount_angles_rad(&self) -> [f32; 3] {
-        rot_to_euler_zyx(quat_to_rotmat(self.q_vb))
+        rot_to_euler_zyx(quat_to_rotmat(self.q_bv))
     }
 
     /// Returns mount Euler angles `[roll, pitch, yaw]` in degrees.
@@ -571,9 +571,9 @@ fn stationary_mount_rotmat(accel_b: [f32; 3], yaw_seed_rad: f32) -> Option<[[f32
     Some(mat3_mul(c_b_v_tilt, c_delta))
 }
 
-fn remove_gravity_axis(q_vb: [f32; 4], accel_b: [f32; 3]) -> [f32; 3] {
-    let r = quat_to_rotmat(q_vb);
-    let g_hat_b = [-r[0][2], -r[1][2], -r[2][2]];
+fn remove_gravity_axis(q_bv: [f32; 4], accel_b: [f32; 3]) -> [f32; 3] {
+    let c_bv = quat_to_rotmat(q_bv);
+    let g_hat_b = [-c_bv[0][2], -c_bv[1][2], -c_bv[2][2]];
     let proj = vec3_scale(g_hat_b, vec3_dot(accel_b, g_hat_b));
     vec3_sub(accel_b, proj)
 }
@@ -749,39 +749,39 @@ fn symmetrize3(a: &mut [[f32; 3]; 3]) {
     }
 }
 
-fn align_obs(q_vb: [f32; 4], gyro_b: [f32; 3], accel_b: [f32; 3]) -> [f32; 6] {
-    let c_vb = quat_to_rotmat(q_vb);
-    let c_bv = transpose3(c_vb);
-    let gyro_v = mat3_vec(c_bv, gyro_b);
-    let accel_v = mat3_vec(c_bv, accel_b);
+fn align_obs(q_bv: [f32; 4], gyro_b: [f32; 3], accel_b: [f32; 3]) -> [f32; 6] {
+    let c_bv = quat_to_rotmat(q_bv);
+    let c_vb = transpose3(c_bv);
+    let gyro_v = mat3_vec(c_vb, gyro_b);
+    let accel_v = mat3_vec(c_vb, accel_b);
     [
         gyro_v[0], gyro_v[1], gyro_v[2], accel_v[0], accel_v[1], accel_v[2],
     ]
 }
 
-fn align_obs_jacobian(q_vb: [f32; 4], gyro_b: [f32; 3], accel_b: [f32; 3]) -> [[f32; 3]; 6] {
-    let c_vb = quat_to_rotmat(q_vb);
-    let c_bv = transpose3(c_vb);
-    let h_gyro = mat3_mul(c_bv, skew3(gyro_b));
-    let h_accel = mat3_mul(c_bv, skew3(accel_b));
+fn align_obs_jacobian(q_bv: [f32; 4], gyro_b: [f32; 3], accel_b: [f32; 3]) -> [[f32; 3]; 6] {
+    let c_bv = quat_to_rotmat(q_bv);
+    let c_vb = transpose3(c_bv);
+    let h_gyro = mat3_mul(c_vb, skew3(gyro_b));
+    let h_accel = mat3_mul(c_vb, skew3(accel_b));
     [
         h_gyro[0], h_gyro[1], h_gyro[2], h_accel[0], h_accel[1], h_accel[2],
     ]
 }
 
-fn inject_small_angle(q_vb: &mut [f32; 4], dtheta: [f32; 3]) {
-    *q_vb = quat_mul(quat_from_small_angle(dtheta), *q_vb);
-    quat_normalize(q_vb);
+fn inject_small_angle(q_bv: &mut [f32; 4], dtheta: [f32; 3]) {
+    *q_bv = quat_mul(quat_from_small_angle(dtheta), *q_bv);
+    quat_normalize(q_bv);
 }
 
-fn inject_vehicle_yaw(q_vb: &mut [f32; 4], dpsi: f32) {
-    *q_vb = quat_mul(*q_vb, quat_from_yaw(dpsi));
-    quat_normalize(q_vb);
+fn inject_vehicle_yaw(q_bv: &mut [f32; 4], dpsi: f32) {
+    *q_bv = quat_mul(*q_bv, quat_from_yaw(dpsi));
+    quat_normalize(q_bv);
 }
 
 #[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
 fn apply_update1_masked(
-    q_vb: &mut [f32; 4],
+    q_bv: &mut [f32; 4],
     p: &mut [[f32; 3]; 3],
     z: f32,
     obs_idx: usize,
@@ -790,8 +790,8 @@ fn apply_update1_masked(
     r_var: f32,
     state_mask: [bool; 3],
 ) -> f32 {
-    let obs = align_obs(*q_vb, gyro_b, accel_b);
-    let h_full = align_obs_jacobian(*q_vb, gyro_b, accel_b);
+    let obs = align_obs(*q_bv, gyro_b, accel_b);
+    let h_full = align_obs_jacobian(*q_bv, gyro_b, accel_b);
     let h = [
         if state_mask[0] {
             h_full[obs_idx][0]
@@ -814,7 +814,7 @@ fn apply_update1_masked(
     let s = vec3_dot(h, ph) + r_var;
     let s_inv = if s.abs() > 1.0e-20 { 1.0 / s } else { 1.0 };
     let k = [ph[0] * s_inv, ph[1] * s_inv, ph[2] * s_inv];
-    inject_small_angle(q_vb, [k[0] * y, k[1] * y, k[2] * y]);
+    inject_small_angle(q_bv, [k[0] * y, k[1] * y, k[2] * y]);
 
     let mut i_minus_kh = [[0.0; 3]; 3];
     for i in 0..3 {
@@ -831,7 +831,7 @@ fn apply_update1_masked(
 
 #[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
 fn apply_update2_scaled_masked(
-    q_vb: &mut [f32; 4],
+    q_bv: &mut [f32; 4],
     p: &mut [[f32; 3]; 3],
     z: [f32; 2],
     obs_idx: [usize; 2],
@@ -841,8 +841,8 @@ fn apply_update2_scaled_masked(
     state_mask: [bool; 3],
     state_scale: [f32; 3],
 ) -> f32 {
-    let obs = align_obs(*q_vb, gyro_b, accel_b);
-    let h_full = align_obs_jacobian(*q_vb, gyro_b, accel_b);
+    let obs = align_obs(*q_bv, gyro_b, accel_b);
+    let h_full = align_obs_jacobian(*q_bv, gyro_b, accel_b);
     let mut h0 = [0.0; 3];
     let mut h1 = [0.0; 3];
     for i in 0..3 {
@@ -873,7 +873,7 @@ fn apply_update2_scaled_masked(
         k[i][1] = ph0[i] * s_inv01 + ph1[i] * s_inv11;
         dtheta[i] = k[i][0] * y[0] + k[i][1] * y[1];
     }
-    inject_small_angle(q_vb, dtheta);
+    inject_small_angle(q_bv, dtheta);
 
     let mut i_minus_kh = [[0.0; 3]; 3];
     for i in 0..3 {
@@ -890,7 +890,7 @@ fn apply_update2_scaled_masked(
 }
 
 fn apply_vehicle_yaw_angle(
-    q_vb: &mut [f32; 4],
+    q_bv: &mut [f32; 4],
     p: &mut [[f32; 3]; 3],
     angle_err_rad: f32,
     r_var: f32,
@@ -898,7 +898,7 @@ fn apply_vehicle_yaw_angle(
     let pzz = p[2][2].max(0.0);
     let s = pzz + r_var.max(1.0e-9);
     let k = if s > 1.0e-9 { pzz / s } else { 0.0 };
-    inject_vehicle_yaw(q_vb, -k * angle_err_rad);
+    inject_vehicle_yaw(q_bv, -k * angle_err_rad);
     p[2][2] = ((1.0 - k) * pzz).max(0.0);
     p[0][2] = 0.0;
     p[2][0] = 0.0;

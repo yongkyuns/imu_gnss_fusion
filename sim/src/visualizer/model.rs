@@ -44,7 +44,7 @@ pub struct PlotData {
     pub full_cmp_vel: Vec<Trace>,
     pub full_cmp_att: Vec<Trace>,
     pub full_nominal_att: Vec<Trace>,
-    pub full_residual_mount: Vec<Trace>,
+    pub full_mount: Vec<Trace>,
     pub full_misalignment: Vec<Trace>,
     pub full_meas_gyro: Vec<Trace>,
     pub full_meas_accel: Vec<Trace>,

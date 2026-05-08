@@ -28,7 +28,7 @@ use sim::eval::replay::{ReplayEvent, for_each_event};
 use sim::visualizer::math::{ecef_to_ned, lla_to_ecef};
 use sim::visualizer::model::MountSourceMode;
 use sim::visualizer::pipeline::FilterCompareConfig;
-use sim::visualizer::pipeline::generic::reference_mount_rpy_to_q_vb;
+use sim::visualizer::pipeline::generic::reference_mount_rpy_to_q_bv;
 use sim::visualizer::pipeline::synthetic::{
     SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_replay_input,
 };
@@ -103,7 +103,7 @@ struct Args {
     )]
     misalignment: MountSourceMode,
 
-    /// Freeze residual mount states in the Reduced diagnostic path.
+    /// Freeze mount states in the Reduced diagnostic path.
     #[arg(long)]
     freeze_misalignment_states: bool,
 
@@ -115,11 +115,11 @@ struct Args {
     #[arg(long)]
     r_body_vel_z: Option<f32>,
 
-    /// Override Reduced residual mount roll/pitch initial sigma, in degrees.
+    /// Override Reduced mount roll/pitch initial sigma, in degrees.
     #[arg(long)]
     mount_roll_pitch_init_sigma_deg: Option<f32>,
 
-    /// Override Reduced residual mount yaw initial sigma, in degrees.
+    /// Override Reduced mount yaw initial sigma, in degrees.
     #[arg(long)]
     mount_init_sigma_deg: Option<f32>,
 
@@ -163,11 +163,11 @@ struct Args {
     #[arg(long)]
     full_attitude_sigma_deg: Option<f32>,
 
-    /// Diagnostic-only override for full residual mount roll/pitch initial sigma, in degrees.
+    /// Diagnostic-only override for full mount roll/pitch initial sigma, in degrees.
     #[arg(long)]
     full_mount_sigma_deg: Option<f32>,
 
-    /// Diagnostic-only override for full residual mount yaw initial sigma, in degrees.
+    /// Diagnostic-only override for full mount yaw initial sigma, in degrees.
     #[arg(long)]
     full_mount_yaw_sigma_deg: Option<f32>,
 
@@ -218,7 +218,7 @@ struct Snapshot {
     reduced: Option<reduced::State>,
     full: Option<FullSnapshot>,
     transition: Option<TransitionSnapshot>,
-    reference_mount_q_vb: Option<[f64; 4]>,
+    reference_mount_q_bv: Option<[f64; 4]>,
     reference_att_q: Option<[f64; 4]>,
     reduced_type_counts: [u32; UPDATE_DIAG_TYPES],
     full_obs_counts: [u32; 9],
@@ -808,8 +808,8 @@ fn run_diagnostics(
 
     let mut fusion = SensorFusion::new();
     apply_fusion_config(&mut fusion, cfg, args.misalignment);
-    if let Some(seed_q_vb) = reference_mount_seed_q_vb(replay, args.misalignment) {
-        fusion.set_misalignment(seed_q_vb);
+    if let Some(seed_q_bv) = reference_mount_seed_q_bv(replay, args.misalignment) {
+        fusion.set_misalignment(seed_q_bv);
     }
 
     let mut align_fusion = SensorFusion::new();
@@ -1075,7 +1075,7 @@ fn run_diagnostics(
                     let vel_ecef =
                         ned_vector_to_ecef(sample.lat_deg, sample.lon_deg, sample.vel_ned_mps)
                             .map(|v| v as f32);
-                    full.init_seeded_vehicle_from_nav_ecef_state(
+                    full.init_vehicle_from_nav_ecef_state(
                         yaw_rad,
                         sample.lat_deg,
                         sample.lon_deg,
@@ -1084,7 +1084,7 @@ fn run_diagnostics(
                         Some(default_full_p_diag(*sample, cfg)),
                         None,
                     );
-                    if let Some(seed_q) = align_fusion.mount_q_vb() {
+                    if let Some(seed_q) = align_fusion.mount_q_bv() {
                         full.set_mount_quat(seed_q);
                     }
                     full_ready = true;
@@ -1247,7 +1247,7 @@ fn capture_due_snapshots(
                 last_obs_types: full.last_obs_types().to_vec(),
             }),
             transition,
-            reference_mount_q_vb: reference_mount_at(&replay.reference_mount, t_s),
+            reference_mount_q_bv: reference_mount_at(&replay.reference_mount, t_s),
             reference_att_q: reference_attitude_at(&replay.reference_attitude, t_s),
             reduced_type_counts: fusion
                 .reduced()
@@ -1405,11 +1405,11 @@ fn state_metrics(snapshot: &Snapshot, ref_gnss: GenericGnssSample) -> StateMetri
     });
     StateMetrics {
         reduced_mount_qerr: reduced_mount_q
-            .zip(snapshot.reference_mount_q_vb)
+            .zip(snapshot.reference_mount_q_bv)
             .map(|(a, b)| quat_angle_deg(a, b))
             .unwrap_or(f64::NAN),
         full_mount_qerr: full_mount_q
-            .zip(snapshot.reference_mount_q_vb)
+            .zip(snapshot.reference_mount_q_bv)
             .map(|(a, b)| quat_angle_deg(a, b))
             .unwrap_or(f64::NAN),
         reduced_att_qerr: snapshot
@@ -1720,7 +1720,7 @@ fn print_state_summary(snapshot: &Snapshot, ref_gnss: GenericGnssSample) {
             l.nominal.qcs3,
         ])
     });
-    let ref_mount_q = snapshot.reference_mount_q_vb;
+    let ref_mount_q = snapshot.reference_mount_q_bv;
     let reduced_mount_qerr = reduced_mount_q
         .zip(ref_mount_q)
         .map(|(a, b)| quat_angle_deg(a, b))
@@ -2577,10 +2577,10 @@ fn full_att_q_ned(full: &FullSnapshot, ref_gnss: GenericGnssSample) -> [f64; 4] 
 
 fn reference_mount_at(samples: &[GenericReferenceRpySample], t_s: f64) -> Option<[f64; 4]> {
     nearest_rpy(samples, t_s)
-        .map(|s| reference_mount_rpy_to_q_vb([s.roll_deg, s.pitch_deg, s.yaw_deg]))
+        .map(|s| reference_mount_rpy_to_q_bv([s.roll_deg, s.pitch_deg, s.yaw_deg]))
 }
 
-fn reference_mount_seed_q_vb(replay: &Replay, mode: MountSourceMode) -> Option<[f32; 4]> {
+fn reference_mount_seed_q_bv(replay: &Replay, mode: MountSourceMode) -> Option<[f32; 4]> {
     if !mode.uses_ref_mount() {
         return None;
     }
@@ -2595,7 +2595,7 @@ fn reference_mount_seed_q_vb(replay: &Replay, mode: MountSourceMode) -> Option<[
         })
         .map(|sample| {
             let q =
-                reference_mount_rpy_to_q_vb([sample.roll_deg, sample.pitch_deg, sample.yaw_deg]);
+                reference_mount_rpy_to_q_bv([sample.roll_deg, sample.pitch_deg, sample.yaw_deg]);
             [q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32]
         })
 }

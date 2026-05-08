@@ -15,10 +15,10 @@ pub struct FilterCompareConfig {
     pub yaw_init_sigma_deg: f32,
     pub gyro_bias_init_sigma_dps: f32,
     pub accel_bias_init_sigma_mps2: f32,
-    /// Initial residual mount roll/pitch sigma, in degrees.
+    /// Initial mount roll/pitch sigma, in degrees.
     #[serde(default = "default_mount_roll_pitch_init_sigma_deg")]
     pub mount_roll_pitch_init_sigma_deg: f32,
-    /// Initial residual mount yaw sigma, in degrees.
+    /// Initial mount yaw sigma, in degrees.
     pub mount_init_sigma_deg: f32,
     pub r_vehicle_speed: f32,
     pub mount_align_rw_var: f32,

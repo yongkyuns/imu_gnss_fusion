@@ -9,20 +9,21 @@
 //! state is:
 //!
 //! ```text
-//! q_es, v_e, p_e, b_g, b_a, s_g, s_a, q_cs
+//! q_ev, v_e, p_e, b_g, b_a, s_g, s_a, q_bv
 //! ```
 //!
-//! `q_es` rotates the seeded IMU frame into ECEF, and `q_cs` rotates the seeded
-//! frame into the corrected vehicle frame used by NHC. The 24-state error order
-//! in generated matrices and injection is:
+//! `q_ev` rotates the vehicle frame into ECEF, and `q_bv` is the physical
+//! vehicle-to-body mount stored in the legacy `qcs*` fields. Raw body-frame IMU
+//! samples are rotated through `q_bv` during propagation. The 24-state error
+//! order in generated matrices and injection is:
 //!
 //! ```text
-//! dp_e, dv_e, dtheta_s, dba, dbg, dsa, dsg, dpsi_cs
+//! dp_e, dv_e, dtheta_v, dba, dbg, dsa, dsg, dpsi_bv
 //! ```
 //!
 //! GNSS reference rows observe ECEF position and velocity, optionally whitening
 //! NED standard deviations into ECEF. NHC rows predict
-//! `v_c = C_cs C_es^T v_e` and constrain its lateral and vertical components.
+//! `v_v = C_ev^T v_e` and constrain its lateral and vertical components.
 
 #![allow(non_snake_case)]
 #![allow(clippy::excessive_precision)]
@@ -156,21 +157,23 @@ impl Filter {
         self.raw.p = p;
     }
 
-    /// Sets the residual seed-to-vehicle mount quaternion.
-    pub fn set_mount_quat(&mut self, q_cs: [f32; 4]) {
-        self.raw.nominal.qcs0 = q_cs[0];
-        self.raw.nominal.qcs1 = q_cs[1];
-        self.raw.nominal.qcs2 = q_cs[2];
-        self.raw.nominal.qcs3 = q_cs[3];
+    /// Sets the physical vehicle-to-body mount quaternion.
+    ///
+    /// The quaternion must satisfy `x_b = C_bv(q) x_v`.
+    pub fn set_mount_quat(&mut self, q_bv: [f32; 4]) {
+        self.raw.nominal.qcs0 = q_bv[0];
+        self.raw.nominal.qcs1 = q_bv[1];
+        self.raw.nominal.qcs2 = q_bv[2];
+        self.raw.nominal.qcs3 = q_bv[3];
         self.raw.qcs64 = [
-            q_cs[0] as f64,
-            q_cs[1] as f64,
-            q_cs[2] as f64,
-            q_cs[3] as f64,
+            q_bv[0] as f64,
+            q_bv[1] as f64,
+            q_bv[2] as f64,
+            q_bv[3] as f64,
         ];
     }
 
-    /// Zeros residual-mount cross-covariances and sets mount variance from a degree sigma.
+    /// Zeros mount cross-covariances and sets mount variance from a degree sigma.
     pub fn tighten_mount_covariance_deg(&mut self, sigma_deg: f32) {
         let mut p = self.raw.p;
         let var = sq_f64((sigma_deg as f64).to_radians()) as f32;
@@ -188,20 +191,20 @@ impl Filter {
     /// Initializes the full filter from a reference-frame state.
     pub fn init_from_reference_state(
         &mut self,
-        q_bn: [f32; 4],
+        q_att: [f32; 4],
         pos_ned_m: [f32; 3],
         vel_ned_mps: [f32; 3],
         gyro_bias_radps: [f32; 3],
         accel_bias_mps2: [f32; 3],
         gyro_scale: [f32; 3],
         accel_scale: [f32; 3],
-        q_cs: [f32; 4],
+        q_bv: [f32; 4],
         p_diag: Option<[f32; ERROR_STATES]>,
     ) {
-        self.raw.nominal.q0 = q_bn[0];
-        self.raw.nominal.q1 = q_bn[1];
-        self.raw.nominal.q2 = q_bn[2];
-        self.raw.nominal.q3 = q_bn[3];
+        self.raw.nominal.q0 = q_att[0];
+        self.raw.nominal.q1 = q_att[1];
+        self.raw.nominal.q2 = q_att[2];
+        self.raw.nominal.q3 = q_att[3];
         self.raw.nominal.vn = vel_ned_mps[0];
         self.raw.nominal.ve = vel_ned_mps[1];
         self.raw.nominal.vd = vel_ned_mps[2];
@@ -225,7 +228,7 @@ impl Filter {
         self.raw.nominal.sax = accel_scale[0];
         self.raw.nominal.say = accel_scale[1];
         self.raw.nominal.saz = accel_scale[2];
-        self.set_mount_quat(q_cs);
+        self.set_mount_quat(q_bv);
         if let Some(p_diag) = p_diag {
             for i in 0..ERROR_STATES {
                 for j in 0..ERROR_STATES {
@@ -242,18 +245,18 @@ impl Filter {
     /// Initializes the full filter from an ECEF reference-frame state.
     pub fn init_from_reference_ecef_state(
         &mut self,
-        q_es: [f32; 4],
+        q_ev: [f32; 4],
         pos_ecef_m: [f64; 3],
         vel_ecef_mps: [f32; 3],
         gyro_bias_radps: [f32; 3],
         accel_bias_mps2: [f32; 3],
         gyro_scale: [f32; 3],
         accel_scale: [f32; 3],
-        q_cs: [f32; 4],
+        q_bv: [f32; 4],
         p_diag: Option<[f32; ERROR_STATES]>,
     ) {
         self.init_from_reference_state(
-            q_es,
+            q_ev,
             [
                 pos_ecef_m[0] as f32,
                 pos_ecef_m[1] as f32,
@@ -264,15 +267,15 @@ impl Filter {
             accel_bias_mps2,
             gyro_scale,
             accel_scale,
-            q_cs,
+            q_bv,
             p_diag,
         );
         self.raw.pos_e64 = pos_ecef_m;
     }
 
-    /// Initializes from ECEF navigation state with a yaw-seeded vehicle frame split.
+    /// Initializes from ECEF navigation state with vehicle yaw and identity mount.
     #[allow(clippy::too_many_arguments)]
-    pub fn init_seeded_vehicle_from_nav_ecef_state(
+    pub fn init_vehicle_from_nav_ecef_state(
         &mut self,
         yaw_rad: f32,
         lat_deg: f64,
@@ -280,21 +283,21 @@ impl Filter {
         pos_ecef_m: [f64; 3],
         vel_ecef_mps: [f32; 3],
         p_diag: Option<[f32; ERROR_STATES]>,
-        residual_mount_sigma_deg: Option<f32>,
+        mount_sigma_deg: Option<f32>,
     ) {
-        let (q_es, q_cs) = full_seeded_vehicle_ecef_split(yaw_rad, lat_deg, lon_deg);
+        let (q_ev, q_bv) = full_vehicle_ecef_split(yaw_rad, lat_deg, lon_deg);
         self.init_from_reference_ecef_state(
-            q_es,
+            q_ev,
             pos_ecef_m,
             vel_ecef_mps,
             [0.0, 0.0, 0.0],
             [0.0, 0.0, 0.0],
             [1.0, 1.0, 1.0],
             [1.0, 1.0, 1.0],
-            q_cs,
+            q_bv,
             p_diag,
         );
-        if let Some(sigma_deg) = residual_mount_sigma_deg {
+        if let Some(sigma_deg) = mount_sigma_deg {
             self.tighten_mount_covariance_deg(sigma_deg);
         }
     }
@@ -340,7 +343,7 @@ impl Filter {
             return;
         }
 
-        let q_es = [
+        let q_ev = [
             self.raw.nominal.q0,
             self.raw.nominal.q1,
             self.raw.nominal.q2,
@@ -405,20 +408,20 @@ impl Filter {
         let f2_v = mat_vec3_f32(c_vb, f2);
 
         let x_e_f = [x_e[0] as f32, x_e[1] as f32, x_e[2] as f32];
-        let c_es = quat_to_dcm_f32(q_es);
+        let c_ev = quat_to_dcm_f32(q_ev);
         let g_e1 = gravity_ecef_j2_f32(x_e_f);
-        let f1_e = mat_vec3_f32(c_es, f1_v);
+        let f1_e = mat_vec3_f32(c_ev, f1_v);
         let vdot1 = [
             g_e1[0] + f1_e[0] + 2.0 * WGS84_OMEGA_IE * v_e[1],
             g_e1[1] + f1_e[1] - 2.0 * WGS84_OMEGA_IE * v_e[0],
             g_e1[2] + f1_e[2],
         ];
-        let qdot1_raw = quat_multiply_f32(q_es, [0.0, omega1_v[0], omega1_v[1], omega1_v[2]]);
+        let qdot1_raw = quat_multiply_f32(q_ev, [0.0, omega1_v[0], omega1_v[1], omega1_v[2]]);
         let qdot1 = [
-            0.5 * (qdot1_raw[0] + WGS84_OMEGA_IE * q_es[3]),
-            0.5 * (qdot1_raw[1] + WGS84_OMEGA_IE * q_es[2]),
-            0.5 * (qdot1_raw[2] - WGS84_OMEGA_IE * q_es[1]),
-            0.5 * (qdot1_raw[3] - WGS84_OMEGA_IE * q_es[0]),
+            0.5 * (qdot1_raw[0] + WGS84_OMEGA_IE * q_ev[3]),
+            0.5 * (qdot1_raw[1] + WGS84_OMEGA_IE * q_ev[2]),
+            0.5 * (qdot1_raw[2] - WGS84_OMEGA_IE * q_ev[1]),
+            0.5 * (qdot1_raw[3] - WGS84_OMEGA_IE * q_ev[0]),
         ];
 
         let x_tmp = [
@@ -432,17 +435,17 @@ impl Filter {
             v_e[2] + dt * vdot1[2],
         ];
         let mut q_tmp = [
-            q_es[0] + dt * qdot1[0],
-            q_es[1] + dt * qdot1[1],
-            q_es[2] + dt * qdot1[2],
-            q_es[3] + dt * qdot1[3],
+            q_ev[0] + dt * qdot1[0],
+            q_ev[1] + dt * qdot1[1],
+            q_ev[2] + dt * qdot1[2],
+            q_ev[3] + dt * qdot1[3],
         ];
         normalize_quat_f32(&mut q_tmp);
 
-        let c_es_tmp = quat_to_dcm_f32(q_tmp);
+        let c_ev_tmp = quat_to_dcm_f32(q_tmp);
         let x_tmp_f = [x_tmp[0] as f32, x_tmp[1] as f32, x_tmp[2] as f32];
         let g_e2 = gravity_ecef_j2_f32(x_tmp_f);
-        let f2_e = mat_vec3_f32(c_es_tmp, f2_v);
+        let f2_e = mat_vec3_f32(c_ev_tmp, f2_v);
         let vdot2 = [
             g_e2[0] + f2_e[0] + 2.0 * WGS84_OMEGA_IE * v_tmp[1],
             g_e2[1] + f2_e[1] - 2.0 * WGS84_OMEGA_IE * v_tmp[0],
@@ -463,10 +466,10 @@ impl Filter {
         self.raw.nominal.vn = v_e[0] + 0.5 * dt * (vdot1[0] + vdot2[0]);
         self.raw.nominal.ve = v_e[1] + 0.5 * dt * (vdot1[1] + vdot2[1]);
         self.raw.nominal.vd = v_e[2] + 0.5 * dt * (vdot1[2] + vdot2[2]);
-        self.raw.nominal.q0 = q_es[0] + 0.5 * dt * (qdot1[0] + qdot2[0]);
-        self.raw.nominal.q1 = q_es[1] + 0.5 * dt * (qdot1[1] + qdot2[1]);
-        self.raw.nominal.q2 = q_es[2] + 0.5 * dt * (qdot1[2] + qdot2[2]);
-        self.raw.nominal.q3 = q_es[3] + 0.5 * dt * (qdot1[3] + qdot2[3]);
+        self.raw.nominal.q0 = q_ev[0] + 0.5 * dt * (qdot1[0] + qdot2[0]);
+        self.raw.nominal.q1 = q_ev[1] + 0.5 * dt * (qdot1[1] + qdot2[1]);
+        self.raw.nominal.q2 = q_ev[2] + 0.5 * dt * (qdot1[2] + qdot2[2]);
+        self.raw.nominal.q3 = q_ev[3] + 0.5 * dt * (qdot1[3] + qdot2[3]);
         self.normalize_nominal_quat();
     }
 
@@ -1377,21 +1380,21 @@ fn extract_support_from_row(h: &[f32; ERROR_STATES], support: &mut [usize; ERROR
     len
 }
 
-/// Splits a yaw-seeded NED vehicle attitude into ECEF seed attitude and identity residual mount.
-pub fn full_seeded_vehicle_ecef_split(
-    yaw_rad: f32,
-    lat_deg: f64,
-    lon_deg: f64,
-) -> ([f32; 4], [f32; 4]) {
+/// Converts local-NED vehicle yaw into Full attitude plus identity mount.
+///
+/// Returns `(q_ev, q_bv)`, where `q_ev` maps vehicle frame to ECEF and `q_bv`
+/// maps vehicle frame to raw body frame. The mount is identity because only yaw
+/// and location are provided here; callers set a physical mount separately.
+pub fn full_vehicle_ecef_split(yaw_rad: f32, lat_deg: f64, lon_deg: f64) -> ([f32; 4], [f32; 4]) {
     let half_yaw = 0.5 * yaw_rad as f64;
     let q_ns = [cos_f64(half_yaw), 0.0, 0.0, sin_f64(half_yaw)];
-    let q_es = quat_mul_f64(quat_conj_f64(quat_ecef_to_ned_f64(lat_deg, lon_deg)), q_ns);
+    let q_ev = quat_mul_f64(quat_conj_f64(quat_ecef_to_ned_f64(lat_deg, lon_deg)), q_ns);
     (
         [
-            q_es[0] as f32,
-            q_es[1] as f32,
-            q_es[2] as f32,
-            q_es[3] as f32,
+            q_ev[0] as f32,
+            q_ev[1] as f32,
+            q_ev[2] as f32,
+            q_ev[3] as f32,
         ],
         [1.0, 0.0, 0.0, 0.0],
     )

@@ -19,7 +19,7 @@ use sim::synthetic::gnss_ins_path::{
 };
 use sim::visualizer::math::{ecef_to_ned, lla_to_ecef};
 use sim::visualizer::model::MountSourceMode;
-use sim::visualizer::pipeline::generic::reference_mount_rpy_to_q_vb;
+use sim::visualizer::pipeline::generic::reference_mount_rpy_to_q_bv;
 use sim::visualizer::pipeline::synthetic::{
     SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_plot_data,
 };
@@ -668,7 +668,7 @@ brake 0.6666667m/s^2 for 18s
     let full_roll = final_trace_value(require_trace(
         "full_misalignment",
         &data.full_misalignment,
-        "Full residual mount roll [deg]",
+        "Full mount roll [deg]",
     )?)?;
     assert!(
         (full_roll - 5.0).abs() < 0.02,
@@ -839,7 +839,7 @@ fn run_reduced_on_samples_configured(
     vel_std_mps: [f64; 3],
     configure: impl FnOnce(&mut SensorFusion),
 ) -> Result<ReducedSyntheticSummary> {
-    let q_truth = reference_mount_rpy_to_q_vb(mount_rpy_deg);
+    let q_truth = reference_mount_rpy_to_q_bv(mount_rpy_deg);
     let imu = imu_samples
         .iter()
         .map(|s| GenericImuSample {

@@ -15,7 +15,7 @@ use sim::synthetic::gnss_ins_path::{
     PathGenConfig, generate_with_noise,
 };
 use sim::visualizer::math::{ecef_to_ned, lla_to_ecef, quat_rpy_deg};
-use sim::visualizer::pipeline::generic::reference_mount_rpy_to_q_vb;
+use sim::visualizer::pipeline::generic::reference_mount_rpy_to_q_bv;
 
 const DIAG_GPS_VEL: usize = 1;
 const DIAG_BODY_VEL_Y: usize = 4;
@@ -316,7 +316,7 @@ fn prepare_scenario(args: &Args, scenario: &Path) -> Result<PreparedScenario> {
         noise,
         args.seed,
     )?;
-    let q_truth_mount = reference_mount_rpy_to_q_vb([
+    let q_truth_mount = reference_mount_rpy_to_q_bv([
         args.mount_roll_deg,
         args.mount_pitch_deg,
         args.mount_yaw_deg,
@@ -666,7 +666,7 @@ fn run_case(
     shift_ms: f64,
     early_vel_bias_ned_mps: [f64; 3],
 ) -> Result<SweepResult> {
-    let q_truth_mount = reference_mount_rpy_to_q_vb([
+    let q_truth_mount = reference_mount_rpy_to_q_bv([
         args.mount_roll_deg,
         args.mount_pitch_deg,
         args.mount_yaw_deg,

@@ -35,8 +35,8 @@ The same generic CSV parser is used by the native visualizer and the browser vis
 
 The visualizer uses a single `--misalignment` option:
 
-- `internal`: Align provides the initial mount seed, then Reduced EKF estimates residual mount states.
-- `external`: Reduced EKF continuously follows Align and freezes its residual mount states.
+- `internal`: Align provides the initial mount seed, then Reduced EKF estimates mount states.
+- `external`: Reduced EKF continuously follows Align and freezes its mount states.
 - `ref`: Reference mount angles are used when a synthetic or converted dataset provides them.
 
 Full EKF keeps its historical behavior: `external` is treated like `internal`, so Full uses the latched Align seed rather than continuously following Align.
@@ -135,7 +135,10 @@ instead of adding one-off CSV parsers or filter replay loops.
 
 ## Full EKF Diagnostics
 
-Full EKF accel and gyro diagnostic plots use the same pre-rotated IMU stream that is fed to the Full EKF. Reduced and Full mount plots use the current `qcs` mount quaternion directly, matching the convention used by the visualizer.
+Full EKF accel and gyro diagnostic plots use the same raw body-frame IMU stream
+that is fed through the public `sensor_fusion` API. Reduced and Full mount plots
+use the current `qcs` mount quaternion directly, where `qcs` stores the physical
+vehicle-to-body mount `q_bv`.
 
 The Full EKF accel-bias states are additive correction states:
 

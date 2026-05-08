@@ -1,14 +1,14 @@
 //! High-level IMU/GNSS fusion facade.
 //!
-//! `SensorFusion` owns mount alignment, local WGS84 anchoring, Reduced
+//! `SensorFusion` owns mount alignment, local WGS84 anchoring, Reduced/Full
 //! initialization, and runtime updates. Feed samples in timestamp order through
 //! `process_imu`, `process_gnss`, and optional vehicle-speed updates; query the
-//! latest initialized Reduced state and mount estimates from the accessors.
+//! latest initialized state and mount estimates from the accessors.
 //!
 //! The facade bridges the PDF formulations in `docs/`: align estimates the
-//! physical vehicle-to-body seed `q_vb`, and the runtime Reduced uses that mount
-//! inside inertial propagation so mount errors affect attitude and velocity
-//! dynamics directly.
+//! physical vehicle-to-body mount, and the runtime filters use that mount inside
+//! inertial propagation so mount errors affect attitude and velocity dynamics
+//! directly. Raw IMU samples stay in the IMU body frame at the public API.
 
 use crate::ProcessNoise;
 use crate::align::{Align, AlignConfig, AlignUpdateTrace, AlignWindowSummary, GRAVITY_MPS2};
@@ -63,8 +63,8 @@ pub struct SensorFusion {
     align_initialized: bool,
     align: Align,
     mount_ready: bool,
-    mount_q_vb: Option<[f32; 4]>,
-    reduced_mount_q_vb: Option<[f32; 4]>,
+    mount_q_bv: Option<[f32; 4]>,
+    reduced_mount_q_bv: Option<[f32; 4]>,
     align_ready_since_t_s: Option<f32>,
     reduced_mount_handoff_t_s: Option<f32>,
     mount_settle_released: bool,
@@ -100,9 +100,11 @@ impl SensorFusion {
     }
 
     /// Creates a fusion pipeline with a fixed external vehicle-to-body mount quaternion.
-    pub fn with_mount(q_vb: [f32; 4]) -> Self {
+    ///
+    /// The quaternion must satisfy `x_b = C_bv(q) x_v`.
+    pub fn with_mount(q_bv: [f32; 4]) -> Self {
         Self::with_config(Config {
-            mount_mode: MountMode::External(q_vb),
+            mount_mode: MountMode::External(q_bv),
             ..Config::default()
         })
     }
@@ -132,8 +134,8 @@ impl SensorFusion {
             align_initialized: false,
             align: Align::new(cfg.align),
             mount_ready: false,
-            mount_q_vb: None,
-            reduced_mount_q_vb: None,
+            mount_q_bv: None,
+            reduced_mount_q_bv: None,
             align_ready_since_t_s: None,
             reduced_mount_handoff_t_s: None,
             mount_settle_released: false,
@@ -161,8 +163,8 @@ impl SensorFusion {
             reanchor_count: 0,
             last_reanchor: None,
         };
-        if let MountMode::External(q_vb) = config.mount_mode {
-            out.set_misalignment(q_vb);
+        if let MountMode::External(q_bv) = config.mount_mode {
+            out.set_misalignment(q_bv);
         }
         out
     }
@@ -173,21 +175,23 @@ impl SensorFusion {
     }
 
     /// Replaces the current mount with a fixed external vehicle-to-body quaternion.
-    pub fn set_misalignment(&mut self, q_vb: [f32; 4]) {
+    ///
+    /// The quaternion must satisfy `x_b = C_bv(q) x_v`.
+    pub fn set_misalignment(&mut self, q_bv: [f32; 4]) {
         self.internal_align_enabled = false;
         self.mount_ready = true;
-        self.mount_q_vb = Some(q_vb);
-        self.reduced_mount_q_vb = Some(q_vb);
+        self.mount_q_bv = Some(q_bv);
+        self.reduced_mount_q_bv = Some(q_bv);
         self.align_ready_since_t_s = None;
         self.reduced_mount_handoff_t_s = None;
         self.mount_settle_released = false;
         self.last_reduced_gnss_fuse_t_s = None;
         self.last_full_gnss_fuse_t_s = None;
         let n = &mut self.reduced.raw_mut().nominal;
-        n.qcs0 = q_vb[0];
-        n.qcs1 = q_vb[1];
-        n.qcs2 = q_vb[2];
-        n.qcs3 = q_vb[3];
+        n.qcs0 = q_bv[0];
+        n.qcs1 = q_bv[1];
+        n.qcs2 = q_bv[2];
+        n.qcs3 = q_bv[3];
     }
 
     /// Replaces the Reduced prediction-noise configuration.
@@ -221,7 +225,7 @@ impl SensorFusion {
         self.align_initialized = false;
         self.align_ready_since_t_s = None;
         self.mount_ready = false;
-        self.mount_q_vb = None;
+        self.mount_q_bv = None;
         self.bootstrap_speed_ema = Ema::default();
         self.bootstrap_speed_rate_ema = Ema::default();
         self.bootstrap_course_rate_ema = Ema::default();
@@ -233,7 +237,7 @@ impl SensorFusion {
         self.last_full_gnss_fuse_t_s = None;
     }
 
-    /// Sets the nonholonomic body-velocity observation variance.
+    /// Sets the nonholonomic vehicle-frame velocity observation variance.
     pub fn set_r_body_vel(&mut self, r_body_vel: f32) {
         if r_body_vel.is_finite() && r_body_vel >= 0.0 {
             self.cfg.r_body_vel_y = r_body_vel;
@@ -241,8 +245,8 @@ impl SensorFusion {
         }
     }
 
-    /// Sets lateral and vertical nonholonomic body-velocity measurement
-    /// variances for the vehicle Y and Z axes.
+    /// Sets lateral and vertical nonholonomic vehicle-frame velocity
+    /// measurement variances for the vehicle Y and Z axes.
     pub fn set_r_body_vel_yz(&mut self, r_body_vel_y: f32, r_body_vel_z: f32) {
         if r_body_vel_y.is_finite() && r_body_vel_y >= 0.0 {
             self.cfg.r_body_vel_y = r_body_vel_y;
@@ -318,14 +322,14 @@ impl SensorFusion {
         }
     }
 
-    /// Enables or disables residual-mount state freezing in the Reduced.
+    /// Enables or disables mount-state freezing in the Reduced.
     pub fn set_freeze_misalignment_states(&mut self, freeze: bool) {
         self.cfg.freeze_misalignment_states = freeze;
         self.reduced
             .set_freeze_misalignment_states(self.effective_freeze_misalignment_states());
     }
 
-    /// Selects whether the Reduced uses a latched mount seed or follows the align filter.
+    /// Selects whether Reduced estimates mount after a latched seed or follows Align.
     pub fn set_mount_source(&mut self, source: MountSource) {
         self.cfg.mount_source = source;
         self.refresh_follow_align_mount_source();
@@ -333,7 +337,7 @@ impl SensorFusion {
             .set_freeze_misalignment_states(self.effective_freeze_misalignment_states());
     }
 
-    /// Sets a post-initialization delay before residual-mount states are released, in seconds.
+    /// Sets a post-initialization delay before mount states are released, in seconds.
     pub fn set_mount_settle_time_s(&mut self, mount_settle_time_s: f32) {
         if mount_settle_time_s.is_finite() && mount_settle_time_s >= 0.0 {
             self.cfg.mount_settle_time_s = mount_settle_time_s;
@@ -341,7 +345,7 @@ impl SensorFusion {
         }
     }
 
-    /// Sets the residual-mount uncertainty threshold for releasing mount-settle freezing.
+    /// Sets the mount uncertainty threshold for releasing mount-settle freezing.
     pub fn set_mount_settle_release_sigma_rad(&mut self, sigma_rad: f32) {
         if sigma_rad.is_finite() && sigma_rad >= 0.0 {
             self.cfg.mount_settle_release_sigma_rad = sigma_rad;
@@ -473,7 +477,7 @@ impl SensorFusion {
                 let (_score, trace) = self.align.update_window_with_trace(&summary);
                 self.last_align_window = Some(summary);
                 self.last_align_trace = Some(trace);
-                self.mount_q_vb = Some(self.align.q_vb);
+                self.mount_q_bv = Some(self.align.q_bv);
                 self.mount_ready =
                     self.align_handoff_ready(trace.coarse_alignment_ready, local.t_s);
                 self.refresh_follow_align_mount_source();
@@ -497,7 +501,7 @@ impl SensorFusion {
         }
 
         let reduced_initialized_now = if !self.reduced_initialized {
-            self.reduced_mount_q_vb = self.mount_q_vb;
+            self.reduced_mount_q_bv = self.mount_q_bv;
             self.initialize_reduced_from_gnss(local);
             self.reduced_initialized = true;
             self.reduced_mount_handoff_t_s = Some(local.t_s);
@@ -560,13 +564,17 @@ impl SensorFusion {
     }
 
     /// Returns the latest physical vehicle-to-body mount quaternion, if ready.
-    pub fn mount_q_vb(&self) -> Option<[f32; 4]> {
-        self.mount_q_vb
+    ///
+    /// The quaternion satisfies `x_b = C_bv(q) x_v`.
+    pub fn mount_q_bv(&self) -> Option<[f32; 4]> {
+        self.mount_q_bv
     }
 
     /// Returns the mount quaternion currently used by the Reduced propagation model.
-    pub fn reduced_mount_q_vb(&self) -> Option<[f32; 4]> {
-        self.reduced_mount_q_vb
+    ///
+    /// The quaternion satisfies `x_b = C_bv(q) x_v`.
+    pub fn reduced_mount_q_bv(&self) -> Option<[f32; 4]> {
+        self.reduced_mount_q_bv
     }
 
     /// Returns the current local-origin anchor `[lat_deg, lon_deg, height_m]` for diagnostics.
@@ -643,14 +651,14 @@ impl SensorFusion {
     }
 
     /// Diagnostic hook that directly sets the Reduced mount quaternion.
-    pub fn analysis_set_reduced_mount_quat(&mut self, q_vb: [f32; 4]) {
+    pub fn analysis_set_reduced_mount_quat(&mut self, q_bv: [f32; 4]) {
         if !self.reduced_initialized {
             return;
         }
         if self.cfg.mount_source == MountSource::FollowAlign {
             return;
         }
-        let mut q = q_vb;
+        let mut q = q_bv;
         normalize_quat_f32(&mut q);
         let n = &mut self.reduced.raw_mut().nominal;
         n.qcs0 = q[0];
@@ -698,14 +706,14 @@ impl SensorFusion {
         if self.cfg.mount_source != MountSource::FollowAlign {
             return;
         }
-        if let Some(q_vb) = self.mount_q_vb {
-            self.reduced_mount_q_vb = Some(q_vb);
+        if let Some(q_bv) = self.mount_q_bv {
+            self.reduced_mount_q_bv = Some(q_bv);
         }
         self.set_reduced_mount_to_current_source();
     }
 
     fn set_reduced_mount_to_current_source(&mut self) {
-        let q = self.reduced_mount_q_vb.unwrap_or([1.0, 0.0, 0.0, 0.0]);
+        let q = self.reduced_mount_q_bv.unwrap_or([1.0, 0.0, 0.0, 0.0]);
         let n = &mut self.reduced.raw_mut().nominal;
         n.qcs0 = q[0];
         n.qcs1 = q[1];
@@ -725,7 +733,7 @@ impl SensorFusion {
             reduced_initialized_now: self.cfg.filter == Filter::Reduced && filter_initialized_now,
             filter_initialized,
             filter_initialized_now,
-            mount_q_vb: self.mount_q_vb,
+            mount_q_bv: self.mount_q_bv,
         }
     }
 
@@ -749,11 +757,11 @@ impl SensorFusion {
         self.reduced
             .init_nominal_from_gnss(quat_from_yaw_f32(yaw), gnss);
         let raw = self.reduced.raw_mut();
-        if let Some(q_vb) = self.reduced_mount_q_vb.or(self.mount_q_vb) {
-            raw.nominal.qcs0 = q_vb[0];
-            raw.nominal.qcs1 = q_vb[1];
-            raw.nominal.qcs2 = q_vb[2];
-            raw.nominal.qcs3 = q_vb[3];
+        if let Some(q_bv) = self.reduced_mount_q_bv.or(self.mount_q_bv) {
+            raw.nominal.qcs0 = q_bv[0];
+            raw.nominal.qcs1 = q_bv[1];
+            raw.nominal.qcs2 = q_bv[2];
+            raw.nominal.qcs3 = q_bv[3];
         }
         raw.p[9][9] = sq_f32(self.cfg.gyro_bias_init_sigma_radps);
         raw.p[10][10] = raw.p[9][9];
@@ -787,7 +795,7 @@ impl SensorFusion {
         let pos_ecef = lla_to_ecef_f64(gnss.lat_deg, gnss.lon_deg, gnss.height_m);
         let vel_ecef = ned_vector_to_ecef_f32(gnss.lat_deg, gnss.lon_deg, gnss.vel_ned_mps);
         self.full = full::Filter::new(self.cfg.noise.full);
-        self.full.init_seeded_vehicle_from_nav_ecef_state(
+        self.full.init_vehicle_from_nav_ecef_state(
             yaw_rad,
             gnss.lat_deg,
             gnss.lon_deg,
@@ -800,7 +808,7 @@ impl SensorFusion {
             )),
             None,
         );
-        if let Some(seed_q) = self.mount_q_vb {
+        if let Some(seed_q) = self.mount_q_bv {
             self.full.set_mount_quat(seed_q);
         }
         self.full_initialized = true;
@@ -952,7 +960,7 @@ impl SensorFusion {
             ];
             if self.align.initialize_from_stationary(&[mean], 0.0).is_ok() {
                 self.align_initialized = true;
-                self.mount_q_vb = Some(self.align.q_vb);
+                self.mount_q_bv = Some(self.align.q_bv);
             }
         }
     }

@@ -15,10 +15,10 @@ fn align_stationary_bootstrap_and_update_are_stable() {
         .initialize_from_stationary(&accel_samples, 0.0)
         .expect("stationary init should succeed");
 
-    assert_close(align.q_vb[0], 1.0, 1.0e-6, "bootstrap q0");
-    assert_close(align.q_vb[1], 0.0, 1.0e-6, "bootstrap q1");
-    assert_close(align.q_vb[2], 0.0, 1.0e-6, "bootstrap q2");
-    assert_close(align.q_vb[3], 0.0, 1.0e-6, "bootstrap q3");
+    assert_close(align.q_bv[0], 1.0, 1.0e-6, "bootstrap q0");
+    assert_close(align.q_bv[1], 0.0, 1.0e-6, "bootstrap q1");
+    assert_close(align.q_bv[2], 0.0, 1.0e-6, "bootstrap q2");
+    assert_close(align.q_bv[3], 0.0, 1.0e-6, "bootstrap q3");
 
     let window = AlignWindowSummary {
         dt: 0.1,

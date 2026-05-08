@@ -234,6 +234,6 @@ fn internal_alignment_bootstraps_mount_estimate() {
         });
     }
     let _ = system.process_gnss(stationary_gnss_sample(1.2));
-    assert!(system.mount_q_vb().is_some());
+    assert!(system.mount_q_bv().is_some());
     assert!(system.align().is_some());
 }

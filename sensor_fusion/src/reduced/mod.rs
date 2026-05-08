@@ -4,6 +4,12 @@
 //! The runtime filter is [`Filter`]. Public structs in this module define the
 //! generated-code and diagnostics data layout. Focused state-operation helpers
 //! live under [`crate::reduced::state_ops`].
+//!
+//! Reduced follows the same mount-in-propagation convention as [`crate::full`]:
+//! raw IMU deltas are expressed in body frame `b`; `qcs0..qcs3` store the
+//! physical vehicle-to-body mount; propagation rotates body increments into the
+//! vehicle frame; and the attitude quaternion maps vehicle frame `v` into local
+//! NED `n`.
 
 use libm::{fabsf, sqrtf};
 
@@ -37,7 +43,7 @@ const BODY_VEL_Y_SUPPORT: [usize; 8] = [0, 1, 2, 3, 4, 5, 15, 17];
 const BODY_VEL_Z_SUPPORT: [usize; 8] = [0, 1, 2, 3, 4, 5, 15, 16];
 const MAX_BATCH_OBS: usize = 8;
 
-/// Rust Reduced state machine with covariance and residual mount-control policy.
+/// Rust Reduced state machine with covariance and mount-control policy.
 #[derive(Debug, Clone)]
 pub struct Filter {
     raw: State,
@@ -109,15 +115,17 @@ impl Filter {
         self.freeze_misalignment_states
     }
 
-    /// Initializes nominal attitude, velocity, and position from a GNSS sample.
-    pub fn init_nominal_from_gnss(&mut self, q_bn: [f32; 4], gnss: GnssSample) {
+    /// Initializes nominal vehicle attitude, velocity, and position from GNSS.
+    ///
+    /// `q_nv` maps vehicle-frame vectors into the local NED frame.
+    pub fn init_nominal_from_gnss(&mut self, q_nv: [f32; 4], gnss: GnssSample) {
         const DEFAULT_GYRO_BIAS_SIGMA_DPS: f32 = 0.125;
         const DEFAULT_ACCEL_BIAS_SIGMA_MPS2: f32 = 0.15;
 
-        self.raw.nominal.q0 = q_bn[0];
-        self.raw.nominal.q1 = q_bn[1];
-        self.raw.nominal.q2 = q_bn[2];
-        self.raw.nominal.q3 = q_bn[3];
+        self.raw.nominal.q0 = q_nv[0];
+        self.raw.nominal.q1 = q_nv[1];
+        self.raw.nominal.q2 = q_nv[2];
+        self.raw.nominal.q3 = q_nv[3];
         self.raw.nominal.vn = gnss.vel_ned_mps[0];
         self.raw.nominal.ve = gnss.vel_ned_mps[1];
         self.raw.nominal.vd = gnss.vel_ned_mps[2];
@@ -170,7 +178,7 @@ impl Filter {
         }
     }
 
-    /// Predicts nominal state and covariance from one IMU delta.
+    /// Predicts nominal state and covariance from one raw body-frame IMU delta.
     pub fn predict(&mut self, imu: ImuDelta) {
         if imu.dt <= 0.0 || !imu.dt.is_finite() {
             return;
@@ -372,13 +380,17 @@ impl Filter {
         self.fuse_gps_vel_d_impl(0.0, r_zero_vel, true);
     }
 
-    /// Applies stationary gravity pseudo-measurements from body-frame acceleration.
-    pub fn fuse_stationary_gravity(&mut self, accel_body_mps2: [f32; 3], r_stationary_accel: f32) {
-        self.fuse_stationary_gravity_x(accel_body_mps2[0], r_stationary_accel);
-        self.fuse_stationary_gravity_y(accel_body_mps2[1], r_stationary_accel);
+    /// Applies stationary gravity pseudo-measurements from vehicle-frame acceleration.
+    pub fn fuse_stationary_gravity(
+        &mut self,
+        accel_vehicle_mps2: [f32; 3],
+        r_stationary_accel: f32,
+    ) {
+        self.fuse_stationary_gravity_x(accel_vehicle_mps2[0], r_stationary_accel);
+        self.fuse_stationary_gravity_y(accel_vehicle_mps2[1], r_stationary_accel);
     }
 
-    /// Fuses forward vehicle speed as a body-frame X velocity observation.
+    /// Fuses forward vehicle speed as a vehicle-frame X velocity observation.
     pub fn fuse_body_speed_x(&mut self, speed_mps: f32, r_speed: f32) {
         let obs = generated::body_vel_x_observation(&self.raw.nominal, &self.raw.p, r_speed);
         let v_vehicle = nominal_vehicle_velocity(&self.raw.nominal);
@@ -390,12 +402,12 @@ impl Filter {
         self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
-    /// Fuses lateral and vertical nonholonomic body-velocity constraints.
+    /// Fuses lateral and vertical nonholonomic vehicle-frame velocity constraints.
     pub fn fuse_body_vel(&mut self, r_body_vel: f32) {
         self.fuse_body_vel_yz(r_body_vel, r_body_vel);
     }
 
-    /// Fuses lateral and vertical nonholonomic body-velocity constraints with
+    /// Fuses lateral and vertical nonholonomic vehicle-frame velocity constraints with
     /// separate measurement variances for the vehicle Y and Z axes.
     pub fn fuse_body_vel_yz(&mut self, r_body_vel_y: f32, r_body_vel_z: f32) {
         self.fuse_body_vel_yz_batch(r_body_vel_y, r_body_vel_z);

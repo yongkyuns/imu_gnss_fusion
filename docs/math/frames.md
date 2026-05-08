@@ -15,10 +15,8 @@ Quick reference:
 | --- | --- |
 | `n` | Local NED navigation frame: north, east, down. |
 | `e` | ECEF frame used by the Full filter. |
-| `b` | Raw IMU body frame. |
-| `v` | Physical vehicle frame, FRD: forward, right, down. |
-| `s` | Seeded frame after raw IMU samples are pre-rotated by the coarse mount. |
-| `c` | Corrected vehicle frame after residual mount `q_cs`. |
+| `b` | Raw IMU body/sensor frame. Public IMU samples are expressed here. |
+| `v` | Physical vehicle frame, FRD: forward, right, down. Vehicle speed and NHC are expressed here. |
 
 Project math notes use active rotations:
 
@@ -27,6 +25,24 @@ x_a = C_ab x_b
 C(q1 * q2) = C(q1) C(q2)
 ```
 
-The align mount `q_vb` is the physical vehicle-to-body seed. Reduced and full
-consume IMU samples already rotated by that seed and carry residual mount
-quaternions `q_cs` for seeded-to-corrected vehicle-frame constraints.
+The align mount, the Reduced `qcs0..qcs3` fields, and the Full `qcs0..qcs3`
+fields all represent the same physical vehicle-to-body mount. The generated
+state field name `qcs` is retained for layout compatibility, but its DCM is
+used as `C_bv`:
+
+```text
+x_b = C_bv(q_mount) x_v
+x_v = C_bv(q_mount)^T x_b
+```
+
+Reduced and Full both consume raw body-frame IMU samples and rotate them into
+the vehicle frame during propagation. Reduced attitude `q0..q3` is `q_nv`
+(vehicle to local NED). Full attitude `q0..q3` is `q_ev` (vehicle to ECEF).
+NHC uses vehicle-frame velocity:
+
+```text
+Reduced: v_v = C_nv^T v_n
+Full:    v_v = C_ev^T v_e
+```
+
+Do not introduce a separate "car" frame in code or docs; use `vehicle`/`v`.

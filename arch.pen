@@ -918,7 +918,7 @@
                   "fill": "#536174",
                   "textGrowth": "fixed-width",
                   "width": 220,
-                  "content": "stationary bootstrap\nGNSS-window mount q_vb",
+                  "content": "stationary bootstrap\nGNSS-window mount q_bv",
                   "lineHeight": 1.35,
                   "fontFamily": "Inter",
                   "fontSize": 12,

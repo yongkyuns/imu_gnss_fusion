@@ -78,11 +78,10 @@ fn is_full_trace_name(name: &str) -> bool {
     name.starts_with("Full")
         || name.contains(" Full")
         || name.contains("full")
-        || name.contains("residual mount")
+        || name.contains("mount")
 }
 
 pub(super) fn display_filter_trace_name(name: &str) -> String {
-    name.replace("Full residual mount", "Full mount")
-        .replace("Full", FULL_FILTER_LABEL)
+    name.replace("Full", FULL_FILTER_LABEL)
         .replace("Reduced", REDUCED_FILTER_LABEL)
 }
