@@ -12,7 +12,7 @@
 The project is useful for:
 
 - 📊 replaying hardware-agnostic IMU/GNSS CSV datasets,
-- 🧭 comparing align, loose INS/GNSS, and augmented ESKF behavior,
+- 🧭 comparing Align, Full EKF, and Reduced EKF behavior,
 - 🧪 generating synthetic trajectories for repeatable mount-angle experiments,
 - ✅ validating generated Kalman-model code against focused Rust tests.
 
@@ -20,11 +20,61 @@ The project is useful for:
 
 | Path | Purpose |
 | --- | --- |
-| `ekf/` | `sensor-fusion` library crate. Contains align, loose, ESKF, generated model code, and filter API tests. |
+| `sensor_fusion/` | `sensor_fusion` library crate. Contains Align, Full EKF, Reduced EKF, generated model code, and filter API tests. |
 | `sim/` | Replay, simulation, evaluation, diagnostics, and egui visualizer crate. |
 | `docs/` | Project documentation, math PDFs/TEX sources, and test guidance. |
 | `web/` | Static browser host for the wasm visualizer. |
 | `mobile/ios/` | Experimental iOS sensor collection app. |
+
+## 🧩 Module Overview
+
+The workspace is split so the embedded filter library is independent from
+offline tooling and visualization.
+
+### `sensor_fusion` crate (`sensor_fusion/src`)
+
+| Module | Role |
+| --- | --- |
+| `SensorFusion` | Public facade for timestamped IMU, GNSS, and optional vehicle-speed samples. Owns Align, local anchoring, Reduced initialization, and accessors used by apps. |
+| `align` | Standalone mount-alignment estimator from stationary gravity, GNSS-derived motion, turn-rate cues, and NHC-style constraints. |
+| `reduced` | Reduced EKF runtime, process-noise configuration, public state/sample/diagnostic structs, and focused state helpers. |
+| `full` | Full-state ECEF EKF used for comparison, diagnostics, and formulation experiments. |
+| `math`, `nav`, `covariance`, generated wrappers | Internal reusable quaternion/vector math, WGS84/ECEF helpers, sparse covariance propagation, and generated symbolic model glue. |
+
+Symbolic model sources live next to the Rust crate:
+
+| Path | Role |
+| --- | --- |
+| `sensor_fusion/reduced.py` | SymPy source for Reduced generated Rust. |
+| `sensor_fusion/ins_gnss_full.py` | SymPy source for Full generated Rust. |
+| `sensor_fusion/code_gen.py` | Shared Python code-generation helpers. |
+
+### `sim` crate (`sim/src`)
+
+| Module | Role |
+| --- | --- |
+| `datasets` | Generic replay CSV parsers, synthetic replay parsers, and seeded Full fixture loaders. |
+| `eval` | Replay ordering, trace lookup helpers, quaternion/math utilities, state summaries, and evaluation config snapshots. |
+| `synthetic` | Rust-native motion DSL, trajectory generation, IMU/GNSS noise injection, and synthetic truth/measured sample generation. |
+| `visualizer` | Shared native/web visualization model, replay pipelines, map/stat helpers, theme, UI modules, and background replay jobs. |
+| `bin/*` | CLI tools for visualization, dataset export, diagnostics, runtime benchmarking, and focused filter investigations. |
+
+The visualizer UI is intentionally modular:
+
+| Module | Role |
+| --- | --- |
+| `visualizer/ui/controls` | Always-visible top controls, web input selection, trace toggles, and run controls. |
+| `visualizer/ui/pages` | Overview, motion, mount, calibration, sensors, and diagnostics page composition. |
+| `visualizer/ui/plots` | Reusable plot sections, foldable overview tiles, shared cursor, log axes, and decimation. |
+| `visualizer/ui/maps` | Map tile providers, map overlays, markers, arrows, and synthetic local-trajectory drawing. |
+| `visualizer/ui/inspector` | Hover-window update allocation and covariance/residual inspector views. |
+| `visualizer/ui/tuning` | Align, Reduced, and Full tuning panels. |
+| `visualizer/ui/web` | Browser-only manifest loading, drag/drop CSV loading, worker orchestration, and synthetic web inputs. |
+| `visualizer/ui/runtime` | App construction, replay refresh, theme initialization, and egui frame update. |
+| `visualizer/ui/state`, `trace_query`, `colors`, `orthogonal`, `windows` | Shared UI state, trace sampling/classification, color policy, angle popups, and floating windows. |
+
+See [docs/README.md](docs/README.md) for the complete documentation index and
+[sim/README.md](sim/README.md) for the command-line tool map.
 
 ## 🗺️ Architecture
 
@@ -39,10 +89,14 @@ The main replay path is:
 1. Data enters as hardware-agnostic `imu.csv` and `gnss.csv`, or as a synthetic scenario generated inside `sim`.
 2. `sim::datasets` converts CSV rows into timestamped IMU/GNSS samples.
 3. `sim::eval::replay` merges IMU and GNSS events in a consistent time order.
-4. `sensor-fusion` runs the align, loose, and ESKF estimators.
+4. `sensor_fusion` runs the Align, Full EKF, and Reduced EKF estimators.
 5. `sim::visualizer` displays traces, map data, mount states, diagnostics, and summary statistics.
 
-The runtime Rust filter code consumes generated matrix/Jacobian snippets under `ekf/src/generated_eskf/` and `ekf/src/generated_loose/`. The symbolic sources live in Python so model derivation stays reviewable while generated Rust stays fast and dependency-light.
+The runtime Rust filter code consumes generated matrix/Jacobian snippets under `sensor_fusion/src/generated_reduced/` and `sensor_fusion/src/generated_full/`. The symbolic sources live in Python so model derivation stays reviewable while generated Rust stays fast and dependency-light.
+
+Plots, controls, modules, binaries, and generated-code paths consistently use
+**Reduced** for the reduced-state local-NED EKF and **Full** for the full-state
+ECEF EKF.
 
 ## 🚀 Quick Start
 
@@ -88,8 +142,8 @@ The visualizer and primary A/B analyzers use `--misalignment` to select the moun
 
 | Mode | Behavior |
 | --- | --- |
-| `internal` | Align seeds the mount angle; ESKF then estimates residual mount states. |
-| `external` | ESKF continuously follows Align and freezes its residual mount states. |
+| `internal` | Align seeds the mount angle; Reduced EKF then estimates residual mount states. |
+| `external` | Reduced EKF continuously follows Align and freezes its residual mount states. |
 | `ref` | Uses reference mount angles when available in synthetic or converted data. |
 
 See [sim/README.md](sim/README.md) for the current tool map.
@@ -110,7 +164,7 @@ t_s,gx_radps,gy_radps,gz_radps,ax_mps2,ay_mps2,az_mps2
 t_s,lat_deg,lon_deg,height_m,vn_mps,ve_mps,vd_mps,pos_std_n_m,pos_std_e_m,pos_std_d_m,vel_std_n_mps,vel_std_e_mps,vel_std_d_mps,heading_rad
 ```
 
-`heading_rad` may be `NaN` when heading is unavailable. Producers include `export_gnss_ins_sim_generic`; hardware-specific converters should live outside this repository and emit this schema.
+`heading_rad` may be `NaN` when heading is unavailable. Producers include `export_synthetic_replay_generic`; hardware-specific converters should live outside this repository and emit this schema.
 
 Replay directories can also include optional reference traces used only for evaluation and visualization:
 
@@ -125,8 +179,8 @@ Attitude and mount reference CSVs use `t_s,roll_deg,pitch_deg,yaw_deg`. Position
 Example conversions:
 
 ```bash
-cargo run --release -p sim --bin export_gnss_ins_sim_generic -- \
-  /path/to/gnss-ins-sim/output /tmp/replay \
+cargo run --release -p sim --bin export_synthetic_replay_generic -- \
+  /path/to/synthetic-export/output /tmp/replay \
   --signal-source meas
 ```
 
@@ -147,22 +201,22 @@ reference_attitude.csv.gz  # optional
 reference_mount.csv.gz     # optional
 ```
 
-`scripts/package_dataset.py` can stage an existing generic replay directory or call `export_gnss_ins_sim_generic` for `gnss-ins-sim` output. Raw `.bin` logs are intentionally not supported in this repository because device-specific parsing belongs outside the hardware-agnostic replay boundary.
+`scripts/package_dataset.py` can stage an existing generic replay directory or call `export_synthetic_replay_generic` for synthetic-export output. Raw `.bin` logs are intentionally not supported in this repository because device-specific parsing belongs outside the hardware-agnostic replay boundary.
 
 ## ⚙️ Generated-Code Workflow
 
-Generated Rust files are checked in and included by `ekf/src/generated_eskf.rs` and `ekf/src/generated_loose.rs`.
+Generated Rust files are checked in and included by `sensor_fusion/src/generated_reduced.rs` and `sensor_fusion/src/generated_full.rs`.
 
-Regenerate ESKF model code after changing `ekf/eskf.py`:
+Regenerate Reduced EKF model code after changing `sensor_fusion/reduced.py`:
 
 ```bash
-python ekf/eskf.py --emit-rust
+python sensor_fusion/reduced.py --emit-rust
 ```
 
-Regenerate loose-reference model code after changing `ekf/ins_gnss_loose.py`:
+Regenerate Full EKF model code after changing `sensor_fusion/ins_gnss_full.py`:
 
 ```bash
-python ekf/ins_gnss_loose.py --emit-rust
+python sensor_fusion/ins_gnss_full.py --emit-rust
 ```
 
 After regeneration, review the generated diffs and run targeted tests from [docs/testing.md](docs/testing.md).
@@ -172,7 +226,7 @@ After regeneration, review the generated diffs and run targeted tests from [docs
 Common local checks:
 
 ```bash
-cargo test -p sensor-fusion --locked
+cargo test -p sensor_fusion --locked
 cargo test -p sim --locked
 cargo test --workspace --locked
 ```
@@ -184,12 +238,16 @@ See [docs/testing.md](docs/testing.md) for focused test groups, fixtures, and ex
 - [docs/README.md](docs/README.md): documentation index.
 - [docs/testing.md](docs/testing.md): testing workflow.
 - [docs/math/frames.md](docs/math/frames.md): frame and quaternion conventions.
-- [docs/math/loose.md](docs/math/loose.md): loose INS/GNSS operational links.
+- [docs/math/full.md](docs/math/full.md): Full EKF operational links.
 - [docs/mount_in_propagation_revision.pdf](docs/mount_in_propagation_revision.pdf): before/after derivation for the mount-in-propagation revision.
-- [docs/eskf_mount_formulation.pdf](docs/eskf_mount_formulation.pdf): detailed ESKF mount formulation.
+- [docs/reduced_mount_formulation.pdf](docs/reduced_mount_formulation.pdf): detailed Reduced EKF mount formulation.
 - [docs/align_nhc_formulation.pdf](docs/align_nhc_formulation.pdf): detailed Align/NHC formulation.
-- [docs/loose_formulation.pdf](docs/loose_formulation.pdf): detailed loose INS/GNSS formulation.
+- [docs/full_formulation.pdf](docs/full_formulation.pdf): detailed Full EKF formulation.
 
 ## 📄 License
 
 MIT. See [LICENSE](LICENSE).
+
+## 🙏 References
+
+This project references `gnss-ins-sim` for synthetic IMU/GNSS data generation concepts and `open-aided-navigation` for loosely coupled Full EKF formulation concepts. These projects are references only; this repository does not vendor or depend on their source code.

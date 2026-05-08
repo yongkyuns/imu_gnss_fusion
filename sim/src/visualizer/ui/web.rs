@@ -11,8 +11,8 @@ use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{ErrorEvent, MessageEvent, Worker, WorkerOptions, WorkerType};
 
-use crate::visualizer::model::{EkfImuSource, PlotData};
-use crate::visualizer::pipeline::{EkfCompareConfig, GnssOutageConfig};
+use crate::visualizer::model::{MountSourceMode, PlotData};
+use crate::visualizer::pipeline::{FilterCompareConfig, GnssOutageConfig};
 use crate::visualizer::stats::map_center_from_traces;
 use crate::visualizer::theme::UiTheme;
 
@@ -77,7 +77,7 @@ pub(super) struct WebDatasetState {
     pub(super) loading_dataset: bool,
     pub(super) loading_replay: bool,
     pub(super) replay_job_id: u64,
-    pub(super) replay_cfg: EkfCompareConfig,
+    pub(super) replay_cfg: FilterCompareConfig,
     pub(super) pending: Rc<RefCell<Option<WebDatasetTaskResult>>>,
     pub(super) pending_replay: Rc<RefCell<Option<WebReplayTaskResult>>>,
     pub(super) replay_worker: Option<Worker>,
@@ -153,7 +153,7 @@ impl WebDatasetState {
             loading_dataset: false,
             loading_replay: false,
             replay_job_id: 0,
-            replay_cfg: EkfCompareConfig::default(),
+            replay_cfg: FilterCompareConfig::default(),
             pending: Rc::new(RefCell::new(None)),
             pending_replay: Rc::new(RefCell::new(None)),
             replay_worker: None,
@@ -282,8 +282,8 @@ fn csv_time_span_s(csv: &str) -> f64 {
 pub(super) fn web_replay_worker_request(
     job_id: u64,
     job: &WebReplayWorkerJob,
-    misalignment: EkfImuSource,
-    ekf_cfg: EkfCompareConfig,
+    misalignment: MountSourceMode,
+    filter_cfg: FilterCompareConfig,
     gnss_outages: GnssOutageConfig,
 ) -> Object {
     let request = Object::new();
@@ -441,7 +441,7 @@ pub(super) fn web_replay_worker_request(
     let _ = Reflect::set(
         &request,
         &JsValue::from_str("ekfCfg"),
-        &serde_wasm_bindgen::to_value(&ekf_cfg).unwrap_or(JsValue::NULL),
+        &serde_wasm_bindgen::to_value(&filter_cfg).unwrap_or(JsValue::NULL),
     );
     let _ = Reflect::set(
         &request,
@@ -797,16 +797,17 @@ impl WebSyntheticScenario {
                 "figure8_roll_excitation_builtin.scenario",
                 FIGURE_EIGHT_ROLL_EXCITATION_SCENARIO,
             ),
-            Self::StraightAccelBrake => {
-                ("straight_accel_brake_builtin.csv", STRAIGHT_ACCEL_BRAKE_CSV)
-            }
+            Self::StraightAccelBrake => (
+                "straight_accel_brake_builtin.scenario",
+                STRAIGHT_ACCEL_BRAKE_SCENARIO,
+            ),
         }
     }
 
     pub(super) fn early_fault(self) -> ([f64; 3], Option<[f64; 2]>) {
         match self {
             Self::FigureEightEarlyVelocityFault | Self::FigureEightRollExcitation => {
-                ([0.5, 0.0, 0.0], Some([0.0, 360.0]))
+                ([0.5, 0.0, 0.0], Some([120.0, 360.0]))
             }
             Self::CityBlocks | Self::FigureEight | Self::StraightAccelBrake => {
                 ([0.0, 0.0, 0.0], None)
@@ -818,10 +819,41 @@ impl WebSyntheticScenario {
 impl WebSyntheticNoise {
     pub(super) fn display_label(self) -> &'static str {
         match self {
-            Self::Truth => "Truth",
-            Self::Low => "Low",
-            Self::Mid => "Mid",
-            Self::High => "High",
+            Self::Truth => "None",
+            Self::Low => "Low noise",
+            Self::Mid => "Mid noise",
+            Self::High => "High noise",
+        }
+    }
+
+    pub(super) fn tooltip(self) -> &'static str {
+        match self {
+            Self::Truth => {
+                "None\n\
+                 IMU and GNSS are exact generated measurements.\n\
+                 Use this to isolate filter formulation from sensor noise."
+            }
+            Self::Low => {
+                "Low noise\n\
+                 IMU: gyro ARW 0.05 deg/sqrt(hr), gyro bias drift 1 deg/hr\n\
+                 IMU: accel VRW 0.015 m/s/sqrt(hr), accel bias drift 0.0002 m/s^2\n\
+                 GNSS: position sigma 0.8 m horizontal, 1.2 m vertical\n\
+                 GNSS: velocity sigma 0.03 m/s horizontal, 0.05 m/s vertical"
+            }
+            Self::Mid => {
+                "Mid noise, consumer-grade reference point\n\
+                 IMU: gyro ARW 0.3 deg/sqrt(hr), gyro bias drift 10 deg/hr\n\
+                 IMU: accel VRW 0.05 m/s/sqrt(hr), accel bias drift 0.001 m/s^2\n\
+                 GNSS: position sigma 3 m horizontal, 5 m vertical\n\
+                 GNSS: velocity sigma 0.10 m/s horizontal, 0.15 m/s vertical"
+            }
+            Self::High => {
+                "High noise\n\
+                 IMU: gyro ARW 1.0 deg/sqrt(hr), gyro bias drift 30 deg/hr\n\
+                 IMU: accel VRW 0.12 m/s/sqrt(hr), accel bias drift 0.005 m/s^2\n\
+                 GNSS: position sigma 8 m horizontal, 12 m vertical\n\
+                 GNSS: velocity sigma 0.30 m/s horizontal, 0.50 m/s vertical"
+            }
         }
     }
 
@@ -859,7 +891,7 @@ initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
 wait 60s
 accelerate 0.6m/s^2 for 20s
 wait 10s
-repeat 24 {
+repeat 11 {
     turn left 10dps for 36s
     turn right 10dps for 36s
 }
@@ -871,7 +903,7 @@ initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
 wait 60s
 accelerate 0.6m/s^2 for 20s
 wait 10s
-repeat 24 {
+repeat 11 {
     drive yaw=10 roll=0.25 for=18s
     drive yaw=10 roll=-0.25 for=18s
     drive yaw=-10 roll=-0.25 for=18s
@@ -880,18 +912,15 @@ repeat 24 {
 brake 0.6666667m/s^2 for 18s
 "#;
 
-const STRAIGHT_ACCEL_BRAKE_CSV: &str = r#"ini lat (deg),ini lon (deg),ini alt (m),ini vx_body (m/s),ini vy_body (m/s),ini vz_body (m/s),ini yaw (deg),ini pitch (deg),ini roll (deg)
-32,120,0,0,0,0,0,0,0
-command type,yaw (deg),pitch (deg),roll (deg),vx_body (m/s),vy_body (m/s),vz_body (m/s),command duration (s),GNSS visibility
-1,0,0,0,0,0,0,20,1
-1,0,0,0,0.5,0,0,20,1
-1,0,0,0,0,0,0,20,1
-1,0,0,0,-0.5,0,0,20,1
-1,0,0,0,0,0,0,15,1
-1,0,0,0,0.5,0,0,20,1
-1,0,0,0,0,0,0,20,1
-1,0,0,0,-0.5,0,0,20,1
-1,0,0,0,0,0,0,15,1
+const STRAIGHT_ACCEL_BRAKE_SCENARIO: &str = r#"
+initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
+wait 20s
+repeat 2 {
+    accelerate 0.5m/s^2 for 20s
+    wait 20s
+    brake 0.5m/s^2 for 20s
+    wait 15s
+}
 "#;
 
 pub(super) fn draw_web_run_button(
@@ -1111,7 +1140,7 @@ impl App {
                         Ok(data) => {
                             let is_synthetic = output.source == "synthetic";
                             self.data = data;
-                            self.map_center = map_center_from_traces(&self.data.eskf_map);
+                            self.map_center = map_center_from_traces(&self.data.reduced_map);
                             self.has_itow = false;
                             self.data_origin = if is_synthetic {
                                 DataOrigin::Synthetic

@@ -2,13 +2,13 @@
 
 use eframe::egui;
 
-use crate::visualizer::model::EkfImuSource;
-use crate::visualizer::pipeline::{EkfCompareConfig, GnssOutageConfig};
+use crate::visualizer::model::MountSourceMode;
+use crate::visualizer::pipeline::{FilterCompareConfig, GnssOutageConfig};
 
 use super::App;
 use super::inspector::{render_update_inspector_contents, update_inspector_view_model};
 use super::state::TuningPanel;
-use super::tuning::{draw_align_tuning, draw_eskf_tuning, draw_loose_tuning};
+use super::tuning::{draw_align_tuning, draw_full_tuning, draw_reduced_tuning};
 
 impl App {
     pub(super) fn draw_tuning_window(&mut self, ctx: &egui::Context) {
@@ -18,9 +18,9 @@ impl App {
         let mut open = true;
         let mut apply_replay = false;
         let title = match panel {
-            TuningPanel::Eskf => "ESKF Tuning",
+            TuningPanel::Reduced => "Reduced Tuning",
             TuningPanel::Align => "Align Tuning",
-            TuningPanel::Loose => "Loose Tuning",
+            TuningPanel::Full => "Full Tuning",
         };
         egui::Window::new(title)
             .open(&mut open)
@@ -28,19 +28,19 @@ impl App {
             .default_width(620.0)
             .show(ctx, |ui| {
                 match panel {
-                    TuningPanel::Eskf => {
-                        draw_eskf_tuning(ui, &mut self.tuning_misalignment, &mut self.tuning_cfg)
+                    TuningPanel::Reduced => {
+                        draw_reduced_tuning(ui, &mut self.tuning_misalignment, &mut self.tuning_cfg)
                     }
                     TuningPanel::Align => draw_align_tuning(ui, &mut self.tuning_cfg),
-                    TuningPanel::Loose => draw_loose_tuning(ui, &mut self.tuning_cfg),
+                    TuningPanel::Full => draw_full_tuning(ui, &mut self.tuning_cfg),
                 }
                 ui.separator();
                 ui.horizontal_wrapped(|ui| {
                     if ui.button("Reset section defaults").clicked() {
-                        let defaults = EkfCompareConfig::default();
+                        let defaults = FilterCompareConfig::default();
                         match panel {
-                            TuningPanel::Eskf => {
-                                self.tuning_misalignment = EkfImuSource::Internal;
+                            TuningPanel::Reduced => {
+                                self.tuning_misalignment = MountSourceMode::Internal;
                                 self.tuning_gnss_outages = GnssOutageConfig::default();
                                 self.tuning_cfg.r_body_vel = defaults.r_body_vel;
                                 self.tuning_cfg.r_body_vel_z = defaults.r_body_vel_z;
@@ -80,9 +80,9 @@ impl App {
                             TuningPanel::Align => {
                                 self.tuning_cfg.align = defaults.align;
                             }
-                            TuningPanel::Loose => {
-                                self.tuning_cfg.loose_predict_noise = defaults.loose_predict_noise;
-                                self.tuning_cfg.loose_init = defaults.loose_init;
+                            TuningPanel::Full => {
+                                self.tuning_cfg.full_predict_noise = defaults.full_predict_noise;
+                                self.tuning_cfg.full_init = defaults.full_init;
                             }
                         }
                     }

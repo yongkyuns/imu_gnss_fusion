@@ -19,7 +19,7 @@ cargo build --workspace --locked
 Run focused crate tests:
 
 ```bash
-cargo test -p sensor-fusion --locked
+cargo test -p sensor_fusion --locked
 cargo test -p sim --locked
 ```
 
@@ -27,25 +27,25 @@ Run one integration test target:
 
 ```bash
 cargo test -p sim --test synthetic_gnss_ins --locked
-cargo test -p sim --test loose_parity --locked
-cargo test -p sensor-fusion --test fusion_api --locked
-cargo test -p sensor-fusion --test nhc_eskf_loose_equivalence --locked
+cargo test -p sim --test full_parity --locked
+cargo test -p sensor_fusion --test fusion_api --locked
+cargo test -p sensor_fusion --test nhc_reduced_full_equivalence --locked
 ```
 
 ## Test Coverage Map
 
 | Area | Tests | What they protect |
 | --- | --- | --- |
-| Filter APIs | `ekf/tests/fusion_api.rs`, `align_api.rs`, `eskf_state_ops.rs` | Public API behavior, state initialization, and basic update contracts. |
-| ESKF/loose NHC equivalence | `ekf/tests/nhc_eskf_loose_equivalence.rs` | Generated ESKF and loose NHC rows, update math, transition blocks, and common covariance propagation after the attitude-basis transform. |
-| Loose observability | `ekf/tests/loose_mount_observability.rs`, `sim/tests/loose_parity.rs` | Loose mount behavior and parity with prepared seeded replay fixtures. |
-| Synthetic replay | `sim/tests/synthetic_gnss_ins.rs` | Synthetic path generation, ESKF convergence, visualizer trace population, and optional `gnss-ins-sim` parity. |
+| Filter APIs | `sensor_fusion/tests/fusion_api.rs`, `align_api.rs`, `reduced_state_ops.rs` | Public API behavior, state initialization, and basic update contracts. |
+| Reduced/Full NHC equivalence | `sensor_fusion/tests/nhc_reduced_full_equivalence.rs` | Generated Reduced and Full NHC rows, update math, transition blocks, and common covariance propagation after the attitude-basis transform. |
+| Full observability | `sensor_fusion/tests/full_mount_observability.rs`, `sim/tests/full_parity.rs` | Full EKF mount behavior and parity with prepared seeded replay fixtures. |
+| Synthetic replay | `sim/tests/synthetic_gnss_ins.rs` | Synthetic path generation, Reduced EKF convergence, visualizer trace population, and checked-in replay fixtures. |
 | Generic replay | `sim/src/datasets/generic_replay.rs`, `sim/tests/synthetic_gnss_ins.rs` | Hardware-agnostic CSV schema loading and visualizer trace population. |
 | Dataset packaging | `scripts/tests/test_package_dataset.py` | Hosted-data manifest generation, deterministic gzip staging, and raw binary rejection. |
 
-## ESKF/Loose Equivalence Diagnostics
+## Reduced/Full Equivalence Diagnostics
 
-Use `ekf/tests/nhc_eskf_loose_equivalence.rs` as the lightweight regression suite for NHC equivalence. It runs without replay fixtures and checks the generated rows and covariance-basis transform directly.
+Use `sensor_fusion/tests/nhc_reduced_full_equivalence.rs` as the lightweight regression suite for NHC equivalence. It runs without replay fixtures and checks the generated rows and covariance-basis transform directly.
 
 The simulator-side filter equivalence harness is a diagnostic tool for interactive investigation, not a replacement for the focused unit-style checks above. When using it, record the exact scenario, noise mode, seeds, NHC noise settings, and acceptance thresholds with the observed deltas so the result can be reproduced before promoting anything into a golden test.
 
@@ -82,7 +82,7 @@ Summarize one or more harness CSVs with:
 cargo run -p sim --bin filter_equivalence_summary -- /tmp/equiv_city_ref.csv
 ```
 
-The summary reports ESKF-minus-loose deltas in a common physical basis for position, velocity, attitude, mount, gyro bias, accel bias, latest GNSS velocity residuals, and reference-relative attitude/mount errors when reference CSVs are available. Use the threshold flags on `filter_equivalence_summary` to mark the first time each axis crosses an investigation threshold. Use `--start-time-s` and `--end-time-s` to separate startup, convergence, and settled windows.
+The summary reports Reduced-minus-Full deltas in a common physical basis for position, velocity, attitude, mount, gyro bias, accel bias, latest GNSS velocity residuals, and reference-relative attitude/mount errors when reference CSVs are available. Use the threshold flags on `filter_equivalence_summary` to mark the first time each axis crosses an investigation threshold. Use `--start-time-s` and `--end-time-s` to separate startup, convergence, and settled windows.
 
 For update-allocation diagnostics, `covariance_history` can summarize a bounded interval:
 
@@ -97,23 +97,23 @@ cargo run -p sim --bin covariance_history -- \
   --allocation-csv /tmp/roll_excitation_alloc.csv
 ```
 
-This prints ESKF update-type deltas, loose observation deltas, mount/attitude/velocity correction allocation, NHC residuals, covariance sigmas, and selected cross-correlations for the requested interval. When `--allocation-csv` is provided, the same window is written as per-event rows with innovation, NIS, correction allocation, covariance sigma, and reference-error context.
+This prints Reduced update-type deltas, Full observation deltas, mount/attitude/velocity correction allocation, NHC residuals, covariance sigmas, and selected cross-correlations for the requested interval. When `--allocation-csv` is provided, the same window is written as per-event rows with innovation, NIS, correction allocation, covariance sigma, and reference-error context.
 
 ## Fixtures And Local Data
 
-Small checked-in fixtures live under `sim/tests/fixtures/`. The `loose_nsr_short` fixture is used by the seeded loose replay path and includes IMU/GNSS CSV inputs plus expected summary data.
+Small checked-in fixtures live under `sim/tests/fixtures/`. The `full_nsr_short` fixture is used by the seeded Full EKF replay path and includes IMU/GNSS CSV inputs plus expected summary data.
 
-Some tests and diagnostic commands can use an external `gnss-ins-sim` checkout. Those assets are not required for the default quick local loop. When a test is written to skip missing local data, treat the skip as expected unless you are specifically validating that integration.
+Synthetic replay tests use checked-in fixtures and Rust-native path generation. External simulator checkouts are not required for the default local loop.
 
 ## Generated-Code Changes
 
-When changing symbolic model files or generated Rust under `ekf/src/generated_eskf/` or `ekf/src/generated_loose/`:
+When changing symbolic model files or generated Rust under `sensor_fusion/src/generated_reduced/` or `sensor_fusion/src/generated_full/`:
 
 ```bash
-python ekf/eskf.py --emit-rust
-python ekf/ins_gnss_loose.py --emit-rust
-cargo test -p sensor-fusion --locked
-cargo test -p sim --test loose_parity --locked
+python sensor_fusion/reduced.py --emit-rust
+python sensor_fusion/ins_gnss_full.py --emit-rust
+cargo test -p sensor_fusion --locked
+cargo test -p sim --test full_parity --locked
 cargo test -p sim --test synthetic_gnss_ins --locked
 ```
 

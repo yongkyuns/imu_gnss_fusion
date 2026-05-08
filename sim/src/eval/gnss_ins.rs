@@ -1,6 +1,6 @@
 use clap::ValueEnum;
 
-use crate::datasets::gnss_ins_sim::GnssSample;
+use crate::datasets::synthetic_replay::GnssSample;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum SignalSource {

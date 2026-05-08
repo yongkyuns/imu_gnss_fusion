@@ -1,0 +1,302 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{hyperref}
+
+\title{Augmented Reduced Mathematical Formulation}
+\author{sensor_fusion documentation}
+\date{\today}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\T}{^{T}}
+\newcommand{\crossmat}[1]{\left[#1\right]_\times}
+\newcommand{\dq}{\delta q}
+\newcommand{\dt}{\Delta t}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+\section{Scope}
+
+This document describes the runtime augmented Reduced implemented by
+\texttt{sensor_fusion/src/rust\_reduced.rs}, \texttt{sensor_fusion/src/generated\_reduced.rs}, and the
+included generated model files. The filter estimates NED attitude, velocity,
+position, IMU biases, and a residual seeded-frame-to-vehicle mount quaternion.
+It is the primary runtime inertial/GNSS filter behind \texttt{SensorFusion}.
+
+\section{Frames and Mount Sources}
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.12\linewidth} >{\raggedright\arraybackslash}p{0.78\linewidth}}
+\toprule
+\textbf{Symbol} & \textbf{Meaning} \\
+\midrule
+\(n\) & Local NED frame. Reduced position and velocity states are in this frame. \\
+\(b\) & Raw IMU body frame. \\
+\(v\) & Physical vehicle frame, FRD: forward, right, down. \\
+\(s\) & Seeded vehicle frame after raw IMU samples are pre-rotated by a coarse mount seed. \\
+\(c\) & Corrected vehicle frame after applying the residual mount quaternion \(q_{cs}\). \\
+\bottomrule
+\end{longtable}
+
+Rotations follow
+\begin{equation}
+  x_a=C_{ab}x_b,\qquad C(q_1\otimes q_2)=C(q_1)C(q_2).
+\end{equation}
+The align filter supplies a physical vehicle-to-body mount \(q_{vb}^{0}\). The
+fusion facade pre-rotates each raw IMU delta into the seeded frame:
+\begin{equation}
+  \Delta\theta_s=C_{sv}^{0}C_{vb}^{0}\Delta\theta_b
+  =C_{bv}^{0\T}\Delta\theta_b,
+  \qquad
+  \Delta v_s=C_{bv}^{0\T}\Delta v_b .
+\end{equation}
+If \texttt{MountSource::LatchedSeed} is selected, \(q_{vb}^{0}\) is frozen
+at Reduced initialization. If \texttt{MountSource::FollowAlign} is selected, the pre-rotation
+source follows the current align mount and the residual mount is reset to
+identity. A fixed external mount is also supported.
+
+\section{Nominal and Error States}
+
+The nominal state has 20 scalar components:
+\begin{equation}
+  x=
+  \begin{bmatrix}
+  q_{ns} & v_n\T & p_n\T & b_g\T & b_a\T & q_{cs}
+  \end{bmatrix}\T ,
+\end{equation}
+where \(q_{ns}\) rotates seeded-frame vectors into NED, \(v_n\) is NED
+velocity, \(p_n\) is local NED position, \(b_g\) and \(b_a\) are additive gyro
+and accelerometer biases in the seeded frame, and \(q_{cs}\) rotates
+seeded-frame velocity into the corrected vehicle frame.
+
+The 18-dimensional error state is
+\begin{equation}
+  \delta x =
+  \begin{bmatrix}
+  \delta\theta_s &
+  \delta v_n &
+  \delta p_n &
+  \delta b_g &
+  \delta b_a &
+  \delta\psi_{cs}
+  \end{bmatrix}\T .
+\end{equation}
+The Rust index order is:
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Indices & Error component \\
+\midrule
+0..2 & attitude small angle \(\delta\theta_s\) \\
+3..5 & velocity error \(\delta v_n\) \\
+6..8 & position error \(\delta p_n\) \\
+9..11 & gyro-bias error \(\delta b_g\) \\
+12..14 & accelerometer-bias error \(\delta b_a\) \\
+15..17 & residual mount error \(\delta\psi_{cs}\) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Nominal Propagation}
+
+The Reduced consumes one-sample IMU increments already expressed in the seeded
+frame:
+\begin{equation}
+  u_k = \{\Delta\theta_s,\Delta v_s,\dt\}.
+\end{equation}
+Bias-corrected increments are
+\begin{equation}
+  \Delta\theta_s^c=\Delta\theta_s-b_g\dt,\qquad
+  \Delta v_s^c=\Delta v_s-b_a\dt .
+\end{equation}
+The generated nominal equations implement
+\begin{align}
+  q_{ns}^{+} &= \operatorname{normalize}\left(q_{ns}^{-}\otimes
+  \dq(\Delta\theta_s^c)\right),\\
+  v_n^{+} &= v_n^{-}+C_{ns}(q_{ns}^{+})\Delta v_s^c+g_n\dt,\\
+  p_n^{+} &= p_n^{-}+v_n^{+}\dt,\\
+  b_g^{+}&=b_g^{-},\qquad b_a^{+}=b_a^{-},\qquad q_{cs}^{+}=q_{cs}^{-},
+\end{align}
+with \(g_n=[0,0,9.80665]\T\) in NED.
+
+\section{Error-State Propagation}
+
+The covariance prediction uses generated discrete matrices:
+\begin{equation}
+  \delta x_{k+1}=F_k\delta x_k+G_kw_k,
+  \qquad
+  P_{k+1}^{-}=F_kP_k^{+}F_k\T+G_kQ_kG_k\T .
+\end{equation}
+The 15-noise vector is
+\begin{equation}
+  w=
+  \begin{bmatrix}
+  n_g & n_a & n_{bg} & n_{ba} & n_m
+  \end{bmatrix}\T .
+\end{equation}
+The diagonal covariance entries assembled at runtime are
+\begin{equation}
+  Q_k=\operatorname{diag}\left(
+  \sigma_g^2\dt^2 I_3,\,
+  \sigma_a^2\dt^2 I_3,\,
+  \sigma_{bg}^2\dt I_3,\,
+  \sigma_{ba}^2\dt I_3,\,
+  \sigma_m^2\dt I_3
+  \right).
+\end{equation}
+If residual mount states are frozen, the mount random-walk block is set to zero
+and the mount covariance rows/columns are cleared.
+
+\section{Measurement Updates}
+
+Scalar observations use
+\begin{align}
+  r &= z-h(\hat x),\\
+  S &= HPH\T+R,\\
+  K &= PH\T S^{-1},\\
+  \delta x &= Kr .
+\end{align}
+Covariance is updated with a scalar Joseph-form expression. The lateral and
+vertical NHC rows may be fused as one sequential two-row batch so the second
+row sees the covariance and accumulated correction from the first row.
+
+\subsection{GNSS Position and Velocity}
+
+GNSS position and velocity are local NED:
+\begin{align}
+  h_p(x)&=p_n,& H_p&=\begin{bmatrix}0&0&I_3&0&0&0\end{bmatrix},\\
+  h_v(x)&=v_n,& H_v&=\begin{bmatrix}0&I_3&0&0&0&0\end{bmatrix}.
+\end{align}
+The generated GNSS rows have no direct residual-mount Jacobian. The runtime has
+optional mount update scales for GNSS rows; with the current generated \(H\)
+these only affect mount updates induced through covariance cross-correlation.
+The default public \texttt{fuse\_gps} path passes zero scales.
+
+\subsection{Zero Velocity}
+
+The zero-velocity pseudo-measurement is a GNSS-velocity-shaped update:
+\begin{equation}
+  z_v=0,\qquad h_v(x)=v_n .
+\end{equation}
+It does not directly observe residual mount because it is expressed in NED, not
+in corrected vehicle coordinates.
+
+\subsection{Vehicle Speed and NHC}
+
+Predicted seeded-frame velocity is
+\begin{equation}
+  v_s=C_{ns}\T v_n .
+\end{equation}
+The corrected vehicle-frame velocity is
+\begin{equation}
+  v_c=C_{cs}v_s .
+\end{equation}
+The optional wheel/CAN speed measurement observes
+\begin{equation}
+  h_x(x)=e_x\T v_c .
+\end{equation}
+The non-holonomic constraints use zero lateral and vertical vehicle velocity:
+\begin{equation}
+  h_y(x)=e_y\T v_c\approx 0,\qquad
+  h_z(x)=e_z\T v_c\approx 0 .
+\end{equation}
+For a left residual-mount perturbation,
+\begin{equation}
+  q_{cs}^{true}=\dq(\delta\psi_{cs})\otimes q_{cs},
+\end{equation}
+the vehicle velocity perturbation is
+\begin{equation}
+  v_c^{true}\simeq (I+\crossmat{\delta\psi_{cs}})v_c
+  = v_c-\crossmat{v_c}\delta\psi_{cs}.
+\end{equation}
+Therefore the residual-mount Jacobian block for component \(i\) is
+\begin{equation}
+  H_{\psi,i}=-e_i\T\crossmat{v_c}.
+\end{equation}
+Runtime controls can ramp, gate, attenuate, or freeze the residual-mount part
+of the Kalman gain and injected correction for these rows.
+
+\subsection{Stationary Gravity}
+
+Stationary gravity updates use body/seed-frame accelerometer samples and update
+only \(x\) and \(y\) accelerometer channels:
+\begin{equation}
+  f_s \approx -C_{ns}\T g_n + b_a+\eta .
+\end{equation}
+The scalar rows are
+\begin{equation}
+  h_x=e_x\T(-C_{ns}\T g_n+b_a),\qquad
+  h_y=e_y\T(-C_{ns}\T g_n+b_a).
+\end{equation}
+Before each stationary gravity scalar update, the runtime floors roll and pitch
+covariance to avoid over-confident attitude locking. The residual-mount
+Jacobian block is zero because the accelerometer sample has already been put in
+the seeded frame.
+
+\section{Injection and Covariance Reset}
+
+After each update the error state is injected:
+\begin{align}
+  q_{ns}^{+} &= q_{ns}^{-}\otimes\dq(\delta\theta_s),\\
+  v_n^{+} &= v_n^{-}+\delta v_n,\qquad
+  p_n^{+}=p_n^{-}+\delta p_n,\\
+  b_g^{+} &= b_g^{-}+\delta b_g,\qquad
+  b_a^{+}=b_a^{-}+\delta b_a,\\
+  q_{cs}^{+} &= \dq(\delta\psi_{cs})\otimes q_{cs}^{-}.
+\end{align}
+Both quaternions are normalized. The attitude and residual-mount covariance
+blocks are reset with
+\begin{equation}
+  G_r(\delta\theta)\simeq I-\frac{1}{2}\crossmat{\delta\theta}.
+\end{equation}
+The full reset matrix is block diagonal with \(G_r\) on the attitude and mount
+blocks and identity elsewhere:
+\begin{equation}
+  P^{+}\leftarrow G_{\mathrm{reset}}P^{+}G_{\mathrm{reset}}\T .
+\end{equation}
+
+\section{Initialization and Mount-Source Modes}
+
+At GNSS initialization the filter sets \(q_{ns}\) from GNSS heading or horizontal
+velocity course, copies GNSS NED position and velocity into \(p_n,v_n\), sets
+biases to zero, and initializes \(q_{cs}=1\). Covariance is diagonal with
+configuration-controlled bias and residual-mount variances.
+
+The fusion facade controls the coarse mount used for IMU pre-rotation:
+\begin{itemize}[leftmargin=1.5em]
+\item \textbf{Latched/internal}: align produces \(q_{vb}^{0}\), which is frozen
+when the Reduced initializes. Residual mount \(q_{cs}\) may then estimate remaining
+seed error.
+\item \textbf{FollowAlign}: the pre-rotation source tracks align and the
+residual \(q_{cs}\) is repeatedly reset to identity. This is useful when the
+Reduced should not own mount estimation.
+\item \textbf{External/reference}: a fixed supplied mount or reference mount is
+used as the pre-rotation source.
+\end{itemize}
+
+\section{Known Modeling Boundaries}
+
+\begin{itemize}[leftmargin=1.5em]
+\item Residual mount does not affect inertial propagation; it is observable only
+through vehicle-frame velocity measurements and through cross-covariances.
+\item GNSS position, GNSS velocity, zero velocity, and stationary gravity do not
+directly observe \(q_{cs}\).
+\item Lateral and vertical NHC observations can couple attitude, velocity,
+biases, and residual mount; aggressive mount updates are therefore gated and
+ramped in the runtime facade.
+\item The physical full mount used for plotting must account for the frozen
+coarse seed and the direction of \(q_{cs}\). Under the convention above, a
+vehicle-to-body comparison uses the seed composed with the inverse residual,
+not the residual alone.
+\end{itemize}
+
+\end{document}

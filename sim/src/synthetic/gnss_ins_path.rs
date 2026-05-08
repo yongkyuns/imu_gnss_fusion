@@ -4,7 +4,7 @@ use rand::{Rng, SeedableRng};
 use std::fs;
 use std::path::Path;
 
-use crate::datasets::gnss_ins_sim::{GnssSample, ImuSample, TruthSample};
+use crate::datasets::synthetic_replay::{GnssSample, ImuSample, TruthSample};
 
 const D2R: f64 = std::f64::consts::PI / 180.0;
 const RE: f64 = 6378137.0;
@@ -130,15 +130,15 @@ impl ImuNoiseModel {
             ImuAccuracy::Low => Self {
                 gyro: AxisNoise {
                     bias: [0.0; 3],
-                    bias_drift_std: [10.0 * d2r / 3600.0; 3],
+                    bias_drift_std: [30.0 * d2r / 3600.0; 3],
                     bias_corr_time_s: [100.0; 3],
-                    white_noise_density: [0.75 * d2r / 60.0; 3],
+                    white_noise_density: [1.0 * d2r / 60.0; 3],
                 },
                 accel: AxisNoise {
                     bias: [0.0; 3],
-                    bias_drift_std: [2.0e-4; 3],
+                    bias_drift_std: [5.0e-3; 3],
                     bias_corr_time_s: [100.0; 3],
-                    white_noise_density: [0.05 / 60.0; 3],
+                    white_noise_density: [0.12 / 60.0; 3],
                 },
                 gyro_vibration: None,
                 accel_vibration: None,
@@ -146,15 +146,15 @@ impl ImuNoiseModel {
             ImuAccuracy::Mid => Self {
                 gyro: AxisNoise {
                     bias: [0.0; 3],
-                    bias_drift_std: [3.5 * d2r / 3600.0; 3],
+                    bias_drift_std: [10.0 * d2r / 3600.0; 3],
                     bias_corr_time_s: [100.0; 3],
-                    white_noise_density: [0.25 * d2r / 60.0; 3],
+                    white_noise_density: [0.3 * d2r / 60.0; 3],
                 },
                 accel: AxisNoise {
                     bias: [0.0; 3],
-                    bias_drift_std: [5.0e-5; 3],
+                    bias_drift_std: [1.0e-3; 3],
                     bias_corr_time_s: [100.0; 3],
-                    white_noise_density: [0.03 / 60.0; 3],
+                    white_noise_density: [0.05 / 60.0; 3],
                 },
                 gyro_vibration: None,
                 accel_vibration: None,
@@ -162,15 +162,15 @@ impl ImuNoiseModel {
             ImuAccuracy::High => Self {
                 gyro: AxisNoise {
                     bias: [0.0; 3],
-                    bias_drift_std: [0.1 * d2r / 3600.0; 3],
+                    bias_drift_std: [1.0 * d2r / 3600.0; 3],
                     bias_corr_time_s: [100.0; 3],
-                    white_noise_density: [2.0e-3 * d2r / 60.0; 3],
+                    white_noise_density: [0.05 * d2r / 60.0; 3],
                 },
                 accel: AxisNoise {
                     bias: [0.0; 3],
-                    bias_drift_std: [3.6e-6; 3],
+                    bias_drift_std: [2.0e-4; 3],
                     bias_corr_time_s: [100.0; 3],
-                    white_noise_density: [2.5e-5 / 60.0; 3],
+                    white_noise_density: [0.015 / 60.0; 3],
                 },
                 gyro_vibration: None,
                 accel_vibration: None,
@@ -186,10 +186,20 @@ pub struct GpsNoiseModel {
 }
 
 impl GpsNoiseModel {
-    pub fn low_accuracy() -> Self {
-        Self {
-            pos_std_m: [5.0, 5.0, 7.0],
-            vel_std_mps: [0.05, 0.05, 0.05],
+    pub fn accuracy(accuracy: ImuAccuracy) -> Self {
+        match accuracy {
+            ImuAccuracy::Low => Self {
+                pos_std_m: [8.0, 8.0, 12.0],
+                vel_std_mps: [0.30, 0.30, 0.50],
+            },
+            ImuAccuracy::Mid => Self {
+                pos_std_m: [3.0, 3.0, 5.0],
+                vel_std_mps: [0.10, 0.10, 0.15],
+            },
+            ImuAccuracy::High => Self {
+                pos_std_m: [0.8, 0.8, 1.2],
+                vel_std_mps: [0.03, 0.03, 0.05],
+            },
         }
     }
 }
@@ -211,28 +221,14 @@ impl MeasurementNoiseConfig {
     pub fn accuracy(accuracy: ImuAccuracy) -> Self {
         Self {
             imu: ImuNoiseModel::accuracy(accuracy),
-            gps: Some(GpsNoiseModel::low_accuracy()),
+            gps: Some(GpsNoiseModel::accuracy(accuracy)),
         }
     }
 }
 
 impl MotionProfile {
     pub fn from_path(path: &Path) -> Result<Self> {
-        let extension = path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .unwrap_or_default();
-        if extension.eq_ignore_ascii_case("csv") {
-            Self::from_csv(path)
-        } else {
-            Self::from_dsl(path)
-        }
-    }
-
-    pub fn from_csv(path: &Path) -> Result<Self> {
-        let text = fs::read_to_string(path)
-            .with_context(|| format!("failed to read {}", path.display()))?;
-        Self::from_csv_str(&text)
+        Self::from_dsl(path)
     }
 
     pub fn from_dsl(path: &Path) -> Result<Self> {
@@ -243,36 +239,6 @@ impl MotionProfile {
 
     pub fn from_dsl_str(text: &str) -> Result<Self> {
         crate::synthetic::motion_dsl::parse_motion_dsl(text)
-    }
-
-    pub fn from_csv_str(text: &str) -> Result<Self> {
-        let rows = text
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .collect::<Vec<_>>();
-        if rows.len() < 4 {
-            bail!("motion profile must contain initial state and at least one command");
-        }
-        let initial_row = parse_csv_numbers(rows[1], 9)?;
-        let initial = InitialState {
-            lat_deg: initial_row[0],
-            lon_deg: initial_row[1],
-            height_m: initial_row[2],
-            vel_body_mps: [initial_row[3], initial_row[4], initial_row[5]],
-            yaw_pitch_roll_deg: [initial_row[6], initial_row[7], initial_row[8]],
-        };
-        let mut commands = Vec::new();
-        for line in rows.iter().skip(3) {
-            let row = parse_csv_numbers(line, 9)?;
-            commands.push(MotionCommand {
-                command_type: row[0].round() as u8,
-                yaw_pitch_roll_cmd_deg: [row[1], row[2], row[3]],
-                body_cmd: [row[4], row[5], row[6]],
-                duration_s: row[7],
-                gps_visible: row[8] != 0.0,
-            });
-        }
-        Ok(Self { initial, commands })
     }
 }
 
@@ -784,26 +750,6 @@ fn angle_range_pi(x: f64) -> f64 {
         out -= two_pi;
     }
     out
-}
-
-fn parse_csv_numbers(line: &str, expected: usize) -> Result<Vec<f64>> {
-    let values = line
-        .split(',')
-        .map(|value| {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                Ok(0.0)
-            } else {
-                trimmed
-                    .parse::<f64>()
-                    .with_context(|| format!("failed to parse CSV value: {trimmed}"))
-            }
-        })
-        .collect::<Result<Vec<_>>>()?;
-    if values.len() != expected {
-        bail!("expected {expected} CSV columns, got {}", values.len());
-    }
-    Ok(values)
 }
 
 fn mat3_vec(m: [[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {

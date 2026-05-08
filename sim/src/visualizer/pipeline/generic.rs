@@ -1,28 +1,31 @@
 use anyhow::{Context, Result, bail};
-use sensor_fusion::eskf_types::ESKF_UPDATE_DIAG_TYPES;
-use sensor_fusion::fusion::SensorFusion;
-use sensor_fusion::generated_loose;
-use sensor_fusion::loose::{
-    LOOSE_ERROR_STATES, LooseFilter, LooseImuDelta, LooseNominalState, LoosePredictNoise,
-};
+use sensor_fusion::full::{FULL_ERROR_STATES, FullNominalState, FullState};
+use sensor_fusion::reduced::REDUCED_UPDATE_DIAG_TYPES;
+use sensor_fusion::{Config, Filter, SensorFusion};
 
 use crate::datasets::generic_replay::{
     GenericGnssSample, GenericImuSample, GenericReferencePositionSample, GenericReferenceRpySample,
     fusion_gnss_sample, fusion_imu_sample,
 };
-use crate::eval::gnss_ins::{as_q64, quat_angle_deg, quat_conj, quat_mul};
+use crate::eval::gnss_ins::{as_q64, quat_angle_deg, quat_mul};
 use crate::eval::replay::{ReplayEvent, for_each_event};
 use crate::visualizer::math::{ecef_to_ned, lla_to_ecef, ned_to_lla_exact, quat_rpy_deg};
 use crate::visualizer::model::{
-    EkfImuSource, HeadingSample, MapCursorSample, PlotData, StateContribution, StateCorrelation,
+    HeadingSample, MapCursorSample, MountSourceMode, PlotData, StateContribution, StateCorrelation,
     Trace, UpdateInspectorSample,
 };
-use crate::visualizer::pipeline::{EkfCompareConfig, GnssOutageConfig};
+use crate::visualizer::pipeline::reference::{
+    reference_mount_seed_q_vb, reference_rpy_at, rpy_series_from_samples,
+};
+use crate::visualizer::pipeline::{FilterCompareConfig, GnssOutageConfig};
+
+pub use crate::visualizer::pipeline::reference::{
+    q_vb_to_reference_mount_rpy, reference_mount_rpy_to_q_vb,
+};
 
 const DIAG_BODY_VEL_Y: usize = 4;
 const DIAG_BODY_VEL_Z: usize = 5;
 const NHC_DIAG_TYPES: [(usize, &str); 2] = [(DIAG_BODY_VEL_Y, "NHC Y"), (DIAG_BODY_VEL_Z, "NHC Z")];
-const LOOSE_NHC_GNSS_SPEED_MAX_AGE_S: f64 = 1.0;
 #[cfg(target_arch = "wasm32")]
 const WEB_BUILD_MAX_POINTS_PER_TRACE: usize =
     crate::visualizer::replay_job::WEB_TRANSPORT_MAX_POINTS_PER_TRACE;
@@ -103,6 +106,39 @@ impl GenericReplayInput {
             reference_mount: Vec::new(),
             reference_position: Vec::new(),
         }
+    }
+}
+
+struct GenericReplayRunContext<'a> {
+    replay: &'a GenericReplayInput,
+    filter_cfg: FilterCompareConfig,
+    mount_source: MountSourceMode,
+    gnss_outages: GnssOutageConfig,
+    reference_mount_seed_q_vb: Option<[f32; 4]>,
+}
+
+impl<'a> GenericReplayRunContext<'a> {
+    fn new(
+        replay: &'a GenericReplayInput,
+        filter_cfg: FilterCompareConfig,
+        mount_source: MountSourceMode,
+        gnss_outages: GnssOutageConfig,
+    ) -> Self {
+        Self {
+            replay,
+            filter_cfg,
+            mount_source,
+            gnss_outages,
+            reference_mount_seed_q_vb: reference_mount_seed_q_vb(replay, mount_source),
+        }
+    }
+
+    fn configure_fusion(&self, fusion: &mut SensorFusion) {
+        apply_fusion_config(fusion, self.filter_cfg, self.mount_source);
+    }
+
+    fn reference_mount_seed_q_vb(&self) -> Option<[f32; 4]> {
+        self.reference_mount_seed_q_vb
     }
 }
 
@@ -218,85 +254,84 @@ pub fn parse_generic_replay_csvs_with_refs(
 
 pub fn build_generic_replay_plot_data(
     replay: &GenericReplayInput,
-    ekf_imu_source: EkfImuSource,
-    ekf_cfg: EkfCompareConfig,
+    mount_source: MountSourceMode,
+    filter_cfg: FilterCompareConfig,
     gnss_outages: GnssOutageConfig,
 ) -> PlotData {
-    build_generic_replay_plot_data_impl(replay, ekf_imu_source, ekf_cfg, gnss_outages, None, None)
+    build_generic_replay_plot_data_impl(replay, mount_source, filter_cfg, gnss_outages, None, None)
 }
 
-pub fn build_generic_replay_plot_data_with_eskf_mount_seed(
+pub fn build_generic_replay_plot_data_with_reduced_mount_seed(
     replay: &GenericReplayInput,
-    ekf_imu_source: EkfImuSource,
-    ekf_cfg: EkfCompareConfig,
+    mount_source: MountSourceMode,
+    filter_cfg: FilterCompareConfig,
     gnss_outages: GnssOutageConfig,
-    eskf_mount_seed_q_vb: Option<[f32; 4]>,
+    reduced_mount_seed_q_vb: Option<[f32; 4]>,
 ) -> PlotData {
     build_generic_replay_plot_data_impl(
         replay,
-        ekf_imu_source,
-        ekf_cfg,
+        mount_source,
+        filter_cfg,
         gnss_outages,
         None,
-        eskf_mount_seed_q_vb,
+        reduced_mount_seed_q_vb,
     )
 }
 
 pub fn build_generic_replay_plot_data_with_progress(
     replay: &GenericReplayInput,
-    ekf_imu_source: EkfImuSource,
-    ekf_cfg: EkfCompareConfig,
+    mount_source: MountSourceMode,
+    filter_cfg: FilterCompareConfig,
     gnss_outages: GnssOutageConfig,
     progress: &mut dyn FnMut(GenericReplayProgress),
 ) -> PlotData {
     build_generic_replay_plot_data_impl(
         replay,
-        ekf_imu_source,
-        ekf_cfg,
+        mount_source,
+        filter_cfg,
         gnss_outages,
         Some(progress),
         None,
     )
 }
 
-pub fn build_generic_replay_plot_data_with_progress_and_eskf_mount_seed(
+pub fn build_generic_replay_plot_data_with_progress_and_reduced_mount_seed(
     replay: &GenericReplayInput,
-    ekf_imu_source: EkfImuSource,
-    ekf_cfg: EkfCompareConfig,
+    mount_source: MountSourceMode,
+    filter_cfg: FilterCompareConfig,
     gnss_outages: GnssOutageConfig,
     progress: &mut dyn FnMut(GenericReplayProgress),
-    eskf_mount_seed_q_vb: Option<[f32; 4]>,
+    reduced_mount_seed_q_vb: Option<[f32; 4]>,
 ) -> PlotData {
     build_generic_replay_plot_data_impl(
         replay,
-        ekf_imu_source,
-        ekf_cfg,
+        mount_source,
+        filter_cfg,
         gnss_outages,
         Some(progress),
-        eskf_mount_seed_q_vb,
+        reduced_mount_seed_q_vb,
     )
 }
 
 fn build_generic_replay_plot_data_impl(
     replay: &GenericReplayInput,
-    ekf_imu_source: EkfImuSource,
-    ekf_cfg: EkfCompareConfig,
+    mount_source: MountSourceMode,
+    filter_cfg: FilterCompareConfig,
     gnss_outages: GnssOutageConfig,
     progress: Option<&mut dyn FnMut(GenericReplayProgress)>,
-    eskf_mount_seed_q_vb: Option<[f32; 4]>,
+    reduced_mount_seed_q_vb: Option<[f32; 4]>,
 ) -> PlotData {
     let mut progress = GenericProgressReporter::new(replay, progress);
+    let ctx = GenericReplayRunContext::new(replay, filter_cfg, mount_source, gnss_outages);
     let mut fusion = SensorFusion::new();
-    apply_fusion_config(&mut fusion, ekf_cfg, ekf_imu_source);
-    if let Some(seed_q_vb) =
-        eskf_mount_seed_q_vb.or_else(|| reference_mount_seed_q_vb(replay, ekf_imu_source))
-    {
+    ctx.configure_fusion(&mut fusion);
+    if let Some(seed_q_vb) = reduced_mount_seed_q_vb.or_else(|| ctx.reference_mount_seed_q_vb()) {
         fusion.set_misalignment(seed_q_vb);
     }
 
     let ref_gnss = replay.gnss.first().copied();
     let ref_ecef = ref_gnss.map(|s| lla_to_ecef(s.lat_deg, s.lon_deg, s.height_m));
-    let outage_windows = sample_outage_windows(&replay.gnss, gnss_outages);
+    let outage_windows = sample_outage_windows(&replay.gnss, ctx.gnss_outages);
     let output_sampling = ReplayOutputSampling::for_replay(replay);
     let imu_total = replay.imu.len();
 
@@ -358,38 +393,38 @@ fn build_generic_replay_plot_data_impl(
         });
     }
 
-    let mut eskf_pos_n = Vec::new();
-    let mut eskf_pos_e = Vec::new();
-    let mut eskf_pos_d = Vec::new();
-    let mut eskf_vel_n = Vec::new();
-    let mut eskf_vel_e = Vec::new();
-    let mut eskf_vel_d = Vec::new();
-    let mut eskf_roll = Vec::new();
-    let mut eskf_pitch = Vec::new();
-    let mut eskf_yaw = Vec::new();
-    let mut eskf_mount_roll = Vec::new();
-    let mut eskf_mount_pitch = Vec::new();
-    let mut eskf_mount_yaw = Vec::new();
-    let mut eskf_bgx = Vec::new();
-    let mut eskf_bgy = Vec::new();
-    let mut eskf_bgz = Vec::new();
-    let mut eskf_bax = Vec::new();
-    let mut eskf_bay = Vec::new();
-    let mut eskf_baz = Vec::new();
-    let mut eskf_cov: [Vec<[f64; 2]>; 18] = std::array::from_fn(|_| Vec::new());
-    let mut eskf_mount_dx: [Vec<[f64; 2]>; 3] = std::array::from_fn(|_| Vec::new());
-    let mut eskf_nhc_mount_dx: [Vec<[f64; 2]>; 6] = std::array::from_fn(|_| Vec::new());
-    let mut eskf_nhc_innovation: [Vec<[f64; 2]>; 2] = std::array::from_fn(|_| Vec::new());
-    let mut eskf_nhc_nis: [Vec<[f64; 2]>; 2] = std::array::from_fn(|_| Vec::new());
-    let mut eskf_nhc_h_mount_norm: [Vec<[f64; 2]>; 2] = std::array::from_fn(|_| Vec::new());
+    let mut reduced_pos_n = Vec::new();
+    let mut reduced_pos_e = Vec::new();
+    let mut reduced_pos_d = Vec::new();
+    let mut reduced_vel_n = Vec::new();
+    let mut reduced_vel_e = Vec::new();
+    let mut reduced_vel_d = Vec::new();
+    let mut reduced_roll = Vec::new();
+    let mut reduced_pitch = Vec::new();
+    let mut reduced_yaw = Vec::new();
+    let mut reduced_mount_roll = Vec::new();
+    let mut reduced_mount_pitch = Vec::new();
+    let mut reduced_mount_yaw = Vec::new();
+    let mut reduced_bgx = Vec::new();
+    let mut reduced_bgy = Vec::new();
+    let mut reduced_bgz = Vec::new();
+    let mut reduced_bax = Vec::new();
+    let mut reduced_bay = Vec::new();
+    let mut reduced_baz = Vec::new();
+    let mut reduced_cov: [Vec<[f64; 2]>; 18] = std::array::from_fn(|_| Vec::new());
+    let mut reduced_mount_dx: [Vec<[f64; 2]>; 3] = std::array::from_fn(|_| Vec::new());
+    let mut reduced_nhc_mount_dx: [Vec<[f64; 2]>; 6] = std::array::from_fn(|_| Vec::new());
+    let mut reduced_nhc_innovation: [Vec<[f64; 2]>; 2] = std::array::from_fn(|_| Vec::new());
+    let mut reduced_nhc_nis: [Vec<[f64; 2]>; 2] = std::array::from_fn(|_| Vec::new());
+    let mut reduced_nhc_h_mount_norm: [Vec<[f64; 2]>; 2] = std::array::from_fn(|_| Vec::new());
     let mut update_inspector = Vec::new();
-    let mut last_eskf_update_count = 0u32;
-    let mut last_eskf_type_counts = [0u32; ESKF_UPDATE_DIAG_TYPES];
-    let mut eskf_map = Vec::new();
-    let mut eskf_outage_map = Vec::new();
-    let mut eskf_heading = Vec::new();
+    let mut last_reduced_update_count = 0u32;
+    let mut last_reduced_type_counts = [0u32; REDUCED_UPDATE_DIAG_TYPES];
+    let mut reduced_map = Vec::new();
+    let mut reduced_outage_map = Vec::new();
+    let mut reduced_heading = Vec::new();
     let mut mount_ready_marker = Vec::new();
-    let mut ekf_init_marker = Vec::new();
+    let mut reduced_init_marker = Vec::new();
 
     for_each_event(&replay.imu, &replay.gnss, |event| match event {
         ReplayEvent::Imu(index, sample) => {
@@ -404,41 +439,41 @@ fn build_generic_replay_plot_data_impl(
             raw_accel_x.push([sample.t_s, sample.accel_mps2[0]]);
             raw_accel_y.push([sample.t_s, sample.accel_mps2[1]]);
             raw_accel_z.push([sample.t_s, sample.accel_mps2[2]]);
-            append_eskf_sample(
+            append_reduced_sample(
                 sample.t_s,
                 &fusion,
                 ref_gnss,
                 ref_ecef,
-                &mut eskf_pos_n,
-                &mut eskf_pos_e,
-                &mut eskf_pos_d,
-                &mut eskf_vel_n,
-                &mut eskf_vel_e,
-                &mut eskf_vel_d,
-                &mut eskf_roll,
-                &mut eskf_pitch,
-                &mut eskf_yaw,
-                &mut eskf_mount_roll,
-                &mut eskf_mount_pitch,
-                &mut eskf_mount_yaw,
-                &mut eskf_bgx,
-                &mut eskf_bgy,
-                &mut eskf_bgz,
-                &mut eskf_bax,
-                &mut eskf_bay,
-                &mut eskf_baz,
-                &mut eskf_cov,
-                &mut eskf_mount_dx,
-                &mut last_eskf_update_count,
-                &mut eskf_nhc_mount_dx,
-                &mut eskf_nhc_innovation,
-                &mut eskf_nhc_nis,
-                &mut eskf_nhc_h_mount_norm,
+                &mut reduced_pos_n,
+                &mut reduced_pos_e,
+                &mut reduced_pos_d,
+                &mut reduced_vel_n,
+                &mut reduced_vel_e,
+                &mut reduced_vel_d,
+                &mut reduced_roll,
+                &mut reduced_pitch,
+                &mut reduced_yaw,
+                &mut reduced_mount_roll,
+                &mut reduced_mount_pitch,
+                &mut reduced_mount_yaw,
+                &mut reduced_bgx,
+                &mut reduced_bgy,
+                &mut reduced_bgz,
+                &mut reduced_bax,
+                &mut reduced_bay,
+                &mut reduced_baz,
+                &mut reduced_cov,
+                &mut reduced_mount_dx,
+                &mut last_reduced_update_count,
+                &mut reduced_nhc_mount_dx,
+                &mut reduced_nhc_innovation,
+                &mut reduced_nhc_nis,
+                &mut reduced_nhc_h_mount_norm,
                 &mut update_inspector,
-                &mut last_eskf_type_counts,
-                &mut eskf_map,
-                &mut eskf_outage_map,
-                &mut eskf_heading,
+                &mut last_reduced_type_counts,
+                &mut reduced_map,
+                &mut reduced_outage_map,
+                &mut reduced_heading,
                 &mut map_cursor,
                 in_outage(sample.t_s, &outage_windows),
             );
@@ -450,8 +485,8 @@ fn build_generic_replay_plot_data_impl(
                 if update.mount_ready_changed && update.mount_ready {
                     mount_ready_marker.push([sample.t_s, 0.0]);
                 }
-                if update.ekf_initialized_now && update.ekf_initialized {
-                    ekf_init_marker.push([sample.t_s, 0.0]);
+                if update.reduced_initialized_now && update.reduced_initialized {
+                    reduced_init_marker.push([sample.t_s, 0.0]);
                 }
             }
         }
@@ -490,33 +525,33 @@ fn build_generic_replay_plot_data_impl(
                 points: raw_accel_z.clone(),
             },
         ],
-        eskf_cmp_pos: vec![
+        reduced_cmp_pos: vec![
             Trace {
                 name: "GNSS posN [m]".to_string(),
                 points: gnss_pos_n,
             },
             Trace {
-                name: "ESKF posN [m]".to_string(),
-                points: eskf_pos_n,
+                name: "Reduced posN [m]".to_string(),
+                points: reduced_pos_n,
             },
             Trace {
                 name: "GNSS posE [m]".to_string(),
                 points: gnss_pos_e,
             },
             Trace {
-                name: "ESKF posE [m]".to_string(),
-                points: eskf_pos_e,
+                name: "Reduced posE [m]".to_string(),
+                points: reduced_pos_e,
             },
             Trace {
                 name: "GNSS posD [m]".to_string(),
                 points: gnss_pos_d,
             },
             Trace {
-                name: "ESKF posD [m]".to_string(),
-                points: eskf_pos_d,
+                name: "Reduced posD [m]".to_string(),
+                points: reduced_pos_d,
             },
         ],
-        eskf_cmp_vel: vec![
+        reduced_cmp_vel: vec![
             Trace {
                 name: "GNSS velN [m/s]".to_string(),
                 points: gnss_vel_n,
@@ -526,8 +561,8 @@ fn build_generic_replay_plot_data_impl(
                 points: reference_vel_n.clone(),
             },
             Trace {
-                name: "ESKF velN [m/s]".to_string(),
-                points: eskf_vel_n,
+                name: "Reduced velN [m/s]".to_string(),
+                points: reduced_vel_n,
             },
             Trace {
                 name: "GNSS velE [m/s]".to_string(),
@@ -538,8 +573,8 @@ fn build_generic_replay_plot_data_impl(
                 points: reference_vel_e.clone(),
             },
             Trace {
-                name: "ESKF velE [m/s]".to_string(),
-                points: eskf_vel_e,
+                name: "Reduced velE [m/s]".to_string(),
+                points: reduced_vel_e,
             },
             Trace {
                 name: "GNSS velD [m/s]".to_string(),
@@ -550,182 +585,182 @@ fn build_generic_replay_plot_data_impl(
                 points: reference_vel_d.clone(),
             },
             Trace {
-                name: "ESKF velD [m/s]".to_string(),
-                points: eskf_vel_d,
+                name: "Reduced velD [m/s]".to_string(),
+                points: reduced_vel_d,
             },
         ],
-        eskf_cmp_att: vec![
+        reduced_cmp_att: vec![
             Trace {
-                name: "ESKF roll [deg]".to_string(),
-                points: eskf_roll,
+                name: "Reduced roll [deg]".to_string(),
+                points: reduced_roll,
             },
             Trace {
-                name: "ESKF pitch [deg]".to_string(),
-                points: eskf_pitch,
+                name: "Reduced pitch [deg]".to_string(),
+                points: reduced_pitch,
             },
             Trace {
-                name: "ESKF yaw [deg]".to_string(),
-                points: eskf_yaw,
+                name: "Reduced yaw [deg]".to_string(),
+                points: reduced_yaw,
             },
             Trace {
                 name: "mount ready".to_string(),
                 points: mount_ready_marker,
             },
             Trace {
-                name: "ekf initialized".to_string(),
-                points: ekf_init_marker,
+                name: "reduced initialized".to_string(),
+                points: reduced_init_marker,
             },
         ],
-        eskf_bias_gyro: vec![
+        reduced_bias_gyro: vec![
             Trace {
-                name: "ESKF gyro bias X [deg/s]".to_string(),
-                points: eskf_bgx,
+                name: "Reduced gyro bias X [deg/s]".to_string(),
+                points: reduced_bgx,
             },
             Trace {
-                name: "ESKF gyro bias Y [deg/s]".to_string(),
-                points: eskf_bgy,
+                name: "Reduced gyro bias Y [deg/s]".to_string(),
+                points: reduced_bgy,
             },
             Trace {
-                name: "ESKF gyro bias Z [deg/s]".to_string(),
-                points: eskf_bgz,
-            },
-        ],
-        eskf_bias_accel: vec![
-            Trace {
-                name: "ESKF accel bias X [m/s^2]".to_string(),
-                points: eskf_bax,
-            },
-            Trace {
-                name: "ESKF accel bias Y [m/s^2]".to_string(),
-                points: eskf_bay,
-            },
-            Trace {
-                name: "ESKF accel bias Z [m/s^2]".to_string(),
-                points: eskf_baz,
+                name: "Reduced gyro bias Z [deg/s]".to_string(),
+                points: reduced_bgz,
             },
         ],
-        eskf_meas_gyro: vec![
+        reduced_bias_accel: vec![
             Trace {
-                name: "ESKF raw IMU gyro X [deg/s]".to_string(),
+                name: "Reduced accel bias X [m/s^2]".to_string(),
+                points: reduced_bax,
+            },
+            Trace {
+                name: "Reduced accel bias Y [m/s^2]".to_string(),
+                points: reduced_bay,
+            },
+            Trace {
+                name: "Reduced accel bias Z [m/s^2]".to_string(),
+                points: reduced_baz,
+            },
+        ],
+        reduced_meas_gyro: vec![
+            Trace {
+                name: "Reduced raw IMU gyro X [deg/s]".to_string(),
                 points: raw_gyro_x.clone(),
             },
             Trace {
-                name: "ESKF raw IMU gyro Y [deg/s]".to_string(),
+                name: "Reduced raw IMU gyro Y [deg/s]".to_string(),
                 points: raw_gyro_y.clone(),
             },
             Trace {
-                name: "ESKF raw IMU gyro Z [deg/s]".to_string(),
+                name: "Reduced raw IMU gyro Z [deg/s]".to_string(),
                 points: raw_gyro_z.clone(),
             },
         ],
-        eskf_meas_accel: vec![
+        reduced_meas_accel: vec![
             Trace {
-                name: "ESKF raw IMU accel X [m/s^2]".to_string(),
+                name: "Reduced raw IMU accel X [m/s^2]".to_string(),
                 points: raw_accel_x.clone(),
             },
             Trace {
-                name: "ESKF raw IMU accel Y [m/s^2]".to_string(),
+                name: "Reduced raw IMU accel Y [m/s^2]".to_string(),
                 points: raw_accel_y.clone(),
             },
             Trace {
-                name: "ESKF raw IMU accel Z [m/s^2]".to_string(),
+                name: "Reduced raw IMU accel Z [m/s^2]".to_string(),
                 points: raw_accel_z.clone(),
             },
         ],
-        eskf_cov_bias: vec![
+        reduced_cov_bias: vec![
             Trace {
                 name: "accel bias sigma X [m/s^2]".to_string(),
-                points: eskf_cov[12].clone(),
+                points: reduced_cov[12].clone(),
             },
             Trace {
                 name: "accel bias sigma Y [m/s^2]".to_string(),
-                points: eskf_cov[13].clone(),
+                points: reduced_cov[13].clone(),
             },
             Trace {
                 name: "accel bias sigma Z [m/s^2]".to_string(),
-                points: eskf_cov[14].clone(),
+                points: reduced_cov[14].clone(),
             },
             Trace {
                 name: "gyro bias sigma X [deg/s]".to_string(),
-                points: eskf_cov[9].clone(),
+                points: reduced_cov[9].clone(),
             },
             Trace {
                 name: "gyro bias sigma Y [deg/s]".to_string(),
-                points: eskf_cov[10].clone(),
+                points: reduced_cov[10].clone(),
             },
             Trace {
                 name: "gyro bias sigma Z [deg/s]".to_string(),
-                points: eskf_cov[11].clone(),
+                points: reduced_cov[11].clone(),
             },
         ],
-        eskf_cov_nonbias: (0..9)
+        reduced_cov_nonbias: (0..9)
             .map(|i| Trace {
                 name: format!("state_{i}"),
-                points: eskf_cov[i].clone(),
+                points: reduced_cov[i].clone(),
             })
             .collect(),
-        eskf_mount_sigma: vec![
+        reduced_mount_sigma: vec![
             Trace {
-                name: "ESKF mount roll sigma [deg]".to_string(),
-                points: sigma_rad_points_to_deg(&eskf_cov[15]),
+                name: "Reduced mount roll sigma [deg]".to_string(),
+                points: sigma_rad_points_to_deg(&reduced_cov[15]),
             },
             Trace {
-                name: "ESKF mount pitch sigma [deg]".to_string(),
-                points: sigma_rad_points_to_deg(&eskf_cov[16]),
+                name: "Reduced mount pitch sigma [deg]".to_string(),
+                points: sigma_rad_points_to_deg(&reduced_cov[16]),
             },
             Trace {
-                name: "ESKF mount yaw sigma [deg]".to_string(),
-                points: sigma_rad_points_to_deg(&eskf_cov[17]),
+                name: "Reduced mount yaw sigma [deg]".to_string(),
+                points: sigma_rad_points_to_deg(&reduced_cov[17]),
             },
         ],
-        eskf_mount_dx: ["roll", "pitch", "yaw"]
+        reduced_mount_dx: ["roll", "pitch", "yaw"]
             .into_iter()
-            .zip(eskf_mount_dx)
+            .zip(reduced_mount_dx)
             .map(|(axis, points)| Trace {
-                name: format!("ESKF mount {axis} correction [deg/update]"),
+                name: format!("Reduced mount {axis} correction [deg/update]"),
                 points,
             })
             .collect(),
-        eskf_nhc_mount_dx: eskf_nhc_mount_dx_traces(&eskf_nhc_mount_dx),
-        eskf_nhc_innovation: NHC_DIAG_TYPES
+        reduced_nhc_mount_dx: reduced_nhc_mount_dx_traces(&reduced_nhc_mount_dx),
+        reduced_nhc_innovation: NHC_DIAG_TYPES
             .into_iter()
             .enumerate()
             .map(|(i, (_, label))| Trace {
-                name: format!("ESKF {label} innovation [m/s]"),
-                points: eskf_nhc_innovation[i].clone(),
+                name: format!("Reduced {label} innovation [m/s]"),
+                points: reduced_nhc_innovation[i].clone(),
             })
             .collect(),
-        eskf_nhc_nis: NHC_DIAG_TYPES
+        reduced_nhc_nis: NHC_DIAG_TYPES
             .into_iter()
             .enumerate()
             .map(|(i, (_, label))| Trace {
-                name: format!("ESKF {label} NIS"),
-                points: eskf_nhc_nis[i].clone(),
+                name: format!("Reduced {label} NIS"),
+                points: reduced_nhc_nis[i].clone(),
             })
             .collect(),
-        eskf_nhc_h_mount_norm: NHC_DIAG_TYPES
+        reduced_nhc_h_mount_norm: NHC_DIAG_TYPES
             .into_iter()
             .enumerate()
             .map(|(i, (_, label))| Trace {
-                name: format!("ESKF {label} mount H norm"),
-                points: eskf_nhc_h_mount_norm[i].clone(),
+                name: format!("Reduced {label} mount H norm"),
+                points: reduced_nhc_h_mount_norm[i].clone(),
             })
             .collect(),
-        eskf_misalignment: vec![
+        reduced_misalignment: vec![
             Trace {
-                name: "ESKF mount roll [deg]".to_string(),
-                points: eskf_mount_roll,
+                name: "Reduced mount roll [deg]".to_string(),
+                points: reduced_mount_roll,
             },
             Trace {
-                name: "ESKF mount pitch [deg]".to_string(),
-                points: eskf_mount_pitch,
+                name: "Reduced mount pitch [deg]".to_string(),
+                points: reduced_mount_pitch,
             },
             Trace {
-                name: "ESKF mount yaw [deg]".to_string(),
-                points: eskf_mount_yaw,
+                name: "Reduced mount yaw [deg]".to_string(),
+                points: reduced_mount_yaw,
             },
         ],
-        eskf_map: vec![
+        reduced_map: vec![
             Trace {
                 name: "GNSS-only path (lon,lat)".to_string(),
                 points: gnss_map,
@@ -735,28 +770,20 @@ fn build_generic_replay_plot_data_impl(
                 points: reference_position_map,
             },
             Trace {
-                name: "ESKF path (lon,lat)".to_string(),
-                points: eskf_map,
+                name: "Reduced path (lon,lat)".to_string(),
+                points: reduced_map,
             },
             Trace {
-                name: "ESKF path during GNSS outage (lon,lat)".to_string(),
-                points: eskf_outage_map,
+                name: "Reduced path during GNSS outage (lon,lat)".to_string(),
+                points: reduced_outage_map,
             },
         ],
         map_cursor,
-        eskf_map_heading: eskf_heading,
+        reduced_map_heading: reduced_heading,
         update_inspector,
         ..PlotData::default()
     };
-    add_auxiliary_generic_traces_impl(
-        &mut data,
-        replay,
-        ekf_cfg,
-        ekf_imu_source,
-        None,
-        None,
-        &mut progress,
-    );
+    add_auxiliary_generic_traces_impl(&mut data, &ctx, None, None, &mut progress);
     progress.complete();
     data
 }
@@ -764,17 +791,21 @@ fn build_generic_replay_plot_data_impl(
 pub fn add_auxiliary_generic_traces(
     data: &mut PlotData,
     replay: &GenericReplayInput,
-    ekf_cfg: EkfCompareConfig,
-    ekf_imu_source: EkfImuSource,
+    filter_cfg: FilterCompareConfig,
+    mount_source: MountSourceMode,
     reference_mount_rpy_deg: Option<[f64; 3]>,
     reference_attitude_rpy: Option<[Vec<[f64; 2]>; 3]>,
 ) {
     let mut progress = GenericProgressReporter::new(replay, None);
+    let ctx = GenericReplayRunContext::new(
+        replay,
+        filter_cfg,
+        mount_source,
+        GnssOutageConfig::default(),
+    );
     add_auxiliary_generic_traces_impl(
         data,
-        replay,
-        ekf_cfg,
-        ekf_imu_source,
+        &ctx,
         reference_mount_rpy_deg,
         reference_attitude_rpy,
         &mut progress,
@@ -783,27 +814,24 @@ pub fn add_auxiliary_generic_traces(
 
 fn add_auxiliary_generic_traces_impl(
     data: &mut PlotData,
-    replay: &GenericReplayInput,
-    ekf_cfg: EkfCompareConfig,
-    ekf_imu_source: EkfImuSource,
+    ctx: &GenericReplayRunContext<'_>,
     reference_mount_rpy_deg: Option<[f64; 3]>,
     reference_attitude_rpy: Option<[Vec<[f64; 2]>; 3]>,
     progress: &mut GenericProgressReporter<'_>,
 ) {
+    let replay = ctx.replay;
     let reference_mount_series = rpy_series_from_samples(&replay.reference_mount);
     let reference_attitude_series =
         reference_attitude_rpy.or_else(|| rpy_series_from_samples(&replay.reference_attitude));
     populate_align_traces(
         data,
-        replay,
-        ekf_cfg,
-        ekf_imu_source,
+        ctx,
         reference_mount_rpy_deg,
         replay.reference_mount.as_slice(),
         progress,
     );
-    populate_loose_traces(data, replay, ekf_cfg, progress);
-    populate_eskf_bump_traces(data);
+    populate_full_traces(data, ctx, progress);
+    populate_reduced_bump_traces(data);
     if let Some(truth) = reference_attitude_series {
         let traces = [
             Trace {
@@ -819,21 +847,21 @@ fn add_auxiliary_generic_traces_impl(
                 points: truth[2].clone(),
             },
         ];
-        data.eskf_cmp_att.extend(traces.clone());
-        data.loose_cmp_att.extend(traces);
+        data.reduced_cmp_att.extend(traces.clone());
+        data.full_cmp_att.extend(traces);
     }
     if let Some(reference) = reference_mount_series {
         push_mount_quaternion_error_trace(
-            &mut data.eskf_misalignment,
-            "ESKF",
-            "ESKF mount",
+            &mut data.reduced_misalignment,
+            "Reduced",
+            "Reduced mount",
             reference_mount_rpy_deg,
             replay.reference_mount.as_slice(),
         );
         push_mount_quaternion_error_trace(
-            &mut data.loose_misalignment,
-            "Loose",
-            "Loose residual mount",
+            &mut data.full_misalignment,
+            "Full",
+            "Full residual mount",
             reference_mount_rpy_deg,
             replay.reference_mount.as_slice(),
         );
@@ -858,8 +886,8 @@ fn add_auxiliary_generic_traces_impl(
                 points: reference[2].clone(),
             },
         ];
-        data.eskf_misalignment.extend(traces.clone());
-        data.loose_misalignment.extend(traces);
+        data.reduced_misalignment.extend(traces.clone());
+        data.full_misalignment.extend(traces);
     }
 }
 
@@ -931,15 +959,14 @@ fn sample_trace_at(trace: &Trace, t_s: f64) -> Option<f64> {
 
 fn populate_align_traces(
     data: &mut PlotData,
-    replay: &GenericReplayInput,
-    ekf_cfg: EkfCompareConfig,
-    ekf_imu_source: EkfImuSource,
+    ctx: &GenericReplayRunContext<'_>,
     reference_mount_rpy_deg: Option<[f64; 3]>,
     reference_mount_series: &[GenericReferenceRpySample],
     progress: &mut GenericProgressReporter<'_>,
 ) {
+    let replay = ctx.replay;
     let mut fusion = SensorFusion::new();
-    apply_fusion_config(&mut fusion, ekf_cfg, ekf_imu_source);
+    ctx.configure_fusion(&mut fusion);
 
     let mut align_roll = Vec::new();
     let mut align_pitch = Vec::new();
@@ -1203,29 +1230,25 @@ fn populate_align_traces(
     ];
 }
 
-fn populate_loose_traces(
+fn populate_full_traces(
     data: &mut PlotData,
-    replay: &GenericReplayInput,
-    ekf_cfg: EkfCompareConfig,
+    ctx: &GenericReplayRunContext<'_>,
     progress: &mut GenericProgressReporter<'_>,
 ) {
+    let replay = ctx.replay;
+    let filter_cfg = ctx.filter_cfg;
     let Some(ref_gnss) = replay.gnss.first().copied() else {
         return;
     };
     let ref_ecef = lla_to_ecef(ref_gnss.lat_deg, ref_gnss.lon_deg, ref_gnss.height_m);
-    let mut align_fusion = SensorFusion::new();
-    apply_fusion_config(&mut align_fusion, ekf_cfg, EkfImuSource::Internal);
-    let mut loose = LooseFilter::new(
-        ekf_cfg
-            .loose_predict_noise
-            .unwrap_or_else(LoosePredictNoise::lsm6dso_loose_104hz),
-    );
-    let mut loose_ready = false;
-    let mut last_imu: Option<GenericImuSample> = None;
-    let mut latest_gnss: Option<GenericGnssSample> = None;
-    let mut loose_gnss_cursor = 0usize;
-    let mut last_gnss_used_t_s = f64::NEG_INFINITY;
-    let mut seed_mount_q_vb: Option<[f32; 4]> = None;
+    let mut full_fusion = SensorFusion::with_config(Config {
+        filter: Filter::Full,
+        ..Config::default()
+    });
+    apply_fusion_config(&mut full_fusion, filter_cfg, MountSourceMode::Internal);
+    if let Some(seed_q_vb) = ctx.reference_mount_seed_q_vb() {
+        full_fusion.set_misalignment(seed_q_vb);
+    }
 
     let mut pos_n = Vec::new();
     let mut pos_e = Vec::new();
@@ -1272,83 +1295,18 @@ fn populate_loose_traces(
     for_each_event(&replay.imu, &replay.gnss, |event| match event {
         ReplayEvent::Imu(index, sample) => {
             progress.report_stage(0.72, 0.26, sample.t_s);
-            let _ = align_fusion.process_imu(fusion_imu_sample(*sample));
-            let Some(prev) = last_imu.replace(*sample) else {
-                return;
-            };
-            if !loose_ready {
-                return;
-            }
-            let dt = (sample.t_s - prev.t_s).max(0.0);
-            if dt <= 0.0 || dt > 1.0 {
-                return;
-            }
-            let imu = loose_imu_delta_from_vehicle(
-                prev.gyro_radps,
-                prev.accel_mps2,
-                sample.gyro_radps,
-                sample.accel_mps2,
-                dt,
-            );
-            loose.predict(imu);
-            while loose_gnss_cursor < replay.gnss.len()
-                && replay.gnss[loose_gnss_cursor].t_s <= sample.t_s + 1.0e-9
-            {
-                latest_gnss = Some(replay.gnss[loose_gnss_cursor]);
-                loose_gnss_cursor += 1;
-            }
-            let mut gps_pos = None;
-            let mut gps_vel = None;
-            let mut gps_pos_std = 0.0f32;
-            let mut gps_vel_std = None;
-            let mut dt_since_gnss = 1.0f32;
-            if let Some(gnss) = latest_gnss
-                && (0.0..=0.05).contains(&(sample.t_s - gnss.t_s))
-                && gnss.t_s != last_gnss_used_t_s
-            {
-                gps_pos = Some(lla_to_ecef(gnss.lat_deg, gnss.lon_deg, gnss.height_m));
-                gps_vel = Some(
-                    ned_vector_to_ecef(gnss.lat_deg, gnss.lon_deg, gnss.vel_ned_mps)
-                        .map(|v| v as f32),
-                );
-                gps_pos_std = ((gnss.pos_std_m[0] + gnss.pos_std_m[1] + gnss.pos_std_m[2]) / 3.0)
-                    .max(0.1) as f32;
-                gps_vel_std = Some(gnss.vel_std_mps.map(|v| v.max(0.01) as f32));
-                dt_since_gnss = if last_gnss_used_t_s.is_finite() {
-                    (gnss.t_s - last_gnss_used_t_s).clamp(1.0e-3, 1.0) as f32
-                } else {
-                    1.0
-                };
-                last_gnss_used_t_s = gnss.t_s;
-            }
-            let nhc_gate_speed_mps = latest_gnss.and_then(|gnss| {
-                let age_s = sample.t_s - gnss.t_s;
-                (0.0..=LOOSE_NHC_GNSS_SPEED_MAX_AGE_S)
-                    .contains(&age_s)
-                    .then(|| gnss.vel_ned_mps[0].hypot(gnss.vel_ned_mps[1]) as f32)
-            });
-            loose.fuse_reference_batch_full_with_nhc_speed_and_r(
-                gps_pos,
-                gps_vel,
-                gps_pos_std,
-                gps_vel_std,
-                dt_since_gnss,
-                nhc_gate_speed_mps,
-                ekf_cfg.r_body_vel,
-                ekf_cfg.r_body_vel_z,
-                sample.gyro_radps.map(|v| v as f32),
-                sample.accel_mps2.map(|v| v as f32),
-                dt as f32,
-            );
+            let _ = full_fusion.process_imu(fusion_imu_sample(*sample));
             if !output_sampling.keep_imu(index, imu_total) {
                 return;
             }
-            append_loose_sample(
+            let Some(full) = full_fusion.full() else {
+                return;
+            };
+            append_full_sample(
                 sample.t_s,
-                &loose,
+                full,
                 ref_gnss,
                 ref_ecef,
-                seed_mount_q_vb,
                 &mut pos_n,
                 &mut pos_e,
                 &mut pos_d,
@@ -1394,240 +1352,213 @@ fn populate_loose_traces(
         }
         ReplayEvent::Gnss(index, sample) => {
             progress.report_stage(0.72, 0.26, sample.t_s);
-            let _ = align_fusion.process_gnss(fusion_gnss_sample(*sample));
-            latest_gnss = Some(*sample);
-            if loose_ready || !align_fusion.mount_ready() {
-                return;
-            }
-            let speed = sample.vel_ned_mps[0].hypot(sample.vel_ned_mps[1]);
-            if speed < 0.5 {
-                return;
-            }
-            let yaw_rad = sample.vel_ned_mps[1].atan2(sample.vel_ned_mps[0]) as f32;
-            let pos_ecef = lla_to_ecef(sample.lat_deg, sample.lon_deg, sample.height_m);
-            let vel_ecef = ned_vector_to_ecef(sample.lat_deg, sample.lon_deg, sample.vel_ned_mps)
-                .map(|v| v as f32);
-            seed_mount_q_vb = align_fusion.mount_q_vb();
-            loose.init_seeded_vehicle_from_nav_ecef_state(
-                yaw_rad,
-                sample.lat_deg,
-                sample.lon_deg,
-                pos_ecef,
-                vel_ecef,
-                Some(default_loose_p_diag(*sample, ekf_cfg)),
-                None,
-            );
-            if let Some(seed_q) = seed_mount_q_vb {
-                loose.set_mount_quat(seed_q);
-            }
-            loose_ready = true;
-            loose_gnss_cursor = index + 1;
-            last_gnss_used_t_s = sample.t_s;
+            let _ = index;
+            let _ = full_fusion.process_gnss(fusion_gnss_sample(*sample));
         }
     });
 
-    data.loose_cmp_pos = vec![
+    data.full_cmp_pos = vec![
         Trace {
-            name: "Loose posN [m]".to_string(),
+            name: "Full posN [m]".to_string(),
             points: pos_n,
         },
         Trace {
-            name: "Loose posE [m]".to_string(),
+            name: "Full posE [m]".to_string(),
             points: pos_e,
         },
         Trace {
-            name: "Loose posD [m]".to_string(),
+            name: "Full posD [m]".to_string(),
             points: pos_d,
         },
     ];
-    data.loose_cmp_vel = vec![
+    data.full_cmp_vel = vec![
         Trace {
-            name: "Loose velN [m/s]".to_string(),
+            name: "Full velN [m/s]".to_string(),
             points: vel_n,
         },
         Trace {
-            name: "Loose velE [m/s]".to_string(),
+            name: "Full velE [m/s]".to_string(),
             points: vel_e,
         },
         Trace {
-            name: "Loose velD [m/s]".to_string(),
+            name: "Full velD [m/s]".to_string(),
             points: vel_d,
         },
     ];
-    data.loose_cmp_att = vec![
+    data.full_cmp_att = vec![
         Trace {
-            name: "Loose roll [deg]".to_string(),
+            name: "Full roll [deg]".to_string(),
             points: roll,
         },
         Trace {
-            name: "Loose pitch [deg]".to_string(),
+            name: "Full pitch [deg]".to_string(),
             points: pitch,
         },
         Trace {
-            name: "Loose yaw [deg]".to_string(),
+            name: "Full yaw [deg]".to_string(),
             points: yaw,
         },
     ];
-    data.loose_misalignment = vec![
+    data.full_misalignment = vec![
         Trace {
-            name: "Loose residual mount roll [deg]".to_string(),
+            name: "Full residual mount roll [deg]".to_string(),
             points: mount_roll,
         },
         Trace {
-            name: "Loose residual mount pitch [deg]".to_string(),
+            name: "Full residual mount pitch [deg]".to_string(),
             points: mount_pitch,
         },
         Trace {
-            name: "Loose residual mount yaw [deg]".to_string(),
+            name: "Full residual mount yaw [deg]".to_string(),
             points: mount_yaw,
         },
     ];
-    data.loose_meas_gyro = vec![
+    data.full_meas_gyro = vec![
         Trace {
-            name: "Loose gyro x [deg/s]".to_string(),
+            name: "Full gyro x [deg/s]".to_string(),
             points: gyro_x,
         },
         Trace {
-            name: "Loose gyro y [deg/s]".to_string(),
+            name: "Full gyro y [deg/s]".to_string(),
             points: gyro_y,
         },
         Trace {
-            name: "Loose gyro z [deg/s]".to_string(),
+            name: "Full gyro z [deg/s]".to_string(),
             points: gyro_z,
         },
     ];
-    data.loose_meas_accel = vec![
+    data.full_meas_accel = vec![
         Trace {
-            name: "Loose accel x [m/s^2]".to_string(),
+            name: "Full accel x [m/s^2]".to_string(),
             points: accel_x,
         },
         Trace {
-            name: "Loose accel y [m/s^2]".to_string(),
+            name: "Full accel y [m/s^2]".to_string(),
             points: accel_y,
         },
         Trace {
-            name: "Loose accel z [m/s^2]".to_string(),
+            name: "Full accel z [m/s^2]".to_string(),
             points: accel_z,
         },
     ];
-    data.loose_bias_gyro = vec![
+    data.full_bias_gyro = vec![
         Trace {
-            name: "Loose gyro sensor bias X [deg/s]".to_string(),
+            name: "Full gyro sensor bias X [deg/s]".to_string(),
             points: bgx,
         },
         Trace {
-            name: "Loose gyro sensor bias Y [deg/s]".to_string(),
+            name: "Full gyro sensor bias Y [deg/s]".to_string(),
             points: bgy,
         },
         Trace {
-            name: "Loose gyro sensor bias Z [deg/s]".to_string(),
+            name: "Full gyro sensor bias Z [deg/s]".to_string(),
             points: bgz,
         },
     ];
-    data.loose_bias_accel = vec![
+    data.full_bias_accel = vec![
         Trace {
-            name: "Loose accel sensor bias X [m/s^2]".to_string(),
+            name: "Full accel sensor bias X [m/s^2]".to_string(),
             points: bax,
         },
         Trace {
-            name: "Loose accel sensor bias Y [m/s^2]".to_string(),
+            name: "Full accel sensor bias Y [m/s^2]".to_string(),
             points: bay,
         },
         Trace {
-            name: "Loose accel sensor bias Z [m/s^2]".to_string(),
+            name: "Full accel sensor bias Z [m/s^2]".to_string(),
             points: accel_bias_z,
         },
     ];
-    data.loose_scale_gyro = vec![
+    data.full_scale_gyro = vec![
         Trace {
-            name: "Loose sgx".to_string(),
+            name: "Full sgx".to_string(),
             points: sgx,
         },
         Trace {
-            name: "Loose sgy".to_string(),
+            name: "Full sgy".to_string(),
             points: sgy,
         },
         Trace {
-            name: "Loose sgz".to_string(),
+            name: "Full sgz".to_string(),
             points: sgz,
         },
     ];
-    data.loose_scale_accel = vec![
+    data.full_scale_accel = vec![
         Trace {
-            name: "Loose sax".to_string(),
+            name: "Full sax".to_string(),
             points: sax,
         },
         Trace {
-            name: "Loose say".to_string(),
+            name: "Full say".to_string(),
             points: say,
         },
         Trace {
-            name: "Loose saz".to_string(),
+            name: "Full saz".to_string(),
             points: saz,
         },
     ];
-    data.loose_cov_bias = cov_bias
+    data.full_cov_bias = cov_bias
         .into_iter()
         .enumerate()
         .map(|(i, points)| Trace {
-            name: format!("Loose sigma bias/scale {i}"),
+            name: format!("Full sigma bias/scale {i}"),
             points,
         })
         .collect();
-    data.loose_cov_nonbias = cov_nonbias
+    data.full_cov_nonbias = cov_nonbias
         .into_iter()
         .enumerate()
         .map(|(i, points)| Trace {
-            name: format!("Loose sigma state {i}"),
+            name: format!("Full sigma state {i}"),
             points,
         })
         .collect();
-    data.loose_mount_sigma = ["roll", "pitch", "yaw"]
+    data.full_mount_sigma = ["roll", "pitch", "yaw"]
         .into_iter()
         .zip(cov_mount)
         .map(|(axis, points)| Trace {
-            name: format!("Loose residual mount {axis} sigma [deg]"),
+            name: format!("Full residual mount {axis} sigma [deg]"),
             points,
         })
         .collect();
-    data.loose_mount_dx = ["roll", "pitch", "yaw"]
+    data.full_mount_dx = ["roll", "pitch", "yaw"]
         .into_iter()
         .zip(dx_mount)
         .map(|(axis, points)| Trace {
-            name: format!("Loose residual mount {axis} correction [deg/update]"),
+            name: format!("Full residual mount {axis} correction [deg/update]"),
             points,
         })
         .collect();
-    data.loose_nhc_innovation = ["Y", "Z"]
+    data.full_nhc_innovation = ["Y", "Z"]
         .into_iter()
         .zip(nhc_innovation)
         .map(|(axis, points)| Trace {
-            name: format!("Loose NHC {axis} innovation [m/s]"),
+            name: format!("Full NHC {axis} innovation [m/s]"),
             points,
         })
         .collect();
-    data.loose_gnss_pos_gate = ["row 0", "row 1", "row 2"]
+    data.full_gnss_pos_gate = ["row 0", "row 1", "row 2"]
         .into_iter()
         .zip(gnss_pos_gate_norm)
         .map(|(row, points)| Trace {
-            name: format!("Loose GNSS position gate normalized residual {row}"),
+            name: format!("Full GNSS position gate normalized residual {row}"),
             points,
         })
         .chain(std::iter::once(Trace {
-            name: "Loose GNSS position accepted".to_string(),
+            name: "Full GNSS position accepted".to_string(),
             points: gnss_pos_gate_status,
         }))
         .collect();
-    data.loose_map = vec![Trace {
-        name: "Loose path (lon,lat)".to_string(),
+    data.full_map = vec![Trace {
+        name: "Full path (lon,lat)".to_string(),
         points: map,
     }];
-    data.loose_map_heading = headings;
+    data.full_map_heading = headings;
 }
 
-fn populate_eskf_bump_traces(data: &mut PlotData) {
+fn populate_reduced_bump_traces(data: &mut PlotData) {
     let pitch = data
-        .eskf_cmp_att
+        .reduced_cmp_att
         .iter()
         .find(|t| t.name.to_ascii_lowercase().contains("pitch"))
         .map(|t| t.points.clone())
@@ -1637,9 +1568,9 @@ fn populate_eskf_bump_traces(data: &mut PlotData) {
         .first()
         .map(|t| t.points.clone())
         .unwrap_or_default();
-    data.eskf_bump_pitch_speed = vec![
+    data.reduced_bump_pitch_speed = vec![
         Trace {
-            name: "ESKF pitch [deg]".to_string(),
+            name: "Reduced pitch [deg]".to_string(),
             points: pitch.clone(),
         },
         Trace {
@@ -1659,7 +1590,7 @@ fn populate_eskf_bump_traces(data: &mut PlotData) {
         hpf.push([t, hp]);
         abs_ema.push([t, rms_ema.sqrt()]);
     }
-    data.eskf_bump_diag = vec![
+    data.reduced_bump_diag = vec![
         Trace {
             name: "Pitch HPF [deg]".to_string(),
             points: hpf,
@@ -1671,12 +1602,12 @@ fn populate_eskf_bump_traces(data: &mut PlotData) {
     ];
 }
 
-fn eskf_nhc_mount_dx_traces(points: &[Vec<[f64; 2]>; 6]) -> Vec<Trace> {
+fn reduced_nhc_mount_dx_traces(points: &[Vec<[f64; 2]>; 6]) -> Vec<Trace> {
     let mut traces = Vec::with_capacity(6);
     for (diag_i, (_, label)) in NHC_DIAG_TYPES.iter().copied().enumerate() {
         for (axis_i, axis) in ["roll", "pitch", "yaw"].into_iter().enumerate() {
             traces.push(Trace {
-                name: format!("ESKF {label} mount {axis} correction [deg/update]"),
+                name: format!("Reduced {label} mount {axis} correction [deg/update]"),
                 points: points[diag_i * 3 + axis_i].clone(),
             });
         }
@@ -1685,7 +1616,7 @@ fn eskf_nhc_mount_dx_traces(points: &[Vec<[f64; 2]>; 6]) -> Vec<Trace> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn append_eskf_sample(
+fn append_reduced_sample(
     t_s: f64,
     fusion: &SensorFusion,
     ref_gnss: Option<GenericGnssSample>,
@@ -1716,18 +1647,18 @@ fn append_eskf_sample(
     nhc_nis: &mut [Vec<[f64; 2]>; 2],
     nhc_h_mount_norm: &mut [Vec<[f64; 2]>; 2],
     update_inspector: &mut Vec<UpdateInspectorSample>,
-    last_type_counts: &mut [u32; ESKF_UPDATE_DIAG_TYPES],
+    last_type_counts: &mut [u32; REDUCED_UPDATE_DIAG_TYPES],
     map: &mut Vec<[f64; 2]>,
     outage_map: &mut Vec<[f64; 2]>,
     headings: &mut Vec<HeadingSample>,
     map_cursor: &mut Vec<MapCursorSample>,
     outage_active: bool,
 ) {
-    let Some(eskf) = fusion.eskf() else {
+    let Some(reduced) = fusion.reduced() else {
         return;
     };
-    let display_pos = eskf_display_position_ned(fusion, eskf, ref_gnss, ref_ecef);
-    let display_vel = eskf_display_velocity_ned(fusion, eskf, ref_gnss);
+    let display_pos = reduced_display_position_ned(fusion, reduced, ref_gnss, ref_ecef);
+    let display_vel = reduced_display_velocity_ned(fusion, reduced, ref_gnss);
     pos_n.push([t_s, display_pos[0]]);
     pos_e.push([t_s, display_pos[1]]);
     pos_d.push([t_s, display_pos[2]]);
@@ -1735,7 +1666,7 @@ fn append_eskf_sample(
     vel_e.push([t_s, display_vel[1]]);
     vel_d.push([t_s, display_vel[2]]);
 
-    let q_vehicle = eskf_vehicle_attitude_q(eskf);
+    let q_vehicle = reduced_vehicle_attitude_q(reduced);
     let (r, p, y) = quat_rpy_deg(
         q_vehicle[0] as f32,
         q_vehicle[1] as f32,
@@ -1747,26 +1678,26 @@ fn append_eskf_sample(
     yaw.push([t_s, y]);
 
     let q_vb = [
-        eskf.nominal.qcs0 as f64,
-        eskf.nominal.qcs1 as f64,
-        eskf.nominal.qcs2 as f64,
-        eskf.nominal.qcs3 as f64,
+        reduced.nominal.qcs0 as f64,
+        reduced.nominal.qcs1 as f64,
+        reduced.nominal.qcs2 as f64,
+        reduced.nominal.qcs3 as f64,
     ];
     let (mr, mp, my) = q_vb_to_reference_mount_rpy(q_vb);
     mount_roll.push([t_s, mr]);
     mount_pitch.push([t_s, mp]);
     mount_yaw.push([t_s, my]);
 
-    bgx.push([t_s, (eskf.nominal.bgx as f64).to_degrees()]);
-    bgy.push([t_s, (eskf.nominal.bgy as f64).to_degrees()]);
-    bgz.push([t_s, (eskf.nominal.bgz as f64).to_degrees()]);
-    accel_bias_x.push([t_s, eskf.nominal.bax as f64]);
-    accel_bias_y.push([t_s, eskf.nominal.bay as f64]);
-    accel_bias_z.push([t_s, eskf.nominal.baz as f64]);
+    bgx.push([t_s, (reduced.nominal.bgx as f64).to_degrees()]);
+    bgy.push([t_s, (reduced.nominal.bgy as f64).to_degrees()]);
+    bgz.push([t_s, (reduced.nominal.bgz as f64).to_degrees()]);
+    accel_bias_x.push([t_s, reduced.nominal.bax as f64]);
+    accel_bias_y.push([t_s, reduced.nominal.bay as f64]);
+    accel_bias_z.push([t_s, reduced.nominal.baz as f64]);
     for (i, trace) in cov.iter_mut().enumerate() {
-        trace.push([t_s, eskf.p[i][i].max(0.0).sqrt() as f64]);
+        trace.push([t_s, reduced.p[i][i].max(0.0).sqrt() as f64]);
     }
-    let diag = eskf.update_diag;
+    let diag = reduced.update_diag;
     if diag.total_updates != *last_update_count {
         mount_dx[0].push([t_s, (diag.last_dx_mount_roll as f64).to_degrees()]);
         mount_dx[1].push([t_s, (diag.last_dx_mount_pitch as f64).to_degrees()]);
@@ -1790,7 +1721,7 @@ fn append_eskf_sample(
             nhc_innovation[diag_i].push([t_s, diag.last_innovation_by_type[diag_type] as f64]);
             nhc_nis[diag_i].push([t_s, diag.last_nis_by_type[diag_type] as f64]);
             nhc_h_mount_norm[diag_i].push([t_s, diag.last_h_mount_norm_by_type[diag_type] as f64]);
-            update_inspector.push(eskf_nhc_inspector_sample(
+            update_inspector.push(reduced_nhc_inspector_sample(
                 t_s,
                 label,
                 diag.last_innovation_by_type[diag_type],
@@ -1798,7 +1729,7 @@ fn append_eskf_sample(
                 diag.last_dx_mount_roll_by_type[diag_type],
                 diag.last_dx_mount_pitch_by_type[diag_type],
                 diag.last_dx_mount_yaw_by_type[diag_type],
-                &eskf.p,
+                &reduced.p,
             ));
             last_type_counts[diag_type] = diag.type_counts[diag_type];
         }
@@ -1822,7 +1753,7 @@ fn append_eskf_sample(
             yaw_deg: y,
         });
         map_cursor.push(MapCursorSample {
-            trace_name: "ESKF path (lon,lat)".to_string(),
+            trace_name: "Reduced path (lon,lat)".to_string(),
             t_s,
             lon_deg: lon,
             lat_deg: lat,
@@ -1830,7 +1761,7 @@ fn append_eskf_sample(
         });
         if outage_active {
             map_cursor.push(MapCursorSample {
-                trace_name: "ESKF path during GNSS outage (lon,lat)".to_string(),
+                trace_name: "Reduced path during GNSS outage (lon,lat)".to_string(),
                 t_s,
                 lon_deg: lon,
                 lat_deg: lat,
@@ -1840,9 +1771,9 @@ fn append_eskf_sample(
     }
 }
 
-fn eskf_display_position_ned(
+fn reduced_display_position_ned(
     fusion: &SensorFusion,
-    eskf: &sensor_fusion::eskf_types::EskfState,
+    reduced: &sensor_fusion::reduced::ReducedState,
     ref_gnss: Option<GenericGnssSample>,
     ref_ecef: Option<[f64; 3]>,
 ) -> [f64; 3] {
@@ -1853,15 +1784,15 @@ fn eskf_display_position_ned(
         return ecef_to_ned(ecef, ref_ecef, ref_sample.lat_deg, ref_sample.lon_deg);
     }
     [
-        eskf.nominal.pn as f64,
-        eskf.nominal.pe as f64,
-        eskf.nominal.pd as f64,
+        reduced.nominal.pn as f64,
+        reduced.nominal.pe as f64,
+        reduced.nominal.pd as f64,
     ]
 }
 
-fn eskf_display_velocity_ned(
+fn reduced_display_velocity_ned(
     fusion: &SensorFusion,
-    eskf: &sensor_fusion::eskf_types::EskfState,
+    reduced: &sensor_fusion::reduced::ReducedState,
     ref_gnss: Option<GenericGnssSample>,
 ) -> [f64; 3] {
     if let (Some(anchor), Some(ref_sample)) = (fusion.anchor_lla_debug(), ref_gnss) {
@@ -1869,60 +1800,35 @@ fn eskf_display_velocity_ned(
             anchor[0] as f64,
             anchor[1] as f64,
             [
-                eskf.nominal.vn as f64,
-                eskf.nominal.ve as f64,
-                eskf.nominal.vd as f64,
+                reduced.nominal.vn as f64,
+                reduced.nominal.ve as f64,
+                reduced.nominal.vd as f64,
             ],
         );
         return ecef_vector_to_ned(ref_sample.lat_deg, ref_sample.lon_deg, vel_ecef);
     }
     [
-        eskf.nominal.vn as f64,
-        eskf.nominal.ve as f64,
-        eskf.nominal.vd as f64,
+        reduced.nominal.vn as f64,
+        reduced.nominal.ve as f64,
+        reduced.nominal.vd as f64,
     ]
 }
 
-fn eskf_vehicle_attitude_q(eskf: &sensor_fusion::eskf_types::EskfState) -> [f64; 4] {
+fn reduced_vehicle_attitude_q(reduced: &sensor_fusion::reduced::ReducedState) -> [f64; 4] {
     as_q64([
-        eskf.nominal.q0,
-        eskf.nominal.q1,
-        eskf.nominal.q2,
-        eskf.nominal.q3,
+        reduced.nominal.q0,
+        reduced.nominal.q1,
+        reduced.nominal.q2,
+        reduced.nominal.q3,
     ])
 }
 
-fn loose_imu_delta_from_vehicle(
-    prev_gyro_radps: [f64; 3],
-    prev_accel_mps2: [f64; 3],
-    curr_gyro_radps: [f64; 3],
-    curr_accel_mps2: [f64; 3],
-    dt: f64,
-) -> LooseImuDelta {
-    LooseImuDelta {
-        dax_1: (prev_gyro_radps[0] * dt) as f32,
-        day_1: (prev_gyro_radps[1] * dt) as f32,
-        daz_1: (prev_gyro_radps[2] * dt) as f32,
-        dvx_1: (prev_accel_mps2[0] * dt) as f32,
-        dvy_1: (prev_accel_mps2[1] * dt) as f32,
-        dvz_1: (prev_accel_mps2[2] * dt) as f32,
-        dax_2: (curr_gyro_radps[0] * dt) as f32,
-        day_2: (curr_gyro_radps[1] * dt) as f32,
-        daz_2: (curr_gyro_radps[2] * dt) as f32,
-        dvx_2: (curr_accel_mps2[0] * dt) as f32,
-        dvy_2: (curr_accel_mps2[1] * dt) as f32,
-        dvz_2: (curr_accel_mps2[2] * dt) as f32,
-        dt: dt as f32,
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
-fn append_loose_sample(
+fn append_full_sample(
     t_s: f64,
-    loose: &LooseFilter,
+    full: &FullState,
     ref_gnss: GenericGnssSample,
     ref_ecef: [f64; 3],
-    _seed_mount_q_vb: Option<[f32; 4]>,
     pos_n: &mut Vec<[f64; 2]>,
     pos_e: &mut Vec<[f64; 2]>,
     pos_d: &mut Vec<[f64; 2]>,
@@ -1959,8 +1865,8 @@ fn append_loose_sample(
     headings: &mut Vec<HeadingSample>,
     map_cursor: &mut Vec<MapCursorSample>,
 ) {
-    let n = loose.nominal();
-    let pos_ecef = loose.shadow_pos_ecef();
+    let n = &full.nominal;
+    let pos_ecef = full.pos_e64;
     let vel_ecef = [n.vn as f64, n.ve as f64, n.vd as f64];
     let pos = ecef_to_ned(pos_ecef, ref_ecef, ref_gnss.lat_deg, ref_gnss.lon_deg);
     let vel = ecef_vector_to_ned(ref_gnss.lat_deg, ref_gnss.lon_deg, vel_ecef);
@@ -2001,7 +1907,7 @@ fn append_loose_sample(
         yaw_deg: y,
     });
     map_cursor.push(MapCursorSample {
-        trace_name: "Loose path (lon,lat)".to_string(),
+        trace_name: "Full path (lon,lat)".to_string(),
         t_s,
         lon_deg: lon,
         lat_deg: lat,
@@ -2013,8 +1919,8 @@ fn append_loose_sample(
     mount_pitch.push([t_s, mp]);
     mount_yaw.push([t_s, my]);
 
-    let gyro_sensor_bias_dps = loose_gyro_sensor_bias_dps(n);
-    let accel_sensor_bias_mps2 = loose_accel_sensor_bias_mps2(n);
+    let gyro_sensor_bias_dps = full_gyro_sensor_bias_dps(n);
+    let accel_sensor_bias_mps2 = full_accel_sensor_bias_mps2(n);
     bgx.push([t_s, gyro_sensor_bias_dps[0]]);
     bgy.push([t_s, gyro_sensor_bias_dps[1]]);
     bgz.push([t_s, gyro_sensor_bias_dps[2]]);
@@ -2027,7 +1933,7 @@ fn append_loose_sample(
     sax.push([t_s, n.sax as f64]);
     say.push([t_s, n.say as f64]);
     saz.push([t_s, n.saz as f64]);
-    let pmat = loose.covariance();
+    let pmat = &full.p;
     for (dst, idx) in cov_bias
         .iter_mut()
         .zip([12usize, 13, 14, 9, 10, 11, 15, 16, 17, 18, 19, 20])
@@ -2040,26 +1946,26 @@ fn append_loose_sample(
     for (dst, idx) in cov_mount.iter_mut().zip([21usize, 22, 23]) {
         dst.push([t_s, (pmat[idx][idx].max(0.0).sqrt() as f64).to_degrees()]);
     }
-    let dx = loose.last_dx();
-    let has_update = !loose.last_obs_types().is_empty();
+    let dx = &full.last_dx;
+    let obs_count = full
+        .last_obs_count
+        .clamp(0, full.last_obs_types.len() as i32) as usize;
+    let obs_types = &full.last_obs_types[..obs_count];
+    let has_update = obs_count > 0;
     if has_update {
         for (dst, idx) in dx_mount.iter_mut().zip([21usize, 22, 23]) {
             dst.push([t_s, (dx[idx] as f64).to_degrees()]);
         }
-        update_inspector.push(loose_inspector_sample(t_s, loose));
-        let obs_types = loose.last_obs_types();
-        if obs_types.contains(&7) || obs_types.contains(&8) {
-            let (vc_y, _) = generated_loose::nhc_y(loose.nominal());
-            let (vc_z, _) = generated_loose::nhc_z(loose.nominal());
-            if obs_types.contains(&7) {
-                nhc_innovation[0].push([t_s, -(vc_y as f64)]);
-            }
-            if obs_types.contains(&8) {
-                nhc_innovation[1].push([t_s, -(vc_z as f64)]);
+        update_inspector.push(full_inspector_sample(t_s, full));
+        for (&obs_type, &residual) in obs_types.iter().zip(full.last_residuals.iter()) {
+            if obs_type == 7 {
+                nhc_innovation[0].push([t_s, residual as f64]);
+            } else if obs_type == 8 {
+                nhc_innovation[1].push([t_s, residual as f64]);
             }
         }
     }
-    let gnss_gate = loose.last_gnss_position_gate();
+    let gnss_gate = full.last_gnss_pos_gate;
     if gnss_gate.attempted {
         for (dst, value) in gnss_pos_gate_norm
             .iter_mut()
@@ -2071,7 +1977,7 @@ fn append_loose_sample(
     }
 }
 
-fn eskf_nhc_inspector_sample(
+fn reduced_nhc_inspector_sample(
     t_s: f64,
     label: &str,
     innovation: f32,
@@ -2096,35 +2002,37 @@ fn eskf_nhc_inspector_sample(
     .collect();
     UpdateInspectorSample {
         t_s,
-        filter: "ESKF".to_string(),
+        filter: "Reduced".to_string(),
         update: label.to_string(),
         residual: Some(innovation as f64),
         nis: Some(nis as f64),
         contributions,
-        correlations: eskf_mount_correlations(p),
+        correlations: reduced_mount_correlations(p),
     }
 }
 
-fn loose_inspector_sample(t_s: f64, loose: &LooseFilter) -> UpdateInspectorSample {
-    let obs_types = loose.last_obs_types();
+fn full_inspector_sample(t_s: f64, full: &FullState) -> UpdateInspectorSample {
+    let obs_count = full
+        .last_obs_count
+        .clamp(0, full.last_obs_types.len() as i32) as usize;
+    let obs_types = &full.last_obs_types[..obs_count];
     let update = if obs_types.contains(&7) || obs_types.contains(&8) {
         "batch + NHC"
     } else {
         "GNSS batch"
     };
-    let dx = loose.last_dx();
     UpdateInspectorSample {
         t_s,
-        filter: "Loose".to_string(),
+        filter: "Full".to_string(),
         update: update.to_string(),
         residual: None,
         nis: None,
-        contributions: loose_state_contributions(dx),
-        correlations: loose_mount_correlations(loose.covariance()),
+        contributions: full_state_contributions(&full.last_dx),
+        correlations: full_mount_correlations(&full.p),
     }
 }
 
-fn eskf_mount_correlations(p: &[[f32; 18]; 18]) -> Vec<StateCorrelation> {
+fn reduced_mount_correlations(p: &[[f32; 18]; 18]) -> Vec<StateCorrelation> {
     const STATES: [(&str, &str, usize, f64); 18] = [
         ("att roll", "attitude", 0, 1.0),
         ("att pitch", "attitude", 1, 1.0),
@@ -2152,10 +2060,10 @@ fn eskf_mount_correlations(p: &[[f32; 18]; 18]) -> Vec<StateCorrelation> {
     )
 }
 
-fn loose_mount_correlations(
-    p: &[[f32; LOOSE_ERROR_STATES]; LOOSE_ERROR_STATES],
+fn full_mount_correlations(
+    p: &[[f32; FULL_ERROR_STATES]; FULL_ERROR_STATES],
 ) -> Vec<StateCorrelation> {
-    const STATES: [(&str, &str, usize, f64); LOOSE_ERROR_STATES] = [
+    const STATES: [(&str, &str, usize, f64); FULL_ERROR_STATES] = [
         ("pos X", "position", 0, 1.0),
         ("pos Y", "position", 1, 1.0),
         ("pos Z", "position", 2, 1.0),
@@ -2232,7 +2140,7 @@ fn covariance_correlation<const N: usize>(p: &[[f32; N]; N], i: usize, j: usize)
     (p[i][j] as f64 / denom).clamp(-1.0, 1.0)
 }
 
-fn loose_state_contributions(dx: &[f32; LOOSE_ERROR_STATES]) -> Vec<StateContribution> {
+fn full_state_contributions(dx: &[f32; FULL_ERROR_STATES]) -> Vec<StateContribution> {
     const STATES: [(&str, &str, &str, usize, f64); 24] = [
         ("pos X", "position", "m", 0, 1.0),
         ("pos Y", "position", "m", 1, 1.0),
@@ -2336,7 +2244,7 @@ fn loose_state_contributions(dx: &[f32; LOOSE_ERROR_STATES]) -> Vec<StateContrib
         .collect()
 }
 
-fn loose_gyro_sensor_bias_dps(n: &LooseNominalState) -> [f64; 3] {
+fn full_gyro_sensor_bias_dps(n: &FullNominalState) -> [f64; 3] {
     [
         -(n.bgx as f64).to_degrees(),
         -(n.bgy as f64).to_degrees(),
@@ -2348,60 +2256,8 @@ fn sigma_rad_points_to_deg(points: &[[f64; 2]]) -> Vec<[f64; 2]> {
     points.iter().map(|p| [p[0], p[1].to_degrees()]).collect()
 }
 
-fn loose_accel_sensor_bias_mps2(n: &LooseNominalState) -> [f64; 3] {
+fn full_accel_sensor_bias_mps2(n: &FullNominalState) -> [f64; 3] {
     [-(n.bax as f64), -(n.bay as f64), -(n.baz as f64)]
-}
-
-fn default_loose_p_diag(
-    gnss: GenericGnssSample,
-    cfg: EkfCompareConfig,
-) -> [f32; LOOSE_ERROR_STATES] {
-    let mut p = [1.0_f32; LOOSE_ERROR_STATES];
-    let init = cfg.loose_init;
-
-    let pos_n_sigma = (gnss.pos_std_m[0] as f32).max(init.pos_min_sigma_m);
-    let pos_e_sigma = (gnss.pos_std_m[1] as f32).max(init.pos_min_sigma_m);
-    let pos_d_sigma = (gnss.pos_std_m[2] as f32).max(init.pos_min_sigma_m);
-    p[0] = pos_n_sigma * pos_n_sigma;
-    p[1] = pos_e_sigma * pos_e_sigma;
-    p[2] = pos_d_sigma * pos_d_sigma;
-
-    let vel_sigma = gnss
-        .vel_std_mps
-        .iter()
-        .copied()
-        .fold(0.0_f64, f64::max)
-        .max(init.vel_min_sigma_mps as f64) as f32;
-    let vel_var = vel_sigma * vel_sigma;
-    p[3] = vel_var;
-    p[4] = vel_var;
-    p[5] = vel_var;
-
-    let attitude_var = init.attitude_sigma_deg.to_radians().powi(2);
-    p[6] = attitude_var;
-    p[7] = attitude_var;
-    p[8] = attitude_var;
-
-    let gyro_bias_sigma = init.gyro_bias_sigma_dps.to_radians();
-    p[9] = init.accel_bias_sigma_mps2 * init.accel_bias_sigma_mps2;
-    p[10] = init.accel_bias_sigma_mps2 * init.accel_bias_sigma_mps2;
-    p[11] = init.accel_bias_sigma_mps2 * init.accel_bias_sigma_mps2;
-    p[12] = gyro_bias_sigma * gyro_bias_sigma;
-    p[13] = gyro_bias_sigma * gyro_bias_sigma;
-    p[14] = gyro_bias_sigma * gyro_bias_sigma;
-
-    p[15] = init.accel_scale_sigma * init.accel_scale_sigma;
-    p[16] = init.accel_scale_sigma * init.accel_scale_sigma;
-    p[17] = init.accel_scale_sigma * init.accel_scale_sigma;
-    p[18] = init.gyro_scale_sigma * init.gyro_scale_sigma;
-    p[19] = init.gyro_scale_sigma * init.gyro_scale_sigma;
-    p[20] = init.gyro_scale_sigma * init.gyro_scale_sigma;
-
-    let mount_var = init.mount_sigma_deg.to_radians().powi(2);
-    p[21] = mount_var;
-    p[22] = mount_var;
-    p[23] = init.mount_yaw_sigma_deg.to_radians().powi(2);
-    p
 }
 
 fn push_update_contrib(
@@ -2437,63 +2293,6 @@ fn wrap_deg(mut x: f64) -> f64 {
         x += 360.0;
     }
     x
-}
-
-pub fn q_vb_to_reference_mount_rpy(q_vb: [f64; 4]) -> (f64, f64, f64) {
-    let q_x_180 = [0.0, 1.0, 0.0, 0.0];
-    let q_flu = quat_mul(q_x_180, quat_conj(q_vb));
-    quat_rpy_alg_deg(q_flu)
-}
-
-pub fn reference_mount_rpy_to_q_vb(rpy_deg: [f64; 3]) -> [f64; 4] {
-    let q_x_180 = [0.0, 1.0, 0.0, 0.0];
-    let q_flu = crate::eval::gnss_ins::quat_from_rpy_alg_deg(rpy_deg[0], rpy_deg[1], rpy_deg[2]);
-    quat_mul(quat_conj(q_flu), q_x_180)
-}
-
-fn reference_mount_seed_q_vb(
-    replay: &GenericReplayInput,
-    ekf_imu_source: EkfImuSource,
-) -> Option<[f32; 4]> {
-    if !ekf_imu_source.uses_ref_mount() {
-        return None;
-    }
-    replay
-        .reference_mount
-        .iter()
-        .rev()
-        .find(|sample| {
-            sample.roll_deg.is_finite()
-                && sample.pitch_deg.is_finite()
-                && sample.yaw_deg.is_finite()
-        })
-        .map(|sample| {
-            let q =
-                reference_mount_rpy_to_q_vb([sample.roll_deg, sample.pitch_deg, sample.yaw_deg]);
-            [q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32]
-        })
-}
-
-fn quat_rpy_alg_deg(q: [f64; 4]) -> (f64, f64, f64) {
-    let n = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
-    let (w, x, y, z) = if n > 1.0e-12 {
-        (q[0] / n, q[1] / n, q[2] / n, q[3] / n)
-    } else {
-        (1.0, 0.0, 0.0, 0.0)
-    };
-    let r00 = 1.0 - 2.0 * (y * y + z * z);
-    let r10 = 2.0 * (x * y + w * z);
-    let r20 = 2.0 * (x * z - w * y);
-    let r21 = 2.0 * (y * z + w * x);
-    let r22 = 1.0 - 2.0 * (x * x + y * y);
-    let pitch = (-r20).clamp(-1.0, 1.0).asin();
-    let roll = r21.atan2(r22);
-    let yaw = r10.atan2(r00);
-    (
-        roll.to_degrees(),
-        pitch.to_degrees(),
-        crate::visualizer::math::normalize_heading_deg(yaw.to_degrees()),
-    )
 }
 
 fn ned_vector_to_ecef(lat_deg: f64, lon_deg: f64, v_ned: [f64; 3]) -> [f64; 3] {
@@ -2573,11 +2372,15 @@ fn dcm_to_quat(c: [[f64; 3]; 3]) -> [f64; 4] {
     }
 }
 
-fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig, mode: EkfImuSource) {
+fn apply_fusion_config(fusion: &mut SensorFusion, cfg: FilterCompareConfig, mode: MountSourceMode) {
     fusion.set_align_config(cfg.align);
     if let Some(noise) = cfg.predict_noise {
         fusion.set_predict_noise(noise);
     }
+    if let Some(noise) = cfg.full_predict_noise {
+        fusion.set_full_predict_noise(noise);
+    }
+    fusion.set_full_init_config(cfg.full_init);
     fusion.set_r_body_vel_yz(cfg.r_body_vel, cfg.r_body_vel_z);
     fusion.set_attitude_roll_pitch_init_sigma_rad(
         cfg.attitude_roll_pitch_init_sigma_deg.to_radians(),
@@ -2593,7 +2396,7 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig, mode: E
     fusion.set_mount_align_rw_var(cfg.mount_align_rw_var);
     fusion.set_align_handoff_delay_s(cfg.align_handoff_delay_s);
     fusion.set_freeze_misalignment_states(cfg.freeze_misalignment_states);
-    fusion.set_eskf_mount_source(mode.eskf_mount_source());
+    fusion.set_mount_source(mode.mount_source());
     fusion.set_mount_settle_time_s(cfg.mount_settle_time_s);
     fusion.set_mount_settle_release_sigma_rad(cfg.mount_settle_release_sigma_deg.to_radians());
     fusion.set_mount_settle_zero_cross_covariance(cfg.mount_settle_zero_cross_covariance);
@@ -2664,42 +2467,6 @@ fn heading_deg_from_sample(heading_rad: Option<f64>, vel_ned_mps: [f64; 3]) -> O
             (speed > 0.2).then(|| vel_ned_mps[1].atan2(vel_ned_mps[0]).to_degrees())
         })
         .filter(|heading| heading.is_finite())
-}
-
-fn rpy_series_from_samples(samples: &[GenericReferenceRpySample]) -> Option<[Vec<[f64; 2]>; 3]> {
-    if samples.is_empty() {
-        return None;
-    }
-    let mut roll = Vec::with_capacity(samples.len());
-    let mut pitch = Vec::with_capacity(samples.len());
-    let mut yaw = Vec::with_capacity(samples.len());
-    for sample in samples {
-        roll.push([sample.t_s, sample.roll_deg]);
-        pitch.push([sample.t_s, sample.pitch_deg]);
-        yaw.push([sample.t_s, sample.yaw_deg]);
-    }
-    Some([roll, pitch, yaw])
-}
-
-fn reference_rpy_at(samples: &[GenericReferenceRpySample], t_s: f64) -> Option<[f64; 3]> {
-    if samples.is_empty() {
-        return None;
-    }
-    let idx = samples.partition_point(|sample| sample.t_s < t_s);
-    let nearest = match (idx.checked_sub(1), samples.get(idx)) {
-        (Some(prev_idx), Some(next)) => {
-            let prev = samples[prev_idx];
-            if (t_s - prev.t_s).abs() <= (next.t_s - t_s).abs() {
-                prev
-            } else {
-                *next
-            }
-        }
-        (Some(prev_idx), None) => samples[prev_idx],
-        (None, Some(next)) => *next,
-        (None, None) => return None,
-    };
-    Some([nearest.roll_deg, nearest.pitch_deg, nearest.yaw_deg])
 }
 
 fn parse_numeric_rows(text: &str, cols: usize, label: &str) -> Result<Vec<Vec<f64>>> {
@@ -2810,19 +2577,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn loose_bias_display_converts_correction_state_to_sensor_bias() {
-        let nominal = LooseNominalState {
+    fn full_bias_display_converts_correction_state_to_sensor_bias() {
+        let nominal = FullNominalState {
             bgx: 1.0_f32.to_radians(),
             bgy: -2.0_f32.to_radians(),
             bgz: 0.5_f32.to_radians(),
             bax: 0.1,
             bay: -0.2,
             baz: 0.3,
-            ..LooseNominalState::default()
+            ..FullNominalState::default()
         };
 
-        let gyro_bias = loose_gyro_sensor_bias_dps(&nominal);
-        let accel_bias = loose_accel_sensor_bias_mps2(&nominal);
+        let gyro_bias = full_gyro_sensor_bias_dps(&nominal);
+        let accel_bias = full_accel_sensor_bias_mps2(&nominal);
 
         assert!((gyro_bias[0] + 1.0).abs() < 1.0e-6);
         assert!((gyro_bias[1] - 2.0).abs() < 1.0e-6);
@@ -2866,7 +2633,7 @@ mod tests {
             reference_position: Vec::new(),
         };
 
-        let seed = reference_mount_seed_q_vb(&replay, EkfImuSource::Ref).unwrap();
+        let seed = reference_mount_seed_q_vb(&replay, MountSourceMode::Ref).unwrap();
         let round_trip = q_vb_to_reference_mount_rpy([
             seed[0] as f64,
             seed[1] as f64,
@@ -2877,7 +2644,37 @@ mod tests {
         assert!((wrap_deg(round_trip.0 - 2.0)).abs() < 1.0e-6);
         assert!((wrap_deg(round_trip.1 + 4.0)).abs() < 1.0e-6);
         assert!((wrap_deg(round_trip.2 - 6.0)).abs() < 1.0e-6);
-        assert!(reference_mount_seed_q_vb(&replay, EkfImuSource::Internal).is_none());
-        assert!(reference_mount_seed_q_vb(&replay, EkfImuSource::External).is_none());
+        assert!(reference_mount_seed_q_vb(&replay, MountSourceMode::Internal).is_none());
+        assert!(reference_mount_seed_q_vb(&replay, MountSourceMode::External).is_none());
+    }
+
+    #[test]
+    fn run_context_captures_reference_mount_seed_once() {
+        let replay = GenericReplayInput {
+            imu: Vec::new(),
+            gnss: Vec::new(),
+            reference_attitude: Vec::new(),
+            reference_mount: vec![GenericReferenceRpySample {
+                t_s: 20.0,
+                roll_deg: 2.0,
+                pitch_deg: -4.0,
+                yaw_deg: 6.0,
+            }],
+            reference_position: Vec::new(),
+        };
+        let ref_ctx = GenericReplayRunContext::new(
+            &replay,
+            FilterCompareConfig::default(),
+            MountSourceMode::Ref,
+            GnssOutageConfig::default(),
+        );
+        let internal_ctx = GenericReplayRunContext::new(
+            &replay,
+            FilterCompareConfig::default(),
+            MountSourceMode::Internal,
+            GnssOutageConfig::default(),
+        );
+        assert!(ref_ctx.reference_mount_seed_q_vb().is_some());
+        assert!(internal_ctx.reference_mount_seed_q_vb().is_none());
     }
 }

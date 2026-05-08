@@ -1,6 +1,6 @@
-# High-level synthetic scenario equivalent to the city-blocks CSV pattern.
+# High-level synthetic city-block scenario.
 # The visualizer accepts this file with:
-#   --synthetic-scenario sim/motion_profiles/city_blocks_15min.scenario
+#   --synthetic-motion-def sim/motion_profiles/city_blocks_15min.scenario
 
 initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
 wait 60s

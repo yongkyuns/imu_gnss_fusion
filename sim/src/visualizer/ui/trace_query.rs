@@ -93,25 +93,31 @@ pub(super) fn mount_estimate_reference_traces<'a>(
     axis: &str,
 ) -> Option<(&'a Trace, &'a Trace)> {
     let estimate = match filter {
-        "ESKF" => find_trace_exact(&data.eskf_misalignment, &format!("ESKF mount {axis} [deg]")),
-        "Loose" => find_trace_exact(
-            &data.loose_misalignment,
-            &format!("Loose residual mount {axis} [deg]"),
+        "Reduced" => find_trace_exact(
+            &data.reduced_misalignment,
+            &format!("Reduced mount {axis} [deg]"),
+        ),
+        "Full" => find_trace_exact(
+            &data.full_misalignment,
+            &format!("Full residual mount {axis} [deg]"),
         ),
         _ => None,
     }?;
     let reference_name = format!("Reference mount {axis} [deg]");
-    let reference = find_trace_exact(&data.eskf_misalignment, &reference_name)
-        .or_else(|| find_trace_exact(&data.loose_misalignment, &reference_name))
+    let reference = find_trace_exact(&data.reduced_misalignment, &reference_name)
+        .or_else(|| find_trace_exact(&data.full_misalignment, &reference_name))
         .or_else(|| find_trace_exact(&data.align_cmp_att, &reference_name))?;
     Some((estimate, reference))
 }
 
 pub(super) fn vehicle_body_velocity_traces(data: &PlotData) -> Vec<Trace> {
-    let velocity_groups = [data.eskf_cmp_vel.as_slice(), data.loose_cmp_vel.as_slice()];
+    let velocity_groups = [
+        data.reduced_cmp_vel.as_slice(),
+        data.full_cmp_vel.as_slice(),
+    ];
     let attitude_groups = [
-        data.eskf_cmp_att.as_slice(),
-        data.loose_cmp_att.as_slice(),
+        data.reduced_cmp_att.as_slice(),
+        data.full_cmp_att.as_slice(),
         data.orientation.as_slice(),
     ];
     [
@@ -125,22 +131,22 @@ pub(super) fn vehicle_body_velocity_traces(data: &PlotData) -> Vec<Trace> {
             yaw_names: &["Reference yaw [deg]", "Synthetic truth yaw [deg]"],
         },
         BodyVelocityTraceSpec {
-            label: "ESKF",
-            vel_n_names: &["ESKF velN [m/s]", "ESKF vN [m/s]"],
-            vel_e_names: &["ESKF velE [m/s]", "ESKF vE [m/s]"],
-            vel_d_names: &["ESKF velD [m/s]", "ESKF vD [m/s]"],
-            roll_names: &["ESKF roll [deg]"],
-            pitch_names: &["ESKF pitch [deg]"],
-            yaw_names: &["ESKF yaw [deg]"],
+            label: "Reduced",
+            vel_n_names: &["Reduced velN [m/s]", "Reduced vN [m/s]"],
+            vel_e_names: &["Reduced velE [m/s]", "Reduced vE [m/s]"],
+            vel_d_names: &["Reduced velD [m/s]", "Reduced vD [m/s]"],
+            roll_names: &["Reduced roll [deg]"],
+            pitch_names: &["Reduced pitch [deg]"],
+            yaw_names: &["Reduced yaw [deg]"],
         },
         BodyVelocityTraceSpec {
-            label: "Loose",
-            vel_n_names: &["Loose velN [m/s]"],
-            vel_e_names: &["Loose velE [m/s]"],
-            vel_d_names: &["Loose velD [m/s]"],
-            roll_names: &["Loose roll [deg]"],
-            pitch_names: &["Loose pitch [deg]"],
-            yaw_names: &["Loose yaw [deg]"],
+            label: "Full",
+            vel_n_names: &["Full velN [m/s]"],
+            vel_e_names: &["Full velE [m/s]"],
+            vel_d_names: &["Full velD [m/s]"],
+            roll_names: &["Full roll [deg]"],
+            pitch_names: &["Full pitch [deg]"],
+            yaw_names: &["Full yaw [deg]"],
         },
     ]
     .into_iter()
@@ -260,12 +266,12 @@ pub(super) fn attitude_error_traces(data: &PlotData, axis: &str) -> Vec<Trace> {
     };
     [
         (
-            "ESKF",
-            find_trace_exact(&data.eskf_cmp_att, &format!("ESKF {axis} [deg]")),
+            "Reduced",
+            find_trace_exact(&data.reduced_cmp_att, &format!("Reduced {axis} [deg]")),
         ),
         (
-            "Loose",
-            find_trace_exact(&data.loose_cmp_att, &format!("Loose {axis} [deg]")),
+            "Full",
+            find_trace_exact(&data.full_cmp_att, &format!("Full {axis} [deg]")),
         ),
     ]
     .into_iter()
@@ -279,8 +285,8 @@ fn reference_attitude_trace<'a>(data: &'a PlotData, axis: &str) -> Option<&'a Tr
     let reference_name = format!("Reference {axis} [deg]");
     let synthetic_name = format!("Synthetic truth {axis} [deg]");
     [
-        data.eskf_cmp_att.as_slice(),
-        data.loose_cmp_att.as_slice(),
+        data.reduced_cmp_att.as_slice(),
+        data.full_cmp_att.as_slice(),
         data.orientation.as_slice(),
     ]
     .into_iter()

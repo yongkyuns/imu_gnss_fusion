@@ -13,10 +13,10 @@ python3 -m http.server --directory web 8080
 
 Open `http://localhost:8080`. The browser visualizer can generate built-in synthetic scenarios, load a generic replay by dragging `imu.csv`, `gnss.csv`, and optional reference CSVs into the app, or load an experimental generic dataset from `web/datasets/manifest.json`.
 
-The map page is available with `?page=map`. Browser and native maps are rendered by the Rust `walkers` egui widget, so map interaction stays inside the same canvas as the rest of the visualizer. The app has light and dark themes; the map source follows the selected theme. Without a Mapbox token, maps use CARTO Positron for light theme and CARTO Dark Matter for dark theme, with OpenStreetMap/CARTO attribution. With a Mapbox token, maps use Mapbox Light or Mapbox Dark to match the app theme.
+The overview page embeds the map beside the primary plots. Browser and native maps are rendered by the Rust `walkers` egui widget, so map interaction stays inside the same canvas as the rest of the visualizer. The app has light and dark themes; the map source follows the selected theme. Without a Mapbox token, maps use CARTO Positron for light theme and CARTO Dark Matter for dark theme, with OpenStreetMap/CARTO attribution. With a Mapbox token, maps use Mapbox Light or Mapbox Dark to match the app theme.
 
 ```text
-http://localhost:8080/?page=map&theme=light&mapbox_token=<token>
+http://localhost:8080/?theme=light&mapbox_token=<token>
 ```
 
 The browser stores the selected theme and any token entered in the field in local storage, so they are reused on later reloads. For local development without entering a token manually, create an ignored `web/local-config.js`:

@@ -1,4 +1,4 @@
-use sensor_fusion::fusion::EskfMountSource;
+use sensor_fusion::MountSource;
 
 #[cfg_attr(target_arch = "wasm32", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone, Default)]
@@ -18,48 +18,48 @@ pub struct PlotData {
     pub imu_cal_accel: Vec<Trace>,
     pub orientation: Vec<Trace>,
     pub other: Vec<Trace>,
-    pub eskf_cmp_pos: Vec<Trace>,
-    pub eskf_cmp_vel: Vec<Trace>,
-    pub eskf_cmp_att: Vec<Trace>,
-    pub eskf_meas_gyro: Vec<Trace>,
-    pub eskf_meas_accel: Vec<Trace>,
-    pub eskf_bias_gyro: Vec<Trace>,
-    pub eskf_bias_accel: Vec<Trace>,
-    pub eskf_cov_bias: Vec<Trace>,
-    pub eskf_cov_nonbias: Vec<Trace>,
-    pub eskf_mount_sigma: Vec<Trace>,
-    pub eskf_mount_dx: Vec<Trace>,
-    pub eskf_nhc_mount_dx: Vec<Trace>,
-    pub eskf_nhc_innovation: Vec<Trace>,
-    pub eskf_nhc_nis: Vec<Trace>,
-    pub eskf_nhc_h_mount_norm: Vec<Trace>,
-    pub eskf_misalignment: Vec<Trace>,
-    pub eskf_stationary_diag: Vec<Trace>,
-    pub eskf_bump_pitch_speed: Vec<Trace>,
-    pub eskf_bump_diag: Vec<Trace>,
-    pub eskf_map: Vec<Trace>,
+    pub reduced_cmp_pos: Vec<Trace>,
+    pub reduced_cmp_vel: Vec<Trace>,
+    pub reduced_cmp_att: Vec<Trace>,
+    pub reduced_meas_gyro: Vec<Trace>,
+    pub reduced_meas_accel: Vec<Trace>,
+    pub reduced_bias_gyro: Vec<Trace>,
+    pub reduced_bias_accel: Vec<Trace>,
+    pub reduced_cov_bias: Vec<Trace>,
+    pub reduced_cov_nonbias: Vec<Trace>,
+    pub reduced_mount_sigma: Vec<Trace>,
+    pub reduced_mount_dx: Vec<Trace>,
+    pub reduced_nhc_mount_dx: Vec<Trace>,
+    pub reduced_nhc_innovation: Vec<Trace>,
+    pub reduced_nhc_nis: Vec<Trace>,
+    pub reduced_nhc_h_mount_norm: Vec<Trace>,
+    pub reduced_misalignment: Vec<Trace>,
+    pub reduced_stationary_diag: Vec<Trace>,
+    pub reduced_bump_pitch_speed: Vec<Trace>,
+    pub reduced_bump_diag: Vec<Trace>,
+    pub reduced_map: Vec<Trace>,
     pub map_cursor: Vec<MapCursorSample>,
-    pub eskf_map_heading: Vec<HeadingSample>,
-    pub loose_cmp_pos: Vec<Trace>,
-    pub loose_cmp_vel: Vec<Trace>,
-    pub loose_cmp_att: Vec<Trace>,
-    pub loose_nominal_att: Vec<Trace>,
-    pub loose_residual_mount: Vec<Trace>,
-    pub loose_misalignment: Vec<Trace>,
-    pub loose_meas_gyro: Vec<Trace>,
-    pub loose_meas_accel: Vec<Trace>,
-    pub loose_bias_gyro: Vec<Trace>,
-    pub loose_bias_accel: Vec<Trace>,
-    pub loose_scale_gyro: Vec<Trace>,
-    pub loose_scale_accel: Vec<Trace>,
-    pub loose_cov_bias: Vec<Trace>,
-    pub loose_cov_nonbias: Vec<Trace>,
-    pub loose_mount_sigma: Vec<Trace>,
-    pub loose_mount_dx: Vec<Trace>,
-    pub loose_nhc_innovation: Vec<Trace>,
-    pub loose_gnss_pos_gate: Vec<Trace>,
-    pub loose_map: Vec<Trace>,
-    pub loose_map_heading: Vec<HeadingSample>,
+    pub reduced_map_heading: Vec<HeadingSample>,
+    pub full_cmp_pos: Vec<Trace>,
+    pub full_cmp_vel: Vec<Trace>,
+    pub full_cmp_att: Vec<Trace>,
+    pub full_nominal_att: Vec<Trace>,
+    pub full_residual_mount: Vec<Trace>,
+    pub full_misalignment: Vec<Trace>,
+    pub full_meas_gyro: Vec<Trace>,
+    pub full_meas_accel: Vec<Trace>,
+    pub full_bias_gyro: Vec<Trace>,
+    pub full_bias_accel: Vec<Trace>,
+    pub full_scale_gyro: Vec<Trace>,
+    pub full_scale_accel: Vec<Trace>,
+    pub full_cov_bias: Vec<Trace>,
+    pub full_cov_nonbias: Vec<Trace>,
+    pub full_mount_sigma: Vec<Trace>,
+    pub full_mount_dx: Vec<Trace>,
+    pub full_nhc_innovation: Vec<Trace>,
+    pub full_gnss_pos_gate: Vec<Trace>,
+    pub full_map: Vec<Trace>,
+    pub full_map_heading: Vec<HeadingSample>,
     pub align_cmp_att: Vec<Trace>,
     pub align_res_vel: Vec<Trace>,
     pub align_axis_err: Vec<Trace>,
@@ -103,14 +103,14 @@ pub struct StateCorrelation {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum EkfImuSource {
+pub enum MountSourceMode {
     #[default]
     Internal,
     External,
     Ref,
 }
 
-impl EkfImuSource {
+impl MountSourceMode {
     pub fn from_cli_value(s: &str) -> Result<Self, String> {
         match s.to_ascii_lowercase().as_str() {
             "internal" | "auto" | "align" | "align-seed" | "seed" => Ok(Self::Internal),
@@ -132,10 +132,10 @@ impl EkfImuSource {
         matches!(self, Self::Internal | Self::External)
     }
 
-    pub fn eskf_mount_source(self) -> EskfMountSource {
+    pub fn mount_source(self) -> MountSource {
         match self {
-            Self::External => EskfMountSource::FollowAlign,
-            Self::Internal | Self::Ref => EskfMountSource::LatchedSeed,
+            Self::External => MountSource::FollowAlign,
+            Self::Internal | Self::Ref => MountSource::LatchedSeed,
         }
     }
 

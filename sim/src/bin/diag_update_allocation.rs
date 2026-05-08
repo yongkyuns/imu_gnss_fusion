@@ -1,21 +1,22 @@
 use anyhow::Result;
 use clap::Parser;
-use sensor_fusion::eskf_types::{ESKF_UPDATE_DIAG_TYPES, EskfUpdateDiag};
-use sensor_fusion::fusion::{EskfMountSource, SensorFusion};
-use sensor_fusion::loose::{LOOSE_ERROR_STATES, LooseFilter, LooseImuDelta, LoosePredictNoise};
+use sensor_fusion::ProcessNoise;
+use sensor_fusion::full::{FULL_ERROR_STATES, FullFilter, FullImuDelta};
+use sensor_fusion::reduced::{REDUCED_UPDATE_DIAG_TYPES, ReducedUpdateDiag};
+use sensor_fusion::{MountSource, SensorFusion};
 use sim::datasets::generic_replay::{
     GenericGnssSample, GenericImuSample, fusion_gnss_sample, fusion_imu_sample,
 };
 use sim::eval::replay::{ReplayEvent, for_each_event};
 use sim::visualizer::math::lla_to_ecef;
-use sim::visualizer::pipeline::EkfCompareConfig;
+use sim::visualizer::pipeline::FilterCompareConfig;
 use sim::visualizer::pipeline::synthetic::{
     SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_replay_input,
 };
 use std::path::PathBuf;
 
-const LOOSE_OBS_TYPES: usize = 9;
-const ESKF_LABELS: [&str; ESKF_UPDATE_DIAG_TYPES] = [
+const FULL_OBS_TYPES: usize = 9;
+const REDUCED_LABELS: [&str; REDUCED_UPDATE_DIAG_TYPES] = [
     "gps_pos",
     "gps_vel",
     "zero_vel",
@@ -28,7 +29,7 @@ const ESKF_LABELS: [&str; ESKF_UPDATE_DIAG_TYPES] = [
     "gps_vel_d",
     "zero_vel_d",
 ];
-const LOOSE_LABELS: [&str; LOOSE_OBS_TYPES] = [
+const FULL_LABELS: [&str; FULL_OBS_TYPES] = [
     "none", "pos_x", "pos_y", "pos_z", "vel_x", "vel_y", "vel_z", "nhc_y", "nhc_z",
 ];
 
@@ -92,14 +93,14 @@ impl<const N: usize> Default for Allocation<N> {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let cfg = EkfCompareConfig {
+    let cfg = FilterCompareConfig {
         r_body_vel: args
             .r_body_vel
-            .unwrap_or(EkfCompareConfig::default().r_body_vel),
+            .unwrap_or(FilterCompareConfig::default().r_body_vel),
         r_body_vel_z: args
             .r_body_vel_z
-            .unwrap_or(EkfCompareConfig::default().r_body_vel_z),
-        ..EkfCompareConfig::default()
+            .unwrap_or(FilterCompareConfig::default().r_body_vel_z),
+        ..FilterCompareConfig::default()
     };
     let synth_cfg = SyntheticVisualizerConfig {
         motion_def: Some(args.motion_def.clone()),
@@ -121,8 +122,8 @@ fn main() -> Result<()> {
         early_fault_window_s: None,
     };
     let (replay, q_mount) = build_synthetic_replay_input(&synth_cfg)?;
-    let (eskf, eskf_residuals) = run_eskf_allocation(&replay, q_mount, cfg, &args);
-    let (loose, loose_residuals) = run_loose_allocation(&replay, q_mount, cfg, &args);
+    let (reduced, reduced_residuals) = run_reduced_allocation(&replay, q_mount, cfg, &args);
+    let (full, full_residuals) = run_full_allocation(&replay, q_mount, cfg, &args);
 
     println!(
         "update allocation scenario={} imu_hz={:.1} window=[{:.1},{:.1}]s",
@@ -131,24 +132,24 @@ fn main() -> Result<()> {
         args.window_start_s,
         args.window_end_s
     );
-    print_allocation("ESKF", &ESKF_LABELS, &eskf);
-    print_residual_summary("ESKF", eskf_residuals);
-    print_allocation("Loose", &LOOSE_LABELS, &loose);
-    print_residual_summary("Loose", loose_residuals);
+    print_allocation("Reduced", &REDUCED_LABELS, &reduced);
+    print_residual_summary("Reduced", reduced_residuals);
+    print_allocation("Full", &FULL_LABELS, &full);
+    print_residual_summary("Full", full_residuals);
     Ok(())
 }
 
-fn run_eskf_allocation(
+fn run_reduced_allocation(
     replay: &sim::visualizer::pipeline::generic::GenericReplayInput,
     q_mount: [f32; 4],
-    cfg: EkfCompareConfig,
+    cfg: FilterCompareConfig,
     args: &Args,
-) -> (Allocation<ESKF_UPDATE_DIAG_TYPES>, ResidualSummary) {
+) -> (Allocation<REDUCED_UPDATE_DIAG_TYPES>, ResidualSummary) {
     let mut fusion = SensorFusion::new();
     apply_fusion_config(&mut fusion, cfg);
     fusion.set_misalignment(q_mount);
 
-    let mut prev_diag = EskfUpdateDiag::default();
+    let mut prev_diag = ReducedUpdateDiag::default();
     let mut out = Allocation::default();
     let mut residuals = ResidualSummary::default();
     for_each_event(&replay.imu, &replay.gnss, |event| {
@@ -159,12 +160,12 @@ fn run_eskf_allocation(
             }
             ReplayEvent::Gnss(_, sample) => {
                 if (args.window_start_s..=args.window_end_s).contains(&sample.t_s)
-                    && let Some(eskf) = fusion.eskf()
+                    && let Some(reduced) = fusion.reduced()
                 {
                     residuals.vel_count += 1;
-                    residuals.vel_sum[0] += sample.vel_ned_mps[0] - eskf.nominal.vn as f64;
-                    residuals.vel_sum[1] += sample.vel_ned_mps[1] - eskf.nominal.ve as f64;
-                    residuals.vel_sum[2] += sample.vel_ned_mps[2] - eskf.nominal.vd as f64;
+                    residuals.vel_sum[0] += sample.vel_ned_mps[0] - reduced.nominal.vn as f64;
+                    residuals.vel_sum[1] += sample.vel_ned_mps[1] - reduced.nominal.ve as f64;
+                    residuals.vel_sum[2] += sample.vel_ned_mps[2] - reduced.nominal.vd as f64;
                 }
                 let mut gnss = *sample;
                 if args.disable_gnss_pos {
@@ -177,27 +178,27 @@ fn run_eskf_allocation(
                 sample.t_s
             }
         };
-        let Some(eskf) = fusion.eskf() else {
+        let Some(reduced) = fusion.reduced() else {
             return;
         };
-        let diag = eskf.update_diag;
+        let diag = reduced.update_diag;
         if (args.window_start_s..=args.window_end_s).contains(&t_s) {
-            accumulate_eskf_diag_delta(&mut out, &prev_diag, &diag);
+            accumulate_reduced_diag_delta(&mut out, &prev_diag, &diag);
         }
         prev_diag = diag;
     });
     (out, residuals)
 }
 
-fn run_loose_allocation(
+fn run_full_allocation(
     replay: &sim::visualizer::pipeline::generic::GenericReplayInput,
     q_mount: [f32; 4],
-    cfg: EkfCompareConfig,
+    cfg: FilterCompareConfig,
     args: &Args,
-) -> (Allocation<LOOSE_OBS_TYPES>, ResidualSummary) {
-    let mut loose = LooseFilter::new(
-        cfg.loose_predict_noise
-            .unwrap_or_else(LoosePredictNoise::lsm6dso_loose_104hz),
+) -> (Allocation<FULL_OBS_TYPES>, ResidualSummary) {
+    let mut full = FullFilter::new(
+        cfg.full_predict_noise
+            .unwrap_or_else(ProcessNoise::lsm6dso_104hz),
     );
     let mut out = Allocation::default();
     let mut residuals = ResidualSummary::default();
@@ -219,7 +220,7 @@ fn run_loose_allocation(
             if dt <= 0.0 || dt > 1.0 {
                 return;
             }
-            loose.predict(loose_imu_delta(prev, *sample, dt));
+            full.predict(full_imu_delta(prev, *sample, dt));
             while gnss_cursor < replay.gnss.len()
                 && replay.gnss[gnss_cursor].t_s <= sample.t_s + 1.0e-9
             {
@@ -256,7 +257,7 @@ fn run_loose_allocation(
                     1.0
                 };
                 if (args.window_start_s..=args.window_end_s).contains(&sample.t_s) {
-                    let n = loose.nominal();
+                    let n = full.nominal();
                     let vel_ned =
                         ecef_vector_to_ned(gnss.lat_deg, gnss.lon_deg, [n.vn, n.ve, n.vd]);
                     residuals.vel_count += 1;
@@ -272,7 +273,7 @@ fn run_loose_allocation(
                     .contains(&age_s)
                     .then(|| gnss.vel_ned_mps[0].hypot(gnss.vel_ned_mps[1]) as f32)
             });
-            loose.fuse_reference_batch_full_with_nhc_speed_and_r(
+            full.fuse_reference_batch_full_with_nhc_speed_and_r(
                 gps_pos,
                 gps_vel,
                 gps_pos_std,
@@ -286,7 +287,7 @@ fn run_loose_allocation(
                 dt as f32,
             );
             if (args.window_start_s..=args.window_end_s).contains(&sample.t_s) {
-                accumulate_loose_last_update(&mut out, &loose);
+                accumulate_full_last_update(&mut out, &full);
             }
         }
         ReplayEvent::Gnss(index, sample) => {
@@ -301,16 +302,16 @@ fn run_loose_allocation(
             let yaw_rad = sample.vel_ned_mps[1].atan2(sample.vel_ned_mps[0]) as f32;
             let pos_ecef = lla_to_ecef(sample.lat_deg, sample.lon_deg, sample.height_m);
             let vel_ecef = ned_vector_to_ecef(sample.lat_deg, sample.lon_deg, sample.vel_ned_mps);
-            loose.init_seeded_vehicle_from_nav_ecef_state(
+            full.init_seeded_vehicle_from_nav_ecef_state(
                 yaw_rad,
                 sample.lat_deg,
                 sample.lon_deg,
                 pos_ecef,
                 vel_ecef,
-                Some(default_loose_p_diag(*sample, cfg)),
+                Some(default_full_p_diag(*sample, cfg)),
                 None,
             );
-            loose.set_mount_quat(q_mount);
+            full.set_mount_quat(q_mount);
             ready = true;
             gnss_cursor = index + 1;
             last_gnss_used_t_s = sample.t_s;
@@ -319,12 +320,12 @@ fn run_loose_allocation(
     (out, residuals)
 }
 
-fn accumulate_eskf_diag_delta(
-    out: &mut Allocation<ESKF_UPDATE_DIAG_TYPES>,
-    prev: &EskfUpdateDiag,
-    curr: &EskfUpdateDiag,
+fn accumulate_reduced_diag_delta(
+    out: &mut Allocation<REDUCED_UPDATE_DIAG_TYPES>,
+    prev: &ReducedUpdateDiag,
+    curr: &ReducedUpdateDiag,
 ) {
-    for ty in 0..ESKF_UPDATE_DIAG_TYPES {
+    for ty in 0..REDUCED_UPDATE_DIAG_TYPES {
         let count_delta = curr.type_counts[ty].saturating_sub(prev.type_counts[ty]);
         out.count[ty] += count_delta;
         out.residual_sum[ty] += (curr.sum_innovation[ty] - prev.sum_innovation[ty]) as f64;
@@ -347,15 +348,15 @@ fn accumulate_eskf_diag_delta(
     }
 }
 
-fn accumulate_loose_last_update(out: &mut Allocation<LOOSE_OBS_TYPES>, loose: &LooseFilter) {
-    let obs_types = loose.last_obs_types();
-    let dx_by_obs = loose.last_dx_by_obs();
-    let effective_residuals = loose.last_effective_residuals();
+fn accumulate_full_last_update(out: &mut Allocation<FULL_OBS_TYPES>, full: &FullFilter) {
+    let obs_types = full.last_obs_types();
+    let dx_by_obs = full.last_dx_by_obs();
+    let effective_residuals = full.last_effective_residuals();
     for (obs_index, &obs_type) in obs_types.iter().enumerate() {
         let Ok(ty) = usize::try_from(obs_type) else {
             continue;
         };
-        if ty >= LOOSE_OBS_TYPES {
+        if ty >= FULL_OBS_TYPES {
             continue;
         }
         out.count[ty] += 1;
@@ -433,7 +434,7 @@ fn print_residual_summary(filter: &str, residuals: ResidualSummary) {
     );
 }
 
-fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig) {
+fn apply_fusion_config(fusion: &mut SensorFusion, cfg: FilterCompareConfig) {
     fusion.set_align_config(cfg.align);
     if let Some(noise) = cfg.predict_noise {
         fusion.set_predict_noise(noise);
@@ -453,18 +454,18 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig) {
     fusion.set_mount_align_rw_var(cfg.mount_align_rw_var);
     fusion.set_align_handoff_delay_s(cfg.align_handoff_delay_s);
     fusion.set_freeze_misalignment_states(cfg.freeze_misalignment_states);
-    fusion.set_eskf_mount_source(EskfMountSource::LatchedSeed);
+    fusion.set_mount_source(MountSource::LatchedSeed);
     fusion.set_mount_settle_time_s(cfg.mount_settle_time_s);
     fusion.set_mount_settle_release_sigma_rad(cfg.mount_settle_release_sigma_deg.to_radians());
     fusion.set_mount_settle_zero_cross_covariance(cfg.mount_settle_zero_cross_covariance);
 }
 
-fn default_loose_p_diag(
+fn default_full_p_diag(
     gnss: GenericGnssSample,
-    cfg: EkfCompareConfig,
-) -> [f32; LOOSE_ERROR_STATES] {
-    let mut p = [1.0_f32; LOOSE_ERROR_STATES];
-    let init = cfg.loose_init;
+    cfg: FilterCompareConfig,
+) -> [f32; FULL_ERROR_STATES] {
+    let mut p = [1.0_f32; FULL_ERROR_STATES];
+    let init = cfg.full_init;
     let pos_n_sigma = (gnss.pos_std_m[0] as f32).max(init.pos_min_sigma_m);
     let pos_e_sigma = (gnss.pos_std_m[1] as f32).max(init.pos_min_sigma_m);
     let pos_d_sigma = (gnss.pos_std_m[2] as f32).max(init.pos_min_sigma_m);
@@ -504,8 +505,8 @@ fn default_loose_p_diag(
     p
 }
 
-fn loose_imu_delta(prev: GenericImuSample, curr: GenericImuSample, dt: f64) -> LooseImuDelta {
-    LooseImuDelta {
+fn full_imu_delta(prev: GenericImuSample, curr: GenericImuSample, dt: f64) -> FullImuDelta {
+    FullImuDelta {
         dax_1: (prev.gyro_radps[0] * dt) as f32,
         day_1: (prev.gyro_radps[1] * dt) as f32,
         daz_1: (prev.gyro_radps[2] * dt) as f32,

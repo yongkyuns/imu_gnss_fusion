@@ -9,13 +9,14 @@ use crate::synthetic::gnss_ins_path::{
     generate_with_noise,
 };
 use crate::visualizer::math::{ecef_to_ned, lla_to_ecef, quat_rpy_deg};
-use crate::visualizer::model::{EkfImuSource, PlotData, Trace};
+use crate::visualizer::model::{MountSourceMode, PlotData, Trace};
 use crate::visualizer::pipeline::generic::{
-    GenericReplayInput, GenericReplayProgress, build_generic_replay_plot_data_with_eskf_mount_seed,
-    build_generic_replay_plot_data_with_progress_and_eskf_mount_seed, q_vb_to_reference_mount_rpy,
+    GenericReplayInput, GenericReplayProgress,
+    build_generic_replay_plot_data_with_progress_and_reduced_mount_seed,
+    build_generic_replay_plot_data_with_reduced_mount_seed, q_vb_to_reference_mount_rpy,
     reference_mount_rpy_to_q_vb,
 };
-use crate::visualizer::pipeline::{EkfCompareConfig, GnssOutageConfig};
+use crate::visualizer::pipeline::{FilterCompareConfig, GnssOutageConfig};
 
 #[derive(Clone, Copy, Debug)]
 pub enum SyntheticNoiseMode {
@@ -23,6 +24,17 @@ pub enum SyntheticNoiseMode {
     Low,
     Mid,
     High,
+}
+
+impl SyntheticNoiseMode {
+    fn measurement_noise(self) -> MeasurementNoiseConfig {
+        match self {
+            SyntheticNoiseMode::Truth => MeasurementNoiseConfig::zero(),
+            SyntheticNoiseMode::Low => MeasurementNoiseConfig::accuracy(ImuAccuracy::High),
+            SyntheticNoiseMode::Mid => MeasurementNoiseConfig::accuracy(ImuAccuracy::Mid),
+            SyntheticNoiseMode::High => MeasurementNoiseConfig::accuracy(ImuAccuracy::Low),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -44,20 +56,17 @@ pub struct SyntheticVisualizerConfig {
 
 pub fn build_synthetic_plot_data(
     synth_cfg: &SyntheticVisualizerConfig,
-    ekf_imu_source: EkfImuSource,
-    ekf_cfg: EkfCompareConfig,
+    mount_source: MountSourceMode,
+    filter_cfg: FilterCompareConfig,
     gnss_outages: GnssOutageConfig,
 ) -> Result<PlotData> {
-    build_synthetic_plot_data_impl(synth_cfg, ekf_imu_source, ekf_cfg, gnss_outages, None)
+    build_synthetic_plot_data_impl(synth_cfg, mount_source, filter_cfg, gnss_outages, None)
 }
 
 pub fn build_synthetic_replay_input(
     synth_cfg: &SyntheticVisualizerConfig,
 ) -> Result<(GenericReplayInput, [f32; 4])> {
     let profile = match (&synth_cfg.motion_text, &synth_cfg.motion_def) {
-        (Some(text), _) if synth_cfg.motion_label.ends_with(".csv") => {
-            MotionProfile::from_csv_str(text)?
-        }
         (Some(text), _) => MotionProfile::from_dsl_str(text)?,
         (None, Some(path)) => MotionProfile::from_path(path)?,
         (None, None) => anyhow::bail!("synthetic scenario has no path or inline text"),
@@ -67,12 +76,7 @@ pub fn build_synthetic_replay_input(
         gnss_hz: synth_cfg.gnss_hz,
         ..PathGenConfig::default()
     };
-    let mut noise = match synth_cfg.noise_mode {
-        SyntheticNoiseMode::Truth => MeasurementNoiseConfig::zero(),
-        SyntheticNoiseMode::Low => MeasurementNoiseConfig::accuracy(ImuAccuracy::Low),
-        SyntheticNoiseMode::Mid => MeasurementNoiseConfig::accuracy(ImuAccuracy::Mid),
-        SyntheticNoiseMode::High => MeasurementNoiseConfig::accuracy(ImuAccuracy::High),
-    };
+    let mut noise = synth_cfg.noise_mode.measurement_noise();
     if synth_cfg.disable_imu_noise {
         noise.imu = crate::synthetic::gnss_ins_path::ImuNoiseModel::zero();
     }
@@ -90,7 +94,7 @@ pub fn build_synthetic_replay_input(
         .imu
         .iter()
         .map(|s| GenericImuSample {
-            // gnss-ins-sim timestamps IMU samples at the start of the interval
+            // Generated replay samples timestamp IMU at the start of the interval
             // represented by the sample. The replay pipeline consumes IMU as
             // an interval ending at `t_s`, so shift generated-only samples by
             // one output period while preserving the generator's raw contract.
@@ -185,15 +189,15 @@ pub fn build_synthetic_replay_input(
 
 pub fn build_synthetic_plot_data_with_progress(
     synth_cfg: &SyntheticVisualizerConfig,
-    ekf_imu_source: EkfImuSource,
-    ekf_cfg: EkfCompareConfig,
+    mount_source: MountSourceMode,
+    filter_cfg: FilterCompareConfig,
     gnss_outages: GnssOutageConfig,
     progress: &mut dyn FnMut(GenericReplayProgress),
 ) -> Result<PlotData> {
     build_synthetic_plot_data_impl(
         synth_cfg,
-        ekf_imu_source,
-        ekf_cfg,
+        mount_source,
+        filter_cfg,
         gnss_outages,
         Some(progress),
     )
@@ -201,15 +205,12 @@ pub fn build_synthetic_plot_data_with_progress(
 
 fn build_synthetic_plot_data_impl(
     synth_cfg: &SyntheticVisualizerConfig,
-    ekf_imu_source: EkfImuSource,
-    ekf_cfg: EkfCompareConfig,
+    mount_source: MountSourceMode,
+    filter_cfg: FilterCompareConfig,
     gnss_outages: GnssOutageConfig,
     progress: Option<&mut dyn FnMut(GenericReplayProgress)>,
 ) -> Result<PlotData> {
     let profile = match (&synth_cfg.motion_text, &synth_cfg.motion_def) {
-        (Some(text), _) if synth_cfg.motion_label.ends_with(".csv") => {
-            MotionProfile::from_csv_str(text)?
-        }
         (Some(text), _) => MotionProfile::from_dsl_str(text)?,
         (None, Some(path)) => MotionProfile::from_path(path)?,
         (None, None) => anyhow::bail!("synthetic scenario has no path or inline text"),
@@ -219,12 +220,7 @@ fn build_synthetic_plot_data_impl(
         gnss_hz: synth_cfg.gnss_hz,
         ..PathGenConfig::default()
     };
-    let mut noise = match synth_cfg.noise_mode {
-        SyntheticNoiseMode::Truth => MeasurementNoiseConfig::zero(),
-        SyntheticNoiseMode::Low => MeasurementNoiseConfig::accuracy(ImuAccuracy::Low),
-        SyntheticNoiseMode::Mid => MeasurementNoiseConfig::accuracy(ImuAccuracy::Mid),
-        SyntheticNoiseMode::High => MeasurementNoiseConfig::accuracy(ImuAccuracy::High),
-    };
+    let mut noise = synth_cfg.noise_mode.measurement_noise();
     if synth_cfg.disable_imu_noise {
         noise.imu = crate::synthetic::gnss_ins_path::ImuNoiseModel::zero();
     }
@@ -242,7 +238,7 @@ fn build_synthetic_plot_data_impl(
         .imu
         .iter()
         .map(|s| GenericImuSample {
-            // gnss-ins-sim timestamps IMU samples at the start of the interval
+            // Generated replay samples timestamp IMU at the start of the interval
             // represented by the sample. The replay pipeline consumes IMU as
             // an interval ending at `t_s`, so shift generated-only samples by
             // one output period while preserving the generator's raw contract.
@@ -371,27 +367,27 @@ fn build_synthetic_plot_data_impl(
         reference_mount,
         reference_position: Vec::new(),
     };
-    let eskf_mount_seed = ekf_imu_source.uses_ref_mount().then_some([
+    let reduced_mount_seed = mount_source.uses_ref_mount().then_some([
         q_truth_mount[0] as f32,
         q_truth_mount[1] as f32,
         q_truth_mount[2] as f32,
         q_truth_mount[3] as f32,
     ]);
     let mut data = match progress {
-        Some(progress) => build_generic_replay_plot_data_with_progress_and_eskf_mount_seed(
+        Some(progress) => build_generic_replay_plot_data_with_progress_and_reduced_mount_seed(
             &replay,
-            ekf_imu_source,
-            ekf_cfg,
+            mount_source,
+            filter_cfg,
             gnss_outages,
             progress,
-            eskf_mount_seed,
+            reduced_mount_seed,
         ),
-        None => build_generic_replay_plot_data_with_eskf_mount_seed(
+        None => build_generic_replay_plot_data_with_reduced_mount_seed(
             &replay,
-            ekf_imu_source,
-            ekf_cfg,
+            mount_source,
+            filter_cfg,
             gnss_outages,
-            eskf_mount_seed,
+            reduced_mount_seed,
         ),
     };
     add_synthetic_overlays(
@@ -448,17 +444,33 @@ fn add_synthetic_overlays(data: &mut PlotData, traces: SyntheticOverlayTraces) {
     ];
     rename_trace_prefix(&mut data.imu_raw_gyro, "Raw IMU", "Synthetic raw IMU");
     rename_trace_prefix(&mut data.imu_raw_accel, "Raw IMU", "Synthetic raw IMU");
-    rename_trace(&mut data.eskf_cmp_vel, "ESKF velN [m/s]", "ESKF vN [m/s]");
-    rename_trace(&mut data.eskf_cmp_vel, "ESKF velE [m/s]", "ESKF vE [m/s]");
-    rename_trace(&mut data.eskf_cmp_vel, "ESKF velD [m/s]", "ESKF vD [m/s]");
-    rename_trace(&mut data.eskf_cmp_att, "ekf initialized", "EKF initialized");
     rename_trace(
-        &mut data.eskf_map,
+        &mut data.reduced_cmp_vel,
+        "Reduced velN [m/s]",
+        "Reduced vN [m/s]",
+    );
+    rename_trace(
+        &mut data.reduced_cmp_vel,
+        "Reduced velE [m/s]",
+        "Reduced vE [m/s]",
+    );
+    rename_trace(
+        &mut data.reduced_cmp_vel,
+        "Reduced velD [m/s]",
+        "Reduced vD [m/s]",
+    );
+    rename_trace(
+        &mut data.reduced_cmp_att,
+        "reduced initialized",
+        "Reduced initialized",
+    );
+    rename_trace(
+        &mut data.reduced_map,
         "GNSS-only path (lon,lat)",
         "Synthetic GNSS path (lon,lat)",
     );
     replace_trace_points(
-        &mut data.eskf_map,
+        &mut data.reduced_map,
         "Synthetic GNSS path (lon,lat)",
         traces.gnss_map,
     );
@@ -478,84 +490,84 @@ fn add_synthetic_overlays(data: &mut PlotData, traces: SyntheticOverlayTraces) {
         },
     ];
     insert_after_trace(
-        &mut data.eskf_cmp_pos,
-        "ESKF posN [m]",
+        &mut data.reduced_cmp_pos,
+        "Reduced posN [m]",
         Trace {
             name: "Synthetic truth posN [m]".to_string(),
             points: traces.truth_pos_n,
         },
     );
     insert_after_trace(
-        &mut data.eskf_cmp_pos,
-        "ESKF posE [m]",
+        &mut data.reduced_cmp_pos,
+        "Reduced posE [m]",
         Trace {
             name: "Synthetic truth posE [m]".to_string(),
             points: traces.truth_pos_e,
         },
     );
     insert_after_trace(
-        &mut data.eskf_cmp_pos,
-        "ESKF posD [m]",
+        &mut data.reduced_cmp_pos,
+        "Reduced posD [m]",
         Trace {
             name: "Synthetic truth posD [m]".to_string(),
             points: traces.truth_pos_d,
         },
     );
     insert_after_trace(
-        &mut data.eskf_cmp_vel,
-        "ESKF vN [m/s]",
+        &mut data.reduced_cmp_vel,
+        "Reduced vN [m/s]",
         Trace {
             name: "Synthetic truth vN [m/s]".to_string(),
             points: traces.truth_vel_n,
         },
     );
     insert_after_trace(
-        &mut data.eskf_cmp_vel,
-        "ESKF vE [m/s]",
+        &mut data.reduced_cmp_vel,
+        "Reduced vE [m/s]",
         Trace {
             name: "Synthetic truth vE [m/s]".to_string(),
             points: traces.truth_vel_e,
         },
     );
     insert_after_trace(
-        &mut data.eskf_cmp_vel,
-        "ESKF vD [m/s]",
+        &mut data.reduced_cmp_vel,
+        "Reduced vD [m/s]",
         Trace {
             name: "Synthetic truth vD [m/s]".to_string(),
             points: traces.truth_vel_d,
         },
     );
     insert_after_trace(
-        &mut data.eskf_cmp_att,
-        "ESKF roll [deg]",
+        &mut data.reduced_cmp_att,
+        "Reduced roll [deg]",
         Trace {
             name: "Synthetic truth roll [deg]".to_string(),
             points: traces.truth_roll,
         },
     );
     insert_after_trace(
-        &mut data.eskf_cmp_att,
-        "ESKF pitch [deg]",
+        &mut data.reduced_cmp_att,
+        "Reduced pitch [deg]",
         Trace {
             name: "Synthetic truth pitch [deg]".to_string(),
             points: traces.truth_pitch,
         },
     );
     insert_after_trace(
-        &mut data.eskf_cmp_att,
-        "ESKF yaw [deg]",
+        &mut data.reduced_cmp_att,
+        "Reduced yaw [deg]",
         Trace {
             name: "Synthetic truth yaw [deg]".to_string(),
             points: traces.truth_yaw,
         },
     );
-    data.eskf_misalignment.push(Trace {
-        name: "ESKF mount quaternion error [deg]".to_string(),
-        points: mount_error_points(&data.eskf_misalignment, traces.q_truth_mount),
+    data.reduced_misalignment.push(Trace {
+        name: "Reduced mount quaternion error [deg]".to_string(),
+        points: mount_error_points(&data.reduced_misalignment, traces.q_truth_mount),
     });
-    data.eskf_misalignment
+    data.reduced_misalignment
         .extend(synthetic_mount_traces(traces.q_truth_mount, traces.end_t_s));
-    data.eskf_map.insert(
+    data.reduced_map.insert(
         0,
         Trace {
             name: "Synthetic truth path (lon,lat)".to_string(),
@@ -585,19 +597,19 @@ fn synthetic_mount_traces(q_truth_mount: [f64; 4], end_t_s: f64) -> [Trace; 3] {
 fn mount_error_points(traces: &[Trace], q_truth_mount: [f64; 4]) -> Vec<[f64; 2]> {
     let Some(roll) = traces
         .iter()
-        .find(|trace| trace.name == "ESKF mount roll [deg]")
+        .find(|trace| trace.name == "Reduced mount roll [deg]")
     else {
         return Vec::new();
     };
     let Some(pitch) = traces
         .iter()
-        .find(|trace| trace.name == "ESKF mount pitch [deg]")
+        .find(|trace| trace.name == "Reduced mount pitch [deg]")
     else {
         return Vec::new();
     };
     let Some(yaw) = traces
         .iter()
-        .find(|trace| trace.name == "ESKF mount yaw [deg]")
+        .find(|trace| trace.name == "Reduced mount yaw [deg]")
     else {
         return Vec::new();
     };

@@ -6,7 +6,7 @@ use crate::visualizer::model::Page;
 use crate::visualizer::theme::UiTheme;
 
 use super::App;
-use super::state::TuningPanel;
+use super::state::{FULL_FILTER_LABEL, REDUCED_FILTER_LABEL, TuningPanel};
 #[cfg(target_arch = "wasm32")]
 use super::web::{
     WEB_MAX_POINTS_PER_TRACE, WEB_MIN_POINTS_PER_TRACE, WebDatasetEntry, WebInputMode,
@@ -77,8 +77,8 @@ impl App {
                 ui.label("Traces");
                 ui.checkbox(&mut self.show_reference, "Reference");
                 ui.checkbox(&mut self.show_align, "Align");
-                ui.checkbox(&mut self.show_eskf, "ESKF");
-                ui.checkbox(&mut self.show_loose, "Loose");
+                ui.checkbox(&mut self.show_reduced, REDUCED_FILTER_LABEL);
+                ui.checkbox(&mut self.show_full, FULL_FILTER_LABEL);
                 ui.separator();
                 ui.label("Map");
                 ui.checkbox(&mut self.show_gnss_map, "GNSS");
@@ -106,14 +106,14 @@ impl App {
                 }
                 ui.separator();
                 ui.label("Tune");
-                if ui.button("ESKF").clicked() {
-                    self.tuning_panel = Some(TuningPanel::Eskf);
+                if ui.button(REDUCED_FILTER_LABEL).clicked() {
+                    self.tuning_panel = Some(TuningPanel::Reduced);
                 }
                 if ui.button("Align").clicked() {
                     self.tuning_panel = Some(TuningPanel::Align);
                 }
-                if ui.button("Loose").clicked() {
-                    self.tuning_panel = Some(TuningPanel::Loose);
+                if ui.button(FULL_FILTER_LABEL).clicked() {
+                    self.tuning_panel = Some(TuningPanel::Full);
                 }
                 ui.separator();
                 ui.toggle_value(&mut self.show_update_inspector, "Inspector");
@@ -182,7 +182,20 @@ impl App {
                                                     .display_label(),
                                             );
                                         });
-                                    ui.label("Noise:");
+                                    let noise_label = ui.add(
+                                        egui::Label::new(egui::RichText::new("Noise:").underline())
+                                            .sense(egui::Sense::hover()),
+                                    );
+                                    if noise_label.hovered() {
+                                        egui::Tooltip::always_open(
+                                            ui.ctx().clone(),
+                                            ui.layer_id(),
+                                            noise_label.id,
+                                            noise_label.rect,
+                                        )
+                                        .width(560.0)
+                                        .show(draw_synthetic_noise_help);
+                                    }
                                     egui::ComboBox::from_id_salt("web_synthetic_noise_select")
                                         .selected_text(self.web_synthetic_noise.display_label())
                                         .show_ui(ui, |ui| {
@@ -190,22 +203,26 @@ impl App {
                                                 &mut self.web_synthetic_noise,
                                                 WebSyntheticNoise::Truth,
                                                 WebSyntheticNoise::Truth.display_label(),
-                                            );
+                                            )
+                                            .on_hover_text(WebSyntheticNoise::Truth.tooltip());
                                             ui.selectable_value(
                                                 &mut self.web_synthetic_noise,
                                                 WebSyntheticNoise::Low,
                                                 WebSyntheticNoise::Low.display_label(),
-                                            );
+                                            )
+                                            .on_hover_text(WebSyntheticNoise::Low.tooltip());
                                             ui.selectable_value(
                                                 &mut self.web_synthetic_noise,
                                                 WebSyntheticNoise::Mid,
                                                 WebSyntheticNoise::Mid.display_label(),
-                                            );
+                                            )
+                                            .on_hover_text(WebSyntheticNoise::Mid.tooltip());
                                             ui.selectable_value(
                                                 &mut self.web_synthetic_noise,
                                                 WebSyntheticNoise::High,
                                                 WebSyntheticNoise::High.display_label(),
-                                            );
+                                            )
+                                            .on_hover_text(WebSyntheticNoise::High.tooltip());
                                         });
                                 }
                                 WebInputMode::RealData => {
@@ -338,4 +355,73 @@ impl App {
             }
         });
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn draw_synthetic_noise_help(ui: &mut egui::Ui) {
+    ui.label(egui::RichText::new("Synthetic noise presets").strong());
+    ui.add_space(2.0);
+    ui.label(
+        "Noise is applied to generated IMU and GNSS measurements. Values are 1-sigma figures.",
+    );
+    ui.add_space(8.0);
+
+    egui::Grid::new("synthetic_noise_help_grid")
+        .num_columns(5)
+        .spacing([16.0, 5.0])
+        .striped(true)
+        .show(ui, |ui| {
+            ui.strong("Preset");
+            ui.strong("Gyro");
+            ui.strong("Accel");
+            ui.strong("GNSS pos");
+            ui.strong("GNSS vel");
+            ui.end_row();
+
+            noise_help_row(ui, "None", "exact", "exact", "exact", "exact");
+            noise_help_row(
+                ui,
+                "Low noise",
+                "0.05 deg/sqrt(hr)\n1 deg/hr drift",
+                "0.015 m/s/sqrt(hr)\n0.0002 m/s^2 drift",
+                "0.8 m horiz\n1.2 m vert",
+                "0.03 m/s horiz\n0.05 m/s vert",
+            );
+            noise_help_row(
+                ui,
+                "Mid noise",
+                "0.3 deg/sqrt(hr)\n10 deg/hr drift",
+                "0.05 m/s/sqrt(hr)\n0.001 m/s^2 drift",
+                "3 m horiz\n5 m vert",
+                "0.10 m/s horiz\n0.15 m/s vert",
+            );
+            noise_help_row(
+                ui,
+                "High noise",
+                "1.0 deg/sqrt(hr)\n30 deg/hr drift",
+                "0.12 m/s/sqrt(hr)\n0.005 m/s^2 drift",
+                "8 m horiz\n12 m vert",
+                "0.30 m/s horiz\n0.50 m/s vert",
+            );
+        });
+
+    ui.add_space(6.0);
+    ui.label("Mid noise is intended to be close to a consumer IMU/GNSS noise level.");
+}
+
+#[cfg(target_arch = "wasm32")]
+fn noise_help_row(
+    ui: &mut egui::Ui,
+    preset: &str,
+    gyro: &str,
+    accel: &str,
+    gnss_pos: &str,
+    gnss_vel: &str,
+) {
+    ui.label(egui::RichText::new(preset).strong());
+    ui.label(gyro);
+    ui.label(accel);
+    ui.label(gnss_pos);
+    ui.label(gnss_vel);
+    ui.end_row();
 }

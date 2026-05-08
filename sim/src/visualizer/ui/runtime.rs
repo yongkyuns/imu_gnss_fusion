@@ -6,7 +6,7 @@ use std::time::Duration;
 use eframe::egui;
 use walkers::MapMemory;
 
-use crate::visualizer::model::{EkfImuSource, Page, PlotData};
+use crate::visualizer::model::{MountSourceMode, Page, PlotData};
 use crate::visualizer::pipeline::synthetic::build_synthetic_plot_data;
 use crate::visualizer::stats::map_center_from_traces;
 use crate::visualizer::theme::{UiDensity, UiTheme};
@@ -53,7 +53,7 @@ pub(super) fn create_app(
     has_itow: bool,
     replay: Option<ReplayState>,
 ) -> App {
-    let map_center = map_center_from_traces(&data.eskf_map);
+    let map_center = map_center_from_traces(&data.reduced_map);
     #[cfg(not(target_arch = "wasm32"))]
     let mapbox_access_token = std::env::var(MAPBOX_ACCESS_TOKEN_ENV).unwrap_or_default();
     #[cfg(target_arch = "wasm32")]
@@ -79,7 +79,7 @@ pub(super) fn create_app(
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let tuning_cfg = replay
         .as_ref()
-        .map(|replay| replay.ekf_cfg)
+        .map(|replay| replay.filter_cfg)
         .unwrap_or_default();
     let tuning_gnss_outages = replay
         .as_ref()
@@ -88,7 +88,7 @@ pub(super) fn create_app(
     let tuning_misalignment = replay
         .as_ref()
         .map(|replay| replay.misalignment)
-        .unwrap_or(EkfImuSource::Internal);
+        .unwrap_or(MountSourceMode::Internal);
 
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut app = App {
@@ -107,8 +107,8 @@ pub(super) fn create_app(
         show_align: true,
         show_heading: false,
         show_gnss_map: true,
-        show_eskf: true,
-        show_loose: true,
+        show_reduced: true,
+        show_full: true,
         shared_cursor_t_s: None,
         update_inspector_cursor_t_s: None,
         show_update_inspector: false,
@@ -181,8 +181,8 @@ impl App {
         TraceVisibility {
             show_reference: self.show_reference,
             show_align: self.show_align,
-            show_eskf: self.show_eskf,
-            show_loose: self.show_loose,
+            show_reduced: self.show_reduced,
+            show_full: self.show_full,
         }
     }
 
@@ -210,13 +210,13 @@ impl App {
             return;
         };
         let misalignment = self.tuning_misalignment;
-        let ekf_cfg = self.tuning_cfg;
+        let filter_cfg = self.tuning_cfg;
         let gnss_outages = self.tuning_gnss_outages;
         if let Some(synthetic) = &replay.synthetic {
-            match build_synthetic_plot_data(synthetic, misalignment, ekf_cfg, gnss_outages) {
+            match build_synthetic_plot_data(synthetic, misalignment, filter_cfg, gnss_outages) {
                 Ok(data) => {
                     self.data = data;
-                    self.map_center = map_center_from_traces(&self.data.eskf_map);
+                    self.map_center = map_center_from_traces(&self.data.reduced_map);
                     self.has_itow = false;
                     self.data_origin = DataOrigin::Synthetic;
                     self.replay_status = Some("Synthetic replay refreshed".to_string());

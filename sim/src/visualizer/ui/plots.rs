@@ -2,14 +2,15 @@
 
 use eframe::egui;
 use egui_plot::{
-    GridInput, GridMark, Legend, Line, LineStyle, Plot, PlotPoints, Points, VLine, log_grid_spacer,
+    GridInput, GridMark, Legend, Line, LineStyle, Plot, PlotPoint, PlotPoints, Points, VLine,
+    log_grid_spacer,
 };
 
 use crate::visualizer::model::Trace;
 
 use super::colors::shared_cursor_color;
 use super::orthogonal::{OrthogonalViewKind, draw_orthogonal_views_popup};
-use super::state::TraceVisibility;
+use super::state::{TraceVisibility, display_filter_trace_name};
 use super::trace_query::trace_time_range;
 
 const TIME_SERIES_PLOT_HEIGHT: f32 = 200.0;
@@ -337,6 +338,14 @@ fn format_log_axis_value(log_value: f64, unit: Option<&str>) -> String {
     }
 }
 
+fn format_plot_hover_label(name: &str, value: &PlotPoint, y_axis: PlotYAxis) -> String {
+    let y = match y_axis {
+        PlotYAxis::Linear => format_physical_value(value.y),
+        PlotYAxis::Log10 { unit, .. } => format_log_axis_value(value.y, unit),
+    };
+    format!("{name}\nx = {:.1}\ny = {y}", value.x)
+}
+
 fn format_physical_value(value: f64) -> String {
     let abs = value.abs();
     if abs == 0.0 {
@@ -653,6 +662,8 @@ where
                     .x_grid_spacer(subdued_plot_grid_marks)
                     .y_grid_spacer(subdued_plot_grid_marks)
                     .link_axis("shared_x", egui::Vec2b::new(true, false))
+                    .show_x(false)
+                    .show_y(false)
                     .x_axis_formatter(|mark, _range| format!("{:.1}", mark.value))
                     .allow_drag(true)
                     .allow_zoom(true)
@@ -678,6 +689,14 @@ where
                     let bounds = plot_ui.plot_bounds();
                     let xmin = bounds.min()[0];
                     let xmax = bounds.max()[0];
+                    let pointer_pos = plot_ui
+                        .response()
+                        .hovered()
+                        .then(|| plot_ui.ctx().input(|i| i.pointer.latest_pos()))
+                        .flatten();
+                    let max_hover_dist_sq =
+                        plot_ui.ctx().style().interaction.interact_radius.powi(2);
+                    let mut nearest_hover: Option<(String, PlotPoint, f32)> = None;
                     for t in &traces {
                         if t.points.is_empty() {
                             continue;
@@ -688,15 +707,53 @@ where
                         if reduced.is_empty() {
                             continue;
                         }
+                        if let Some(pointer_pos) = pointer_pos {
+                            let name = display_filter_trace_name(&t.name);
+                            for p in reduced
+                                .iter()
+                                .filter(|p| p[0].is_finite() && p[1].is_finite())
+                            {
+                                let plot_point = PlotPoint::new(p[0], p[1]);
+                                let screen_pos = plot_ui.screen_from_plot(plot_point);
+                                let dist_sq = screen_pos.distance_sq(pointer_pos);
+                                if dist_sq <= max_hover_dist_sq
+                                    && nearest_hover
+                                        .as_ref()
+                                        .is_none_or(|(_, _, best_dist_sq)| dist_sq < *best_dist_sq)
+                                {
+                                    nearest_hover = Some((name.clone(), plot_point, dist_sq));
+                                }
+                            }
+                        }
                         if t.name == "yaw initialized" {
                             let points: PlotPoints<'_> = reduced.into();
-                            plot_ui.points(Points::new(t.name.clone(), points).radius(4.0));
+                            plot_ui.points(
+                                Points::new(display_filter_trace_name(&t.name), points).radius(4.0),
+                            );
                         } else {
                             for segment in finite_line_segments(reduced) {
                                 let points: PlotPoints<'_> = segment.into();
-                                plot_ui.line(Line::new(t.name.clone(), points));
+                                plot_ui.line(Line::new(display_filter_trace_name(&t.name), points));
                             }
                         }
+                    }
+                    if let Some((name, point, _)) = nearest_hover {
+                        plot_ui.points(
+                            Points::new("", vec![[point.x, point.y]])
+                                .radius(3.5)
+                                .color(shared_cursor_color)
+                                .allow_hover(false),
+                        );
+                        egui::Tooltip::always_open(
+                            plot_ui.ctx().clone(),
+                            plot_ui.response().layer_id,
+                            plot_ui.response().id.with("trace-hover"),
+                            egui::PopupAnchor::Pointer,
+                        )
+                        .gap(12.0)
+                        .show(|ui| {
+                            ui.label(format_plot_hover_label(&name, &point, y_axis));
+                        });
                     }
                     let hover_t_s = plot_ui
                         .response()

@@ -3,7 +3,7 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use sensor_fusion::fusion::{FusionGnssSample, FusionImuSample};
+use sensor_fusion::{GnssSample, ImuSample};
 
 #[derive(Clone, Copy, Debug)]
 pub struct GenericImuSample {
@@ -102,8 +102,8 @@ pub fn write_samples(
     Ok(())
 }
 
-pub fn fusion_imu_sample(sample: GenericImuSample) -> FusionImuSample {
-    FusionImuSample {
+pub fn fusion_imu_sample(sample: GenericImuSample) -> ImuSample {
+    ImuSample {
         t_s: sample.t_s as f32,
         gyro_radps: [
             sample.gyro_radps[0] as f32,
@@ -118,8 +118,8 @@ pub fn fusion_imu_sample(sample: GenericImuSample) -> FusionImuSample {
     }
 }
 
-pub fn fusion_gnss_sample(sample: GenericGnssSample) -> FusionGnssSample {
-    FusionGnssSample {
+pub fn fusion_gnss_sample(sample: GenericGnssSample) -> GnssSample {
+    GnssSample {
         t_s: sample.t_s as f32,
         lat_deg: sample.lat_deg,
         lon_deg: sample.lon_deg,

@@ -11,7 +11,7 @@
 \usepackage{hyperref}
 
 \title{Align Filter and Non-Holonomic Mount Observations}
-\author{sensor-fusion documentation}
+\author{sensor_fusion documentation}
 \date{\today}
 
 \newcommand{\R}{\mathbb{R}}
@@ -27,10 +27,10 @@
 \section{Scope}
 
 This document records the mathematical model implemented by
-\texttt{ekf/src/align.rs}. The align filter is a standalone IMU-to-vehicle
-mount estimator. It is not the augmented ESKF; it only estimates the mount
+\texttt{sensor_fusion/src/align.rs}. The align filter is a standalone IMU-to-vehicle
+mount estimator. It is not the augmented Reduced; it only estimates the mount
 quaternion and its three-dimensional small-angle covariance. The runtime fusion
-pipeline uses this mount as the coarse seed for the ESKF and loose-reference
+pipeline uses this mount as the coarse seed for the Reduced and Full
 paths.
 
 \section{Frames and Quaternion Convention}

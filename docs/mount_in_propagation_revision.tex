@@ -11,7 +11,7 @@
 \usepackage{hyperref}
 
 \title{Mount-In-Propagation Formulation Revision}
-\author{sensor-fusion documentation}
+\author{sensor_fusion documentation}
 \date{\today}
 
 \newcommand{\R}{\mathbb{R}}
@@ -28,9 +28,9 @@
 \section{Scope}
 
 This document records the formulation change that moved mount alignment into
-the inertial propagation model for both the runtime ESKF and the loose
-reference filter. It is intentionally a before/after document. The full
-steady-state formulations remain in the dedicated ESKF and loose formulation
+the inertial propagation model for both the runtime Reduced and the full
+Full filter. It is intentionally a before/after document. The Full
+steady-state formulations remain in the dedicated Reduced and full formulation
 PDFs, while this document explains why the revision was needed, what changed
 mathematically, and how the implementation maps to the revised equations.
 
@@ -50,8 +50,8 @@ strapdown attitude and velocity propagation.
 \midrule
 \(b\) & Raw IMU body frame. \\
 \(v\) & Physical vehicle frame, forward-right-down. \\
-\(n\) & Local NED navigation frame used by the ESKF. \\
-\(e\) & ECEF frame used by the loose reference filter. \\
+\(n\) & Local NED navigation frame used by the Reduced. \\
+\(e\) & ECEF frame used by the Full filter. \\
 \(s\) & Old seeded frame produced by pre-rotating raw IMU with a coarse mount seed. \\
 \(c\) & Old corrected vehicle frame after applying residual mount. \\
 \(q_{vb}\) & Physical vehicle-to-body mount quaternion, with \(x_b=C_{bv}x_v\). \\
@@ -77,7 +77,7 @@ Small-angle perturbations use the first-order quaternion
 
 \subsection{State Split}
 
-The old ESKF nominal state was
+The old Reduced nominal state was
 \begin{equation}
   x_{\mathrm{old}} =
   \begin{bmatrix}
@@ -99,9 +99,9 @@ was
   \end{bmatrix}\T .
 \end{equation}
 
-The loose filter had the same structure in ECEF:
+The full filter had the same structure in ECEF:
 \begin{equation}
-  x_{\mathrm{old,loose}} =
+  x_{\mathrm{old,full}} =
   \begin{bmatrix}
   q_{es} & v_e\T & p_e\T & b_g\T & b_a\T &
   s_g\T & s_a\T & q_{cs}
@@ -111,7 +111,7 @@ The loose filter had the same structure in ECEF:
 \subsection{IMU Pre-Rotation}
 
 The align filter provided a coarse physical mount seed \(q_{vb}^{0}\). Before
-the ESKF or loose propagation step, the runtime converted raw IMU samples into
+the Reduced or full propagation step, the runtime converted raw IMU samples into
 the seeded frame:
 \begin{align}
   \Delta\theta_s &= C_{bv}^{0\T}\Delta\theta_b,\\
@@ -123,9 +123,9 @@ residual mount \(q_{cs}\) was held constant during propagation:
   q_{cs}^{+}=q_{cs}^{-}.
 \end{equation}
 
-\subsection{Old ESKF Propagation}
+\subsection{Old Reduced Propagation}
 
-The old ESKF prediction was effectively
+The old Reduced prediction was effectively
 \begin{align}
   \Delta\theta_s^c &= \Delta\theta_s - b_g\dt,\\
   \Delta v_s^c &= \Delta v_s - b_a\dt,\\
@@ -184,7 +184,7 @@ it could not remove the structural ambiguity.
 
 \subsection{State Meaning}
 
-The revised ESKF keeps the same state dimension and Rust field layout, but
+The revised Reduced keeps the same state dimension and Rust field layout, but
 changes the meaning of the quaternion formerly named \texttt{qcs}:
 \begin{equation}
   q_{cs}\quad\hbox{is now interpreted as}\quad q_{vb}.
@@ -192,7 +192,7 @@ changes the meaning of the quaternion formerly named \texttt{qcs}:
 That is, \texttt{qcs0..qcs3} store the physical vehicle-to-body mount, not a
 residual seeded-frame-to-vehicle correction.
 
-The revised ESKF nominal state is
+The revised Reduced nominal state is
 \begin{equation}
   x_{\mathrm{new}} =
   \begin{bmatrix}
@@ -212,9 +212,9 @@ and the revised error state is
   \end{bmatrix}\T .
 \end{equation}
 
-The loose filter analog is
+The full filter analog is
 \begin{equation}
-  x_{\mathrm{new,loose}} =
+  x_{\mathrm{new,full}} =
   \begin{bmatrix}
   q_{ev} & v_e\T & p_e\T & b_g\T & b_a\T &
   s_g\T & s_a\T & q_{vb}
@@ -235,7 +235,7 @@ The current mount rotates them into the vehicle frame:
   \Delta v_v^c &= C_{bv}(q_{vb})\T \Delta v_b^c.
 \end{align}
 
-The revised ESKF propagation is
+The revised Reduced propagation is
 \begin{align}
   q_{nv}^{+} &=
     \operatorname{normalize}\left(q_{nv}^{-}\otimes
@@ -245,7 +245,7 @@ The revised ESKF propagation is
   q_{vb}^{+} &= q_{vb}^{-}.
 \end{align}
 
-For loose, the same structure is used with ECEF gravity and Earth rotation
+For full, the same structure is used with ECEF gravity and Earth rotation
 terms:
 \begin{align}
   \omega_v &= C_{bv}(q_{vb})\T\omega_b^c,\\
@@ -288,12 +288,12 @@ needs the mount quaternion directly:
 \begin{equation}
   v_v = C_{nv}\T v_n.
 \end{equation}
-The ESKF NHC rows are
+The Reduced NHC rows are
 \begin{equation}
   z_y=e_y\T C_{nv}\T v_n=0,\qquad
   z_z=e_z\T C_{nv}\T v_n=0.
 \end{equation}
-The loose rows are
+The full rows are
 \begin{equation}
   z_y=e_y\T C_{ev}\T v_e=0,\qquad
   z_z=e_z\T C_{ev}\T v_e=0.
@@ -340,10 +340,10 @@ Wrong mount causes wrong inertial propagation, so residuals push mount. \\
 
 \section{Implementation Mapping}
 
-\subsection{Generated ESKF}
+\subsection{Generated Reduced}
 
-The symbolic source is \path{ekf/eskf.py}. The generated Rust fragments are
-included by \path{ekf/src/generated_eskf.rs}. The important changes are:
+The symbolic source is \path{sensor_fusion/reduced.py}. The generated Rust fragments are
+included by \path{sensor_fusion/src/generated_reduced.rs}. The important changes are:
 \begin{itemize}[leftmargin=*]
   \item \texttt{propagate\_nominal(...)} now takes \texttt{qcs} as \(q_{vb}\).
   \item Nominal prediction rotates \(\Delta\theta_b\) and \(\Delta v_b\)
@@ -353,26 +353,26 @@ included by \path{ekf/src/generated_eskf.rs}. The important changes are:
   \item Body velocity observations no longer depend on \texttt{qcs}.
 \end{itemize}
 
-\subsection{Runtime ESKF Facade}
+\subsection{Runtime Reduced Facade}
 
-\texttt{ekf/src/fusion.rs} no longer pre-rotates IMU before calling
-\texttt{RustEskf::predict}. It initializes \texttt{nominal.qcs*} from the align
+\texttt{sensor_fusion/src/fusion.rs} no longer pre-rotates IMU before calling
+\texttt{RustReduced::predict}. It initializes \texttt{nominal.qcs*} from the align
 or reference mount seed. In follow-align mode, the facade writes the current
 align mount into \texttt{nominal.qcs*} and keeps mount error states frozen.
 
-\subsection{Loose Reference Filter}
+\subsection{Full Reference Filter}
 
-The symbolic source is \texttt{ekf/ins\_gnss\_loose.py}. The generated Rust
-fragments are included by \texttt{ekf/src/generated\_loose.rs}. The important
+The symbolic source is \texttt{sensor_fusion/ins\_gnss\_full.py}. The generated Rust
+fragments are included by \texttt{sensor_fusion/src/generated\_full.rs}. The important
 changes are:
 \begin{itemize}[leftmargin=*]
   \item The transition matrix uses \texttt{qcs} as \(q_{vb}\) in the IMU
         rotation terms.
-  \item Loose nominal propagation in \texttt{ekf/src/loose.rs} rotates raw
+  \item Full nominal propagation in \texttt{sensor_fusion/src/full.rs} rotates raw
         body-frame gyro and accelerometer measurements into the vehicle frame.
-  \item Loose NHC rows observe \(C_{ev}\T v_e\) and have no direct mount
+  \item Full NHC rows observe \(C_{ev}\T v_e\) and have no direct mount
         support.
-  \item The visualizer seeds loose \texttt{qcs} with align mount and plots it
+  \item The visualizer seeds full \texttt{qcs} with align mount and plots it
         directly as physical mount.
 \end{itemize}
 
@@ -380,21 +380,21 @@ changes are:
 
 Moving mount into propagation makes mount observable through cross-covariance,
 so the initial covariance must allow the filter to adjust the attitude/mount
-split. This matters most for the loose filter because it initializes vehicle
-attitude from a yaw-only state. If the loose vehicle-attitude covariance is too
+split. This matters most for the full filter because it initializes vehicle
+attitude from a yaw-only state. If the full vehicle-attitude covariance is too
 small, the filter remains overconfident in an attitude that cannot yet be known
 well enough, and the mount state cannot fully absorb the coarse seed error.
 
 The visualizer default was therefore changed from
 \begin{equation}
-  \sigma_{\theta,\mathrm{loose}}=2^\circ
+  \sigma_{\theta,\mathrm{full}}=2^\circ
 \end{equation}
 to
 \begin{equation}
-  \sigma_{\theta,\mathrm{loose}}=20^\circ.
+  \sigma_{\theta,\mathrm{full}}=20^\circ.
 \end{equation}
 This is not an ad-hoc correction to one maneuver. It reflects the weaker
-initial information content of the loose yaw-only attitude seed.
+initial information content of the full yaw-only attitude seed.
 
 \section{Synthetic Validation}
 
@@ -405,8 +405,8 @@ old filters settled at nonzero mount roll error:
 \toprule
 Filter & Old final mount qerr & New final mount qerr \\
 \midrule
-ESKF & approximately \(0.46^\circ\) & \(0.0277^\circ\) \\
-Loose & approximately \(0.45^\circ\) & \(0.0321^\circ\) \\
+Reduced & approximately \(0.46^\circ\) & \(0.0277^\circ\) \\
+Full & approximately \(0.45^\circ\) & \(0.0321^\circ\) \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -418,26 +418,26 @@ With an early GNSS velocity fault of \(+0.5\,\mathrm{m/s}\) north over
 \toprule
 Filter & Final mount qerr \\
 \midrule
-ESKF & \(0.0887^\circ\) \\
-Loose & \(0.0545^\circ\) \\
+Reduced & \(0.0887^\circ\) \\
+Full & \(0.0545^\circ\) \\
 \bottomrule
 \end{tabular}
 \end{center}
-In that same faulted case, the loose GNSS position gate accepted all GNSS
+In that same faulted case, the full GNSS position gate accepted all GNSS
 position updates after the revision. Before this change, the bad state split
-could drive the loose prediction far enough away that the full 3D position gate
+could drive the full prediction far enough away that the full 3D position gate
 rejected valid measurements for the rest of the run.
 
 \section{Test Coverage}
 
 The following tests exercise the revised model:
 \begin{itemize}[leftmargin=*]
-  \item \texttt{ekf/tests/eskf\_nhc\_jacobian.rs}: finite-difference check for
-        the direct vehicle-frame ESKF NHC Jacobians.
-  \item \texttt{ekf/tests/nhc\_eskf\_loose\_equivalence.rs}: verifies ESKF and
-        loose NHC rows and updates remain equivalent after the attitude basis
+  \item \texttt{sensor_fusion/tests/reduced\_nhc\_jacobian.rs}: finite-difference check for
+        the direct vehicle-frame Reduced NHC Jacobians.
+  \item \texttt{sensor_fusion/tests/nhc\_reduced\_full\_equivalence.rs}: verifies Reduced and
+        full NHC rows and updates remain equivalent after the attitude basis
         transform.
-  \item \texttt{ekf/tests/loose\_mount\_observability.rs}: verifies NHC does
+  \item \texttt{sensor_fusion/tests/full\_mount\_observability.rs}: verifies NHC does
         not directly move mount under the new formulation; mount is corrected
         through propagation correlations.
   \item The synthetic GNSS/INS test verifies that roll-excitation now makes
@@ -446,7 +446,7 @@ The following tests exercise the revised model:
 
 \section{Remaining Follow-Up}
 
-The existing ESKF and loose formulation PDFs still describe portions of the old
+The existing Reduced and full formulation PDFs still describe portions of the old
 seeded-frame terminology. They should be updated to use this document as the
 source of truth for mount semantics, or merged into a single current
 formulation reference after the revised behavior is accepted on the full

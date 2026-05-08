@@ -7,7 +7,7 @@ use clap::Parser;
 
 #[derive(Parser, Debug)]
 #[command(name = "filter_equivalence_summary")]
-#[command(about = "Summarize ESKF/loose deltas from filter_equivalence_harness CSV output")]
+#[command(about = "Summarize Reduced/full deltas from filter_equivalence_harness CSV output")]
 struct Args {
     #[arg(required = true)]
     csv: Vec<PathBuf>,
@@ -53,8 +53,8 @@ struct MetricStats {
 struct ReadyStats {
     total: usize,
     both_ready: usize,
-    eskf_ready: usize,
-    loose_ready: usize,
+    reduced_ready: usize,
+    full_ready: usize,
 }
 
 fn main() -> Result<()> {
@@ -82,8 +82,8 @@ fn summarize_file(path: &PathBuf, args: &Args) -> Result<()> {
     let mut stats = vec![MetricStats::default(); specs.len()];
     let mut ready = ReadyStats::default();
     let t_idx = required_index(&index, "t_s")?;
-    let eskf_ready_idx = required_index(&index, "eskf_ready")?;
-    let loose_ready_idx = required_index(&index, "loose_ready")?;
+    let reduced_ready_idx = required_index(&index, "reduced_ready")?;
+    let full_ready_idx = required_index(&index, "full_ready")?;
 
     for line in lines.filter(|line| !line.trim().is_empty()) {
         let row: Vec<_> = line.split(',').collect();
@@ -104,12 +104,12 @@ fn summarize_file(path: &PathBuf, args: &Args) -> Result<()> {
         {
             continue;
         }
-        let eskf_ready = parse_bool(row[eskf_ready_idx]);
-        let loose_ready = parse_bool(row[loose_ready_idx]);
+        let reduced_ready = parse_bool(row[reduced_ready_idx]);
+        let full_ready = parse_bool(row[full_ready_idx]);
         ready.total += 1;
-        ready.eskf_ready += usize::from(eskf_ready);
-        ready.loose_ready += usize::from(loose_ready);
-        if !(eskf_ready && loose_ready) {
+        ready.reduced_ready += usize::from(reduced_ready);
+        ready.full_ready += usize::from(full_ready);
+        if !(reduced_ready && full_ready) {
             continue;
         }
         ready.both_ready += 1;
@@ -145,7 +145,7 @@ fn metric_specs(args: &Args) -> Vec<MetricSpec> {
             threshold: args.vel_threshold_mps,
         },
         MetricSpec {
-            label: "attitude ESKF-loose [deg]",
+            label: "attitude Reduced-full [deg]",
             columns: [
                 "att_diff_roll_deg",
                 "att_diff_pitch_deg",
@@ -154,25 +154,25 @@ fn metric_specs(args: &Args) -> Vec<MetricSpec> {
             threshold: args.attitude_threshold_deg,
         },
         MetricSpec {
-            label: "ESKF attitude-reference [deg]",
+            label: "Reduced attitude-reference [deg]",
             columns: [
-                "eskf_att_err_roll_deg",
-                "eskf_att_err_pitch_deg",
-                "eskf_att_err_yaw_deg",
+                "reduced_att_err_roll_deg",
+                "reduced_att_err_pitch_deg",
+                "reduced_att_err_yaw_deg",
             ],
             threshold: args.attitude_threshold_deg,
         },
         MetricSpec {
-            label: "Loose attitude-reference [deg]",
+            label: "Full attitude-reference [deg]",
             columns: [
-                "loose_att_err_roll_deg",
-                "loose_att_err_pitch_deg",
-                "loose_att_err_yaw_deg",
+                "full_att_err_roll_deg",
+                "full_att_err_pitch_deg",
+                "full_att_err_yaw_deg",
             ],
             threshold: args.attitude_threshold_deg,
         },
         MetricSpec {
-            label: "mount ESKF-loose [deg]",
+            label: "mount Reduced-full [deg]",
             columns: [
                 "mount_diff_roll_deg",
                 "mount_diff_pitch_deg",
@@ -181,25 +181,25 @@ fn metric_specs(args: &Args) -> Vec<MetricSpec> {
             threshold: args.mount_threshold_deg,
         },
         MetricSpec {
-            label: "ESKF mount-reference [deg]",
+            label: "Reduced mount-reference [deg]",
             columns: [
-                "eskf_mount_err_roll_deg",
-                "eskf_mount_err_pitch_deg",
-                "eskf_mount_err_yaw_deg",
+                "reduced_mount_err_roll_deg",
+                "reduced_mount_err_pitch_deg",
+                "reduced_mount_err_yaw_deg",
             ],
             threshold: args.mount_threshold_deg,
         },
         MetricSpec {
-            label: "Loose mount-reference [deg]",
+            label: "Full mount-reference [deg]",
             columns: [
-                "loose_mount_err_roll_deg",
-                "loose_mount_err_pitch_deg",
-                "loose_mount_err_yaw_deg",
+                "full_mount_err_roll_deg",
+                "full_mount_err_pitch_deg",
+                "full_mount_err_yaw_deg",
             ],
             threshold: args.mount_threshold_deg,
         },
         MetricSpec {
-            label: "gyro bias ESKF-loose [deg/s]",
+            label: "gyro bias Reduced-full [deg/s]",
             columns: [
                 "gyro_bias_diff_x_dps",
                 "gyro_bias_diff_y_dps",
@@ -208,7 +208,7 @@ fn metric_specs(args: &Args) -> Vec<MetricSpec> {
             threshold: args.gyro_bias_threshold_dps,
         },
         MetricSpec {
-            label: "accel bias ESKF-loose [m/s^2]",
+            label: "accel bias Reduced-full [m/s^2]",
             columns: [
                 "accel_bias_diff_x_mps2",
                 "accel_bias_diff_y_mps2",
@@ -217,20 +217,20 @@ fn metric_specs(args: &Args) -> Vec<MetricSpec> {
             threshold: args.accel_bias_threshold_mps2,
         },
         MetricSpec {
-            label: "ESKF GNSS vel residual [m/s]",
+            label: "Reduced GNSS vel residual [m/s]",
             columns: [
-                "eskf_gnss_vel_res_n_mps",
-                "eskf_gnss_vel_res_e_mps",
-                "eskf_gnss_vel_res_d_mps",
+                "reduced_gnss_vel_res_n_mps",
+                "reduced_gnss_vel_res_e_mps",
+                "reduced_gnss_vel_res_d_mps",
             ],
             threshold: args.vel_threshold_mps,
         },
         MetricSpec {
-            label: "Loose GNSS vel residual [m/s]",
+            label: "Full GNSS vel residual [m/s]",
             columns: [
-                "loose_gnss_vel_res_n_mps",
-                "loose_gnss_vel_res_e_mps",
-                "loose_gnss_vel_res_d_mps",
+                "full_gnss_vel_res_n_mps",
+                "full_gnss_vel_res_e_mps",
+                "full_gnss_vel_res_d_mps",
             ],
             threshold: args.vel_threshold_mps,
         },
@@ -260,8 +260,8 @@ fn accumulate(stat: &mut MetricStats, values: [f64; 3], t_s: f64, threshold: f64
 fn print_text(path: &PathBuf, specs: &[MetricSpec], stats: &[MetricStats], ready: ReadyStats) {
     println!("file={}", path.display());
     println!(
-        "rows total={} both_ready={} eskf_ready={} loose_ready={}",
-        ready.total, ready.both_ready, ready.eskf_ready, ready.loose_ready
+        "rows total={} both_ready={} reduced_ready={} full_ready={}",
+        ready.total, ready.both_ready, ready.reduced_ready, ready.full_ready
     );
     for (spec, stat) in specs.iter().zip(stats) {
         if stat.count == 0 {
@@ -302,8 +302,8 @@ fn print_markdown(path: &PathBuf, specs: &[MetricSpec], stats: &[MetricStats], r
     println!("### {}", path.display());
     println!();
     println!(
-        "`total={}` `both_ready={}` `eskf_ready={}` `loose_ready={}`",
-        ready.total, ready.both_ready, ready.eskf_ready, ready.loose_ready
+        "`total={}` `both_ready={}` `reduced_ready={}` `full_ready={}`",
+        ready.total, ready.both_ready, ready.reduced_ready, ready.full_ready
     );
     println!();
     println!(

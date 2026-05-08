@@ -12,6 +12,7 @@ use super::colors::{
     SeriesColor, cursor_marker_color, map_heading_color, map_marker_color, map_trace_color,
     marker_outline_color, tooltip_fill, tooltip_text_color,
 };
+use super::state::{FULL_FILTER_LABEL, REDUCED_FILTER_LABEL};
 use super::trace_query::sample_trace_at;
 
 #[derive(Clone, Copy)]
@@ -276,24 +277,24 @@ pub(super) fn synthetic_trajectory_traces(
     visuals: &egui::Visuals,
     show_reference: bool,
     show_gnss: bool,
-    show_eskf: bool,
-    show_loose: bool,
+    show_reduced: bool,
+    show_full: bool,
 ) -> Vec<SyntheticTrajectoryTrace> {
     let mut traces = Vec::new();
     if show_reference {
         push_position_pair_trace(
             &mut traces,
             "Reference",
-            &data.eskf_cmp_pos,
+            &data.reduced_cmp_pos,
             "Synthetic truth posN [m]",
             "Synthetic truth posE [m]",
             SeriesColor::Reference.resolve(visuals),
         );
     }
     if show_gnss
-        && let Some(reference) = first_lonlat_trace_point(&data.eskf_map, "Synthetic truth path")
+        && let Some(reference) = first_lonlat_trace_point(&data.reduced_map, "Synthetic truth path")
         && let Some(gnss) = data
-            .eskf_map
+            .reduced_map
             .iter()
             .find(|trace| trace.name.contains("Synthetic GNSS path"))
         && let Some(points) = lonlat_trace_to_local_en(gnss, reference)
@@ -304,24 +305,24 @@ pub(super) fn synthetic_trajectory_traces(
             color: map_trace_color("GNSS", visuals),
         });
     }
-    if show_eskf {
+    if show_reduced {
         push_position_pair_trace(
             &mut traces,
-            "ESKF",
-            &data.eskf_cmp_pos,
-            "ESKF posN [m]",
-            "ESKF posE [m]",
-            map_trace_color("ESKF path (lon,lat)", visuals),
+            REDUCED_FILTER_LABEL,
+            &data.reduced_cmp_pos,
+            "Reduced posN [m]",
+            "Reduced posE [m]",
+            map_trace_color("Reduced path (lon,lat)", visuals),
         );
     }
-    if show_loose {
+    if show_full {
         push_position_pair_trace(
             &mut traces,
-            "Loose",
-            &data.loose_cmp_pos,
-            "Loose posN [m]",
-            "Loose posE [m]",
-            map_trace_color("Loose path (lon,lat)", visuals),
+            FULL_FILTER_LABEL,
+            &data.full_cmp_pos,
+            "Full posN [m]",
+            "Full posE [m]",
+            map_trace_color("Full path (lon,lat)", visuals),
         );
     }
     traces
@@ -345,34 +346,34 @@ pub(super) fn synthetic_cursor_markers(
     data: &PlotData,
     visuals: &egui::Visuals,
     show_reference: bool,
-    show_eskf: bool,
-    show_loose: bool,
+    show_reduced: bool,
+    show_full: bool,
     t_s: f64,
 ) -> Vec<SyntheticCursorMarker> {
     [
         (
             show_reference,
             "Reference",
-            &data.eskf_cmp_pos,
+            &data.reduced_cmp_pos,
             "Synthetic truth posN [m]",
             "Synthetic truth posE [m]",
             SeriesColor::Reference.resolve(visuals),
         ),
         (
-            show_eskf,
-            "ESKF",
-            &data.eskf_cmp_pos,
-            "ESKF posN [m]",
-            "ESKF posE [m]",
-            map_marker_color("ESKF path (lon,lat)", visuals),
+            show_reduced,
+            REDUCED_FILTER_LABEL,
+            &data.reduced_cmp_pos,
+            "Reduced posN [m]",
+            "Reduced posE [m]",
+            map_marker_color("Reduced path (lon,lat)", visuals),
         ),
         (
-            show_loose,
-            "Loose",
-            &data.loose_cmp_pos,
-            "Loose posN [m]",
-            "Loose posE [m]",
-            map_marker_color("Loose path (lon,lat)", visuals),
+            show_full,
+            FULL_FILTER_LABEL,
+            &data.full_cmp_pos,
+            "Full posN [m]",
+            "Full posE [m]",
+            map_marker_color("Full path (lon,lat)", visuals),
         ),
     ]
     .into_iter()

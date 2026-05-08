@@ -1,11 +1,11 @@
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use sensor_fusion::ekf::PredictNoise;
-use sensor_fusion::eskf_types::{EskfGnssSample, EskfImuDelta};
-use sensor_fusion::loose::{LooseFilter, LooseImuDelta, LoosePredictNoise};
-use sensor_fusion::rust_eskf::RustEskf;
+use sensor_fusion::ProcessNoise;
+use sensor_fusion::full::{FullFilter, FullImuDelta};
+use sensor_fusion::reduced::RustReduced;
+use sensor_fusion::reduced::{ReducedGnssSample, ReducedImuDelta};
 use serde::Deserialize;
-use sim::datasets::seeded_loose::{
+use sim::datasets::seeded_full::{
     AccelSample, GnssSample, GyroSample, import_accel_data, import_gnss_data, import_gyro_data,
     resolve_single_file,
 };
@@ -62,7 +62,7 @@ struct RefInit {
 
 #[derive(Debug, Clone, Copy)]
 struct GpsUpdate {
-    eskf: EskfGnssSample,
+    reduced: ReducedGnssSample,
     pos_ecef_m: [f64; 3],
     vel_ecef_mps: [f32; 3],
     h_acc_m: f32,
@@ -73,8 +73,8 @@ struct GpsUpdate {
 #[derive(Debug, Clone, Copy)]
 struct ReplayStep {
     t_s: f64,
-    eskf_imu: EskfImuDelta,
-    loose_imu: LooseImuDelta,
+    reduced_imu: ReducedImuDelta,
+    full_imu: FullImuDelta,
     gyro_radps: [f32; 3],
     accel_mps2: [f32; 3],
     gps: Option<GpsUpdate>,
@@ -117,15 +117,15 @@ fn main() -> Result<()> {
     let timed_runs = args.timed_runs.max(1);
 
     for _ in 0..warmup_runs {
-        let _ = run_eskf(&init, &steps);
-        let _ = run_loose(&init, &steps);
+        let _ = run_reduced(&init, &steps);
+        let _ = run_full(&init, &steps);
     }
 
-    let mut eskf_total = FilterStats::default();
-    let mut loose_total = FilterStats::default();
+    let mut reduced_total = FilterStats::default();
+    let mut full_total = FilterStats::default();
     for _ in 0..timed_runs {
-        eskf_total += run_eskf(&init, &steps);
-        loose_total += run_loose(&init, &steps);
+        reduced_total += run_reduced(&init, &steps);
+        full_total += run_full(&init, &steps);
     }
 
     let data_span_s = steps.last().map(|s| s.t_s).unwrap_or(0.0);
@@ -138,9 +138,9 @@ fn main() -> Result<()> {
         timed_runs
     );
     println!();
-    print_report("ESKF Rust", eskf_total, timed_runs, data_span_s);
+    print_report("Reduced Rust", reduced_total, timed_runs, data_span_s);
     println!();
-    print_report("Loose Rust GPS+NHC", loose_total, timed_runs, data_span_s);
+    print_report("Full Rust GPS+NHC", full_total, timed_runs, data_span_s);
     Ok(())
 }
 
@@ -240,7 +240,7 @@ fn build_replay_steps(
 
                 steps.push(ReplayStep {
                     t_s: (curr.ttag_us - init.start_ttag_us) as f64 * 1.0e-6,
-                    eskf_imu: EskfImuDelta {
+                    reduced_imu: ReducedImuDelta {
                         dax: (curr.omega_radps[0] * dt) as f32,
                         day: (curr.omega_radps[1] * dt) as f32,
                         daz: (curr.omega_radps[2] * dt) as f32,
@@ -249,7 +249,7 @@ fn build_replay_steps(
                         dvz: (a2[2] * dt) as f32,
                         dt: dt as f32,
                     },
-                    loose_imu: LooseImuDelta {
+                    full_imu: FullImuDelta {
                         dax_1: (prev.omega_radps[0] * dt) as f32,
                         day_1: (prev.omega_radps[1] * dt) as f32,
                         daz_1: (prev.omega_radps[2] * dt) as f32,
@@ -308,7 +308,7 @@ fn build_gps_update(
     };
 
     GpsUpdate {
-        eskf: EskfGnssSample {
+        reduced: ReducedGnssSample {
             t_s: ((curr_ttag_us - init.start_ttag_us) as f64 * 1.0e-6) as f32,
             pos_ned_m: [pos_ned[0] as f32, pos_ned[1] as f32, pos_ned[2] as f32],
             vel_ned_mps: vel_ned,
@@ -328,11 +328,11 @@ fn build_gps_update(
     }
 }
 
-fn run_eskf(init: &RefInit, steps: &[ReplayStep]) -> FilterStats {
-    let mut eskf = RustEskf::new(PredictNoise::default());
-    eskf.init_nominal_from_gnss(
+fn run_reduced(init: &RefInit, steps: &[ReplayStep]) -> FilterStats {
+    let mut reduced = RustReduced::new(ProcessNoise::default());
+    reduced.init_nominal_from_gnss(
         init.q_bn,
-        EskfGnssSample {
+        ReducedGnssSample {
             t_s: 0.0,
             pos_ned_m: init.pos_ned_m,
             vel_ned_mps: init.vel_ned_mps,
@@ -346,13 +346,13 @@ fn run_eskf(init: &RefInit, steps: &[ReplayStep]) -> FilterStats {
     let mut stats = FilterStats::default();
     for step in steps {
         let t0 = Instant::now();
-        eskf.predict(step.eskf_imu);
+        reduced.predict(step.reduced_imu);
         stats.timing.predict += t0.elapsed();
         stats.counts.predict_steps += 1;
 
         if let Some(gps) = step.gps {
             let t1 = Instant::now();
-            eskf.fuse_gps(gps.eskf);
+            reduced.fuse_gps(gps.reduced);
             stats.timing.gps_update += t1.elapsed();
             stats.counts.gps_updates += 1;
         }
@@ -361,9 +361,9 @@ fn run_eskf(init: &RefInit, steps: &[ReplayStep]) -> FilterStats {
     stats
 }
 
-fn run_loose(init: &RefInit, steps: &[ReplayStep]) -> FilterStats {
-    let mut loose = LooseFilter::new(LoosePredictNoise::reference_nsr_demo());
-    loose.init_from_reference_ecef_state(
+fn run_full(init: &RefInit, steps: &[ReplayStep]) -> FilterStats {
+    let mut full = FullFilter::new(ProcessNoise::reference_nsr_demo());
+    full.init_from_reference_ecef_state(
         init.q_bn,
         init.pos_ecef_m,
         init.vel_ecef_mps,
@@ -374,18 +374,18 @@ fn run_loose(init: &RefInit, steps: &[ReplayStep]) -> FilterStats {
         init.q_cs,
         Some(init.p_diag),
     );
-    loose.set_covariance(init.p_full);
+    full.set_covariance(init.p_full);
 
     let total_start = Instant::now();
     let mut stats = FilterStats::default();
     for step in steps {
         let t0 = Instant::now();
-        loose.predict(step.loose_imu);
+        full.predict(step.full_imu);
         stats.timing.predict += t0.elapsed();
         stats.counts.predict_steps += 1;
 
         let t1 = Instant::now();
-        loose.fuse_reference_batch(
+        full.fuse_reference_batch(
             step.gps.map(|g| g.pos_ecef_m),
             step.gps.map(|g| g.vel_ecef_mps),
             step.gps.map_or(0.0, |g| g.h_acc_m),
@@ -393,13 +393,13 @@ fn run_loose(init: &RefInit, steps: &[ReplayStep]) -> FilterStats {
             step.gps.map_or(1.0, |g| g.dt_since_last_gnss_s),
             step.gyro_radps,
             step.accel_mps2,
-            step.loose_imu.dt,
+            step.full_imu.dt,
         );
         stats.timing.constrained_update += t1.elapsed();
         if step.gps.is_some() {
             stats.counts.gps_updates += 1;
         }
-        let obs_types = loose.last_obs_types();
+        let obs_types = full.last_obs_types();
         if !obs_types.is_empty() {
             stats.counts.constrained_updates += 1;
             stats.counts.observation_rows += obs_types.len();

@@ -4,12 +4,12 @@ use std::sync::mpsc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 
-use super::model::{EkfImuSource, PlotData, Trace};
+use super::model::{MountSourceMode, PlotData, Trace};
 use super::pipeline::generic::{
     GenericReplayInput, GenericReplayProgress, build_generic_replay_plot_data,
     build_generic_replay_plot_data_with_progress, parse_generic_replay_csvs_with_refs,
 };
-use super::pipeline::{EkfCompareConfig, GnssOutageConfig};
+use super::pipeline::{FilterCompareConfig, GnssOutageConfig};
 
 pub const WEB_TRANSPORT_MAX_POINTS_PER_TRACE: usize = 6000;
 const WEB_TRANSPORT_COMPARE_POINTS_PER_TRACE: usize = 30000;
@@ -97,29 +97,29 @@ impl ReplayOutputPolicy {
 pub struct GenericReplayJobRequest {
     pub inputs: GenericReplayCsvInputs,
     pub labels: GenericReplayLabels,
-    pub ekf_imu_source: EkfImuSource,
-    pub ekf_cfg: EkfCompareConfig,
+    pub mount_source: MountSourceMode,
+    pub filter_cfg: FilterCompareConfig,
     pub gnss_outages: GnssOutageConfig,
     pub output_policy: ReplayOutputPolicy,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct GenericReplayJobConfig {
-    pub misalignment: EkfImuSource,
-    pub ekf_cfg: EkfCompareConfig,
+    pub misalignment: MountSourceMode,
+    pub filter_cfg: FilterCompareConfig,
     pub gnss_outages: GnssOutageConfig,
     pub output_policy: ReplayOutputPolicy,
 }
 
 impl GenericReplayJobConfig {
     pub fn full(
-        misalignment: EkfImuSource,
-        ekf_cfg: EkfCompareConfig,
+        misalignment: MountSourceMode,
+        filter_cfg: FilterCompareConfig,
         gnss_outages: GnssOutageConfig,
     ) -> Self {
         Self {
             misalignment,
-            ekf_cfg,
+            filter_cfg,
             gnss_outages,
             output_policy: ReplayOutputPolicy::Full,
         }
@@ -127,8 +127,8 @@ impl GenericReplayJobConfig {
 
     pub fn web_transport() -> Self {
         Self {
-            misalignment: EkfImuSource::Internal,
-            ekf_cfg: EkfCompareConfig::default(),
+            misalignment: MountSourceMode::Internal,
+            filter_cfg: FilterCompareConfig::default(),
             gnss_outages: GnssOutageConfig::default(),
             output_policy: ReplayOutputPolicy::web_transport(),
         }
@@ -149,8 +149,8 @@ impl GenericReplayJobRequest {
         Self {
             inputs,
             labels: GenericReplayLabels::default(),
-            ekf_imu_source: EkfImuSource::Internal,
-            ekf_cfg: EkfCompareConfig::default(),
+            mount_source: MountSourceMode::Internal,
+            filter_cfg: FilterCompareConfig::default(),
             gnss_outages: GnssOutageConfig::default(),
             output_policy: ReplayOutputPolicy::Full,
         }
@@ -175,8 +175,8 @@ pub fn run_generic_replay_request(
     )?;
     let plot_data = build_generic_replay_plot_data_from_input(
         &replay,
-        request.ekf_imu_source,
-        request.ekf_cfg,
+        request.mount_source,
+        request.filter_cfg,
         request.gnss_outages,
         request.output_policy,
     );
@@ -194,7 +194,7 @@ pub fn run_generic_replay_job(
     build_generic_replay_plot_data_from_input(
         replay,
         config.misalignment,
-        config.ekf_cfg,
+        config.filter_cfg,
         config.gnss_outages,
         config.output_policy,
     )
@@ -225,7 +225,7 @@ pub fn run_generic_csv_replay_job_with_progress(
     let mut plot_data = build_generic_replay_plot_data_with_progress(
         &replay,
         job.config.misalignment,
-        job.config.ekf_cfg,
+        job.config.filter_cfg,
         job.config.gnss_outages,
         progress,
     );
@@ -282,8 +282,8 @@ impl GenericReplayThread {
 
 pub fn parse_and_build_generic_replay_plot_data(
     inputs: &GenericReplayCsvInputs,
-    ekf_imu_source: EkfImuSource,
-    ekf_cfg: EkfCompareConfig,
+    mount_source: MountSourceMode,
+    filter_cfg: FilterCompareConfig,
     gnss_outages: GnssOutageConfig,
     output_policy: ReplayOutputPolicy,
 ) -> Result<PlotData> {
@@ -296,8 +296,8 @@ pub fn parse_and_build_generic_replay_plot_data(
     )?;
     Ok(build_generic_replay_plot_data_from_input(
         &replay,
-        ekf_imu_source,
-        ekf_cfg,
+        mount_source,
+        filter_cfg,
         gnss_outages,
         output_policy,
     ))
@@ -305,13 +305,13 @@ pub fn parse_and_build_generic_replay_plot_data(
 
 pub fn build_generic_replay_plot_data_from_input(
     replay: &GenericReplayInput,
-    ekf_imu_source: EkfImuSource,
-    ekf_cfg: EkfCompareConfig,
+    mount_source: MountSourceMode,
+    filter_cfg: FilterCompareConfig,
     gnss_outages: GnssOutageConfig,
     output_policy: ReplayOutputPolicy,
 ) -> PlotData {
     let mut plot_data =
-        build_generic_replay_plot_data(replay, ekf_imu_source, ekf_cfg, gnss_outages);
+        build_generic_replay_plot_data(replay, mount_source, filter_cfg, gnss_outages);
     output_policy.apply(&mut plot_data);
     plot_data
 }
@@ -331,42 +331,42 @@ pub fn decimate_for_transport(data: &mut PlotData, max_points_per_trace: usize) 
     decimate_group(&mut data.other, max_points_per_trace);
     let compare_max_points = max_points_per_trace.max(WEB_TRANSPORT_COMPARE_POINTS_PER_TRACE);
 
-    decimate_group(&mut data.eskf_cmp_pos, compare_max_points);
-    decimate_group(&mut data.eskf_cmp_vel, compare_max_points);
-    decimate_group(&mut data.eskf_cmp_att, compare_max_points);
-    decimate_group(&mut data.eskf_meas_gyro, max_points_per_trace);
-    decimate_group(&mut data.eskf_meas_accel, max_points_per_trace);
-    decimate_group(&mut data.eskf_bias_gyro, max_points_per_trace);
-    decimate_group(&mut data.eskf_bias_accel, max_points_per_trace);
-    decimate_group(&mut data.eskf_cov_bias, max_points_per_trace);
-    decimate_group(&mut data.eskf_cov_nonbias, max_points_per_trace);
-    decimate_group(&mut data.eskf_mount_sigma, max_points_per_trace);
-    decimate_group(&mut data.eskf_mount_dx, max_points_per_trace);
-    decimate_group(&mut data.eskf_nhc_mount_dx, max_points_per_trace);
-    decimate_group(&mut data.eskf_nhc_innovation, max_points_per_trace);
-    decimate_group(&mut data.eskf_nhc_nis, max_points_per_trace);
-    decimate_group(&mut data.eskf_nhc_h_mount_norm, max_points_per_trace);
-    decimate_group(&mut data.eskf_misalignment, compare_max_points);
-    decimate_group(&mut data.eskf_stationary_diag, max_points_per_trace);
-    decimate_group(&mut data.eskf_bump_pitch_speed, max_points_per_trace);
-    decimate_group(&mut data.eskf_bump_diag, max_points_per_trace);
-    decimate_group(&mut data.loose_cmp_pos, compare_max_points);
-    decimate_group(&mut data.loose_cmp_vel, compare_max_points);
-    decimate_group(&mut data.loose_cmp_att, compare_max_points);
-    decimate_group(&mut data.loose_nominal_att, max_points_per_trace);
-    decimate_group(&mut data.loose_residual_mount, max_points_per_trace);
-    decimate_group(&mut data.loose_misalignment, compare_max_points);
-    decimate_group(&mut data.loose_meas_gyro, max_points_per_trace);
-    decimate_group(&mut data.loose_meas_accel, max_points_per_trace);
-    decimate_group(&mut data.loose_bias_gyro, max_points_per_trace);
-    decimate_group(&mut data.loose_bias_accel, max_points_per_trace);
-    decimate_group(&mut data.loose_scale_gyro, max_points_per_trace);
-    decimate_group(&mut data.loose_scale_accel, max_points_per_trace);
-    decimate_group(&mut data.loose_cov_bias, max_points_per_trace);
-    decimate_group(&mut data.loose_cov_nonbias, max_points_per_trace);
-    decimate_group(&mut data.loose_mount_sigma, max_points_per_trace);
-    decimate_group(&mut data.loose_mount_dx, max_points_per_trace);
-    decimate_group(&mut data.loose_gnss_pos_gate, max_points_per_trace);
+    decimate_group(&mut data.reduced_cmp_pos, compare_max_points);
+    decimate_group(&mut data.reduced_cmp_vel, compare_max_points);
+    decimate_group(&mut data.reduced_cmp_att, compare_max_points);
+    decimate_group(&mut data.reduced_meas_gyro, max_points_per_trace);
+    decimate_group(&mut data.reduced_meas_accel, max_points_per_trace);
+    decimate_group(&mut data.reduced_bias_gyro, max_points_per_trace);
+    decimate_group(&mut data.reduced_bias_accel, max_points_per_trace);
+    decimate_group(&mut data.reduced_cov_bias, max_points_per_trace);
+    decimate_group(&mut data.reduced_cov_nonbias, max_points_per_trace);
+    decimate_group(&mut data.reduced_mount_sigma, max_points_per_trace);
+    decimate_group(&mut data.reduced_mount_dx, max_points_per_trace);
+    decimate_group(&mut data.reduced_nhc_mount_dx, max_points_per_trace);
+    decimate_group(&mut data.reduced_nhc_innovation, max_points_per_trace);
+    decimate_group(&mut data.reduced_nhc_nis, max_points_per_trace);
+    decimate_group(&mut data.reduced_nhc_h_mount_norm, max_points_per_trace);
+    decimate_group(&mut data.reduced_misalignment, compare_max_points);
+    decimate_group(&mut data.reduced_stationary_diag, max_points_per_trace);
+    decimate_group(&mut data.reduced_bump_pitch_speed, max_points_per_trace);
+    decimate_group(&mut data.reduced_bump_diag, max_points_per_trace);
+    decimate_group(&mut data.full_cmp_pos, compare_max_points);
+    decimate_group(&mut data.full_cmp_vel, compare_max_points);
+    decimate_group(&mut data.full_cmp_att, compare_max_points);
+    decimate_group(&mut data.full_nominal_att, max_points_per_trace);
+    decimate_group(&mut data.full_residual_mount, max_points_per_trace);
+    decimate_group(&mut data.full_misalignment, compare_max_points);
+    decimate_group(&mut data.full_meas_gyro, max_points_per_trace);
+    decimate_group(&mut data.full_meas_accel, max_points_per_trace);
+    decimate_group(&mut data.full_bias_gyro, max_points_per_trace);
+    decimate_group(&mut data.full_bias_accel, max_points_per_trace);
+    decimate_group(&mut data.full_scale_gyro, max_points_per_trace);
+    decimate_group(&mut data.full_scale_accel, max_points_per_trace);
+    decimate_group(&mut data.full_cov_bias, max_points_per_trace);
+    decimate_group(&mut data.full_cov_nonbias, max_points_per_trace);
+    decimate_group(&mut data.full_mount_sigma, max_points_per_trace);
+    decimate_group(&mut data.full_mount_dx, max_points_per_trace);
+    decimate_group(&mut data.full_gnss_pos_gate, max_points_per_trace);
     decimate_group(&mut data.align_cmp_att, max_points_per_trace);
     decimate_group(&mut data.align_res_vel, max_points_per_trace);
     decimate_group(&mut data.align_axis_err, max_points_per_trace);
@@ -668,19 +668,19 @@ mod tests {
                 .collect(),
         };
         let mut data = PlotData {
-            loose_cmp_att: vec![dense_trace()],
-            eskf_cmp_att: vec![dense_trace()],
-            loose_meas_gyro: vec![dense_trace()],
+            full_cmp_att: vec![dense_trace()],
+            reduced_cmp_att: vec![dense_trace()],
+            full_meas_gyro: vec![dense_trace()],
             ..PlotData::default()
         };
 
         decimate_for_transport(&mut data, WEB_TRANSPORT_MAX_POINTS_PER_TRACE);
 
-        assert!(data.loose_cmp_att[0].points.len() > WEB_TRANSPORT_MAX_POINTS_PER_TRACE);
-        assert!(data.eskf_cmp_att[0].points.len() > WEB_TRANSPORT_MAX_POINTS_PER_TRACE);
-        assert!(data.loose_cmp_att[0].points.len() <= WEB_TRANSPORT_COMPARE_POINTS_PER_TRACE);
-        assert!(data.eskf_cmp_att[0].points.len() <= WEB_TRANSPORT_COMPARE_POINTS_PER_TRACE);
-        assert!(data.loose_meas_gyro[0].points.len() <= WEB_TRANSPORT_MAX_POINTS_PER_TRACE);
+        assert!(data.full_cmp_att[0].points.len() > WEB_TRANSPORT_MAX_POINTS_PER_TRACE);
+        assert!(data.reduced_cmp_att[0].points.len() > WEB_TRANSPORT_MAX_POINTS_PER_TRACE);
+        assert!(data.full_cmp_att[0].points.len() <= WEB_TRANSPORT_COMPARE_POINTS_PER_TRACE);
+        assert!(data.reduced_cmp_att[0].points.len() <= WEB_TRANSPORT_COMPARE_POINTS_PER_TRACE);
+        assert!(data.full_meas_gyro[0].points.len() <= WEB_TRANSPORT_MAX_POINTS_PER_TRACE);
     }
 }
 

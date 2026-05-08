@@ -1,7 +1,7 @@
-use crate::visualizer::pipeline::EkfCompareConfig;
+use crate::visualizer::pipeline::FilterCompareConfig;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct EkfCompareConfigSnapshot {
+pub struct FilterCompareConfigSnapshot {
     pub r_body_vel: f32,
     pub r_body_vel_z: f32,
     pub attitude_roll_pitch_init_sigma_deg: f32,
@@ -24,10 +24,10 @@ pub struct EkfCompareConfigSnapshot {
     pub predict_imu_decimation: usize,
     pub yaw_init_speed_mps: f64,
     pub predict_noise_configured: bool,
-    pub loose_predict_noise_configured: bool,
+    pub full_predict_noise_configured: bool,
 }
 
-pub const EKF_COMPARE_DEFAULTS: EkfCompareConfigSnapshot = EkfCompareConfigSnapshot {
+pub const FILTER_COMPARE_DEFAULTS: FilterCompareConfigSnapshot = FilterCompareConfigSnapshot {
     r_body_vel: 0.5,
     r_body_vel_z: 0.05,
     attitude_roll_pitch_init_sigma_deg: 2.0,
@@ -50,11 +50,11 @@ pub const EKF_COMPARE_DEFAULTS: EkfCompareConfigSnapshot = EkfCompareConfigSnaps
     predict_imu_decimation: 1,
     yaw_init_speed_mps: 0.0,
     predict_noise_configured: true,
-    loose_predict_noise_configured: true,
+    full_predict_noise_configured: true,
 };
 
-pub fn snapshot_ekf_compare_config(cfg: &EkfCompareConfig) -> EkfCompareConfigSnapshot {
-    EkfCompareConfigSnapshot {
+pub fn snapshot_filter_compare_config(cfg: &FilterCompareConfig) -> FilterCompareConfigSnapshot {
+    FilterCompareConfigSnapshot {
         r_body_vel: cfg.r_body_vel,
         r_body_vel_z: cfg.r_body_vel_z,
         attitude_roll_pitch_init_sigma_deg: cfg.attitude_roll_pitch_init_sigma_deg,
@@ -77,6 +77,6 @@ pub fn snapshot_ekf_compare_config(cfg: &EkfCompareConfig) -> EkfCompareConfigSn
         predict_imu_decimation: cfg.predict_imu_decimation,
         yaw_init_speed_mps: cfg.yaw_init_speed_mps,
         predict_noise_configured: cfg.predict_noise.is_some(),
-        loose_predict_noise_configured: cfg.loose_predict_noise.is_some(),
+        full_predict_noise_configured: cfg.full_predict_noise.is_some(),
     }
 }

@@ -1,10 +1,10 @@
+use sensor_fusion::ProcessNoise;
 use sensor_fusion::align::AlignConfig;
-use sensor_fusion::ekf::PredictNoise;
-use sensor_fusion::loose::LoosePredictNoise;
+pub use sensor_fusion::full::FullInitConfig;
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct EkfCompareConfig {
+pub struct FilterCompareConfig {
     pub align: AlignConfig,
     #[serde(default = "default_r_body_vel_y")]
     pub r_body_vel: f32,
@@ -34,14 +34,14 @@ pub struct EkfCompareConfig {
     pub predict_imu_lpf_cutoff_hz: Option<f64>,
     pub predict_imu_decimation: usize,
     pub yaw_init_speed_mps: f64,
-    #[serde(default = "default_eskf_predict_noise_option")]
-    pub predict_noise: Option<PredictNoise>,
-    #[serde(default = "default_loose_predict_noise_option")]
-    pub loose_predict_noise: Option<LoosePredictNoise>,
-    pub loose_init: LooseInitConfig,
+    #[serde(default = "default_reduced_predict_noise_option")]
+    pub predict_noise: Option<ProcessNoise>,
+    #[serde(default = "default_full_predict_noise_option")]
+    pub full_predict_noise: Option<ProcessNoise>,
+    pub full_init: FullInitConfig,
 }
 
-impl Default for EkfCompareConfig {
+impl Default for FilterCompareConfig {
     fn default() -> Self {
         Self {
             align: AlignConfig::default(),
@@ -66,9 +66,9 @@ impl Default for EkfCompareConfig {
             predict_imu_lpf_cutoff_hz: None,
             predict_imu_decimation: 1,
             yaw_init_speed_mps: 0.0 / 3.6,
-            predict_noise: Some(default_eskf_predict_noise()),
-            loose_predict_noise: Some(default_loose_predict_noise()),
-            loose_init: LooseInitConfig::default(),
+            predict_noise: Some(default_reduced_predict_noise()),
+            full_predict_noise: Some(default_full_predict_noise()),
+            full_init: FullInitConfig::default(),
         }
     }
 }
@@ -97,63 +97,28 @@ pub struct GnssOutageConfig {
     pub seed: u64,
 }
 
-#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LooseInitConfig {
-    pub pos_min_sigma_m: f32,
-    pub vel_min_sigma_mps: f32,
-    pub attitude_sigma_deg: f32,
-    pub gyro_bias_sigma_dps: f32,
-    pub accel_bias_sigma_mps2: f32,
-    pub gyro_scale_sigma: f32,
-    pub accel_scale_sigma: f32,
-    /// Initial residual mount roll/pitch sigma, in degrees.
-    pub mount_sigma_deg: f32,
-    /// Initial residual mount yaw sigma, in degrees.
-    #[serde(default = "default_loose_mount_yaw_sigma_deg")]
-    pub mount_yaw_sigma_deg: f32,
-}
-
-impl Default for LooseInitConfig {
-    fn default() -> Self {
-        Self {
-            pos_min_sigma_m: 0.5,
-            vel_min_sigma_mps: 0.2,
-            attitude_sigma_deg: 20.0,
-            gyro_bias_sigma_dps: 0.125,
-            accel_bias_sigma_mps2: 0.15,
-            gyro_scale_sigma: 0.02,
-            accel_scale_sigma: 0.0,
-            mount_sigma_deg: 2.0,
-            mount_yaw_sigma_deg: default_loose_mount_yaw_sigma_deg(),
-        }
-    }
-}
-
-fn default_loose_mount_yaw_sigma_deg() -> f32 {
-    6.0
-}
-
-pub const fn default_eskf_predict_noise() -> PredictNoise {
-    PredictNoise {
+pub const fn default_reduced_predict_noise() -> ProcessNoise {
+    ProcessNoise {
         gyro_var: 2.287_311_3e-7 * 10.0_f32,
         accel_var: 2.450_421_4e-5 * 15.0_f32,
         gyro_bias_rw_var: 0.0002e-9,
         accel_bias_rw_var: 0.002e-9,
+        gyro_scale_rw_var: 0.0,
+        accel_scale_rw_var: 0.0,
         mount_align_rw_var: 0.0,
     }
 }
 
-pub const fn default_loose_predict_noise() -> LoosePredictNoise {
-    LoosePredictNoise::lsm6dso_loose_104hz()
+pub const fn default_full_predict_noise() -> ProcessNoise {
+    ProcessNoise::lsm6dso_104hz()
 }
 
-fn default_eskf_predict_noise_option() -> Option<PredictNoise> {
-    Some(default_eskf_predict_noise())
+fn default_reduced_predict_noise_option() -> Option<ProcessNoise> {
+    Some(default_reduced_predict_noise())
 }
 
-fn default_loose_predict_noise_option() -> Option<LoosePredictNoise> {
-    Some(default_loose_predict_noise())
+fn default_full_predict_noise_option() -> Option<ProcessNoise> {
+    Some(default_full_predict_noise())
 }
 
 #[cfg(test)]
@@ -162,7 +127,7 @@ mod tests {
 
     #[test]
     fn replay_configs_round_trip_through_canonical_json() {
-        let mut cfg = EkfCompareConfig {
+        let mut cfg = FilterCompareConfig {
             r_body_vel: 0.42,
             r_body_vel_z: 0.24,
             predict_imu_lpf_cutoff_hz: Some(120.0),
@@ -170,12 +135,12 @@ mod tests {
         };
         cfg.align.min_speed_mps = 1.5;
         cfg.align.q_mount_std_rad = [1.0e-5, 2.0e-5, 3.0e-5];
-        cfg.loose_init.mount_sigma_deg = 4.0;
-        cfg.loose_init.mount_yaw_sigma_deg = 8.0;
-        cfg.loose_predict_noise.as_mut().unwrap().mount_align_rw_var = 2.0e-8;
+        cfg.full_init.mount_sigma_deg = 4.0;
+        cfg.full_init.mount_yaw_sigma_deg = 8.0;
+        cfg.full_predict_noise.as_mut().unwrap().mount_align_rw_var = 2.0e-8;
 
         let json = serde_json::to_string(&cfg).unwrap();
-        let decoded: EkfCompareConfig = serde_json::from_str(&json).unwrap();
+        let decoded: FilterCompareConfig = serde_json::from_str(&json).unwrap();
 
         assert_eq!(decoded.r_body_vel, cfg.r_body_vel);
         assert_eq!(decoded.r_body_vel_z, cfg.r_body_vel_z);
@@ -190,16 +155,16 @@ mod tests {
         assert_eq!(decoded.align.min_speed_mps, cfg.align.min_speed_mps);
         assert_eq!(decoded.align.q_mount_std_rad, cfg.align.q_mount_std_rad);
         assert_eq!(
-            decoded.loose_init.mount_sigma_deg,
-            cfg.loose_init.mount_sigma_deg
+            decoded.full_init.mount_sigma_deg,
+            cfg.full_init.mount_sigma_deg
         );
         assert_eq!(
-            decoded.loose_init.mount_yaw_sigma_deg,
-            cfg.loose_init.mount_yaw_sigma_deg
+            decoded.full_init.mount_yaw_sigma_deg,
+            cfg.full_init.mount_yaw_sigma_deg
         );
         assert_eq!(
-            decoded.loose_predict_noise.unwrap().mount_align_rw_var,
-            cfg.loose_predict_noise.unwrap().mount_align_rw_var
+            decoded.full_predict_noise.unwrap().mount_align_rw_var,
+            cfg.full_predict_noise.unwrap().mount_align_rw_var
         );
 
         let outages = GnssOutageConfig {
@@ -236,7 +201,7 @@ mod tests {
             "vehicleMeasLpfCutoffHz": 35.0,
             "predictImuDecimation": 1,
             "yawInitSpeedMps": 0.0,
-            "looseInit": {
+            "fullInit": {
                 "posMinSigmaM": 0.5,
                 "velMinSigmaMps": 0.2,
                 "attitudeSigmaDeg": 2.0,
@@ -248,12 +213,12 @@ mod tests {
             },
         });
 
-        let decoded: EkfCompareConfig = serde_json::from_value(json).unwrap();
+        let decoded: FilterCompareConfig = serde_json::from_value(json).unwrap();
 
         assert_eq!(decoded.predict_imu_lpf_cutoff_hz, None);
         assert_eq!(
-            decoded.loose_init.mount_yaw_sigma_deg,
-            default_loose_mount_yaw_sigma_deg()
+            decoded.full_init.mount_yaw_sigma_deg,
+            FullInitConfig::default().mount_yaw_sigma_deg
         );
         assert_eq!(decoded.r_body_vel_z, default_r_body_vel_z());
         assert_eq!(
@@ -261,6 +226,6 @@ mod tests {
             default_mount_roll_pitch_init_sigma_deg()
         );
         assert!(decoded.predict_noise.is_some());
-        assert!(decoded.loose_predict_noise.is_some());
+        assert!(decoded.full_predict_noise.is_some());
     }
 }

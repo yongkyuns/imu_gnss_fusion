@@ -1,20 +1,20 @@
-//! ESKF, align, and loose tuning panel controls.
+//! Reduced, align, and full tuning panel controls.
 
 use eframe::egui;
 
-use crate::visualizer::model::EkfImuSource;
-use crate::visualizer::pipeline::EkfCompareConfig;
+use crate::visualizer::model::MountSourceMode;
+use crate::visualizer::pipeline::FilterCompareConfig;
 
-pub(super) fn draw_eskf_tuning(
+pub(super) fn draw_reduced_tuning(
     ui: &mut egui::Ui,
-    misalignment: &mut EkfImuSource,
-    cfg: &mut EkfCompareConfig,
+    misalignment: &mut MountSourceMode,
+    cfg: &mut FilterCompareConfig,
 ) {
     ui.horizontal_wrapped(|ui| {
         ui.label("Mount source");
-        ui.selectable_value(misalignment, EkfImuSource::Internal, "internal");
-        ui.selectable_value(misalignment, EkfImuSource::External, "external align");
-        ui.selectable_value(misalignment, EkfImuSource::Ref, "reference");
+        ui.selectable_value(misalignment, MountSourceMode::Internal, "internal");
+        ui.selectable_value(misalignment, MountSourceMode::External, "external align");
+        ui.selectable_value(misalignment, MountSourceMode::Ref, "reference");
     });
     ui.collapsing("Measurement weighting", |ui| {
         drag_f32(
@@ -127,7 +127,7 @@ pub(super) fn draw_eskf_tuning(
     ui.collapsing("Prediction", |ui| {
         let noise = cfg
             .predict_noise
-            .get_or_insert_with(|| EkfCompareConfig::default().predict_noise.unwrap());
+            .get_or_insert_with(|| FilterCompareConfig::default().predict_noise.unwrap());
         drag_f32(ui, "Gyro var", &mut noise.gyro_var, 1.0e-7, 0.0..=1.0);
         drag_f32(ui, "Accel var", &mut noise.accel_var, 1.0e-5, 0.0..=100.0);
         drag_f32(
@@ -173,7 +173,7 @@ pub(super) fn draw_eskf_tuning(
     });
 }
 
-pub(super) fn draw_align_tuning(ui: &mut egui::Ui, cfg: &mut EkfCompareConfig) {
+pub(super) fn draw_align_tuning(ui: &mut egui::Ui, cfg: &mut FilterCompareConfig) {
     drag_f32(
         ui,
         "Align handoff delay s",
@@ -313,11 +313,11 @@ pub(super) fn draw_align_tuning(ui: &mut egui::Ui, cfg: &mut EkfCompareConfig) {
     ui.checkbox(&mut align.use_turn_gyro, "Use turn gyro updates");
 }
 
-pub(super) fn draw_loose_tuning(ui: &mut egui::Ui, cfg: &mut EkfCompareConfig) {
+pub(super) fn draw_full_tuning(ui: &mut egui::Ui, cfg: &mut FilterCompareConfig) {
     ui.collapsing("Prediction noise", |ui| {
         let noise = cfg
-            .loose_predict_noise
-            .get_or_insert_with(|| EkfCompareConfig::default().loose_predict_noise.unwrap());
+            .full_predict_noise
+            .get_or_insert_with(|| FilterCompareConfig::default().full_predict_noise.unwrap());
         drag_f32(ui, "Gyro var", &mut noise.gyro_var, 1.0e-7, 0.0..=1.0);
         drag_f32(ui, "Accel var", &mut noise.accel_var, 1.0e-5, 0.0..=100.0);
         drag_f32(
@@ -355,7 +355,7 @@ pub(super) fn draw_loose_tuning(ui: &mut egui::Ui, cfg: &mut EkfCompareConfig) {
         );
     });
     ui.collapsing("Initial covariance", |ui| {
-        let init = &mut cfg.loose_init;
+        let init = &mut cfg.full_init;
         drag_f32(
             ui,
             "Position min sigma m",

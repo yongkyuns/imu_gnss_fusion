@@ -11,8 +11,8 @@ The package format is intentionally hardware agnostic:
   reference_mount.csv.gz (optional)
 
 Input can be an existing generic replay directory containing imu.csv/gnss.csv
-or a gnss-ins-sim output directory that can be converted by the existing
-export_gnss_ins_sim_generic Rust tool.
+or a synthetic-export output directory that can be converted by the existing
+export_synthetic_replay_generic Rust tool.
 """
 
 from __future__ import annotations
@@ -89,13 +89,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Package generic replay data into manifest.json plus imu.csv.gz/gnss.csv.gz.",
     )
-    parser.add_argument("input", type=Path, help="Generic replay dir or gnss-ins-sim output dir")
+    parser.add_argument("input", type=Path, help="Generic replay dir or synthetic-export output dir")
     parser.add_argument("output", type=Path, help="Output hosted-data dataset directory")
     parser.add_argument(
         "--source-format",
-        choices=["auto", "generic", "gnss-ins-sim"],
+        choices=["auto", "generic", "synthetic-export"],
         default="auto",
-        help="Input format. auto detects generic replay first, then gnss-ins-sim.",
+        help="Input format. auto detects generic replay first, then synthetic-export.",
     )
     parser.add_argument(
         "--dataset-id",
@@ -113,12 +113,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Also stage uncompressed imu.csv and gnss.csv next to the gzip files.",
     )
 
-    conversion = parser.add_argument_group("gnss-ins-sim conversion options")
+    conversion = parser.add_argument_group("synthetic-export conversion options")
     conversion.add_argument(
         "--signal-source",
         choices=["meas", "ref"],
         default="meas",
-        help="Forwarded to export_gnss_ins_sim_generic.",
+        help="Forwarded to export_synthetic_replay_generic.",
     )
     conversion.add_argument("--data-key", type=int, default=0)
     conversion.add_argument("--mount-roll-deg", type=float, default=0.0)
@@ -161,8 +161,8 @@ def package_dataset(args: argparse.Namespace) -> None:
         generic_dir = Path(tmp) / "generic"
         if source_format == "generic":
             generic_dir = input_path
-        elif source_format == "gnss-ins-sim":
-            run_gnss_ins_sim_export(input_path, generic_dir, args)
+        elif source_format == "synthetic-export":
+            run_synthetic_replay_export(input_path, generic_dir, args)
         else:
             raise AssertionError(f"unexpected source format: {source_format}")
 
@@ -324,11 +324,11 @@ def detect_source_format(input_dir: Path, requested: str) -> str:
         return requested
     if has_generic_replay(input_dir):
         return "generic"
-    if has_gnss_ins_sim(input_dir):
-        return "gnss-ins-sim"
+    if has_synthetic_replay(input_dir):
+        return "synthetic-export"
     raise ValueError(
         "could not detect input format; expected generic imu.csv/gnss.csv "
-        "or gnss-ins-sim time.csv/gps_time.csv outputs"
+        "or synthetic-export time.csv/gps_time.csv outputs"
     )
 
 
@@ -338,11 +338,11 @@ def has_generic_replay(input_dir: Path) -> bool:
     )
 
 
-def has_gnss_ins_sim(input_dir: Path) -> bool:
+def has_synthetic_replay(input_dir: Path) -> bool:
     return (input_dir / "time.csv").exists() and (input_dir / "gps_time.csv").exists()
 
 
-def run_gnss_ins_sim_export(input_dir: Path, generic_dir: Path, args: argparse.Namespace) -> None:
+def run_synthetic_replay_export(input_dir: Path, generic_dir: Path, args: argparse.Namespace) -> None:
     cmd = [
         "cargo",
         "run",
@@ -350,7 +350,7 @@ def run_gnss_ins_sim_export(input_dir: Path, generic_dir: Path, args: argparse.N
         "-p",
         "sim",
         "--bin",
-        "export_gnss_ins_sim_generic",
+        "export_synthetic_replay_generic",
         "--",
         str(input_dir),
         str(generic_dir),

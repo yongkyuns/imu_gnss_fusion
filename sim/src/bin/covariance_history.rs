@@ -4,11 +4,12 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use sensor_fusion::eskf_types::{ESKF_UPDATE_DIAG_TYPES, EskfImuDelta, EskfState};
-use sensor_fusion::fusion::SensorFusion;
-use sensor_fusion::generated_eskf;
-use sensor_fusion::generated_loose;
-use sensor_fusion::loose::{LOOSE_ERROR_STATES, LooseFilter, LooseImuDelta, LoosePredictNoise};
+use sensor_fusion::ProcessNoise;
+use sensor_fusion::SensorFusion;
+use sensor_fusion::full::{FULL_ERROR_STATES, FullFilter, FullImuDelta};
+use sensor_fusion::generated_full;
+use sensor_fusion::generated_reduced;
+use sensor_fusion::reduced::{REDUCED_UPDATE_DIAG_TYPES, ReducedImuDelta, ReducedState};
 use sim::datasets::generic_replay::{
     GenericGnssSample, GenericImuSample, GenericReferenceRpySample, fusion_gnss_sample,
     fusion_imu_sample, load_gnss_samples, load_imu_samples, load_reference_attitude_samples,
@@ -17,8 +18,8 @@ use sim::datasets::generic_replay::{
 use sim::eval::gnss_ins::{as_q64, quat_angle_deg, quat_mul};
 use sim::eval::replay::{ReplayEvent, for_each_event};
 use sim::visualizer::math::{ecef_to_ned, lla_to_ecef};
-use sim::visualizer::model::EkfImuSource;
-use sim::visualizer::pipeline::EkfCompareConfig;
+use sim::visualizer::model::MountSourceMode;
+use sim::visualizer::pipeline::FilterCompareConfig;
 use sim::visualizer::pipeline::generic::reference_mount_rpy_to_q_vb;
 use sim::visualizer::pipeline::synthetic::{
     SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_replay_input,
@@ -26,7 +27,7 @@ use sim::visualizer::pipeline::synthetic::{
 
 const DIAG_BODY_VEL_Y: usize = 4;
 const DIAG_BODY_VEL_Z: usize = 5;
-const LOOSE_NHC_GNSS_SPEED_MAX_AGE_S: f64 = 1.0;
+const FULL_NHC_GNSS_SPEED_MAX_AGE_S: f64 = 1.0;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -86,93 +87,93 @@ struct Args {
     #[arg(long, default_value_t = 0.10)]
     trace_interval_s: f64,
 
-    /// Mount source for the ESKF diagnostic path: internal, external, or ref.
+    /// Mount source for the Reduced diagnostic path: internal, external, or ref.
     #[arg(
         long,
         default_value = "internal",
-        value_parser = EkfImuSource::from_cli_value
+        value_parser = MountSourceMode::from_cli_value
     )]
-    misalignment: EkfImuSource,
+    misalignment: MountSourceMode,
 
-    /// Freeze residual mount states in the ESKF diagnostic path.
+    /// Freeze residual mount states in the Reduced diagnostic path.
     #[arg(long)]
     freeze_misalignment_states: bool,
 
-    /// Override ESKF/loose lateral no-motion measurement standard deviation.
+    /// Override Reduced/full lateral no-motion measurement standard deviation.
     #[arg(long)]
     r_body_vel: Option<f32>,
 
-    /// Override ESKF/loose vertical no-motion measurement standard deviation.
+    /// Override Reduced/full vertical no-motion measurement standard deviation.
     #[arg(long)]
     r_body_vel_z: Option<f32>,
 
-    /// Override ESKF residual mount roll/pitch initial sigma, in degrees.
+    /// Override Reduced residual mount roll/pitch initial sigma, in degrees.
     #[arg(long)]
     mount_roll_pitch_init_sigma_deg: Option<f32>,
 
-    /// Override ESKF residual mount yaw initial sigma, in degrees.
+    /// Override Reduced residual mount yaw initial sigma, in degrees.
     #[arg(long)]
     mount_init_sigma_deg: Option<f32>,
 
-    /// Override ESKF initial yaw sigma, in degrees.
+    /// Override Reduced initial yaw sigma, in degrees.
     #[arg(long)]
     yaw_init_sigma_deg: Option<f32>,
 
-    /// Override ESKF initial gyro-bias sigma, in deg/s.
+    /// Override Reduced initial gyro-bias sigma, in deg/s.
     #[arg(long)]
     gyro_bias_init_sigma_dps: Option<f32>,
 
-    /// Override ESKF initial accelerometer-bias sigma, in m/s^2.
+    /// Override Reduced initial accelerometer-bias sigma, in m/s^2.
     #[arg(long)]
     accel_bias_init_sigma_mps2: Option<f32>,
 
-    /// Diagnostic-only override for ESKF residual attitude roll/pitch covariance after initialization.
+    /// Diagnostic-only override for Reduced residual attitude roll/pitch covariance after initialization.
     #[arg(long)]
-    eskf_attitude_roll_pitch_sigma_deg: Option<f32>,
+    reduced_attitude_roll_pitch_sigma_deg: Option<f32>,
 
-    /// Diagnostic override for ESKF runtime zero-velocity measurement variance.
+    /// Diagnostic override for Reduced runtime zero-velocity measurement variance.
     #[arg(long)]
     r_zero_vel: Option<f32>,
 
-    /// Diagnostic-only scale applied to ESKF accelerometer white-noise variance.
+    /// Diagnostic-only scale applied to Reduced accelerometer white-noise variance.
     #[arg(long, default_value_t = 1.0)]
-    eskf_accel_var_scale: f32,
+    reduced_accel_var_scale: f32,
 
-    /// Diagnostic-only scale applied to ESKF gyro white-noise variance.
+    /// Diagnostic-only scale applied to Reduced gyro white-noise variance.
     #[arg(long, default_value_t = 1.0)]
-    eskf_gyro_var_scale: f32,
+    reduced_gyro_var_scale: f32,
 
-    /// Diagnostic-only override for loose gyro-scale initial sigma.
+    /// Diagnostic-only override for full gyro-scale initial sigma.
     #[arg(long)]
-    loose_gyro_scale_sigma: Option<f32>,
+    full_gyro_scale_sigma: Option<f32>,
 
-    /// Diagnostic-only override for loose accel-scale initial sigma.
+    /// Diagnostic-only override for full accel-scale initial sigma.
     #[arg(long)]
-    loose_accel_scale_sigma: Option<f32>,
+    full_accel_scale_sigma: Option<f32>,
 
-    /// Diagnostic-only override for loose attitude initial sigma, in degrees.
+    /// Diagnostic-only override for full attitude initial sigma, in degrees.
     #[arg(long)]
-    loose_attitude_sigma_deg: Option<f32>,
+    full_attitude_sigma_deg: Option<f32>,
 
-    /// Diagnostic-only override for loose residual mount roll/pitch initial sigma, in degrees.
+    /// Diagnostic-only override for full residual mount roll/pitch initial sigma, in degrees.
     #[arg(long)]
-    loose_mount_sigma_deg: Option<f32>,
+    full_mount_sigma_deg: Option<f32>,
 
-    /// Diagnostic-only override for loose residual mount yaw initial sigma, in degrees.
+    /// Diagnostic-only override for full residual mount yaw initial sigma, in degrees.
     #[arg(long)]
-    loose_mount_yaw_sigma_deg: Option<f32>,
+    full_mount_yaw_sigma_deg: Option<f32>,
 
-    /// Diagnostic-only scale applied to ESKF GNSS position standard deviations.
+    /// Diagnostic-only scale applied to Reduced GNSS position standard deviations.
     #[arg(long, default_value_t = 1.0)]
-    eskf_gnss_pos_std_scale: f64,
+    reduced_gnss_pos_std_scale: f64,
 
-    /// Diagnostic-only scale applied to ESKF GNSS down-position standard deviations.
+    /// Diagnostic-only scale applied to Reduced GNSS down-position standard deviations.
     #[arg(long, default_value_t = 1.0)]
-    eskf_gnss_pos_d_std_scale: f64,
+    reduced_gnss_pos_d_std_scale: f64,
 
-    /// Diagnostic-only scale applied to ESKF GNSS velocity standard deviations.
+    /// Diagnostic-only scale applied to Reduced GNSS velocity standard deviations.
     #[arg(long, default_value_t = 1.0)]
-    eskf_gnss_vel_std_scale: f64,
+    reduced_gnss_vel_std_scale: f64,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -206,46 +207,46 @@ struct Replay {
 struct Snapshot {
     target_rel_s: f64,
     t_s: f64,
-    eskf: Option<EskfState>,
-    loose: Option<LooseSnapshot>,
+    reduced: Option<ReducedState>,
+    full: Option<FullSnapshot>,
     transition: Option<TransitionSnapshot>,
     reference_mount_q_vb: Option<[f64; 4]>,
     reference_att_q: Option<[f64; 4]>,
-    eskf_type_counts: [u32; ESKF_UPDATE_DIAG_TYPES],
-    loose_obs_counts: [u32; 9],
-    loose_mount_dx_sum: [f32; 3],
-    loose_mount_dx_abs_sum: [f32; 3],
-    loose_att_dx_sum: [f32; 3],
-    loose_att_dx_abs_sum: [f32; 3],
-    loose_vel_dx_sum: [f32; 3],
-    loose_vel_dx_abs_sum: [f32; 3],
-    loose_mount_dx_sum_by_type: [[f32; 3]; 9],
-    loose_mount_dx_abs_sum_by_type: [[f32; 3]; 9],
-    loose_residual_sum_by_type: [f32; 9],
-    loose_residual_abs_sum_by_type: [f32; 9],
-    loose_effective_residual_sum_by_type: [f32; 9],
-    loose_effective_residual_abs_sum_by_type: [f32; 9],
-    loose_nis_sum_by_type: [f32; 9],
-    loose_nis_max_by_type: [f32; 9],
+    reduced_type_counts: [u32; REDUCED_UPDATE_DIAG_TYPES],
+    full_obs_counts: [u32; 9],
+    full_mount_dx_sum: [f32; 3],
+    full_mount_dx_abs_sum: [f32; 3],
+    full_att_dx_sum: [f32; 3],
+    full_att_dx_abs_sum: [f32; 3],
+    full_vel_dx_sum: [f32; 3],
+    full_vel_dx_abs_sum: [f32; 3],
+    full_mount_dx_sum_by_type: [[f32; 3]; 9],
+    full_mount_dx_abs_sum_by_type: [[f32; 3]; 9],
+    full_residual_sum_by_type: [f32; 9],
+    full_residual_abs_sum_by_type: [f32; 9],
+    full_effective_residual_sum_by_type: [f32; 9],
+    full_effective_residual_abs_sum_by_type: [f32; 9],
+    full_nis_sum_by_type: [f32; 9],
+    full_nis_max_by_type: [f32; 9],
 }
 
 #[derive(Clone, Copy, Debug)]
 struct TransitionSnapshot {
     dt_s: f32,
-    eskf_mount_to_att: [[f32; 3]; 3],
-    eskf_mount_to_vel: [[f32; 3]; 3],
-    eskf_mount_to_pos: [[f32; 3]; 3],
-    loose_mount_to_att: [[f32; 3]; 3],
-    loose_mount_to_vel: [[f32; 3]; 3],
-    loose_mount_to_pos: [[f32; 3]; 3],
+    reduced_mount_to_att: [[f32; 3]; 3],
+    reduced_mount_to_vel: [[f32; 3]; 3],
+    reduced_mount_to_pos: [[f32; 3]; 3],
+    full_mount_to_att: [[f32; 3]; 3],
+    full_mount_to_vel: [[f32; 3]; 3],
+    full_mount_to_pos: [[f32; 3]; 3],
 }
 
 #[derive(Clone)]
-struct LooseSnapshot {
-    nominal: sensor_fusion::loose::LooseNominalState,
-    p: [[f32; LOOSE_ERROR_STATES]; LOOSE_ERROR_STATES],
+struct FullSnapshot {
+    nominal: sensor_fusion::full::FullNominalState,
+    p: [[f32; FULL_ERROR_STATES]; FULL_ERROR_STATES],
     pos_ecef: [f64; 3],
-    last_dx: [f32; LOOSE_ERROR_STATES],
+    last_dx: [f32; FULL_ERROR_STATES],
     last_obs_types: Vec<i32>,
 }
 
@@ -253,33 +254,33 @@ struct LooseSnapshot {
 struct TraceState {
     initialized: bool,
     last_trace_t_s: Option<f64>,
-    prev_eskf_counts: [u32; ESKF_UPDATE_DIAG_TYPES],
-    prev_loose_counts: [u32; 9],
-    prev_eskf_sum_dx_mount_roll: [f32; ESKF_UPDATE_DIAG_TYPES],
-    prev_eskf_sum_dx_mount_pitch: [f32; ESKF_UPDATE_DIAG_TYPES],
-    prev_eskf_sum_dx_mount_yaw: [f32; ESKF_UPDATE_DIAG_TYPES],
+    prev_reduced_counts: [u32; REDUCED_UPDATE_DIAG_TYPES],
+    prev_full_counts: [u32; 9],
+    prev_reduced_sum_dx_mount_roll: [f32; REDUCED_UPDATE_DIAG_TYPES],
+    prev_reduced_sum_dx_mount_pitch: [f32; REDUCED_UPDATE_DIAG_TYPES],
+    prev_reduced_sum_dx_mount_yaw: [f32; REDUCED_UPDATE_DIAG_TYPES],
 }
 
 struct AllocationCsv {
     writer: BufWriter<File>,
     window_abs: Option<[f64; 2]>,
-    prev_eskf_counts: [u32; ESKF_UPDATE_DIAG_TYPES],
-    prev_sum_dx_att_roll: [f32; ESKF_UPDATE_DIAG_TYPES],
-    prev_sum_dx_pitch: [f32; ESKF_UPDATE_DIAG_TYPES],
-    prev_sum_dx_yaw: [f32; ESKF_UPDATE_DIAG_TYPES],
-    prev_sum_dx_vel_n: [f32; ESKF_UPDATE_DIAG_TYPES],
-    prev_sum_dx_vel_e: [f32; ESKF_UPDATE_DIAG_TYPES],
-    prev_sum_dx_vel_d: [f32; ESKF_UPDATE_DIAG_TYPES],
-    prev_sum_dx_mount_roll: [f32; ESKF_UPDATE_DIAG_TYPES],
-    prev_sum_dx_mount_pitch: [f32; ESKF_UPDATE_DIAG_TYPES],
-    prev_sum_dx_mount_yaw: [f32; ESKF_UPDATE_DIAG_TYPES],
-    prev_sum_dx_gyro_bias: [[f32; 3]; ESKF_UPDATE_DIAG_TYPES],
-    prev_sum_dx_accel_bias: [[f32; 3]; ESKF_UPDATE_DIAG_TYPES],
-    prev_sum_innovation: [f32; ESKF_UPDATE_DIAG_TYPES],
-    prev_sum_abs_innovation: [f32; ESKF_UPDATE_DIAG_TYPES],
-    prev_sum_nis: [f32; ESKF_UPDATE_DIAG_TYPES],
-    prev_sum_h_mount_norm: [f32; ESKF_UPDATE_DIAG_TYPES],
-    prev_sum_k_mount_norm: [f32; ESKF_UPDATE_DIAG_TYPES],
+    prev_reduced_counts: [u32; REDUCED_UPDATE_DIAG_TYPES],
+    prev_sum_dx_att_roll: [f32; REDUCED_UPDATE_DIAG_TYPES],
+    prev_sum_dx_pitch: [f32; REDUCED_UPDATE_DIAG_TYPES],
+    prev_sum_dx_yaw: [f32; REDUCED_UPDATE_DIAG_TYPES],
+    prev_sum_dx_vel_n: [f32; REDUCED_UPDATE_DIAG_TYPES],
+    prev_sum_dx_vel_e: [f32; REDUCED_UPDATE_DIAG_TYPES],
+    prev_sum_dx_vel_d: [f32; REDUCED_UPDATE_DIAG_TYPES],
+    prev_sum_dx_mount_roll: [f32; REDUCED_UPDATE_DIAG_TYPES],
+    prev_sum_dx_mount_pitch: [f32; REDUCED_UPDATE_DIAG_TYPES],
+    prev_sum_dx_mount_yaw: [f32; REDUCED_UPDATE_DIAG_TYPES],
+    prev_sum_dx_gyro_bias: [[f32; 3]; REDUCED_UPDATE_DIAG_TYPES],
+    prev_sum_dx_accel_bias: [[f32; 3]; REDUCED_UPDATE_DIAG_TYPES],
+    prev_sum_innovation: [f32; REDUCED_UPDATE_DIAG_TYPES],
+    prev_sum_abs_innovation: [f32; REDUCED_UPDATE_DIAG_TYPES],
+    prev_sum_nis: [f32; REDUCED_UPDATE_DIAG_TYPES],
+    prev_sum_h_mount_norm: [f32; REDUCED_UPDATE_DIAG_TYPES],
+    prev_sum_k_mount_norm: [f32; REDUCED_UPDATE_DIAG_TYPES],
     initialized: bool,
 }
 
@@ -304,48 +305,48 @@ mount_qerr_deg,att_qerr_deg"
         Ok(Self {
             writer,
             window_abs,
-            prev_eskf_counts: [0; ESKF_UPDATE_DIAG_TYPES],
-            prev_sum_dx_att_roll: [0.0; ESKF_UPDATE_DIAG_TYPES],
-            prev_sum_dx_pitch: [0.0; ESKF_UPDATE_DIAG_TYPES],
-            prev_sum_dx_yaw: [0.0; ESKF_UPDATE_DIAG_TYPES],
-            prev_sum_dx_vel_n: [0.0; ESKF_UPDATE_DIAG_TYPES],
-            prev_sum_dx_vel_e: [0.0; ESKF_UPDATE_DIAG_TYPES],
-            prev_sum_dx_vel_d: [0.0; ESKF_UPDATE_DIAG_TYPES],
-            prev_sum_dx_mount_roll: [0.0; ESKF_UPDATE_DIAG_TYPES],
-            prev_sum_dx_mount_pitch: [0.0; ESKF_UPDATE_DIAG_TYPES],
-            prev_sum_dx_mount_yaw: [0.0; ESKF_UPDATE_DIAG_TYPES],
-            prev_sum_dx_gyro_bias: [[0.0; 3]; ESKF_UPDATE_DIAG_TYPES],
-            prev_sum_dx_accel_bias: [[0.0; 3]; ESKF_UPDATE_DIAG_TYPES],
-            prev_sum_innovation: [0.0; ESKF_UPDATE_DIAG_TYPES],
-            prev_sum_abs_innovation: [0.0; ESKF_UPDATE_DIAG_TYPES],
-            prev_sum_nis: [0.0; ESKF_UPDATE_DIAG_TYPES],
-            prev_sum_h_mount_norm: [0.0; ESKF_UPDATE_DIAG_TYPES],
-            prev_sum_k_mount_norm: [0.0; ESKF_UPDATE_DIAG_TYPES],
+            prev_reduced_counts: [0; REDUCED_UPDATE_DIAG_TYPES],
+            prev_sum_dx_att_roll: [0.0; REDUCED_UPDATE_DIAG_TYPES],
+            prev_sum_dx_pitch: [0.0; REDUCED_UPDATE_DIAG_TYPES],
+            prev_sum_dx_yaw: [0.0; REDUCED_UPDATE_DIAG_TYPES],
+            prev_sum_dx_vel_n: [0.0; REDUCED_UPDATE_DIAG_TYPES],
+            prev_sum_dx_vel_e: [0.0; REDUCED_UPDATE_DIAG_TYPES],
+            prev_sum_dx_vel_d: [0.0; REDUCED_UPDATE_DIAG_TYPES],
+            prev_sum_dx_mount_roll: [0.0; REDUCED_UPDATE_DIAG_TYPES],
+            prev_sum_dx_mount_pitch: [0.0; REDUCED_UPDATE_DIAG_TYPES],
+            prev_sum_dx_mount_yaw: [0.0; REDUCED_UPDATE_DIAG_TYPES],
+            prev_sum_dx_gyro_bias: [[0.0; 3]; REDUCED_UPDATE_DIAG_TYPES],
+            prev_sum_dx_accel_bias: [[0.0; 3]; REDUCED_UPDATE_DIAG_TYPES],
+            prev_sum_innovation: [0.0; REDUCED_UPDATE_DIAG_TYPES],
+            prev_sum_abs_innovation: [0.0; REDUCED_UPDATE_DIAG_TYPES],
+            prev_sum_nis: [0.0; REDUCED_UPDATE_DIAG_TYPES],
+            prev_sum_h_mount_norm: [0.0; REDUCED_UPDATE_DIAG_TYPES],
+            prev_sum_k_mount_norm: [0.0; REDUCED_UPDATE_DIAG_TYPES],
             initialized: false,
         })
     }
 
-    fn record_eskf(
+    fn record_reduced(
         &mut self,
         replay: &Replay,
         event: &str,
         t_s: f64,
-        eskf: Option<&EskfState>,
-        loose_ready: bool,
+        reduced: Option<&ReducedState>,
+        full_ready: bool,
         ref_gnss: GenericGnssSample,
     ) -> Result<()> {
-        let Some(eskf) = eskf else {
+        let Some(reduced) = reduced else {
             return Ok(());
         };
         if !self.initialized {
-            self.capture_eskf_baseline(eskf);
+            self.capture_reduced_baseline(reduced);
             self.initialized = true;
             return Ok(());
         }
 
-        let in_window = self.in_window(t_s) && loose_ready;
-        for (label, idx) in selected_eskf_diag_types() {
-            let count_delta = eskf.update_diag.type_counts[idx] - self.prev_eskf_counts[idx];
+        let in_window = self.in_window(t_s) && full_ready;
+        for (label, idx) in selected_reduced_diag_types() {
+            let count_delta = reduced.update_diag.type_counts[idx] - self.prev_reduced_counts[idx];
             if count_delta == 0 {
                 continue;
             }
@@ -355,29 +356,29 @@ mount_qerr_deg,att_qerr_deg"
                     .map(|r| {
                         quat_angle_deg(
                             as_q64([
-                                eskf.nominal.qcs0,
-                                eskf.nominal.qcs1,
-                                eskf.nominal.qcs2,
-                                eskf.nominal.qcs3,
+                                reduced.nominal.qcs0,
+                                reduced.nominal.qcs1,
+                                reduced.nominal.qcs2,
+                                reduced.nominal.qcs3,
                             ]),
                             r,
                         )
                     })
                     .unwrap_or(f64::NAN);
                 let att_qerr = reference_attitude_at(&replay.reference_attitude, t_s)
-                    .map(|r| quat_angle_deg(eskf_att_q(eskf), r))
+                    .map(|r| quat_angle_deg(reduced_att_q(reduced), r))
                     .unwrap_or(f64::NAN);
                 let dg = delta3(
-                    eskf.update_diag.sum_dx_gyro_bias[idx],
+                    reduced.update_diag.sum_dx_gyro_bias[idx],
                     self.prev_sum_dx_gyro_bias[idx],
                 );
                 let da = delta3(
-                    eskf.update_diag.sum_dx_accel_bias[idx],
+                    reduced.update_diag.sum_dx_accel_bias[idx],
                     self.prev_sum_dx_accel_bias[idx],
                 );
                 writeln!(
                     self.writer,
-                    "{rel_s:.6},{t_s:.6},eskf,{event},{label},{count_delta},\
+                    "{rel_s:.6},{t_s:.6},reduced,{event},{label},{count_delta},\
 {:.9},{:.9},{:.9},{:.9},{:.9},\
 {:.9},{:.9},{:.9},\
 {:.9},{:.9},{:.9},\
@@ -387,30 +388,31 @@ mount_qerr_deg,att_qerr_deg"
 {:.9},{:.9},{:.9},\
 {:.9},{:.9},{:.9},\
 {mount_qerr:.9},{att_qerr:.9}",
-                    eskf.update_diag.sum_innovation[idx] - self.prev_sum_innovation[idx],
-                    eskf.update_diag.sum_abs_innovation[idx] - self.prev_sum_abs_innovation[idx],
-                    eskf.update_diag.sum_nis[idx] - self.prev_sum_nis[idx],
-                    eskf.update_diag.sum_h_mount_norm[idx] - self.prev_sum_h_mount_norm[idx],
-                    eskf.update_diag.sum_k_mount_norm[idx] - self.prev_sum_k_mount_norm[idx],
+                    reduced.update_diag.sum_innovation[idx] - self.prev_sum_innovation[idx],
+                    reduced.update_diag.sum_abs_innovation[idx] - self.prev_sum_abs_innovation[idx],
+                    reduced.update_diag.sum_nis[idx] - self.prev_sum_nis[idx],
+                    reduced.update_diag.sum_h_mount_norm[idx] - self.prev_sum_h_mount_norm[idx],
+                    reduced.update_diag.sum_k_mount_norm[idx] - self.prev_sum_k_mount_norm[idx],
                     rad_f32_to_deg(
-                        eskf.update_diag.sum_dx_att_roll[idx] - self.prev_sum_dx_att_roll[idx]
+                        reduced.update_diag.sum_dx_att_roll[idx] - self.prev_sum_dx_att_roll[idx]
                     ),
                     rad_f32_to_deg(
-                        eskf.update_diag.sum_dx_pitch[idx] - self.prev_sum_dx_pitch[idx]
+                        reduced.update_diag.sum_dx_pitch[idx] - self.prev_sum_dx_pitch[idx]
                     ),
-                    rad_f32_to_deg(eskf.update_diag.sum_dx_yaw[idx] - self.prev_sum_dx_yaw[idx]),
-                    eskf.update_diag.sum_dx_vel_n[idx] - self.prev_sum_dx_vel_n[idx],
-                    eskf.update_diag.sum_dx_vel_e[idx] - self.prev_sum_dx_vel_e[idx],
-                    eskf.update_diag.sum_dx_vel_d[idx] - self.prev_sum_dx_vel_d[idx],
+                    rad_f32_to_deg(reduced.update_diag.sum_dx_yaw[idx] - self.prev_sum_dx_yaw[idx]),
+                    reduced.update_diag.sum_dx_vel_n[idx] - self.prev_sum_dx_vel_n[idx],
+                    reduced.update_diag.sum_dx_vel_e[idx] - self.prev_sum_dx_vel_e[idx],
+                    reduced.update_diag.sum_dx_vel_d[idx] - self.prev_sum_dx_vel_d[idx],
                     rad_f32_to_deg(
-                        eskf.update_diag.sum_dx_mount_roll[idx] - self.prev_sum_dx_mount_roll[idx]
+                        reduced.update_diag.sum_dx_mount_roll[idx]
+                            - self.prev_sum_dx_mount_roll[idx]
                     ),
                     rad_f32_to_deg(
-                        eskf.update_diag.sum_dx_mount_pitch[idx]
+                        reduced.update_diag.sum_dx_mount_pitch[idx]
                             - self.prev_sum_dx_mount_pitch[idx]
                     ),
                     rad_f32_to_deg(
-                        eskf.update_diag.sum_dx_mount_yaw[idx] - self.prev_sum_dx_mount_yaw[idx]
+                        reduced.update_diag.sum_dx_mount_yaw[idx] - self.prev_sum_dx_mount_yaw[idx]
                     ),
                     rad_f32_to_dps(dg[0]),
                     rad_f32_to_dps(dg[1]),
@@ -418,62 +420,62 @@ mount_qerr_deg,att_qerr_deg"
                     da[0],
                     da[1],
                     da[2],
-                    sigma_deg(&eskf.p, 15),
-                    sigma_deg(&eskf.p, 16),
-                    sigma_deg(&eskf.p, 17),
-                    sigma_deg(&eskf.p, 0),
-                    sigma_deg(&eskf.p, 1),
-                    sigma_deg(&eskf.p, 2),
+                    sigma_deg(&reduced.p, 15),
+                    sigma_deg(&reduced.p, 16),
+                    sigma_deg(&reduced.p, 17),
+                    sigma_deg(&reduced.p, 0),
+                    sigma_deg(&reduced.p, 1),
+                    sigma_deg(&reduced.p, 2),
                 )?;
             }
         }
-        self.capture_eskf_baseline(eskf);
+        self.capture_reduced_baseline(reduced);
         let _ = ref_gnss;
         Ok(())
     }
 
-    fn record_loose(
+    fn record_full(
         &mut self,
         replay: &Replay,
         t_s: f64,
-        loose: &LooseFilter,
+        full: &FullFilter,
         ref_gnss: GenericGnssSample,
     ) -> Result<()> {
-        if !self.in_window(t_s) || loose.last_obs_types().is_empty() {
+        if !self.in_window(t_s) || full.last_obs_types().is_empty() {
             return Ok(());
         }
         let rel_s = t_s - replay_start_t_s(replay).unwrap_or(0.0);
-        let loose_snap = LooseSnapshot {
-            nominal: *loose.nominal(),
-            p: *loose.covariance(),
-            pos_ecef: loose.shadow_pos_ecef(),
-            last_dx: *loose.last_dx(),
-            last_obs_types: loose.last_obs_types().to_vec(),
+        let full_snap = FullSnapshot {
+            nominal: *full.nominal(),
+            p: *full.covariance(),
+            pos_ecef: full.shadow_pos_ecef(),
+            last_dx: *full.last_dx(),
+            last_obs_types: full.last_obs_types().to_vec(),
         };
-        let p_as_eskf = transform_loose_cov_to_eskf(&loose_snap, ref_gnss);
+        let p_as_reduced = transform_full_cov_to_reduced(&full_snap, ref_gnss);
         let mount_qerr = reference_mount_at(&replay.reference_mount, t_s)
             .map(|r| {
                 quat_angle_deg(
                     as_q64([
-                        loose_snap.nominal.qcs0,
-                        loose_snap.nominal.qcs1,
-                        loose_snap.nominal.qcs2,
-                        loose_snap.nominal.qcs3,
+                        full_snap.nominal.qcs0,
+                        full_snap.nominal.qcs1,
+                        full_snap.nominal.qcs2,
+                        full_snap.nominal.qcs3,
                     ]),
                     r,
                 )
             })
             .unwrap_or(f64::NAN);
         let att_qerr = reference_attitude_at(&replay.reference_attitude, t_s)
-            .map(|r| quat_angle_deg(loose_att_q_ned(&loose_snap, ref_gnss), r))
+            .map(|r| quat_angle_deg(full_att_q_ned(&full_snap, ref_gnss), r))
             .unwrap_or(f64::NAN);
 
-        for (obs_idx, ty) in loose.last_obs_types().iter().copied().enumerate() {
+        for (obs_idx, ty) in full.last_obs_types().iter().copied().enumerate() {
             let ty = ty as usize;
-            let row_dx = &loose.last_dx_by_obs()[obs_idx];
-            let dx_as_eskf = transform_loose_dx_to_eskf(&loose_snap, row_dx, ref_gnss);
-            let residual = loose.last_residuals()[obs_idx];
-            let innovation_var = loose.last_innovation_vars()[obs_idx];
+            let row_dx = &full.last_dx_by_obs()[obs_idx];
+            let dx_as_reduced = transform_full_dx_to_reduced(&full_snap, row_dx, ref_gnss);
+            let residual = full.last_residuals()[obs_idx];
+            let innovation_var = full.last_innovation_vars()[obs_idx];
             let nis = if innovation_var > 0.0 {
                 residual * residual / innovation_var
             } else {
@@ -481,7 +483,7 @@ mount_qerr_deg,att_qerr_deg"
             };
             writeln!(
                 self.writer,
-                "{rel_s:.6},{t_s:.6},loose,imu,{},1,\
+                "{rel_s:.6},{t_s:.6},full,imu,{},1,\
 {:.9},{:.9},{:.9},NaN,NaN,\
 {:.9},{:.9},{:.9},\
 {:.9},{:.9},{:.9},\
@@ -491,16 +493,16 @@ mount_qerr_deg,att_qerr_deg"
 {:.9},{:.9},{:.9},\
 {:.9},{:.9},{:.9},\
 {mount_qerr:.9},{att_qerr:.9}",
-                loose_obs_type_label(ty),
+                full_obs_type_label(ty),
                 residual,
                 residual.abs(),
                 nis,
-                rad_f32_to_deg(dx_as_eskf[0]),
-                rad_f32_to_deg(dx_as_eskf[1]),
-                rad_f32_to_deg(dx_as_eskf[2]),
-                dx_as_eskf[3],
-                dx_as_eskf[4],
-                dx_as_eskf[5],
+                rad_f32_to_deg(dx_as_reduced[0]),
+                rad_f32_to_deg(dx_as_reduced[1]),
+                rad_f32_to_deg(dx_as_reduced[2]),
+                dx_as_reduced[3],
+                dx_as_reduced[4],
+                dx_as_reduced[5],
                 rad_f32_to_deg(row_dx[21]),
                 rad_f32_to_deg(row_dx[22]),
                 rad_f32_to_deg(row_dx[23]),
@@ -510,12 +512,12 @@ mount_qerr_deg,att_qerr_deg"
                 -row_dx[9],
                 -row_dx[10],
                 -row_dx[11],
-                sigma_deg(&p_as_eskf, 15),
-                sigma_deg(&p_as_eskf, 16),
-                sigma_deg(&p_as_eskf, 17),
-                sigma_deg(&p_as_eskf, 0),
-                sigma_deg(&p_as_eskf, 1),
-                sigma_deg(&p_as_eskf, 2),
+                sigma_deg(&p_as_reduced, 15),
+                sigma_deg(&p_as_reduced, 16),
+                sigma_deg(&p_as_reduced, 17),
+                sigma_deg(&p_as_reduced, 0),
+                sigma_deg(&p_as_reduced, 1),
+                sigma_deg(&p_as_reduced, 2),
             )?;
         }
         Ok(())
@@ -526,24 +528,24 @@ mount_qerr_deg,att_qerr_deg"
             .is_none_or(|[start, end]| (start..=end).contains(&t_s))
     }
 
-    fn capture_eskf_baseline(&mut self, eskf: &EskfState) {
-        self.prev_eskf_counts = eskf.update_diag.type_counts;
-        self.prev_sum_dx_att_roll = eskf.update_diag.sum_dx_att_roll;
-        self.prev_sum_dx_pitch = eskf.update_diag.sum_dx_pitch;
-        self.prev_sum_dx_yaw = eskf.update_diag.sum_dx_yaw;
-        self.prev_sum_dx_vel_n = eskf.update_diag.sum_dx_vel_n;
-        self.prev_sum_dx_vel_e = eskf.update_diag.sum_dx_vel_e;
-        self.prev_sum_dx_vel_d = eskf.update_diag.sum_dx_vel_d;
-        self.prev_sum_dx_mount_roll = eskf.update_diag.sum_dx_mount_roll;
-        self.prev_sum_dx_mount_pitch = eskf.update_diag.sum_dx_mount_pitch;
-        self.prev_sum_dx_mount_yaw = eskf.update_diag.sum_dx_mount_yaw;
-        self.prev_sum_dx_gyro_bias = eskf.update_diag.sum_dx_gyro_bias;
-        self.prev_sum_dx_accel_bias = eskf.update_diag.sum_dx_accel_bias;
-        self.prev_sum_innovation = eskf.update_diag.sum_innovation;
-        self.prev_sum_abs_innovation = eskf.update_diag.sum_abs_innovation;
-        self.prev_sum_nis = eskf.update_diag.sum_nis;
-        self.prev_sum_h_mount_norm = eskf.update_diag.sum_h_mount_norm;
-        self.prev_sum_k_mount_norm = eskf.update_diag.sum_k_mount_norm;
+    fn capture_reduced_baseline(&mut self, reduced: &ReducedState) {
+        self.prev_reduced_counts = reduced.update_diag.type_counts;
+        self.prev_sum_dx_att_roll = reduced.update_diag.sum_dx_att_roll;
+        self.prev_sum_dx_pitch = reduced.update_diag.sum_dx_pitch;
+        self.prev_sum_dx_yaw = reduced.update_diag.sum_dx_yaw;
+        self.prev_sum_dx_vel_n = reduced.update_diag.sum_dx_vel_n;
+        self.prev_sum_dx_vel_e = reduced.update_diag.sum_dx_vel_e;
+        self.prev_sum_dx_vel_d = reduced.update_diag.sum_dx_vel_d;
+        self.prev_sum_dx_mount_roll = reduced.update_diag.sum_dx_mount_roll;
+        self.prev_sum_dx_mount_pitch = reduced.update_diag.sum_dx_mount_pitch;
+        self.prev_sum_dx_mount_yaw = reduced.update_diag.sum_dx_mount_yaw;
+        self.prev_sum_dx_gyro_bias = reduced.update_diag.sum_dx_gyro_bias;
+        self.prev_sum_dx_accel_bias = reduced.update_diag.sum_dx_accel_bias;
+        self.prev_sum_innovation = reduced.update_diag.sum_innovation;
+        self.prev_sum_abs_innovation = reduced.update_diag.sum_abs_innovation;
+        self.prev_sum_nis = reduced.update_diag.sum_nis;
+        self.prev_sum_h_mount_norm = reduced.update_diag.sum_h_mount_norm;
+        self.prev_sum_k_mount_norm = reduced.update_diag.sum_k_mount_norm;
     }
 }
 
@@ -653,7 +655,7 @@ fn scaled_fusion_gnss_sample(
     pos_std_scale: f64,
     pos_d_std_scale: f64,
     vel_std_scale: f64,
-) -> sensor_fusion::fusion::FusionGnssSample {
+) -> sensor_fusion::GnssSample {
     let mut out = fusion_gnss_sample(sample);
     if pos_std_scale.is_finite() && pos_std_scale > 0.0 {
         let scale = pos_std_scale as f32;
@@ -724,9 +726,9 @@ fn run_diagnostics(
     trace_window_abs: Option<[f64; 2]>,
     mut allocation_csv: Option<&mut AllocationCsv>,
 ) -> Result<Vec<Snapshot>> {
-    let mut cfg = EkfCompareConfig {
+    let mut cfg = FilterCompareConfig {
         freeze_misalignment_states: args.freeze_misalignment_states,
-        ..EkfCompareConfig::default()
+        ..FilterCompareConfig::default()
     };
     if let Some(r) = args.r_body_vel {
         cfg.r_body_vel = r;
@@ -752,45 +754,45 @@ fn run_diagnostics(
     if let Some(r) = args.r_zero_vel.filter(|v| v.is_finite() && *v >= 0.0) {
         cfg.r_zero_vel = r;
     }
-    if args.eskf_accel_var_scale.is_finite() && args.eskf_accel_var_scale > 0.0 {
+    if args.reduced_accel_var_scale.is_finite() && args.reduced_accel_var_scale > 0.0 {
         if let Some(noise) = cfg.predict_noise.as_mut() {
-            noise.accel_var *= args.eskf_accel_var_scale;
+            noise.accel_var *= args.reduced_accel_var_scale;
         }
     }
-    if args.eskf_gyro_var_scale.is_finite() && args.eskf_gyro_var_scale > 0.0 {
+    if args.reduced_gyro_var_scale.is_finite() && args.reduced_gyro_var_scale > 0.0 {
         if let Some(noise) = cfg.predict_noise.as_mut() {
-            noise.gyro_var *= args.eskf_gyro_var_scale;
+            noise.gyro_var *= args.reduced_gyro_var_scale;
         }
     }
     if let Some(sigma) = args
-        .loose_gyro_scale_sigma
+        .full_gyro_scale_sigma
         .filter(|v| v.is_finite() && *v >= 0.0)
     {
-        cfg.loose_init.gyro_scale_sigma = sigma;
+        cfg.full_init.gyro_scale_sigma = sigma;
     }
     if let Some(sigma) = args
-        .loose_accel_scale_sigma
+        .full_accel_scale_sigma
         .filter(|v| v.is_finite() && *v >= 0.0)
     {
-        cfg.loose_init.accel_scale_sigma = sigma;
+        cfg.full_init.accel_scale_sigma = sigma;
     }
     if let Some(sigma) = args
-        .loose_attitude_sigma_deg
+        .full_attitude_sigma_deg
         .filter(|v| v.is_finite() && *v >= 0.0)
     {
-        cfg.loose_init.attitude_sigma_deg = sigma;
+        cfg.full_init.attitude_sigma_deg = sigma;
     }
     if let Some(sigma) = args
-        .loose_mount_sigma_deg
+        .full_mount_sigma_deg
         .filter(|v| v.is_finite() && *v >= 0.0)
     {
-        cfg.loose_init.mount_sigma_deg = sigma;
+        cfg.full_init.mount_sigma_deg = sigma;
     }
     if let Some(sigma) = args
-        .loose_mount_yaw_sigma_deg
+        .full_mount_yaw_sigma_deg
         .filter(|v| v.is_finite() && *v >= 0.0)
     {
-        cfg.loose_init.mount_yaw_sigma_deg = sigma;
+        cfg.full_init.mount_yaw_sigma_deg = sigma;
     }
     let Some(ref_gnss) = replay.gnss.first().copied() else {
         anyhow::bail!("gnss replay is empty");
@@ -803,35 +805,35 @@ fn run_diagnostics(
     }
 
     let mut align_fusion = SensorFusion::new();
-    apply_fusion_config(&mut align_fusion, cfg, EkfImuSource::Internal);
+    apply_fusion_config(&mut align_fusion, cfg, MountSourceMode::Internal);
 
-    let mut loose = LooseFilter::new(
-        cfg.loose_predict_noise
-            .unwrap_or_else(LoosePredictNoise::lsm6dso_loose_104hz),
+    let mut full = FullFilter::new(
+        cfg.full_predict_noise
+            .unwrap_or_else(ProcessNoise::lsm6dso_104hz),
     );
-    let mut loose_ready = false;
+    let mut full_ready = false;
     let mut last_imu: Option<GenericImuSample> = None;
     let mut latest_gnss: Option<GenericGnssSample> = None;
-    let mut loose_gnss_cursor = 0usize;
+    let mut full_gnss_cursor = 0usize;
     let mut last_gnss_used_t_s = f64::NEG_INFINITY;
-    let mut loose_obs_counts = [0u32; 9];
-    let mut loose_mount_dx_sum = [0.0f32; 3];
-    let mut loose_mount_dx_abs_sum = [0.0f32; 3];
-    let mut loose_att_dx_sum = [0.0f32; 3];
-    let mut loose_att_dx_abs_sum = [0.0f32; 3];
-    let mut loose_vel_dx_sum = [0.0f32; 3];
-    let mut loose_vel_dx_abs_sum = [0.0f32; 3];
-    let mut loose_mount_dx_sum_by_type = [[0.0f32; 3]; 9];
-    let mut loose_mount_dx_abs_sum_by_type = [[0.0f32; 3]; 9];
-    let mut loose_residual_sum_by_type = [0.0f32; 9];
-    let mut loose_residual_abs_sum_by_type = [0.0f32; 9];
-    let mut loose_effective_residual_sum_by_type = [0.0f32; 9];
-    let mut loose_effective_residual_abs_sum_by_type = [0.0f32; 9];
-    let mut loose_nis_sum_by_type = [0.0f32; 9];
-    let mut loose_nis_max_by_type = [0.0f32; 9];
+    let mut full_obs_counts = [0u32; 9];
+    let mut full_mount_dx_sum = [0.0f32; 3];
+    let mut full_mount_dx_abs_sum = [0.0f32; 3];
+    let mut full_att_dx_sum = [0.0f32; 3];
+    let mut full_att_dx_abs_sum = [0.0f32; 3];
+    let mut full_vel_dx_sum = [0.0f32; 3];
+    let mut full_vel_dx_abs_sum = [0.0f32; 3];
+    let mut full_mount_dx_sum_by_type = [[0.0f32; 3]; 9];
+    let mut full_mount_dx_abs_sum_by_type = [[0.0f32; 3]; 9];
+    let mut full_residual_sum_by_type = [0.0f32; 9];
+    let mut full_residual_abs_sum_by_type = [0.0f32; 9];
+    let mut full_effective_residual_sum_by_type = [0.0f32; 9];
+    let mut full_effective_residual_abs_sum_by_type = [0.0f32; 9];
+    let mut full_nis_sum_by_type = [0.0f32; 9];
+    let mut full_nis_max_by_type = [0.0f32; 9];
     let mut trace_state = TraceState::default();
     let mut latest_transition: Option<TransitionSnapshot> = None;
-    let mut eskf_attitude_covariance_override_applied = false;
+    let mut reduced_attitude_covariance_override_applied = false;
 
     let mut snapshots = Vec::new();
     let mut target_idx = 0usize;
@@ -844,23 +846,23 @@ fn run_diagnostics(
                 capture_due_snapshots(
                     replay,
                     &fusion,
-                    &loose,
-                    loose_ready,
-                    loose_obs_counts,
-                    loose_mount_dx_sum,
-                    loose_mount_dx_abs_sum,
-                    loose_att_dx_sum,
-                    loose_att_dx_abs_sum,
-                    loose_vel_dx_sum,
-                    loose_vel_dx_abs_sum,
-                    loose_mount_dx_sum_by_type,
-                    loose_mount_dx_abs_sum_by_type,
-                    loose_residual_sum_by_type,
-                    loose_residual_abs_sum_by_type,
-                    loose_effective_residual_sum_by_type,
-                    loose_effective_residual_abs_sum_by_type,
-                    loose_nis_sum_by_type,
-                    loose_nis_max_by_type,
+                    &full,
+                    full_ready,
+                    full_obs_counts,
+                    full_mount_dx_sum,
+                    full_mount_dx_abs_sum,
+                    full_att_dx_sum,
+                    full_att_dx_abs_sum,
+                    full_vel_dx_sum,
+                    full_vel_dx_abs_sum,
+                    full_mount_dx_sum_by_type,
+                    full_mount_dx_abs_sum_by_type,
+                    full_residual_sum_by_type,
+                    full_residual_abs_sum_by_type,
+                    full_effective_residual_sum_by_type,
+                    full_effective_residual_abs_sum_by_type,
+                    full_nis_sum_by_type,
+                    full_nis_max_by_type,
                     latest_transition,
                     targets_abs,
                     &mut target_idx,
@@ -869,22 +871,22 @@ fn run_diagnostics(
                 );
                 return;
             };
-            if loose_ready {
+            if full_ready {
                 let dt = (sample.t_s - prev.t_s).max(0.0);
                 if dt > 0.0 && dt <= 1.0 {
-                    let imu = loose_imu_delta_from_vehicle(
+                    let imu = full_imu_delta_from_vehicle(
                         prev.gyro_radps,
                         prev.accel_mps2,
                         sample.gyro_radps,
                         sample.accel_mps2,
                         dt,
                     );
-                    loose.predict(imu);
-                    while loose_gnss_cursor < replay.gnss.len()
-                        && replay.gnss[loose_gnss_cursor].t_s <= sample.t_s + 1.0e-9
+                    full.predict(imu);
+                    while full_gnss_cursor < replay.gnss.len()
+                        && replay.gnss[full_gnss_cursor].t_s <= sample.t_s + 1.0e-9
                     {
-                        latest_gnss = Some(replay.gnss[loose_gnss_cursor]);
-                        loose_gnss_cursor += 1;
+                        latest_gnss = Some(replay.gnss[full_gnss_cursor]);
+                        full_gnss_cursor += 1;
                     }
                     let mut gps_pos = None;
                     let mut gps_vel = None;
@@ -913,11 +915,11 @@ fn run_diagnostics(
                     }
                     let nhc_gate_speed_mps = latest_gnss.and_then(|gnss| {
                         let age_s = sample.t_s - gnss.t_s;
-                        (0.0..=LOOSE_NHC_GNSS_SPEED_MAX_AGE_S)
+                        (0.0..=FULL_NHC_GNSS_SPEED_MAX_AGE_S)
                             .contains(&age_s)
                             .then(|| gnss.vel_ned_mps[0].hypot(gnss.vel_ned_mps[1]) as f32)
                     });
-                    loose.fuse_reference_batch_full_with_nhc_speed_and_r(
+                    full.fuse_reference_batch_full_with_nhc_speed_and_r(
                         gps_pos,
                         gps_vel,
                         gps_pos_std,
@@ -930,86 +932,85 @@ fn run_diagnostics(
                         sample.accel_mps2.map(|v| v as f32),
                         dt as f32,
                     );
-                    if !loose.last_obs_types().is_empty() {
-                        let dx = loose.last_dx();
-                        let loose_snap = LooseSnapshot {
-                            nominal: *loose.nominal(),
-                            p: *loose.covariance(),
-                            pos_ecef: loose.shadow_pos_ecef(),
+                    if !full.last_obs_types().is_empty() {
+                        let dx = full.last_dx();
+                        let full_snap = FullSnapshot {
+                            nominal: *full.nominal(),
+                            p: *full.covariance(),
+                            pos_ecef: full.shadow_pos_ecef(),
                             last_dx: *dx,
-                            last_obs_types: loose.last_obs_types().to_vec(),
+                            last_obs_types: full.last_obs_types().to_vec(),
                         };
-                        let dx_as_eskf = transform_loose_dx_to_eskf(&loose_snap, dx, ref_gnss);
+                        let dx_as_reduced = transform_full_dx_to_reduced(&full_snap, dx, ref_gnss);
                         for axis in 0..3 {
                             let value = dx[21 + axis];
-                            loose_mount_dx_sum[axis] += value;
-                            loose_mount_dx_abs_sum[axis] += value.abs();
-                            let att_value = dx_as_eskf[axis];
-                            loose_att_dx_sum[axis] += att_value;
-                            loose_att_dx_abs_sum[axis] += att_value.abs();
-                            let vel_value = dx_as_eskf[3 + axis];
-                            loose_vel_dx_sum[axis] += vel_value;
-                            loose_vel_dx_abs_sum[axis] += vel_value.abs();
+                            full_mount_dx_sum[axis] += value;
+                            full_mount_dx_abs_sum[axis] += value.abs();
+                            let att_value = dx_as_reduced[axis];
+                            full_att_dx_sum[axis] += att_value;
+                            full_att_dx_abs_sum[axis] += att_value.abs();
+                            let vel_value = dx_as_reduced[3 + axis];
+                            full_vel_dx_sum[axis] += vel_value;
+                            full_vel_dx_abs_sum[axis] += vel_value.abs();
                         }
-                        for (obs_idx, ty) in loose.last_obs_types().iter().copied().enumerate() {
-                            let Some(sum) = loose_mount_dx_sum_by_type.get_mut(ty as usize) else {
+                        for (obs_idx, ty) in full.last_obs_types().iter().copied().enumerate() {
+                            let Some(sum) = full_mount_dx_sum_by_type.get_mut(ty as usize) else {
                                 continue;
                             };
-                            let Some(abs_sum) = loose_mount_dx_abs_sum_by_type.get_mut(ty as usize)
+                            let Some(abs_sum) = full_mount_dx_abs_sum_by_type.get_mut(ty as usize)
                             else {
                                 continue;
                             };
-                            let row_dx = &loose.last_dx_by_obs()[obs_idx];
+                            let row_dx = &full.last_dx_by_obs()[obs_idx];
                             for axis in 0..3 {
                                 let value = row_dx[21 + axis];
                                 sum[axis] += value;
                                 abs_sum[axis] += value.abs();
                             }
                             let ty = ty as usize;
-                            let residual = loose.last_residuals()[obs_idx];
-                            let effective_residual = loose.last_effective_residuals()[obs_idx];
-                            let innovation_var = loose.last_innovation_vars()[obs_idx];
-                            loose_residual_sum_by_type[ty] += residual;
-                            loose_residual_abs_sum_by_type[ty] += residual.abs();
-                            loose_effective_residual_sum_by_type[ty] += effective_residual;
-                            loose_effective_residual_abs_sum_by_type[ty] +=
-                                effective_residual.abs();
+                            let residual = full.last_residuals()[obs_idx];
+                            let effective_residual = full.last_effective_residuals()[obs_idx];
+                            let innovation_var = full.last_innovation_vars()[obs_idx];
+                            full_residual_sum_by_type[ty] += residual;
+                            full_residual_abs_sum_by_type[ty] += residual.abs();
+                            full_effective_residual_sum_by_type[ty] += effective_residual;
+                            full_effective_residual_abs_sum_by_type[ty] += effective_residual.abs();
                             if innovation_var > 0.0 {
                                 let nis = effective_residual * effective_residual / innovation_var;
-                                loose_nis_sum_by_type[ty] += nis;
-                                loose_nis_max_by_type[ty] = loose_nis_max_by_type[ty].max(nis);
+                                full_nis_sum_by_type[ty] += nis;
+                                full_nis_max_by_type[ty] = full_nis_max_by_type[ty].max(nis);
                             }
                         }
                     }
-                    for ty in loose.last_obs_types() {
-                        if let Some(count) = loose_obs_counts.get_mut(*ty as usize) {
+                    for ty in full.last_obs_types() {
+                        if let Some(count) = full_obs_counts.get_mut(*ty as usize) {
                             *count += 1;
                         }
                     }
                     latest_transition =
-                        transition_snapshot(&fusion, &loose, *sample, prev, dt, ref_gnss);
+                        transition_snapshot(&fusion, &full, *sample, prev, dt, ref_gnss);
                 }
             }
             capture_due_snapshots(
                 replay,
                 &fusion,
-                &loose,
-                loose_ready,
-                loose_obs_counts,
-                loose_mount_dx_sum,
-                loose_mount_dx_abs_sum,
-                loose_att_dx_sum,
-                loose_att_dx_abs_sum,
-                loose_vel_dx_sum,
-                loose_vel_dx_abs_sum,
-                loose_mount_dx_sum_by_type,
-                loose_mount_dx_abs_sum_by_type,
-                loose_residual_sum_by_type,
-                loose_residual_abs_sum_by_type,
-                loose_effective_residual_sum_by_type,
-                loose_effective_residual_abs_sum_by_type,
-                loose_nis_sum_by_type,
-                loose_nis_max_by_type,
+                &full,
+                full_ready,
+                full_obs_counts,
+                full_mount_dx_sum,
+                full_mount_dx_abs_sum,
+                full_att_dx_sum,
+                full_att_dx_abs_sum,
+                full_vel_dx_sum,
+                full_vel_dx_abs_sum,
+                full_mount_dx_sum_by_type,
+                full_mount_dx_abs_sum_by_type,
+                full_residual_sum_by_type,
+                full_residual_abs_sum_by_type,
+                full_effective_residual_sum_by_type,
+                full_effective_residual_abs_sum_by_type,
+                full_nis_sum_by_type,
+                full_nis_max_by_type,
                 latest_transition,
                 targets_abs,
                 &mut target_idx,
@@ -1025,43 +1026,43 @@ fn run_diagnostics(
                 "imu",
                 sample.t_s,
                 &fusion,
-                &loose,
-                loose_ready,
-                loose_obs_counts,
+                &full,
+                full_ready,
+                full_obs_counts,
             );
             if let Some(csv) = allocation_csv.as_deref_mut() {
-                let _ = csv.record_eskf(
+                let _ = csv.record_reduced(
                     replay,
                     "imu",
                     sample.t_s,
-                    fusion.eskf(),
-                    loose_ready,
+                    fusion.reduced(),
+                    full_ready,
                     ref_gnss,
                 );
-                if loose_ready {
-                    let _ = csv.record_loose(replay, sample.t_s, &loose, ref_gnss);
+                if full_ready {
+                    let _ = csv.record_full(replay, sample.t_s, &full, ref_gnss);
                 }
             }
         }
         ReplayEvent::Gnss(index, sample) => {
             let _ = fusion.process_gnss(scaled_fusion_gnss_sample(
                 *sample,
-                args.eskf_gnss_pos_std_scale,
-                args.eskf_gnss_pos_d_std_scale,
-                args.eskf_gnss_vel_std_scale,
+                args.reduced_gnss_pos_std_scale,
+                args.reduced_gnss_pos_d_std_scale,
+                args.reduced_gnss_vel_std_scale,
             ));
-            if !eskf_attitude_covariance_override_applied
+            if !reduced_attitude_covariance_override_applied
                 && let Some(sigma_deg) = args
-                    .eskf_attitude_roll_pitch_sigma_deg
+                    .reduced_attitude_roll_pitch_sigma_deg
                     .filter(|v| v.is_finite() && *v >= 0.0)
-                && fusion.eskf().is_some()
+                && fusion.reduced().is_some()
             {
-                fusion.analysis_set_eskf_attitude_roll_pitch_covariance(sigma_deg.to_radians());
-                eskf_attitude_covariance_override_applied = true;
+                fusion.analysis_set_reduced_attitude_roll_pitch_covariance(sigma_deg.to_radians());
+                reduced_attitude_covariance_override_applied = true;
             }
             let _ = align_fusion.process_gnss(fusion_gnss_sample(*sample));
             latest_gnss = Some(*sample);
-            if !loose_ready && align_fusion.mount_ready() {
+            if !full_ready && align_fusion.mount_ready() {
                 let speed = sample.vel_ned_mps[0].hypot(sample.vel_ned_mps[1]);
                 if speed >= 0.5 {
                     let yaw_rad = sample.vel_ned_mps[1].atan2(sample.vel_ned_mps[0]) as f32;
@@ -1069,43 +1070,43 @@ fn run_diagnostics(
                     let vel_ecef =
                         ned_vector_to_ecef(sample.lat_deg, sample.lon_deg, sample.vel_ned_mps)
                             .map(|v| v as f32);
-                    loose.init_seeded_vehicle_from_nav_ecef_state(
+                    full.init_seeded_vehicle_from_nav_ecef_state(
                         yaw_rad,
                         sample.lat_deg,
                         sample.lon_deg,
                         pos_ecef,
                         vel_ecef,
-                        Some(default_loose_p_diag(*sample, cfg)),
+                        Some(default_full_p_diag(*sample, cfg)),
                         None,
                     );
                     if let Some(seed_q) = align_fusion.mount_q_vb() {
-                        loose.set_mount_quat(seed_q);
+                        full.set_mount_quat(seed_q);
                     }
-                    loose_ready = true;
-                    loose_gnss_cursor = index + 1;
+                    full_ready = true;
+                    full_gnss_cursor = index + 1;
                     last_gnss_used_t_s = sample.t_s;
                 }
             }
             capture_due_snapshots(
                 replay,
                 &fusion,
-                &loose,
-                loose_ready,
-                loose_obs_counts,
-                loose_mount_dx_sum,
-                loose_mount_dx_abs_sum,
-                loose_att_dx_sum,
-                loose_att_dx_abs_sum,
-                loose_vel_dx_sum,
-                loose_vel_dx_abs_sum,
-                loose_mount_dx_sum_by_type,
-                loose_mount_dx_abs_sum_by_type,
-                loose_residual_sum_by_type,
-                loose_residual_abs_sum_by_type,
-                loose_effective_residual_sum_by_type,
-                loose_effective_residual_abs_sum_by_type,
-                loose_nis_sum_by_type,
-                loose_nis_max_by_type,
+                &full,
+                full_ready,
+                full_obs_counts,
+                full_mount_dx_sum,
+                full_mount_dx_abs_sum,
+                full_att_dx_sum,
+                full_att_dx_abs_sum,
+                full_vel_dx_sum,
+                full_vel_dx_abs_sum,
+                full_mount_dx_sum_by_type,
+                full_mount_dx_abs_sum_by_type,
+                full_residual_sum_by_type,
+                full_residual_abs_sum_by_type,
+                full_effective_residual_sum_by_type,
+                full_effective_residual_abs_sum_by_type,
+                full_nis_sum_by_type,
+                full_nis_max_by_type,
                 latest_transition,
                 targets_abs,
                 &mut target_idx,
@@ -1121,17 +1122,17 @@ fn run_diagnostics(
                 "gnss",
                 sample.t_s,
                 &fusion,
-                &loose,
-                loose_ready,
-                loose_obs_counts,
+                &full,
+                full_ready,
+                full_obs_counts,
             );
             if let Some(csv) = allocation_csv.as_deref_mut() {
-                let _ = csv.record_eskf(
+                let _ = csv.record_reduced(
                     replay,
                     "gnss",
                     sample.t_s,
-                    fusion.eskf(),
-                    loose_ready,
+                    fusion.reduced(),
+                    full_ready,
                     ref_gnss,
                 );
             }
@@ -1147,23 +1148,23 @@ fn run_diagnostics(
     capture_due_snapshots(
         replay,
         &fusion,
-        &loose,
-        loose_ready,
-        loose_obs_counts,
-        loose_mount_dx_sum,
-        loose_mount_dx_abs_sum,
-        loose_att_dx_sum,
-        loose_att_dx_abs_sum,
-        loose_vel_dx_sum,
-        loose_vel_dx_abs_sum,
-        loose_mount_dx_sum_by_type,
-        loose_mount_dx_abs_sum_by_type,
-        loose_residual_sum_by_type,
-        loose_residual_abs_sum_by_type,
-        loose_effective_residual_sum_by_type,
-        loose_effective_residual_abs_sum_by_type,
-        loose_nis_sum_by_type,
-        loose_nis_max_by_type,
+        &full,
+        full_ready,
+        full_obs_counts,
+        full_mount_dx_sum,
+        full_mount_dx_abs_sum,
+        full_att_dx_sum,
+        full_att_dx_abs_sum,
+        full_vel_dx_sum,
+        full_vel_dx_abs_sum,
+        full_mount_dx_sum_by_type,
+        full_mount_dx_abs_sum_by_type,
+        full_residual_sum_by_type,
+        full_residual_abs_sum_by_type,
+        full_effective_residual_sum_by_type,
+        full_effective_residual_abs_sum_by_type,
+        full_nis_sum_by_type,
+        full_nis_max_by_type,
         latest_transition,
         targets_abs,
         &mut target_idx,
@@ -1173,7 +1174,7 @@ fn run_diagnostics(
     Ok(snapshots)
 }
 
-fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig, mode: EkfImuSource) {
+fn apply_fusion_config(fusion: &mut SensorFusion, cfg: FilterCompareConfig, mode: MountSourceMode) {
     fusion.set_align_config(cfg.align);
     if let Some(noise) = cfg.predict_noise {
         fusion.set_predict_noise(noise);
@@ -1193,7 +1194,7 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig, mode: E
     fusion.set_mount_align_rw_var(cfg.mount_align_rw_var);
     fusion.set_align_handoff_delay_s(cfg.align_handoff_delay_s);
     fusion.set_freeze_misalignment_states(cfg.freeze_misalignment_states);
-    fusion.set_eskf_mount_source(mode.eskf_mount_source());
+    fusion.set_mount_source(mode.mount_source());
     fusion.set_mount_settle_time_s(cfg.mount_settle_time_s);
     fusion.set_mount_settle_release_sigma_rad(cfg.mount_settle_release_sigma_deg.to_radians());
     fusion.set_mount_settle_zero_cross_covariance(cfg.mount_settle_zero_cross_covariance);
@@ -1202,23 +1203,23 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: EkfCompareConfig, mode: E
 fn capture_due_snapshots(
     replay: &Replay,
     fusion: &SensorFusion,
-    loose: &LooseFilter,
-    loose_ready: bool,
-    loose_obs_counts: [u32; 9],
-    loose_mount_dx_sum: [f32; 3],
-    loose_mount_dx_abs_sum: [f32; 3],
-    loose_att_dx_sum: [f32; 3],
-    loose_att_dx_abs_sum: [f32; 3],
-    loose_vel_dx_sum: [f32; 3],
-    loose_vel_dx_abs_sum: [f32; 3],
-    loose_mount_dx_sum_by_type: [[f32; 3]; 9],
-    loose_mount_dx_abs_sum_by_type: [[f32; 3]; 9],
-    loose_residual_sum_by_type: [f32; 9],
-    loose_residual_abs_sum_by_type: [f32; 9],
-    loose_effective_residual_sum_by_type: [f32; 9],
-    loose_effective_residual_abs_sum_by_type: [f32; 9],
-    loose_nis_sum_by_type: [f32; 9],
-    loose_nis_max_by_type: [f32; 9],
+    full: &FullFilter,
+    full_ready: bool,
+    full_obs_counts: [u32; 9],
+    full_mount_dx_sum: [f32; 3],
+    full_mount_dx_abs_sum: [f32; 3],
+    full_att_dx_sum: [f32; 3],
+    full_att_dx_abs_sum: [f32; 3],
+    full_vel_dx_sum: [f32; 3],
+    full_vel_dx_abs_sum: [f32; 3],
+    full_mount_dx_sum_by_type: [[f32; 3]; 9],
+    full_mount_dx_abs_sum_by_type: [[f32; 3]; 9],
+    full_residual_sum_by_type: [f32; 9],
+    full_residual_abs_sum_by_type: [f32; 9],
+    full_effective_residual_sum_by_type: [f32; 9],
+    full_effective_residual_abs_sum_by_type: [f32; 9],
+    full_nis_sum_by_type: [f32; 9],
+    full_nis_max_by_type: [f32; 9],
     transition: Option<TransitionSnapshot>,
     targets_abs: &[f64],
     target_idx: &mut usize,
@@ -1232,36 +1233,36 @@ fn capture_due_snapshots(
         snapshots.push(Snapshot {
             target_rel_s: target_t_s - replay_start_t_s(replay).unwrap_or(0.0),
             t_s,
-            eskf: fusion.eskf().copied(),
-            loose: loose_ready.then(|| LooseSnapshot {
-                nominal: *loose.nominal(),
-                p: *loose.covariance(),
-                pos_ecef: loose.shadow_pos_ecef(),
-                last_dx: *loose.last_dx(),
-                last_obs_types: loose.last_obs_types().to_vec(),
+            reduced: fusion.reduced().copied(),
+            full: full_ready.then(|| FullSnapshot {
+                nominal: *full.nominal(),
+                p: *full.covariance(),
+                pos_ecef: full.shadow_pos_ecef(),
+                last_dx: *full.last_dx(),
+                last_obs_types: full.last_obs_types().to_vec(),
             }),
             transition,
             reference_mount_q_vb: reference_mount_at(&replay.reference_mount, t_s),
             reference_att_q: reference_attitude_at(&replay.reference_attitude, t_s),
-            eskf_type_counts: fusion
-                .eskf()
+            reduced_type_counts: fusion
+                .reduced()
                 .map(|e| e.update_diag.type_counts)
-                .unwrap_or([0; ESKF_UPDATE_DIAG_TYPES]),
-            loose_obs_counts,
-            loose_mount_dx_sum,
-            loose_mount_dx_abs_sum,
-            loose_att_dx_sum,
-            loose_att_dx_abs_sum,
-            loose_vel_dx_sum,
-            loose_vel_dx_abs_sum,
-            loose_mount_dx_sum_by_type,
-            loose_mount_dx_abs_sum_by_type,
-            loose_residual_sum_by_type,
-            loose_residual_abs_sum_by_type,
-            loose_effective_residual_sum_by_type,
-            loose_effective_residual_abs_sum_by_type,
-            loose_nis_sum_by_type,
-            loose_nis_max_by_type,
+                .unwrap_or([0; REDUCED_UPDATE_DIAG_TYPES]),
+            full_obs_counts,
+            full_mount_dx_sum,
+            full_mount_dx_abs_sum,
+            full_att_dx_sum,
+            full_att_dx_abs_sum,
+            full_vel_dx_sum,
+            full_vel_dx_abs_sum,
+            full_mount_dx_sum_by_type,
+            full_mount_dx_abs_sum_by_type,
+            full_residual_sum_by_type,
+            full_residual_abs_sum_by_type,
+            full_effective_residual_sum_by_type,
+            full_effective_residual_abs_sum_by_type,
+            full_nis_sum_by_type,
+            full_nis_max_by_type,
         });
         *target_idx += 1;
     }
@@ -1277,16 +1278,16 @@ fn print_snapshots(snapshots: &[Snapshot], replay: &Replay) {
             snapshot.target_rel_s, snapshot.t_s
         );
         print_state_summary(snapshot, ref_gnss);
-        if let (Some(eskf), Some(loose)) = (&snapshot.eskf, &snapshot.loose) {
-            let p_loose_as_eskf = transform_loose_cov_to_eskf(loose, ref_gnss);
-            print_covariance_summary(eskf, &p_loose_as_eskf);
-            print_mount_correlations("ESKF", &eskf.p);
-            print_mount_correlations("LooseAsESKF", &p_loose_as_eskf);
-            print_common_gnss_gain_summary(snapshot, replay, &eskf.p, &p_loose_as_eskf);
+        if let (Some(reduced), Some(full)) = (&snapshot.reduced, &snapshot.full) {
+            let p_full_as_reduced = transform_full_cov_to_reduced(full, ref_gnss);
+            print_covariance_summary(reduced, &p_full_as_reduced);
+            print_mount_correlations("Reduced", &reduced.p);
+            print_mount_correlations("FullAsREDUCED", &p_full_as_reduced);
+            print_common_gnss_gain_summary(snapshot, replay, &reduced.p, &p_full_as_reduced);
             if let Some(transition) = snapshot.transition {
                 print_transition_summary(transition);
             }
-            print_update_summary(snapshot, loose);
+            print_update_summary(snapshot, full);
         }
     }
 }
@@ -1316,17 +1317,17 @@ fn print_interval_summary(snapshots: &[Snapshot], replay: &Replay, window_rel_s:
     );
     print_interval_state_summary(start, end, ref_gnss);
     print_interval_update_summary(start, end);
-    if let (Some(start_eskf), Some(end_eskf), Some(start_loose), Some(end_loose)) =
-        (&start.eskf, &end.eskf, &start.loose, &end.loose)
+    if let (Some(start_reduced), Some(end_reduced), Some(start_full), Some(end_full)) =
+        (&start.reduced, &end.reduced, &start.full, &end.full)
     {
-        let start_loose_p = transform_loose_cov_to_eskf(start_loose, ref_gnss);
-        let end_loose_p = transform_loose_cov_to_eskf(end_loose, ref_gnss);
-        print_interval_sigma_summary(start_eskf, end_eskf, &start_loose_p, &end_loose_p);
+        let start_full_p = transform_full_cov_to_reduced(start_full, ref_gnss);
+        let end_full_p = transform_full_cov_to_reduced(end_full, ref_gnss);
+        print_interval_sigma_summary(start_reduced, end_reduced, &start_full_p, &end_full_p);
         print_interval_correlation_summary(
-            &start_eskf.p,
-            &end_eskf.p,
-            &start_loose_p,
-            &end_loose_p,
+            &start_reduced.p,
+            &end_reduced.p,
+            &start_full_p,
+            &end_full_p,
         );
     }
 }
@@ -1344,44 +1345,44 @@ fn print_interval_state_summary(start: &Snapshot, end: &Snapshot, ref_gnss: Gene
     let start_metrics = state_metrics(start, ref_gnss);
     let end_metrics = state_metrics(end, ref_gnss);
     println!(
-        "[covhist-interval] qerr_mount_deg eskf={:.6}->{:.6} d={:.6} loose={:.6}->{:.6} d={:.6}",
-        start_metrics.eskf_mount_qerr,
-        end_metrics.eskf_mount_qerr,
-        end_metrics.eskf_mount_qerr - start_metrics.eskf_mount_qerr,
-        start_metrics.loose_mount_qerr,
-        end_metrics.loose_mount_qerr,
-        end_metrics.loose_mount_qerr - start_metrics.loose_mount_qerr,
+        "[covhist-interval] qerr_mount_deg reduced={:.6}->{:.6} d={:.6} full={:.6}->{:.6} d={:.6}",
+        start_metrics.reduced_mount_qerr,
+        end_metrics.reduced_mount_qerr,
+        end_metrics.reduced_mount_qerr - start_metrics.reduced_mount_qerr,
+        start_metrics.full_mount_qerr,
+        end_metrics.full_mount_qerr,
+        end_metrics.full_mount_qerr - start_metrics.full_mount_qerr,
     );
     println!(
-        "[covhist-interval] qerr_att_deg eskf={:.6}->{:.6} d={:.6} loose={:.6}->{:.6} d={:.6}",
-        start_metrics.eskf_att_qerr,
-        end_metrics.eskf_att_qerr,
-        end_metrics.eskf_att_qerr - start_metrics.eskf_att_qerr,
-        start_metrics.loose_att_qerr,
-        end_metrics.loose_att_qerr,
-        end_metrics.loose_att_qerr - start_metrics.loose_att_qerr,
+        "[covhist-interval] qerr_att_deg reduced={:.6}->{:.6} d={:.6} full={:.6}->{:.6} d={:.6}",
+        start_metrics.reduced_att_qerr,
+        end_metrics.reduced_att_qerr,
+        end_metrics.reduced_att_qerr - start_metrics.reduced_att_qerr,
+        start_metrics.full_att_qerr,
+        end_metrics.full_att_qerr,
+        end_metrics.full_att_qerr - start_metrics.full_att_qerr,
     );
     println!(
-        "[covhist-interval] nhc_residual_end_mps eskf_yz=[{:.6},{:.6}] loose_yz=[{:.6},{:.6}]",
-        end_metrics.eskf_nhc[0],
-        end_metrics.eskf_nhc[1],
-        end_metrics.loose_nhc[0],
-        end_metrics.loose_nhc[1],
+        "[covhist-interval] nhc_residual_end_mps reduced_yz=[{:.6},{:.6}] full_yz=[{:.6},{:.6}]",
+        end_metrics.reduced_nhc[0],
+        end_metrics.reduced_nhc[1],
+        end_metrics.full_nhc[0],
+        end_metrics.full_nhc[1],
     );
 }
 
 #[derive(Clone, Copy)]
 struct StateMetrics {
-    eskf_mount_qerr: f64,
-    loose_mount_qerr: f64,
-    eskf_att_qerr: f64,
-    loose_att_qerr: f64,
-    eskf_nhc: [f64; 2],
-    loose_nhc: [f64; 2],
+    reduced_mount_qerr: f64,
+    full_mount_qerr: f64,
+    reduced_att_qerr: f64,
+    full_att_qerr: f64,
+    reduced_nhc: [f64; 2],
+    full_nhc: [f64; 2],
 }
 
 fn state_metrics(snapshot: &Snapshot, ref_gnss: GenericGnssSample) -> StateMetrics {
-    let eskf_mount_q = snapshot.eskf.as_ref().map(|e| {
+    let reduced_mount_q = snapshot.reduced.as_ref().map(|e| {
         as_q64([
             e.nominal.qcs0,
             e.nominal.qcs1,
@@ -1389,7 +1390,7 @@ fn state_metrics(snapshot: &Snapshot, ref_gnss: GenericGnssSample) -> StateMetri
             e.nominal.qcs3,
         ])
     });
-    let loose_mount_q = snapshot.loose.as_ref().map(|l| {
+    let full_mount_q = snapshot.full.as_ref().map(|l| {
         as_q64([
             l.nominal.qcs0,
             l.nominal.qcs1,
@@ -1398,158 +1399,162 @@ fn state_metrics(snapshot: &Snapshot, ref_gnss: GenericGnssSample) -> StateMetri
         ])
     });
     StateMetrics {
-        eskf_mount_qerr: eskf_mount_q
+        reduced_mount_qerr: reduced_mount_q
             .zip(snapshot.reference_mount_q_vb)
             .map(|(a, b)| quat_angle_deg(a, b))
             .unwrap_or(f64::NAN),
-        loose_mount_qerr: loose_mount_q
+        full_mount_qerr: full_mount_q
             .zip(snapshot.reference_mount_q_vb)
             .map(|(a, b)| quat_angle_deg(a, b))
             .unwrap_or(f64::NAN),
-        eskf_att_qerr: snapshot
-            .eskf
+        reduced_att_qerr: snapshot
+            .reduced
             .as_ref()
             .and_then(|e| snapshot.reference_att_q.map(|r| (e, r)))
-            .map(|(e, r)| quat_angle_deg(eskf_att_q(e), r))
+            .map(|(e, r)| quat_angle_deg(reduced_att_q(e), r))
             .unwrap_or(f64::NAN),
-        loose_att_qerr: snapshot
-            .loose
+        full_att_qerr: snapshot
+            .full
             .as_ref()
             .and_then(|l| snapshot.reference_att_q.map(|r| (l, r)))
-            .map(|(l, r)| quat_angle_deg(loose_att_q_ned(l, ref_gnss), r))
+            .map(|(l, r)| quat_angle_deg(full_att_q_ned(l, ref_gnss), r))
             .unwrap_or(f64::NAN),
-        eskf_nhc: snapshot
-            .eskf
+        reduced_nhc: snapshot
+            .reduced
             .as_ref()
-            .map(eskf_nhc_residual_yz)
+            .map(reduced_nhc_residual_yz)
             .unwrap_or([f64::NAN; 2]),
-        loose_nhc: snapshot
-            .loose
+        full_nhc: snapshot
+            .full
             .as_ref()
-            .map(loose_nhc_residual_yz)
+            .map(full_nhc_residual_yz)
             .unwrap_or([f64::NAN; 2]),
     }
 }
 
 fn print_interval_update_summary(start: &Snapshot, end: &Snapshot) {
-    let eskf_delta = count_delta(&end.eskf_type_counts, &start.eskf_type_counts);
-    let loose_delta = count_delta(&end.loose_obs_counts, &start.loose_obs_counts);
+    let reduced_delta = count_delta(&end.reduced_type_counts, &start.reduced_type_counts);
+    let full_delta = count_delta(&end.full_obs_counts, &start.full_obs_counts);
     println!(
-        "[covhist-interval] eskf_update_delta pos_xy={} pos_d={} vel_xy={} vel_d={} zero_xy={} zero_d={} nhc_y={} nhc_z={}",
-        eskf_delta[0],
-        eskf_delta[8],
-        eskf_delta[1],
-        eskf_delta[9],
-        eskf_delta[2],
-        eskf_delta[10],
-        eskf_delta[DIAG_BODY_VEL_Y],
-        eskf_delta[DIAG_BODY_VEL_Z]
+        "[covhist-interval] reduced_update_delta pos_xy={} pos_d={} vel_xy={} vel_d={} zero_xy={} zero_d={} nhc_y={} nhc_z={}",
+        reduced_delta[0],
+        reduced_delta[8],
+        reduced_delta[1],
+        reduced_delta[9],
+        reduced_delta[2],
+        reduced_delta[10],
+        reduced_delta[DIAG_BODY_VEL_Y],
+        reduced_delta[DIAG_BODY_VEL_Z]
     );
     println!(
-        "[covhist-interval] loose_obs_delta pos=[{},{},{}] vel=[{},{},{}] nhc_y={} nhc_z={}",
-        loose_delta[1],
-        loose_delta[2],
-        loose_delta[3],
-        loose_delta[4],
-        loose_delta[5],
-        loose_delta[6],
-        loose_delta[7],
-        loose_delta[8]
+        "[covhist-interval] full_obs_delta pos=[{},{},{}] vel=[{},{},{}] nhc_y={} nhc_z={}",
+        full_delta[1],
+        full_delta[2],
+        full_delta[3],
+        full_delta[4],
+        full_delta[5],
+        full_delta[6],
+        full_delta[7],
+        full_delta[8]
     );
-    if let (Some(start_eskf), Some(end_eskf)) = (&start.eskf, &end.eskf) {
-        for (label, idx) in selected_eskf_diag_types() {
+    if let (Some(start_reduced), Some(end_reduced)) = (&start.reduced, &end.reduced) {
+        for (label, idx) in selected_reduced_diag_types() {
             println!(
-                "[covhist-interval] eskf_mount_dx type={} count_delta={} net_deg=[{:.6},{:.6},{:.6}] abs_deg=[{:.6},{:.6},{:.6}]",
+                "[covhist-interval] reduced_mount_dx type={} count_delta={} net_deg=[{:.6},{:.6},{:.6}] abs_deg=[{:.6},{:.6},{:.6}]",
                 label,
-                eskf_delta[idx],
+                reduced_delta[idx],
                 rad_f32_to_deg(
-                    end_eskf.update_diag.sum_dx_mount_roll[idx]
-                        - start_eskf.update_diag.sum_dx_mount_roll[idx]
+                    end_reduced.update_diag.sum_dx_mount_roll[idx]
+                        - start_reduced.update_diag.sum_dx_mount_roll[idx]
                 ),
                 rad_f32_to_deg(
-                    end_eskf.update_diag.sum_dx_mount_pitch[idx]
-                        - start_eskf.update_diag.sum_dx_mount_pitch[idx]
+                    end_reduced.update_diag.sum_dx_mount_pitch[idx]
+                        - start_reduced.update_diag.sum_dx_mount_pitch[idx]
                 ),
                 rad_f32_to_deg(
-                    end_eskf.update_diag.sum_dx_mount_yaw[idx]
-                        - start_eskf.update_diag.sum_dx_mount_yaw[idx]
+                    end_reduced.update_diag.sum_dx_mount_yaw[idx]
+                        - start_reduced.update_diag.sum_dx_mount_yaw[idx]
                 ),
                 rad_f32_to_deg(
-                    end_eskf.update_diag.sum_abs_dx_mount_roll[idx]
-                        - start_eskf.update_diag.sum_abs_dx_mount_roll[idx]
+                    end_reduced.update_diag.sum_abs_dx_mount_roll[idx]
+                        - start_reduced.update_diag.sum_abs_dx_mount_roll[idx]
                 ),
                 rad_f32_to_deg(
-                    end_eskf.update_diag.sum_abs_dx_mount_pitch[idx]
-                        - start_eskf.update_diag.sum_abs_dx_mount_pitch[idx]
+                    end_reduced.update_diag.sum_abs_dx_mount_pitch[idx]
+                        - start_reduced.update_diag.sum_abs_dx_mount_pitch[idx]
                 ),
                 rad_f32_to_deg(
-                    end_eskf.update_diag.sum_abs_dx_mount_yaw[idx]
-                        - start_eskf.update_diag.sum_abs_dx_mount_yaw[idx]
+                    end_reduced.update_diag.sum_abs_dx_mount_yaw[idx]
+                        - start_reduced.update_diag.sum_abs_dx_mount_yaw[idx]
                 ),
             );
             println!(
-                "[covhist-interval] eskf_att_dx type={} count_delta={} net_deg=[{:.6},{:.6},{:.6}] abs_deg=[{:.6},{:.6},{:.6}]",
+                "[covhist-interval] reduced_att_dx type={} count_delta={} net_deg=[{:.6},{:.6},{:.6}] abs_deg=[{:.6},{:.6},{:.6}]",
                 label,
-                eskf_delta[idx],
+                reduced_delta[idx],
                 rad_f32_to_deg(
-                    end_eskf.update_diag.sum_dx_att_roll[idx]
-                        - start_eskf.update_diag.sum_dx_att_roll[idx]
+                    end_reduced.update_diag.sum_dx_att_roll[idx]
+                        - start_reduced.update_diag.sum_dx_att_roll[idx]
                 ),
                 rad_f32_to_deg(
-                    end_eskf.update_diag.sum_dx_pitch[idx]
-                        - start_eskf.update_diag.sum_dx_pitch[idx]
+                    end_reduced.update_diag.sum_dx_pitch[idx]
+                        - start_reduced.update_diag.sum_dx_pitch[idx]
                 ),
                 rad_f32_to_deg(
-                    end_eskf.update_diag.sum_dx_yaw[idx] - start_eskf.update_diag.sum_dx_yaw[idx]
+                    end_reduced.update_diag.sum_dx_yaw[idx]
+                        - start_reduced.update_diag.sum_dx_yaw[idx]
                 ),
                 rad_f32_to_deg(
-                    end_eskf.update_diag.sum_abs_dx_att_roll[idx]
-                        - start_eskf.update_diag.sum_abs_dx_att_roll[idx]
+                    end_reduced.update_diag.sum_abs_dx_att_roll[idx]
+                        - start_reduced.update_diag.sum_abs_dx_att_roll[idx]
                 ),
                 rad_f32_to_deg(
-                    end_eskf.update_diag.sum_abs_dx_pitch[idx]
-                        - start_eskf.update_diag.sum_abs_dx_pitch[idx]
+                    end_reduced.update_diag.sum_abs_dx_pitch[idx]
+                        - start_reduced.update_diag.sum_abs_dx_pitch[idx]
                 ),
                 rad_f32_to_deg(
-                    end_eskf.update_diag.sum_abs_dx_yaw[idx]
-                        - start_eskf.update_diag.sum_abs_dx_yaw[idx]
+                    end_reduced.update_diag.sum_abs_dx_yaw[idx]
+                        - start_reduced.update_diag.sum_abs_dx_yaw[idx]
                 ),
             );
             println!(
-                "[covhist-interval] eskf_vel_dx type={} count_delta={} net_mps=[{:.6},{:.6},{:.6}] abs_mps=[{:.6},{:.6},{:.6}]",
+                "[covhist-interval] reduced_vel_dx type={} count_delta={} net_mps=[{:.6},{:.6},{:.6}] abs_mps=[{:.6},{:.6},{:.6}]",
                 label,
-                eskf_delta[idx],
-                end_eskf.update_diag.sum_dx_vel_n[idx] - start_eskf.update_diag.sum_dx_vel_n[idx],
-                end_eskf.update_diag.sum_dx_vel_e[idx] - start_eskf.update_diag.sum_dx_vel_e[idx],
-                end_eskf.update_diag.sum_dx_vel_d[idx] - start_eskf.update_diag.sum_dx_vel_d[idx],
-                end_eskf.update_diag.sum_abs_dx_vel_n[idx]
-                    - start_eskf.update_diag.sum_abs_dx_vel_n[idx],
-                end_eskf.update_diag.sum_abs_dx_vel_e[idx]
-                    - start_eskf.update_diag.sum_abs_dx_vel_e[idx],
-                end_eskf.update_diag.sum_abs_dx_vel_d[idx]
-                    - start_eskf.update_diag.sum_abs_dx_vel_d[idx],
+                reduced_delta[idx],
+                end_reduced.update_diag.sum_dx_vel_n[idx]
+                    - start_reduced.update_diag.sum_dx_vel_n[idx],
+                end_reduced.update_diag.sum_dx_vel_e[idx]
+                    - start_reduced.update_diag.sum_dx_vel_e[idx],
+                end_reduced.update_diag.sum_dx_vel_d[idx]
+                    - start_reduced.update_diag.sum_dx_vel_d[idx],
+                end_reduced.update_diag.sum_abs_dx_vel_n[idx]
+                    - start_reduced.update_diag.sum_abs_dx_vel_n[idx],
+                end_reduced.update_diag.sum_abs_dx_vel_e[idx]
+                    - start_reduced.update_diag.sum_abs_dx_vel_e[idx],
+                end_reduced.update_diag.sum_abs_dx_vel_d[idx]
+                    - start_reduced.update_diag.sum_abs_dx_vel_d[idx],
             );
             println!(
-                "[covhist-interval] eskf_innov type={} count_delta={} net={:.6} abs={:.6} nis_sum={:.6} nis_max={:.6}",
+                "[covhist-interval] reduced_innov type={} count_delta={} net={:.6} abs={:.6} nis_sum={:.6} nis_max={:.6}",
                 label,
-                eskf_delta[idx],
-                end_eskf.update_diag.sum_innovation[idx]
-                    - start_eskf.update_diag.sum_innovation[idx],
-                end_eskf.update_diag.sum_abs_innovation[idx]
-                    - start_eskf.update_diag.sum_abs_innovation[idx],
-                end_eskf.update_diag.sum_nis[idx] - start_eskf.update_diag.sum_nis[idx],
-                end_eskf.update_diag.max_nis[idx],
+                reduced_delta[idx],
+                end_reduced.update_diag.sum_innovation[idx]
+                    - start_reduced.update_diag.sum_innovation[idx],
+                end_reduced.update_diag.sum_abs_innovation[idx]
+                    - start_reduced.update_diag.sum_abs_innovation[idx],
+                end_reduced.update_diag.sum_nis[idx] - start_reduced.update_diag.sum_nis[idx],
+                end_reduced.update_diag.max_nis[idx],
             );
         }
     }
     println!(
-        "[covhist-interval] loose_mount_dx total_net_deg=[{:.6},{:.6},{:.6}] total_abs_deg=[{:.6},{:.6},{:.6}]",
-        rad_f32_to_deg(end.loose_mount_dx_sum[0] - start.loose_mount_dx_sum[0]),
-        rad_f32_to_deg(end.loose_mount_dx_sum[1] - start.loose_mount_dx_sum[1]),
-        rad_f32_to_deg(end.loose_mount_dx_sum[2] - start.loose_mount_dx_sum[2]),
-        rad_f32_to_deg(end.loose_mount_dx_abs_sum[0] - start.loose_mount_dx_abs_sum[0]),
-        rad_f32_to_deg(end.loose_mount_dx_abs_sum[1] - start.loose_mount_dx_abs_sum[1]),
-        rad_f32_to_deg(end.loose_mount_dx_abs_sum[2] - start.loose_mount_dx_abs_sum[2]),
+        "[covhist-interval] full_mount_dx total_net_deg=[{:.6},{:.6},{:.6}] total_abs_deg=[{:.6},{:.6},{:.6}]",
+        rad_f32_to_deg(end.full_mount_dx_sum[0] - start.full_mount_dx_sum[0]),
+        rad_f32_to_deg(end.full_mount_dx_sum[1] - start.full_mount_dx_sum[1]),
+        rad_f32_to_deg(end.full_mount_dx_sum[2] - start.full_mount_dx_sum[2]),
+        rad_f32_to_deg(end.full_mount_dx_abs_sum[0] - start.full_mount_dx_abs_sum[0]),
+        rad_f32_to_deg(end.full_mount_dx_abs_sum[1] - start.full_mount_dx_abs_sum[1]),
+        rad_f32_to_deg(end.full_mount_dx_abs_sum[2] - start.full_mount_dx_abs_sum[2]),
     );
     for (ty, label) in [
         (1usize, "pos_x"),
@@ -1562,17 +1567,17 @@ fn print_interval_update_summary(start: &Snapshot, end: &Snapshot) {
         (8, "nhc_z"),
     ] {
         let net = [
-            end.loose_mount_dx_sum_by_type[ty][0] - start.loose_mount_dx_sum_by_type[ty][0],
-            end.loose_mount_dx_sum_by_type[ty][1] - start.loose_mount_dx_sum_by_type[ty][1],
-            end.loose_mount_dx_sum_by_type[ty][2] - start.loose_mount_dx_sum_by_type[ty][2],
+            end.full_mount_dx_sum_by_type[ty][0] - start.full_mount_dx_sum_by_type[ty][0],
+            end.full_mount_dx_sum_by_type[ty][1] - start.full_mount_dx_sum_by_type[ty][1],
+            end.full_mount_dx_sum_by_type[ty][2] - start.full_mount_dx_sum_by_type[ty][2],
         ];
         let abs = [
-            end.loose_mount_dx_abs_sum_by_type[ty][0] - start.loose_mount_dx_abs_sum_by_type[ty][0],
-            end.loose_mount_dx_abs_sum_by_type[ty][1] - start.loose_mount_dx_abs_sum_by_type[ty][1],
-            end.loose_mount_dx_abs_sum_by_type[ty][2] - start.loose_mount_dx_abs_sum_by_type[ty][2],
+            end.full_mount_dx_abs_sum_by_type[ty][0] - start.full_mount_dx_abs_sum_by_type[ty][0],
+            end.full_mount_dx_abs_sum_by_type[ty][1] - start.full_mount_dx_abs_sum_by_type[ty][1],
+            end.full_mount_dx_abs_sum_by_type[ty][2] - start.full_mount_dx_abs_sum_by_type[ty][2],
         ];
         println!(
-            "[covhist-interval] loose_mount_dx type={} net_deg=[{:.6},{:.6},{:.6}] abs_deg=[{:.6},{:.6},{:.6}]",
+            "[covhist-interval] full_mount_dx type={} net_deg=[{:.6},{:.6},{:.6}] abs_deg=[{:.6},{:.6},{:.6}]",
             label,
             rad_f32_to_deg(net[0]),
             rad_f32_to_deg(net[1]),
@@ -1582,35 +1587,35 @@ fn print_interval_update_summary(start: &Snapshot, end: &Snapshot) {
             rad_f32_to_deg(abs[2]),
         );
         println!(
-            "[covhist-interval] loose_residual type={} net={:.6} abs={:.6} eff_net={:.6} eff_abs={:.6} nis_sum={:.6} nis_max={:.6}",
+            "[covhist-interval] full_residual type={} net={:.6} abs={:.6} eff_net={:.6} eff_abs={:.6} nis_sum={:.6} nis_max={:.6}",
             label,
-            end.loose_residual_sum_by_type[ty] - start.loose_residual_sum_by_type[ty],
-            end.loose_residual_abs_sum_by_type[ty] - start.loose_residual_abs_sum_by_type[ty],
-            end.loose_effective_residual_sum_by_type[ty]
-                - start.loose_effective_residual_sum_by_type[ty],
-            end.loose_effective_residual_abs_sum_by_type[ty]
-                - start.loose_effective_residual_abs_sum_by_type[ty],
-            end.loose_nis_sum_by_type[ty] - start.loose_nis_sum_by_type[ty],
-            end.loose_nis_max_by_type[ty],
+            end.full_residual_sum_by_type[ty] - start.full_residual_sum_by_type[ty],
+            end.full_residual_abs_sum_by_type[ty] - start.full_residual_abs_sum_by_type[ty],
+            end.full_effective_residual_sum_by_type[ty]
+                - start.full_effective_residual_sum_by_type[ty],
+            end.full_effective_residual_abs_sum_by_type[ty]
+                - start.full_effective_residual_abs_sum_by_type[ty],
+            end.full_nis_sum_by_type[ty] - start.full_nis_sum_by_type[ty],
+            end.full_nis_max_by_type[ty],
         );
     }
     println!(
-        "[covhist-interval] loose_att_dx_as_eskf total_net_deg=[{:.6},{:.6},{:.6}] total_abs_deg=[{:.6},{:.6},{:.6}]",
-        rad_f32_to_deg(end.loose_att_dx_sum[0] - start.loose_att_dx_sum[0]),
-        rad_f32_to_deg(end.loose_att_dx_sum[1] - start.loose_att_dx_sum[1]),
-        rad_f32_to_deg(end.loose_att_dx_sum[2] - start.loose_att_dx_sum[2]),
-        rad_f32_to_deg(end.loose_att_dx_abs_sum[0] - start.loose_att_dx_abs_sum[0]),
-        rad_f32_to_deg(end.loose_att_dx_abs_sum[1] - start.loose_att_dx_abs_sum[1]),
-        rad_f32_to_deg(end.loose_att_dx_abs_sum[2] - start.loose_att_dx_abs_sum[2]),
+        "[covhist-interval] full_att_dx_as_reduced total_net_deg=[{:.6},{:.6},{:.6}] total_abs_deg=[{:.6},{:.6},{:.6}]",
+        rad_f32_to_deg(end.full_att_dx_sum[0] - start.full_att_dx_sum[0]),
+        rad_f32_to_deg(end.full_att_dx_sum[1] - start.full_att_dx_sum[1]),
+        rad_f32_to_deg(end.full_att_dx_sum[2] - start.full_att_dx_sum[2]),
+        rad_f32_to_deg(end.full_att_dx_abs_sum[0] - start.full_att_dx_abs_sum[0]),
+        rad_f32_to_deg(end.full_att_dx_abs_sum[1] - start.full_att_dx_abs_sum[1]),
+        rad_f32_to_deg(end.full_att_dx_abs_sum[2] - start.full_att_dx_abs_sum[2]),
     );
     println!(
-        "[covhist-interval] loose_vel_dx_as_eskf total_net_mps=[{:.6},{:.6},{:.6}] total_abs_mps=[{:.6},{:.6},{:.6}]",
-        end.loose_vel_dx_sum[0] - start.loose_vel_dx_sum[0],
-        end.loose_vel_dx_sum[1] - start.loose_vel_dx_sum[1],
-        end.loose_vel_dx_sum[2] - start.loose_vel_dx_sum[2],
-        end.loose_vel_dx_abs_sum[0] - start.loose_vel_dx_abs_sum[0],
-        end.loose_vel_dx_abs_sum[1] - start.loose_vel_dx_abs_sum[1],
-        end.loose_vel_dx_abs_sum[2] - start.loose_vel_dx_abs_sum[2],
+        "[covhist-interval] full_vel_dx_as_reduced total_net_mps=[{:.6},{:.6},{:.6}] total_abs_mps=[{:.6},{:.6},{:.6}]",
+        end.full_vel_dx_sum[0] - start.full_vel_dx_sum[0],
+        end.full_vel_dx_sum[1] - start.full_vel_dx_sum[1],
+        end.full_vel_dx_sum[2] - start.full_vel_dx_sum[2],
+        end.full_vel_dx_abs_sum[0] - start.full_vel_dx_abs_sum[0],
+        end.full_vel_dx_abs_sum[1] - start.full_vel_dx_abs_sum[1],
+        end.full_vel_dx_abs_sum[2] - start.full_vel_dx_abs_sum[2],
     );
 }
 
@@ -1630,7 +1635,7 @@ fn delta3(current: [f32; 3], previous: [f32; 3]) -> [f32; 3] {
     ]
 }
 
-fn loose_obs_type_label(ty: usize) -> &'static str {
+fn full_obs_type_label(ty: usize) -> &'static str {
     match ty {
         1 => "pos_x",
         2 => "pos_y",
@@ -1645,37 +1650,37 @@ fn loose_obs_type_label(ty: usize) -> &'static str {
 }
 
 fn print_interval_sigma_summary(
-    start_eskf: &EskfState,
-    end_eskf: &EskfState,
-    start_loose_p: &[[f32; 18]; 18],
-    end_loose_p: &[[f32; 18]; 18],
+    start_reduced: &ReducedState,
+    end_reduced: &ReducedState,
+    start_full_p: &[[f32; 18]; 18],
+    end_full_p: &[[f32; 18]; 18],
 ) {
     for i in [0usize, 1, 2, 9, 10, 11, 12, 13, 14, 15, 16, 17] {
         println!(
-            "[covhist-interval] sigma_deg state={} eskf={:.6}->{:.6} loose={:.6}->{:.6}",
+            "[covhist-interval] sigma_deg state={} reduced={:.6}->{:.6} full={:.6}->{:.6}",
             STATE_NAMES[i],
-            sigma_deg(&start_eskf.p, i),
-            sigma_deg(&end_eskf.p, i),
-            sigma_deg(start_loose_p, i),
-            sigma_deg(end_loose_p, i),
+            sigma_deg(&start_reduced.p, i),
+            sigma_deg(&end_reduced.p, i),
+            sigma_deg(start_full_p, i),
+            sigma_deg(end_full_p, i),
         );
     }
 }
 
 fn print_interval_correlation_summary(
-    start_eskf_p: &[[f32; 18]; 18],
-    end_eskf_p: &[[f32; 18]; 18],
-    start_loose_p: &[[f32; 18]; 18],
-    end_loose_p: &[[f32; 18]; 18],
+    start_reduced_p: &[[f32; 18]; 18],
+    end_reduced_p: &[[f32; 18]; 18],
+    start_full_p: &[[f32; 18]; 18],
+    end_full_p: &[[f32; 18]; 18],
 ) {
     for (label, i, j) in selected_corr_pairs() {
         println!(
-            "[covhist-interval] corr {} eskf={:.3}->{:.3} loose={:.3}->{:.3}",
+            "[covhist-interval] corr {} reduced={:.3}->{:.3} full={:.3}->{:.3}",
             label,
-            corr_from_cov(start_eskf_p, i, j),
-            corr_from_cov(end_eskf_p, i, j),
-            corr_from_cov(start_loose_p, i, j),
-            corr_from_cov(end_loose_p, i, j),
+            corr_from_cov(start_reduced_p, i, j),
+            corr_from_cov(end_reduced_p, i, j),
+            corr_from_cov(start_full_p, i, j),
+            corr_from_cov(end_full_p, i, j),
         );
     }
 }
@@ -1694,7 +1699,7 @@ fn selected_corr_pairs() -> [(&'static str, usize, usize); 8] {
 }
 
 fn print_state_summary(snapshot: &Snapshot, ref_gnss: GenericGnssSample) {
-    let eskf_mount_q = snapshot.eskf.as_ref().map(|e| {
+    let reduced_mount_q = snapshot.reduced.as_ref().map(|e| {
         as_q64([
             e.nominal.qcs0,
             e.nominal.qcs1,
@@ -1702,7 +1707,7 @@ fn print_state_summary(snapshot: &Snapshot, ref_gnss: GenericGnssSample) {
             e.nominal.qcs3,
         ])
     });
-    let loose_mount_q = snapshot.loose.as_ref().map(|l| {
+    let full_mount_q = snapshot.full.as_ref().map(|l| {
         as_q64([
             l.nominal.qcs0,
             l.nominal.qcs1,
@@ -1711,48 +1716,48 @@ fn print_state_summary(snapshot: &Snapshot, ref_gnss: GenericGnssSample) {
         ])
     });
     let ref_mount_q = snapshot.reference_mount_q_vb;
-    let eskf_mount_qerr = eskf_mount_q
+    let reduced_mount_qerr = reduced_mount_q
         .zip(ref_mount_q)
         .map(|(a, b)| quat_angle_deg(a, b))
         .unwrap_or(f64::NAN);
-    let loose_mount_qerr = loose_mount_q
+    let full_mount_qerr = full_mount_q
         .zip(ref_mount_q)
         .map(|(a, b)| quat_angle_deg(a, b))
         .unwrap_or(f64::NAN);
-    let eskf_att_qerr = snapshot
-        .eskf
+    let reduced_att_qerr = snapshot
+        .reduced
         .as_ref()
         .and_then(|e| snapshot.reference_att_q.map(|r| (e, r)))
-        .map(|(e, r)| quat_angle_deg(eskf_att_q(e), r))
+        .map(|(e, r)| quat_angle_deg(reduced_att_q(e), r))
         .unwrap_or(f64::NAN);
-    let loose_att_qerr = snapshot
-        .loose
+    let full_att_qerr = snapshot
+        .full
         .as_ref()
         .and_then(|l| snapshot.reference_att_q.map(|r| (l, r)))
-        .map(|(l, r)| quat_angle_deg(loose_att_q_ned(l, ref_gnss), r))
+        .map(|(l, r)| quat_angle_deg(full_att_q_ned(l, ref_gnss), r))
         .unwrap_or(f64::NAN);
-    let eskf_nhc = snapshot
-        .eskf
+    let reduced_nhc = snapshot
+        .reduced
         .as_ref()
-        .map(eskf_nhc_residual_yz)
+        .map(reduced_nhc_residual_yz)
         .unwrap_or([f64::NAN; 2]);
-    let loose_nhc = snapshot
-        .loose
+    let full_nhc = snapshot
+        .full
         .as_ref()
-        .map(loose_nhc_residual_yz)
+        .map(full_nhc_residual_yz)
         .unwrap_or([f64::NAN; 2]);
 
     println!(
-        "[covhist] state mount_qerr_deg eskf={:.6} loose={:.6} att_qerr_deg eskf={:.6} loose={:.6}",
-        eskf_mount_qerr, loose_mount_qerr, eskf_att_qerr, loose_att_qerr
+        "[covhist] state mount_qerr_deg reduced={:.6} full={:.6} att_qerr_deg reduced={:.6} full={:.6}",
+        reduced_mount_qerr, full_mount_qerr, reduced_att_qerr, full_att_qerr
     );
     println!(
-        "[covhist] nhc_residual_mps eskf_y={:.6} eskf_z={:.6} loose_y={:.6} loose_z={:.6}",
-        eskf_nhc[0], eskf_nhc[1], loose_nhc[0], loose_nhc[1]
+        "[covhist] nhc_residual_mps reduced_y={:.6} reduced_z={:.6} full_y={:.6} full_z={:.6}",
+        reduced_nhc[0], reduced_nhc[1], full_nhc[0], full_nhc[1]
     );
 }
 
-fn print_covariance_summary(eskf: &EskfState, loose_as_eskf: &[[f32; 18]; 18]) {
+fn print_covariance_summary(reduced: &ReducedState, full_as_reduced: &[[f32; 18]; 18]) {
     for (label, rows, cols) in [
         ("att", &[0usize, 1, 2][..], &[0usize, 1, 2][..]),
         ("vel", &[3usize, 4, 5][..], &[3usize, 4, 5][..]),
@@ -1776,8 +1781,8 @@ fn print_covariance_summary(eskf: &EskfState, loose_as_eskf: &[[f32; 18]; 18]) {
         println!(
             "[covhist] cov_block label={} rms_abs_diff={:.6e} rms_rel_diff={:.6e}",
             label,
-            block_rms_abs_diff(&eskf.p, loose_as_eskf, rows, cols),
-            block_rms_rel_diff(&eskf.p, loose_as_eskf, rows, cols)
+            block_rms_abs_diff(&reduced.p, full_as_reduced, rows, cols),
+            block_rms_rel_diff(&reduced.p, full_as_reduced, rows, cols)
         );
     }
     for i in [
@@ -1788,10 +1793,10 @@ fn print_covariance_summary(eskf: &EskfState, loose_as_eskf: &[[f32; 18]; 18]) {
         15, 16, 17, // mount
     ] {
         println!(
-            "[covhist] sigma state={} eskf={:.6e} loose_as_eskf={:.6e}",
+            "[covhist] sigma state={} reduced={:.6e} full_as_reduced={:.6e}",
             STATE_NAMES[i],
-            eskf.p[i][i].max(0.0).sqrt(),
-            loose_as_eskf[i][i].max(0.0).sqrt()
+            reduced.p[i][i].max(0.0).sqrt(),
+            full_as_reduced[i][i].max(0.0).sqrt()
         );
     }
 }
@@ -1812,61 +1817,61 @@ fn print_mount_correlations(label: &str, p: &[[f32; 18]; 18]) {
     }
 }
 
-fn print_update_summary(snapshot: &Snapshot, loose: &LooseSnapshot) {
+fn print_update_summary(snapshot: &Snapshot, full: &FullSnapshot) {
     let dy = DIAG_BODY_VEL_Y;
     let dz = DIAG_BODY_VEL_Z;
     println!(
-        "[covhist] eskf_update_counts pos_xy={} pos_d={} vel_xy={} vel_d={} zero_xy={} zero_d={} nhc_y={} nhc_z={}",
-        snapshot.eskf_type_counts[0],
-        snapshot.eskf_type_counts[8],
-        snapshot.eskf_type_counts[1],
-        snapshot.eskf_type_counts[9],
-        snapshot.eskf_type_counts[2],
-        snapshot.eskf_type_counts[10],
-        snapshot.eskf_type_counts[dy],
-        snapshot.eskf_type_counts[dz]
+        "[covhist] reduced_update_counts pos_xy={} pos_d={} vel_xy={} vel_d={} zero_xy={} zero_d={} nhc_y={} nhc_z={}",
+        snapshot.reduced_type_counts[0],
+        snapshot.reduced_type_counts[8],
+        snapshot.reduced_type_counts[1],
+        snapshot.reduced_type_counts[9],
+        snapshot.reduced_type_counts[2],
+        snapshot.reduced_type_counts[10],
+        snapshot.reduced_type_counts[dy],
+        snapshot.reduced_type_counts[dz]
     );
     println!(
-        "[covhist] loose_obs_counts pos=[{},{},{}] vel=[{},{},{}] nhc_y={} nhc_z={}",
-        snapshot.loose_obs_counts[1],
-        snapshot.loose_obs_counts[2],
-        snapshot.loose_obs_counts[3],
-        snapshot.loose_obs_counts[4],
-        snapshot.loose_obs_counts[5],
-        snapshot.loose_obs_counts[6],
-        snapshot.loose_obs_counts[7],
-        snapshot.loose_obs_counts[8]
+        "[covhist] full_obs_counts pos=[{},{},{}] vel=[{},{},{}] nhc_y={} nhc_z={}",
+        snapshot.full_obs_counts[1],
+        snapshot.full_obs_counts[2],
+        snapshot.full_obs_counts[3],
+        snapshot.full_obs_counts[4],
+        snapshot.full_obs_counts[5],
+        snapshot.full_obs_counts[6],
+        snapshot.full_obs_counts[7],
+        snapshot.full_obs_counts[8]
     );
     println!(
-        "[covhist] loose_last_obs types={:?} mount_dx_deg=[{:.6},{:.6},{:.6}]",
-        loose.last_obs_types,
-        (loose.last_dx[21] as f64).to_degrees(),
-        (loose.last_dx[22] as f64).to_degrees(),
-        (loose.last_dx[23] as f64).to_degrees()
+        "[covhist] full_last_obs types={:?} mount_dx_deg=[{:.6},{:.6},{:.6}]",
+        full.last_obs_types,
+        (full.last_dx[21] as f64).to_degrees(),
+        (full.last_dx[22] as f64).to_degrees(),
+        (full.last_dx[23] as f64).to_degrees()
     );
-    if let Some(eskf) = &snapshot.eskf {
-        print_eskf_mount_dx_by_type("sum", eskf);
+    if let Some(reduced) = &snapshot.reduced {
+        print_reduced_mount_dx_by_type("sum", reduced);
     }
 }
 
-fn print_eskf_mount_dx_by_type(prefix: &str, eskf: &EskfState) {
-    for (label, idx) in selected_eskf_diag_types() {
+fn print_reduced_mount_dx_by_type(prefix: &str, reduced: &ReducedState) {
+    for (label, idx) in selected_reduced_diag_types() {
         println!(
-            "[covhist] eskf_mount_dx_{} type={} count={} sum_deg=[{:.6},{:.6},{:.6}] abs_sum_deg=[{:.6},{:.6},{:.6}]",
+            "[covhist] reduced_mount_dx_{} type={} count={} sum_deg=[{:.6},{:.6},{:.6}] abs_sum_deg=[{:.6},{:.6},{:.6}]",
             prefix,
             label,
-            eskf.update_diag.type_counts[idx],
-            (eskf.update_diag.sum_dx_mount_roll[idx] as f64).to_degrees(),
-            (eskf.update_diag.sum_dx_mount_pitch[idx] as f64).to_degrees(),
-            (eskf.update_diag.sum_dx_mount_yaw[idx] as f64).to_degrees(),
-            (eskf.update_diag.sum_abs_dx_mount_roll[idx] as f64).to_degrees(),
-            (eskf.update_diag.sum_abs_dx_mount_pitch[idx] as f64).to_degrees(),
-            (eskf.update_diag.sum_abs_dx_mount_yaw[idx] as f64).to_degrees(),
+            reduced.update_diag.type_counts[idx],
+            (reduced.update_diag.sum_dx_mount_roll[idx] as f64).to_degrees(),
+            (reduced.update_diag.sum_dx_mount_pitch[idx] as f64).to_degrees(),
+            (reduced.update_diag.sum_dx_mount_yaw[idx] as f64).to_degrees(),
+            (reduced.update_diag.sum_abs_dx_mount_roll[idx] as f64).to_degrees(),
+            (reduced.update_diag.sum_abs_dx_mount_pitch[idx] as f64).to_degrees(),
+            (reduced.update_diag.sum_abs_dx_mount_yaw[idx] as f64).to_degrees(),
         );
     }
 }
 
-fn selected_eskf_diag_types() -> [(&'static str, usize); 8] {
+fn selected_reduced_diag_types() -> [(&'static str, usize); 8] {
     [
         ("pos_xy", 0),
         ("pos_d", 8),
@@ -1889,44 +1894,44 @@ fn maybe_print_trace(
     event: &str,
     t_s: f64,
     fusion: &SensorFusion,
-    loose: &LooseFilter,
-    loose_ready: bool,
-    loose_obs_counts: [u32; 9],
+    full: &FullFilter,
+    full_ready: bool,
+    full_obs_counts: [u32; 9],
 ) {
     let Some([start_t_s, end_t_s]) = trace_window_abs else {
         return;
     };
-    if t_s < start_t_s || t_s > end_t_s || !loose_ready {
+    if t_s < start_t_s || t_s > end_t_s || !full_ready {
         return;
     }
-    let Some(eskf) = fusion.eskf() else {
+    let Some(reduced) = fusion.reduced() else {
         return;
     };
-    let eskf_counts = eskf.update_diag.type_counts;
+    let reduced_counts = reduced.update_diag.type_counts;
     if !trace.initialized {
-        trace.prev_eskf_counts = eskf_counts;
-        trace.prev_loose_counts = loose_obs_counts;
-        trace.prev_eskf_sum_dx_mount_roll = eskf.update_diag.sum_dx_mount_roll;
-        trace.prev_eskf_sum_dx_mount_pitch = eskf.update_diag.sum_dx_mount_pitch;
-        trace.prev_eskf_sum_dx_mount_yaw = eskf.update_diag.sum_dx_mount_yaw;
+        trace.prev_reduced_counts = reduced_counts;
+        trace.prev_full_counts = full_obs_counts;
+        trace.prev_reduced_sum_dx_mount_roll = reduced.update_diag.sum_dx_mount_roll;
+        trace.prev_reduced_sum_dx_mount_pitch = reduced.update_diag.sum_dx_mount_pitch;
+        trace.prev_reduced_sum_dx_mount_yaw = reduced.update_diag.sum_dx_mount_yaw;
         trace.initialized = true;
     }
 
-    let eskf_delta = count_delta(&eskf_counts, &trace.prev_eskf_counts);
-    let loose_delta = count_delta(&loose_obs_counts, &trace.prev_loose_counts);
-    let eskf_mount_roll_delta = f32_delta(
-        &eskf.update_diag.sum_dx_mount_roll,
-        &trace.prev_eskf_sum_dx_mount_roll,
+    let reduced_delta = count_delta(&reduced_counts, &trace.prev_reduced_counts);
+    let full_delta = count_delta(&full_obs_counts, &trace.prev_full_counts);
+    let reduced_mount_roll_delta = f32_delta(
+        &reduced.update_diag.sum_dx_mount_roll,
+        &trace.prev_reduced_sum_dx_mount_roll,
     );
-    let eskf_mount_pitch_delta = f32_delta(
-        &eskf.update_diag.sum_dx_mount_pitch,
-        &trace.prev_eskf_sum_dx_mount_pitch,
+    let reduced_mount_pitch_delta = f32_delta(
+        &reduced.update_diag.sum_dx_mount_pitch,
+        &trace.prev_reduced_sum_dx_mount_pitch,
     );
-    let eskf_mount_yaw_delta = f32_delta(
-        &eskf.update_diag.sum_dx_mount_yaw,
-        &trace.prev_eskf_sum_dx_mount_yaw,
+    let reduced_mount_yaw_delta = f32_delta(
+        &reduced.update_diag.sum_dx_mount_yaw,
+        &trace.prev_reduced_sum_dx_mount_yaw,
     );
-    let update_event = eskf_delta.iter().any(|v| *v > 0) || loose_delta.iter().any(|v| *v > 0);
+    let update_event = reduced_delta.iter().any(|v| *v > 0) || full_delta.iter().any(|v| *v > 0);
     let periodic = trace
         .last_trace_t_s
         .is_none_or(|last| t_s - last >= trace_interval_s.max(0.0));
@@ -1934,135 +1939,135 @@ fn maybe_print_trace(
         return;
     }
 
-    let loose_snap = LooseSnapshot {
-        nominal: *loose.nominal(),
-        p: *loose.covariance(),
-        pos_ecef: loose.shadow_pos_ecef(),
-        last_dx: *loose.last_dx(),
-        last_obs_types: loose.last_obs_types().to_vec(),
+    let full_snap = FullSnapshot {
+        nominal: *full.nominal(),
+        p: *full.covariance(),
+        pos_ecef: full.shadow_pos_ecef(),
+        last_dx: *full.last_dx(),
+        last_obs_types: full.last_obs_types().to_vec(),
     };
-    let p_loose_as_eskf = transform_loose_cov_to_eskf(&loose_snap, ref_gnss);
+    let p_full_as_reduced = transform_full_cov_to_reduced(&full_snap, ref_gnss);
     let rel_s = t_s - replay_start_t_s(replay).unwrap_or(0.0);
     let ref_mount = reference_mount_at(&replay.reference_mount, t_s);
     let ref_att = reference_attitude_at(&replay.reference_attitude, t_s);
-    let eskf_mount_qerr = ref_mount
+    let reduced_mount_qerr = ref_mount
         .map(|r| {
             quat_angle_deg(
                 as_q64([
-                    eskf.nominal.qcs0,
-                    eskf.nominal.qcs1,
-                    eskf.nominal.qcs2,
-                    eskf.nominal.qcs3,
+                    reduced.nominal.qcs0,
+                    reduced.nominal.qcs1,
+                    reduced.nominal.qcs2,
+                    reduced.nominal.qcs3,
                 ]),
                 r,
             )
         })
         .unwrap_or(f64::NAN);
-    let loose_mount_qerr = ref_mount
+    let full_mount_qerr = ref_mount
         .map(|r| {
             quat_angle_deg(
                 as_q64([
-                    loose_snap.nominal.qcs0,
-                    loose_snap.nominal.qcs1,
-                    loose_snap.nominal.qcs2,
-                    loose_snap.nominal.qcs3,
+                    full_snap.nominal.qcs0,
+                    full_snap.nominal.qcs1,
+                    full_snap.nominal.qcs2,
+                    full_snap.nominal.qcs3,
                 ]),
                 r,
             )
         })
         .unwrap_or(f64::NAN);
-    let eskf_att_qerr = ref_att
-        .map(|r| quat_angle_deg(eskf_att_q(eskf), r))
+    let reduced_att_qerr = ref_att
+        .map(|r| quat_angle_deg(reduced_att_q(reduced), r))
         .unwrap_or(f64::NAN);
-    let loose_att_qerr = ref_att
-        .map(|r| quat_angle_deg(loose_att_q_ned(&loose_snap, ref_gnss), r))
+    let full_att_qerr = ref_att
+        .map(|r| quat_angle_deg(full_att_q_ned(&full_snap, ref_gnss), r))
         .unwrap_or(f64::NAN);
-    let eskf_nhc = eskf_nhc_residual_yz(eskf);
-    let loose_nhc = loose_nhc_residual_yz(&loose_snap);
+    let reduced_nhc = reduced_nhc_residual_yz(reduced);
+    let full_nhc = full_nhc_residual_yz(&full_snap);
 
     println!(
-        "[covhist-trace] rel_s={:.3} event={} update={} d_eskf(pos_xy,pos_d,vel_xy,vel_d,nhc_y,nhc_z)=[{},{},{},{},{},{}] d_loose(pos,vel,nhc_y,nhc_z)=[{},{},{},{}] qerr_mount_deg=[{:.3},{:.3}] qerr_att_deg=[{:.3},{:.3}] nhc_yz_eskf=[{:.3},{:.3}] nhc_yz_loose=[{:.3},{:.3}]",
+        "[covhist-trace] rel_s={:.3} event={} update={} d_reduced(pos_xy,pos_d,vel_xy,vel_d,nhc_y,nhc_z)=[{},{},{},{},{},{}] d_full(pos,vel,nhc_y,nhc_z)=[{},{},{},{}] qerr_mount_deg=[{:.3},{:.3}] qerr_att_deg=[{:.3},{:.3}] nhc_yz_reduced=[{:.3},{:.3}] nhc_yz_full=[{:.3},{:.3}]",
         rel_s,
         event,
         update_event,
-        eskf_delta[0],
-        eskf_delta[8],
-        eskf_delta[1],
-        eskf_delta[9],
-        eskf_delta[DIAG_BODY_VEL_Y],
-        eskf_delta[DIAG_BODY_VEL_Z],
-        loose_delta[1] + loose_delta[2] + loose_delta[3],
-        loose_delta[4] + loose_delta[5] + loose_delta[6],
-        loose_delta[7],
-        loose_delta[8],
-        eskf_mount_qerr,
-        loose_mount_qerr,
-        eskf_att_qerr,
-        loose_att_qerr,
-        eskf_nhc[0],
-        eskf_nhc[1],
-        loose_nhc[0],
-        loose_nhc[1],
+        reduced_delta[0],
+        reduced_delta[8],
+        reduced_delta[1],
+        reduced_delta[9],
+        reduced_delta[DIAG_BODY_VEL_Y],
+        reduced_delta[DIAG_BODY_VEL_Z],
+        full_delta[1] + full_delta[2] + full_delta[3],
+        full_delta[4] + full_delta[5] + full_delta[6],
+        full_delta[7],
+        full_delta[8],
+        reduced_mount_qerr,
+        full_mount_qerr,
+        reduced_att_qerr,
+        full_att_qerr,
+        reduced_nhc[0],
+        reduced_nhc[1],
+        full_nhc[0],
+        full_nhc[1],
     );
     println!(
-        "[covhist-trace] rel_s={:.3} sig_mount_deg eskf=[{:.3},{:.3},{:.3}] loose=[{:.3},{:.3},{:.3}] sig_att_deg eskf=[{:.3},{:.3},{:.3}] loose=[{:.3},{:.3},{:.3}]",
+        "[covhist-trace] rel_s={:.3} sig_mount_deg reduced=[{:.3},{:.3},{:.3}] full=[{:.3},{:.3},{:.3}] sig_att_deg reduced=[{:.3},{:.3},{:.3}] full=[{:.3},{:.3},{:.3}]",
         rel_s,
-        sigma_deg(&eskf.p, 15),
-        sigma_deg(&eskf.p, 16),
-        sigma_deg(&eskf.p, 17),
-        sigma_deg(&p_loose_as_eskf, 15),
-        sigma_deg(&p_loose_as_eskf, 16),
-        sigma_deg(&p_loose_as_eskf, 17),
-        sigma_deg(&eskf.p, 0),
-        sigma_deg(&eskf.p, 1),
-        sigma_deg(&eskf.p, 2),
-        sigma_deg(&p_loose_as_eskf, 0),
-        sigma_deg(&p_loose_as_eskf, 1),
-        sigma_deg(&p_loose_as_eskf, 2),
+        sigma_deg(&reduced.p, 15),
+        sigma_deg(&reduced.p, 16),
+        sigma_deg(&reduced.p, 17),
+        sigma_deg(&p_full_as_reduced, 15),
+        sigma_deg(&p_full_as_reduced, 16),
+        sigma_deg(&p_full_as_reduced, 17),
+        sigma_deg(&reduced.p, 0),
+        sigma_deg(&reduced.p, 1),
+        sigma_deg(&reduced.p, 2),
+        sigma_deg(&p_full_as_reduced, 0),
+        sigma_deg(&p_full_as_reduced, 1),
+        sigma_deg(&p_full_as_reduced, 2),
     );
     println!(
-        "[covhist-trace] rel_s={:.3} d_eskf_mount_dx_deg type_order=[pos_xy,pos_d,vel_xy,vel_d,nhc_y,nhc_z] roll=[{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}] pitch=[{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}] yaw=[{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}]",
+        "[covhist-trace] rel_s={:.3} d_reduced_mount_dx_deg type_order=[pos_xy,pos_d,vel_xy,vel_d,nhc_y,nhc_z] roll=[{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}] pitch=[{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}] yaw=[{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}]",
         rel_s,
-        (eskf_mount_roll_delta[0] as f64).to_degrees(),
-        (eskf_mount_roll_delta[8] as f64).to_degrees(),
-        (eskf_mount_roll_delta[1] as f64).to_degrees(),
-        (eskf_mount_roll_delta[9] as f64).to_degrees(),
-        (eskf_mount_roll_delta[DIAG_BODY_VEL_Y] as f64).to_degrees(),
-        (eskf_mount_roll_delta[DIAG_BODY_VEL_Z] as f64).to_degrees(),
-        (eskf_mount_pitch_delta[0] as f64).to_degrees(),
-        (eskf_mount_pitch_delta[8] as f64).to_degrees(),
-        (eskf_mount_pitch_delta[1] as f64).to_degrees(),
-        (eskf_mount_pitch_delta[9] as f64).to_degrees(),
-        (eskf_mount_pitch_delta[DIAG_BODY_VEL_Y] as f64).to_degrees(),
-        (eskf_mount_pitch_delta[DIAG_BODY_VEL_Z] as f64).to_degrees(),
-        (eskf_mount_yaw_delta[0] as f64).to_degrees(),
-        (eskf_mount_yaw_delta[8] as f64).to_degrees(),
-        (eskf_mount_yaw_delta[1] as f64).to_degrees(),
-        (eskf_mount_yaw_delta[9] as f64).to_degrees(),
-        (eskf_mount_yaw_delta[DIAG_BODY_VEL_Y] as f64).to_degrees(),
-        (eskf_mount_yaw_delta[DIAG_BODY_VEL_Z] as f64).to_degrees(),
+        (reduced_mount_roll_delta[0] as f64).to_degrees(),
+        (reduced_mount_roll_delta[8] as f64).to_degrees(),
+        (reduced_mount_roll_delta[1] as f64).to_degrees(),
+        (reduced_mount_roll_delta[9] as f64).to_degrees(),
+        (reduced_mount_roll_delta[DIAG_BODY_VEL_Y] as f64).to_degrees(),
+        (reduced_mount_roll_delta[DIAG_BODY_VEL_Z] as f64).to_degrees(),
+        (reduced_mount_pitch_delta[0] as f64).to_degrees(),
+        (reduced_mount_pitch_delta[8] as f64).to_degrees(),
+        (reduced_mount_pitch_delta[1] as f64).to_degrees(),
+        (reduced_mount_pitch_delta[9] as f64).to_degrees(),
+        (reduced_mount_pitch_delta[DIAG_BODY_VEL_Y] as f64).to_degrees(),
+        (reduced_mount_pitch_delta[DIAG_BODY_VEL_Z] as f64).to_degrees(),
+        (reduced_mount_yaw_delta[0] as f64).to_degrees(),
+        (reduced_mount_yaw_delta[8] as f64).to_degrees(),
+        (reduced_mount_yaw_delta[1] as f64).to_degrees(),
+        (reduced_mount_yaw_delta[9] as f64).to_degrees(),
+        (reduced_mount_yaw_delta[DIAG_BODY_VEL_Y] as f64).to_degrees(),
+        (reduced_mount_yaw_delta[DIAG_BODY_VEL_Z] as f64).to_degrees(),
     );
     println!(
         "[covhist-trace] rel_s={:.3} corr bax_yaw=[{:.3},{:.3}] bay_yaw=[{:.3},{:.3}] attx_mountpitch=[{:.3},{:.3}] atty_mountyaw=[{:.3},{:.3}] bgx_mountroll=[{:.3},{:.3}]",
         rel_s,
-        corr_from_cov(&eskf.p, 12, 17),
-        corr_from_cov(&p_loose_as_eskf, 12, 17),
-        corr_from_cov(&eskf.p, 13, 17),
-        corr_from_cov(&p_loose_as_eskf, 13, 17),
-        corr_from_cov(&eskf.p, 0, 16),
-        corr_from_cov(&p_loose_as_eskf, 0, 16),
-        corr_from_cov(&eskf.p, 1, 17),
-        corr_from_cov(&p_loose_as_eskf, 1, 17),
-        corr_from_cov(&eskf.p, 9, 15),
-        corr_from_cov(&p_loose_as_eskf, 9, 15),
+        corr_from_cov(&reduced.p, 12, 17),
+        corr_from_cov(&p_full_as_reduced, 12, 17),
+        corr_from_cov(&reduced.p, 13, 17),
+        corr_from_cov(&p_full_as_reduced, 13, 17),
+        corr_from_cov(&reduced.p, 0, 16),
+        corr_from_cov(&p_full_as_reduced, 0, 16),
+        corr_from_cov(&reduced.p, 1, 17),
+        corr_from_cov(&p_full_as_reduced, 1, 17),
+        corr_from_cov(&reduced.p, 9, 15),
+        corr_from_cov(&p_full_as_reduced, 9, 15),
     );
 
     trace.last_trace_t_s = Some(t_s);
-    trace.prev_eskf_counts = eskf_counts;
-    trace.prev_loose_counts = loose_obs_counts;
-    trace.prev_eskf_sum_dx_mount_roll = eskf.update_diag.sum_dx_mount_roll;
-    trace.prev_eskf_sum_dx_mount_pitch = eskf.update_diag.sum_dx_mount_pitch;
-    trace.prev_eskf_sum_dx_mount_yaw = eskf.update_diag.sum_dx_mount_yaw;
+    trace.prev_reduced_counts = reduced_counts;
+    trace.prev_full_counts = full_obs_counts;
+    trace.prev_reduced_sum_dx_mount_roll = reduced.update_diag.sum_dx_mount_roll;
+    trace.prev_reduced_sum_dx_mount_pitch = reduced.update_diag.sum_dx_mount_pitch;
+    trace.prev_reduced_sum_dx_mount_yaw = reduced.update_diag.sum_dx_mount_yaw;
 }
 
 fn count_delta<const N: usize>(current: &[u32; N], previous: &[u32; N]) -> [u32; N] {
@@ -2124,20 +2129,20 @@ fn block_rms_rel_diff(
     (sum / n).sqrt()
 }
 
-fn transform_loose_cov_to_eskf(
-    loose: &LooseSnapshot,
+fn transform_full_cov_to_reduced(
+    full: &FullSnapshot,
     ref_gnss: GenericGnssSample,
 ) -> [[f32; 18]; 18] {
-    let mut t = [[0.0f32; LOOSE_ERROR_STATES]; 18];
+    let mut t = [[0.0f32; FULL_ERROR_STATES]; 18];
     let q_es = as_q64([
-        loose.nominal.q0,
-        loose.nominal.q1,
-        loose.nominal.q2,
-        loose.nominal.q3,
+        full.nominal.q0,
+        full.nominal.q1,
+        full.nominal.q2,
+        full.nominal.q3,
     ]);
     let c_es = quat_to_rot(q_es);
     let pos_ned = ecef_to_ned(
-        loose.pos_ecef,
+        full.pos_ecef,
         lla_to_ecef(ref_gnss.lat_deg, ref_gnss.lon_deg, ref_gnss.height_m),
         ref_gnss.lat_deg,
         ref_gnss.lon_deg,
@@ -2152,9 +2157,9 @@ fn transform_loose_cov_to_eskf(
     );
     let c_ne = ecef_to_ned_matrix(lat, lon);
 
-    for eskf_i in 0..3 {
-        for loose_i in 0..3 {
-            t[eskf_i][6 + loose_i] = c_es[loose_i][eskf_i] as f32;
+    for reduced_i in 0..3 {
+        for full_i in 0..3 {
+            t[reduced_i][6 + full_i] = c_es[full_i][reduced_i] as f32;
         }
     }
     for r in 0..3 {
@@ -2173,9 +2178,9 @@ fn transform_loose_cov_to_eskf(
     for i in 0..18 {
         for j in 0..18 {
             let mut v = 0.0f32;
-            for a in 0..LOOSE_ERROR_STATES {
-                for b in 0..LOOSE_ERROR_STATES {
-                    v += t[i][a] * loose.p[a][b] * t[j][b];
+            for a in 0..FULL_ERROR_STATES {
+                for b in 0..FULL_ERROR_STATES {
+                    v += t[i][a] * full.p[a][b] * t[j][b];
                 }
             }
             out[i][j] = v;
@@ -2184,20 +2189,20 @@ fn transform_loose_cov_to_eskf(
     out
 }
 
-fn transform_loose_dx_to_eskf(
-    loose: &LooseSnapshot,
-    dx: &[f32; LOOSE_ERROR_STATES],
+fn transform_full_dx_to_reduced(
+    full: &FullSnapshot,
+    dx: &[f32; FULL_ERROR_STATES],
     ref_gnss: GenericGnssSample,
 ) -> [f32; 18] {
     let q_es = as_q64([
-        loose.nominal.q0,
-        loose.nominal.q1,
-        loose.nominal.q2,
-        loose.nominal.q3,
+        full.nominal.q0,
+        full.nominal.q1,
+        full.nominal.q2,
+        full.nominal.q3,
     ]);
     let c_es = quat_to_rot(q_es);
     let pos_ned = ecef_to_ned(
-        loose.pos_ecef,
+        full.pos_ecef,
         lla_to_ecef(ref_gnss.lat_deg, ref_gnss.lon_deg, ref_gnss.height_m),
         ref_gnss.lat_deg,
         ref_gnss.lon_deg,
@@ -2213,9 +2218,9 @@ fn transform_loose_dx_to_eskf(
     let c_ne = ecef_to_ned_matrix(lat, lon);
 
     let mut out = [0.0f32; 18];
-    for eskf_i in 0..3 {
-        for loose_i in 0..3 {
-            out[eskf_i] += c_es[loose_i][eskf_i] as f32 * dx[6 + loose_i];
+    for reduced_i in 0..3 {
+        for full_i in 0..3 {
+            out[reduced_i] += c_es[full_i][reduced_i] as f32 * dx[6 + full_i];
         }
     }
     for r in 0..3 {
@@ -2234,18 +2239,18 @@ fn transform_loose_dx_to_eskf(
 
 fn transition_snapshot(
     fusion: &SensorFusion,
-    loose: &LooseFilter,
+    full: &FullFilter,
     curr: GenericImuSample,
     prev: GenericImuSample,
     dt: f64,
     ref_gnss: GenericGnssSample,
 ) -> Option<TransitionSnapshot> {
-    let eskf = fusion.eskf()?;
+    let reduced = fusion.reduced()?;
     if dt <= 0.0 || dt > 1.0 || !dt.is_finite() {
         return None;
     }
 
-    let eskf_imu = EskfImuDelta {
+    let reduced_imu = ReducedImuDelta {
         dax: (curr.gyro_radps[0] * dt) as f32,
         day: (curr.gyro_radps[1] * dt) as f32,
         daz: (curr.gyro_radps[2] * dt) as f32,
@@ -2254,106 +2259,106 @@ fn transition_snapshot(
         dvz: (curr.accel_mps2[2] * dt) as f32,
         dt: dt as f32,
     };
-    let f_eskf = generated_eskf::error_transition_with_gravity(
-        &eskf.nominal,
-        eskf_imu,
-        generated_eskf::GRAVITY_MSS,
+    let f_reduced = generated_reduced::error_transition_with_gravity(
+        &reduced.nominal,
+        reduced_imu,
+        generated_reduced::GRAVITY_MSS,
     )
     .0;
-    let loose_imu = loose_imu_delta_from_vehicle(
+    let full_imu = full_imu_delta_from_vehicle(
         prev.gyro_radps,
         prev.accel_mps2,
         curr.gyro_radps,
         curr.accel_mps2,
         dt,
     );
-    let (f_loose, _) = generated_loose::error_transition(loose.nominal(), loose_imu);
-    let loose_snap = LooseSnapshot {
-        nominal: *loose.nominal(),
-        p: *loose.covariance(),
-        pos_ecef: loose.shadow_pos_ecef(),
-        last_dx: *loose.last_dx(),
-        last_obs_types: loose.last_obs_types().to_vec(),
+    let (f_full, _) = generated_full::error_transition(full.nominal(), full_imu);
+    let full_snap = FullSnapshot {
+        nominal: *full.nominal(),
+        p: *full.covariance(),
+        pos_ecef: full.shadow_pos_ecef(),
+        last_dx: *full.last_dx(),
+        last_obs_types: full.last_obs_types().to_vec(),
     };
 
     let mut out = TransitionSnapshot {
         dt_s: dt as f32,
-        eskf_mount_to_att: [[0.0; 3]; 3],
-        eskf_mount_to_vel: [[0.0; 3]; 3],
-        eskf_mount_to_pos: [[0.0; 3]; 3],
-        loose_mount_to_att: [[0.0; 3]; 3],
-        loose_mount_to_vel: [[0.0; 3]; 3],
-        loose_mount_to_pos: [[0.0; 3]; 3],
+        reduced_mount_to_att: [[0.0; 3]; 3],
+        reduced_mount_to_vel: [[0.0; 3]; 3],
+        reduced_mount_to_pos: [[0.0; 3]; 3],
+        full_mount_to_att: [[0.0; 3]; 3],
+        full_mount_to_vel: [[0.0; 3]; 3],
+        full_mount_to_pos: [[0.0; 3]; 3],
     };
 
     for mount_axis in 0..3 {
         for row in 0..3 {
-            out.eskf_mount_to_att[row][mount_axis] = f_eskf[row][15 + mount_axis];
-            out.eskf_mount_to_vel[row][mount_axis] = f_eskf[3 + row][15 + mount_axis];
-            out.eskf_mount_to_pos[row][mount_axis] = f_eskf[6 + row][15 + mount_axis];
+            out.reduced_mount_to_att[row][mount_axis] = f_reduced[row][15 + mount_axis];
+            out.reduced_mount_to_vel[row][mount_axis] = f_reduced[3 + row][15 + mount_axis];
+            out.reduced_mount_to_pos[row][mount_axis] = f_reduced[6 + row][15 + mount_axis];
         }
 
-        let mut loose_col = [0.0f32; LOOSE_ERROR_STATES];
-        for row in 0..LOOSE_ERROR_STATES {
-            loose_col[row] = f_loose[row][21 + mount_axis];
+        let mut full_col = [0.0f32; FULL_ERROR_STATES];
+        for row in 0..FULL_ERROR_STATES {
+            full_col[row] = f_full[row][21 + mount_axis];
         }
-        let loose_as_eskf = transform_loose_dx_to_eskf(&loose_snap, &loose_col, ref_gnss);
+        let full_as_reduced = transform_full_dx_to_reduced(&full_snap, &full_col, ref_gnss);
         for row in 0..3 {
-            out.loose_mount_to_att[row][mount_axis] = loose_as_eskf[row];
-            out.loose_mount_to_vel[row][mount_axis] = loose_as_eskf[3 + row];
-            out.loose_mount_to_pos[row][mount_axis] = loose_as_eskf[6 + row];
+            out.full_mount_to_att[row][mount_axis] = full_as_reduced[row];
+            out.full_mount_to_vel[row][mount_axis] = full_as_reduced[3 + row];
+            out.full_mount_to_pos[row][mount_axis] = full_as_reduced[6 + row];
         }
     }
     Some(out)
 }
 
 fn print_transition_summary(transition: TransitionSnapshot) {
-    for (label, eskf, loose) in [
+    for (label, reduced, full) in [
         (
             "att",
-            transition.eskf_mount_to_att,
-            transition.loose_mount_to_att,
+            transition.reduced_mount_to_att,
+            transition.full_mount_to_att,
         ),
         (
             "vel",
-            transition.eskf_mount_to_vel,
-            transition.loose_mount_to_vel,
+            transition.reduced_mount_to_vel,
+            transition.full_mount_to_vel,
         ),
         (
             "pos",
-            transition.eskf_mount_to_pos,
-            transition.loose_mount_to_pos,
+            transition.reduced_mount_to_pos,
+            transition.full_mount_to_pos,
         ),
     ] {
         println!(
-            "[covhist] transition_mount_block block={} dt={:.6} rms_abs_diff={:.6e} eskf_col_norms=[{:.6e},{:.6e},{:.6e}] loose_col_norms=[{:.6e},{:.6e},{:.6e}]",
+            "[covhist] transition_mount_block block={} dt={:.6} rms_abs_diff={:.6e} reduced_col_norms=[{:.6e},{:.6e},{:.6e}] full_col_norms=[{:.6e},{:.6e},{:.6e}]",
             label,
             transition.dt_s,
-            mat3_rms_abs_diff(&eskf, &loose),
-            col_norm3(&eskf, 0),
-            col_norm3(&eskf, 1),
-            col_norm3(&eskf, 2),
-            col_norm3(&loose, 0),
-            col_norm3(&loose, 1),
-            col_norm3(&loose, 2),
+            mat3_rms_abs_diff(&reduced, &full),
+            col_norm3(&reduced, 0),
+            col_norm3(&reduced, 1),
+            col_norm3(&reduced, 2),
+            col_norm3(&full, 0),
+            col_norm3(&full, 1),
+            col_norm3(&full, 2),
         );
     }
     for mount_axis in 0..3 {
         println!(
-            "[covhist] transition_mount_col axis={} eskf_vel=[{:.6e},{:.6e},{:.6e}] loose_vel=[{:.6e},{:.6e},{:.6e}] eskf_pos=[{:.6e},{:.6e},{:.6e}] loose_pos=[{:.6e},{:.6e},{:.6e}]",
+            "[covhist] transition_mount_col axis={} reduced_vel=[{:.6e},{:.6e},{:.6e}] full_vel=[{:.6e},{:.6e},{:.6e}] reduced_pos=[{:.6e},{:.6e},{:.6e}] full_pos=[{:.6e},{:.6e},{:.6e}]",
             ["roll", "pitch", "yaw"][mount_axis],
-            transition.eskf_mount_to_vel[0][mount_axis],
-            transition.eskf_mount_to_vel[1][mount_axis],
-            transition.eskf_mount_to_vel[2][mount_axis],
-            transition.loose_mount_to_vel[0][mount_axis],
-            transition.loose_mount_to_vel[1][mount_axis],
-            transition.loose_mount_to_vel[2][mount_axis],
-            transition.eskf_mount_to_pos[0][mount_axis],
-            transition.eskf_mount_to_pos[1][mount_axis],
-            transition.eskf_mount_to_pos[2][mount_axis],
-            transition.loose_mount_to_pos[0][mount_axis],
-            transition.loose_mount_to_pos[1][mount_axis],
-            transition.loose_mount_to_pos[2][mount_axis],
+            transition.reduced_mount_to_vel[0][mount_axis],
+            transition.reduced_mount_to_vel[1][mount_axis],
+            transition.reduced_mount_to_vel[2][mount_axis],
+            transition.full_mount_to_vel[0][mount_axis],
+            transition.full_mount_to_vel[1][mount_axis],
+            transition.full_mount_to_vel[2][mount_axis],
+            transition.reduced_mount_to_pos[0][mount_axis],
+            transition.reduced_mount_to_pos[1][mount_axis],
+            transition.reduced_mount_to_pos[2][mount_axis],
+            transition.full_mount_to_pos[0][mount_axis],
+            transition.full_mount_to_pos[1][mount_axis],
+            transition.full_mount_to_pos[2][mount_axis],
         );
     }
 }
@@ -2361,8 +2366,8 @@ fn print_transition_summary(transition: TransitionSnapshot) {
 fn print_common_gnss_gain_summary(
     snapshot: &Snapshot,
     replay: &Replay,
-    p_eskf: &[[f32; 18]; 18],
-    p_loose: &[[f32; 18]; 18],
+    p_reduced: &[[f32; 18]; 18],
+    p_full: &[[f32; 18]; 18],
 ) {
     let Some((gnss, dt_since_gnss)) = nearest_gnss_with_period(&replay.gnss, snapshot.t_s) else {
         return;
@@ -2391,20 +2396,20 @@ fn print_common_gnss_gain_summary(
         ),
     ];
     for (label, state, r) in rows {
-        let eskf_gain = scalar_mount_gain(p_eskf, state, r);
-        let loose_gain = scalar_mount_gain(p_loose, state, r);
+        let reduced_gain = scalar_mount_gain(p_reduced, state, r);
+        let full_gain = scalar_mount_gain(p_full, state, r);
         println!(
-            "[covhist] common_gnss_mount_gain row={} dt_gnss={:.3} r={:.6e} eskf=[{:.6e},{:.6e},{:.6e}] loose=[{:.6e},{:.6e},{:.6e}] norm_ratio={:.3}",
+            "[covhist] common_gnss_mount_gain row={} dt_gnss={:.3} r={:.6e} reduced=[{:.6e},{:.6e},{:.6e}] full=[{:.6e},{:.6e},{:.6e}] norm_ratio={:.3}",
             label,
             dt_since_gnss,
             r,
-            eskf_gain[0],
-            eskf_gain[1],
-            eskf_gain[2],
-            loose_gain[0],
-            loose_gain[1],
-            loose_gain[2],
-            norm3(eskf_gain) / norm3(loose_gain).max(1.0e-12),
+            reduced_gain[0],
+            reduced_gain[1],
+            reduced_gain[2],
+            full_gain[0],
+            full_gain[1],
+            full_gain[2],
+            norm3(reduced_gain) / norm3(full_gain).max(1.0e-12),
         );
     }
 }
@@ -2463,12 +2468,12 @@ fn col_norm3(a: &[[f32; 3]; 3], col: usize) -> f64 {
     sum.sqrt()
 }
 
-fn default_loose_p_diag(
+fn default_full_p_diag(
     gnss: GenericGnssSample,
-    cfg: EkfCompareConfig,
-) -> [f32; LOOSE_ERROR_STATES] {
-    let mut p = [1.0_f32; LOOSE_ERROR_STATES];
-    let init = cfg.loose_init;
+    cfg: FilterCompareConfig,
+) -> [f32; FULL_ERROR_STATES] {
+    let mut p = [1.0_f32; FULL_ERROR_STATES];
+    let init = cfg.full_init;
     let pos_n_sigma = (gnss.pos_std_m[0] as f32).max(init.pos_min_sigma_m);
     let pos_e_sigma = (gnss.pos_std_m[1] as f32).max(init.pos_min_sigma_m);
     let pos_d_sigma = (gnss.pos_std_m[2] as f32).max(init.pos_min_sigma_m);
@@ -2509,14 +2514,14 @@ fn default_loose_p_diag(
     p
 }
 
-fn loose_imu_delta_from_vehicle(
+fn full_imu_delta_from_vehicle(
     prev_gyro_radps: [f64; 3],
     prev_accel_mps2: [f64; 3],
     curr_gyro_radps: [f64; 3],
     curr_accel_mps2: [f64; 3],
     dt: f64,
-) -> LooseImuDelta {
-    LooseImuDelta {
+) -> FullImuDelta {
+    FullImuDelta {
         dax_1: (prev_gyro_radps[0] * dt) as f32,
         day_1: (prev_gyro_radps[1] * dt) as f32,
         daz_1: (prev_gyro_radps[2] * dt) as f32,
@@ -2533,18 +2538,18 @@ fn loose_imu_delta_from_vehicle(
     }
 }
 
-fn eskf_att_q(eskf: &EskfState) -> [f64; 4] {
+fn reduced_att_q(reduced: &ReducedState) -> [f64; 4] {
     as_q64([
-        eskf.nominal.q0,
-        eskf.nominal.q1,
-        eskf.nominal.q2,
-        eskf.nominal.q3,
+        reduced.nominal.q0,
+        reduced.nominal.q1,
+        reduced.nominal.q2,
+        reduced.nominal.q3,
     ])
 }
 
-fn loose_att_q_ned(loose: &LooseSnapshot, ref_gnss: GenericGnssSample) -> [f64; 4] {
+fn full_att_q_ned(full: &FullSnapshot, ref_gnss: GenericGnssSample) -> [f64; 4] {
     let pos_ned = ecef_to_ned(
-        loose.pos_ecef,
+        full.pos_ecef,
         lla_to_ecef(ref_gnss.lat_deg, ref_gnss.lon_deg, ref_gnss.height_m),
         ref_gnss.lat_deg,
         ref_gnss.lon_deg,
@@ -2560,10 +2565,10 @@ fn loose_att_q_ned(loose: &LooseSnapshot, ref_gnss: GenericGnssSample) -> [f64; 
     quat_mul(
         quat_ecef_to_ned(lat, lon),
         as_q64([
-            loose.nominal.q0,
-            loose.nominal.q1,
-            loose.nominal.q2,
-            loose.nominal.q3,
+            full.nominal.q0,
+            full.nominal.q1,
+            full.nominal.q2,
+            full.nominal.q3,
         ]),
     )
 }
@@ -2573,7 +2578,7 @@ fn reference_mount_at(samples: &[GenericReferenceRpySample], t_s: f64) -> Option
         .map(|s| reference_mount_rpy_to_q_vb([s.roll_deg, s.pitch_deg, s.yaw_deg]))
 }
 
-fn reference_mount_seed_q_vb(replay: &Replay, mode: EkfImuSource) -> Option<[f32; 4]> {
+fn reference_mount_seed_q_vb(replay: &Replay, mode: MountSourceMode) -> Option<[f32; 4]> {
     if !mode.uses_ref_mount() {
         return None;
     }
@@ -2620,26 +2625,26 @@ fn nearest_rpy(
     }
 }
 
-fn eskf_nhc_residual_yz(eskf: &EskfState) -> [f64; 2] {
+fn reduced_nhc_residual_yz(reduced: &ReducedState) -> [f64; 2] {
     let v = vehicle_velocity_from_q(
         as_q64([
-            eskf.nominal.q0,
-            eskf.nominal.q1,
-            eskf.nominal.q2,
-            eskf.nominal.q3,
+            reduced.nominal.q0,
+            reduced.nominal.q1,
+            reduced.nominal.q2,
+            reduced.nominal.q3,
         ]),
         [
-            eskf.nominal.vn as f64,
-            eskf.nominal.ve as f64,
-            eskf.nominal.vd as f64,
+            reduced.nominal.vn as f64,
+            reduced.nominal.ve as f64,
+            reduced.nominal.vd as f64,
         ],
     );
     [-v[1], -v[2]]
 }
 
-fn loose_nhc_residual_yz(loose: &LooseSnapshot) -> [f64; 2] {
-    let (y, _) = generated_loose::nhc_y(&loose.nominal);
-    let (z, _) = generated_loose::nhc_z(&loose.nominal);
+fn full_nhc_residual_yz(full: &FullSnapshot) -> [f64; 2] {
+    let (y, _) = generated_full::nhc_y(&full.nominal);
+    let (z, _) = generated_full::nhc_z(&full.nominal);
     [-(y as f64), -(z as f64)]
 }
 

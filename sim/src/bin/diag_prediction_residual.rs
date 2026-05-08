@@ -1,9 +1,9 @@
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
-use sensor_fusion::ekf::PredictNoise;
-use sensor_fusion::eskf_types::{EskfGnssSample, EskfImuDelta};
-use sensor_fusion::loose::{LooseFilter, LooseImuDelta, LoosePredictNoise};
-use sensor_fusion::rust_eskf::RustEskf;
+use sensor_fusion::ProcessNoise;
+use sensor_fusion::full::{FullFilter, FullImuDelta};
+use sensor_fusion::reduced::RustReduced;
+use sensor_fusion::reduced::{ReducedGnssSample, ReducedImuDelta};
 use sim::eval::gnss_ins::{as_q64, quat_angle_deg, quat_conj, quat_mul};
 use sim::synthetic::gnss_ins_path::{MotionProfile, PathGenConfig, generate};
 use sim::visualizer::math::lla_to_ecef;
@@ -32,12 +32,12 @@ struct Args {
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum FilterArg {
     Both,
-    Eskf,
-    Loose,
+    Reduced,
+    Full,
 }
 
 #[derive(Clone, Copy, Debug)]
-enum EskfInput {
+enum ReducedInput {
     Start,
     End,
     Trapezoid,
@@ -45,7 +45,7 @@ enum EskfInput {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum LooseInput {
+enum FullInput {
     StartStart,
     StartEnd,
     EndEnd,
@@ -84,47 +84,47 @@ fn main() -> Result<()> {
         generated.imu.len(),
         generated.truth.last().map_or(0.0, |s| s.t_s)
     );
-    if matches!(args.filter, FilterArg::Both | FilterArg::Eskf) {
+    if matches!(args.filter, FilterArg::Both | FilterArg::Reduced) {
         for mode in [
-            EskfInput::Start,
-            EskfInput::End,
-            EskfInput::Trapezoid,
-            EskfInput::LaggedTrapezoid,
+            ReducedInput::Start,
+            ReducedInput::End,
+            ReducedInput::Trapezoid,
+            ReducedInput::LaggedTrapezoid,
         ] {
-            let summary = run_eskf(&generated, q_mount, mode);
-            print_summary(&format!("ESKF {mode:?}"), summary);
+            let summary = run_reduced(&generated, q_mount, mode);
+            print_summary(&format!("Reduced {mode:?}"), summary);
         }
     }
-    if matches!(args.filter, FilterArg::Both | FilterArg::Loose) {
+    if matches!(args.filter, FilterArg::Both | FilterArg::Full) {
         for mode in [
-            LooseInput::StartStart,
-            LooseInput::StartEnd,
-            LooseInput::EndEnd,
-            LooseInput::LaggedStartEnd,
+            FullInput::StartStart,
+            FullInput::StartEnd,
+            FullInput::EndEnd,
+            FullInput::LaggedStartEnd,
         ] {
-            let summary = run_loose(&generated, q_mount, mode);
-            print_summary(&format!("Loose {mode:?}"), summary);
+            let summary = run_full(&generated, q_mount, mode);
+            print_summary(&format!("Full {mode:?}"), summary);
         }
     }
     Ok(())
 }
 
-fn run_eskf(
+fn run_reduced(
     generated: &sim::synthetic::gnss_ins_path::GeneratedPath,
     q_mount: [f64; 4],
-    mode: EskfInput,
+    mode: ReducedInput,
 ) -> Summary {
     let first = generated.truth[0];
-    let mut eskf = RustEskf::new(PredictNoise::default());
-    eskf.set_gravity_mss(normal_gravity_mss(first.lat_deg, first.height_m));
-    eskf.init_nominal_from_gnss(
+    let mut reduced = RustReduced::new(ProcessNoise::default());
+    reduced.set_gravity_mss(normal_gravity_mss(first.lat_deg, first.height_m));
+    reduced.init_nominal_from_gnss(
         [
             first.q_bn[0] as f32,
             first.q_bn[1] as f32,
             first.q_bn[2] as f32,
             first.q_bn[3] as f32,
         ],
-        EskfGnssSample {
+        ReducedGnssSample {
             t_s: first.t_s as f32,
             pos_ned_m: [0.0; 3],
             vel_ned_mps: [
@@ -138,7 +138,7 @@ fn run_eskf(
         },
     );
     {
-        let n = &mut eskf.raw_mut().nominal;
+        let n = &mut reduced.raw_mut().nominal;
         n.qcs0 = q_mount[0] as f32;
         n.qcs1 = q_mount[1] as f32;
         n.qcs2 = q_mount[2] as f32;
@@ -155,15 +155,15 @@ fn run_eskf(
             continue;
         }
         let (gyro_raw, accel_raw) = match mode {
-            EskfInput::Start => (
+            ReducedInput::Start => (
                 mounted_gyro(generated.imu[i].gyro_vehicle_radps, q_mount),
                 mounted_accel(generated.imu[i].accel_vehicle_mps2, q_mount),
             ),
-            EskfInput::End => (
+            ReducedInput::End => (
                 mounted_gyro(generated.imu[i + 1].gyro_vehicle_radps, q_mount),
                 mounted_accel(generated.imu[i + 1].accel_vehicle_mps2, q_mount),
             ),
-            EskfInput::Trapezoid => (
+            ReducedInput::Trapezoid => (
                 mounted_gyro(generated.imu[i + 1].gyro_vehicle_radps, q_mount),
                 scale3(
                     add3(
@@ -173,7 +173,7 @@ fn run_eskf(
                     0.5,
                 ),
             ),
-            EskfInput::LaggedTrapezoid => {
+            ReducedInput::LaggedTrapezoid => {
                 let prev_i = i.saturating_sub(1);
                 (
                     mounted_gyro(generated.imu[i].gyro_vehicle_radps, q_mount),
@@ -188,23 +188,23 @@ fn run_eskf(
             }
         };
         let truth_prev = generated.truth[i];
-        let (gyro_predict, coriolis_delta_v_n) = eskf_navigation_rate_corrections(
-            &eskf,
+        let (gyro_predict, coriolis_delta_v_n) = reduced_navigation_rate_corrections(
+            &reduced,
             truth_prev.lat_deg,
             truth_prev.height_m,
             dt,
             gyro_raw,
         );
-        let imu = eskf_imu_delta(gyro_predict, accel_raw, dt);
-        eskf.predict(imu);
+        let imu = reduced_imu_delta(gyro_predict, accel_raw, dt);
+        reduced.predict(imu);
         {
-            let n = &mut eskf.raw_mut().nominal;
+            let n = &mut reduced.raw_mut().nominal;
             n.vn += coriolis_delta_v_n[0] as f32;
             n.ve += coriolis_delta_v_n[1] as f32;
             n.vd += coriolis_delta_v_n[2] as f32;
         }
         let truth = generated.truth[i + 1];
-        let n = &eskf.raw().nominal;
+        let n = &reduced.raw().nominal;
         final_vel_err = [
             n.vn as f64 - truth.vel_ned_mps[0],
             n.ve as f64 - truth.vel_ned_mps[1],
@@ -223,18 +223,18 @@ fn run_eskf(
     )
 }
 
-fn run_loose(
+fn run_full(
     generated: &sim::synthetic::gnss_ins_path::GeneratedPath,
     q_mount: [f64; 4],
-    mode: LooseInput,
+    mode: FullInput,
 ) -> Summary {
     let first = generated.truth[0];
     let ref_ecef = lla_to_ecef(first.lat_deg, first.lon_deg, first.height_m);
     let q_ne = quat_ecef_to_ned(first.lat_deg, first.lon_deg);
     let q_es = quat_mul(quat_conj(q_ne), first.q_bn);
     let vel_ecef = ned_vector_to_ecef(first.lat_deg, first.lon_deg, first.vel_ned_mps);
-    let mut loose = LooseFilter::new(LoosePredictNoise::default());
-    loose.init_from_reference_ecef_state(
+    let mut full = FullFilter::new(ProcessNoise::default());
+    full.init_from_reference_ecef_state(
         [
             q_es[0] as f32,
             q_es[1] as f32,
@@ -270,12 +270,12 @@ fn run_loose(
         let end_g = mounted_gyro(generated.imu[i + 1].gyro_vehicle_radps, q_mount);
         let end_a = mounted_accel(generated.imu[i + 1].accel_vehicle_mps2, q_mount);
         let imu = match mode {
-            LooseInput::StartStart => loose_imu_delta(start_g, start_a, start_g, start_a, dt),
-            LooseInput::StartEnd => loose_imu_delta(start_g, start_a, end_g, end_a, dt),
-            LooseInput::EndEnd => loose_imu_delta(end_g, end_a, end_g, end_a, dt),
-            LooseInput::LaggedStartEnd => {
+            FullInput::StartStart => full_imu_delta(start_g, start_a, start_g, start_a, dt),
+            FullInput::StartEnd => full_imu_delta(start_g, start_a, end_g, end_a, dt),
+            FullInput::EndEnd => full_imu_delta(end_g, end_a, end_g, end_a, dt),
+            FullInput::LaggedStartEnd => {
                 let prev_i = i.saturating_sub(1);
-                loose_imu_delta(
+                full_imu_delta(
                     mounted_gyro(generated.imu[prev_i].gyro_vehicle_radps, q_mount),
                     mounted_accel(generated.imu[prev_i].accel_vehicle_mps2, q_mount),
                     start_g,
@@ -284,9 +284,9 @@ fn run_loose(
                 )
             }
         };
-        loose.predict(imu);
+        full.predict(imu);
         let truth = generated.truth[i + 1];
-        let n = loose.nominal();
+        let n = full.nominal();
         let vel_ned = ecef_vector_to_ned(
             truth.lat_deg,
             truth.lon_deg,
@@ -351,8 +351,8 @@ fn print_summary(label: &str, s: Summary) {
     );
 }
 
-fn eskf_imu_delta(gyro: [f64; 3], accel: [f64; 3], dt: f64) -> EskfImuDelta {
-    EskfImuDelta {
+fn reduced_imu_delta(gyro: [f64; 3], accel: [f64; 3], dt: f64) -> ReducedImuDelta {
+    ReducedImuDelta {
         dax: (gyro[0] * dt) as f32,
         day: (gyro[1] * dt) as f32,
         daz: (gyro[2] * dt) as f32,
@@ -363,14 +363,14 @@ fn eskf_imu_delta(gyro: [f64; 3], accel: [f64; 3], dt: f64) -> EskfImuDelta {
     }
 }
 
-fn loose_imu_delta(
+fn full_imu_delta(
     gyro1: [f64; 3],
     accel1: [f64; 3],
     gyro2: [f64; 3],
     accel2: [f64; 3],
     dt: f64,
-) -> LooseImuDelta {
-    LooseImuDelta {
+) -> FullImuDelta {
+    FullImuDelta {
         dax_1: (gyro1[0] * dt) as f32,
         day_1: (gyro1[1] * dt) as f32,
         daz_1: (gyro1[2] * dt) as f32,
@@ -395,8 +395,8 @@ fn mounted_accel(accel_vehicle: [f64; 3], q_mount: [f64; 4]) -> [f64; 3] {
     sim::eval::gnss_ins::quat_rotate(q_mount, accel_vehicle)
 }
 
-fn eskf_navigation_rate_corrections(
-    eskf: &RustEskf,
+fn reduced_navigation_rate_corrections(
+    reduced: &RustReduced,
     lat_deg: f64,
     height_m: f64,
     dt: f64,
@@ -405,7 +405,7 @@ fn eskf_navigation_rate_corrections(
     if dt <= 0.0 {
         return (gyro_body, [0.0; 3]);
     }
-    let n = &eskf.raw().nominal;
+    let n = &reduced.raw().nominal;
     let vel_ned = [n.vn as f64, n.ve as f64, n.vd as f64];
     let (omega_ie_n, omega_en_n) = navigation_rates_ned(lat_deg, height_m, vel_ned);
     let omega_in_n = add3(omega_ie_n, omega_en_n);

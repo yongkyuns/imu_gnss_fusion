@@ -2,10 +2,9 @@
 
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 use anyhow::{Result, bail};
-use sensor_fusion::fusion::SensorFusion;
+use sensor_fusion::SensorFusion;
 use sim::datasets::generic_replay::{
     GenericGnssSample, GenericImuSample, fusion_gnss_sample, fusion_imu_sample,
 };
@@ -19,21 +18,18 @@ use sim::synthetic::gnss_ins_path::{
     PathGenConfig, VibrationNoise, add_measurement_noise, generate, generate_with_noise,
 };
 use sim::visualizer::math::{ecef_to_ned, lla_to_ecef};
-use sim::visualizer::model::EkfImuSource;
+use sim::visualizer::model::MountSourceMode;
 use sim::visualizer::pipeline::generic::reference_mount_rpy_to_q_vb;
 use sim::visualizer::pipeline::synthetic::{
     SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_plot_data,
 };
-use sim::visualizer::pipeline::{EkfCompareConfig, GnssOutageConfig};
+use sim::visualizer::pipeline::{FilterCompareConfig, GnssOutageConfig};
 
-const LOCAL_GNSS_INS_SIM_DIR: &str = "/Users/ykshin/Dev/me/gnss-ins-sim";
 const SHORT_PROFILE: &str = "\
-ini lat (deg),ini lon (deg),ini alt (m),ini vx_body (m/s),ini vy_body (m/s),ini vz_body (m/s),ini yaw (deg),ini pitch (deg),ini roll (deg)
-32,120,0,0,0,0,0,0,0
-command type,yaw (deg),pitch (deg),roll (deg),vx_body (m/s),vy_body (m/s),vz_body (m/s),command duration (s),GPS visibility
-1,0,0,0,0,0,0,1,1
-1,5,0,0,0.5,0,0,2,1
-1,-5,0,0,-0.5,0,0,2,1
+initial lat=32 lon=120 alt=0 vx=0 vy=0 vz=0 yaw=0 pitch=0 roll=0
+command type=1 yaw=0 pitch=0 roll=0 ax=0 ay=0 az=0 for=1s gps=on
+command type=1 yaw=5 pitch=0 roll=0 ax=0.5 ay=0 az=0 for=2s gps=on
+command type=1 yaw=-5 pitch=0 roll=0 ax=-0.5 ay=0 az=0 for=2s gps=on
 ";
 const VISUALIZER_AUX_SCENARIO: &str = "\
 initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
@@ -49,8 +45,8 @@ repeat 10 {
 ";
 
 #[test]
-fn rust_path_generator_matches_gnss_ins_sim_reference_samples() -> Result<()> {
-    let profile = MotionProfile::from_csv_str(SHORT_PROFILE)?;
+fn rust_path_generator_matches_synthetic_replay_reference_samples() -> Result<()> {
+    let profile = MotionProfile::from_dsl_str(SHORT_PROFILE)?;
     let generated = generate(&profile, PathGenConfig::default())?;
 
     assert_eq!(generated.imu.len(), 500);
@@ -159,185 +155,31 @@ fn motion_dsl_expands_to_gnss_ins_motion_commands() -> Result<()> {
 }
 
 #[test]
-fn city_blocks_scenario_matches_csv_motion_profile() -> Result<()> {
-    let profile_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("motion_profiles");
-    let csv = MotionProfile::from_csv(&profile_dir.join("city_blocks_15min.csv"))?;
-    let scenario = MotionProfile::from_path(&profile_dir.join("city_blocks_15min.scenario"))?;
+fn motion_dsl_supports_explicit_command_type_semantics() -> Result<()> {
+    let profile = MotionProfile::from_dsl_str(
+        r#"
+        initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=3 roll=0
+        command type=2 yaw=90 pitch=3 roll=0 ax=0 ay=0 az=0 for=18s gps=on
+        command type=3 yaw=0 pitch=-3 roll=-3 ax=8 ay=0 az=0 for=15s gps=off
+        "#,
+    )?;
 
-    assert_eq!(scenario.initial.lat_deg, csv.initial.lat_deg);
-    assert_eq!(scenario.initial.lon_deg, csv.initial.lon_deg);
-    assert_eq!(scenario.initial.height_m, csv.initial.height_m);
-    assert_eq!(scenario.initial.vel_body_mps, csv.initial.vel_body_mps);
+    assert_eq!(profile.commands.len(), 2);
+    assert_eq!(profile.commands[0].command_type, 2);
+    assert_eq!(profile.commands[0].yaw_pitch_roll_cmd_deg, [90.0, 3.0, 0.0]);
+    assert_eq!(profile.commands[1].command_type, 3);
     assert_eq!(
-        scenario.initial.yaw_pitch_roll_deg,
-        csv.initial.yaw_pitch_roll_deg
+        profile.commands[1].yaw_pitch_roll_cmd_deg,
+        [0.0, -3.0, -3.0]
     );
-    assert_eq!(scenario.commands.len(), csv.commands.len());
-    for (idx, (actual, expected)) in scenario.commands.iter().zip(&csv.commands).enumerate() {
-        assert_eq!(actual.command_type, expected.command_type, "command {idx}");
-        assert_eq!(
-            actual.yaw_pitch_roll_cmd_deg, expected.yaw_pitch_roll_cmd_deg,
-            "command {idx}"
-        );
-        assert_eq!(actual.body_cmd, expected.body_cmd, "command {idx}");
-        assert_eq!(actual.duration_s, expected.duration_s, "command {idx}");
-        assert_eq!(actual.gps_visible, expected.gps_visible, "command {idx}");
-    }
-    Ok(())
-}
-
-#[test]
-fn rust_path_generator_matches_local_gnss_ins_sim_full_short_trajectory() -> Result<()> {
-    let gnss_ins_sim_dir =
-        std::env::var("GNSS_INS_SIM_DIR").unwrap_or_else(|_| LOCAL_GNSS_INS_SIM_DIR.to_string());
-    if !Path::new(&gnss_ins_sim_dir).exists() {
-        eprintln!("skipping local gnss-ins-sim parity test; missing {gnss_ins_sim_dir}");
-        return Ok(());
-    }
-
-    let profile = MotionProfile::from_csv_str(SHORT_PROFILE)?;
-    let generated = generate(&profile, PathGenConfig::default())?;
-    let python = Command::new("python3")
-        .arg("-c")
-        .arg(format!(
-            r#"
-import json, math, numpy as np, sys
-sys.path.insert(0, {gnss_ins_sim_dir:?})
-from gnss_ins_sim.pathgen import pathgen
-from gnss_ins_sim.attitude import attitude
-ini = np.array([32*math.pi/180,120*math.pi/180,0,0,0,0,0,0,0.0])
-motion = np.array([
- [1,0,0,0,0,0,0,1.0,1],
- [1,5*math.pi/180,0,0,0.5,0,0,2.0,1],
- [1,-5*math.pi/180,0,0,-0.5,0,0,2.0,1],
-], dtype=float)
-output_def=np.array([[1.0,100.0],[1.0,2.0],[-1.0,100.0]])
-mobility=np.array([10.0,0.5,1.0])
-r=pathgen.path_gen(ini,motion,output_def,mobility,ref_frame=0,magnet=False)
-quat = [attitude.euler2quat(row[7:10]).tolist() for row in r['nav']]
-print(json.dumps({{'imu': r['imu'].tolist(), 'nav': r['nav'].tolist(), 'gps': r['gps'].tolist(), 'quat': quat}}))
-"#
-        ))
-        .output()?;
-    if !python.status.success() {
-        bail!(
-            "gnss-ins-sim Python reference failed: {}",
-            String::from_utf8_lossy(&python.stderr)
-        );
-    }
-    let reference: serde_json::Value = serde_json::from_slice(&python.stdout)?;
-    let imu_ref = reference["imu"].as_array().expect("imu array");
-    let nav_ref = reference["nav"].as_array().expect("nav array");
-    let gps_ref = reference["gps"].as_array().expect("gps array");
-    let quat_ref = reference["quat"].as_array().expect("quat array");
-    assert_eq!(imu_ref.len(), generated.imu.len());
-    assert_eq!(nav_ref.len(), generated.truth.len());
-    assert_eq!(gps_ref.len(), generated.gnss.len());
-
-    for (i, row) in imu_ref.iter().enumerate() {
-        let row = row.as_array().expect("imu row");
-        assert_close(
-            "imu t",
-            generated.imu[i].t_s * 100.0,
-            f64_at(row, 0),
-            1.0e-10,
-        );
-        for axis in 0..3 {
-            assert_close(
-                "imu accel",
-                generated.imu[i].accel_vehicle_mps2[axis],
-                f64_at(row, 1 + axis),
-                1.0e-12,
-            );
-            assert_close(
-                "imu gyro",
-                generated.imu[i].gyro_vehicle_radps[axis],
-                f64_at(row, 4 + axis),
-                1.0e-15,
-            );
-        }
-    }
-    for (i, row) in nav_ref.iter().enumerate() {
-        let row = row.as_array().expect("nav row");
-        assert_close(
-            "nav t",
-            generated.truth[i].t_s * 100.0,
-            f64_at(row, 0),
-            1.0e-10,
-        );
-        assert_close(
-            "nav lat",
-            generated.truth[i].lat_deg.to_radians(),
-            f64_at(row, 1),
-            1.0e-14,
-        );
-        assert_close(
-            "nav lon",
-            generated.truth[i].lon_deg.to_radians(),
-            f64_at(row, 2),
-            1.0e-14,
-        );
-        assert_close(
-            "nav h",
-            generated.truth[i].height_m,
-            f64_at(row, 3),
-            1.0e-12,
-        );
-        for axis in 0..3 {
-            assert_close(
-                "nav vel",
-                generated.truth[i].vel_ned_mps[axis],
-                f64_at(row, 4 + axis),
-                1.0e-12,
-            );
-        }
-        let q_ref = quat_ref[i].as_array().expect("quat row");
-        for q_idx in 0..4 {
-            assert_close(
-                "nav quat",
-                generated.truth[i].q_bn[q_idx],
-                f64_at(q_ref, q_idx),
-                1.0e-15,
-            );
-        }
-    }
-    for (i, row) in gps_ref.iter().enumerate() {
-        let row = row.as_array().expect("gps row");
-        assert_close(
-            "gps t",
-            generated.gnss[i].t_s * 100.0,
-            f64_at(row, 0),
-            1.0e-10,
-        );
-        assert_close(
-            "gps lat",
-            generated.gnss[i].lat_deg.to_radians(),
-            f64_at(row, 1),
-            1.0e-14,
-        );
-        assert_close(
-            "gps lon",
-            generated.gnss[i].lon_deg.to_radians(),
-            f64_at(row, 2),
-            1.0e-14,
-        );
-        assert_close("gps h", generated.gnss[i].height_m, f64_at(row, 3), 1.0e-12);
-        for axis in 0..3 {
-            assert_close(
-                "gps vel",
-                generated.gnss[i].vel_ned_mps[axis],
-                f64_at(row, 4 + axis),
-                1.0e-12,
-            );
-        }
-    }
-
+    assert_eq!(profile.commands[1].body_cmd, [8.0, 0.0, 0.0]);
+    assert!(!profile.commands[1].gps_visible);
     Ok(())
 }
 
 #[test]
 fn measurement_noise_supports_bias_drift_white_noise_vibration_and_gps_noise() -> Result<()> {
-    let profile = MotionProfile::from_csv_str(SHORT_PROFILE)?;
+    let profile = MotionProfile::from_dsl_str(SHORT_PROFILE)?;
     let reference = generate(&profile, PathGenConfig::default())?;
 
     let bias_only = add_measurement_noise(
@@ -404,7 +246,7 @@ fn measurement_noise_supports_bias_drift_white_noise_vibration_and_gps_noise() -
                 std: [0.01, 0.02, 0.03],
             }),
         },
-        gps: Some(GpsNoiseModel::low_accuracy()),
+        gps: Some(GpsNoiseModel::accuracy(ImuAccuracy::Low)),
     };
     let noisy_a = add_measurement_noise(&reference, 100.0, stochastic_noise, 42);
     let noisy_b = add_measurement_noise(&reference, 100.0, stochastic_noise, 42);
@@ -450,26 +292,26 @@ fn measurement_noise_supports_bias_drift_white_noise_vibration_and_gps_noise() -
 }
 
 #[test]
-fn eskf_converges_on_generated_city_blocks_truth_signals() -> Result<()> {
-    assert_eskf_converges_on_profile("city_blocks_15min.csv")
+fn reduced_converges_on_generated_city_blocks_truth_signals() -> Result<()> {
+    assert_reduced_converges_on_profile("city_blocks_15min.scenario")
 }
 
 #[test]
-fn eskf_converges_on_generated_figure8_truth_signals() -> Result<()> {
-    assert_eskf_converges_on_profile("figure8_15min.csv")
+fn reduced_converges_on_generated_figure8_truth_signals() -> Result<()> {
+    assert_reduced_converges_on_profile("figure8_15min.scenario")
 }
 
 #[test]
-fn eskf_converges_tightly_on_long_generated_figure8_truth_signals() -> Result<()> {
+fn reduced_converges_tightly_on_long_generated_figure8_truth_signals() -> Result<()> {
     let profile_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("motion_profiles/figure8_30min.scenario");
     let profile = MotionProfile::from_path(&profile_path)?;
     let generated = generate(&profile, PathGenConfig::default())?;
-    let summary = run_eskf_on_generated_path(&generated, [5.0, -5.0, 5.0])?;
+    let summary = run_reduced_on_generated_path(&generated, [5.0, -5.0, 5.0])?;
 
     assert!(
-        summary.ekf_initialized,
-        "ESKF did not initialize on long figure-eight truth data"
+        summary.reduced_initialized,
+        "Reduced did not initialize on long figure-eight truth data"
     );
     assert!(
         summary.final_mount_quat_err_deg < 0.15,
@@ -496,23 +338,20 @@ fn eskf_converges_tightly_on_long_generated_figure8_truth_signals() -> Result<()
 }
 
 #[test]
-fn eskf_converges_on_generated_city_blocks_noisy_measurements() -> Result<()> {
+fn reduced_converges_on_generated_city_blocks_noisy_measurements() -> Result<()> {
     let profile_path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("motion_profiles/city_blocks_15min.csv");
-    let profile = MotionProfile::from_csv(&profile_path)?;
-    let measured = generate_with_noise(
-        &profile,
-        PathGenConfig::default(),
-        MeasurementNoiseConfig::accuracy(ImuAccuracy::Mid),
-        20260426,
-    )?;
-    let summary = run_eskf_on_samples(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("motion_profiles/city_blocks_15min.scenario");
+    let profile = MotionProfile::from_path(&profile_path)?;
+    let noise = MeasurementNoiseConfig::accuracy(ImuAccuracy::Mid);
+    let gps_noise = noise.gps.unwrap();
+    let measured = generate_with_noise(&profile, PathGenConfig::default(), noise, 20260426)?;
+    let summary = run_reduced_on_samples(
         &measured.reference,
         &measured.imu,
         &measured.gnss,
         [5.0, -5.0, 5.0],
-        [5.0, 5.0, 7.0],
-        [0.05, 0.05, 0.05],
+        gps_noise.pos_std_m,
+        gps_noise.vel_std_mps,
     )?;
     assert!(
         summary.final_mount_quat_err_deg < 1.5,
@@ -538,15 +377,15 @@ fn eskf_converges_on_generated_city_blocks_noisy_measurements() -> Result<()> {
 }
 
 #[test]
-fn synthetic_early_velocity_fault_does_not_drive_eskf_mount_by_default() -> Result<()> {
+fn synthetic_early_velocity_fault_does_not_drive_reduced_mount_by_default() -> Result<()> {
     let profile_path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("motion_profiles/figure8_15min.csv");
-    let profile = MotionProfile::from_csv(&profile_path)?;
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("motion_profiles/figure8_15min.scenario");
+    let profile = MotionProfile::from_path(&profile_path)?;
     let generated = generate(&profile, PathGenConfig::default())?;
     let faulted_gnss = gnss_with_early_velocity_bias(&generated.gnss, [0.5, 0.0, 0.0], 360.0);
 
-    let clean = run_eskf_on_generated_path(&generated, [5.0, -5.0, 5.0])?;
-    let faulted_default = run_eskf_on_samples(
+    let clean = run_reduced_on_generated_path(&generated, [5.0, -5.0, 5.0])?;
+    let faulted_default = run_reduced_on_samples(
         &generated,
         &generated.imu,
         &faulted_gnss,
@@ -560,13 +399,13 @@ fn synthetic_early_velocity_fault_does_not_drive_eskf_mount_by_default() -> Resu
     );
     assert!(
         faulted_default.tail_mount_quat_err_mean_deg < 0.25,
-        "default ESKF should not let an early GNSS velocity fault directly push mount into a wrong basin: {faulted_default:#?}"
+        "default Reduced should not let an early GNSS velocity fault directly push mount into a wrong basin: {faulted_default:#?}"
     );
     Ok(())
 }
 
 #[test]
-fn synthetic_inputs_populate_visualizer_eskf_traces() -> Result<()> {
+fn synthetic_inputs_populate_visualizer_reduced_traces() -> Result<()> {
     let profile_path = std::env::temp_dir().join(format!(
         "imu_gnss_fusion_visualizer_short_{}.scenario",
         std::process::id()
@@ -588,8 +427,8 @@ fn synthetic_inputs_populate_visualizer_eskf_traces() -> Result<()> {
             early_vel_bias_ned_mps: [0.0; 3],
             early_fault_window_s: None,
         },
-        EkfImuSource::Ref,
-        EkfCompareConfig::default(),
+        MountSourceMode::Ref,
+        FilterCompareConfig::default(),
         GnssOutageConfig::default(),
     );
     let remove_result = fs::remove_file(&profile_path);
@@ -600,34 +439,34 @@ fn synthetic_inputs_populate_visualizer_eskf_traces() -> Result<()> {
     assert!(!data.imu_raw_gyro.is_empty());
     assert!(!data.imu_raw_accel.is_empty());
     assert!(!data.orientation.is_empty());
-    assert!(!data.eskf_cmp_pos.is_empty());
-    assert!(!data.eskf_cmp_vel.is_empty());
-    assert!(!data.eskf_cmp_att.is_empty());
-    assert!(!data.eskf_misalignment.is_empty());
-    assert!(!data.eskf_map.is_empty());
+    assert!(!data.reduced_cmp_pos.is_empty());
+    assert!(!data.reduced_cmp_vel.is_empty());
+    assert!(!data.reduced_cmp_att.is_empty());
+    assert!(!data.reduced_misalignment.is_empty());
+    assert!(!data.reduced_map.is_empty());
     assert!(
-        data.loose_cmp_att
+        data.full_cmp_att
             .iter()
             .any(|trace| !trace.points.is_empty()),
-        "synthetic visualizer produced no loose attitude points"
+        "synthetic visualizer produced no full attitude points"
     );
     assert!(
-        data.loose_bias_accel
+        data.full_bias_accel
             .iter()
             .any(|trace| !trace.points.is_empty()),
-        "synthetic visualizer produced no loose accel-bias points"
+        "synthetic visualizer produced no full accel-bias points"
     );
     assert!(
-        data.eskf_bump_pitch_speed
+        data.reduced_bump_pitch_speed
             .iter()
             .any(|trace| !trace.points.is_empty()),
-        "synthetic visualizer produced no ESKF bump pitch/speed points"
+        "synthetic visualizer produced no Reduced bump pitch/speed points"
     );
     assert!(
-        data.eskf_bump_diag
+        data.reduced_bump_diag
             .iter()
             .any(|trace| !trace.points.is_empty()),
-        "synthetic visualizer produced no ESKF bump diagnostic points"
+        "synthetic visualizer produced no Reduced bump diagnostic points"
     );
     assert!(
         data.align_cmp_att
@@ -675,85 +514,85 @@ fn synthetic_inputs_populate_visualizer_eskf_traces() -> Result<()> {
         ],
     )?;
     require_trace_schema(
-        "eskf_cmp_pos",
-        &data.eskf_cmp_pos,
+        "reduced_cmp_pos",
+        &data.reduced_cmp_pos,
         &[
-            "ESKF posN [m]",
+            "Reduced posN [m]",
             "Synthetic truth posN [m]",
-            "ESKF posE [m]",
+            "Reduced posE [m]",
             "Synthetic truth posE [m]",
-            "ESKF posD [m]",
+            "Reduced posD [m]",
             "Synthetic truth posD [m]",
         ],
     )?;
     require_trace_schema(
-        "eskf_cmp_vel",
-        &data.eskf_cmp_vel,
+        "reduced_cmp_vel",
+        &data.reduced_cmp_vel,
         &[
-            "ESKF vN [m/s]",
+            "Reduced vN [m/s]",
             "Synthetic truth vN [m/s]",
-            "ESKF vE [m/s]",
+            "Reduced vE [m/s]",
             "Synthetic truth vE [m/s]",
-            "ESKF vD [m/s]",
+            "Reduced vD [m/s]",
             "Synthetic truth vD [m/s]",
         ],
     )?;
     require_trace_schema(
-        "eskf_cmp_att",
-        &data.eskf_cmp_att,
+        "reduced_cmp_att",
+        &data.reduced_cmp_att,
         &[
-            "ESKF roll [deg]",
+            "Reduced roll [deg]",
             "Synthetic truth roll [deg]",
-            "ESKF pitch [deg]",
+            "Reduced pitch [deg]",
             "Synthetic truth pitch [deg]",
-            "ESKF yaw [deg]",
+            "Reduced yaw [deg]",
             "Synthetic truth yaw [deg]",
             "mount ready",
-            "EKF initialized",
+            "Reduced initialized",
         ],
     )?;
     require_trace_schema(
-        "eskf_misalignment",
-        &data.eskf_misalignment,
+        "reduced_misalignment",
+        &data.reduced_misalignment,
         &[
-            "ESKF mount roll [deg]",
-            "ESKF mount pitch [deg]",
-            "ESKF mount yaw [deg]",
-            "ESKF mount quaternion error [deg]",
+            "Reduced mount roll [deg]",
+            "Reduced mount pitch [deg]",
+            "Reduced mount yaw [deg]",
+            "Reduced mount quaternion error [deg]",
             "Synthetic truth mount roll [deg]",
             "Synthetic truth mount pitch [deg]",
             "Synthetic truth mount yaw [deg]",
         ],
     )?;
     require_trace_schema(
-        "eskf_map",
-        &data.eskf_map,
+        "reduced_map",
+        &data.reduced_map,
         &[
             "Synthetic truth path (lon,lat)",
             "Synthetic GNSS path (lon,lat)",
-            "ESKF path (lon,lat)",
+            "Reduced path (lon,lat)",
         ],
     )?;
     require_trace_schema(
-        "loose_cmp_att",
-        &data.loose_cmp_att,
+        "full_cmp_att",
+        &data.full_cmp_att,
         &[
-            "Loose roll [deg]",
-            "Loose pitch [deg]",
-            "Loose yaw [deg]",
+            "Full roll [deg]",
+            "Full pitch [deg]",
+            "Full yaw [deg]",
             "Reference roll [deg]",
             "Reference pitch [deg]",
             "Reference yaw [deg]",
         ],
     )?;
     require_trace_schema(
-        "eskf_bump_pitch_speed",
-        &data.eskf_bump_pitch_speed,
-        &["ESKF pitch [deg]", "vehicle speed [m/s]"],
+        "reduced_bump_pitch_speed",
+        &data.reduced_bump_pitch_speed,
+        &["Reduced pitch [deg]", "vehicle speed [m/s]"],
     )?;
     require_trace_schema(
-        "eskf_bump_diag",
-        &data.eskf_bump_diag,
+        "reduced_bump_diag",
+        &data.reduced_bump_diag,
         &["Pitch HPF [deg]", "Pitch RMS EMA [deg]"],
     )?;
     require_trace_schema(
@@ -769,29 +608,31 @@ fn synthetic_inputs_populate_visualizer_eskf_traces() -> Result<()> {
         ],
     )?;
 
-    let pos_n = require_trace("eskf_cmp_pos", &data.eskf_cmp_pos, "ESKF posN [m]")?;
-    require_trace_points("eskf_cmp_pos", pos_n)?;
+    let pos_n = require_trace("reduced_cmp_pos", &data.reduced_cmp_pos, "Reduced posN [m]")?;
+    require_trace_points("reduced_cmp_pos", pos_n)?;
     let initial_state =
-        sample_nearest_value(pos_n, 0.0).expect("ESKF posN trace should be sampled");
+        sample_nearest_value(pos_n, 0.0).expect("Reduced posN trace should be sampled");
     assert!(
         initial_state.is_finite(),
-        "sampled ESKF posN should be finite, got {initial_state}"
+        "sampled Reduced posN should be finite, got {initial_state}"
     );
     assert!(
-        data.eskf_cmp_pos
+        data.reduced_cmp_pos
             .iter()
             .any(|trace| !trace.points.is_empty()),
-        "synthetic visualizer produced no ESKF position points"
+        "synthetic visualizer produced no Reduced position points"
     );
     assert!(
-        data.eskf_map.iter().any(|trace| !trace.points.is_empty()),
+        data.reduced_map
+            .iter()
+            .any(|trace| !trace.points.is_empty()),
         "synthetic visualizer produced no map points"
     );
     Ok(())
 }
 
 #[test]
-fn synthetic_symmetric_figure8_does_not_create_loose_mount_roll_drift() -> Result<()> {
+fn synthetic_symmetric_figure8_does_not_create_full_mount_roll_drift() -> Result<()> {
     let scenario = "\
 initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
 wait 60s
@@ -819,19 +660,19 @@ brake 0.6666667m/s^2 for 18s
             early_vel_bias_ned_mps: [0.0; 3],
             early_fault_window_s: None,
         },
-        EkfImuSource::Internal,
-        EkfCompareConfig::default(),
+        MountSourceMode::Internal,
+        FilterCompareConfig::default(),
         GnssOutageConfig::default(),
     )?;
 
-    let loose_roll = final_trace_value(require_trace(
-        "loose_misalignment",
-        &data.loose_misalignment,
-        "Loose residual mount roll [deg]",
+    let full_roll = final_trace_value(require_trace(
+        "full_misalignment",
+        &data.full_misalignment,
+        "Full residual mount roll [deg]",
     )?)?;
     assert!(
-        (loose_roll - 5.0).abs() < 0.02,
-        "ideal symmetric figure-eight should not drive loose mount roll: final={loose_roll:.6}"
+        (full_roll - 5.0).abs() < 0.02,
+        "ideal symmetric figure-eight should not drive full mount roll: final={full_roll:.6}"
     );
     Ok(())
 }
@@ -856,42 +697,42 @@ fn synthetic_roll_excitation_makes_internal_mount_observable() -> Result<()> {
             early_vel_bias_ned_mps: [0.5, 0.0, 0.0],
             early_fault_window_s: Some((0.0, 360.0)),
         },
-        EkfImuSource::Internal,
-        EkfCompareConfig::default(),
+        MountSourceMode::Internal,
+        FilterCompareConfig::default(),
         GnssOutageConfig::default(),
     )?;
 
-    let eskf_mount_qerr = final_trace_value(require_trace(
-        "eskf_misalignment",
-        &data.eskf_misalignment,
-        "ESKF mount quaternion error [deg]",
+    let reduced_mount_qerr = final_trace_value(require_trace(
+        "reduced_misalignment",
+        &data.reduced_misalignment,
+        "Reduced mount quaternion error [deg]",
     )?)?;
     assert!(
-        eskf_mount_qerr < 0.25,
-        "roll excitation should make ESKF mount converge; qerr={eskf_mount_qerr:.6}"
+        reduced_mount_qerr < 0.25,
+        "roll excitation should make Reduced mount converge; qerr={reduced_mount_qerr:.6}"
     );
-    let loose_mount_qerr = final_trace_value(require_trace(
-        "loose_misalignment",
-        &data.loose_misalignment,
-        "Loose mount quaternion error [deg]",
+    let full_mount_qerr = final_trace_value(require_trace(
+        "full_misalignment",
+        &data.full_misalignment,
+        "Full mount quaternion error [deg]",
     )?)?;
     assert!(
-        loose_mount_qerr < 0.25,
-        "roll excitation should make loose mount converge; qerr={loose_mount_qerr:.6}"
+        full_mount_qerr < 0.25,
+        "roll excitation should make full mount converge; qerr={full_mount_qerr:.6}"
     );
     Ok(())
 }
 
-fn assert_eskf_converges_on_profile(profile_name: &str) -> Result<()> {
+fn assert_reduced_converges_on_profile(profile_name: &str) -> Result<()> {
     let profile_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("motion_profiles/{profile_name}"));
-    let profile = MotionProfile::from_csv(&profile_path)?;
+    let profile = MotionProfile::from_path(&profile_path)?;
     let generated = generate(&profile, PathGenConfig::default())?;
-    let summary = run_eskf_on_generated_path(&generated, [5.0, -5.0, 5.0])?;
+    let summary = run_reduced_on_generated_path(&generated, [5.0, -5.0, 5.0])?;
 
     assert!(
-        summary.ekf_initialized,
-        "ESKF did not initialize on generated synthetic data: {profile_name}"
+        summary.reduced_initialized,
+        "Reduced did not initialize on generated synthetic data: {profile_name}"
     );
     assert!(
         summary.final_mount_quat_err_deg < 0.75,
@@ -934,8 +775,8 @@ fn final_trace_value(trace: &sim::visualizer::model::Trace) -> Result<f64> {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct EskfSyntheticSummary {
-    ekf_initialized: bool,
+struct ReducedSyntheticSummary {
+    reduced_initialized: bool,
     final_mount_quat_err_deg: f64,
     tail_mount_quat_err_mean_deg: f64,
     final_att_quat_err_deg: f64,
@@ -956,11 +797,11 @@ struct StateErr {
     accel_bias_norm_mps2: f64,
 }
 
-fn run_eskf_on_generated_path(
+fn run_reduced_on_generated_path(
     generated: &sim::synthetic::gnss_ins_path::GeneratedPath,
     mount_rpy_deg: [f64; 3],
-) -> Result<EskfSyntheticSummary> {
-    run_eskf_on_samples(
+) -> Result<ReducedSyntheticSummary> {
+    run_reduced_on_samples(
         generated,
         &generated.imu,
         &generated.gnss,
@@ -970,15 +811,15 @@ fn run_eskf_on_generated_path(
     )
 }
 
-fn run_eskf_on_samples(
+fn run_reduced_on_samples(
     reference: &sim::synthetic::gnss_ins_path::GeneratedPath,
-    imu_samples: &[sim::datasets::gnss_ins_sim::ImuSample],
-    gnss_samples: &[sim::datasets::gnss_ins_sim::GnssSample],
+    imu_samples: &[sim::datasets::synthetic_replay::ImuSample],
+    gnss_samples: &[sim::datasets::synthetic_replay::GnssSample],
     mount_rpy_deg: [f64; 3],
     pos_std_m: [f64; 3],
     vel_std_mps: [f64; 3],
-) -> Result<EskfSyntheticSummary> {
-    run_eskf_on_samples_configured(
+) -> Result<ReducedSyntheticSummary> {
+    run_reduced_on_samples_configured(
         reference,
         imu_samples,
         gnss_samples,
@@ -989,15 +830,15 @@ fn run_eskf_on_samples(
     )
 }
 
-fn run_eskf_on_samples_configured(
+fn run_reduced_on_samples_configured(
     reference: &sim::synthetic::gnss_ins_path::GeneratedPath,
-    imu_samples: &[sim::datasets::gnss_ins_sim::ImuSample],
-    gnss_samples: &[sim::datasets::gnss_ins_sim::GnssSample],
+    imu_samples: &[sim::datasets::synthetic_replay::ImuSample],
+    gnss_samples: &[sim::datasets::synthetic_replay::GnssSample],
     mount_rpy_deg: [f64; 3],
     pos_std_m: [f64; 3],
     vel_std_mps: [f64; 3],
     configure: impl FnOnce(&mut SensorFusion),
-) -> Result<EskfSyntheticSummary> {
+) -> Result<ReducedSyntheticSummary> {
     let q_truth = reference_mount_rpy_to_q_vb(mount_rpy_deg);
     let imu = imu_samples
         .iter()
@@ -1036,7 +877,7 @@ fn run_eskf_on_samples_configured(
     for_each_event(&imu, &gnss, |event| match event {
         ReplayEvent::Imu(idx, sample) => {
             let _ = fusion.process_imu(fusion_imu_sample(*sample));
-            if let Some(eskf) = fusion.eskf() {
+            if let Some(reduced) = fusion.reduced() {
                 let truth = reference.truth[idx];
                 let truth_ecef = lla_to_ecef(truth.lat_deg, truth.lon_deg, truth.height_m);
                 let truth_pos_ned = ecef_to_ned(
@@ -1046,41 +887,41 @@ fn run_eskf_on_samples_configured(
                     reference.truth[0].lon_deg,
                 );
                 let q_cs = as_q64([
-                    eskf.nominal.qcs0,
-                    eskf.nominal.qcs1,
-                    eskf.nominal.qcs2,
-                    eskf.nominal.qcs3,
+                    reduced.nominal.qcs0,
+                    reduced.nominal.qcs1,
+                    reduced.nominal.qcs2,
+                    reduced.nominal.qcs3,
                 ]);
                 let q_est_att = as_q64([
-                    eskf.nominal.q0,
-                    eskf.nominal.q1,
-                    eskf.nominal.q2,
-                    eskf.nominal.q3,
+                    reduced.nominal.q0,
+                    reduced.nominal.q1,
+                    reduced.nominal.q2,
+                    reduced.nominal.q3,
                 ]);
                 errors.push(StateErr {
                     t_s: sample.t_s,
                     mount_quat_err_deg: quat_angle_deg(q_cs, q_truth),
                     att_quat_err_deg: quat_angle_deg(q_est_att, truth.q_bn),
                     vel_err_mps: norm3([
-                        eskf.nominal.vn as f64 - truth.vel_ned_mps[0],
-                        eskf.nominal.ve as f64 - truth.vel_ned_mps[1],
-                        eskf.nominal.vd as f64 - truth.vel_ned_mps[2],
+                        reduced.nominal.vn as f64 - truth.vel_ned_mps[0],
+                        reduced.nominal.ve as f64 - truth.vel_ned_mps[1],
+                        reduced.nominal.vd as f64 - truth.vel_ned_mps[2],
                     ]),
                     pos_err_m: norm3([
-                        eskf.nominal.pn as f64 - truth_pos_ned[0],
-                        eskf.nominal.pe as f64 - truth_pos_ned[1],
-                        eskf.nominal.pd as f64 - truth_pos_ned[2],
+                        reduced.nominal.pn as f64 - truth_pos_ned[0],
+                        reduced.nominal.pe as f64 - truth_pos_ned[1],
+                        reduced.nominal.pd as f64 - truth_pos_ned[2],
                     ]),
                     gyro_bias_norm_dps: norm3([
-                        eskf.nominal.bgx as f64,
-                        eskf.nominal.bgy as f64,
-                        eskf.nominal.bgz as f64,
+                        reduced.nominal.bgx as f64,
+                        reduced.nominal.bgy as f64,
+                        reduced.nominal.bgz as f64,
                     ])
                     .to_degrees(),
                     accel_bias_norm_mps2: norm3([
-                        eskf.nominal.bax as f64,
-                        eskf.nominal.bay as f64,
-                        eskf.nominal.baz as f64,
+                        reduced.nominal.bax as f64,
+                        reduced.nominal.bay as f64,
+                        reduced.nominal.baz as f64,
                     ]),
                 });
             }
@@ -1091,7 +932,7 @@ fn run_eskf_on_samples_configured(
     });
 
     let Some(final_err) = errors.last().copied() else {
-        bail!("ESKF produced no state samples");
+        bail!("Reduced produced no state samples");
     };
     let tail_start = (final_err.t_s - 60.0).max(0.0);
     let tail = errors
@@ -1101,8 +942,8 @@ fn run_eskf_on_samples_configured(
     let tail_mount_quat_err_mean_deg =
         tail.iter().map(|e| e.mount_quat_err_deg).sum::<f64>() / tail.len() as f64;
 
-    Ok(EskfSyntheticSummary {
-        ekf_initialized: fusion.eskf().is_some(),
+    Ok(ReducedSyntheticSummary {
+        reduced_initialized: fusion.reduced().is_some(),
         final_mount_quat_err_deg: final_err.mount_quat_err_deg,
         tail_mount_quat_err_mean_deg,
         final_att_quat_err_deg: final_err.att_quat_err_deg,
@@ -1114,10 +955,10 @@ fn run_eskf_on_samples_configured(
 }
 
 fn gnss_with_early_velocity_bias(
-    gnss: &[sim::datasets::gnss_ins_sim::GnssSample],
+    gnss: &[sim::datasets::synthetic_replay::GnssSample],
     bias_ned_mps: [f64; 3],
     end_t_s: f64,
-) -> Vec<sim::datasets::gnss_ins_sim::GnssSample> {
+) -> Vec<sim::datasets::synthetic_replay::GnssSample> {
     gnss.iter()
         .map(|sample| {
             let mut sample = *sample;

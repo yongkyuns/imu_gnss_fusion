@@ -18,7 +18,7 @@
 </text>
 <rect x="1370" y="60" width="18" height="12" rx="3" fill="#FFE0E7" stroke="none"/>
 <text class="label" x="1396" y="56" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
-<tspan x="1396" dy="0">sensor-fusion</tspan>
+<tspan x="1396" dy="0">sensor_fusion</tspan>
 </text>
 <rect x="1518" y="60" width="18" height="12" rx="3" fill="#FFF1D5" stroke="none"/>
 <text class="label" x="1544" y="56" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
@@ -54,7 +54,7 @@
 </text>
 <text class="label" x="72" y="530" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
 <tspan x="72" dy="0">motion_profiles/*.scenario</tspan>
-<tspan x="72" dy="16.200000000000003">Rust-native DSL + gnss-ins-sim parity</tspan>
+<tspan x="72" dy="16.200000000000003">Rust-native DSL + synthetic replay parity</tspan>
 </text>
 <rect x="58" y="634" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#B9DEC7" stroke-width="1"/>
 <text x="72" y="646" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
@@ -78,7 +78,7 @@
 </text>
 <rect x="398" y="350" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#BAD1EE" stroke-width="1"/>
 <text x="412" y="362" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
-<tspan x="412" dy="0">gnss_ins_sim.rs</tspan>
+<tspan x="412" dy="0">synthetic_replay.rs</tspan>
 </text>
 <text class="label" x="412" y="388" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
 <tspan x="412" dy="0">legacy simulator exports</tspan>
@@ -119,7 +119,7 @@
 </text>
 <text class="label" x="752" y="388" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
 <tspan x="752" dy="0">time-ordered IMU/GNSS events</tspan>
-<tspan x="752" dy="16.200000000000003">one public sensor-fusion feed</tspan>
+<tspan x="752" dy="16.200000000000003">one public sensor_fusion feed</tspan>
 </text>
 <rect x="738" y="492" width="249" height="126" rx="8" fill="#FFFFFF" stroke="#C3D1EF" stroke-width="1"/>
 <text x="752" y="504" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
@@ -135,7 +135,7 @@
 </text>
 <text class="label" x="752" y="698" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
 <tspan x="752" dy="0">visualizer</tspan>
-<tspan x="752" dy="16.200000000000003">export_gnss_ins_sim_generic</tspan>
+<tspan x="752" dy="16.200000000000003">export_synthetic_replay_generic</tspan>
 <tspan x="752" dy="16.200000000000003">package_dataset.py</tspan>
 </text>
 <rect x="1060" y="140" width="285" height="760" rx="10" fill="#FFF1F4" stroke="#E9B8C2" stroke-width="1"/>
@@ -161,7 +161,7 @@
 </text>
 <rect x="1078" y="506" width="249" height="126" rx="8" fill="#FFFFFF" stroke="#E9B8C2" stroke-width="1"/>
 <text x="1092" y="518" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
-<tspan x="1092" dy="0">rust_eskf.rs / ESKF</tspan>
+<tspan x="1092" dy="0">reduced.rs / Reduced</tspan>
 </text>
 <text class="label" x="1092" y="544" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
 <tspan x="1092" dy="0">18 error states</tspan>
@@ -169,7 +169,7 @@
 </text>
 <rect x="1078" y="662" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#E9B8C2" stroke-width="1"/>
 <text x="1092" y="674" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
-<tspan x="1092" dy="0">loose.rs / LooseFilter</tspan>
+<tspan x="1092" dy="0">full.rs / FullFilter</tspan>
 </text>
 <text class="label" x="1092" y="700" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
 <tspan x="1092" dy="0">24-state reference path</tspan>
@@ -180,7 +180,7 @@
 <tspan x="1092" dy="0">generated models</tspan>
 </text>
 <text class="label" x="1092" y="840" fill="#536174" font-size="11" font-weight="normal" text-anchor="start">
-<tspan x="1092" dy="0">generated_eskf + generated_loose</tspan>
+<tspan x="1092" dy="0">generated_reduced + generated_full</tspan>
 <tspan x="1092" dy="14.3">symbolic prediction + observations</tspan>
 </text>
 <rect x="1400" y="140" width="285" height="760" rx="10" fill="#FFF7E8" stroke="#E4C782" stroke-width="1"/>
@@ -239,7 +239,7 @@
 <tspan x="478" dy="0">model generation</tspan>
 </text>
 <text class="label" x="478" y="1034" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
-<tspan x="478" dy="0">ekf/code_gen.py, ekf/eskf.py, ins_gnss_loose.py</tspan>
+<tspan x="478" dy="0">sensor_fusion/code_gen.py, sensor_fusion/reduced.py, ins_gnss_full.py</tspan>
 <tspan x="478" dy="16.200000000000003">-&gt; generated Rust modules</tspan>
 </text>
 <rect x="868" y="996" width="380" height="108" rx="8" fill="#F3FAF8" stroke="#BBDDD2" stroke-width="1"/>
@@ -247,7 +247,7 @@
 <tspan x="882" dy="0">tests</tspan>
 </text>
 <text class="label" x="882" y="1034" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
-<tspan x="882" dy="0">ekf/tests</tspan>
+<tspan x="882" dy="0">sensor_fusion/tests</tspan>
 <tspan x="882" dy="16.200000000000003">sim/tests</tspan>
 <tspan x="882" dy="16.200000000000003">synthetic + replay equivalence</tspan>
 </text>

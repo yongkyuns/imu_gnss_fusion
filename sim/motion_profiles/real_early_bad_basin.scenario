@@ -1,6 +1,6 @@
 # Synthetic reconstruction of an early-convergence stress window.
 #
-# It intentionally places ESKF/align startup near a high-yaw-rate maneuver,
+# It intentionally places Reduced/align startup near a high-yaw-rate maneuver,
 # followed by straight braking and long low-excitation segments. Use this with
 # synthetic_bad_basin_sweep to inject GNSS timing/bias faults and look for
 # state-allocation failures.

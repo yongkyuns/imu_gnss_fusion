@@ -182,8 +182,13 @@ fn parse_command(line: &str) -> Result<MotionCommand> {
         other => bail!("unknown motion DSL command '{other}'"),
     }
 
+    let command_type = fields
+        .number(&["type", "command_type"])?
+        .map(|value| value.round() as u8)
+        .unwrap_or(1);
+
     Ok(MotionCommand {
-        command_type: 1,
+        command_type,
         yaw_pitch_roll_cmd_deg,
         body_cmd,
         duration_s,

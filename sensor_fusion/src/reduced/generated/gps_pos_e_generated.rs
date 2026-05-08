@@ -1,0 +1,34 @@
+{
+// Sub Expressions
+let REDUCED_HK_POS_E0: f32 = P[7][7] + R_POS_E;
+let REDUCED_HK_POS_E1: f32 = 1.0_f32/REDUCED_HK_POS_E0;
+
+
+// Observation Jacobians
+H[7] = 1.0_f32;
+
+
+// Kalman gains
+K[0] = REDUCED_HK_POS_E1*P[0][7];
+K[1] = REDUCED_HK_POS_E1*P[1][7];
+K[2] = REDUCED_HK_POS_E1*P[2][7];
+K[3] = REDUCED_HK_POS_E1*P[3][7];
+K[4] = REDUCED_HK_POS_E1*P[4][7];
+K[5] = REDUCED_HK_POS_E1*P[5][7];
+K[6] = REDUCED_HK_POS_E1*P[6][7];
+K[7] = REDUCED_HK_POS_E1*P[7][7];
+K[8] = REDUCED_HK_POS_E1*P[7][8];
+K[9] = REDUCED_HK_POS_E1*P[7][9];
+K[10] = REDUCED_HK_POS_E1*P[7][10];
+K[11] = REDUCED_HK_POS_E1*P[7][11];
+K[12] = REDUCED_HK_POS_E1*P[7][12];
+K[13] = REDUCED_HK_POS_E1*P[7][13];
+K[14] = REDUCED_HK_POS_E1*P[7][14];
+K[15] = REDUCED_HK_POS_E1*P[7][15];
+K[16] = REDUCED_HK_POS_E1*P[7][16];
+K[17] = REDUCED_HK_POS_E1*P[7][17];
+
+
+// Innovation Variance
+S = REDUCED_HK_POS_E0;
+}

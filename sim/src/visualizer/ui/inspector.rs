@@ -6,6 +6,7 @@ use crate::visualizer::model::{
     PlotData, StateContribution, StateCorrelation, UpdateInspectorSample,
 };
 
+use super::state::display_filter_trace_name;
 use super::trace_query::{mount_estimate_reference_traces, sample_trace_at, wrap_degrees};
 
 const UPDATE_INSPECTOR_WINDOW_S: f64 = 5.0;
@@ -90,7 +91,7 @@ pub(super) fn render_update_inspector_contents(
                         ui.label(
                             egui::RichText::new(format!(
                                 "{} {}  dt={:+.2}s{}{}",
-                                sample.filter,
+                                display_filter_trace_name(&sample.filter),
                                 sample.update,
                                 sample.t_s - t_s,
                                 residual,
@@ -160,7 +161,7 @@ fn render_mount_error_ledger(
                 } else {
                     "flat"
                 };
-                ui.label(egui::RichText::new(row.filter).small());
+                ui.label(egui::RichText::new(display_filter_trace_name(row.filter)).small());
                 ui.label(egui::RichText::new(row.axis).small());
                 ui.label(egui::RichText::new(format!("{:+.2} deg", row.start_error_deg)).small());
                 ui.label(egui::RichText::new(format!("{:+.2} deg", row.end_error_deg)).small());
@@ -214,7 +215,7 @@ struct MountUpdatePushRow {
 
 fn mount_error_rows(data: &PlotData, start_t_s: f64, end_t_s: f64) -> Vec<MountErrorLedgerRow> {
     let mut rows = Vec::new();
-    for filter in ["ESKF", "Loose"] {
+    for filter in ["Reduced", "Full"] {
         for axis in ["roll", "pitch", "yaw"] {
             let Some((estimate, reference)) = mount_estimate_reference_traces(data, filter, axis)
             else {
@@ -283,7 +284,11 @@ fn mount_update_push_rows(
                 "flat"
             };
             pushes.push(MountUpdatePushRow {
-                update: format!("{} {}", sample.filter, sample.update),
+                update: format!(
+                    "{} {}",
+                    display_filter_trace_name(&sample.filter),
+                    sample.update
+                ),
                 axis,
                 dx_deg: contribution.value,
                 away_score,
@@ -386,7 +391,7 @@ fn draw_correlation_row(
     update: &str,
     correlation: &StateCorrelation,
 ) {
-    ui.label(egui::RichText::new(filter).small());
+    ui.label(egui::RichText::new(display_filter_trace_name(filter)).small());
     ui.label(egui::RichText::new(&correlation.mount_axis).small());
     ui.label(
         egui::RichText::new(compact_correlation_state(&correlation.state))
@@ -394,8 +399,12 @@ fn draw_correlation_row(
             .monospace(),
     );
     draw_correlation_value(ui, correlation.value).on_hover_text(format!(
-        "{filter} {update}: rho({} / {}, mount {}) = {:+.4}",
-        correlation.group, correlation.state, correlation.mount_axis, correlation.value
+        "{} {update}: rho({} / {}, mount {}) = {:+.4}",
+        display_filter_trace_name(filter),
+        correlation.group,
+        correlation.state,
+        correlation.mount_axis,
+        correlation.value
     ));
     ui.end_row();
 }

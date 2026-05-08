@@ -1,10 +1,10 @@
-use sim::eval::config::{EKF_COMPARE_DEFAULTS, snapshot_ekf_compare_config};
+use sim::eval::config::{FILTER_COMPARE_DEFAULTS, snapshot_filter_compare_config};
 use sim::eval::trace::{
     find_trace, require_trace, require_trace_points, require_trace_schema, sample_nearest_point,
     sample_nearest_value,
 };
 use sim::visualizer::model::Trace;
-use sim::visualizer::pipeline::EkfCompareConfig;
+use sim::visualizer::pipeline::FilterCompareConfig;
 
 #[test]
 fn trace_helpers_find_required_traces_and_sample_nearest_values() {
@@ -51,7 +51,7 @@ fn trace_schema_helper_requires_named_traces() {
 }
 
 #[test]
-fn ekf_compare_config_defaults_match_regression_snapshot() {
-    let actual = snapshot_ekf_compare_config(&EkfCompareConfig::default());
-    assert_eq!(actual, EKF_COMPARE_DEFAULTS);
+fn filter_compare_config_defaults_match_regression_snapshot() {
+    let actual = snapshot_filter_compare_config(&FilterCompareConfig::default());
+    assert_eq!(actual, FILTER_COMPARE_DEFAULTS);
 }
