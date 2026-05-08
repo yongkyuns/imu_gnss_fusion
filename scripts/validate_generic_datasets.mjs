@@ -186,9 +186,9 @@ function validateManifest(manifest) {
         }
         if (
           dataset.smoke.misalignment !== undefined &&
-          !["internal", "external", "ref"].includes(dataset.smoke.misalignment)
+          !["auto", "manual"].includes(dataset.smoke.misalignment)
         ) {
-          errors.push(`${label}.smoke.misalignment must be internal, external, or ref`);
+          errors.push(`${label}.smoke.misalignment must be auto or manual`);
         }
       }
     }
@@ -404,7 +404,7 @@ async function runSmokeProfile(dataset, replayDir, args) {
     return;
   }
   const smokeDir = await makeSmokeReplay(dataset, replayDir, args);
-  const misalignment = dataset.smoke?.misalignment || "internal";
+  const misalignment = dataset.smoke?.misalignment || "auto";
   await run(args.cargo, [
     "run",
     "-p",

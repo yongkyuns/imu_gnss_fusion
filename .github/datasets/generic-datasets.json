@@ -44,7 +44,7 @@
         "enabled": false,
         "max_imu_rows": 17604,
         "max_gnss_rows": 354,
-        "misalignment": "internal"
+        "misalignment": "auto"
       }
     },
     {
@@ -89,7 +89,7 @@
         "enabled": false,
         "max_imu_rows": 18904,
         "max_gnss_rows": 380,
-        "misalignment": "internal"
+        "misalignment": "auto"
       }
     },
     {
@@ -134,7 +134,7 @@
         "enabled": false,
         "max_imu_rows": 20000,
         "max_gnss_rows": 400,
-        "misalignment": "internal"
+        "misalignment": "auto"
       }
     },
     {
@@ -179,7 +179,7 @@
         "enabled": false,
         "max_imu_rows": 20000,
         "max_gnss_rows": 400,
-        "misalignment": "internal"
+        "misalignment": "auto"
       }
     },
     {
@@ -224,7 +224,7 @@
         "enabled": false,
         "max_imu_rows": 20000,
         "max_gnss_rows": 400,
-        "misalignment": "internal"
+        "misalignment": "auto"
       }
     },
     {
@@ -269,7 +269,7 @@
         "enabled": true,
         "max_imu_rows": 15010,
         "max_gnss_rows": 302,
-        "misalignment": "internal"
+        "misalignment": "auto"
       }
     },
     {
@@ -314,7 +314,7 @@
         "enabled": false,
         "max_imu_rows": 9502,
         "max_gnss_rows": 191,
-        "misalignment": "internal"
+        "misalignment": "auto"
       }
     },
     {
@@ -359,7 +359,7 @@
         "enabled": false,
         "max_imu_rows": 20000,
         "max_gnss_rows": 400,
-        "misalignment": "internal"
+        "misalignment": "auto"
       }
     },
     {
@@ -404,7 +404,7 @@
         "enabled": false,
         "max_imu_rows": 20000,
         "max_gnss_rows": 400,
-        "misalignment": "internal"
+        "misalignment": "auto"
       }
     },
     {
@@ -449,7 +449,7 @@
         "enabled": false,
         "max_imu_rows": 20000,
         "max_gnss_rows": 400,
-        "misalignment": "internal"
+        "misalignment": "auto"
       }
     },
     {
@@ -494,7 +494,7 @@
         "enabled": false,
         "max_imu_rows": 20000,
         "max_gnss_rows": 400,
-        "misalignment": "internal"
+        "misalignment": "auto"
       }
     },
     {
@@ -539,7 +539,7 @@
         "enabled": false,
         "max_imu_rows": 20000,
         "max_gnss_rows": 400,
-        "misalignment": "internal"
+        "misalignment": "auto"
       }
     },
     {
@@ -584,7 +584,7 @@
         "enabled": false,
         "max_imu_rows": 20000,
         "max_gnss_rows": 400,
-        "misalignment": "internal"
+        "misalignment": "auto"
       }
     },
     {
@@ -629,7 +629,7 @@
         "enabled": false,
         "max_imu_rows": 20000,
         "max_gnss_rows": 400,
-        "misalignment": "internal"
+        "misalignment": "auto"
       }
     },
     {
@@ -674,7 +674,7 @@
         "enabled": false,
         "max_imu_rows": 20000,
         "max_gnss_rows": 400,
-        "misalignment": "internal"
+        "misalignment": "auto"
       }
     },
     {
@@ -719,7 +719,7 @@
         "enabled": false,
         "max_imu_rows": 20000,
         "max_gnss_rows": 400,
-        "misalignment": "internal"
+        "misalignment": "auto"
       }
     },
     {
@@ -764,7 +764,7 @@
         "enabled": false,
         "max_imu_rows": 20000,
         "max_gnss_rows": 400,
-        "misalignment": "internal"
+        "misalignment": "auto"
       }
     }
   ]

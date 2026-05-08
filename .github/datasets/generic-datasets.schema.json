@@ -88,8 +88,8 @@
               },
               "misalignment": {
                 "type": "string",
-                "enum": ["internal", "external", "ref"],
-                "default": "internal"
+                "enum": ["auto", "manual"],
+                "default": "auto"
               }
             }
           }
