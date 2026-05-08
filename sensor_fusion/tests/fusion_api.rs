@@ -1,8 +1,8 @@
+use sensor_fusion::ProcessNoise;
 use sensor_fusion::{
     Config, Filter, GnssSample, ImuSample, MountMode, MountSource, SensorFusion,
     VehicleSpeedDirection, VehicleSpeedSample,
 };
-use sensor_fusion::{ProcessNoise, reduced::RustReduced};
 
 fn gnss_sample(t_s: f32) -> GnssSample {
     GnssSample {
@@ -155,7 +155,7 @@ fn zero_velocity_update_does_not_inject_mount_error() {
     const DIAG_ZERO_VEL: usize = 2;
     const DIAG_ZERO_VEL_D: usize = 10;
 
-    let mut reduced = RustReduced::new(ProcessNoise::default());
+    let mut reduced = sensor_fusion::reduced::Filter::new(ProcessNoise::default());
     {
         let raw = reduced.raw_mut();
         raw.nominal.vn = 0.7;

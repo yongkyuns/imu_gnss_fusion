@@ -1,4 +1,4 @@
-use sensor_fusion::reduced::{
+use sensor_fusion::reduced::state_ops::{
     ERROR_STATE_DIM, ErrorState, IDX_DBA_X, IDX_DBG_X, IDX_DPOS_N, IDX_DPSI_CS_X, IDX_DTHETA_Z,
     IDX_DVEL_N, ImuDelta, NominalState, error_reset_jacobian,
 };

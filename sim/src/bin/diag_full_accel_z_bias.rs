@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::Parser;
 use sensor_fusion::ProcessNoise;
-use sensor_fusion::full::{FULL_ERROR_STATES, FullFilter, FullImuDelta};
+use sensor_fusion::full::{ERROR_STATES, Filter, ImuDelta};
 use sim::eval::gnss_ins::{quat_conj, quat_mul};
 use sim::synthetic::gnss_ins_path::{MotionProfile, PathGenConfig, generate};
 use sim::visualizer::math::lla_to_ecef;
@@ -115,7 +115,7 @@ fn run_case(scenario: &Path, accel_z_bias_mps2: f64, args: &Args) -> Result<Resu
         first_truth.lon_deg,
         first_truth.vel_ned_mps,
     );
-    let mut full = FullFilter::new(ProcessNoise::lsm6dso_104hz());
+    let mut full = Filter::new(ProcessNoise::lsm6dso_104hz());
     full.init_from_reference_ecef_state(
         q_es0.map(|v| v as f32),
         pos0,
@@ -161,7 +161,7 @@ fn run_case(scenario: &Path, accel_z_bias_mps2: f64, args: &Args) -> Result<Resu
             curr.accel_vehicle_mps2[1],
             curr.accel_vehicle_mps2[2] + accel_z_bias_mps2,
         ];
-        full.predict(FullImuDelta {
+        full.predict(ImuDelta {
             dax_1: (prev.gyro_vehicle_radps[0] * dt_s) as f32,
             day_1: (prev.gyro_vehicle_radps[1] * dt_s) as f32,
             daz_1: (prev.gyro_vehicle_radps[2] * dt_s) as f32,
@@ -245,8 +245,8 @@ fn run_case(scenario: &Path, accel_z_bias_mps2: f64, args: &Args) -> Result<Resu
     Ok(final_row)
 }
 
-fn build_p_diag(args: &Args) -> [f32; FULL_ERROR_STATES] {
-    let mut p = [0.0_f32; FULL_ERROR_STATES];
+fn build_p_diag(args: &Args) -> [f32; ERROR_STATES] {
+    let mut p = [0.0_f32; ERROR_STATES];
     let pos_var = args.pos_std_m.max(0.001).powi(2);
     let vel_var = args.vel_std_mps.max(0.001).powi(2);
     let att_var = 1.0e-8_f32;

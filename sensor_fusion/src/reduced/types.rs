@@ -3,11 +3,11 @@
 use super::generated::ERROR_STATES;
 use crate::ProcessNoise;
 
-pub const REDUCED_UPDATE_DIAG_TYPES: usize = 11;
+pub const UPDATE_DIAG_TYPES: usize = 11;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-pub struct ReducedNominalState {
+pub struct NominalState {
     pub q0: f32,
     pub q1: f32,
     pub q2: f32,
@@ -32,7 +32,7 @@ pub struct ReducedNominalState {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-pub struct ReducedStationaryDiag {
+pub struct StationaryDiag {
     pub innovation_x: f32,
     pub innovation_y: f32,
     pub k_theta_x_from_x: f32,
@@ -54,91 +54,91 @@ pub struct ReducedStationaryDiag {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-pub struct ReducedUpdateDiag {
+pub struct UpdateDiag {
     pub total_updates: u32,
-    pub type_counts: [u32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_dx_att_roll: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_abs_dx_att_roll: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_dx_yaw: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_abs_dx_yaw: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_dx_pitch: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_abs_dx_pitch: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_dx_vel_n: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_dx_vel_e: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_dx_vel_d: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_abs_dx_vel_n: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_abs_dx_vel_e: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_abs_dx_vel_d: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_abs_dx_vel_h: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_dx_gyro_bias_z: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_abs_dx_gyro_bias_z: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_dx_gyro_bias: [[f32; 3]; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_abs_dx_gyro_bias: [[f32; 3]; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_dx_accel_bias: [[f32; 3]; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_abs_dx_accel_bias: [[f32; 3]; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_abs_dx_mount_norm: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_dx_mount_roll: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_dx_mount_pitch: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_dx_mount_yaw: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_abs_dx_mount_roll: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_abs_dx_mount_pitch: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_abs_dx_mount_yaw: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_innovation: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_abs_innovation: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_nis: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub max_nis: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_abs_h_yaw: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_abs_h_gyro_bias_z: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_h_mount_norm: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_abs_k_yaw: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_k_mount_norm: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub sum_abs_corr_yaw_mount_yaw: [f32; REDUCED_UPDATE_DIAG_TYPES],
+    pub type_counts: [u32; UPDATE_DIAG_TYPES],
+    pub sum_dx_att_roll: [f32; UPDATE_DIAG_TYPES],
+    pub sum_abs_dx_att_roll: [f32; UPDATE_DIAG_TYPES],
+    pub sum_dx_yaw: [f32; UPDATE_DIAG_TYPES],
+    pub sum_abs_dx_yaw: [f32; UPDATE_DIAG_TYPES],
+    pub sum_dx_pitch: [f32; UPDATE_DIAG_TYPES],
+    pub sum_abs_dx_pitch: [f32; UPDATE_DIAG_TYPES],
+    pub sum_dx_vel_n: [f32; UPDATE_DIAG_TYPES],
+    pub sum_dx_vel_e: [f32; UPDATE_DIAG_TYPES],
+    pub sum_dx_vel_d: [f32; UPDATE_DIAG_TYPES],
+    pub sum_abs_dx_vel_n: [f32; UPDATE_DIAG_TYPES],
+    pub sum_abs_dx_vel_e: [f32; UPDATE_DIAG_TYPES],
+    pub sum_abs_dx_vel_d: [f32; UPDATE_DIAG_TYPES],
+    pub sum_abs_dx_vel_h: [f32; UPDATE_DIAG_TYPES],
+    pub sum_dx_gyro_bias_z: [f32; UPDATE_DIAG_TYPES],
+    pub sum_abs_dx_gyro_bias_z: [f32; UPDATE_DIAG_TYPES],
+    pub sum_dx_gyro_bias: [[f32; 3]; UPDATE_DIAG_TYPES],
+    pub sum_abs_dx_gyro_bias: [[f32; 3]; UPDATE_DIAG_TYPES],
+    pub sum_dx_accel_bias: [[f32; 3]; UPDATE_DIAG_TYPES],
+    pub sum_abs_dx_accel_bias: [[f32; 3]; UPDATE_DIAG_TYPES],
+    pub sum_abs_dx_mount_norm: [f32; UPDATE_DIAG_TYPES],
+    pub sum_dx_mount_roll: [f32; UPDATE_DIAG_TYPES],
+    pub sum_dx_mount_pitch: [f32; UPDATE_DIAG_TYPES],
+    pub sum_dx_mount_yaw: [f32; UPDATE_DIAG_TYPES],
+    pub sum_abs_dx_mount_roll: [f32; UPDATE_DIAG_TYPES],
+    pub sum_abs_dx_mount_pitch: [f32; UPDATE_DIAG_TYPES],
+    pub sum_abs_dx_mount_yaw: [f32; UPDATE_DIAG_TYPES],
+    pub sum_innovation: [f32; UPDATE_DIAG_TYPES],
+    pub sum_abs_innovation: [f32; UPDATE_DIAG_TYPES],
+    pub sum_nis: [f32; UPDATE_DIAG_TYPES],
+    pub max_nis: [f32; UPDATE_DIAG_TYPES],
+    pub sum_abs_h_yaw: [f32; UPDATE_DIAG_TYPES],
+    pub sum_abs_h_gyro_bias_z: [f32; UPDATE_DIAG_TYPES],
+    pub sum_h_mount_norm: [f32; UPDATE_DIAG_TYPES],
+    pub sum_abs_k_yaw: [f32; UPDATE_DIAG_TYPES],
+    pub sum_k_mount_norm: [f32; UPDATE_DIAG_TYPES],
+    pub sum_abs_corr_yaw_mount_yaw: [f32; UPDATE_DIAG_TYPES],
     pub last_dx_mount_roll: f32,
     pub last_dx_mount_pitch: f32,
     pub last_dx_mount_yaw: f32,
-    pub last_dx_mount_roll_by_type: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub last_dx_mount_pitch_by_type: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    pub last_dx_mount_yaw_by_type: [f32; REDUCED_UPDATE_DIAG_TYPES],
+    pub last_dx_mount_roll_by_type: [f32; UPDATE_DIAG_TYPES],
+    pub last_dx_mount_pitch_by_type: [f32; UPDATE_DIAG_TYPES],
+    pub last_dx_mount_yaw_by_type: [f32; UPDATE_DIAG_TYPES],
     pub last_k_mount_yaw: f32,
     pub last_innovation: f32,
-    pub last_innovation_by_type: [f32; REDUCED_UPDATE_DIAG_TYPES],
+    pub last_innovation_by_type: [f32; UPDATE_DIAG_TYPES],
     pub last_innovation_var: f32,
     pub last_nis: f32,
-    pub last_nis_by_type: [f32; REDUCED_UPDATE_DIAG_TYPES],
+    pub last_nis_by_type: [f32; UPDATE_DIAG_TYPES],
     pub last_h_mount_norm: f32,
-    pub last_h_mount_norm_by_type: [f32; REDUCED_UPDATE_DIAG_TYPES],
+    pub last_h_mount_norm_by_type: [f32; UPDATE_DIAG_TYPES],
     pub last_corr_yaw_mount_yaw: f32,
     pub last_type: u32,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct ReducedState {
-    pub nominal: ReducedNominalState,
+pub struct State {
+    pub nominal: NominalState,
     pub p: [[f32; ERROR_STATES]; ERROR_STATES],
     pub noise: ProcessNoise,
-    pub stationary_diag: ReducedStationaryDiag,
-    pub update_diag: ReducedUpdateDiag,
+    pub stationary_diag: StationaryDiag,
+    pub update_diag: UpdateDiag,
 }
 
-impl Default for ReducedState {
+impl Default for State {
     fn default() -> Self {
         Self {
-            nominal: ReducedNominalState {
+            nominal: NominalState {
                 qcs0: 1.0,
-                ..ReducedNominalState::default()
+                ..NominalState::default()
             },
             p: [[0.0; ERROR_STATES]; ERROR_STATES],
             noise: ProcessNoise::lsm6dso_104hz(),
-            stationary_diag: ReducedStationaryDiag::default(),
-            update_diag: ReducedUpdateDiag::default(),
+            stationary_diag: StationaryDiag::default(),
+            update_diag: UpdateDiag::default(),
         }
     }
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-pub struct ReducedImuDelta {
+pub struct ImuDelta {
     pub dax: f32,
     pub day: f32,
     pub daz: f32,
@@ -149,7 +149,7 @@ pub struct ReducedImuDelta {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct ReducedGnssSample {
+pub struct GnssSample {
     pub t_s: f32,
     pub pos_ned_m: [f32; 3],
     pub vel_ned_mps: [f32; 3],

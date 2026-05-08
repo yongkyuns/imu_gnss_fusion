@@ -1,8 +1,8 @@
 use anyhow::Result;
 use clap::Parser;
 use sensor_fusion::ProcessNoise;
-use sensor_fusion::full::{FULL_ERROR_STATES, FullFilter, FullImuDelta};
-use sensor_fusion::reduced::{REDUCED_UPDATE_DIAG_TYPES, ReducedUpdateDiag};
+use sensor_fusion::full::{ERROR_STATES, Filter, ImuDelta};
+use sensor_fusion::reduced::{UPDATE_DIAG_TYPES, UpdateDiag};
 use sensor_fusion::{MountSource, SensorFusion};
 use sim::datasets::generic_replay::{
     GenericGnssSample, GenericImuSample, fusion_gnss_sample, fusion_imu_sample,
@@ -16,7 +16,7 @@ use sim::visualizer::pipeline::synthetic::{
 use std::path::PathBuf;
 
 const FULL_OBS_TYPES: usize = 9;
-const REDUCED_LABELS: [&str; REDUCED_UPDATE_DIAG_TYPES] = [
+const REDUCED_LABELS: [&str; UPDATE_DIAG_TYPES] = [
     "gps_pos",
     "gps_vel",
     "zero_vel",
@@ -144,12 +144,12 @@ fn run_reduced_allocation(
     q_mount: [f32; 4],
     cfg: FilterCompareConfig,
     args: &Args,
-) -> (Allocation<REDUCED_UPDATE_DIAG_TYPES>, ResidualSummary) {
+) -> (Allocation<UPDATE_DIAG_TYPES>, ResidualSummary) {
     let mut fusion = SensorFusion::new();
     apply_fusion_config(&mut fusion, cfg);
     fusion.set_misalignment(q_mount);
 
-    let mut prev_diag = ReducedUpdateDiag::default();
+    let mut prev_diag = UpdateDiag::default();
     let mut out = Allocation::default();
     let mut residuals = ResidualSummary::default();
     for_each_event(&replay.imu, &replay.gnss, |event| {
@@ -196,8 +196,8 @@ fn run_full_allocation(
     cfg: FilterCompareConfig,
     args: &Args,
 ) -> (Allocation<FULL_OBS_TYPES>, ResidualSummary) {
-    let mut full = FullFilter::new(
-        cfg.full_predict_noise
+    let mut full = Filter::new(
+        cfg.noise.full
             .unwrap_or_else(ProcessNoise::lsm6dso_104hz),
     );
     let mut out = Allocation::default();
@@ -321,11 +321,11 @@ fn run_full_allocation(
 }
 
 fn accumulate_reduced_diag_delta(
-    out: &mut Allocation<REDUCED_UPDATE_DIAG_TYPES>,
-    prev: &ReducedUpdateDiag,
-    curr: &ReducedUpdateDiag,
+    out: &mut Allocation<UPDATE_DIAG_TYPES>,
+    prev: &UpdateDiag,
+    curr: &UpdateDiag,
 ) {
-    for ty in 0..REDUCED_UPDATE_DIAG_TYPES {
+    for ty in 0..UPDATE_DIAG_TYPES {
         let count_delta = curr.type_counts[ty].saturating_sub(prev.type_counts[ty]);
         out.count[ty] += count_delta;
         out.residual_sum[ty] += (curr.sum_innovation[ty] - prev.sum_innovation[ty]) as f64;
@@ -348,7 +348,7 @@ fn accumulate_reduced_diag_delta(
     }
 }
 
-fn accumulate_full_last_update(out: &mut Allocation<FULL_OBS_TYPES>, full: &FullFilter) {
+fn accumulate_full_last_update(out: &mut Allocation<FULL_OBS_TYPES>, full: &Filter) {
     let obs_types = full.last_obs_types();
     let dx_by_obs = full.last_dx_by_obs();
     let effective_residuals = full.last_effective_residuals();
@@ -436,8 +436,8 @@ fn print_residual_summary(filter: &str, residuals: ResidualSummary) {
 
 fn apply_fusion_config(fusion: &mut SensorFusion, cfg: FilterCompareConfig) {
     fusion.set_align_config(cfg.align);
-    if let Some(noise) = cfg.predict_noise {
-        fusion.set_predict_noise(noise);
+    if let Some(noise) = cfg.noise.reduced {
+        fusion.set_reduced_noise(noise);
     }
     fusion.set_r_body_vel_yz(cfg.r_body_vel, cfg.r_body_vel_z);
     fusion.set_attitude_roll_pitch_init_sigma_rad(
@@ -460,11 +460,8 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: FilterCompareConfig) {
     fusion.set_mount_settle_zero_cross_covariance(cfg.mount_settle_zero_cross_covariance);
 }
 
-fn default_full_p_diag(
-    gnss: GenericGnssSample,
-    cfg: FilterCompareConfig,
-) -> [f32; FULL_ERROR_STATES] {
-    let mut p = [1.0_f32; FULL_ERROR_STATES];
+fn default_full_p_diag(gnss: GenericGnssSample, cfg: FilterCompareConfig) -> [f32; ERROR_STATES] {
+    let mut p = [1.0_f32; ERROR_STATES];
     let init = cfg.full_init;
     let pos_n_sigma = (gnss.pos_std_m[0] as f32).max(init.pos_min_sigma_m);
     let pos_e_sigma = (gnss.pos_std_m[1] as f32).max(init.pos_min_sigma_m);
@@ -505,8 +502,8 @@ fn default_full_p_diag(
     p
 }
 
-fn full_imu_delta(prev: GenericImuSample, curr: GenericImuSample, dt: f64) -> FullImuDelta {
-    FullImuDelta {
+fn full_imu_delta(prev: GenericImuSample, curr: GenericImuSample, dt: f64) -> ImuDelta {
+    ImuDelta {
         dax_1: (prev.gyro_radps[0] * dt) as f32,
         day_1: (prev.gyro_radps[1] * dt) as f32,
         daz_1: (prev.gyro_radps[2] * dt) as f32,

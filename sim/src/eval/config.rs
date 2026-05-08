@@ -23,8 +23,8 @@ pub struct FilterCompareConfigSnapshot {
     pub predict_imu_lpf_cutoff_hz: Option<f64>,
     pub predict_imu_decimation: usize,
     pub yaw_init_speed_mps: f64,
-    pub predict_noise_configured: bool,
-    pub full_predict_noise_configured: bool,
+    pub reduced_noise_configured: bool,
+    pub full_noise_configured: bool,
 }
 
 pub const FILTER_COMPARE_DEFAULTS: FilterCompareConfigSnapshot = FilterCompareConfigSnapshot {
@@ -49,8 +49,8 @@ pub const FILTER_COMPARE_DEFAULTS: FilterCompareConfigSnapshot = FilterCompareCo
     predict_imu_lpf_cutoff_hz: None,
     predict_imu_decimation: 1,
     yaw_init_speed_mps: 0.0,
-    predict_noise_configured: true,
-    full_predict_noise_configured: true,
+    reduced_noise_configured: true,
+    full_noise_configured: true,
 };
 
 pub fn snapshot_filter_compare_config(cfg: &FilterCompareConfig) -> FilterCompareConfigSnapshot {
@@ -76,7 +76,7 @@ pub fn snapshot_filter_compare_config(cfg: &FilterCompareConfig) -> FilterCompar
         predict_imu_lpf_cutoff_hz: cfg.predict_imu_lpf_cutoff_hz,
         predict_imu_decimation: cfg.predict_imu_decimation,
         yaw_init_speed_mps: cfg.yaw_init_speed_mps,
-        predict_noise_configured: cfg.predict_noise.is_some(),
-        full_predict_noise_configured: cfg.full_predict_noise.is_some(),
+        reduced_noise_configured: cfg.noise.reduced.is_some(),
+        full_noise_configured: cfg.noise.full.is_some(),
     }
 }

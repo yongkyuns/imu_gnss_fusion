@@ -1,9 +1,9 @@
 use sensor_fusion::generated_reduced::{self, ERROR_STATES};
-use sensor_fusion::reduced::ReducedNominalState;
+use sensor_fusion::reduced::NominalState;
 
 #[test]
 fn body_velocity_yz_jacobians_match_nominal_model_finite_difference() {
-    let nominal = ReducedNominalState {
+    let nominal = NominalState {
         q0: 0.979_466,
         q1: 0.059_519,
         q2: -0.068_553,
@@ -15,7 +15,7 @@ fn body_velocity_yz_jacobians_match_nominal_model_finite_difference() {
         qcs1: 0.045_023,
         qcs2: -0.036_704,
         qcs3: 0.081_264,
-        ..ReducedNominalState::default()
+        ..NominalState::default()
     };
     let p = [[0.0; ERROR_STATES]; ERROR_STATES];
     let obs_y = generated_reduced::body_vel_y_observation(&nominal, &p, 1.0);
@@ -29,7 +29,7 @@ fn body_velocity_yz_jacobians_match_nominal_model_finite_difference() {
     }
 }
 
-fn finite_difference(nominal: &ReducedNominalState, state: usize, component: usize) -> f32 {
+fn finite_difference(nominal: &NominalState, state: usize, component: usize) -> f32 {
     let eps = 1.0e-4_f32;
     let mut plus = *nominal;
     let mut minus = *nominal;
@@ -38,7 +38,7 @@ fn finite_difference(nominal: &ReducedNominalState, state: usize, component: usi
     (vehicle_velocity(&plus)[component] - vehicle_velocity(&minus)[component]) / (2.0 * eps)
 }
 
-fn apply_error(nominal: &mut ReducedNominalState, state: usize, dx: f32) {
+fn apply_error(nominal: &mut NominalState, state: usize, dx: f32) {
     match state {
         0..=2 => {
             let mut dq = [1.0, 0.0, 0.0, 0.0];
@@ -59,7 +59,7 @@ fn apply_error(nominal: &mut ReducedNominalState, state: usize, dx: f32) {
     }
 }
 
-fn vehicle_velocity(n: &ReducedNominalState) -> [f32; 3] {
+fn vehicle_velocity(n: &NominalState) -> [f32; 3] {
     [
         (1.0 - 2.0 * n.q2 * n.q2 - 2.0 * n.q3 * n.q3) * n.vn
             + 2.0 * (n.q1 * n.q2 + n.q0 * n.q3) * n.ve

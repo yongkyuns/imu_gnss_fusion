@@ -45,8 +45,8 @@ Symbolic model sources live next to the Rust crate:
 
 | Path | Role |
 | --- | --- |
-| `sensor_fusion/reduced.py` | SymPy source for Reduced generated Rust. |
-| `sensor_fusion/ins_gnss_full.py` | SymPy source for Full generated Rust. |
+| `sensor_fusion/src/reduced/formulation.py` | SymPy source for Reduced generated Rust. |
+| `sensor_fusion/src/full/formulation.py` | SymPy source for Full generated Rust. |
 | `sensor_fusion/code_gen.py` | Shared Python code-generation helpers. |
 
 ### `sim` crate (`sim/src`)
@@ -92,7 +92,7 @@ The main replay path is:
 4. `sensor_fusion` runs the Align, Full EKF, and Reduced EKF estimators.
 5. `sim::visualizer` displays traces, map data, mount states, diagnostics, and summary statistics.
 
-The runtime Rust filter code consumes generated matrix/Jacobian snippets under `sensor_fusion/src/generated_reduced/` and `sensor_fusion/src/generated_full/`. The symbolic sources live in Python so model derivation stays reviewable while generated Rust stays fast and dependency-light.
+The runtime Rust filter code consumes generated matrix/Jacobian snippets under `sensor_fusion/src/reduced/generated/` and `sensor_fusion/src/full/generated/`. The symbolic sources live in Python so model derivation stays reviewable while generated Rust stays fast and dependency-light.
 
 Plots, controls, modules, binaries, and generated-code paths consistently use
 **Reduced** for the reduced-state local-NED EKF and **Full** for the full-state
@@ -205,18 +205,18 @@ reference_mount.csv.gz     # optional
 
 ## ⚙️ Generated-Code Workflow
 
-Generated Rust files are checked in and included by `sensor_fusion/src/generated_reduced.rs` and `sensor_fusion/src/generated_full.rs`.
+Generated Rust files are checked in and included by the generated wrappers in `sensor_fusion/src/reduced/generated.rs` and `sensor_fusion/src/full/generated.rs`.
 
-Regenerate Reduced EKF model code after changing `sensor_fusion/reduced.py`:
+Regenerate Reduced EKF model code after changing `sensor_fusion/src/reduced/formulation.py`:
 
 ```bash
-python sensor_fusion/reduced.py --emit-rust
+python sensor_fusion/src/reduced/formulation.py --emit-rust
 ```
 
-Regenerate Full EKF model code after changing `sensor_fusion/ins_gnss_full.py`:
+Regenerate Full EKF model code after changing `sensor_fusion/src/full/formulation.py`:
 
 ```bash
-python sensor_fusion/ins_gnss_full.py --emit-rust
+python sensor_fusion/src/full/formulation.py --emit-rust
 ```
 
 After regeneration, review the generated diffs and run targeted tests from [docs/testing.md](docs/testing.md).

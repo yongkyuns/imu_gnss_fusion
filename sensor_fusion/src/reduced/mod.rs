@@ -1,10 +1,9 @@
 //! Reduced EKF runtime, public state structs, and standalone state helpers.
 //!
 //! Mathematical details are maintained in `docs/reduced_mount_formulation.pdf`.
-//! The runtime filter is [`RustReduced`]. Public `Reduced*` structs define the
-//! generated-code and diagnostics data layout, while the shorter `NominalState`
-//! and `ErrorState` helpers provide focused state-operation utilities for tests
-//! and support code.
+//! The runtime filter is [`Filter`]. Public structs in this module define the
+//! generated-code and diagnostics data layout. Focused state-operation helpers
+//! live under [`state_ops`].
 
 use libm::{fabsf, sqrtf};
 
@@ -12,21 +11,13 @@ use crate::covariance::{self, SparseCovariancePolicy};
 use crate::math::{normalize_quat_f32, quat_multiply_f32};
 #[doc(hidden)]
 pub mod generated;
-mod state_ops;
+pub mod state_ops;
 mod types;
 
 use crate::ProcessNoise;
 use generated::{ERROR_STATES, NOISE_STATES};
-pub use state_ops::{
-    ERROR_STATE_DIM, ErrorState, IDX_DBA_X, IDX_DBA_Y, IDX_DBA_Z, IDX_DBG_X, IDX_DBG_Y, IDX_DBG_Z,
-    IDX_DPOS_D, IDX_DPOS_E, IDX_DPOS_N, IDX_DPSI_CS_X, IDX_DPSI_CS_Y, IDX_DPSI_CS_Z, IDX_DTHETA_X,
-    IDX_DTHETA_Y, IDX_DTHETA_Z, IDX_DVEL_D, IDX_DVEL_E, IDX_DVEL_N, ImuDelta, NOMINAL_STATE_DIM,
-    NominalState, error_reset_jacobian, normalize_quat, quat_from_delta_theta, quat_multiply,
-    quat_to_rot,
-};
 pub use types::{
-    REDUCED_UPDATE_DIAG_TYPES, ReducedGnssSample, ReducedImuDelta, ReducedNominalState,
-    ReducedState, ReducedStationaryDiag, ReducedUpdateDiag,
+    GnssSample, ImuDelta, NominalState, State, StationaryDiag, UPDATE_DIAG_TYPES, UpdateDiag,
 };
 
 const RUNTIME_ZERO_VEL_R_DIAG: f32 = 0.01;
@@ -48,25 +39,25 @@ const MAX_BATCH_OBS: usize = 8;
 
 /// Rust Reduced state machine with covariance and residual mount-control policy.
 #[derive(Debug, Clone)]
-pub struct RustReduced {
-    raw: ReducedState,
+pub struct Filter {
+    raw: State,
     freeze_misalignment_states: bool,
     gravity_mss: f32,
 }
 
-impl RustReduced {
+impl Filter {
     /// Creates a filter with identity attitude/mount and diagonal covariance.
     pub fn new(noise: ProcessNoise) -> Self {
-        let mut raw = ReducedState {
-            nominal: ReducedNominalState {
+        let mut raw = State {
+            nominal: NominalState {
                 q0: 1.0,
                 qcs0: 1.0,
-                ..ReducedNominalState::default()
+                ..NominalState::default()
             },
             p: [[0.0; ERROR_STATES]; ERROR_STATES],
             noise,
-            stationary_diag: ReducedStationaryDiag::default(),
-            update_diag: ReducedUpdateDiag::default(),
+            stationary_diag: StationaryDiag::default(),
+            update_diag: UpdateDiag::default(),
         };
         for i in 0..ERROR_STATES {
             raw.p[i][i] = 1.0;
@@ -79,12 +70,12 @@ impl RustReduced {
     }
 
     /// Returns the full raw Reduced state.
-    pub fn raw(&self) -> &ReducedState {
+    pub fn raw(&self) -> &State {
         &self.raw
     }
 
     /// Returns mutable access to the full raw Reduced state for integration code and diagnostics.
-    pub fn raw_mut(&mut self) -> &mut ReducedState {
+    pub fn raw_mut(&mut self) -> &mut State {
         &mut self.raw
     }
 
@@ -96,7 +87,7 @@ impl RustReduced {
     }
 
     /// Returns the nominal navigation state.
-    pub fn nominal(&self) -> &ReducedNominalState {
+    pub fn nominal(&self) -> &NominalState {
         &self.raw.nominal
     }
 
@@ -119,7 +110,7 @@ impl RustReduced {
     }
 
     /// Initializes nominal attitude, velocity, and position from a GNSS sample.
-    pub fn init_nominal_from_gnss(&mut self, q_bn: [f32; 4], gnss: ReducedGnssSample) {
+    pub fn init_nominal_from_gnss(&mut self, q_bn: [f32; 4], gnss: GnssSample) {
         const DEFAULT_GYRO_BIAS_SIGMA_DPS: f32 = 0.125;
         const DEFAULT_ACCEL_BIAS_SIGMA_MPS2: f32 = 0.15;
 
@@ -180,7 +171,7 @@ impl RustReduced {
     }
 
     /// Predicts nominal state and covariance from one IMU delta.
-    pub fn predict(&mut self, imu: ReducedImuDelta) {
+    pub fn predict(&mut self, imu: ImuDelta) {
         if imu.dt <= 0.0 || !imu.dt.is_finite() {
             return;
         }
@@ -224,17 +215,14 @@ impl RustReduced {
     }
 
     /// Computes the generated error-state transition matrix for an IMU delta.
-    pub fn compute_error_transition(
-        &self,
-        imu: ReducedImuDelta,
-    ) -> [[f32; ERROR_STATES]; ERROR_STATES] {
+    pub fn compute_error_transition(&self, imu: ImuDelta) -> [[f32; ERROR_STATES]; ERROR_STATES] {
         self.compute_error_transition_with_noise(imu).0
     }
 
     /// Computes generated error-state transition and noise-input matrices.
     pub fn compute_error_transition_with_noise(
         &self,
-        imu: ReducedImuDelta,
+        imu: ImuDelta,
     ) -> (
         [[f32; ERROR_STATES]; ERROR_STATES],
         [[f32; NOISE_STATES]; ERROR_STATES],
@@ -243,7 +231,7 @@ impl RustReduced {
     }
 
     /// Fuses GNSS position and velocity.
-    pub fn fuse_gps(&mut self, sample: ReducedGnssSample) {
+    pub fn fuse_gps(&mut self, sample: GnssSample) {
         self.fuse_gps_pos_n(
             sample.pos_ned_m[0],
             sample.pos_std_m[0] * sample.pos_std_m[0],
@@ -278,7 +266,7 @@ impl RustReduced {
     /// while preserving the important GNSS/NHC covariance allocation.
     pub fn fuse_gps_nhc_batch(
         &mut self,
-        sample: ReducedGnssSample,
+        sample: GnssSample,
         r_body_vel_y: Option<f32>,
         r_body_vel_z: Option<f32>,
     ) {
@@ -737,7 +725,7 @@ impl RustReduced {
         k: &[f32; ERROR_STATES],
         dx: &[f32; ERROR_STATES],
     ) {
-        if diag_type >= REDUCED_UPDATE_DIAG_TYPES {
+        if diag_type >= UPDATE_DIAG_TYPES {
             return;
         }
         let diag = &mut self.raw.update_diag;
@@ -923,7 +911,7 @@ fn predict_covariance_sparse(
     )
 }
 
-fn normalize_nominal_quat(nominal: &mut ReducedNominalState) {
+fn normalize_nominal_quat(nominal: &mut NominalState) {
     let mut q = [nominal.q0, nominal.q1, nominal.q2, nominal.q3];
     normalize_quat_f32(&mut q);
     nominal.q0 = q[0];
@@ -932,7 +920,7 @@ fn normalize_nominal_quat(nominal: &mut ReducedNominalState) {
     nominal.q3 = q[3];
 }
 
-fn normalize_nominal_mount_quat(nominal: &mut ReducedNominalState) {
+fn normalize_nominal_mount_quat(nominal: &mut NominalState) {
     let mut q = [nominal.qcs0, nominal.qcs1, nominal.qcs2, nominal.qcs3];
     normalize_quat_f32(&mut q);
     nominal.qcs0 = q[0];
@@ -941,7 +929,7 @@ fn normalize_nominal_mount_quat(nominal: &mut ReducedNominalState) {
     nominal.qcs3 = q[3];
 }
 
-fn inject_error_state(nominal: &mut ReducedNominalState, dx: &[f32; ERROR_STATES]) {
+fn inject_error_state(nominal: &mut NominalState, dx: &[f32; ERROR_STATES]) {
     let dq = [1.0, 0.5 * dx[0], 0.5 * dx[1], 0.5 * dx[2]];
     let q_old = [nominal.q0, nominal.q1, nominal.q2, nominal.q3];
     let q_new = quat_multiply_f32(q_old, dq);
@@ -1028,7 +1016,7 @@ fn apply_reset_block(p: &mut [[f32; ERROR_STATES]; ERROR_STATES], offset: usize,
     }
 }
 
-fn floor_attitude_covariance(reduced: &mut ReducedState, sigma_rad: f32) {
+fn floor_attitude_covariance(reduced: &mut State, sigma_rad: f32) {
     let var_floor = sigma_rad * sigma_rad;
     if reduced.p[0][0] < var_floor {
         reduced.p[0][0] = var_floor;
@@ -1039,7 +1027,7 @@ fn floor_attitude_covariance(reduced: &mut ReducedState, sigma_rad: f32) {
     covariance::symmetrize(&mut reduced.p);
 }
 
-fn nominal_vehicle_velocity(nominal: &ReducedNominalState) -> [f32; 3] {
+fn nominal_vehicle_velocity(nominal: &NominalState) -> [f32; 3] {
     let q0 = nominal.q0;
     let q1 = nominal.q1;
     let q2 = nominal.q2;

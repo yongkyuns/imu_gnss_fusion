@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
-use sensor_fusion::full::{FULL_ERROR_STATES, FullNominalState, FullState};
-use sensor_fusion::reduced::REDUCED_UPDATE_DIAG_TYPES;
+use sensor_fusion::full::{ERROR_STATES, NominalState, State};
+use sensor_fusion::reduced::UPDATE_DIAG_TYPES;
 use sensor_fusion::{Config, Filter, SensorFusion};
 
 use crate::datasets::generic_replay::{
@@ -419,7 +419,7 @@ fn build_generic_replay_plot_data_impl(
     let mut reduced_nhc_h_mount_norm: [Vec<[f64; 2]>; 2] = std::array::from_fn(|_| Vec::new());
     let mut update_inspector = Vec::new();
     let mut last_reduced_update_count = 0u32;
-    let mut last_reduced_type_counts = [0u32; REDUCED_UPDATE_DIAG_TYPES];
+    let mut last_reduced_type_counts = [0u32; UPDATE_DIAG_TYPES];
     let mut reduced_map = Vec::new();
     let mut reduced_outage_map = Vec::new();
     let mut reduced_heading = Vec::new();
@@ -1647,7 +1647,7 @@ fn append_reduced_sample(
     nhc_nis: &mut [Vec<[f64; 2]>; 2],
     nhc_h_mount_norm: &mut [Vec<[f64; 2]>; 2],
     update_inspector: &mut Vec<UpdateInspectorSample>,
-    last_type_counts: &mut [u32; REDUCED_UPDATE_DIAG_TYPES],
+    last_type_counts: &mut [u32; UPDATE_DIAG_TYPES],
     map: &mut Vec<[f64; 2]>,
     outage_map: &mut Vec<[f64; 2]>,
     headings: &mut Vec<HeadingSample>,
@@ -1773,7 +1773,7 @@ fn append_reduced_sample(
 
 fn reduced_display_position_ned(
     fusion: &SensorFusion,
-    reduced: &sensor_fusion::reduced::ReducedState,
+    reduced: &sensor_fusion::reduced::State,
     ref_gnss: Option<GenericGnssSample>,
     ref_ecef: Option<[f64; 3]>,
 ) -> [f64; 3] {
@@ -1792,7 +1792,7 @@ fn reduced_display_position_ned(
 
 fn reduced_display_velocity_ned(
     fusion: &SensorFusion,
-    reduced: &sensor_fusion::reduced::ReducedState,
+    reduced: &sensor_fusion::reduced::State,
     ref_gnss: Option<GenericGnssSample>,
 ) -> [f64; 3] {
     if let (Some(anchor), Some(ref_sample)) = (fusion.anchor_lla_debug(), ref_gnss) {
@@ -1814,7 +1814,7 @@ fn reduced_display_velocity_ned(
     ]
 }
 
-fn reduced_vehicle_attitude_q(reduced: &sensor_fusion::reduced::ReducedState) -> [f64; 4] {
+fn reduced_vehicle_attitude_q(reduced: &sensor_fusion::reduced::State) -> [f64; 4] {
     as_q64([
         reduced.nominal.q0,
         reduced.nominal.q1,
@@ -1826,7 +1826,7 @@ fn reduced_vehicle_attitude_q(reduced: &sensor_fusion::reduced::ReducedState) ->
 #[allow(clippy::too_many_arguments)]
 fn append_full_sample(
     t_s: f64,
-    full: &FullState,
+    full: &State,
     ref_gnss: GenericGnssSample,
     ref_ecef: [f64; 3],
     pos_n: &mut Vec<[f64; 2]>,
@@ -2011,7 +2011,7 @@ fn reduced_nhc_inspector_sample(
     }
 }
 
-fn full_inspector_sample(t_s: f64, full: &FullState) -> UpdateInspectorSample {
+fn full_inspector_sample(t_s: f64, full: &State) -> UpdateInspectorSample {
     let obs_count = full
         .last_obs_count
         .clamp(0, full.last_obs_types.len() as i32) as usize;
@@ -2060,10 +2060,8 @@ fn reduced_mount_correlations(p: &[[f32; 18]; 18]) -> Vec<StateCorrelation> {
     )
 }
 
-fn full_mount_correlations(
-    p: &[[f32; FULL_ERROR_STATES]; FULL_ERROR_STATES],
-) -> Vec<StateCorrelation> {
-    const STATES: [(&str, &str, usize, f64); FULL_ERROR_STATES] = [
+fn full_mount_correlations(p: &[[f32; ERROR_STATES]; ERROR_STATES]) -> Vec<StateCorrelation> {
+    const STATES: [(&str, &str, usize, f64); ERROR_STATES] = [
         ("pos X", "position", 0, 1.0),
         ("pos Y", "position", 1, 1.0),
         ("pos Z", "position", 2, 1.0),
@@ -2140,7 +2138,7 @@ fn covariance_correlation<const N: usize>(p: &[[f32; N]; N], i: usize, j: usize)
     (p[i][j] as f64 / denom).clamp(-1.0, 1.0)
 }
 
-fn full_state_contributions(dx: &[f32; FULL_ERROR_STATES]) -> Vec<StateContribution> {
+fn full_state_contributions(dx: &[f32; ERROR_STATES]) -> Vec<StateContribution> {
     const STATES: [(&str, &str, &str, usize, f64); 24] = [
         ("pos X", "position", "m", 0, 1.0),
         ("pos Y", "position", "m", 1, 1.0),
@@ -2244,7 +2242,7 @@ fn full_state_contributions(dx: &[f32; FULL_ERROR_STATES]) -> Vec<StateContribut
         .collect()
 }
 
-fn full_gyro_sensor_bias_dps(n: &FullNominalState) -> [f64; 3] {
+fn full_gyro_sensor_bias_dps(n: &NominalState) -> [f64; 3] {
     [
         -(n.bgx as f64).to_degrees(),
         -(n.bgy as f64).to_degrees(),
@@ -2256,7 +2254,7 @@ fn sigma_rad_points_to_deg(points: &[[f64; 2]]) -> Vec<[f64; 2]> {
     points.iter().map(|p| [p[0], p[1].to_degrees()]).collect()
 }
 
-fn full_accel_sensor_bias_mps2(n: &FullNominalState) -> [f64; 3] {
+fn full_accel_sensor_bias_mps2(n: &NominalState) -> [f64; 3] {
     [-(n.bax as f64), -(n.bay as f64), -(n.baz as f64)]
 }
 
@@ -2374,11 +2372,11 @@ fn dcm_to_quat(c: [[f64; 3]; 3]) -> [f64; 4] {
 
 fn apply_fusion_config(fusion: &mut SensorFusion, cfg: FilterCompareConfig, mode: MountSourceMode) {
     fusion.set_align_config(cfg.align);
-    if let Some(noise) = cfg.predict_noise {
-        fusion.set_predict_noise(noise);
+    if let Some(noise) = cfg.noise.reduced {
+        fusion.set_reduced_noise(noise);
     }
-    if let Some(noise) = cfg.full_predict_noise {
-        fusion.set_full_predict_noise(noise);
+    if let Some(noise) = cfg.noise.full {
+        fusion.set_full_noise(noise);
     }
     fusion.set_full_init_config(cfg.full_init);
     fusion.set_r_body_vel_yz(cfg.r_body_vel, cfg.r_body_vel_z);
@@ -2578,14 +2576,14 @@ mod tests {
 
     #[test]
     fn full_bias_display_converts_correction_state_to_sensor_bias() {
-        let nominal = FullNominalState {
+        let nominal = NominalState {
             bgx: 1.0_f32.to_radians(),
             bgy: -2.0_f32.to_radians(),
             bgz: 0.5_f32.to_radians(),
             bax: 0.1,
             bay: -0.2,
             baz: 0.3,
-            ..FullNominalState::default()
+            ..NominalState::default()
         };
 
         let gyro_bias = full_gyro_sensor_bias_dps(&nominal);

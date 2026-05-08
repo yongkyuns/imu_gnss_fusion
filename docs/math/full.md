@@ -7,14 +7,14 @@ The Full EKF formulation is now PDF-first:
 
 Operational references:
 
-- Symbolic source: `sensor_fusion/ins_gnss_full.py`
-- Generated wrapper: `sensor_fusion/src/generated_full.rs`
-- Runtime/reference implementation: `sensor_fusion/src/full.rs`
+- Symbolic source: `sensor_fusion/src/full/formulation.py`
+- Generated wrapper: `sensor_fusion/src/full/generated.rs`
+- Runtime/reference implementation: `sensor_fusion/src/full/`
 
 Regenerate generated Full EKF snippets with:
 
 ```bash
-python sensor_fusion/ins_gnss_full.py --emit-rust
+python sensor_fusion/src/full/formulation.py --emit-rust
 ```
 
 Useful focused checks after Full EKF model changes:

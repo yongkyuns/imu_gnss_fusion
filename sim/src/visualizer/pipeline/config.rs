@@ -1,6 +1,6 @@
 use sensor_fusion::ProcessNoise;
 use sensor_fusion::align::AlignConfig;
-pub use sensor_fusion::full::FullInitConfig;
+use sensor_fusion::full;
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,11 +34,9 @@ pub struct FilterCompareConfig {
     pub predict_imu_lpf_cutoff_hz: Option<f64>,
     pub predict_imu_decimation: usize,
     pub yaw_init_speed_mps: f64,
-    #[serde(default = "default_reduced_predict_noise_option")]
-    pub predict_noise: Option<ProcessNoise>,
-    #[serde(default = "default_full_predict_noise_option")]
-    pub full_predict_noise: Option<ProcessNoise>,
-    pub full_init: FullInitConfig,
+    #[serde(default)]
+    pub noise: NoiseConfig,
+    pub full_init: full::InitConfig,
 }
 
 impl Default for FilterCompareConfig {
@@ -66,9 +64,8 @@ impl Default for FilterCompareConfig {
             predict_imu_lpf_cutoff_hz: None,
             predict_imu_decimation: 1,
             yaw_init_speed_mps: 0.0 / 3.6,
-            predict_noise: Some(default_reduced_predict_noise()),
-            full_predict_noise: Some(default_full_predict_noise()),
-            full_init: FullInitConfig::default(),
+            noise: NoiseConfig::default(),
+            full_init: full::InitConfig::default(),
         }
     }
 }
@@ -97,7 +94,25 @@ pub struct GnssOutageConfig {
     pub seed: u64,
 }
 
-pub const fn default_reduced_predict_noise() -> ProcessNoise {
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoiseConfig {
+    #[serde(default = "default_reduced_noise_option")]
+    pub reduced: Option<ProcessNoise>,
+    #[serde(default = "default_full_noise_option")]
+    pub full: Option<ProcessNoise>,
+}
+
+impl Default for NoiseConfig {
+    fn default() -> Self {
+        Self {
+            reduced: Some(default_reduced_noise()),
+            full: Some(default_full_noise()),
+        }
+    }
+}
+
+pub const fn default_reduced_noise() -> ProcessNoise {
     ProcessNoise {
         gyro_var: 2.287_311_3e-7 * 10.0_f32,
         accel_var: 2.450_421_4e-5 * 15.0_f32,
@@ -109,16 +124,16 @@ pub const fn default_reduced_predict_noise() -> ProcessNoise {
     }
 }
 
-pub const fn default_full_predict_noise() -> ProcessNoise {
+pub const fn default_full_noise() -> ProcessNoise {
     ProcessNoise::lsm6dso_104hz()
 }
 
-fn default_reduced_predict_noise_option() -> Option<ProcessNoise> {
-    Some(default_reduced_predict_noise())
+fn default_reduced_noise_option() -> Option<ProcessNoise> {
+    Some(default_reduced_noise())
 }
 
-fn default_full_predict_noise_option() -> Option<ProcessNoise> {
-    Some(default_full_predict_noise())
+fn default_full_noise_option() -> Option<ProcessNoise> {
+    Some(default_full_noise())
 }
 
 #[cfg(test)]
@@ -137,7 +152,7 @@ mod tests {
         cfg.align.q_mount_std_rad = [1.0e-5, 2.0e-5, 3.0e-5];
         cfg.full_init.mount_sigma_deg = 4.0;
         cfg.full_init.mount_yaw_sigma_deg = 8.0;
-        cfg.full_predict_noise.as_mut().unwrap().mount_align_rw_var = 2.0e-8;
+        cfg.noise.full.as_mut().unwrap().mount_align_rw_var = 2.0e-8;
 
         let json = serde_json::to_string(&cfg).unwrap();
         let decoded: FilterCompareConfig = serde_json::from_str(&json).unwrap();
@@ -163,8 +178,8 @@ mod tests {
             cfg.full_init.mount_yaw_sigma_deg
         );
         assert_eq!(
-            decoded.full_predict_noise.unwrap().mount_align_rw_var,
-            cfg.full_predict_noise.unwrap().mount_align_rw_var
+            decoded.noise.full.unwrap().mount_align_rw_var,
+            cfg.noise.full.unwrap().mount_align_rw_var
         );
 
         let outages = GnssOutageConfig {
@@ -218,14 +233,14 @@ mod tests {
         assert_eq!(decoded.predict_imu_lpf_cutoff_hz, None);
         assert_eq!(
             decoded.full_init.mount_yaw_sigma_deg,
-            FullInitConfig::default().mount_yaw_sigma_deg
+            full::InitConfig::default().mount_yaw_sigma_deg
         );
         assert_eq!(decoded.r_body_vel_z, default_r_body_vel_z());
         assert_eq!(
             decoded.mount_roll_pitch_init_sigma_deg,
             default_mount_roll_pitch_init_sigma_deg()
         );
-        assert!(decoded.predict_noise.is_some());
-        assert!(decoded.full_predict_noise.is_some());
+        assert!(decoded.noise.reduced.is_some());
+        assert!(decoded.noise.full.is_some());
     }
 }

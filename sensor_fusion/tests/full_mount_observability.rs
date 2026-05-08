@@ -1,8 +1,8 @@
 use sensor_fusion::ProcessNoise;
-use sensor_fusion::full::{FULL_ERROR_STATES, FullFilter};
+use sensor_fusion::full::{ERROR_STATES, Filter};
 
-fn initialized_full(vel_ecef_mps: [f32; 3]) -> FullFilter {
-    let mut p_diag = [1.0e-4; FULL_ERROR_STATES];
+fn initialized_full(vel_ecef_mps: [f32; 3]) -> Filter {
+    let mut p_diag = [1.0e-4; ERROR_STATES];
     p_diag[3] = 1.0;
     p_diag[4] = 1.0;
     p_diag[5] = 1.0;
@@ -10,7 +10,7 @@ fn initialized_full(vel_ecef_mps: [f32; 3]) -> FullFilter {
     p_diag[22] = 0.25;
     p_diag[23] = 0.25;
 
-    let mut full = FullFilter::new(ProcessNoise::reference_nsr_demo());
+    let mut full = Filter::new(ProcessNoise::reference_nsr_demo());
     full.init_from_reference_state(
         [1.0, 0.0, 0.0, 0.0],
         [6_378_137.0, 0.0, 0.0],

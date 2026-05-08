@@ -3,11 +3,15 @@ from pathlib import Path
 
 from sympy import Matrix, Symbol, cse, symbols
 
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+CRATE_DIR = SCRIPT_DIR.parent.parent
+sys.path.insert(0, str(CRATE_DIR))
+
 from code_gen import RustCodeGenerator
 
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-GENERATED_RUST_DIR = SCRIPT_DIR / "src" / "generated_reduced"
+GENERATED_RUST_DIR = SCRIPT_DIR / "generated"
 
 
 def create_symmetric_cov_matrix(n):

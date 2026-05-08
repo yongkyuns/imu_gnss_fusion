@@ -75,13 +75,13 @@ impl App {
                                 self.tuning_cfg.predict_imu_decimation =
                                     defaults.predict_imu_decimation;
                                 self.tuning_cfg.yaw_init_speed_mps = defaults.yaw_init_speed_mps;
-                                self.tuning_cfg.predict_noise = defaults.predict_noise;
+                                self.tuning_cfg.noise.reduced = defaults.noise.reduced;
                             }
                             TuningPanel::Align => {
                                 self.tuning_cfg.align = defaults.align;
                             }
                             TuningPanel::Full => {
-                                self.tuning_cfg.full_predict_noise = defaults.full_predict_noise;
+                                self.tuning_cfg.noise.full = defaults.noise.full;
                                 self.tuning_cfg.full_init = defaults.full_init;
                             }
                         }

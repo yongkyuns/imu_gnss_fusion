@@ -1,9 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
-use sensor_fusion::ProcessNoise;
-use sensor_fusion::full::{FullFilter, FullImuDelta};
-use sensor_fusion::reduced::RustReduced;
-use sensor_fusion::reduced::{ReducedGnssSample, ReducedImuDelta};
+use sensor_fusion::{ProcessNoise, full, reduced};
 use sim::eval::gnss_ins::{as_q64, quat_angle_deg, quat_conj, quat_mul};
 use sim::synthetic::gnss_ins_path::{MotionProfile, PathGenConfig, generate};
 use sim::visualizer::math::lla_to_ecef;
@@ -115,7 +112,7 @@ fn run_reduced(
     mode: ReducedInput,
 ) -> Summary {
     let first = generated.truth[0];
-    let mut reduced = RustReduced::new(ProcessNoise::default());
+    let mut reduced = reduced::Filter::new(ProcessNoise::default());
     reduced.set_gravity_mss(normal_gravity_mss(first.lat_deg, first.height_m));
     reduced.init_nominal_from_gnss(
         [
@@ -124,7 +121,7 @@ fn run_reduced(
             first.q_bn[2] as f32,
             first.q_bn[3] as f32,
         ],
-        ReducedGnssSample {
+        reduced::GnssSample {
             t_s: first.t_s as f32,
             pos_ned_m: [0.0; 3],
             vel_ned_mps: [
@@ -233,7 +230,7 @@ fn run_full(
     let q_ne = quat_ecef_to_ned(first.lat_deg, first.lon_deg);
     let q_es = quat_mul(quat_conj(q_ne), first.q_bn);
     let vel_ecef = ned_vector_to_ecef(first.lat_deg, first.lon_deg, first.vel_ned_mps);
-    let mut full = FullFilter::new(ProcessNoise::default());
+    let mut full = full::Filter::new(ProcessNoise::default());
     full.init_from_reference_ecef_state(
         [
             q_es[0] as f32,
@@ -351,8 +348,8 @@ fn print_summary(label: &str, s: Summary) {
     );
 }
 
-fn reduced_imu_delta(gyro: [f64; 3], accel: [f64; 3], dt: f64) -> ReducedImuDelta {
-    ReducedImuDelta {
+fn reduced_imu_delta(gyro: [f64; 3], accel: [f64; 3], dt: f64) -> reduced::ImuDelta {
+    reduced::ImuDelta {
         dax: (gyro[0] * dt) as f32,
         day: (gyro[1] * dt) as f32,
         daz: (gyro[2] * dt) as f32,
@@ -369,8 +366,8 @@ fn full_imu_delta(
     gyro2: [f64; 3],
     accel2: [f64; 3],
     dt: f64,
-) -> FullImuDelta {
-    FullImuDelta {
+) -> full::ImuDelta {
+    full::ImuDelta {
         dax_1: (gyro1[0] * dt) as f32,
         day_1: (gyro1[1] * dt) as f32,
         daz_1: (gyro1[2] * dt) as f32,
@@ -396,7 +393,7 @@ fn mounted_accel(accel_vehicle: [f64; 3], q_mount: [f64; 4]) -> [f64; 3] {
 }
 
 fn reduced_navigation_rate_corrections(
-    reduced: &RustReduced,
+    reduced: &reduced::Filter,
     lat_deg: f64,
     height_m: f64,
     dt: f64,

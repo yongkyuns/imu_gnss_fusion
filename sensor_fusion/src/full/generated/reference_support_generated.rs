@@ -1,9 +1,9 @@
 // Generated full-filter sparsity supports
 pub const F_MAX_ROW_NONZERO: usize = 13;
-pub const F_ROW_COUNTS: [usize; FULL_ERROR_STATES] = [
+pub const F_ROW_COUNTS: [usize; ERROR_STATES] = [
     2, 2, 2, 13, 13, 12, 11, 11, 10, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
 ];
-pub const F_ROW_COLS: [[usize; F_MAX_ROW_NONZERO]; FULL_ERROR_STATES] = [
+pub const F_ROW_COLS: [[usize; F_MAX_ROW_NONZERO]; ERROR_STATES] = [
     [0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     [1, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     [2, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -31,10 +31,10 @@ pub const F_ROW_COLS: [[usize; F_MAX_ROW_NONZERO]; FULL_ERROR_STATES] = [
 ];
 
 pub const G_MAX_ROW_NONZERO: usize = 3;
-pub const G_ROW_COUNTS: [usize; FULL_ERROR_STATES] = [
+pub const G_ROW_COUNTS: [usize; ERROR_STATES] = [
     0, 0, 0, 3, 3, 3, 3, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
 ];
-pub const G_ROW_COLS: [[usize; G_MAX_ROW_NONZERO]; FULL_ERROR_STATES] = [
+pub const G_ROW_COLS: [[usize; G_MAX_ROW_NONZERO]; ERROR_STATES] = [
     [0, 0, 0],
     [0, 0, 0],
     [0, 0, 0],

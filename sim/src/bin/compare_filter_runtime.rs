@@ -1,9 +1,6 @@
 use anyhow::{Context, Result, bail};
 use clap::Parser;
-use sensor_fusion::ProcessNoise;
-use sensor_fusion::full::{FullFilter, FullImuDelta};
-use sensor_fusion::reduced::RustReduced;
-use sensor_fusion::reduced::{ReducedGnssSample, ReducedImuDelta};
+use sensor_fusion::{ProcessNoise, full, reduced};
 use serde::Deserialize;
 use sim::datasets::seeded_full::{
     AccelSample, GnssSample, GyroSample, import_accel_data, import_gnss_data, import_gyro_data,
@@ -62,7 +59,7 @@ struct RefInit {
 
 #[derive(Debug, Clone, Copy)]
 struct GpsUpdate {
-    reduced: ReducedGnssSample,
+    reduced: reduced::GnssSample,
     pos_ecef_m: [f64; 3],
     vel_ecef_mps: [f32; 3],
     h_acc_m: f32,
@@ -73,8 +70,8 @@ struct GpsUpdate {
 #[derive(Debug, Clone, Copy)]
 struct ReplayStep {
     t_s: f64,
-    reduced_imu: ReducedImuDelta,
-    full_imu: FullImuDelta,
+    reduced_imu: reduced::ImuDelta,
+    full_imu: full::ImuDelta,
     gyro_radps: [f32; 3],
     accel_mps2: [f32; 3],
     gps: Option<GpsUpdate>,
@@ -240,7 +237,7 @@ fn build_replay_steps(
 
                 steps.push(ReplayStep {
                     t_s: (curr.ttag_us - init.start_ttag_us) as f64 * 1.0e-6,
-                    reduced_imu: ReducedImuDelta {
+                    reduced_imu: reduced::ImuDelta {
                         dax: (curr.omega_radps[0] * dt) as f32,
                         day: (curr.omega_radps[1] * dt) as f32,
                         daz: (curr.omega_radps[2] * dt) as f32,
@@ -249,7 +246,7 @@ fn build_replay_steps(
                         dvz: (a2[2] * dt) as f32,
                         dt: dt as f32,
                     },
-                    full_imu: FullImuDelta {
+                    full_imu: full::ImuDelta {
                         dax_1: (prev.omega_radps[0] * dt) as f32,
                         day_1: (prev.omega_radps[1] * dt) as f32,
                         daz_1: (prev.omega_radps[2] * dt) as f32,
@@ -308,7 +305,7 @@ fn build_gps_update(
     };
 
     GpsUpdate {
-        reduced: ReducedGnssSample {
+        reduced: reduced::GnssSample {
             t_s: ((curr_ttag_us - init.start_ttag_us) as f64 * 1.0e-6) as f32,
             pos_ned_m: [pos_ned[0] as f32, pos_ned[1] as f32, pos_ned[2] as f32],
             vel_ned_mps: vel_ned,
@@ -329,10 +326,10 @@ fn build_gps_update(
 }
 
 fn run_reduced(init: &RefInit, steps: &[ReplayStep]) -> FilterStats {
-    let mut reduced = RustReduced::new(ProcessNoise::default());
+    let mut reduced = reduced::Filter::new(ProcessNoise::default());
     reduced.init_nominal_from_gnss(
         init.q_bn,
-        ReducedGnssSample {
+        reduced::GnssSample {
             t_s: 0.0,
             pos_ned_m: init.pos_ned_m,
             vel_ned_mps: init.vel_ned_mps,
@@ -362,7 +359,7 @@ fn run_reduced(init: &RefInit, steps: &[ReplayStep]) -> FilterStats {
 }
 
 fn run_full(init: &RefInit, steps: &[ReplayStep]) -> FilterStats {
-    let mut full = FullFilter::new(ProcessNoise::reference_nsr_demo());
+    let mut full = full::Filter::new(ProcessNoise::reference_nsr_demo());
     full.init_from_reference_ecef_state(
         init.q_bn,
         init.pos_ecef_m,

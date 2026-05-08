@@ -4,12 +4,12 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use sensor_fusion::ProcessNoise;
 use sensor_fusion::SensorFusion;
-use sensor_fusion::full::{FULL_ERROR_STATES, FullFilter, FullImuDelta};
+use sensor_fusion::full::ERROR_STATES;
 use sensor_fusion::generated_full;
 use sensor_fusion::generated_reduced;
-use sensor_fusion::reduced::{REDUCED_UPDATE_DIAG_TYPES, ReducedImuDelta, ReducedState};
+use sensor_fusion::reduced::UPDATE_DIAG_TYPES;
+use sensor_fusion::{ProcessNoise, full, reduced};
 use sim::datasets::generic_replay::{
     GenericGnssSample, GenericImuSample, GenericReferenceRpySample, fusion_gnss_sample,
     fusion_imu_sample, load_gnss_samples, load_imu_samples, load_reference_attitude_samples,
@@ -207,12 +207,12 @@ struct Replay {
 struct Snapshot {
     target_rel_s: f64,
     t_s: f64,
-    reduced: Option<ReducedState>,
+    reduced: Option<reduced::State>,
     full: Option<FullSnapshot>,
     transition: Option<TransitionSnapshot>,
     reference_mount_q_vb: Option<[f64; 4]>,
     reference_att_q: Option<[f64; 4]>,
-    reduced_type_counts: [u32; REDUCED_UPDATE_DIAG_TYPES],
+    reduced_type_counts: [u32; UPDATE_DIAG_TYPES],
     full_obs_counts: [u32; 9],
     full_mount_dx_sum: [f32; 3],
     full_mount_dx_abs_sum: [f32; 3],
@@ -243,10 +243,10 @@ struct TransitionSnapshot {
 
 #[derive(Clone)]
 struct FullSnapshot {
-    nominal: sensor_fusion::full::FullNominalState,
-    p: [[f32; FULL_ERROR_STATES]; FULL_ERROR_STATES],
+    nominal: full::NominalState,
+    p: [[f32; ERROR_STATES]; ERROR_STATES],
     pos_ecef: [f64; 3],
-    last_dx: [f32; FULL_ERROR_STATES],
+    last_dx: [f32; ERROR_STATES],
     last_obs_types: Vec<i32>,
 }
 
@@ -254,33 +254,33 @@ struct FullSnapshot {
 struct TraceState {
     initialized: bool,
     last_trace_t_s: Option<f64>,
-    prev_reduced_counts: [u32; REDUCED_UPDATE_DIAG_TYPES],
+    prev_reduced_counts: [u32; UPDATE_DIAG_TYPES],
     prev_full_counts: [u32; 9],
-    prev_reduced_sum_dx_mount_roll: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    prev_reduced_sum_dx_mount_pitch: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    prev_reduced_sum_dx_mount_yaw: [f32; REDUCED_UPDATE_DIAG_TYPES],
+    prev_reduced_sum_dx_mount_roll: [f32; UPDATE_DIAG_TYPES],
+    prev_reduced_sum_dx_mount_pitch: [f32; UPDATE_DIAG_TYPES],
+    prev_reduced_sum_dx_mount_yaw: [f32; UPDATE_DIAG_TYPES],
 }
 
 struct AllocationCsv {
     writer: BufWriter<File>,
     window_abs: Option<[f64; 2]>,
-    prev_reduced_counts: [u32; REDUCED_UPDATE_DIAG_TYPES],
-    prev_sum_dx_att_roll: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    prev_sum_dx_pitch: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    prev_sum_dx_yaw: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    prev_sum_dx_vel_n: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    prev_sum_dx_vel_e: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    prev_sum_dx_vel_d: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    prev_sum_dx_mount_roll: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    prev_sum_dx_mount_pitch: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    prev_sum_dx_mount_yaw: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    prev_sum_dx_gyro_bias: [[f32; 3]; REDUCED_UPDATE_DIAG_TYPES],
-    prev_sum_dx_accel_bias: [[f32; 3]; REDUCED_UPDATE_DIAG_TYPES],
-    prev_sum_innovation: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    prev_sum_abs_innovation: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    prev_sum_nis: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    prev_sum_h_mount_norm: [f32; REDUCED_UPDATE_DIAG_TYPES],
-    prev_sum_k_mount_norm: [f32; REDUCED_UPDATE_DIAG_TYPES],
+    prev_reduced_counts: [u32; UPDATE_DIAG_TYPES],
+    prev_sum_dx_att_roll: [f32; UPDATE_DIAG_TYPES],
+    prev_sum_dx_pitch: [f32; UPDATE_DIAG_TYPES],
+    prev_sum_dx_yaw: [f32; UPDATE_DIAG_TYPES],
+    prev_sum_dx_vel_n: [f32; UPDATE_DIAG_TYPES],
+    prev_sum_dx_vel_e: [f32; UPDATE_DIAG_TYPES],
+    prev_sum_dx_vel_d: [f32; UPDATE_DIAG_TYPES],
+    prev_sum_dx_mount_roll: [f32; UPDATE_DIAG_TYPES],
+    prev_sum_dx_mount_pitch: [f32; UPDATE_DIAG_TYPES],
+    prev_sum_dx_mount_yaw: [f32; UPDATE_DIAG_TYPES],
+    prev_sum_dx_gyro_bias: [[f32; 3]; UPDATE_DIAG_TYPES],
+    prev_sum_dx_accel_bias: [[f32; 3]; UPDATE_DIAG_TYPES],
+    prev_sum_innovation: [f32; UPDATE_DIAG_TYPES],
+    prev_sum_abs_innovation: [f32; UPDATE_DIAG_TYPES],
+    prev_sum_nis: [f32; UPDATE_DIAG_TYPES],
+    prev_sum_h_mount_norm: [f32; UPDATE_DIAG_TYPES],
+    prev_sum_k_mount_norm: [f32; UPDATE_DIAG_TYPES],
     initialized: bool,
 }
 
@@ -305,23 +305,23 @@ mount_qerr_deg,att_qerr_deg"
         Ok(Self {
             writer,
             window_abs,
-            prev_reduced_counts: [0; REDUCED_UPDATE_DIAG_TYPES],
-            prev_sum_dx_att_roll: [0.0; REDUCED_UPDATE_DIAG_TYPES],
-            prev_sum_dx_pitch: [0.0; REDUCED_UPDATE_DIAG_TYPES],
-            prev_sum_dx_yaw: [0.0; REDUCED_UPDATE_DIAG_TYPES],
-            prev_sum_dx_vel_n: [0.0; REDUCED_UPDATE_DIAG_TYPES],
-            prev_sum_dx_vel_e: [0.0; REDUCED_UPDATE_DIAG_TYPES],
-            prev_sum_dx_vel_d: [0.0; REDUCED_UPDATE_DIAG_TYPES],
-            prev_sum_dx_mount_roll: [0.0; REDUCED_UPDATE_DIAG_TYPES],
-            prev_sum_dx_mount_pitch: [0.0; REDUCED_UPDATE_DIAG_TYPES],
-            prev_sum_dx_mount_yaw: [0.0; REDUCED_UPDATE_DIAG_TYPES],
-            prev_sum_dx_gyro_bias: [[0.0; 3]; REDUCED_UPDATE_DIAG_TYPES],
-            prev_sum_dx_accel_bias: [[0.0; 3]; REDUCED_UPDATE_DIAG_TYPES],
-            prev_sum_innovation: [0.0; REDUCED_UPDATE_DIAG_TYPES],
-            prev_sum_abs_innovation: [0.0; REDUCED_UPDATE_DIAG_TYPES],
-            prev_sum_nis: [0.0; REDUCED_UPDATE_DIAG_TYPES],
-            prev_sum_h_mount_norm: [0.0; REDUCED_UPDATE_DIAG_TYPES],
-            prev_sum_k_mount_norm: [0.0; REDUCED_UPDATE_DIAG_TYPES],
+            prev_reduced_counts: [0; UPDATE_DIAG_TYPES],
+            prev_sum_dx_att_roll: [0.0; UPDATE_DIAG_TYPES],
+            prev_sum_dx_pitch: [0.0; UPDATE_DIAG_TYPES],
+            prev_sum_dx_yaw: [0.0; UPDATE_DIAG_TYPES],
+            prev_sum_dx_vel_n: [0.0; UPDATE_DIAG_TYPES],
+            prev_sum_dx_vel_e: [0.0; UPDATE_DIAG_TYPES],
+            prev_sum_dx_vel_d: [0.0; UPDATE_DIAG_TYPES],
+            prev_sum_dx_mount_roll: [0.0; UPDATE_DIAG_TYPES],
+            prev_sum_dx_mount_pitch: [0.0; UPDATE_DIAG_TYPES],
+            prev_sum_dx_mount_yaw: [0.0; UPDATE_DIAG_TYPES],
+            prev_sum_dx_gyro_bias: [[0.0; 3]; UPDATE_DIAG_TYPES],
+            prev_sum_dx_accel_bias: [[0.0; 3]; UPDATE_DIAG_TYPES],
+            prev_sum_innovation: [0.0; UPDATE_DIAG_TYPES],
+            prev_sum_abs_innovation: [0.0; UPDATE_DIAG_TYPES],
+            prev_sum_nis: [0.0; UPDATE_DIAG_TYPES],
+            prev_sum_h_mount_norm: [0.0; UPDATE_DIAG_TYPES],
+            prev_sum_k_mount_norm: [0.0; UPDATE_DIAG_TYPES],
             initialized: false,
         })
     }
@@ -331,7 +331,7 @@ mount_qerr_deg,att_qerr_deg"
         replay: &Replay,
         event: &str,
         t_s: f64,
-        reduced: Option<&ReducedState>,
+        reduced: Option<&reduced::State>,
         full_ready: bool,
         ref_gnss: GenericGnssSample,
     ) -> Result<()> {
@@ -438,7 +438,7 @@ mount_qerr_deg,att_qerr_deg"
         &mut self,
         replay: &Replay,
         t_s: f64,
-        full: &FullFilter,
+        full: &full::Filter,
         ref_gnss: GenericGnssSample,
     ) -> Result<()> {
         if !self.in_window(t_s) || full.last_obs_types().is_empty() {
@@ -528,7 +528,7 @@ mount_qerr_deg,att_qerr_deg"
             .is_none_or(|[start, end]| (start..=end).contains(&t_s))
     }
 
-    fn capture_reduced_baseline(&mut self, reduced: &ReducedState) {
+    fn capture_reduced_baseline(&mut self, reduced: &reduced::State) {
         self.prev_reduced_counts = reduced.update_diag.type_counts;
         self.prev_sum_dx_att_roll = reduced.update_diag.sum_dx_att_roll;
         self.prev_sum_dx_pitch = reduced.update_diag.sum_dx_pitch;
@@ -755,12 +755,12 @@ fn run_diagnostics(
         cfg.r_zero_vel = r;
     }
     if args.reduced_accel_var_scale.is_finite() && args.reduced_accel_var_scale > 0.0 {
-        if let Some(noise) = cfg.predict_noise.as_mut() {
+        if let Some(noise) = cfg.noise.reduced.as_mut() {
             noise.accel_var *= args.reduced_accel_var_scale;
         }
     }
     if args.reduced_gyro_var_scale.is_finite() && args.reduced_gyro_var_scale > 0.0 {
-        if let Some(noise) = cfg.predict_noise.as_mut() {
+        if let Some(noise) = cfg.noise.reduced.as_mut() {
             noise.gyro_var *= args.reduced_gyro_var_scale;
         }
     }
@@ -807,8 +807,8 @@ fn run_diagnostics(
     let mut align_fusion = SensorFusion::new();
     apply_fusion_config(&mut align_fusion, cfg, MountSourceMode::Internal);
 
-    let mut full = FullFilter::new(
-        cfg.full_predict_noise
+    let mut full = full::Filter::new(
+        cfg.noise.full
             .unwrap_or_else(ProcessNoise::lsm6dso_104hz),
     );
     let mut full_ready = false;
@@ -1176,8 +1176,8 @@ fn run_diagnostics(
 
 fn apply_fusion_config(fusion: &mut SensorFusion, cfg: FilterCompareConfig, mode: MountSourceMode) {
     fusion.set_align_config(cfg.align);
-    if let Some(noise) = cfg.predict_noise {
-        fusion.set_predict_noise(noise);
+    if let Some(noise) = cfg.noise.reduced {
+        fusion.set_reduced_noise(noise);
     }
     fusion.set_r_body_vel_yz(cfg.r_body_vel, cfg.r_body_vel_z);
     fusion.set_attitude_roll_pitch_init_sigma_rad(
@@ -1203,7 +1203,7 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: FilterCompareConfig, mode
 fn capture_due_snapshots(
     replay: &Replay,
     fusion: &SensorFusion,
-    full: &FullFilter,
+    full: &full::Filter,
     full_ready: bool,
     full_obs_counts: [u32; 9],
     full_mount_dx_sum: [f32; 3],
@@ -1247,7 +1247,7 @@ fn capture_due_snapshots(
             reduced_type_counts: fusion
                 .reduced()
                 .map(|e| e.update_diag.type_counts)
-                .unwrap_or([0; REDUCED_UPDATE_DIAG_TYPES]),
+                .unwrap_or([0; UPDATE_DIAG_TYPES]),
             full_obs_counts,
             full_mount_dx_sum,
             full_mount_dx_abs_sum,
@@ -1650,8 +1650,8 @@ fn full_obs_type_label(ty: usize) -> &'static str {
 }
 
 fn print_interval_sigma_summary(
-    start_reduced: &ReducedState,
-    end_reduced: &ReducedState,
+    start_reduced: &reduced::State,
+    end_reduced: &reduced::State,
     start_full_p: &[[f32; 18]; 18],
     end_full_p: &[[f32; 18]; 18],
 ) {
@@ -1757,7 +1757,7 @@ fn print_state_summary(snapshot: &Snapshot, ref_gnss: GenericGnssSample) {
     );
 }
 
-fn print_covariance_summary(reduced: &ReducedState, full_as_reduced: &[[f32; 18]; 18]) {
+fn print_covariance_summary(reduced: &reduced::State, full_as_reduced: &[[f32; 18]; 18]) {
     for (label, rows, cols) in [
         ("att", &[0usize, 1, 2][..], &[0usize, 1, 2][..]),
         ("vel", &[3usize, 4, 5][..], &[3usize, 4, 5][..]),
@@ -1854,7 +1854,7 @@ fn print_update_summary(snapshot: &Snapshot, full: &FullSnapshot) {
     }
 }
 
-fn print_reduced_mount_dx_by_type(prefix: &str, reduced: &ReducedState) {
+fn print_reduced_mount_dx_by_type(prefix: &str, reduced: &reduced::State) {
     for (label, idx) in selected_reduced_diag_types() {
         println!(
             "[covhist] reduced_mount_dx_{} type={} count={} sum_deg=[{:.6},{:.6},{:.6}] abs_sum_deg=[{:.6},{:.6},{:.6}]",
@@ -1894,7 +1894,7 @@ fn maybe_print_trace(
     event: &str,
     t_s: f64,
     fusion: &SensorFusion,
-    full: &FullFilter,
+    full: &full::Filter,
     full_ready: bool,
     full_obs_counts: [u32; 9],
 ) {
@@ -2133,7 +2133,7 @@ fn transform_full_cov_to_reduced(
     full: &FullSnapshot,
     ref_gnss: GenericGnssSample,
 ) -> [[f32; 18]; 18] {
-    let mut t = [[0.0f32; FULL_ERROR_STATES]; 18];
+    let mut t = [[0.0f32; ERROR_STATES]; 18];
     let q_es = as_q64([
         full.nominal.q0,
         full.nominal.q1,
@@ -2178,8 +2178,8 @@ fn transform_full_cov_to_reduced(
     for i in 0..18 {
         for j in 0..18 {
             let mut v = 0.0f32;
-            for a in 0..FULL_ERROR_STATES {
-                for b in 0..FULL_ERROR_STATES {
+            for a in 0..ERROR_STATES {
+                for b in 0..ERROR_STATES {
                     v += t[i][a] * full.p[a][b] * t[j][b];
                 }
             }
@@ -2191,7 +2191,7 @@ fn transform_full_cov_to_reduced(
 
 fn transform_full_dx_to_reduced(
     full: &FullSnapshot,
-    dx: &[f32; FULL_ERROR_STATES],
+    dx: &[f32; ERROR_STATES],
     ref_gnss: GenericGnssSample,
 ) -> [f32; 18] {
     let q_es = as_q64([
@@ -2239,7 +2239,7 @@ fn transform_full_dx_to_reduced(
 
 fn transition_snapshot(
     fusion: &SensorFusion,
-    full: &FullFilter,
+    full: &full::Filter,
     curr: GenericImuSample,
     prev: GenericImuSample,
     dt: f64,
@@ -2250,7 +2250,7 @@ fn transition_snapshot(
         return None;
     }
 
-    let reduced_imu = ReducedImuDelta {
+    let reduced_imu = reduced::ImuDelta {
         dax: (curr.gyro_radps[0] * dt) as f32,
         day: (curr.gyro_radps[1] * dt) as f32,
         daz: (curr.gyro_radps[2] * dt) as f32,
@@ -2298,8 +2298,8 @@ fn transition_snapshot(
             out.reduced_mount_to_pos[row][mount_axis] = f_reduced[6 + row][15 + mount_axis];
         }
 
-        let mut full_col = [0.0f32; FULL_ERROR_STATES];
-        for row in 0..FULL_ERROR_STATES {
+        let mut full_col = [0.0f32; ERROR_STATES];
+        for row in 0..ERROR_STATES {
             full_col[row] = f_full[row][21 + mount_axis];
         }
         let full_as_reduced = transform_full_dx_to_reduced(&full_snap, &full_col, ref_gnss);
@@ -2468,11 +2468,8 @@ fn col_norm3(a: &[[f32; 3]; 3], col: usize) -> f64 {
     sum.sqrt()
 }
 
-fn default_full_p_diag(
-    gnss: GenericGnssSample,
-    cfg: FilterCompareConfig,
-) -> [f32; FULL_ERROR_STATES] {
-    let mut p = [1.0_f32; FULL_ERROR_STATES];
+fn default_full_p_diag(gnss: GenericGnssSample, cfg: FilterCompareConfig) -> [f32; ERROR_STATES] {
+    let mut p = [1.0_f32; ERROR_STATES];
     let init = cfg.full_init;
     let pos_n_sigma = (gnss.pos_std_m[0] as f32).max(init.pos_min_sigma_m);
     let pos_e_sigma = (gnss.pos_std_m[1] as f32).max(init.pos_min_sigma_m);
@@ -2520,8 +2517,8 @@ fn full_imu_delta_from_vehicle(
     curr_gyro_radps: [f64; 3],
     curr_accel_mps2: [f64; 3],
     dt: f64,
-) -> FullImuDelta {
-    FullImuDelta {
+) -> full::ImuDelta {
+    full::ImuDelta {
         dax_1: (prev_gyro_radps[0] * dt) as f32,
         day_1: (prev_gyro_radps[1] * dt) as f32,
         daz_1: (prev_gyro_radps[2] * dt) as f32,
@@ -2538,7 +2535,7 @@ fn full_imu_delta_from_vehicle(
     }
 }
 
-fn reduced_att_q(reduced: &ReducedState) -> [f64; 4] {
+fn reduced_att_q(reduced: &reduced::State) -> [f64; 4] {
     as_q64([
         reduced.nominal.q0,
         reduced.nominal.q1,
@@ -2625,7 +2622,7 @@ fn nearest_rpy(
     }
 }
 
-fn reduced_nhc_residual_yz(reduced: &ReducedState) -> [f64; 2] {
+fn reduced_nhc_residual_yz(reduced: &reduced::State) -> [f64; 2] {
     let v = vehicle_velocity_from_q(
         as_q64([
             reduced.nominal.q0,

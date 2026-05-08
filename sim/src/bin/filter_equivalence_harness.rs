@@ -5,8 +5,9 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, ValueEnum};
 use sensor_fusion::ProcessNoise;
-use sensor_fusion::full::{FULL_ERROR_STATES, FullFilter, FullImuDelta};
-use sensor_fusion::reduced::ReducedState;
+use sensor_fusion::full::InitConfig;
+use sensor_fusion::full::{ERROR_STATES, Filter, ImuDelta};
+use sensor_fusion::reduced::State;
 use sensor_fusion::{MountSource, SensorFusion};
 use sim::datasets::generic_replay::{
     GenericGnssSample, GenericImuSample, GenericReferenceRpySample, fusion_gnss_sample,
@@ -15,7 +16,6 @@ use sim::datasets::generic_replay::{
 use sim::eval::replay::{ReplayEvent, for_each_event};
 use sim::visualizer::math::{ecef_to_lla, ecef_to_ned, lla_to_ecef, quat_rpy_deg};
 use sim::visualizer::pipeline::FilterCompareConfig;
-use sim::visualizer::pipeline::config::FullInitConfig;
 use sim::visualizer::pipeline::generic::{
     GenericReplayInput, parse_generic_replay_csvs_with_refs, q_vb_to_reference_mount_rpy,
     reference_mount_rpy_to_q_vb,
@@ -95,7 +95,7 @@ struct CommonSnapshot {
 struct HarnessState {
     fusion: SensorFusion,
     align_fusion: SensorFusion,
-    full: FullFilter,
+    full: Filter,
     full_ready: bool,
     last_imu: Option<GenericImuSample>,
     latest_gnss: Option<GenericGnssSample>,
@@ -254,8 +254,8 @@ impl HarnessState {
         Self {
             fusion,
             align_fusion,
-            full: FullFilter::new(
-                cfg.full_predict_noise
+            full: Filter::new(
+                cfg.noise.full
                     .unwrap_or_else(ProcessNoise::lsm6dso_104hz),
             ),
             full_ready: false,
@@ -637,7 +637,7 @@ impl HarnessState {
         })
     }
 
-    fn reduced_display_position_ned(&self, reduced: &ReducedState) -> [f64; 3] {
+    fn reduced_display_position_ned(&self, reduced: &State) -> [f64; 3] {
         if let Some(lla) = self.fusion.position_lla_f64() {
             return ecef_to_ned(
                 lla_to_ecef(lla[0], lla[1], lla[2]),
@@ -653,7 +653,7 @@ impl HarnessState {
         ]
     }
 
-    fn reduced_display_velocity_ned(&self, reduced: &ReducedState) -> [f64; 3] {
+    fn reduced_display_velocity_ned(&self, reduced: &State) -> [f64; 3] {
         if let Some(lla) = self.fusion.position_lla_f64() {
             let vel = [reduced.nominal.vn, reduced.nominal.ve, reduced.nominal.vd];
             let c_ne_local = ecef_to_ned_matrix(lla[0], lla[1]);
@@ -703,8 +703,8 @@ fn nan_snapshot() -> CommonSnapshot {
 
 fn apply_fusion_config(fusion: &mut SensorFusion, cfg: FilterCompareConfig) {
     fusion.set_align_config(cfg.align);
-    if let Some(noise) = cfg.predict_noise {
-        fusion.set_predict_noise(noise);
+    if let Some(noise) = cfg.noise.reduced {
+        fusion.set_reduced_noise(noise);
     }
     fusion.set_r_body_vel_yz(cfg.r_body_vel, cfg.r_body_vel_z);
     fusion.set_attitude_roll_pitch_init_sigma_rad(
@@ -727,8 +727,8 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: FilterCompareConfig) {
     fusion.set_mount_settle_zero_cross_covariance(cfg.mount_settle_zero_cross_covariance);
 }
 
-fn default_full_p_diag(gnss: GenericGnssSample, init: FullInitConfig) -> [f32; FULL_ERROR_STATES] {
-    let mut p = [1.0_f32; FULL_ERROR_STATES];
+fn default_full_p_diag(gnss: GenericGnssSample, init: InitConfig) -> [f32; ERROR_STATES] {
+    let mut p = [1.0_f32; ERROR_STATES];
     let pos_n_sigma = (gnss.pos_std_m[0] as f32).max(init.pos_min_sigma_m);
     let pos_e_sigma = (gnss.pos_std_m[1] as f32).max(init.pos_min_sigma_m);
     let pos_d_sigma = (gnss.pos_std_m[2] as f32).max(init.pos_min_sigma_m);
@@ -769,8 +769,8 @@ fn default_full_p_diag(gnss: GenericGnssSample, init: FullInitConfig) -> [f32; F
     p
 }
 
-fn full_imu_delta(prev: GenericImuSample, curr: GenericImuSample, dt: f64) -> FullImuDelta {
-    FullImuDelta {
+fn full_imu_delta(prev: GenericImuSample, curr: GenericImuSample, dt: f64) -> ImuDelta {
+    ImuDelta {
         dax_1: (prev.gyro_radps[0] * dt) as f32,
         day_1: (prev.gyro_radps[1] * dt) as f32,
         daz_1: (prev.gyro_radps[2] * dt) as f32,

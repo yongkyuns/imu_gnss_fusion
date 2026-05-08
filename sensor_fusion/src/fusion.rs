@@ -12,7 +12,7 @@
 
 use crate::ProcessNoise;
 use crate::align::{Align, AlignConfig, AlignUpdateTrace, AlignWindowSummary, GRAVITY_MPS2};
-use crate::full::{FullFilter, FullImuDelta, FullInitConfig, FullState, default_full_p_diag};
+use crate::full::{self, default_full_p_diag};
 use crate::fusion_types::RuntimeConfig;
 pub use crate::fusion_types::{
     AlignDebug, Config, Filter, GnssSample, ImuSample, MountMode, MountSource, Update,
@@ -27,7 +27,6 @@ use crate::nav::{
     ecef_to_lla_f64, ecef_to_ned_matrix_f32, lla_to_ecef_f64, navigation_rates_ned_f32,
     ned_vector_to_ecef_f32, normal_gravity_mss_f64,
 };
-use crate::reduced::{ReducedGnssSample, ReducedImuDelta, ReducedState, RustReduced};
 
 const REANCHOR_DISTANCE_M: f32 = 5000.0;
 const RUNTIME_ZERO_SPEED_MPS: f32 = 0.80;
@@ -56,9 +55,9 @@ struct Anchor {
 #[derive(Debug)]
 pub struct SensorFusion {
     cfg: RuntimeConfig,
-    reduced: RustReduced,
+    reduced: crate::reduced::Filter,
     reduced_initialized: bool,
-    full: FullFilter,
+    full: full::Filter,
     full_initialized: bool,
     internal_align_enabled: bool,
     align_initialized: bool,
@@ -71,12 +70,12 @@ pub struct SensorFusion {
     mount_settle_released: bool,
     last_imu_t_s: Option<f32>,
     last_imu_sample: Option<ImuSample>,
-    last_gnss: Option<ReducedGnssSample>,
+    last_gnss: Option<crate::reduced::GnssSample>,
     last_full_gnss: Option<GnssSample>,
-    pending_reduced_gnss: Option<ReducedGnssSample>,
+    pending_reduced_gnss: Option<crate::reduced::GnssSample>,
     last_reduced_gnss_fuse_t_s: Option<f32>,
     last_full_gnss_fuse_t_s: Option<f32>,
-    bootstrap_prev_reduced_gnss: Option<ReducedGnssSample>,
+    bootstrap_prev_reduced_gnss: Option<crate::reduced::GnssSample>,
     anchor: Anchor,
     interval_imu_sum_gyro: [f32; 3],
     interval_imu_sum_accel: [f32; 3],
@@ -125,9 +124,9 @@ impl SensorFusion {
         };
         let mut out = Self {
             cfg,
-            reduced: RustReduced::new(cfg.predict_noise),
+            reduced: crate::reduced::Filter::new(cfg.noise.reduced),
             reduced_initialized: false,
-            full: FullFilter::new(cfg.full_predict_noise),
+            full: full::Filter::new(cfg.noise.full),
             full_initialized: false,
             internal_align_enabled: matches!(config.mount_mode, MountMode::InternalAlign),
             align_initialized: false,
@@ -192,21 +191,21 @@ impl SensorFusion {
     }
 
     /// Replaces the Reduced prediction-noise configuration.
-    pub fn set_predict_noise(&mut self, predict_noise: ProcessNoise) {
-        self.cfg.predict_noise = predict_noise;
-        self.reduced.raw_mut().noise = predict_noise;
+    pub fn set_reduced_noise(&mut self, noise: ProcessNoise) {
+        self.cfg.noise.reduced = noise;
+        self.reduced.raw_mut().noise = noise;
     }
 
     /// Replaces the Full prediction-noise configuration.
-    pub fn set_full_predict_noise(&mut self, predict_noise: ProcessNoise) {
-        self.cfg.full_predict_noise = predict_noise;
-        self.full = FullFilter::new(predict_noise);
+    pub fn set_full_noise(&mut self, noise: ProcessNoise) {
+        self.cfg.noise.full = noise;
+        self.full = full::Filter::new(noise);
         self.full_initialized = false;
         self.last_full_gnss_fuse_t_s = None;
     }
 
     /// Replaces the Full initialization covariance configuration.
-    pub fn set_full_init_config(&mut self, full_init: FullInitConfig) {
+    pub fn set_full_init_config(&mut self, full_init: full::InitConfig) {
         self.cfg.full_init = full_init;
     }
 
@@ -298,7 +297,7 @@ impl SensorFusion {
     /// Sets accelerometer-bias random-walk process variance.
     pub fn set_accel_bias_rw_var(&mut self, accel_bias_rw_var: f32) {
         if accel_bias_rw_var.is_finite() && accel_bias_rw_var >= 0.0 {
-            self.cfg.predict_noise.accel_bias_rw_var = accel_bias_rw_var;
+            self.cfg.noise.reduced.accel_bias_rw_var = accel_bias_rw_var;
             self.reduced.raw_mut().noise.accel_bias_rw_var = accel_bias_rw_var;
         }
     }
@@ -306,7 +305,7 @@ impl SensorFusion {
     /// Sets residual-mount random-walk process variance.
     pub fn set_mount_align_rw_var(&mut self, mount_align_rw_var: f32) {
         if mount_align_rw_var.is_finite() && mount_align_rw_var >= 0.0 {
-            self.cfg.predict_noise.mount_align_rw_var = mount_align_rw_var;
+            self.cfg.noise.reduced.mount_align_rw_var = mount_align_rw_var;
             self.reduced.raw_mut().noise.mount_align_rw_var = mount_align_rw_var;
         }
     }
@@ -411,7 +410,7 @@ impl SensorFusion {
         let accel_vehicle = self.current_vehicle_vector_from_body(sample.accel_mps2);
         let (gyro_predict, coriolis_delta_v_n) =
             self.reduced_navigation_rate_corrections(sample.gyro_radps, dt);
-        self.reduced.predict(ReducedImuDelta {
+        self.reduced.predict(crate::reduced::ImuDelta {
             dax: gyro_predict[0] * dt,
             day: gyro_predict[1] * dt,
             daz: gyro_predict[2] * dt,
@@ -551,12 +550,12 @@ impl SensorFusion {
     }
 
     /// Returns the current Reduced state after GNSS initialization.
-    pub fn reduced(&self) -> Option<&ReducedState> {
+    pub fn reduced(&self) -> Option<&crate::reduced::State> {
         self.reduced_initialized.then_some(self.reduced.raw())
     }
 
     /// Returns the current Full state after GNSS initialization.
-    pub fn full(&self) -> Option<&FullState> {
+    pub fn full(&self) -> Option<&full::State> {
         self.full_initialized.then_some(self.full.raw())
     }
 
@@ -730,8 +729,8 @@ impl SensorFusion {
         }
     }
 
-    fn initialize_reduced_from_gnss(&mut self, gnss: ReducedGnssSample) {
-        self.reduced = RustReduced::new(self.cfg.predict_noise);
+    fn initialize_reduced_from_gnss(&mut self, gnss: crate::reduced::GnssSample) {
+        self.reduced = crate::reduced::Filter::new(self.cfg.noise.reduced);
         if self.anchor.valid {
             self.reduced.set_gravity_mss(self.anchor.gravity_mss);
         }
@@ -787,7 +786,7 @@ impl SensorFusion {
         let yaw_rad = atan2_f32(gnss.vel_ned_mps[1], gnss.vel_ned_mps[0]);
         let pos_ecef = lla_to_ecef_f64(gnss.lat_deg, gnss.lon_deg, gnss.height_m);
         let vel_ecef = ned_vector_to_ecef_f32(gnss.lat_deg, gnss.lon_deg, gnss.vel_ned_mps);
-        self.full = FullFilter::new(self.cfg.full_predict_noise);
+        self.full = full::Filter::new(self.cfg.noise.full);
         self.full.init_seeded_vehicle_from_nav_ecef_state(
             yaw_rad,
             gnss.lat_deg,
@@ -958,7 +957,10 @@ impl SensorFusion {
         }
     }
 
-    fn prepare_local_gnss_sample(&mut self, sample: GnssSample) -> Option<ReducedGnssSample> {
+    fn prepare_local_gnss_sample(
+        &mut self,
+        sample: GnssSample,
+    ) -> Option<crate::reduced::GnssSample> {
         if !self.anchor.valid {
             self.anchor = anchor_from_lla(sample.lat_deg, sample.lon_deg, sample.height_m);
             self.reduced.set_gravity_mss(self.anchor.gravity_mss);
@@ -979,7 +981,7 @@ impl SensorFusion {
         }
         let (pos_std_m, vel_std_mps) =
             full_equivalent_gnss_sigmas(sample.pos_std_m, sample.vel_std_mps);
-        Some(ReducedGnssSample {
+        Some(crate::reduced::GnssSample {
             t_s: sample.t_s,
             pos_ned_m: pos_ned,
             vel_ned_mps: velocity_local_ned_to_anchor_ned(
@@ -1075,7 +1077,7 @@ impl SensorFusion {
         }
     }
 
-    fn bootstrap_update_gnss_hints(&mut self, sample: ReducedGnssSample) {
+    fn bootstrap_update_gnss_hints(&mut self, sample: crate::reduced::GnssSample) {
         let speed = horiz_speed(sample.vel_ned_mps);
         self.bootstrap_speed_ema
             .update(speed, self.cfg.bootstrap.ema_alpha);
@@ -1130,8 +1132,8 @@ impl SensorFusion {
 
     fn take_interval_summary(
         &mut self,
-        prev_gnss: ReducedGnssSample,
-        curr_gnss: ReducedGnssSample,
+        prev_gnss: crate::reduced::GnssSample,
+        curr_gnss: crate::reduced::GnssSample,
     ) -> Option<AlignWindowSummary> {
         if self.interval_imu_count == 0 {
             return None;
@@ -1217,7 +1219,10 @@ impl SensorFusion {
         use_nhc.is_some()
     }
 
-    fn rate_normalized_reduced_gnss(&self, mut gnss: ReducedGnssSample) -> ReducedGnssSample {
+    fn rate_normalized_reduced_gnss(
+        &self,
+        mut gnss: crate::reduced::GnssSample,
+    ) -> crate::reduced::GnssSample {
         let Some(prev_t_s) = self.last_reduced_gnss_fuse_t_s else {
             return gnss;
         };
@@ -1335,7 +1340,7 @@ fn runtime_nhc_active(accel_v: [f32; 3], gyro_v: [f32; 3]) -> bool {
         && (vec_norm3_f32(accel_v) - GRAVITY_MPS2).abs() < RUNTIME_NHC_MAX_ACCEL_NORM_ERR_MPS2
 }
 
-fn body_speed_x_estimate(reduced: &ReducedState) -> f32 {
+fn body_speed_x_estimate(reduced: &crate::reduced::State) -> f32 {
     let n = &reduced.nominal;
     (1.0 - 2.0 * n.q2 * n.q2 - 2.0 * n.q3 * n.q3) * n.vn
         + 2.0 * (n.q1 * n.q2 + n.q0 * n.q3) * n.ve
@@ -1434,8 +1439,8 @@ fn full_equivalent_gnss_sigmas(pos_std_m: [f32; 3], vel_std_mps: [f32; 3]) -> ([
     (pos_std_m, vel_std_mps)
 }
 
-fn full_imu_delta_from_samples(prev: ImuSample, curr: ImuSample, dt: f32) -> FullImuDelta {
-    FullImuDelta {
+fn full_imu_delta_from_samples(prev: ImuSample, curr: ImuSample, dt: f32) -> full::ImuDelta {
+    full::ImuDelta {
         dax_1: prev.gyro_radps[0] * dt,
         day_1: prev.gyro_radps[1] * dt,
         daz_1: prev.gyro_radps[2] * dt,

@@ -342,8 +342,8 @@ Wrong mount causes wrong inertial propagation, so residuals push mount. \\
 
 \subsection{Generated Reduced}
 
-The symbolic source is \path{sensor_fusion/reduced.py}. The generated Rust fragments are
-included by \path{sensor_fusion/src/generated_reduced.rs}. The important changes are:
+The symbolic source is \path{sensor_fusion/src/reduced/formulation.py}. The generated Rust fragments are
+included by \path{sensor_fusion/src/reduced/generated.rs}. The important changes are:
 \begin{itemize}[leftmargin=*]
   \item \texttt{propagate\_nominal(...)} now takes \texttt{qcs} as \(q_{vb}\).
   \item Nominal prediction rotates \(\Delta\theta_b\) and \(\Delta v_b\)
@@ -356,19 +356,19 @@ included by \path{sensor_fusion/src/generated_reduced.rs}. The important changes
 \subsection{Runtime Reduced Facade}
 
 \texttt{sensor_fusion/src/fusion.rs} no longer pre-rotates IMU before calling
-\texttt{RustReduced::predict}. It initializes \texttt{nominal.qcs*} from the align
+\texttt{reduced::Filter::predict}. It initializes \texttt{nominal.qcs*} from the align
 or reference mount seed. In follow-align mode, the facade writes the current
 align mount into \texttt{nominal.qcs*} and keeps mount error states frozen.
 
 \subsection{Full Reference Filter}
 
-The symbolic source is \texttt{sensor_fusion/ins\_gnss\_full.py}. The generated Rust
-fragments are included by \texttt{sensor_fusion/src/generated\_full.rs}. The important
+The symbolic source is \texttt{sensor_fusion/src/full/formulation.py}. The generated Rust
+fragments are included by \texttt{sensor_fusion/src/full/generated.rs}. The important
 changes are:
 \begin{itemize}[leftmargin=*]
   \item The transition matrix uses \texttt{qcs} as \(q_{vb}\) in the IMU
         rotation terms.
-  \item Full nominal propagation in \texttt{sensor_fusion/src/full.rs} rotates raw
+  \item Full nominal propagation in \texttt{sensor_fusion/src/full/} rotates raw
         body-frame gyro and accelerometer measurements into the vehicle frame.
   \item Full NHC rows observe \(C_{ev}\T v_e\) and have no direct mount
         support.

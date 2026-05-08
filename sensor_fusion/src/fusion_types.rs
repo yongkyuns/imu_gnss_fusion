@@ -1,7 +1,7 @@
 //! Public facade types and internal configuration for [`crate::SensorFusion`].
 
 use crate::align::{AlignConfig, AlignUpdateTrace, AlignWindowSummary};
-use crate::{ProcessNoise, full::FullInitConfig};
+use crate::{ProcessNoise, full};
 
 /// One timestamped IMU sample in the sensor/body frame.
 #[derive(Clone, Copy, Debug)]
@@ -162,13 +162,35 @@ impl Default for BootstrapConfig {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub(crate) struct NoiseConfig {
+    pub(crate) reduced: ProcessNoise,
+    pub(crate) full: ProcessNoise,
+}
+
+impl Default for NoiseConfig {
+    fn default() -> Self {
+        Self {
+            reduced: ProcessNoise {
+                gyro_var: 2.287_311_3e-7 * 10.0_f32,
+                accel_var: 2.450_421_4e-5 * 15.0_f32,
+                gyro_bias_rw_var: 0.0002e-9,
+                accel_bias_rw_var: 0.002e-9,
+                gyro_scale_rw_var: 0.0,
+                accel_scale_rw_var: 0.0,
+                mount_align_rw_var: 0.0,
+            },
+            full: ProcessNoise::lsm6dso_104hz(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct RuntimeConfig {
     pub(crate) filter: Filter,
     pub(crate) align: AlignConfig,
     pub(crate) bootstrap: BootstrapConfig,
-    pub(crate) predict_noise: ProcessNoise,
-    pub(crate) full_predict_noise: ProcessNoise,
-    pub(crate) full_init: FullInitConfig,
+    pub(crate) noise: NoiseConfig,
+    pub(crate) full_init: full::InitConfig,
     pub(crate) attitude_roll_pitch_init_sigma_rad: f32,
     pub(crate) yaw_init_sigma_rad: f32,
     pub(crate) gyro_bias_init_sigma_radps: f32,
@@ -195,17 +217,8 @@ impl Default for RuntimeConfig {
             filter: Filter::Reduced,
             align: AlignConfig::default(),
             bootstrap: BootstrapConfig::default(),
-            predict_noise: ProcessNoise {
-                gyro_var: 2.287_311_3e-7 * 10.0_f32,
-                accel_var: 2.450_421_4e-5 * 15.0_f32,
-                gyro_bias_rw_var: 0.0002e-9,
-                accel_bias_rw_var: 0.002e-9,
-                gyro_scale_rw_var: 0.0,
-                accel_scale_rw_var: 0.0,
-                mount_align_rw_var: 0.0,
-            },
-            full_predict_noise: ProcessNoise::lsm6dso_104hz(),
-            full_init: FullInitConfig::default(),
+            noise: NoiseConfig::default(),
+            full_init: full::InitConfig::default(),
             attitude_roll_pitch_init_sigma_rad: 2.0_f32.to_radians(),
             yaw_init_sigma_rad: 6.0_f32.to_radians(),
             gyro_bias_init_sigma_radps: 0.125_f32.to_radians(),

@@ -3,17 +3,17 @@
 use crate::{ProcessNoise, math::sq_f32};
 
 /// Number of full-filter error-state components.
-pub const FULL_ERROR_STATES: usize = 24;
+pub const ERROR_STATES: usize = 24;
 /// Number of full-filter process-noise components.
-pub const FULL_NOISE_STATES: usize = 21;
+pub const NOISE_STATES: usize = 21;
 
-/// Initial covariance settings used when seeding [`crate::full::FullFilter`]
+/// Initial covariance settings used when seeding [`crate::full::Filter`]
 /// through the high-level `SensorFusion` facade.
 #[repr(C)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase", default))]
 #[derive(Clone, Copy, Debug)]
-pub struct FullInitConfig {
+pub struct InitConfig {
     /// Minimum one-sigma position uncertainty, in meters.
     pub pos_min_sigma_m: f32,
     /// Minimum one-sigma velocity uncertainty, in meters per second.
@@ -34,7 +34,7 @@ pub struct FullInitConfig {
     pub mount_yaw_sigma_deg: f32,
 }
 
-impl Default for FullInitConfig {
+impl Default for InitConfig {
     fn default() -> Self {
         Self {
             pos_min_sigma_m: 0.5,
@@ -53,9 +53,9 @@ impl Default for FullInitConfig {
 pub(crate) fn default_full_p_diag(
     pos_std_m: [f32; 3],
     vel_std_mps: [f32; 3],
-    init: FullInitConfig,
-) -> [f32; FULL_ERROR_STATES] {
-    let mut p = [1.0_f32; FULL_ERROR_STATES];
+    init: InitConfig,
+) -> [f32; ERROR_STATES] {
+    let mut p = [1.0_f32; ERROR_STATES];
 
     let pos_n_sigma = pos_std_m[0].max(init.pos_min_sigma_m);
     let pos_e_sigma = pos_std_m[1].max(init.pos_min_sigma_m);
@@ -103,7 +103,7 @@ pub(crate) fn default_full_p_diag(
 /// Full-filter nominal state.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-pub struct FullNominalState {
+pub struct NominalState {
     pub q0: f32,
     pub q1: f32,
     pub q2: f32,
@@ -135,7 +135,7 @@ pub struct FullNominalState {
 /// Two-sample IMU increment used by the full ECEF propagation model.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-pub struct FullImuDelta {
+pub struct ImuDelta {
     pub dax_1: f32,
     pub day_1: f32,
     pub daz_1: f32,
@@ -153,7 +153,7 @@ pub struct FullImuDelta {
 
 /// Diagnostic snapshot for the most recent full GNSS position gate attempt.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct FullGnssPositionGateDiag {
+pub struct GnssPositionGateDiag {
     pub attempted: bool,
     pub accepted: bool,
     pub whitened_residual: [f32; 3],
@@ -164,46 +164,46 @@ pub struct FullGnssPositionGateDiag {
 /// Complete full-filter state and diagnostics.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct FullState {
-    pub nominal: FullNominalState,
-    pub p: [[f32; FULL_ERROR_STATES]; FULL_ERROR_STATES],
+pub struct State {
+    pub nominal: NominalState,
+    pub p: [[f32; ERROR_STATES]; ERROR_STATES],
     pub noise: ProcessNoise,
     pub pos_e64: [f64; 3],
     pub qcs64: [f64; 4],
-    pub last_dx: [f32; FULL_ERROR_STATES],
-    pub last_dx_by_obs: [[f32; FULL_ERROR_STATES]; 8],
+    pub last_dx: [f32; ERROR_STATES],
+    pub last_dx_by_obs: [[f32; ERROR_STATES]; 8],
     pub last_obs_count: i32,
     pub last_obs_types: [i32; 8],
     pub last_residuals: [f32; 8],
     pub last_effective_residuals: [f32; 8],
     pub last_innovation_vars: [f32; 8],
-    pub last_gnss_pos_gate: FullGnssPositionGateDiag,
+    pub last_gnss_pos_gate: GnssPositionGateDiag,
 }
 
-impl Default for FullState {
+impl Default for State {
     fn default() -> Self {
-        let mut p = [[0.0; FULL_ERROR_STATES]; FULL_ERROR_STATES];
-        for i in 0..FULL_ERROR_STATES {
+        let mut p = [[0.0; ERROR_STATES]; ERROR_STATES];
+        for i in 0..ERROR_STATES {
             p[i][i] = 1.0;
         }
         Self {
-            nominal: FullNominalState {
+            nominal: NominalState {
                 q0: 1.0,
                 qcs0: 1.0,
-                ..FullNominalState::default()
+                ..NominalState::default()
             },
             p,
             noise: ProcessNoise::reference_nsr_demo(),
             pos_e64: [0.0; 3],
             qcs64: [1.0, 0.0, 0.0, 0.0],
-            last_dx: [0.0; FULL_ERROR_STATES],
-            last_dx_by_obs: [[0.0; FULL_ERROR_STATES]; 8],
+            last_dx: [0.0; ERROR_STATES],
+            last_dx_by_obs: [[0.0; ERROR_STATES]; 8],
             last_obs_count: 0,
             last_obs_types: [0; 8],
             last_residuals: [0.0; 8],
             last_effective_residuals: [0.0; 8],
             last_innovation_vars: [0.0; 8],
-            last_gnss_pos_gate: FullGnssPositionGateDiag::default(),
+            last_gnss_pos_gate: GnssPositionGateDiag::default(),
         }
     }
 }

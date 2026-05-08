@@ -1,7 +1,7 @@
 //! Standalone Reduced-state operation helpers.
 //!
 //! These types are useful for focused tests and derivation checks. The
-//! production runtime is [`crate::reduced::RustReduced`].
+//! production runtime is [`crate::reduced::Filter`].
 
 use crate::math::{
     mat_vec3_f32, normalize_quat_f32, normalized_quat_f32, quat_multiply_f32, quat_to_dcm_f32,

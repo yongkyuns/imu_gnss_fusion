@@ -1,14 +1,14 @@
-use sensor_fusion::full::{FULL_ERROR_STATES, FullImuDelta, FullNominalState};
-use sensor_fusion::generated_full;
-use sensor_fusion::generated_reduced::{self, ERROR_STATES};
-use sensor_fusion::reduced::{ReducedImuDelta, ReducedNominalState};
+use sensor_fusion::{full, generated_full, generated_reduced, reduced};
+
+const REDUCED_STATES: usize = generated_reduced::ERROR_STATES;
+const FULL_STATES: usize = full::ERROR_STATES;
 
 const REDUCED_NHC_Y_SUPPORT: [usize; 8] = [0, 1, 2, 3, 4, 5, 15, 17];
 const REDUCED_NHC_Z_SUPPORT: [usize; 8] = [0, 1, 2, 3, 4, 5, 15, 16];
 
 #[test]
 fn declared_nhc_sparse_supports_cover_generated_rows() {
-    let p = [[0.0; ERROR_STATES]; ERROR_STATES];
+    let p = [[0.0; REDUCED_STATES]; REDUCED_STATES];
     let mut reduced_y_rows = Vec::new();
     let mut reduced_z_rows = Vec::new();
     let mut full_y_rows = Vec::new();
@@ -23,26 +23,26 @@ fn declared_nhc_sparse_supports_cover_generated_rows() {
     }
 
     assert_support_covers(
-        observed_support_union::<ERROR_STATES, 5>(&reduced_y_rows),
+        observed_support_union::<REDUCED_STATES, 5>(&reduced_y_rows),
         &REDUCED_NHC_Y_SUPPORT,
     );
     assert_support_covers(
-        observed_support_union::<ERROR_STATES, 5>(&reduced_z_rows),
+        observed_support_union::<REDUCED_STATES, 5>(&reduced_z_rows),
         &REDUCED_NHC_Z_SUPPORT,
     );
     assert_eq!(
-        observed_support_union::<FULL_ERROR_STATES, 6>(&full_y_rows),
+        observed_support_union::<FULL_STATES, 6>(&full_y_rows),
         generated_full::NHC_Y_SUPPORT
     );
     assert_eq!(
-        observed_support_union::<FULL_ERROR_STATES, 6>(&full_z_rows),
+        observed_support_union::<FULL_STATES, 6>(&full_z_rows),
         generated_full::NHC_Z_SUPPORT
     );
 }
 
 #[test]
 fn reduced_and_full_nhc_jacobians_match_after_attitude_basis_transform() {
-    let reduced = ReducedNominalState {
+    let reduced = reduced::NominalState {
         q0: 0.979_466,
         q1: 0.059_519,
         q2: -0.068_553,
@@ -54,9 +54,9 @@ fn reduced_and_full_nhc_jacobians_match_after_attitude_basis_transform() {
         qcs1: 0.045_023,
         qcs2: -0.036_704,
         qcs3: 0.081_264,
-        ..ReducedNominalState::default()
+        ..reduced::NominalState::default()
     };
-    let full = FullNominalState {
+    let full = full::NominalState {
         q0: reduced.q0,
         q1: reduced.q1,
         q2: reduced.q2,
@@ -68,9 +68,9 @@ fn reduced_and_full_nhc_jacobians_match_after_attitude_basis_transform() {
         qcs1: reduced.qcs1,
         qcs2: reduced.qcs2,
         qcs3: reduced.qcs3,
-        ..FullNominalState::default()
+        ..full::NominalState::default()
     };
-    let p = [[0.0; ERROR_STATES]; ERROR_STATES];
+    let p = [[0.0; REDUCED_STATES]; REDUCED_STATES];
     let reduced_y = generated_reduced::body_vel_y_observation(&reduced, &p, 1.0).h;
     let reduced_z = generated_reduced::body_vel_z_observation(&reduced, &p, 1.0).h;
     let (_full_vy, full_y) = generated_full::nhc_y(&full);
@@ -131,7 +131,7 @@ fn reduced_and_full_nhc_update_match_after_covariance_basis_transform() {
     let (full_vy, full_y) = generated_full::nhc_y(&full);
     let (full_vz, full_z) = generated_full::nhc_z(&full);
 
-    let mut dx_reduced = [0.0; ERROR_STATES];
+    let mut dx_reduced = [0.0; REDUCED_STATES];
     scalar_update_reduced(
         &mut p_reduced,
         &mut dx_reduced,
@@ -149,7 +149,7 @@ fn reduced_and_full_nhc_update_match_after_covariance_basis_transform() {
         1.0,
     );
 
-    let mut dx_full = [0.0; FULL_ERROR_STATES];
+    let mut dx_full = [0.0; FULL_STATES];
     scalar_update_full(
         &mut p_full,
         &mut dx_full,
@@ -184,7 +184,7 @@ fn reduced_and_full_nhc_update_match_after_covariance_basis_transform() {
 fn reduced_and_full_mount_transition_blocks_match_after_basis_transform() {
     let reduced = sample_reduced_nominal();
     let full = sample_full_nominal(&reduced);
-    let imu_reduced = ReducedImuDelta {
+    let imu_reduced = reduced::ImuDelta {
         dax: 0.001,
         day: -0.002,
         daz: 0.003,
@@ -193,7 +193,7 @@ fn reduced_and_full_mount_transition_blocks_match_after_basis_transform() {
         dvz: 0.095,
         dt: 0.01,
     };
-    let imu_full = FullImuDelta {
+    let imu_full = full::ImuDelta {
         dax_1: imu_reduced.dax,
         day_1: imu_reduced.day,
         daz_1: imu_reduced.daz,
@@ -214,7 +214,7 @@ fn reduced_and_full_mount_transition_blocks_match_after_basis_transform() {
     for &full_row in &[3usize, 4, 5, 6, 7, 8] {
         for &reduced_col in &[15usize, 16, 17] {
             let mut expected = 0.0;
-            for reduced_row in 0..ERROR_STATES {
+            for reduced_row in 0..REDUCED_STATES {
                 expected += full_from_reduced_coeff(full_row, reduced_row, c_es)
                     * f_reduced[reduced_row][reduced_col];
             }
@@ -233,7 +233,7 @@ fn reduced_and_full_mount_transition_blocks_match_after_basis_transform() {
 fn reduced_and_full_common_transition_blocks_are_close_after_basis_transform() {
     let reduced = sample_reduced_nominal();
     let full = sample_full_nominal(&reduced);
-    let imu_reduced = ReducedImuDelta {
+    let imu_reduced = reduced::ImuDelta {
         dax: 0.001,
         day: -0.002,
         daz: 0.003,
@@ -242,7 +242,7 @@ fn reduced_and_full_common_transition_blocks_are_close_after_basis_transform() {
         dvz: 0.095,
         dt: 0.01,
     };
-    let imu_full = FullImuDelta {
+    let imu_full = full::ImuDelta {
         dax_1: imu_reduced.dax,
         day_1: imu_reduced.day,
         daz_1: imu_reduced.daz,
@@ -267,12 +267,12 @@ fn reduced_and_full_common_transition_blocks_are_close_after_basis_transform() {
     for &full_row in &full_common {
         for &reduced_col in &reduced_common {
             let mut expected = 0.0;
-            for reduced_row in 0..ERROR_STATES {
+            for reduced_row in 0..REDUCED_STATES {
                 expected += full_from_reduced_coeff(full_row, reduced_row, c_es)
                     * f_reduced[reduced_row][reduced_col];
             }
             let mut actual = 0.0;
-            for full_col in 0..FULL_ERROR_STATES {
+            for full_col in 0..FULL_STATES {
                 actual += f_full[full_row][full_col]
                     * full_from_reduced_coeff(full_col, reduced_col, c_es);
             }
@@ -298,7 +298,7 @@ fn reduced_and_full_common_transition_blocks_are_close_after_basis_transform() {
 fn reduced_and_full_common_prediction_covariances_are_close_after_basis_transform() {
     let reduced = sample_reduced_nominal();
     let full = sample_full_nominal(&reduced);
-    let imu_reduced = ReducedImuDelta {
+    let imu_reduced = reduced::ImuDelta {
         dax: 0.001,
         day: -0.002,
         daz: 0.003,
@@ -307,7 +307,7 @@ fn reduced_and_full_common_prediction_covariances_are_close_after_basis_transfor
         dvz: 0.095,
         dt: 0.01,
     };
-    let imu_full = FullImuDelta {
+    let imu_full = full::ImuDelta {
         dax_1: imu_reduced.dax,
         day_1: imu_reduced.day,
         daz_1: imu_reduced.daz,
@@ -328,7 +328,7 @@ fn reduced_and_full_common_prediction_covariances_are_close_after_basis_transfor
     let (f_reduced, g_reduced) = generated_reduced::error_transition(&reduced, imu_reduced);
     let (f_full, g_full) = generated_full::error_transition(&full, imu_full);
     let q_reduced = [1.0e-8_f32; generated_reduced::NOISE_STATES];
-    let mut q_full = [0.0_f32; sensor_fusion::full::FULL_NOISE_STATES];
+    let mut q_full = [0.0_f32; full::NOISE_STATES];
     q_full[0] = q_reduced[3];
     q_full[1] = q_reduced[4];
     q_full[2] = q_reduced[5];
@@ -371,8 +371,8 @@ fn reduced_and_full_common_prediction_covariances_are_close_after_basis_transfor
     );
 }
 
-fn sample_reduced_nominal() -> ReducedNominalState {
-    ReducedNominalState {
+fn sample_reduced_nominal() -> reduced::NominalState {
+    reduced::NominalState {
         q0: 0.979_466,
         q1: 0.059_519,
         q2: -0.068_553,
@@ -384,12 +384,12 @@ fn sample_reduced_nominal() -> ReducedNominalState {
         qcs1: 0.045_023,
         qcs2: -0.036_704,
         qcs3: 0.081_264,
-        ..ReducedNominalState::default()
+        ..reduced::NominalState::default()
     }
 }
 
-fn alternate_reduced_nominal() -> ReducedNominalState {
-    ReducedNominalState {
+fn alternate_reduced_nominal() -> reduced::NominalState {
+    reduced::NominalState {
         q0: 0.927_361_85,
         q1: -0.162_134_74,
         q2: 0.307_685_73,
@@ -401,12 +401,12 @@ fn alternate_reduced_nominal() -> ReducedNominalState {
         qcs1: -0.037_259_74,
         qcs2: 0.128_494_34,
         qcs3: -0.241_015_14,
-        ..ReducedNominalState::default()
+        ..reduced::NominalState::default()
     }
 }
 
-fn sample_full_nominal(reduced: &ReducedNominalState) -> FullNominalState {
-    FullNominalState {
+fn sample_full_nominal(reduced: &reduced::NominalState) -> full::NominalState {
+    full::NominalState {
         q0: reduced.q0,
         q1: reduced.q1,
         q2: reduced.q2,
@@ -424,12 +424,12 @@ fn sample_full_nominal(reduced: &ReducedNominalState) -> FullNominalState {
         sax: 1.0,
         say: 1.0,
         saz: 1.0,
-        ..FullNominalState::default()
+        ..full::NominalState::default()
     }
 }
 
-fn sample_reduced_covariance() -> [[f32; ERROR_STATES]; ERROR_STATES] {
-    let mut p = [[0.0; ERROR_STATES]; ERROR_STATES];
+fn sample_reduced_covariance() -> [[f32; REDUCED_STATES]; REDUCED_STATES] {
+    let mut p = [[0.0; REDUCED_STATES]; REDUCED_STATES];
     let states = [0usize, 1, 2, 3, 4, 5, 9, 10, 11, 12, 13, 14, 15, 16, 17];
     for (rank, &i) in states.iter().enumerate() {
         let sigma = 0.02 + 0.015 * rank as f32;
@@ -447,17 +447,17 @@ fn sample_reduced_covariance() -> [[f32; ERROR_STATES]; ERROR_STATES] {
 }
 
 fn scalar_update_reduced(
-    p: &mut [[f32; ERROR_STATES]; ERROR_STATES],
-    dx: &mut [f32; ERROR_STATES],
-    h: &[f32; ERROR_STATES],
+    p: &mut [[f32; REDUCED_STATES]; REDUCED_STATES],
+    dx: &mut [f32; REDUCED_STATES],
+    h: &[f32; REDUCED_STATES],
     support: &[usize],
     residual: f32,
     r: f32,
 ) {
-    let mut ph = [0.0; ERROR_STATES];
+    let mut ph = [0.0; REDUCED_STATES];
     let mut s = r;
     let mut hd = 0.0;
-    for i in 0..ERROR_STATES {
+    for i in 0..REDUCED_STATES {
         for &state in support {
             ph[i] += p[i][state] * h[state];
         }
@@ -466,11 +466,11 @@ fn scalar_update_reduced(
         s += h[state] * ph[state];
         hd += h[state] * dx[state];
     }
-    for i in 0..ERROR_STATES {
+    for i in 0..REDUCED_STATES {
         dx[i] += (ph[i] / s) * (residual - hd);
     }
-    for i in 0..ERROR_STATES {
-        for j in i..ERROR_STATES {
+    for i in 0..REDUCED_STATES {
+        for j in i..REDUCED_STATES {
             let updated = p[i][j] - (ph[i] * ph[j]) / s;
             p[i][j] = updated;
             p[j][i] = updated;
@@ -479,17 +479,17 @@ fn scalar_update_reduced(
 }
 
 fn scalar_update_full(
-    p: &mut [[f32; FULL_ERROR_STATES]; FULL_ERROR_STATES],
-    dx: &mut [f32; FULL_ERROR_STATES],
-    h: &[f32; FULL_ERROR_STATES],
+    p: &mut [[f32; FULL_STATES]; FULL_STATES],
+    dx: &mut [f32; FULL_STATES],
+    h: &[f32; FULL_STATES],
     support: &[usize],
     residual: f32,
     r: f32,
 ) {
-    let mut ph = [0.0; FULL_ERROR_STATES];
+    let mut ph = [0.0; FULL_STATES];
     let mut s = r;
     let mut hd = 0.0;
-    for i in 0..FULL_ERROR_STATES {
+    for i in 0..FULL_STATES {
         for &state in support {
             ph[i] += p[i][state] * h[state];
         }
@@ -498,11 +498,11 @@ fn scalar_update_full(
         s += h[state] * ph[state];
         hd += h[state] * dx[state];
     }
-    for i in 0..FULL_ERROR_STATES {
+    for i in 0..FULL_STATES {
         dx[i] += (ph[i] / s) * (residual - hd);
     }
-    for i in 0..FULL_ERROR_STATES {
-        for j in i..FULL_ERROR_STATES {
+    for i in 0..FULL_STATES {
+        for j in i..FULL_STATES {
             let updated = p[i][j] - (ph[i] * ph[j]) / s;
             p[i][j] = updated;
             p[j][i] = updated;
@@ -511,15 +511,15 @@ fn scalar_update_full(
 }
 
 fn transform_reduced_cov_to_full(
-    p_reduced: &[[f32; ERROR_STATES]; ERROR_STATES],
+    p_reduced: &[[f32; REDUCED_STATES]; REDUCED_STATES],
     c_es: [[f32; 3]; 3],
-) -> [[f32; FULL_ERROR_STATES]; FULL_ERROR_STATES] {
-    let mut p = [[0.0; FULL_ERROR_STATES]; FULL_ERROR_STATES];
-    for full_i in 0..FULL_ERROR_STATES {
-        for full_j in 0..FULL_ERROR_STATES {
+) -> [[f32; FULL_STATES]; FULL_STATES] {
+    let mut p = [[0.0; FULL_STATES]; FULL_STATES];
+    for full_i in 0..FULL_STATES {
+        for full_j in 0..FULL_STATES {
             let mut v = 0.0;
-            for reduced_i in 0..ERROR_STATES {
-                for reduced_j in 0..ERROR_STATES {
+            for reduced_i in 0..REDUCED_STATES {
+                for reduced_j in 0..REDUCED_STATES {
                     v += full_from_reduced_coeff(full_i, reduced_i, c_es)
                         * p_reduced[reduced_i][reduced_j]
                         * full_from_reduced_coeff(full_j, reduced_j, c_es);
@@ -532,15 +532,15 @@ fn transform_reduced_cov_to_full(
 }
 
 fn transform_full_cov_to_reduced(
-    p_full: &[[f32; FULL_ERROR_STATES]; FULL_ERROR_STATES],
+    p_full: &[[f32; FULL_STATES]; FULL_STATES],
     c_es: [[f32; 3]; 3],
-) -> [[f32; ERROR_STATES]; ERROR_STATES] {
-    let mut p = [[0.0; ERROR_STATES]; ERROR_STATES];
-    for reduced_i in 0..ERROR_STATES {
-        for reduced_j in 0..ERROR_STATES {
+) -> [[f32; REDUCED_STATES]; REDUCED_STATES] {
+    let mut p = [[0.0; REDUCED_STATES]; REDUCED_STATES];
+    for reduced_i in 0..REDUCED_STATES {
+        for reduced_j in 0..REDUCED_STATES {
             let mut v = 0.0;
-            for full_i in 0..FULL_ERROR_STATES {
-                for full_j in 0..FULL_ERROR_STATES {
+            for full_i in 0..FULL_STATES {
+                for full_j in 0..FULL_STATES {
                     v += reduced_from_full_coeff(reduced_i, full_i, c_es)
                         * p_full[full_i][full_j]
                         * reduced_from_full_coeff(reduced_j, full_j, c_es);
@@ -553,12 +553,12 @@ fn transform_full_cov_to_reduced(
 }
 
 fn transform_full_dx_to_reduced(
-    dx_full: &[f32; FULL_ERROR_STATES],
+    dx_full: &[f32; FULL_STATES],
     c_es: [[f32; 3]; 3],
-) -> [f32; ERROR_STATES] {
-    let mut dx = [0.0; ERROR_STATES];
+) -> [f32; REDUCED_STATES] {
+    let mut dx = [0.0; REDUCED_STATES];
     for (i, out) in dx.iter_mut().enumerate() {
-        for full_i in 0..FULL_ERROR_STATES {
+        for full_i in 0..FULL_STATES {
             *out += reduced_from_full_coeff(i, full_i, c_es) * dx_full[full_i];
         }
     }
@@ -566,23 +566,23 @@ fn transform_full_dx_to_reduced(
 }
 
 fn predict_cov_reduced(
-    f: &[[f32; ERROR_STATES]; ERROR_STATES],
-    g: &[[f32; generated_reduced::NOISE_STATES]; ERROR_STATES],
-    p: &[[f32; ERROR_STATES]; ERROR_STATES],
+    f: &[[f32; REDUCED_STATES]; REDUCED_STATES],
+    g: &[[f32; generated_reduced::NOISE_STATES]; REDUCED_STATES],
+    p: &[[f32; REDUCED_STATES]; REDUCED_STATES],
     q: &[f32; generated_reduced::NOISE_STATES],
-) -> [[f32; ERROR_STATES]; ERROR_STATES] {
-    let mut fp = [[0.0; ERROR_STATES]; ERROR_STATES];
-    for i in 0..ERROR_STATES {
-        for j in 0..ERROR_STATES {
-            for k in 0..ERROR_STATES {
+) -> [[f32; REDUCED_STATES]; REDUCED_STATES] {
+    let mut fp = [[0.0; REDUCED_STATES]; REDUCED_STATES];
+    for i in 0..REDUCED_STATES {
+        for j in 0..REDUCED_STATES {
+            for k in 0..REDUCED_STATES {
                 fp[i][j] += f[i][k] * p[k][j];
             }
         }
     }
-    let mut out = [[0.0; ERROR_STATES]; ERROR_STATES];
-    for i in 0..ERROR_STATES {
-        for j in 0..ERROR_STATES {
-            for k in 0..ERROR_STATES {
+    let mut out = [[0.0; REDUCED_STATES]; REDUCED_STATES];
+    for i in 0..REDUCED_STATES {
+        for j in 0..REDUCED_STATES {
+            for k in 0..REDUCED_STATES {
                 out[i][j] += fp[i][k] * f[j][k];
             }
             for (k, qk) in q.iter().enumerate() {
@@ -594,23 +594,23 @@ fn predict_cov_reduced(
 }
 
 fn predict_cov_full(
-    f: &[[f32; FULL_ERROR_STATES]; FULL_ERROR_STATES],
-    g: &[[f32; sensor_fusion::full::FULL_NOISE_STATES]; FULL_ERROR_STATES],
-    p: &[[f32; FULL_ERROR_STATES]; FULL_ERROR_STATES],
-    q: &[f32; sensor_fusion::full::FULL_NOISE_STATES],
-) -> [[f32; FULL_ERROR_STATES]; FULL_ERROR_STATES] {
-    let mut fp = [[0.0; FULL_ERROR_STATES]; FULL_ERROR_STATES];
-    for i in 0..FULL_ERROR_STATES {
-        for j in 0..FULL_ERROR_STATES {
-            for k in 0..FULL_ERROR_STATES {
+    f: &[[f32; FULL_STATES]; FULL_STATES],
+    g: &[[f32; full::NOISE_STATES]; FULL_STATES],
+    p: &[[f32; FULL_STATES]; FULL_STATES],
+    q: &[f32; full::NOISE_STATES],
+) -> [[f32; FULL_STATES]; FULL_STATES] {
+    let mut fp = [[0.0; FULL_STATES]; FULL_STATES];
+    for i in 0..FULL_STATES {
+        for j in 0..FULL_STATES {
+            for k in 0..FULL_STATES {
                 fp[i][j] += f[i][k] * p[k][j];
             }
         }
     }
-    let mut out = [[0.0; FULL_ERROR_STATES]; FULL_ERROR_STATES];
-    for i in 0..FULL_ERROR_STATES {
-        for j in 0..FULL_ERROR_STATES {
-            for k in 0..FULL_ERROR_STATES {
+    let mut out = [[0.0; FULL_STATES]; FULL_STATES];
+    for i in 0..FULL_STATES {
+        for j in 0..FULL_STATES {
+            for k in 0..FULL_STATES {
                 out[i][j] += fp[i][k] * f[j][k];
             }
             for (k, qk) in q.iter().enumerate() {

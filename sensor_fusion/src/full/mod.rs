@@ -42,8 +42,7 @@ use crate::nav::{
 };
 pub(crate) use types::default_full_p_diag;
 pub use types::{
-    FULL_ERROR_STATES, FULL_NOISE_STATES, FullGnssPositionGateDiag, FullImuDelta, FullInitConfig,
-    FullNominalState, FullState,
+    ERROR_STATES, GnssPositionGateDiag, ImuDelta, InitConfig, NOISE_STATES, NominalState, State,
 };
 
 const GPS_REF_SUPPORT_ROW0: &[usize] = &[0];
@@ -64,16 +63,16 @@ const DEFAULT_NHC_R_Z: f32 = 0.05_f32 * 0.05_f32;
 
 /// Full-coupled ECEF INS/GNSS filter used for reference comparisons.
 #[derive(Clone, Debug)]
-pub struct FullFilter {
-    raw: FullState,
+pub struct Filter {
+    raw: State,
 }
 
-impl FullFilter {
+impl Filter {
     /// Creates a full filter with identity attitude/mount and the supplied process noise.
     pub fn new(noise: ProcessNoise) -> Self {
-        let mut raw = FullState {
+        let mut raw = State {
             noise,
-            ..FullState::default()
+            ..State::default()
         };
         raw.nominal.q0 = 1.0;
         raw.nominal.qcs0 = 1.0;
@@ -82,17 +81,17 @@ impl FullFilter {
     }
 
     /// Returns the full full-filter state.
-    pub fn raw(&self) -> &FullState {
+    pub fn raw(&self) -> &State {
         &self.raw
     }
 
     /// Returns the nominal full-filter state.
-    pub fn nominal(&self) -> &FullNominalState {
+    pub fn nominal(&self) -> &NominalState {
         &self.raw.nominal
     }
 
     /// Returns the public f32 covariance matrix.
-    pub fn covariance(&self) -> &[[f32; FULL_ERROR_STATES]; FULL_ERROR_STATES] {
+    pub fn covariance(&self) -> &[[f32; ERROR_STATES]; ERROR_STATES] {
         &self.raw.p
     }
 
@@ -111,12 +110,12 @@ impl FullFilter {
     }
 
     /// Returns the last injected error-state correction.
-    pub fn last_dx(&self) -> &[f32; FULL_ERROR_STATES] {
+    pub fn last_dx(&self) -> &[f32; ERROR_STATES] {
         &self.raw.last_dx
     }
 
     /// Returns per-observation-row contributions from the last batch update.
-    pub fn last_dx_by_obs(&self) -> &[[f32; FULL_ERROR_STATES]; 8] {
+    pub fn last_dx_by_obs(&self) -> &[[f32; ERROR_STATES]; 8] {
         &self.raw.last_dx_by_obs
     }
 
@@ -148,12 +147,12 @@ impl FullFilter {
     }
 
     /// Returns diagnostics for the most recent GNSS position gate attempt.
-    pub fn last_gnss_position_gate(&self) -> FullGnssPositionGateDiag {
+    pub fn last_gnss_position_gate(&self) -> GnssPositionGateDiag {
         self.raw.last_gnss_pos_gate
     }
 
     /// Replaces covariance.
-    pub fn set_covariance(&mut self, p: [[f32; FULL_ERROR_STATES]; FULL_ERROR_STATES]) {
+    pub fn set_covariance(&mut self, p: [[f32; ERROR_STATES]; ERROR_STATES]) {
         self.raw.p = p;
     }
 
@@ -176,7 +175,7 @@ impl FullFilter {
         let mut p = self.raw.p;
         let var = sq_f64((sigma_deg as f64).to_radians()) as f32;
         for i in 21..24 {
-            for j in 0..FULL_ERROR_STATES {
+            for j in 0..ERROR_STATES {
                 p[i][j] = 0.0;
                 p[j][i] = 0.0;
             }
@@ -197,7 +196,7 @@ impl FullFilter {
         gyro_scale: [f32; 3],
         accel_scale: [f32; 3],
         q_cs: [f32; 4],
-        p_diag: Option<[f32; FULL_ERROR_STATES]>,
+        p_diag: Option<[f32; ERROR_STATES]>,
     ) {
         self.raw.nominal.q0 = q_bn[0];
         self.raw.nominal.q1 = q_bn[1];
@@ -228,8 +227,8 @@ impl FullFilter {
         self.raw.nominal.saz = accel_scale[2];
         self.set_mount_quat(q_cs);
         if let Some(p_diag) = p_diag {
-            for i in 0..FULL_ERROR_STATES {
-                for j in 0..FULL_ERROR_STATES {
+            for i in 0..ERROR_STATES {
+                for j in 0..ERROR_STATES {
                     self.raw.p[i][j] = 0.0;
                 }
             }
@@ -251,7 +250,7 @@ impl FullFilter {
         gyro_scale: [f32; 3],
         accel_scale: [f32; 3],
         q_cs: [f32; 4],
-        p_diag: Option<[f32; FULL_ERROR_STATES]>,
+        p_diag: Option<[f32; ERROR_STATES]>,
     ) {
         self.init_from_reference_state(
             q_es,
@@ -280,7 +279,7 @@ impl FullFilter {
         lon_deg: f64,
         pos_ecef_m: [f64; 3],
         vel_ecef_mps: [f32; 3],
-        p_diag: Option<[f32; FULL_ERROR_STATES]>,
+        p_diag: Option<[f32; ERROR_STATES]>,
         residual_mount_sigma_deg: Option<f32>,
     ) {
         let (q_es, q_cs) = full_seeded_vehicle_ecef_split(yaw_rad, lat_deg, lon_deg);
@@ -301,14 +300,14 @@ impl FullFilter {
     }
 
     /// Predicts nominal state and covariance from one two-sample IMU delta.
-    pub fn predict(&mut self, imu: FullImuDelta) {
+    pub fn predict(&mut self, imu: ImuDelta) {
         if imu.dt <= 0.0 {
             return;
         }
         self.predict_nominal(imu);
         let (f, g) = self.compute_error_transition(imu);
         let dt = imu.dt;
-        let mut q = [0.0; FULL_NOISE_STATES];
+        let mut q = [0.0; NOISE_STATES];
         q[0] = self.raw.noise.accel_var * dt;
         q[1] = q[0];
         q[2] = q[0];
@@ -335,7 +334,7 @@ impl FullFilter {
     }
 
     /// Predicts only the full nominal state from one two-sample IMU delta.
-    pub fn predict_nominal(&mut self, imu: FullImuDelta) {
+    pub fn predict_nominal(&mut self, imu: ImuDelta) {
         let dt = imu.dt;
         if dt <= 0.0 {
             return;
@@ -474,15 +473,15 @@ impl FullFilter {
     /// Computes generated full-filter transition and noise-input matrices.
     pub fn compute_error_transition(
         &self,
-        imu: FullImuDelta,
+        imu: ImuDelta,
     ) -> (
-        [[f32; FULL_ERROR_STATES]; FULL_ERROR_STATES],
-        [[f32; FULL_NOISE_STATES]; FULL_ERROR_STATES],
+        [[f32; ERROR_STATES]; ERROR_STATES],
+        [[f32; NOISE_STATES]; ERROR_STATES],
     ) {
         if imu.dt <= 0.0 {
             return (
-                [[0.0; FULL_ERROR_STATES]; FULL_ERROR_STATES],
-                [[0.0; FULL_NOISE_STATES]; FULL_ERROR_STATES],
+                [[0.0; ERROR_STATES]; ERROR_STATES],
+                [[0.0; NOISE_STATES]; ERROR_STATES],
             );
         }
         generated::error_transition(&self.raw.nominal, imu)
@@ -497,7 +496,7 @@ impl FullFilter {
         speed_acc_mps: f32,
         dt_since_last_gnss_s: f32,
     ) {
-        let mut h_rows = [[0.0; FULL_ERROR_STATES]; 8];
+        let mut h_rows = [[0.0; ERROR_STATES]; 8];
         let mut h_supports: [Option<&'static [usize]>; 8] = [None; 8];
         let mut residuals = [0.0; 8];
         let mut variances = [0.0; 8];
@@ -530,7 +529,7 @@ impl FullFilter {
         vel_std_ned_mps: Option<[f32; 3]>,
         dt_since_last_gnss_s: f32,
     ) {
-        let mut h_rows = [[0.0; FULL_ERROR_STATES]; 8];
+        let mut h_rows = [[0.0; ERROR_STATES]; 8];
         let mut h_supports: [Option<&'static [usize]>; 8] = [None; 8];
         let mut residuals = [0.0; 8];
         let mut variances = [0.0; 8];
@@ -716,7 +715,7 @@ impl FullFilter {
         let dt_obs = nhc_observation_dt(dt_s);
         let var_y = sanitize_nhc_variance(r_nhc_y) / dt_obs;
         let var_z = sanitize_nhc_variance(r_nhc_z) / dt_obs;
-        let mut h_rows = [[0.0; FULL_ERROR_STATES]; 8];
+        let mut h_rows = [[0.0; ERROR_STATES]; 8];
         let mut h_supports: [Option<&'static [usize]>; 8] = [None; 8];
         let mut residuals = [0.0; 8];
         let mut variances = [0.0; 8];
@@ -761,13 +760,13 @@ impl FullFilter {
         }
         self.raw.last_obs_count = 0;
         self.raw.last_obs_types = [0; 8];
-        self.raw.last_dx_by_obs = [[0.0; FULL_ERROR_STATES]; 8];
+        self.raw.last_dx_by_obs = [[0.0; ERROR_STATES]; 8];
         self.raw.last_residuals = [0.0; 8];
         self.raw.last_effective_residuals = [0.0; 8];
         self.raw.last_innovation_vars = [0.0; 8];
-        self.raw.last_gnss_pos_gate = FullGnssPositionGateDiag::default();
+        self.raw.last_gnss_pos_gate = GnssPositionGateDiag::default();
 
-        let mut h_rows = [[0.0; FULL_ERROR_STATES]; 8];
+        let mut h_rows = [[0.0; ERROR_STATES]; 8];
         let mut h_supports: [Option<&'static [usize]>; 8] = [None; 8];
         let mut residuals = [0.0; 8];
         let mut variances = [0.0; 8];
@@ -828,7 +827,7 @@ impl FullFilter {
         speed_acc_mps: f32,
         vel_std_ned_mps: Option<[f32; 3]>,
         dt_since_last_gnss_s: f32,
-        h_rows: &mut [[f32; FULL_ERROR_STATES]; 8],
+        h_rows: &mut [[f32; ERROR_STATES]; 8],
         h_supports: &mut [Option<&'static [usize]>; 8],
         residuals: &mut [f32; 8],
         variances: &mut [f32; 8],
@@ -872,7 +871,7 @@ impl FullFilter {
             ];
             let mut x_meas = [0.0_f64; 3];
             let x_est = self.raw.pos_e64;
-            let mut h_tmp = [[0.0; FULL_ERROR_STATES]; 3];
+            let mut h_tmp = [[0.0; ERROR_STATES]; 3];
             for i in 0..3 {
                 for j in 0..3 {
                     x_meas[i] += t[i][j] as f64 * pos_ecef_m[j];
@@ -922,7 +921,7 @@ impl FullFilter {
         }
 
         if let Some(vel_ecef_mps) = vel_ecef_mps {
-            let mut vel_rows = [[0.0; FULL_ERROR_STATES]; 3];
+            let mut vel_rows = [[0.0; ERROR_STATES]; 3];
             let mut vel_residual = [0.0; 3];
             let mut vel_r_diag = [1.0; 3];
             let mut vel_update_var = [1.0; 3];
@@ -1032,19 +1031,19 @@ impl FullFilter {
     fn batch_update_joseph(
         &mut self,
         obs_count: usize,
-        h: &[[f32; FULL_ERROR_STATES]; 8],
+        h: &[[f32; ERROR_STATES]; 8],
         h_supports: &[Option<&'static [usize]>; 8],
         residuals: &[f32; 8],
         variances: &[f32; 8],
     ) {
-        let mut dx = [0.0; FULL_ERROR_STATES];
-        let mut dx_by_obs = [[0.0; FULL_ERROR_STATES]; 8];
+        let mut dx = [0.0; ERROR_STATES];
+        let mut dx_by_obs = [[0.0; ERROR_STATES]; 8];
         let mut residual_diag = [0.0; 8];
         let mut effective_residual_diag = [0.0; 8];
         let mut innovation_var_diag = [0.0; 8];
         {
             let p = &mut self.raw.p;
-            let mut dense_support = [0usize; FULL_ERROR_STATES];
+            let mut dense_support = [0usize; ERROR_STATES];
             for obs in 0..obs_count {
                 let h_obs = &h[obs];
                 let support = match h_supports[obs] {
@@ -1055,9 +1054,9 @@ impl FullFilter {
                     }
                 };
 
-                let mut ph = [0.0; FULL_ERROR_STATES];
+                let mut ph = [0.0; ERROR_STATES];
                 let mut s = variances[obs];
-                for i in 0..FULL_ERROR_STATES {
+                for i in 0..ERROR_STATES {
                     for &state in support {
                         ph[i] += p[i][state] * h_obs[state];
                     }
@@ -1077,13 +1076,13 @@ impl FullFilter {
                 effective_residual_diag[obs] = effective_residual;
                 innovation_var_diag[obs] = s;
                 let alpha = effective_residual / s;
-                for i in 0..FULL_ERROR_STATES {
+                for i in 0..ERROR_STATES {
                     let row_dx = ph[i] * alpha;
                     dx_by_obs[obs][i] = row_dx;
                     dx[i] += row_dx;
                 }
-                for i in 0..FULL_ERROR_STATES {
-                    for j in i..FULL_ERROR_STATES {
+                for i in 0..ERROR_STATES {
+                    for j in i..ERROR_STATES {
                         let updated = p[i][j] - (ph[i] * ph[j]) / s;
                         p[i][j] = updated;
                         p[j][i] = updated;
@@ -1092,7 +1091,7 @@ impl FullFilter {
             }
         }
 
-        for i in 0..FULL_ERROR_STATES {
+        for i in 0..ERROR_STATES {
             self.raw.last_dx[i] = dx[i];
         }
         self.raw.last_dx_by_obs = dx_by_obs;
@@ -1102,7 +1101,7 @@ impl FullFilter {
         self.inject_error_state(dx);
     }
 
-    fn inject_error_state(&mut self, dx: [f32; FULL_ERROR_STATES]) {
+    fn inject_error_state(&mut self, dx: [f32; ERROR_STATES]) {
         let dq = euler_to_quat_f32(dx[6], dx[7], dx[8]);
         let q_old = [
             self.raw.nominal.q0,
@@ -1200,14 +1199,14 @@ impl FullFilter {
     }
 }
 
-pub type FullWrapper = FullFilter;
+pub type Wrapper = Filter;
 
 fn predict_covariance_sparse(
-    f: &[[f32; FULL_ERROR_STATES]; FULL_ERROR_STATES],
-    g: &[[f32; FULL_NOISE_STATES]; FULL_ERROR_STATES],
-    p: &[[f32; FULL_ERROR_STATES]; FULL_ERROR_STATES],
-    q: &[f32; FULL_NOISE_STATES],
-) -> [[f32; FULL_ERROR_STATES]; FULL_ERROR_STATES] {
+    f: &[[f32; ERROR_STATES]; ERROR_STATES],
+    g: &[[f32; NOISE_STATES]; ERROR_STATES],
+    p: &[[f32; ERROR_STATES]; ERROR_STATES],
+    q: &[f32; NOISE_STATES],
+) -> [[f32; ERROR_STATES]; ERROR_STATES] {
     covariance::predict_sparse(
         f,
         g,
@@ -1246,8 +1245,8 @@ fn nhc_speed_gate_allows(external_speed_mps: Option<f32>) -> bool {
 
 fn test_chi2_scalar(
     residual: f32,
-    p: &[[f32; FULL_ERROR_STATES]; FULL_ERROR_STATES],
-    h: &[f32; FULL_ERROR_STATES],
+    p: &[[f32; ERROR_STATES]; ERROR_STATES],
+    h: &[f32; ERROR_STATES],
     r: f32,
     support: &[usize],
 ) -> bool {
@@ -1262,11 +1261,11 @@ fn test_chi2_scalar(
 
 fn gnss_position_gate_diag(
     residual: [f32; 3],
-    p: &[[f32; FULL_ERROR_STATES]; FULL_ERROR_STATES],
-    h: &[[f32; FULL_ERROR_STATES]; 3],
+    p: &[[f32; ERROR_STATES]; ERROR_STATES],
+    h: &[[f32; ERROR_STATES]; 3],
     r_diag: [f32; 3],
     supports: &[&'static [usize]; 3],
-) -> FullGnssPositionGateDiag {
+) -> GnssPositionGateDiag {
     let mut innovation_sigma = [0.0; 3];
     let mut normalized_residual = [0.0; 3];
     let mut accepted = true;
@@ -1288,7 +1287,7 @@ fn gnss_position_gate_diag(
             accepted = false;
         }
     }
-    FullGnssPositionGateDiag {
+    GnssPositionGateDiag {
         attempted: true,
         accepted,
         whitened_residual: residual,
@@ -1299,8 +1298,8 @@ fn gnss_position_gate_diag(
 
 fn test_chi2_vec3(
     residual: [f32; 3],
-    p: &[[f32; FULL_ERROR_STATES]; FULL_ERROR_STATES],
-    h: &[[f32; FULL_ERROR_STATES]; 3],
+    p: &[[f32; ERROR_STATES]; ERROR_STATES],
+    h: &[[f32; ERROR_STATES]; 3],
     r_diag: [f32; 3],
     supports: &[&'static [usize]; 3],
 ) -> bool {
@@ -1312,10 +1311,7 @@ fn test_chi2_vec3(
     false
 }
 
-fn extract_support_from_row(
-    h: &[f32; FULL_ERROR_STATES],
-    support: &mut [usize; FULL_ERROR_STATES],
-) -> usize {
+fn extract_support_from_row(h: &[f32; ERROR_STATES], support: &mut [usize; ERROR_STATES]) -> usize {
     let mut len = 0;
     for (i, value) in h.iter().enumerate() {
         if *value != 0.0 {

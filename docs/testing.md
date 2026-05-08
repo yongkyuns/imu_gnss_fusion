@@ -107,11 +107,11 @@ Synthetic replay tests use checked-in fixtures and Rust-native path generation. 
 
 ## Generated-Code Changes
 
-When changing symbolic model files or generated Rust under `sensor_fusion/src/generated_reduced/` or `sensor_fusion/src/generated_full/`:
+When changing symbolic model files or generated Rust under `sensor_fusion/src/reduced/generated/` or `sensor_fusion/src/full/generated/`:
 
 ```bash
-python sensor_fusion/reduced.py --emit-rust
-python sensor_fusion/ins_gnss_full.py --emit-rust
+python sensor_fusion/src/reduced/formulation.py --emit-rust
+python sensor_fusion/src/full/formulation.py --emit-rust
 cargo test -p sensor_fusion --locked
 cargo test -p sim --test full_parity --locked
 cargo test -p sim --test synthetic_gnss_ins --locked

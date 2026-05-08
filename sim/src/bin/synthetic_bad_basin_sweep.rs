@@ -1254,25 +1254,25 @@ fn snapshot_at_or_after(snapshots: &[Snapshot], t_s: f64) -> Option<Snapshot> {
 }
 
 fn diag_abs_rad_to_deg(
-    diag: Option<sensor_fusion::reduced::ReducedUpdateDiag>,
-    value: impl FnOnce(sensor_fusion::reduced::ReducedUpdateDiag) -> f32,
+    diag: Option<sensor_fusion::reduced::UpdateDiag>,
+    value: impl FnOnce(sensor_fusion::reduced::UpdateDiag) -> f32,
 ) -> f64 {
     diag.map(|diag| value(diag) as f64 * RAD_TO_DEG)
         .unwrap_or(f64::NAN)
 }
 
 fn diag_abs_rad_to_dps(
-    diag: Option<sensor_fusion::reduced::ReducedUpdateDiag>,
-    value: impl FnOnce(sensor_fusion::reduced::ReducedUpdateDiag) -> f32,
+    diag: Option<sensor_fusion::reduced::UpdateDiag>,
+    value: impl FnOnce(sensor_fusion::reduced::UpdateDiag) -> f32,
 ) -> f64 {
     diag.map(|diag| value(diag) as f64 * RADPS_TO_DPS)
         .unwrap_or(f64::NAN)
 }
 
 fn diag_mean(
-    diag: Option<sensor_fusion::reduced::ReducedUpdateDiag>,
+    diag: Option<sensor_fusion::reduced::UpdateDiag>,
     diag_type: usize,
-    value: impl FnOnce(sensor_fusion::reduced::ReducedUpdateDiag) -> f32,
+    value: impl FnOnce(sensor_fusion::reduced::UpdateDiag) -> f32,
 ) -> f64 {
     let Some(diag) = diag else {
         return f64::NAN;
@@ -1286,8 +1286,8 @@ fn diag_mean(
 }
 
 fn diag_value(
-    diag: Option<sensor_fusion::reduced::ReducedUpdateDiag>,
-    value: impl FnOnce(sensor_fusion::reduced::ReducedUpdateDiag) -> f32,
+    diag: Option<sensor_fusion::reduced::UpdateDiag>,
+    value: impl FnOnce(sensor_fusion::reduced::UpdateDiag) -> f32,
 ) -> f64 {
     diag.map(|diag| value(diag) as f64).unwrap_or(f64::NAN)
 }

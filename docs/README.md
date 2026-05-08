@@ -40,10 +40,10 @@ with optional generic reference CSVs for visualization and evaluation.
 | `full` | Full-state ECEF EKF used for comparison and diagnostics. Includes Full prediction, GNSS and NHC updates, and Full-specific process-noise configuration. |
 | `math`, `nav`, `covariance`, generated wrappers | Internal shared helpers for quaternion/vector math, WGS84/ECEF navigation, generated-model glue, and covariance propagation. |
 
-Generated files under `sensor_fusion/src/generated_reduced/` and
-`sensor_fusion/src/generated_full/` should not be edited by hand. Update
-`sensor_fusion/reduced.py` or `sensor_fusion/ins_gnss_full.py`, regenerate, then review the Rust
-diff.
+Generated files under `sensor_fusion/src/reduced/generated/` and
+`sensor_fusion/src/full/generated/` should not be edited by hand. Update
+`sensor_fusion/src/reduced/formulation.py` or `sensor_fusion/src/full/formulation.py`, regenerate, then
+review the Rust diff.
 
 ### `sim` (`sim/src`)
 

@@ -1,15 +1,20 @@
 import argparse
 import math
+import sys
 from pathlib import Path
 
 import numpy as np
 from sympy import Matrix, Symbol, cse, symbols
 
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+CRATE_DIR = SCRIPT_DIR.parent.parent
+sys.path.insert(0, str(CRATE_DIR))
+
 from code_gen import RustCodeGenerator
 
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-GENERATED_RUST_DIR = SCRIPT_DIR / "src" / "generated_full"
+GENERATED_RUST_DIR = SCRIPT_DIR / "generated"
 
 WGS84_OMEGA_IE = 7.292115e-5
 
@@ -154,11 +159,11 @@ def emit_supports(path: Path, phi: Matrix, g: Matrix, h_y: Matrix, h_z: Matrix):
                 supports.append(row_support)
                 max_len = max(max_len, len(row_support))
             file.write(f"pub const {prefix}_MAX_ROW_NONZERO: usize = {max_len};\n")
-            file.write(f"pub const {prefix}_ROW_COUNTS: [usize; FULL_ERROR_STATES] = [\n")
+            file.write(f"pub const {prefix}_ROW_COUNTS: [usize; ERROR_STATES] = [\n")
             file.write("    " + ", ".join(str(len(row)) for row in supports) + ",\n")
             file.write("];\n")
             file.write(
-                f"pub const {prefix}_ROW_COLS: [[usize; {prefix}_MAX_ROW_NONZERO]; FULL_ERROR_STATES] = [\n"
+                f"pub const {prefix}_ROW_COLS: [[usize; {prefix}_MAX_ROW_NONZERO]; ERROR_STATES] = [\n"
             )
             for row in supports:
                 padded = row + [0] * (max_len - len(row))
@@ -213,7 +218,7 @@ def main():
         print("Phi shape:", phi.shape)
         print("G shape:", g.shape)
         return
-    print("Usage: python3 sensor_fusion/ins_gnss_full.py [--derive-fg|--emit-rust]")
+    print("Usage: python3 sensor_fusion/src/full/formulation.py [--derive-fg|--emit-rust]")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use sensor_fusion::ProcessNoise;
-use sensor_fusion::full::{FullFilter, FullImuDelta};
+use sensor_fusion::full::{Filter, ImuDelta};
 use serde::{Deserialize, Serialize};
 use sim::datasets::seeded_full::{
     AccelSample, GyroSample, import_accel_data, import_gnss_data, import_gyro_data,
@@ -161,7 +161,7 @@ fn main() -> Result<()> {
     if let Some(value) = args.mount_align_rw_var {
         noise.mount_align_rw_var = value;
     }
-    let mut full = FullFilter::new(noise);
+    let mut full = Filter::new(noise);
     full.init_from_reference_ecef_state(
         init.q_bn,
         init.pos_ecef_m,
@@ -299,7 +299,7 @@ fn main() -> Result<()> {
                 if dt <= 0.0 {
                     continue;
                 }
-                let imu = FullImuDelta {
+                let imu = ImuDelta {
                     dax_1: (prev.omega_radps[0] * dt) as f32,
                     day_1: (prev.omega_radps[1] * dt) as f32,
                     daz_1: (prev.omega_radps[2] * dt) as f32,
@@ -682,11 +682,7 @@ fn accel_at(ttag_us: i64, accel: &[AccelSample]) -> Option<[f64; 3]> {
     }
 }
 
-fn nhc_gate(
-    n: &sensor_fusion::full::FullNominalState,
-    gyro: &GyroSample,
-    accel: &[f64; 3],
-) -> bool {
+fn nhc_gate(n: &sensor_fusion::full::NominalState, gyro: &GyroSample, accel: &[f64; 3]) -> bool {
     let omega = [
         n.sgx as f64 * gyro.omega_radps[0] + n.bgx as f64,
         n.sgy as f64 * gyro.omega_radps[1] + n.bgy as f64,

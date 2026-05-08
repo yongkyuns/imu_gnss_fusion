@@ -36,7 +36,6 @@ pub mod generated_reduced {
 /// Reduced EKF runtime, public state structs, and standalone state helpers.
 pub mod reduced;
 
-pub use full::FullInitConfig;
 pub use fusion::{
     AlignDebug, Config, Filter, GnssSample, ImuSample, MountMode, MountSource, SensorFusion,
     Update, VehicleSpeedDirection, VehicleSpeedSample,
