@@ -9,6 +9,12 @@
 
 `imu_gnss_fusion` is a Rust workspace for experimenting with IMU, GNSS, and wheel-speed sensor fusion. It contains an embedded-oriented filter crate, offline replay and visualization tools, synthetic trajectory generation, and hardware-agnostic CSV replay support.
 
+The project is currently an active filter-development workspace rather than a
+finished navigation product. The main work is tuning the standalone alignment
+estimator, comparing the two EKF formulations, and using synthetic plus
+reference-backed field data to understand accuracy, stability, and convergence
+limits.
+
 The project is useful for:
 
 - 📊 replaying hardware-agnostic IMU/GNSS CSV datasets,
@@ -29,16 +35,30 @@ The project is useful for:
 ## 🧩 Module Overview
 
 The workspace is split so the embedded filter library is independent from
-offline tooling and visualization.
+offline tooling and visualization. The core sensor-fusion crate has three
+current algorithm modules:
+
+- `align`: a standalone mount-alignment estimator. It is being tuned to improve
+  overall stability, seed quality, and downstream filter performance.
+- `reduced`: a local-NED reduced-state EKF implementation of the IMU/GNSS
+  fusion problem.
+- `full`: a full-state ECEF EKF implementation of the same fusion problem.
+
+`reduced` and `full` are intentionally maintained side by side today so their
+math, tuning, covariance behavior, and replay accuracy can be compared. They are
+two implementations of the same navigation problem, not two separate end-user
+products. The intended direction is to consolidate them into a single filter
+implementation once the formulation and tuning tradeoffs are understood well
+enough.
 
 ### `sensor_fusion` crate (`sensor_fusion/src`)
 
 | Module | Role |
 | --- | --- |
-| `SensorFusion` | Public facade for timestamped IMU, GNSS, and optional vehicle-speed samples. Owns Align, local anchoring, Reduced initialization, and accessors used by apps. |
-| `align` | Standalone mount-alignment estimator from stationary gravity, GNSS-derived motion, turn-rate cues, and NHC-style constraints. |
-| `reduced` | Reduced EKF runtime, process-noise configuration, public state/sample/diagnostic structs, and focused state helpers. |
-| `full` | Full-state ECEF EKF used for comparison, diagnostics, and formulation experiments. |
+| `SensorFusion` | Public facade for timestamped IMU, GNSS, and optional vehicle-speed samples. Owns Align, local anchoring, selected EKF initialization, and accessors used by apps. |
+| `align` | Standalone mount-alignment estimator from stationary gravity, GNSS-derived motion, turn-rate cues, and NHC-style constraints. Its output can seed the runtime EKF mount states. |
+| `reduced` | Local-NED reduced-state EKF implementation. This is one candidate runtime formulation for the same IMU/GNSS fusion problem solved by `full`. |
+| `full` | Full-state ECEF EKF implementation. It is used as the parallel formulation for comparison, diagnostics, and eventual consolidation with `reduced`. |
 | `math`, `nav`, `covariance`, generated wrappers | Internal reusable quaternion/vector math, WGS84/ECEF helpers, sparse covariance propagation, and generated symbolic model glue. |
 
 Symbolic model sources live next to the Rust crate:
@@ -89,7 +109,7 @@ The main replay path is:
 1. Data enters as hardware-agnostic `imu.csv` and `gnss.csv`, or as a synthetic scenario generated inside `sim`.
 2. `sim::datasets` converts CSV rows into timestamped IMU/GNSS samples.
 3. `sim::eval::replay` merges IMU and GNSS events in a consistent time order.
-4. `sensor_fusion` runs the Align, Full EKF, and Reduced EKF estimators.
+4. `sensor_fusion` runs Align plus the Reduced and Full EKF implementations.
 5. `sim::visualizer` displays traces, map data, mount states, diagnostics, and summary statistics.
 
 The runtime Rust filter code consumes generated matrix/Jacobian snippets under `sensor_fusion/src/reduced/generated/` and `sensor_fusion/src/full/generated/`. The symbolic sources live in Python so model derivation stays reviewable while generated Rust stays fast and dependency-light.
@@ -97,6 +117,11 @@ The runtime Rust filter code consumes generated matrix/Jacobian snippets under `
 Plots, controls, modules, binaries, and generated-code paths consistently use
 **Reduced** for the reduced-state local-NED EKF and **Full** for the full-state
 ECEF EKF.
+
+Reference data included with hosted/generic replay datasets is used for rough
+accuracy comparison in plots, summaries, and tests. It is not an input to the
+runtime filters unless the user explicitly selects manual mount mode; otherwise
+it only provides an external yardstick for current filter performance.
 
 ## 🧭 Coordinate And API Conventions
 
