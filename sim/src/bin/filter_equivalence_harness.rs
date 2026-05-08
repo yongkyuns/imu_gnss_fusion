@@ -59,6 +59,8 @@ struct Args {
     #[arg(long)]
     freeze_misalignment_states: bool,
     #[arg(long)]
+    nhc_update_hz: Option<f32>,
+    #[arg(long)]
     output: Option<PathBuf>,
 }
 
@@ -107,6 +109,7 @@ struct HarnessState {
     last_imu: Option<GenericImuSample>,
     latest_gnss: Option<GenericGnssSample>,
     last_full_gnss_used_t_s: f64,
+    last_full_nhc_t_s: Option<f64>,
     ref_gnss: GenericGnssSample,
     ref_ecef: [f64; 3],
     fixed_mount_q_bv: Option<[f32; 4]>,
@@ -143,6 +146,9 @@ fn main() -> Result<()> {
     }
     if args.freeze_misalignment_states {
         cfg.freeze_misalignment_states = true;
+    }
+    if let Some(hz) = args.nhc_update_hz {
+        cfg.nhc_update_period_s = if hz > 0.0 { 1.0 / hz } else { 0.0 };
     }
     let mut state = HarnessState::new(ref_gnss, fixed_mount_q_bv, cfg, args.mount_mode);
 
@@ -266,6 +272,7 @@ impl HarnessState {
             last_imu: None,
             latest_gnss: None,
             last_full_gnss_used_t_s: f64::NEG_INFINITY,
+            last_full_nhc_t_s: None,
             ref_gnss,
             ref_ecef: lla_to_ecef(ref_gnss.lat_deg, ref_gnss.lon_deg, ref_gnss.height_m),
             fixed_mount_q_bv,
@@ -393,6 +400,17 @@ impl HarnessState {
                 .contains(&age_s)
                 .then(|| gnss.vel_ned_mps[0].hypot(gnss.vel_ned_mps[1]) as f32)
         });
+        let (nhc_gate_speed_mps, nhc_dt) = if self.cfg.nhc_update_period_s > 0.0 {
+            let raw_gyro_norm = sample.gyro_radps.iter().map(|v| v * v).sum::<f64>().sqrt();
+            let raw_accel_norm = sample.accel_mps2.iter().map(|v| v * v).sum::<f64>().sqrt();
+            let nhc_active = raw_gyro_norm < 0.2
+                && (raw_accel_norm - 9.80665).abs() < 1.0
+                && nhc_gate_speed_mps.is_some_and(|speed| speed > 0.05);
+            let nhc_dt = self.next_full_nhc_dt(sample.t_s, dt, nhc_active);
+            (nhc_dt.map(|_| ()).and(nhc_gate_speed_mps), nhc_dt)
+        } else {
+            (nhc_gate_speed_mps, Some(dt))
+        };
         self.full.fuse_reference_batch_full_with_nhc_speed_and_r(
             gps_pos,
             gps_vel.map(|v| v.map(|x| x as f32)),
@@ -404,8 +422,31 @@ impl HarnessState {
             self.cfg.r_body_vel_z,
             sample.gyro_radps.map(|v| v as f32),
             sample.accel_mps2.map(|v| v as f32),
-            dt as f32,
+            nhc_dt.unwrap_or(dt) as f32,
         );
+    }
+
+    fn next_full_nhc_dt(&mut self, t_s: f64, fallback_dt_s: f64, active: bool) -> Option<f64> {
+        if !active {
+            self.last_full_nhc_t_s = Some(t_s);
+            return None;
+        }
+        let fallback_dt_s = fallback_dt_s.max(1.0e-3);
+        let period_s = self.cfg.nhc_update_period_s as f64;
+        if period_s <= 0.0 {
+            self.last_full_nhc_t_s = Some(t_s);
+            return Some(fallback_dt_s);
+        }
+        let Some(last_t_s) = self.last_full_nhc_t_s else {
+            self.last_full_nhc_t_s = Some(t_s);
+            return Some(fallback_dt_s);
+        };
+        let elapsed_s = t_s - last_t_s;
+        if elapsed_s + 1.0e-4 < period_s {
+            return None;
+        }
+        self.last_full_nhc_t_s = Some(t_s);
+        Some(elapsed_s.max(fallback_dt_s))
     }
 }
 
@@ -711,6 +752,7 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: FilterCompareConfig) {
         fusion.set_reduced_noise(noise);
     }
     fusion.set_r_body_vel_yz(cfg.r_body_vel, cfg.r_body_vel_z);
+    fusion.set_nhc_update_period_s(cfg.nhc_update_period_s);
     fusion.set_attitude_roll_pitch_init_sigma_rad(
         cfg.attitude_roll_pitch_init_sigma_deg.to_radians(),
     );

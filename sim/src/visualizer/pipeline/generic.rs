@@ -2377,6 +2377,7 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: FilterCompareConfig) {
     }
     fusion.set_full_init_config(cfg.full_init);
     fusion.set_r_body_vel_yz(cfg.r_body_vel, cfg.r_body_vel_z);
+    fusion.set_nhc_update_period_s(cfg.nhc_update_period_s);
     fusion.set_attitude_roll_pitch_init_sigma_rad(
         cfg.attitude_roll_pitch_init_sigma_deg.to_radians(),
     );

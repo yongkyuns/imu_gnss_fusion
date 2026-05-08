@@ -10,6 +10,8 @@ pub struct FilterCompareConfig {
     pub r_body_vel: f32,
     #[serde(default = "default_r_body_vel_z")]
     pub r_body_vel_z: f32,
+    #[serde(default)]
+    pub nhc_update_period_s: f32,
     #[serde(default = "default_attitude_roll_pitch_init_sigma_deg")]
     pub attitude_roll_pitch_init_sigma_deg: f32,
     pub yaw_init_sigma_deg: f32,
@@ -45,6 +47,7 @@ impl Default for FilterCompareConfig {
             align: AlignConfig::default(),
             r_body_vel: default_r_body_vel_y(),
             r_body_vel_z: default_r_body_vel_z(),
+            nhc_update_period_s: 0.1,
             attitude_roll_pitch_init_sigma_deg: default_attitude_roll_pitch_init_sigma_deg(),
             yaw_init_sigma_deg: 6.0,
             gyro_bias_init_sigma_dps: 0.125,

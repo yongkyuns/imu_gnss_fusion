@@ -75,6 +75,8 @@ pub struct SensorFusion {
     pending_reduced_gnss: Option<crate::reduced::GnssSample>,
     last_reduced_gnss_fuse_t_s: Option<f32>,
     last_full_gnss_fuse_t_s: Option<f32>,
+    last_reduced_nhc_t_s: Option<f32>,
+    last_full_nhc_t_s: Option<f32>,
     bootstrap_prev_reduced_gnss: Option<crate::reduced::GnssSample>,
     anchor: Anchor,
     interval_imu_sum_gyro: [f32; 3],
@@ -145,6 +147,8 @@ impl SensorFusion {
             pending_reduced_gnss: None,
             last_reduced_gnss_fuse_t_s: None,
             last_full_gnss_fuse_t_s: None,
+            last_reduced_nhc_t_s: None,
+            last_full_nhc_t_s: None,
             bootstrap_prev_reduced_gnss: None,
             anchor: Anchor::default(),
             interval_imu_sum_gyro: [0.0; 3],
@@ -186,6 +190,8 @@ impl SensorFusion {
         self.mount_settle_released = false;
         self.last_reduced_gnss_fuse_t_s = None;
         self.last_full_gnss_fuse_t_s = None;
+        self.last_reduced_nhc_t_s = None;
+        self.last_full_nhc_t_s = None;
         let n = &mut self.reduced.raw_mut().nominal;
         n.qcs0 = q_bv[0];
         n.qcs1 = q_bv[1];
@@ -212,6 +218,7 @@ impl SensorFusion {
         }
         self.full_initialized = false;
         self.last_full_gnss_fuse_t_s = None;
+        self.last_full_nhc_t_s = None;
     }
 
     /// Replaces the Full initialization covariance configuration.
@@ -243,6 +250,8 @@ impl SensorFusion {
         self.bootstrap_stationary_count = 0;
         self.last_reduced_gnss_fuse_t_s = None;
         self.last_full_gnss_fuse_t_s = None;
+        self.last_reduced_nhc_t_s = None;
+        self.last_full_nhc_t_s = None;
     }
 
     /// Sets the nonholonomic vehicle-frame velocity observation variance.
@@ -261,6 +270,20 @@ impl SensorFusion {
         }
         if r_body_vel_z.is_finite() && r_body_vel_z >= 0.0 {
             self.cfg.r_body_vel_z = r_body_vel_z;
+        }
+    }
+
+    /// Sets the minimum period between NHC updates, in seconds.
+    ///
+    /// `0` applies NHC at every eligible IMU epoch. Positive values decimate
+    /// NHC while scaling the observation variance by the elapsed NHC interval,
+    /// preserving approximately the same information rate for the continuous
+    /// nonholonomic constraint. The runtime default is 10 Hz.
+    pub fn set_nhc_update_period_s(&mut self, period_s: f32) {
+        if period_s.is_finite() && period_s >= 0.0 {
+            self.cfg.nhc_update_period_s = period_s;
+            self.last_reduced_nhc_t_s = None;
+            self.last_full_nhc_t_s = None;
         }
     }
 
@@ -444,7 +467,7 @@ impl SensorFusion {
                         .fuse_stationary_gravity(accel_vehicle, self.cfg.r_stationary_accel);
                 }
             } else {
-                let nhc = self.imu_epoch_nhc_variances(dt, accel_vehicle, gyro_vehicle);
+                let nhc = self.imu_epoch_nhc_variances(sample.t_s, dt, accel_vehicle, gyro_vehicle);
                 let used_nhc_with_gnss = self.fuse_pending_gnss_at_imu(sample.t_s, nhc);
                 if let Some(r) = nhc
                     && !used_nhc_with_gnss
@@ -762,6 +785,7 @@ impl SensorFusion {
             self.reduced.set_freeze_misalignment_states(true);
         }
         self.last_reduced_gnss_fuse_t_s = Some(gnss.t_s);
+        self.last_reduced_nhc_t_s = None;
     }
 
     fn initialize_full_from_gnss(&mut self, gnss: GnssSample) -> bool {
@@ -796,6 +820,7 @@ impl SensorFusion {
             .set_freeze_mount_states(self.effective_freeze_misalignment_states());
         self.full_initialized = true;
         self.last_full_gnss_fuse_t_s = Some(gnss.t_s);
+        self.last_full_nhc_t_s = None;
         true
     }
 
@@ -851,18 +876,32 @@ impl SensorFusion {
                     )
                 })
         });
+        let (full_nhc_gate_speed_mps, full_nhc_dt) = if self.cfg.nhc_update_period_s > 0.0 {
+            let full_nhc_active = runtime_nhc_active(sample.accel_mps2, sample.gyro_radps)
+                && nhc_gate_speed_mps.is_some_and(nhc_speed_allows_update);
+            let full_nhc_dt = self.nhc_observation_interval(
+                self.last_full_nhc_t_s,
+                sample.t_s,
+                dt,
+                full_nhc_active,
+            );
+            self.last_full_nhc_t_s = full_nhc_dt.1;
+            (full_nhc_dt.0.and(nhc_gate_speed_mps), full_nhc_dt.0)
+        } else {
+            (nhc_gate_speed_mps, Some(dt))
+        };
         self.full.fuse_reference_batch_full_with_nhc_speed_and_r(
             gps_pos,
             gps_vel,
             gps_pos_std,
             gps_vel_std,
             dt_since_gnss,
-            nhc_gate_speed_mps,
+            full_nhc_gate_speed_mps,
             self.cfg.r_body_vel_y,
             self.cfg.r_body_vel_z,
             sample.gyro_radps,
             sample.accel_mps2,
-            dt,
+            full_nhc_dt.unwrap_or(dt),
         );
 
         self.update(false, false)
@@ -1172,25 +1211,52 @@ impl SensorFusion {
     }
 
     fn imu_epoch_nhc_variances(
-        &self,
+        &mut self,
+        t_s: f32,
         dt: f32,
         accel_vehicle: [f32; 3],
         gyro_vehicle: [f32; 3],
     ) -> Option<[f32; 2]> {
-        if !runtime_nhc_active(accel_vehicle, gyro_vehicle) {
-            return None;
-        }
         let speed_allows_nhc = self
             .last_gnss
             .is_some_and(|g| nhc_speed_allows_update(horiz_speed(g.vel_ned_mps)));
-        if !speed_allows_nhc {
+        let nhc_active = runtime_nhc_active(accel_vehicle, gyro_vehicle) && speed_allows_nhc;
+        let (obs_dt, last_t_s) =
+            self.nhc_observation_interval(self.last_reduced_nhc_t_s, t_s, dt, nhc_active);
+        self.last_reduced_nhc_t_s = last_t_s;
+        let Some(obs_dt) = obs_dt else {
             return None;
-        }
-        let r_scale = nhc_observation_r_scale(dt);
+        };
+        let r_scale = nhc_observation_r_scale(obs_dt);
         Some([
             self.cfg.r_body_vel_y * r_scale,
             self.cfg.r_body_vel_z * r_scale,
         ])
+    }
+
+    fn nhc_observation_interval(
+        &self,
+        last_t_s: Option<f32>,
+        t_s: f32,
+        fallback_dt_s: f32,
+        active: bool,
+    ) -> (Option<f32>, Option<f32>) {
+        if !active {
+            return (None, Some(t_s));
+        }
+        let fallback_dt_s = fallback_dt_s.max(1.0e-3);
+        let period_s = self.cfg.nhc_update_period_s;
+        if period_s <= 0.0 {
+            return (Some(fallback_dt_s), Some(t_s));
+        }
+        let Some(last_t_s) = last_t_s else {
+            return (Some(fallback_dt_s), Some(t_s));
+        };
+        let elapsed_s = t_s - last_t_s;
+        if elapsed_s + 1.0e-4 < period_s {
+            return (None, Some(last_t_s));
+        }
+        (Some(elapsed_s.max(fallback_dt_s)), Some(t_s))
     }
 
     fn fuse_pending_gnss_at_imu(&mut self, imu_t_s: f32, nhc: Option<[f32; 2]>) -> bool {
