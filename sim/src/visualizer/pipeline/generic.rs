@@ -2368,33 +2368,7 @@ fn dcm_to_quat(c: [[f64; 3]; 3]) -> [f64; 4] {
 }
 
 fn apply_fusion_config(fusion: &mut SensorFusion, cfg: FilterCompareConfig) {
-    fusion.set_align_config(cfg.align);
-    if let Some(noise) = cfg.noise.reduced {
-        fusion.set_reduced_noise(noise);
-    }
-    if let Some(noise) = cfg.noise.full {
-        fusion.set_full_noise(noise);
-    }
-    fusion.set_full_init_config(cfg.full_init);
-    fusion.set_r_body_vel_yz(cfg.r_body_vel, cfg.r_body_vel_z);
-    fusion.set_nhc_update_period_s(cfg.nhc_update_period_s);
-    fusion.set_attitude_roll_pitch_init_sigma_rad(
-        cfg.attitude_roll_pitch_init_sigma_deg.to_radians(),
-    );
-    fusion.set_yaw_init_sigma_rad(cfg.yaw_init_sigma_deg.to_radians());
-    fusion.set_gyro_bias_init_sigma_radps(cfg.gyro_bias_init_sigma_dps.to_radians());
-    fusion.set_accel_bias_init_sigma_mps2(cfg.accel_bias_init_sigma_mps2);
-    fusion.set_mount_roll_pitch_init_sigma_rad(cfg.mount_roll_pitch_init_sigma_deg.to_radians());
-    fusion.set_mount_init_sigma_rad(cfg.mount_init_sigma_deg.to_radians());
-    fusion.set_r_vehicle_speed(cfg.r_vehicle_speed);
-    fusion.set_r_zero_vel(cfg.r_zero_vel);
-    fusion.set_r_stationary_accel(cfg.r_stationary_accel);
-    fusion.set_mount_align_rw_var(cfg.mount_align_rw_var);
-    fusion.set_align_handoff_delay_s(cfg.align_handoff_delay_s);
-    fusion.set_freeze_misalignment_states(cfg.freeze_misalignment_states);
-    fusion.set_mount_settle_time_s(cfg.mount_settle_time_s);
-    fusion.set_mount_settle_release_sigma_rad(cfg.mount_settle_release_sigma_deg.to_radians());
-    fusion.set_mount_settle_zero_cross_covariance(cfg.mount_settle_zero_cross_covariance);
+    crate::visualizer::pipeline::apply_filter_compare_config(fusion, cfg);
 }
 
 fn parse_imu_csv(text: &str) -> Result<Vec<GenericImuSample>> {

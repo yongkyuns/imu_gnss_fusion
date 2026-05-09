@@ -1,6 +1,7 @@
 //! Reduced, align, and full tuning panel controls.
 
 use eframe::egui;
+use sensor_fusion::ProcessNoise;
 
 use crate::visualizer::model::VisualizerMountMode;
 use crate::visualizer::pipeline::FilterCompareConfig;
@@ -86,23 +87,30 @@ pub(super) fn draw_reduced_tuning(
             0.01,
             0.0..=10.0,
         );
-        drag_f32(
+        slider_f32(
             ui,
-            "Mount roll/pitch sigma deg",
-            &mut cfg.mount_roll_pitch_init_sigma_deg,
-            0.5,
-            0.0..=180.0,
+            "Mount roll sigma deg",
+            &mut cfg.mount_roll_init_sigma_deg,
+            0.0..=10.0,
         );
-        drag_f32(
+        slider_f32(
+            ui,
+            "Mount pitch sigma deg",
+            &mut cfg.mount_pitch_init_sigma_deg,
+            0.0..=10.0,
+        );
+        slider_f32(
             ui,
             "Mount yaw sigma deg",
             &mut cfg.mount_init_sigma_deg,
-            0.5,
-            0.0..=180.0,
+            0.0..=30.0,
         );
+        cfg.mount_roll_pitch_init_sigma_deg = cfg
+            .mount_roll_init_sigma_deg
+            .max(cfg.mount_pitch_init_sigma_deg);
     });
     ui.collapsing("Mount updates", |ui| {
-        drag_rw_var_deg_per_sqrt_hr(
+        slider_rw_var_deg_per_sqrt_hr(
             ui,
             "Mount RW noise deg/sqrt(hr)",
             &mut cfg.mount_align_rw_var,
@@ -148,11 +156,7 @@ pub(super) fn draw_reduced_tuning(
             1.0e-12,
             0.0..=1.0e-6,
         );
-        drag_rw_var_deg_per_sqrt_hr(
-            ui,
-            "Mount RW noise deg/sqrt(hr)",
-            &mut noise.mount_align_rw_var,
-        );
+        mount_rw_controls(ui, noise);
         drag_usize(
             ui,
             "Predict IMU decimation",
@@ -353,11 +357,7 @@ pub(super) fn draw_full_tuning(ui: &mut egui::Ui, cfg: &mut FilterCompareConfig)
             1.0e-11,
             0.0..=1.0e-6,
         );
-        drag_rw_var_deg_per_sqrt_hr(
-            ui,
-            "Mount RW noise deg/sqrt(hr)",
-            &mut noise.mount_align_rw_var,
-        );
+        mount_rw_controls(ui, noise);
     });
     ui.collapsing("Initial covariance", |ui| {
         let init = &mut cfg.full_init;
@@ -410,12 +410,11 @@ pub(super) fn draw_full_tuning(ui: &mut egui::Ui, cfg: &mut FilterCompareConfig)
             0.001,
             0.0..=1.0,
         );
-        drag_f32(
+        slider_f32(
             ui,
             "Mount roll/pitch sigma deg",
             &mut init.mount_sigma_deg,
-            0.5,
-            0.0..=180.0,
+            0.0..=10.0,
         );
         drag_f32(
             ui,
@@ -440,9 +439,53 @@ fn drag_f32(
     });
 }
 
-fn drag_rw_var_deg_per_sqrt_hr(ui: &mut egui::Ui, label: &str, value_rad2_per_s: &mut f32) {
+fn slider_f32(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(label);
+        ui.add(egui::Slider::new(value, range).clamping(egui::SliderClamping::Always));
+    });
+}
+
+fn mount_rw_controls(ui: &mut egui::Ui, noise: &mut ProcessNoise) {
+    slider_rw_var_deg_per_sqrt_hr(
+        ui,
+        "Mount RW scalar deg/sqrt(hr)",
+        &mut noise.mount_align_rw_var,
+    );
+    ui.checkbox(
+        &mut noise.mount_align_rw_var_axes_enabled,
+        "Axis-specific mount RW",
+    );
+    if noise.mount_align_rw_var_axes_enabled {
+        if noise.mount_align_rw_var_axes == [0.0; 3] && noise.mount_align_rw_var > 0.0 {
+            noise.mount_align_rw_var_axes = [noise.mount_align_rw_var; 3];
+        }
+        slider_rw_var_deg_per_sqrt_hr(
+            ui,
+            "Mount roll RW deg/sqrt(hr)",
+            &mut noise.mount_align_rw_var_axes[0],
+        );
+        slider_rw_var_deg_per_sqrt_hr(
+            ui,
+            "Mount pitch RW deg/sqrt(hr)",
+            &mut noise.mount_align_rw_var_axes[1],
+        );
+        slider_rw_var_deg_per_sqrt_hr(
+            ui,
+            "Mount yaw RW deg/sqrt(hr)",
+            &mut noise.mount_align_rw_var_axes[2],
+        );
+    }
+}
+
+fn slider_rw_var_deg_per_sqrt_hr(ui: &mut egui::Ui, label: &str, value_rad2_per_s: &mut f32) {
     let mut value_deg_per_sqrt_hr = rw_var_to_deg_per_sqrt_hr(*value_rad2_per_s);
-    drag_f32(ui, label, &mut value_deg_per_sqrt_hr, 0.01, 0.0..=10.0);
+    slider_f32(ui, label, &mut value_deg_per_sqrt_hr, 0.0..=5.0);
     *value_rad2_per_s = deg_per_sqrt_hr_to_rw_var(value_deg_per_sqrt_hr);
 }
 

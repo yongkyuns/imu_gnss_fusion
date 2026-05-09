@@ -346,10 +346,18 @@ impl Filter {
         q[18] = if self.freeze_mount_states {
             0.0
         } else {
-            self.raw.noise.mount_align_rw_var * dt
+            self.raw.noise.mount_align_rw_var_axis(0) * dt
         };
-        q[19] = q[18];
-        q[20] = q[18];
+        q[19] = if self.freeze_mount_states {
+            0.0
+        } else {
+            self.raw.noise.mount_align_rw_var_axis(1) * dt
+        };
+        q[20] = if self.freeze_mount_states {
+            0.0
+        } else {
+            self.raw.noise.mount_align_rw_var_axis(2) * dt
+        };
 
         self.raw.p = predict_covariance_sparse(&f, &g, &self.raw.p, &q);
         if self.freeze_mount_states {

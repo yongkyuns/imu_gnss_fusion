@@ -213,10 +213,18 @@ impl Filter {
         q[12] = if self.freeze_misalignment_states {
             0.0
         } else {
-            self.raw.noise.mount_align_rw_var * dt
+            self.raw.noise.mount_align_rw_var_axis(0) * dt
         };
-        q[13] = q[12];
-        q[14] = q[12];
+        q[13] = if self.freeze_misalignment_states {
+            0.0
+        } else {
+            self.raw.noise.mount_align_rw_var_axis(1) * dt
+        };
+        q[14] = if self.freeze_misalignment_states {
+            0.0
+        } else {
+            self.raw.noise.mount_align_rw_var_axis(2) * dt
+        };
 
         self.raw.p = predict_covariance_sparse(&f, &g, &self.raw.p, &q);
         covariance::symmetrize(&mut self.raw.p);

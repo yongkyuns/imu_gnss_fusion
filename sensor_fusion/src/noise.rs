@@ -23,6 +23,16 @@ pub struct ProcessNoise {
     pub accel_scale_rw_var: f32,
     /// Mount-alignment random-walk variance.
     pub mount_align_rw_var: f32,
+    /// Axis-specific mount-alignment random-walk variances.
+    ///
+    /// These values are interpreted as `[roll, pitch, yaw]` only when
+    /// [`Self::mount_align_rw_var_axes_enabled`] is true. Otherwise
+    /// [`Self::mount_align_rw_var`] is used for all three axes.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub mount_align_rw_var_axes: [f32; 3],
+    /// Enables [`Self::mount_align_rw_var_axes`].
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub mount_align_rw_var_axes_enabled: bool,
 }
 
 impl Default for ProcessNoise {
@@ -42,6 +52,8 @@ impl ProcessNoise {
             gyro_scale_rw_var: 1.0e-10,
             accel_scale_rw_var: 1.0e-10,
             mount_align_rw_var: 0.0,
+            mount_align_rw_var_axes: [0.0; 3],
+            mount_align_rw_var_axes_enabled: false,
         }
     }
 
@@ -55,6 +67,8 @@ impl ProcessNoise {
             gyro_scale_rw_var: 0.0,
             accel_scale_rw_var: 0.0,
             mount_align_rw_var: 0.0,
+            mount_align_rw_var_axes: [0.0; 3],
+            mount_align_rw_var_axes_enabled: false,
         }
     }
 
@@ -68,6 +82,24 @@ impl ProcessNoise {
             gyro_scale_rw_var: 1.0e-10,
             accel_scale_rw_var: 1.0e-10,
             mount_align_rw_var: 0.0,
+            mount_align_rw_var_axes: [0.0; 3],
+            mount_align_rw_var_axes_enabled: false,
         }
+    }
+
+    /// Returns the mount random-walk variance for one mount error axis.
+    pub fn mount_align_rw_var_axis(&self, axis: usize) -> f32 {
+        if self.mount_align_rw_var_axes_enabled {
+            self.mount_align_rw_var_axes[axis]
+        } else {
+            self.mount_align_rw_var
+        }
+    }
+
+    /// Returns a copy with axis-specific mount random-walk variances enabled.
+    pub fn with_mount_align_rw_var_axes(mut self, axes: [f32; 3]) -> Self {
+        self.mount_align_rw_var_axes = axes;
+        self.mount_align_rw_var_axes_enabled = true;
+        self
     }
 }

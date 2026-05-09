@@ -327,6 +327,22 @@ impl SensorFusion {
     pub fn set_mount_roll_pitch_init_sigma_rad(&mut self, mount_init_sigma_rad: f32) {
         if mount_init_sigma_rad.is_finite() && mount_init_sigma_rad >= 0.0 {
             self.cfg.mount_roll_pitch_init_sigma_rad = mount_init_sigma_rad;
+            self.cfg.mount_roll_init_sigma_rad = mount_init_sigma_rad;
+            self.cfg.mount_pitch_init_sigma_rad = mount_init_sigma_rad;
+        }
+    }
+
+    /// Sets initial residual-mount roll one-sigma uncertainty, in radians.
+    pub fn set_mount_roll_init_sigma_rad(&mut self, sigma_rad: f32) {
+        if sigma_rad.is_finite() && sigma_rad >= 0.0 {
+            self.cfg.mount_roll_init_sigma_rad = sigma_rad;
+        }
+    }
+
+    /// Sets initial residual-mount pitch one-sigma uncertainty, in radians.
+    pub fn set_mount_pitch_init_sigma_rad(&mut self, sigma_rad: f32) {
+        if sigma_rad.is_finite() && sigma_rad >= 0.0 {
+            self.cfg.mount_pitch_init_sigma_rad = sigma_rad;
         }
     }
 
@@ -707,6 +723,49 @@ impl SensorFusion {
         }
     }
 
+    /// Diagnostic hook that directly sets residual-mount covariance per axis.
+    ///
+    /// This is intended for offline sensitivity analysis. Runtime configuration
+    /// should use the regular public tuning setters.
+    pub fn analysis_set_mount_covariance_axes(&mut self, sigma_rad: [f32; 3], zero_cross: bool) {
+        if sigma_rad
+            .iter()
+            .any(|sigma| !sigma.is_finite() || *sigma < 0.0)
+        {
+            return;
+        }
+        let filter_initialized = match self.cfg.filter {
+            Filter::Reduced => self.reduced_initialized,
+            Filter::Full => self.full_initialized,
+        };
+        if !filter_initialized {
+            return;
+        }
+
+        let variances = [
+            sigma_rad[0] * sigma_rad[0],
+            sigma_rad[1] * sigma_rad[1],
+            sigma_rad[2] * sigma_rad[2],
+        ];
+        match self.cfg.filter {
+            Filter::Reduced => {
+                let raw = self.reduced.raw_mut();
+                set_covariance_axis_block(&mut raw.p, 15, variances, zero_cross);
+                if self.effective_freeze_misalignment_states() {
+                    self.reduced.set_freeze_misalignment_states(true);
+                }
+            }
+            Filter::Full => {
+                let mut p = *self.full.covariance();
+                set_covariance_axis_block(&mut p, 21, variances, zero_cross);
+                self.full.set_covariance(p);
+                if self.effective_freeze_misalignment_states() {
+                    self.full.set_freeze_mount_states(true);
+                }
+            }
+        }
+    }
+
     /// Diagnostic hook that directly sets residual attitude roll/pitch covariance.
     pub fn analysis_set_reduced_attitude_roll_pitch_covariance(&mut self, sigma_rad: f32) {
         if !self.reduced_initialized || !sigma_rad.is_finite() || sigma_rad < 0.0 {
@@ -778,9 +837,8 @@ impl SensorFusion {
         raw.p[1][1] = raw.p[0][0];
         raw.p[2][2] = sq_f32(self.cfg.yaw_init_sigma_rad);
         let mount_var = sq_f32(self.cfg.mount_init_sigma_rad);
-        let mount_roll_pitch_var = sq_f32(self.cfg.mount_roll_pitch_init_sigma_rad);
-        raw.p[15][15] = mount_roll_pitch_var;
-        raw.p[16][16] = mount_roll_pitch_var;
+        raw.p[15][15] = sq_f32(self.cfg.mount_roll_init_sigma_rad);
+        raw.p[16][16] = sq_f32(self.cfg.mount_pitch_init_sigma_rad);
         raw.p[17][17] = mount_var;
         if self.effective_freeze_misalignment_states() {
             self.reduced.set_freeze_misalignment_states(true);
@@ -1510,6 +1568,24 @@ fn full_imu_delta_from_samples(prev: ImuSample, curr: ImuSample, dt: f32) -> ful
         dvy_2: curr.accel_mps2[1] * dt,
         dvz_2: curr.accel_mps2[2] * dt,
         dt,
+    }
+}
+
+fn set_covariance_axis_block<const N: usize>(
+    p: &mut [[f32; N]; N],
+    base: usize,
+    variances: [f32; 3],
+    zero_cross: bool,
+) {
+    for axis in 0..3 {
+        let i = base + axis;
+        if zero_cross {
+            for j in 0..N {
+                p[i][j] = 0.0;
+                p[j][i] = 0.0;
+            }
+        }
+        p[i][i] = variances[axis];
     }
 }
 

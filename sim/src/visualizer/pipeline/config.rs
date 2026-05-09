@@ -1,6 +1,6 @@
-use sensor_fusion::ProcessNoise;
 use sensor_fusion::align::AlignConfig;
 use sensor_fusion::full;
+use sensor_fusion::{ProcessNoise, SensorFusion};
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -20,6 +20,12 @@ pub struct FilterCompareConfig {
     /// Initial mount roll/pitch sigma, in degrees.
     #[serde(default = "default_mount_roll_pitch_init_sigma_deg")]
     pub mount_roll_pitch_init_sigma_deg: f32,
+    /// Initial mount roll sigma, in degrees.
+    #[serde(default = "default_mount_roll_pitch_init_sigma_deg")]
+    pub mount_roll_init_sigma_deg: f32,
+    /// Initial mount pitch sigma, in degrees.
+    #[serde(default = "default_mount_roll_pitch_init_sigma_deg")]
+    pub mount_pitch_init_sigma_deg: f32,
     /// Initial mount yaw sigma, in degrees.
     pub mount_init_sigma_deg: f32,
     pub r_vehicle_speed: f32,
@@ -53,6 +59,8 @@ impl Default for FilterCompareConfig {
             gyro_bias_init_sigma_dps: 0.125,
             accel_bias_init_sigma_mps2: 0.15,
             mount_roll_pitch_init_sigma_deg: default_mount_roll_pitch_init_sigma_deg(),
+            mount_roll_init_sigma_deg: default_mount_roll_pitch_init_sigma_deg(),
+            mount_pitch_init_sigma_deg: default_mount_roll_pitch_init_sigma_deg(),
             mount_init_sigma_deg: 6.0,
             r_vehicle_speed: 0.04,
             mount_align_rw_var: 0.0,
@@ -124,11 +132,45 @@ pub const fn default_reduced_noise() -> ProcessNoise {
         gyro_scale_rw_var: 0.0,
         accel_scale_rw_var: 0.0,
         mount_align_rw_var: 0.0,
+        mount_align_rw_var_axes: [0.0; 3],
+        mount_align_rw_var_axes_enabled: false,
     }
 }
 
 pub const fn default_full_noise() -> ProcessNoise {
     ProcessNoise::lsm6dso_104hz()
+}
+
+pub fn apply_filter_compare_config(fusion: &mut SensorFusion, cfg: FilterCompareConfig) {
+    fusion.set_align_config(cfg.align);
+    if let Some(noise) = cfg.noise.reduced {
+        fusion.set_reduced_noise(noise);
+    }
+    if let Some(noise) = cfg.noise.full {
+        fusion.set_full_noise(noise);
+    }
+    fusion.set_full_init_config(cfg.full_init);
+    fusion.set_r_body_vel_yz(cfg.r_body_vel, cfg.r_body_vel_z);
+    fusion.set_nhc_update_period_s(cfg.nhc_update_period_s);
+    fusion.set_attitude_roll_pitch_init_sigma_rad(
+        cfg.attitude_roll_pitch_init_sigma_deg.to_radians(),
+    );
+    fusion.set_yaw_init_sigma_rad(cfg.yaw_init_sigma_deg.to_radians());
+    fusion.set_gyro_bias_init_sigma_radps(cfg.gyro_bias_init_sigma_dps.to_radians());
+    fusion.set_accel_bias_init_sigma_mps2(cfg.accel_bias_init_sigma_mps2);
+    fusion.set_mount_roll_pitch_init_sigma_rad(cfg.mount_roll_pitch_init_sigma_deg.to_radians());
+    fusion.set_mount_roll_init_sigma_rad(cfg.mount_roll_init_sigma_deg.to_radians());
+    fusion.set_mount_pitch_init_sigma_rad(cfg.mount_pitch_init_sigma_deg.to_radians());
+    fusion.set_mount_init_sigma_rad(cfg.mount_init_sigma_deg.to_radians());
+    fusion.set_r_vehicle_speed(cfg.r_vehicle_speed);
+    fusion.set_r_zero_vel(cfg.r_zero_vel);
+    fusion.set_r_stationary_accel(cfg.r_stationary_accel);
+    fusion.set_mount_align_rw_var(cfg.mount_align_rw_var);
+    fusion.set_align_handoff_delay_s(cfg.align_handoff_delay_s);
+    fusion.set_freeze_misalignment_states(cfg.freeze_misalignment_states);
+    fusion.set_mount_settle_time_s(cfg.mount_settle_time_s);
+    fusion.set_mount_settle_release_sigma_rad(cfg.mount_settle_release_sigma_deg.to_radians());
+    fusion.set_mount_settle_zero_cross_covariance(cfg.mount_settle_zero_cross_covariance);
 }
 
 fn default_reduced_noise_option() -> Option<ProcessNoise> {

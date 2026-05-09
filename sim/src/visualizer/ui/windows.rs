@@ -53,6 +53,10 @@ impl App {
                                     defaults.accel_bias_init_sigma_mps2;
                                 self.tuning_cfg.mount_roll_pitch_init_sigma_deg =
                                     defaults.mount_roll_pitch_init_sigma_deg;
+                                self.tuning_cfg.mount_roll_init_sigma_deg =
+                                    defaults.mount_roll_init_sigma_deg;
+                                self.tuning_cfg.mount_pitch_init_sigma_deg =
+                                    defaults.mount_pitch_init_sigma_deg;
                                 self.tuning_cfg.mount_init_sigma_deg =
                                     defaults.mount_init_sigma_deg;
                                 self.tuning_cfg.r_vehicle_speed = defaults.r_vehicle_speed;

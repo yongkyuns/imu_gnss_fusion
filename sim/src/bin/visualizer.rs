@@ -191,6 +191,12 @@ fn main() -> Result<()> {
         mount_roll_pitch_init_sigma_deg: args
             .mount_roll_pitch_init_sigma_deg
             .unwrap_or(FilterCompareConfig::default().mount_roll_pitch_init_sigma_deg),
+        mount_roll_init_sigma_deg: args
+            .mount_roll_pitch_init_sigma_deg
+            .unwrap_or(FilterCompareConfig::default().mount_roll_init_sigma_deg),
+        mount_pitch_init_sigma_deg: args
+            .mount_roll_pitch_init_sigma_deg
+            .unwrap_or(FilterCompareConfig::default().mount_pitch_init_sigma_deg),
         mount_init_sigma_deg: args
             .mount_init_sigma_deg
             .unwrap_or(FilterCompareConfig::default().mount_init_sigma_deg),
