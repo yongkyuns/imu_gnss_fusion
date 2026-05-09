@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
-use sim::eval::first_divergence::{Options, Report, run_generic_replay};
+use sim::eval::first_divergence::{BehaviorSample, Options, Report, run_generic_replay};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -30,6 +30,9 @@ struct Args {
     /// Stop replay after this timestamp.
     #[arg(long)]
     max_time_s: Option<f64>,
+    /// Optional CSV path for time-aligned reference/filter behavior diagnostics.
+    #[arg(long)]
+    behavior_csv: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
@@ -46,6 +49,15 @@ fn main() -> Result<()> {
         },
     )?;
     print_report(&report);
+    if let Some(path) = args.behavior_csv {
+        write_behavior_csv(&path, &report.behavior_samples)
+            .with_context(|| format!("writing {}", path.display()))?;
+        println!(
+            "behavior csv: {} rows={}",
+            path.display(),
+            report.behavior_samples.len()
+        );
+    }
     Ok(())
 }
 
@@ -155,4 +167,90 @@ fn fmt_opt(value: Option<f64>) -> String {
     value
         .map(|v| format!("{v:.3}"))
         .unwrap_or_else(|| "n/a".to_string())
+}
+
+fn write_behavior_csv(path: &PathBuf, samples: &[BehaviorSample]) -> Result<()> {
+    let mut out = String::new();
+    out.push_str(
+        "t_s,interval_s,motion_regime,gnss_speed_mps,gnss_course_rate_dps,gnss_speed_rate_mps2,imu_gyro_norm_dps,imu_gyro_z_dps,imu_accel_norm_err_mps2,\
+ref_mount_roll_deg,ref_mount_pitch_deg,ref_mount_yaw_deg,ref_mount_delta_roll_deg,ref_mount_delta_pitch_deg,ref_mount_delta_yaw_deg,\
+align_mount_roll_deg,align_mount_pitch_deg,align_mount_yaw_deg,align_mount_delta_roll_deg,align_mount_delta_pitch_deg,align_mount_delta_yaw_deg,align_mount_sigma_roll_deg,align_mount_sigma_pitch_deg,align_mount_sigma_yaw_deg,\
+reduced_mount_roll_deg,reduced_mount_pitch_deg,reduced_mount_yaw_deg,reduced_mount_delta_roll_deg,reduced_mount_delta_pitch_deg,reduced_mount_delta_yaw_deg,reduced_mount_error_roll_deg,reduced_mount_error_pitch_deg,reduced_mount_error_yaw_deg,reduced_mount_sigma_roll_deg,reduced_mount_sigma_pitch_deg,reduced_mount_sigma_yaw_deg,reduced_attitude_qerr_deg,\
+full_mount_roll_deg,full_mount_pitch_deg,full_mount_yaw_deg,full_mount_delta_roll_deg,full_mount_delta_pitch_deg,full_mount_delta_yaw_deg,full_mount_error_roll_deg,full_mount_error_pitch_deg,full_mount_error_yaw_deg,full_mount_sigma_roll_deg,full_mount_sigma_pitch_deg,full_mount_sigma_yaw_deg,full_attitude_qerr_deg,\
+reduced_gnss_residual_abs,reduced_nhc_y_residual_abs,reduced_nhc_z_residual_abs,full_gnss_residual_abs,full_nhc_y_residual_abs,full_nhc_z_residual_abs,\
+reduced_gnss_mount_dx_roll_deg,reduced_gnss_mount_dx_pitch_deg,reduced_gnss_mount_dx_yaw_deg,reduced_nhc_mount_dx_roll_deg,reduced_nhc_mount_dx_pitch_deg,reduced_nhc_mount_dx_yaw_deg,\
+full_gnss_mount_dx_roll_deg,full_gnss_mount_dx_pitch_deg,full_gnss_mount_dx_yaw_deg,full_nhc_mount_dx_roll_deg,full_nhc_mount_dx_pitch_deg,full_nhc_mount_dx_yaw_deg\n",
+    );
+    for sample in samples {
+        push_behavior_row(&mut out, sample);
+    }
+    std::fs::write(path, out)?;
+    Ok(())
+}
+
+fn push_behavior_row(out: &mut String, sample: &BehaviorSample) {
+    csv_val(out, sample.t_s);
+    csv_val(out, sample.interval_s);
+    out.push_str(sample.motion_regime);
+    out.push(',');
+    csv_val(out, sample.gnss_speed_mps);
+    csv_val(out, sample.gnss_course_rate_dps);
+    csv_val(out, sample.gnss_speed_rate_mps2);
+    csv_val(out, sample.imu_gyro_norm_dps);
+    csv_val(out, sample.imu_gyro_z_dps);
+    csv_val(out, sample.imu_accel_norm_err_mps2);
+    csv_vec3(out, sample.reference_mount_rpy_deg);
+    csv_vec3(out, sample.reference_mount_delta_deg);
+    csv_vec3(out, sample.align_mount_rpy_deg);
+    csv_vec3(out, sample.align_mount_delta_deg);
+    csv_vec3(out, sample.align_mount_sigma_deg);
+    csv_vec3(out, sample.reduced_mount_rpy_deg);
+    csv_vec3(out, sample.reduced_mount_delta_deg);
+    csv_vec3(out, sample.reduced_mount_error_deg);
+    csv_vec3(out, sample.reduced_mount_sigma_deg);
+    csv_opt(out, sample.reduced_attitude_qerr_deg);
+    csv_vec3(out, sample.full_mount_rpy_deg);
+    csv_vec3(out, sample.full_mount_delta_deg);
+    csv_vec3(out, sample.full_mount_error_deg);
+    csv_vec3(out, sample.full_mount_sigma_deg);
+    csv_opt(out, sample.full_attitude_qerr_deg);
+    csv_val(out, sample.reduced_gnss_residual_abs);
+    csv_val(out, sample.reduced_nhc_y_residual_abs);
+    csv_val(out, sample.reduced_nhc_z_residual_abs);
+    csv_val(out, sample.full_gnss_residual_abs);
+    csv_val(out, sample.full_nhc_y_residual_abs);
+    csv_val(out, sample.full_nhc_z_residual_abs);
+    csv_arr3(out, sample.reduced_gnss_mount_dx_deg);
+    csv_arr3(out, sample.reduced_nhc_mount_dx_deg);
+    csv_arr3(out, sample.full_gnss_mount_dx_deg);
+    csv_arr3(out, sample.full_nhc_mount_dx_deg);
+    out.pop();
+    out.push('\n');
+}
+
+fn csv_vec3(out: &mut String, value: Option<[f64; 3]>) {
+    match value {
+        Some(v) => csv_arr3(out, v),
+        None => out.push_str(",,,"),
+    }
+}
+
+fn csv_arr3(out: &mut String, value: [f64; 3]) {
+    csv_val(out, value[0]);
+    csv_val(out, value[1]);
+    csv_val(out, value[2]);
+}
+
+fn csv_opt(out: &mut String, value: Option<f64>) {
+    match value {
+        Some(v) => csv_val(out, v),
+        None => out.push(','),
+    }
+}
+
+fn csv_val(out: &mut String, value: f64) {
+    if value.is_finite() {
+        out.push_str(&format!("{value:.9}"));
+    }
+    out.push(',');
 }

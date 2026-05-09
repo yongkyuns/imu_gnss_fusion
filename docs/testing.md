@@ -99,6 +99,27 @@ cargo run -p sim --bin covariance_history -- \
 
 This prints Reduced update-type deltas, Full observation deltas, mount/attitude/velocity correction allocation, NHC residuals, covariance sigmas, and selected cross-correlations for the requested interval. When `--allocation-csv` is provided, the same window is written as per-event rows with innovation, NIS, correction allocation, covariance sigma, and reference-error context.
 
+For public-API first-divergence analysis on generic replay CSVs, use
+`first_divergence`:
+
+```bash
+cargo run --release -p sim --bin first_divergence -- \
+  --generic-replay-dir target/replay-analysis/field-sweep/urban-short-turn-loop-nominal-002 \
+  --start-after-s 50 \
+  --mount-threshold-deg 2.0 \
+  --attitude-threshold-deg 2.0 \
+  --window-s 10 \
+  --behavior-csv /tmp/reference_filter_behavior.csv
+```
+
+The optional behavior CSV is a time-aligned stream for reverse-engineering
+reference/filter behavior. Each row includes motion cues, reference/align/
+Reduced/Full mount angles and deltas, Reduced/Full mount errors and covariance
+sigmas, attitude quaternion errors, and interval-summed GNSS/NHC residuals plus
+mount correction allocation. Reference covariance is not present in the current
+generic replay CSV schema; add it to the data exporter before expecting that
+field to be populated.
+
 ## Fixtures And Local Data
 
 Small checked-in fixtures live under `sim/tests/fixtures/`. The `full_nsr_short` fixture is used by the seeded Full EKF replay path and includes IMU/GNSS CSV inputs plus expected summary data.

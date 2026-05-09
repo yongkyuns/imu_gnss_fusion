@@ -76,6 +76,7 @@ pub struct Report {
     pub first_crossings: Vec<Crossing>,
     pub final_errors: Vec<ErrorSnapshot>,
     pub window_summaries: Vec<WindowSummary>,
+    pub behavior_samples: Vec<BehaviorSample>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -134,6 +135,56 @@ impl WindowSummary {
 }
 
 #[derive(Clone, Debug)]
+pub struct BehaviorSample {
+    pub t_s: f64,
+    pub interval_s: f64,
+    pub motion_regime: &'static str,
+    pub gnss_speed_mps: f64,
+    pub gnss_course_rate_dps: f64,
+    pub gnss_speed_rate_mps2: f64,
+    pub imu_gyro_norm_dps: f64,
+    pub imu_gyro_z_dps: f64,
+    pub imu_accel_norm_err_mps2: f64,
+    pub reference_mount_rpy_deg: Option<[f64; 3]>,
+    pub reference_mount_delta_deg: Option<[f64; 3]>,
+    pub align_mount_rpy_deg: Option<[f64; 3]>,
+    pub align_mount_delta_deg: Option<[f64; 3]>,
+    pub align_mount_sigma_deg: Option<[f64; 3]>,
+    pub reduced_mount_rpy_deg: Option<[f64; 3]>,
+    pub reduced_mount_delta_deg: Option<[f64; 3]>,
+    pub reduced_mount_error_deg: Option<[f64; 3]>,
+    pub reduced_mount_sigma_deg: Option<[f64; 3]>,
+    pub reduced_attitude_qerr_deg: Option<f64>,
+    pub full_mount_rpy_deg: Option<[f64; 3]>,
+    pub full_mount_delta_deg: Option<[f64; 3]>,
+    pub full_mount_error_deg: Option<[f64; 3]>,
+    pub full_mount_sigma_deg: Option<[f64; 3]>,
+    pub full_attitude_qerr_deg: Option<f64>,
+    pub reduced_gnss_residual_abs: f64,
+    pub reduced_nhc_y_residual_abs: f64,
+    pub reduced_nhc_z_residual_abs: f64,
+    pub full_gnss_residual_abs: f64,
+    pub full_nhc_y_residual_abs: f64,
+    pub full_nhc_z_residual_abs: f64,
+    pub reduced_gnss_mount_dx_deg: [f64; 3],
+    pub reduced_nhc_mount_dx_deg: [f64; 3],
+    pub full_gnss_mount_dx_deg: [f64; 3],
+    pub full_nhc_mount_dx_deg: [f64; 3],
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct PreviousBehavior {
+    t_s: Option<f64>,
+    gnss_t_s: Option<f64>,
+    gnss_speed_mps: Option<f64>,
+    gnss_course_rad: Option<f64>,
+    reference_mount_rpy_deg: Option<[f64; 3]>,
+    align_mount_rpy_deg: Option<[f64; 3]>,
+    reduced_mount_rpy_deg: Option<[f64; 3]>,
+    full_mount_rpy_deg: Option<[f64; 3]>,
+}
+
+#[derive(Clone, Debug)]
 struct Replay {
     imu: Vec<GenericImuSample>,
     gnss: Vec<GenericGnssSample>,
@@ -178,10 +229,13 @@ pub fn run_generic_replay(dir: &Path, options: Options) -> Result<Report> {
     let mut prev_reduced_diag = UpdateDiag::default();
     let mut allocations = Vec::new();
     let mut snapshots = Vec::new();
+    let mut behavior_samples = Vec::new();
     let mut reduced_init_t_s = None;
     let mut full_init_t_s = None;
     let mut align_ready_t_s = None;
     let mut next_snapshot_t_s = f64::NEG_INFINITY;
+    let mut prev_behavior = PreviousBehavior::default();
+    let mut behavior_allocation_start = 0usize;
 
     for_each_event(&replay.imu, &replay.gnss, |event| match event {
         ReplayEvent::Imu(_, sample) => {
@@ -207,6 +261,16 @@ pub fn run_generic_replay(dir: &Path, options: Options) -> Result<Report> {
                     final_ref_mount_rpy,
                     &mut snapshots,
                 );
+                behavior_samples.push(collect_behavior_sample(
+                    sample.t_s,
+                    sample,
+                    &reduced,
+                    &full,
+                    &replay,
+                    &allocations[behavior_allocation_start..],
+                    &mut prev_behavior,
+                ));
+                behavior_allocation_start = allocations.len();
                 next_snapshot_t_s = sample.t_s + options.sample_period_s.max(1.0e-3);
             }
         }
@@ -255,6 +319,7 @@ pub fn run_generic_replay(dir: &Path, options: Options) -> Result<Report> {
         first_crossings,
         final_errors,
         window_summaries,
+        behavior_samples,
     })
 }
 
@@ -445,6 +510,207 @@ fn collect_snapshots(
     }
 }
 
+fn collect_behavior_sample(
+    t_s: f64,
+    imu: &GenericImuSample,
+    reduced: &SensorFusion,
+    full: &SensorFusion,
+    replay: &Replay,
+    interval_events: &[AllocationEvent],
+    prev: &mut PreviousBehavior,
+) -> BehaviorSample {
+    let reference_mount_rpy = nearest_rpy(&replay.reference_mount, t_s);
+    let align_mount_rpy = reduced.align().map(|align| {
+        let (r, p, y) = q_bv_to_reference_mount_rpy(as_q64(align.q_bv));
+        [r, p, y]
+    });
+    let align_mount_sigma = reduced.align().map(|align| {
+        [
+            (align.P[0][0].max(0.0) as f64).sqrt().to_degrees(),
+            (align.P[1][1].max(0.0) as f64).sqrt().to_degrees(),
+            (align.P[2][2].max(0.0) as f64).sqrt().to_degrees(),
+        ]
+    });
+    let reduced_mount_rpy = reduced.reduced().map(|state| {
+        let (r, p, y) = q_bv_to_reference_mount_rpy(as_q64([
+            state.nominal.qcs0,
+            state.nominal.qcs1,
+            state.nominal.qcs2,
+            state.nominal.qcs3,
+        ]));
+        [r, p, y]
+    });
+    let reduced_mount_sigma = reduced.reduced().map(|state| {
+        [
+            (state.p[15][15].max(0.0) as f64).sqrt().to_degrees(),
+            (state.p[16][16].max(0.0) as f64).sqrt().to_degrees(),
+            (state.p[17][17].max(0.0) as f64).sqrt().to_degrees(),
+        ]
+    });
+    let reduced_attitude_qerr = reduced.reduced().and_then(|state| {
+        reference_attitude_q(replay, t_s).map(|q_ref| {
+            quat_angle_deg(
+                as_q64([
+                    state.nominal.q0,
+                    state.nominal.q1,
+                    state.nominal.q2,
+                    state.nominal.q3,
+                ]),
+                q_ref,
+            )
+        })
+    });
+    let full_mount_rpy = full.full().map(|state| {
+        let (r, p, y) = q_bv_to_reference_mount_rpy(as_q64([
+            state.nominal.qcs0,
+            state.nominal.qcs1,
+            state.nominal.qcs2,
+            state.nominal.qcs3,
+        ]));
+        [r, p, y]
+    });
+    let full_mount_sigma = full.full().map(|state| {
+        [
+            (state.p[21][21].max(0.0) as f64).sqrt().to_degrees(),
+            (state.p[22][22].max(0.0) as f64).sqrt().to_degrees(),
+            (state.p[23][23].max(0.0) as f64).sqrt().to_degrees(),
+        ]
+    });
+    let full_attitude_qerr = full.full().and_then(|state| {
+        let q_ref = reference_attitude_q(replay, t_s)?;
+        let q_ne = reference_ecef_to_ned_q(replay, t_s)?;
+        Some(quat_angle_deg(
+            quat_mul(
+                q_ne,
+                as_q64([
+                    state.nominal.q0,
+                    state.nominal.q1,
+                    state.nominal.q2,
+                    state.nominal.q3,
+                ]),
+            ),
+            q_ref,
+        ))
+    });
+
+    let gnss = nearest_gnss(&replay.gnss, t_s);
+    let gnss_speed_mps = gnss.map_or(f64::NAN, |s| horizontal_speed(s.vel_ned_mps));
+    let gnss_course_rad = gnss.map(|s| s.vel_ned_mps[1].atan2(s.vel_ned_mps[0]));
+    let (gnss_course_rate_dps, gnss_speed_rate_mps2) =
+        gnss_motion_rates(gnss, gnss_course_rad, prev);
+    let imu_gyro_norm_dps = norm3(imu.gyro_radps).to_degrees();
+    let imu_gyro_z_dps = imu.gyro_radps[2].to_degrees();
+    let imu_accel_norm_err_mps2 = (norm3(imu.accel_mps2) - 9.80665).abs();
+    let interval_s = prev.t_s.map_or(0.0, |prev_t| (t_s - prev_t).max(0.0));
+    let interval_summary = BehaviorAllocationSummary::from_events(interval_events);
+    let motion_regime = classify_motion(
+        gnss_speed_mps,
+        gnss_course_rate_dps,
+        gnss_speed_rate_mps2,
+        imu_accel_norm_err_mps2,
+    );
+
+    let sample = BehaviorSample {
+        t_s,
+        interval_s,
+        motion_regime,
+        gnss_speed_mps,
+        gnss_course_rate_dps,
+        gnss_speed_rate_mps2,
+        imu_gyro_norm_dps,
+        imu_gyro_z_dps,
+        imu_accel_norm_err_mps2,
+        reference_mount_rpy_deg: reference_mount_rpy,
+        reference_mount_delta_deg: delta_rpy(reference_mount_rpy, prev.reference_mount_rpy_deg),
+        align_mount_rpy_deg: align_mount_rpy,
+        align_mount_delta_deg: delta_rpy(align_mount_rpy, prev.align_mount_rpy_deg),
+        align_mount_sigma_deg: align_mount_sigma,
+        reduced_mount_rpy_deg: reduced_mount_rpy,
+        reduced_mount_delta_deg: delta_rpy(reduced_mount_rpy, prev.reduced_mount_rpy_deg),
+        reduced_mount_error_deg: error_rpy(reduced_mount_rpy, reference_mount_rpy),
+        reduced_mount_sigma_deg: reduced_mount_sigma,
+        reduced_attitude_qerr_deg: reduced_attitude_qerr,
+        full_mount_rpy_deg: full_mount_rpy,
+        full_mount_delta_deg: delta_rpy(full_mount_rpy, prev.full_mount_rpy_deg),
+        full_mount_error_deg: error_rpy(full_mount_rpy, reference_mount_rpy),
+        full_mount_sigma_deg: full_mount_sigma,
+        full_attitude_qerr_deg: full_attitude_qerr,
+        reduced_gnss_residual_abs: interval_summary.reduced_gnss_residual_abs,
+        reduced_nhc_y_residual_abs: interval_summary.reduced_nhc_y_residual_abs,
+        reduced_nhc_z_residual_abs: interval_summary.reduced_nhc_z_residual_abs,
+        full_gnss_residual_abs: interval_summary.full_gnss_residual_abs,
+        full_nhc_y_residual_abs: interval_summary.full_nhc_y_residual_abs,
+        full_nhc_z_residual_abs: interval_summary.full_nhc_z_residual_abs,
+        reduced_gnss_mount_dx_deg: interval_summary.reduced_gnss_mount_dx_deg,
+        reduced_nhc_mount_dx_deg: interval_summary.reduced_nhc_mount_dx_deg,
+        full_gnss_mount_dx_deg: interval_summary.full_gnss_mount_dx_deg,
+        full_nhc_mount_dx_deg: interval_summary.full_nhc_mount_dx_deg,
+    };
+
+    prev.t_s = Some(t_s);
+    if let Some(gnss) = gnss {
+        prev.gnss_t_s = Some(gnss.t_s);
+        prev.gnss_speed_mps = Some(gnss_speed_mps);
+        prev.gnss_course_rad = gnss_course_rad;
+    }
+    prev.reference_mount_rpy_deg = reference_mount_rpy;
+    prev.align_mount_rpy_deg = align_mount_rpy;
+    prev.reduced_mount_rpy_deg = reduced_mount_rpy;
+    prev.full_mount_rpy_deg = full_mount_rpy;
+    sample
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct BehaviorAllocationSummary {
+    reduced_gnss_residual_abs: f64,
+    reduced_nhc_y_residual_abs: f64,
+    reduced_nhc_z_residual_abs: f64,
+    full_gnss_residual_abs: f64,
+    full_nhc_y_residual_abs: f64,
+    full_nhc_z_residual_abs: f64,
+    reduced_gnss_mount_dx_deg: [f64; 3],
+    reduced_nhc_mount_dx_deg: [f64; 3],
+    full_gnss_mount_dx_deg: [f64; 3],
+    full_nhc_mount_dx_deg: [f64; 3],
+}
+
+impl BehaviorAllocationSummary {
+    fn from_events(events: &[AllocationEvent]) -> Self {
+        let mut summary = Self::default();
+        for event in events {
+            let residual = event.residual.unwrap_or(0.0);
+            match (event.source, event.update) {
+                ("Reduced", "nhc_y") => {
+                    summary.reduced_nhc_y_residual_abs += residual;
+                    add3(&mut summary.reduced_nhc_mount_dx_deg, event.mount_dx_deg);
+                }
+                ("Reduced", "nhc_z") => {
+                    summary.reduced_nhc_z_residual_abs += residual;
+                    add3(&mut summary.reduced_nhc_mount_dx_deg, event.mount_dx_deg);
+                }
+                ("Reduced", update) if update.starts_with("gnss_") => {
+                    summary.reduced_gnss_residual_abs += residual;
+                    add3(&mut summary.reduced_gnss_mount_dx_deg, event.mount_dx_deg);
+                }
+                ("Full", "nhc_y") => {
+                    summary.full_nhc_y_residual_abs += residual;
+                    add3(&mut summary.full_nhc_mount_dx_deg, event.mount_dx_deg);
+                }
+                ("Full", "nhc_z") => {
+                    summary.full_nhc_z_residual_abs += residual;
+                    add3(&mut summary.full_nhc_mount_dx_deg, event.mount_dx_deg);
+                }
+                ("Full", update) if update.starts_with("gnss_") => {
+                    summary.full_gnss_residual_abs += residual;
+                    add3(&mut summary.full_gnss_mount_dx_deg, event.mount_dx_deg);
+                }
+                _ => {}
+            }
+        }
+        summary
+    }
+}
+
 fn mount_snapshot(
     t_s: f64,
     source: &'static str,
@@ -632,6 +898,78 @@ fn nearest_gnss(samples: &[GenericGnssSample], t_s: f64) -> Option<GenericGnssSa
     nearest_by_time(samples, t_s, |sample| sample.t_s).copied()
 }
 
+fn gnss_motion_rates(
+    gnss: Option<GenericGnssSample>,
+    course_rad: Option<f64>,
+    prev: &PreviousBehavior,
+) -> (f64, f64) {
+    let Some(gnss) = gnss else {
+        return (f64::NAN, f64::NAN);
+    };
+    let Some(prev_t) = prev.gnss_t_s else {
+        return (0.0, 0.0);
+    };
+    if (gnss.t_s - prev_t).abs() <= 1.0e-9 {
+        return (0.0, 0.0);
+    }
+    let dt = (gnss.t_s - prev_t).max(1.0e-6);
+    let speed = horizontal_speed(gnss.vel_ned_mps);
+    let prev_speed = prev.gnss_speed_mps;
+    let course_rate_dps = match (course_rad, prev.gnss_course_rad) {
+        (Some(_), Some(_)) if speed < 0.5 || prev_speed.is_some_and(|v| v < 0.5) => 0.0,
+        (Some(course), Some(prev_course)) => wrap_rad_pi(course - prev_course).to_degrees() / dt,
+        _ => f64::NAN,
+    };
+    let speed_rate = match prev_speed {
+        Some(prev_speed) => (speed - prev_speed) / dt,
+        None => f64::NAN,
+    };
+    (course_rate_dps, speed_rate)
+}
+
+fn classify_motion(
+    speed_mps: f64,
+    course_rate_dps: f64,
+    speed_rate_mps2: f64,
+    accel_norm_err_mps2: f64,
+) -> &'static str {
+    if speed_mps.is_finite() && speed_mps < 0.5 {
+        "stationary"
+    } else if course_rate_dps.is_finite() && course_rate_dps.abs() >= 8.0 {
+        "turning"
+    } else if speed_rate_mps2.is_finite() && speed_rate_mps2.abs() >= 0.5 {
+        "accel_brake"
+    } else if accel_norm_err_mps2.is_finite() && accel_norm_err_mps2 >= 1.0 {
+        "vertical_excitation"
+    } else if speed_mps.is_finite() {
+        "steady"
+    } else {
+        "unknown"
+    }
+}
+
+fn horizontal_speed(vel_ned_mps: [f64; 3]) -> f64 {
+    (vel_ned_mps[0] * vel_ned_mps[0] + vel_ned_mps[1] * vel_ned_mps[1]).sqrt()
+}
+
+fn norm3(v: [f64; 3]) -> f64 {
+    (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+}
+
+fn delta_rpy(current: Option<[f64; 3]>, previous: Option<[f64; 3]>) -> Option<[f64; 3]> {
+    error_rpy(current, previous)
+}
+
+fn error_rpy(current: Option<[f64; 3]>, reference: Option<[f64; 3]>) -> Option<[f64; 3]> {
+    let current = current?;
+    let reference = reference?;
+    Some([
+        wrap_deg180(current[0] - reference[0]),
+        wrap_deg180(current[1] - reference[1]),
+        wrap_deg180(current[2] - reference[2]),
+    ])
+}
+
 fn nearest_by_time<T>(samples: &[T], t_s: f64, time: impl Fn(&T) -> f64) -> Option<&T> {
     if samples.is_empty() {
         return None;
@@ -723,6 +1061,16 @@ fn add_abs3(dst: &mut [f64; 3], src: [f64; 3]) {
 
 fn delta(new: f32, old: f32) -> f32 {
     new - old
+}
+
+fn wrap_rad_pi(mut rad: f64) -> f64 {
+    while rad > core::f64::consts::PI {
+        rad -= 2.0 * core::f64::consts::PI;
+    }
+    while rad <= -core::f64::consts::PI {
+        rad += 2.0 * core::f64::consts::PI;
+    }
+    rad
 }
 
 #[cfg(test)]
@@ -821,5 +1169,51 @@ mod tests {
         assert_eq!(summary.sum_abs_residual, 5.0);
         assert_eq!(summary.mean_nis(), 5.0);
         assert_eq!(summary.max_nis, 9.0);
+    }
+
+    #[test]
+    fn behavior_allocation_summary_separates_gnss_and_nhc() {
+        let events = vec![
+            AllocationEvent {
+                t_s: 1.0,
+                source: "Reduced",
+                update: "gnss_vel",
+                mount_dx_deg: [1.0, 2.0, 3.0],
+                att_dx_deg: [0.0; 3],
+                accel_bias_dx: [0.0; 3],
+                gyro_bias_dx: [0.0; 3],
+                residual: Some(4.0),
+                nis: None,
+            },
+            AllocationEvent {
+                t_s: 1.1,
+                source: "Reduced",
+                update: "nhc_y",
+                mount_dx_deg: [-0.5, 0.0, 0.25],
+                att_dx_deg: [0.0; 3],
+                accel_bias_dx: [0.0; 3],
+                gyro_bias_dx: [0.0; 3],
+                residual: Some(2.0),
+                nis: None,
+            },
+            AllocationEvent {
+                t_s: 1.2,
+                source: "Full",
+                update: "nhc_z",
+                mount_dx_deg: [0.0, -1.0, 0.5],
+                att_dx_deg: [0.0; 3],
+                accel_bias_dx: [0.0; 3],
+                gyro_bias_dx: [0.0; 3],
+                residual: Some(3.0),
+                nis: None,
+            },
+        ];
+        let summary = BehaviorAllocationSummary::from_events(&events);
+        assert_eq!(summary.reduced_gnss_residual_abs, 4.0);
+        assert_eq!(summary.reduced_nhc_y_residual_abs, 2.0);
+        assert_eq!(summary.full_nhc_z_residual_abs, 3.0);
+        assert_eq!(summary.reduced_gnss_mount_dx_deg, [1.0, 2.0, 3.0]);
+        assert_eq!(summary.reduced_nhc_mount_dx_deg, [-0.5, 0.0, 0.25]);
+        assert_eq!(summary.full_nhc_mount_dx_deg, [0.0, -1.0, 0.5]);
     }
 }
