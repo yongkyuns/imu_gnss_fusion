@@ -13,8 +13,10 @@ struct ReplayOutput {
     time_s: Vec<f64>,
     pos_ecef_m: Vec<[f64; 3]>,
     vel_ecef_mps: Vec<[f64; 3]>,
-    q_es: Vec<[f64; 4]>,
-    q_cs: Vec<[f64; 4]>,
+    #[serde(rename = "q_es")]
+    q_ev: Vec<[f64; 4]>,
+    #[serde(rename = "q_cs")]
+    q_bv: Vec<[f64; 4]>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -36,8 +38,10 @@ struct GoldenCheckpoint {
     time_s: f64,
     pos_ecef_m: [f64; 3],
     vel_ecef_mps: [f64; 3],
-    q_es: [f64; 4],
-    q_cs: [f64; 4],
+    #[serde(rename = "q_es")]
+    q_ev: [f64; 4],
+    #[serde(rename = "q_cs")]
+    q_bv: [f64; 4],
 }
 
 #[derive(Debug, Deserialize)]
@@ -122,13 +126,13 @@ fn full_short_fixture_matches_golden_observation_sequence_and_checkpoints() {
             i
         );
         assert!(
-            quat_angle_deg(output.q_es[i], checkpoint.q_es) <= ATTITUDE_TOL_DEG,
-            "q_es mismatch at index {}",
+            quat_angle_deg(output.q_ev[i], checkpoint.q_ev) <= ATTITUDE_TOL_DEG,
+            "q_ev mismatch at index {}",
             i
         );
         assert!(
-            quat_angle_deg(output.q_cs[i], checkpoint.q_cs) <= MOUNT_TOL_DEG,
-            "q_cs mismatch at index {}",
+            quat_angle_deg(output.q_bv[i], checkpoint.q_bv) <= MOUNT_TOL_DEG,
+            "q_bv mismatch at index {}",
             i
         );
     }

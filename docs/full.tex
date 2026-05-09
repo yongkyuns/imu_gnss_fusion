@@ -48,16 +48,20 @@ vehicle-to-body mount used by inertial propagation.
 
 Rotations follow the project convention
 \begin{equation}
-  x_a=C_{ab}x_b,\qquad C(q_1\otimes q_2)=C(q_1)C(q_2).
+  x_a=C_{ab}x_b,\qquad R(q_{ab})=C_{ab},\qquad
+  R(q_1\otimes q_2)=R(q_1)R(q_2).
 \end{equation}
-The full attitude quaternion \(q_{ev}\) maps vehicle-frame vectors into ECEF:
+The full attitude quaternion \(q_{ev}\) is the ECEF-frame attitude with respect
+to the vehicle frame. Its DCM maps vehicle-frame coordinates into ECEF
+coordinates:
 \begin{equation}
-  x_e=C_{ev}(q_{ev})x_v .
+  C_{ev}=R(q_{ev}),\qquad x_e=C_{ev}x_v .
 \end{equation}
 The mount quaternion stored in the Rust fields \texttt{qcs0..qcs3} is the
 physical vehicle-to-body mount \(q_{bv}\):
 \begin{equation}
-  x_b=C_{bv}(q_{bv})x_v,\qquad x_v=C_{bv}(q_{bv})\T x_b .
+  C_{bv}=R(q_{bv}),\qquad x_b=C_{bv}x_v,\qquad
+  C_{vb}=C_{bv}\T,\qquad x_v=C_{vb}x_b .
 \end{equation}
 
 The local NED-to-ECEF relation is represented by
@@ -144,8 +148,8 @@ The full filter uses a two-sample IMU increment. For each half-step \(i\in
 \begin{align}
   \omega_{b,i}^{c} &= s_g\odot\left(\frac{\Delta\theta_{b,i}}{\dt}\right)+b_g,\\
   f_{b,i}^{c} &= s_a\odot\left(\frac{\Delta v_{b,i}}{\dt}\right)+b_a,\\
-  \omega_{v,i} &= C_{bv}(q_{bv})\T\omega_{b,i}^{c},\\
-  f_{v,i} &= C_{bv}(q_{bv})\T f_{b,i}^{c}.
+  \omega_{v,i} &= C_{vb}\omega_{b,i}^{c},\\
+  f_{v,i} &= C_{vb} f_{b,i}^{c},\qquad C_{vb}=C_{bv}\T .
 \end{align}
 The attitude derivative includes Earth rotation:
 \begin{equation}
@@ -301,11 +305,11 @@ mount block, then the covariance is symmetrized.
 
 \section{ECEF/NED Initialization}
 
-For visualizer replay, a vehicle yaw in the local NED frame is converted to
-vehicle-to-ECEF attitude \(q_{ev}\) using latitude and longitude. The physical
-mount \(q_{bv}\) is then initialized from Align, reference data, or a manual
-caller-supplied mount. Raw body-frame IMU samples are supplied directly to the
-Full filter.
+For visualizer replay, a vehicle yaw in the local NED frame is converted to the
+ECEF-frame attitude with respect to the vehicle frame \(q_{ev}\), using latitude
+and longitude. The physical mount \(q_{bv}\) is then initialized from Align,
+reference data, or a manual caller-supplied mount. Raw body-frame IMU samples
+are supplied directly to the Full filter.
 
 \section{Observability and Known Limitations}
 

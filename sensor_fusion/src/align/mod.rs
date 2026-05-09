@@ -6,8 +6,9 @@
 //! mount small angle `[roll, pitch, yaw]`.
 //!
 //! ```text
-//! x_b = C_bv(q_bv) x_v
-//! x_v = C_bv(q_bv)^T x_b
+//! R(q_bv) = C_bv
+//! x_b = C_bv x_v
+//! x_v = C_bv^T x_b
 //! ```
 //!
 //! Stationary gravity constrains roll and pitch, GNSS-derived horizontal
@@ -176,7 +177,8 @@ struct TurnConsistencySample {
 /// Standalone mount-alignment filter state.
 #[derive(Debug, Clone)]
 pub struct Align {
-    /// Vehicle-to-body mount quaternion `[w, x, y, z]`.
+    /// Vehicle-to-body mount quaternion `[w, x, y, z]`, with
+    /// `R(q_bv) = C_bv`.
     pub q_bv: [f32; 4],
     /// Small-angle mount covariance for roll, pitch, and yaw.
     pub P: [[f32; ALIGN_N_STATES]; ALIGN_N_STATES],

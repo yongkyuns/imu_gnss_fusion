@@ -6,9 +6,10 @@
 //! latest initialized state and mount estimates from the accessors.
 //!
 //! The facade bridges the PDF formulations in `docs/`: align estimates the
-//! physical vehicle-to-body mount, and the runtime filters use that mount inside
-//! inertial propagation so mount errors affect attitude and velocity dynamics
-//! directly. Raw IMU samples stay in the IMU body frame at the public API.
+//! physical vehicle-to-body mount `q_bv`, with `R(q_bv) = C_bv` and
+//! `x_b = C_bv x_v`, and the runtime filters use that mount inside inertial
+//! propagation so mount errors affect attitude and velocity dynamics directly.
+//! Raw IMU samples stay in the IMU body frame at the public API.
 
 use crate::ProcessNoise;
 use crate::align::{Align, AlignConfig, AlignUpdateTrace, AlignWindowSummary, GRAVITY_MPS2};
@@ -103,7 +104,7 @@ impl SensorFusion {
 
     /// Creates a fusion pipeline with a fixed manual vehicle-to-body mount quaternion.
     ///
-    /// The quaternion must satisfy `x_b = C_bv(q) x_v`.
+    /// The quaternion must satisfy `R(q_bv) = C_bv`, `x_b = C_bv x_v`.
     pub fn with_mount(q_bv: [f32; 4]) -> Self {
         Self::with_config(Config {
             mount_mode: MountMode::Manual(q_bv),
@@ -179,7 +180,7 @@ impl SensorFusion {
 
     /// Replaces the current mount with a fixed manual vehicle-to-body quaternion.
     ///
-    /// The quaternion must satisfy `x_b = C_bv(q) x_v`.
+    /// The quaternion must satisfy `R(q_bv) = C_bv`, `x_b = C_bv x_v`.
     pub fn set_misalignment(&mut self, q_bv: [f32; 4]) {
         self.internal_align_enabled = false;
         self.mount_ready = true;
@@ -587,14 +588,14 @@ impl SensorFusion {
 
     /// Returns the latest physical vehicle-to-body mount quaternion, if ready.
     ///
-    /// The quaternion satisfies `x_b = C_bv(q) x_v`.
+    /// The quaternion satisfies `R(q_bv) = C_bv`, `x_b = C_bv x_v`.
     pub fn mount_q_bv(&self) -> Option<[f32; 4]> {
         self.mount_q_bv
     }
 
     /// Returns the mount quaternion currently used by the Reduced propagation model.
     ///
-    /// The quaternion satisfies `x_b = C_bv(q) x_v`.
+    /// The quaternion satisfies `R(q_bv) = C_bv`, `x_b = C_bv x_v`.
     pub fn reduced_mount_q_bv(&self) -> Option<[f32; 4]> {
         self.reduced_mount_q_bv
     }

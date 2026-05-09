@@ -886,7 +886,7 @@ fn run_reduced_on_samples_configured(
                     reference.truth[0].lat_deg,
                     reference.truth[0].lon_deg,
                 );
-                let q_cs = as_q64([
+                let q_bv = as_q64([
                     reduced.nominal.qcs0,
                     reduced.nominal.qcs1,
                     reduced.nominal.qcs2,
@@ -900,7 +900,7 @@ fn run_reduced_on_samples_configured(
                 ]);
                 errors.push(StateErr {
                     t_s: sample.t_s,
-                    mount_quat_err_deg: quat_angle_deg(q_cs, q_truth),
+                    mount_quat_err_deg: quat_angle_deg(q_bv, q_truth),
                     att_quat_err_deg: quat_angle_deg(q_est_att, truth.q_bn),
                     vel_err_mps: norm3([
                         reduced.nominal.vn as f64 - truth.vel_ned_mps[0],

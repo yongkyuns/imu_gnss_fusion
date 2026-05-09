@@ -52,7 +52,8 @@ struct RefInit {
     accel_bias_mps2: [f32; 3],
     gyro_scale: [f32; 3],
     accel_scale: [f32; 3],
-    q_cs: [f32; 4],
+    #[serde(rename = "q_cs")]
+    q_bv: [f32; 4],
     p_diag: [f32; 24],
     p_full: [[f32; 24]; 24],
 }
@@ -368,7 +369,7 @@ fn run_full(init: &RefInit, steps: &[ReplayStep]) -> FilterStats {
         init.accel_bias_mps2,
         init.gyro_scale,
         init.accel_scale,
-        init.q_cs,
+        init.q_bv,
         Some(init.p_diag),
     );
     full.set_covariance(init.p_full);

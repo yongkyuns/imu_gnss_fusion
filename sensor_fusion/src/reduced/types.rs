@@ -8,7 +8,9 @@ pub const UPDATE_DIAG_TYPES: usize = 11;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NominalState {
-    /// Vehicle-to-local-NED attitude quaternion `q_nv`, scalar-first.
+    /// NED/navigation-frame attitude with respect to the vehicle frame.
+    ///
+    /// Scalar-first `q_nv`, with `R(q_nv) = C_nv` and `x_n = C_nv x_v`.
     pub q0: f32,
     pub q1: f32,
     pub q2: f32,
@@ -31,8 +33,8 @@ pub struct NominalState {
     pub baz: f32,
     /// Physical vehicle-to-body mount quaternion, stored in legacy `qcs*` fields.
     ///
-    /// Its DCM maps `x_v` into `x_b`; propagation uses its transpose to rotate
-    /// raw IMU increments into the vehicle frame.
+    /// `R(q_bv) = C_bv`, `x_b = C_bv x_v`; propagation uses
+    /// `C_vb = C_bv^T` to rotate raw IMU increments into the vehicle frame.
     pub qcs0: f32,
     pub qcs1: f32,
     pub qcs2: f32,

@@ -2,8 +2,8 @@
 //!
 //! These types are useful for focused tests and derivation checks. The
 //! production runtime is [`crate::reduced::Filter`]. Names match the current
-//! mount-in-propagation convention: `q_nv` is vehicle-to-NED attitude and
-//! `q_bv` is the physical vehicle-to-body mount stored in runtime `qcs*`
+//! mount-in-propagation convention: `R(q_nv) = C_nv` and `R(q_bv) = C_bv`.
+//! The physical vehicle-to-body mount `q_bv` is stored in runtime `qcs*`
 //! fields.
 
 use crate::math::{
@@ -35,7 +35,9 @@ pub const IDX_DPSI_BV_Z: usize = 17;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct NominalState {
-    /// Vehicle-to-local-NED attitude quaternion.
+    /// NED/navigation-frame attitude with respect to the vehicle frame.
+    ///
+    /// `R(q_nv) = C_nv`, `x_n = C_nv x_v`.
     pub q_nv: [f32; 4],
     pub vel_n: [f32; 3],
     pub pos_n: [f32; 3],
@@ -43,7 +45,7 @@ pub struct NominalState {
     pub gyro_bias_b: [f32; 3],
     /// Additive accelerometer correction in the IMU body frame.
     pub accel_bias_b: [f32; 3],
-    /// Physical vehicle-to-body mount quaternion.
+    /// Physical vehicle-to-body mount quaternion, with `R(q_bv) = C_bv`.
     pub q_bv: [f32; 4],
 }
 

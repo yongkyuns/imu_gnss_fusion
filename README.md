@@ -127,9 +127,16 @@ it only provides an external yardstick for current filter performance.
 
 ## 🧭 Coordinate And API Conventions
 
-The filters use active rotations: `x_a = C_ab x_b`, and quaternion products
-compose as `C(q1 * q2) = C(q1) C(q2)`. Quaternions are scalar-first
-`[w, x, y, z]`.
+The filters use active rotations. `C_ab` maps coordinates from frame `b` to
+frame `a`:
+
+```text
+x_a = C_ab x_b
+R(q_ab) = C_ab
+R(q1 * q2) = R(q1) R(q2)
+```
+
+Quaternions are scalar-first `[w, x, y, z]`.
 
 | Symbol | Meaning |
 | --- | --- |
@@ -138,20 +145,24 @@ compose as `C(q1 * q2) = C(q1) C(q2)`. Quaternions are scalar-first
 | `n` | Local NED navigation frame used by Reduced and GNSS velocities. |
 | `e` | ECEF frame used internally by Full. |
 
-The current implementation follows the mount-in-propagation convention used by
-Full. The mount quaternion returned by Align and stored in the `qcs0..qcs3`
-fields of both filters is the physical vehicle-to-body mount:
+The current implementation follows the mount-in-propagation convention. The
+public mount quaternion returned by Align and stored in the `qcs0..qcs3` fields
+of both filters is the physical vehicle-to-body mount `q_bv`, whose rotation
+matrix is `C_bv = R(q_bv)`:
 
 ```text
-x_b = C_bv(q_mount) x_v
-x_v = C_bv(q_mount)^T x_b
+x_b = C_bv x_v
+C_vb = C_bv^T
+x_v = C_vb x_b
 ```
 
 Raw IMU samples are not pre-rotated by callers. Reduced and Full rotate them
-into the vehicle frame inside propagation. Reduced attitude `q0..q3` is the
-vehicle-to-NED quaternion `q_nv`; Full attitude `q0..q3` is the vehicle-to-ECEF
-quaternion `q_ev`. NHC velocity is `C_nv^T v_n` for Reduced and `C_ev^T v_e`
-for Full.
+into the vehicle frame inside propagation. Reduced attitude `q0..q3` is `q_nv`,
+the NED/navigation-frame attitude with respect to the vehicle frame; its DCM
+maps vehicle coordinates into NED coordinates: `x_n = C_nv x_v`. Full attitude
+`q0..q3` is `q_ev`, the ECEF-frame attitude with respect to the vehicle frame;
+its DCM maps vehicle coordinates into ECEF coordinates: `x_e = C_ev x_v`. NHC
+velocity is `C_nv^T v_n` for Reduced and `C_ev^T v_e` for Full.
 
 Expected `sensor_fusion` inputs:
 
@@ -174,7 +185,7 @@ use sensor_fusion::{
     VehicleSpeedDirection, VehicleSpeedSample,
 };
 
-let mount_q = [1.0, 0.0, 0.0, 0.0]; // x_b = C_bv(q) x_v
+let mount_q = [1.0, 0.0, 0.0, 0.0]; // q_bv: x_b = R(q_bv) x_v
 let mut fusion = SensorFusion::with_config(Config {
     filter: Filter::Reduced,
     mount_mode: MountMode::Manual(mount_q),
@@ -334,7 +345,7 @@ use the same two mount behaviors:
 | Mode | Behavior |
 | --- | --- |
 | `auto` | Align seeds the mount angle; Reduced/Full then estimate the physical mount states internally. |
-| `manual` | Uses a supplied/reference vehicle-to-body mount and freezes mount states in Reduced/Full. |
+| `manual` | Uses a supplied/reference `q_bv` vehicle-to-body mount and freezes mount states in Reduced/Full. |
 
 See [sim/README.md](sim/README.md) for the current tool map.
 
@@ -370,7 +381,7 @@ reference_position.csv
 
 Attitude and mount reference CSVs use `t_s,roll_deg,pitch_deg,yaw_deg`.
 Attitude references describe vehicle attitude in the local NED convention.
-Mount references describe the physical vehicle-to-body mount. Position
+Mount references describe the physical `q_bv` vehicle-to-body mount. Position
 references use
 `t_s,lat_deg,lon_deg,height_m,vn_mps,ve_mps,vd_mps,heading_rad`. They are
 intentionally generic: a converter may derive them from any trusted reference

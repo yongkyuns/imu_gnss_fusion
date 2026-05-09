@@ -7,9 +7,11 @@
 //!
 //! Reduced follows the same mount-in-propagation convention as [`crate::full`]:
 //! raw IMU deltas are expressed in body frame `b`; `qcs0..qcs3` store the
-//! physical vehicle-to-body mount; propagation rotates body increments into the
-//! vehicle frame; and the attitude quaternion maps vehicle frame `v` into local
-//! NED `n`.
+//! physical vehicle-to-body mount `q_bv`, with `R(q_bv) = C_bv` and
+//! `x_b = C_bv x_v`; propagation rotates body increments through
+//! `C_vb = C_bv^T`; and the attitude quaternion is `q_nv`, the
+//! NED/navigation-frame attitude with respect to the vehicle frame, with
+//! `R(q_nv) = C_nv` and `x_n = C_nv x_v`.
 
 use libm::{fabsf, sqrtf};
 
@@ -115,9 +117,10 @@ impl Filter {
         self.freeze_misalignment_states
     }
 
-    /// Initializes nominal vehicle attitude, velocity, and position from GNSS.
+    /// Initializes nominal attitude, velocity, and position from GNSS.
     ///
-    /// `q_nv` maps vehicle-frame vectors into the local NED frame.
+    /// `q_nv` is the NED/navigation-frame attitude with respect to the vehicle
+    /// frame and must satisfy `R(q_nv) = C_nv`, `x_n = C_nv x_v`.
     pub fn init_nominal_from_gnss(&mut self, q_nv: [f32; 4], gnss: GnssSample) {
         const DEFAULT_GYRO_BIAS_SIGMA_DPS: f32 = 0.125;
         const DEFAULT_ACCEL_BIAS_SIGMA_MPS2: f32 = 0.15;

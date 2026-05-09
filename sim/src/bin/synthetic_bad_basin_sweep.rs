@@ -905,7 +905,7 @@ fn snapshot_state(
 ) -> Option<Snapshot> {
     let reduced = fusion.reduced()?;
     let truth = truth?;
-    let q_cs = as_q64([
+    let q_bv = as_q64([
         reduced.nominal.qcs0,
         reduced.nominal.qcs1,
         reduced.nominal.qcs2,
@@ -978,7 +978,7 @@ fn snapshot_state(
         nominal_course_gnss_deg: wrap_deg180(nominal_course_deg - gnss_course_deg),
         yaw_nominal_course_deg: wrap_deg180(yaw - nominal_course_deg),
         lat_vel_mps: vel_vehicle[1],
-        mount_qerr_deg: quat_angle_deg(q_cs, q_truth_mount),
+        mount_qerr_deg: quat_angle_deg(q_bv, q_truth_mount),
         att_qerr_deg: quat_angle_deg(q_vehicle, truth.q_bn),
         yaw_err_deg: wrap_deg180(yaw - truth_yaw),
         vel_err_mps: norm3([

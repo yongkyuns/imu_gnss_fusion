@@ -34,7 +34,7 @@ with optional generic reference CSVs for visualization and evaluation.
 
 | Module | Responsibility |
 | --- | --- |
-| `align` | Mount-alignment filter. Estimates the vehicle-to-body mount quaternion from stationary gravity, GNSS-derived acceleration, turn-rate windows, and nonholonomic cues. |
+| `align` | Mount-alignment filter. Estimates the `q_bv` vehicle-to-body mount quaternion from stationary gravity, GNSS-derived acceleration, turn-rate windows, and nonholonomic cues. |
 | `SensorFusion` | High-level runtime API. Accepts timestamped sensor samples, manages alignment and Reduced initialization, owns the local WGS84 anchor, and exposes current filter states. |
 | `reduced` | Reduced EKF runtime, process-noise configuration, public state/sample/diagnostic structs, and focused state helpers. |
 | `full` | Full-state ECEF EKF used for comparison and diagnostics. Includes Full prediction, GNSS and NHC updates, and Full-specific process-noise configuration. |

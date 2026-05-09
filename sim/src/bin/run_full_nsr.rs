@@ -56,7 +56,8 @@ struct RefInit {
     ref_lat_deg: f64,
     ref_lon_deg: f64,
     ref_h_m: f64,
-    q_bn: [f32; 4],
+    #[serde(rename = "q_bn")]
+    q_ev: [f32; 4],
     pos_ecef_m: [f64; 3],
     vel_ecef_mps: [f32; 3],
     pos_ned_m: [f32; 3],
@@ -65,7 +66,8 @@ struct RefInit {
     accel_bias_mps2: [f32; 3],
     gyro_scale: [f32; 3],
     accel_scale: [f32; 3],
-    q_cs: [f32; 4],
+    #[serde(rename = "q_cs")]
+    q_bv: [f32; 4],
     p_diag: [f32; 24],
     p_full: [[f32; 24]; 24],
 }
@@ -82,8 +84,10 @@ struct Output {
     euler_mis_deg: Vec<[f64; 3]>,
     pos_ecef_m: Vec<[f64; 3]>,
     vel_ecef_mps: Vec<[f64; 3]>,
-    q_es: Vec<[f64; 4]>,
-    q_cs: Vec<[f64; 4]>,
+    #[serde(rename = "q_es")]
+    q_ev: Vec<[f64; 4]>,
+    #[serde(rename = "q_cs")]
+    q_bv: Vec<[f64; 4]>,
 }
 
 #[derive(Debug, Serialize)]
@@ -98,32 +102,45 @@ struct DiagRow {
     accel_bias_pre: [f64; 3],
     gyro_scale_pre: [f64; 3],
     accel_scale_pre: [f64; 3],
-    q_es_pre: [f64; 4],
+    #[serde(rename = "q_ev_pre")]
+    q_ev_pre: [f64; 4],
     vel_ecef_pre: [f64; 3],
     omega_is_pre: [f64; 3],
     omega_norm_pre: f64,
     f_s_pre: [f64; 3],
     f_s_norm_pre: f64,
-    v_c_pre: [f64; 3],
+    #[serde(rename = "v_v_pre")]
+    v_v_pre: [f64; 3],
     nhc_h_y_pre: [f64; 24],
     nhc_h_z_pre: [f64; 24],
     p_pre_full: [[f64; 24]; 24],
-    p_pos_psi_cc_pre: [[f64; 3]; 3],
-    p_vel_psi_cc_pre: [[f64; 3]; 3],
-    p_psiee_psi_cc_pre: [[f64; 3]; 3],
-    p_psi_cc_pre: [[f64; 3]; 3],
+    #[serde(rename = "p_pos_psi_bv_pre")]
+    p_pos_psi_bv_pre: [[f64; 3]; 3],
+    #[serde(rename = "p_vel_psi_bv_pre")]
+    p_vel_psi_bv_pre: [[f64; 3]; 3],
+    #[serde(rename = "p_psiev_psi_bv_pre")]
+    p_psiev_psi_bv_pre: [[f64; 3]; 3],
+    #[serde(rename = "p_psi_bv_pre")]
+    p_psi_bv_pre: [[f64; 3]; 3],
     gps_h_rows_pre: [[f64; 24]; 3],
     gps_residual_pre: [f64; 3],
     gps_variance_pre: [f64; 3],
-    q_cs_pre: [f64; 4],
+    #[serde(rename = "q_bv_pre")]
+    q_bv_pre: [f64; 4],
     p_post_full: [[f64; 24]; 24],
-    p_pos_psi_cc_post: [[f64; 3]; 3],
-    p_vel_psi_cc_post: [[f64; 3]; 3],
-    p_psiee_psi_cc_post: [[f64; 3]; 3],
-    p_psi_cc_post: [[f64; 3]; 3],
+    #[serde(rename = "p_pos_psi_bv_post")]
+    p_pos_psi_bv_post: [[f64; 3]; 3],
+    #[serde(rename = "p_vel_psi_bv_post")]
+    p_vel_psi_bv_post: [[f64; 3]; 3],
+    #[serde(rename = "p_psiev_psi_bv_post")]
+    p_psiev_psi_bv_post: [[f64; 3]; 3],
+    #[serde(rename = "p_psi_bv_post")]
+    p_psi_bv_post: [[f64; 3]; 3],
     pos_ecef_post: [f64; 3],
-    q_es_post: [f64; 4],
-    q_cs_post: [f64; 4],
+    #[serde(rename = "q_ev_post")]
+    q_ev_post: [f64; 4],
+    #[serde(rename = "q_bv_post")]
+    q_bv_post: [f64; 4],
 }
 
 fn main() -> Result<()> {
@@ -163,19 +180,19 @@ fn main() -> Result<()> {
     }
     let mut full = Filter::new(noise);
     full.init_from_reference_ecef_state(
-        init.q_bn,
+        init.q_ev,
         init.pos_ecef_m,
         init.vel_ecef_mps,
         init.gyro_bias_radps,
         init.accel_bias_mps2,
         init.gyro_scale,
         init.accel_scale,
-        init.q_cs,
+        init.q_bv,
         Some(init.p_diag),
     );
     full.set_covariance(init.p_full);
 
-    let qcs0 = init.q_cs;
+    let q_bv0 = init.q_bv;
     let q_ne = quat_ecef_to_ned(init.ref_lat_deg, init.ref_lon_deg);
     let ref_ecef = lla_to_ecef(init.ref_lat_deg, init.ref_lon_deg, init.ref_h_m);
     let mut started = false;
@@ -193,8 +210,8 @@ fn main() -> Result<()> {
     let mut euler_mis_deg = Vec::new();
     let mut pos_ecef_m = Vec::new();
     let mut vel_ecef_mps = Vec::new();
-    let mut q_es_out = Vec::new();
-    let mut q_cs_out = Vec::new();
+    let mut q_ev_out = Vec::new();
+    let mut q_bv_out = Vec::new();
     let mut diag_rows = Vec::new();
     let mut trace_row: Option<DiagRow> = None;
 
@@ -243,10 +260,10 @@ fn main() -> Result<()> {
         let mis = quat_mul(
             [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64],
             quat_conj([
-                qcs0[0] as f64,
-                qcs0[1] as f64,
-                qcs0[2] as f64,
-                qcs0[3] as f64,
+                q_bv0[0] as f64,
+                q_bv0[1] as f64,
+                q_bv0[2] as f64,
+                q_bv0[3] as f64,
             ]),
         );
         let (mroll, mpitch, myaw) =
@@ -262,8 +279,8 @@ fn main() -> Result<()> {
         euler_mis_deg.push([mroll, mpitch, myaw]);
         pos_ecef_m.push(pos_ecef);
         vel_ecef_mps.push(vel_ecef);
-        q_es_out.push([n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64]);
-        q_cs_out.push([n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64]);
+        q_ev_out.push([n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64]);
+        q_bv_out.push([n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64]);
     }
 
     for event in events {
@@ -354,8 +371,8 @@ fn main() -> Result<()> {
                 {
                     let p = full.covariance();
                     let n = full.nominal();
-                    let q_es_pre = [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64];
-                    let q_cs_pre = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
+                    let q_ev_pre = [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64];
+                    let q_bv_pre = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
                     let pos_ecef_pre = full.shadow_pos_ecef();
                     let vel_ecef_pre = [n.vn as f64, n.ve as f64, n.vd as f64];
                     let omega_is_pre = [
@@ -368,11 +385,10 @@ fn main() -> Result<()> {
                         (n.say * latest_accel[1] as f32 + n.bay) as f64,
                         (n.saz * latest_accel[2] as f32 + n.baz) as f64,
                     ];
-                    let c_es = quat_to_dcm64(q_es_pre);
-                    let c_cs = quat_to_dcm64(q_cs_pre);
-                    let c_ce = mat3_mul(c_cs, mat3_transpose(c_es));
-                    let v_c_pre = mat3_vec_mul(c_ce, vel_ecef_pre);
-                    let h_rows = nhc_h_rows(c_ce, vel_ecef_pre, v_c_pre);
+                    let c_ev = quat_to_dcm64(q_ev_pre);
+                    let c_ve = mat3_transpose(c_ev);
+                    let v_v_pre = mat3_vec_mul(c_ve, vel_ecef_pre);
+                    let h_rows = nhc_h_rows(c_ve, vel_ecef_pre);
                     let omega_norm_pre = norm3(omega_is_pre);
                     let f_s_norm_pre = norm3(f_s_pre);
                     let (gps_h_rows_pre, gps_residual_pre, gps_variance_pre) = gps_diag_inputs(
@@ -383,17 +399,17 @@ fn main() -> Result<()> {
                         gps_h_acc_m,
                         dt_since_last_gnss,
                     );
-                    let mut p_pos_psi_cc_pre = [[0.0; 3]; 3];
-                    let mut p_vel_psi_cc_pre = [[0.0; 3]; 3];
-                    let mut p_psiee_psi_cc_pre = [[0.0; 3]; 3];
-                    let mut p_psi_cc_pre = [[0.0; 3]; 3];
+                    let mut p_pos_psi_bv_pre = [[0.0; 3]; 3];
+                    let mut p_vel_psi_bv_pre = [[0.0; 3]; 3];
+                    let mut p_psiev_psi_bv_pre = [[0.0; 3]; 3];
+                    let mut p_psi_bv_pre = [[0.0; 3]; 3];
                     let mut p_pre_full = [[0.0; 24]; 24];
                     for i in 0..3 {
                         for j in 0..3 {
-                            p_pos_psi_cc_pre[i][j] = p[i][21 + j] as f64;
-                            p_vel_psi_cc_pre[i][j] = p[3 + i][21 + j] as f64;
-                            p_psiee_psi_cc_pre[i][j] = p[6 + i][21 + j] as f64;
-                            p_psi_cc_pre[i][j] = p[21 + i][21 + j] as f64;
+                            p_pos_psi_bv_pre[i][j] = p[i][21 + j] as f64;
+                            p_vel_psi_bv_pre[i][j] = p[3 + i][21 + j] as f64;
+                            p_psiev_psi_bv_pre[i][j] = p[6 + i][21 + j] as f64;
+                            p_psi_bv_pre[i][j] = p[21 + i][21 + j] as f64;
                         }
                     }
                     for i in 0..24 {
@@ -412,32 +428,32 @@ fn main() -> Result<()> {
                         accel_bias_pre: [n.bax as f64, n.bay as f64, n.baz as f64],
                         gyro_scale_pre: [n.sgx as f64, n.sgy as f64, n.sgz as f64],
                         accel_scale_pre: [n.sax as f64, n.say as f64, n.saz as f64],
-                        q_es_pre,
+                        q_ev_pre,
                         vel_ecef_pre,
                         omega_is_pre,
                         omega_norm_pre,
                         f_s_pre,
                         f_s_norm_pre,
-                        v_c_pre,
+                        v_v_pre,
                         nhc_h_y_pre: h_rows[1],
                         nhc_h_z_pre: h_rows[2],
                         p_pre_full,
-                        p_pos_psi_cc_pre,
-                        p_vel_psi_cc_pre,
-                        p_psiee_psi_cc_pre,
-                        p_psi_cc_pre,
+                        p_pos_psi_bv_pre,
+                        p_vel_psi_bv_pre,
+                        p_psiev_psi_bv_pre,
+                        p_psi_bv_pre,
                         gps_h_rows_pre,
                         gps_residual_pre,
                         gps_variance_pre,
-                        q_cs_pre,
+                        q_bv_pre,
                         p_post_full: [[0.0; 24]; 24],
-                        p_pos_psi_cc_post: [[0.0; 3]; 3],
-                        p_vel_psi_cc_post: [[0.0; 3]; 3],
-                        p_psiee_psi_cc_post: [[0.0; 3]; 3],
-                        p_psi_cc_post: [[0.0; 3]; 3],
+                        p_pos_psi_bv_post: [[0.0; 3]; 3],
+                        p_vel_psi_bv_post: [[0.0; 3]; 3],
+                        p_psiev_psi_bv_post: [[0.0; 3]; 3],
+                        p_psi_bv_post: [[0.0; 3]; 3],
                         pos_ecef_post: [0.0; 3],
-                        q_es_post: [0.0; 4],
-                        q_cs_post: [0.0; 4],
+                        q_ev_post: [0.0; 4],
+                        q_bv_post: [0.0; 4],
                     };
                     if nhc_active || gps_pos_ecef.is_some() {
                         full.fuse_reference_batch_full_with_nhc_speed(
@@ -464,10 +480,10 @@ fn main() -> Result<()> {
                         row.applied_obs_types = full.last_obs_types().to_vec();
                         for i in 0..3 {
                             for j in 0..3 {
-                                row.p_pos_psi_cc_post[i][j] = p[i][21 + j] as f64;
-                                row.p_vel_psi_cc_post[i][j] = p[3 + i][21 + j] as f64;
-                                row.p_psiee_psi_cc_post[i][j] = p[6 + i][21 + j] as f64;
-                                row.p_psi_cc_post[i][j] = p[21 + i][21 + j] as f64;
+                                row.p_pos_psi_bv_post[i][j] = p[i][21 + j] as f64;
+                                row.p_vel_psi_bv_post[i][j] = p[3 + i][21 + j] as f64;
+                                row.p_psiev_psi_bv_post[i][j] = p[6 + i][21 + j] as f64;
+                                row.p_psi_bv_post[i][j] = p[21 + i][21 + j] as f64;
                             }
                         }
                         for (i, p_row) in p.iter().enumerate() {
@@ -476,18 +492,18 @@ fn main() -> Result<()> {
                             }
                         }
                         row.pos_ecef_post = full.shadow_pos_ecef();
-                        row.q_es_post = [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64];
-                        row.q_cs_post =
+                        row.q_ev_post = [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64];
+                        row.q_bv_post =
                             [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
                     } else {
                         row.p_post_full = row.p_pre_full;
-                        row.p_pos_psi_cc_post = row.p_pos_psi_cc_pre;
-                        row.p_vel_psi_cc_post = row.p_vel_psi_cc_pre;
-                        row.p_psiee_psi_cc_post = row.p_psiee_psi_cc_pre;
-                        row.p_psi_cc_post = row.p_psi_cc_pre;
+                        row.p_pos_psi_bv_post = row.p_pos_psi_bv_pre;
+                        row.p_vel_psi_bv_post = row.p_vel_psi_bv_pre;
+                        row.p_psiev_psi_bv_post = row.p_psiev_psi_bv_pre;
+                        row.p_psi_bv_post = row.p_psi_bv_pre;
                         row.pos_ecef_post = row.pos_ecef_pre;
-                        row.q_es_post = row.q_es_pre;
-                        row.q_cs_post = row.q_cs_pre;
+                        row.q_ev_post = row.q_ev_pre;
+                        row.q_bv_post = row.q_bv_pre;
                     }
                     if args.diag_json.is_some()
                         && t <= args.diag_until_s
@@ -505,32 +521,32 @@ fn main() -> Result<()> {
                             accel_bias_pre: row.accel_bias_pre,
                             gyro_scale_pre: row.gyro_scale_pre,
                             accel_scale_pre: row.accel_scale_pre,
-                            q_es_pre: row.q_es_pre,
+                            q_ev_pre: row.q_ev_pre,
                             vel_ecef_pre: row.vel_ecef_pre,
                             omega_is_pre: row.omega_is_pre,
                             omega_norm_pre: row.omega_norm_pre,
                             f_s_pre: row.f_s_pre,
                             f_s_norm_pre: row.f_s_norm_pre,
-                            v_c_pre: row.v_c_pre,
+                            v_v_pre: row.v_v_pre,
                             nhc_h_y_pre: row.nhc_h_y_pre,
                             nhc_h_z_pre: row.nhc_h_z_pre,
                             p_pre_full: row.p_pre_full,
-                            p_pos_psi_cc_pre: row.p_pos_psi_cc_pre,
-                            p_vel_psi_cc_pre: row.p_vel_psi_cc_pre,
-                            p_psiee_psi_cc_pre: row.p_psiee_psi_cc_pre,
-                            p_psi_cc_pre: row.p_psi_cc_pre,
+                            p_pos_psi_bv_pre: row.p_pos_psi_bv_pre,
+                            p_vel_psi_bv_pre: row.p_vel_psi_bv_pre,
+                            p_psiev_psi_bv_pre: row.p_psiev_psi_bv_pre,
+                            p_psi_bv_pre: row.p_psi_bv_pre,
                             gps_h_rows_pre: row.gps_h_rows_pre,
                             gps_residual_pre: row.gps_residual_pre,
                             gps_variance_pre: row.gps_variance_pre,
-                            q_cs_pre: row.q_cs_pre,
+                            q_bv_pre: row.q_bv_pre,
                             p_post_full: row.p_post_full,
-                            p_pos_psi_cc_post: row.p_pos_psi_cc_post,
-                            p_vel_psi_cc_post: row.p_vel_psi_cc_post,
-                            p_psiee_psi_cc_post: row.p_psiee_psi_cc_post,
-                            p_psi_cc_post: row.p_psi_cc_post,
+                            p_pos_psi_bv_post: row.p_pos_psi_bv_post,
+                            p_vel_psi_bv_post: row.p_vel_psi_bv_post,
+                            p_psiev_psi_bv_post: row.p_psiev_psi_bv_post,
+                            p_psi_bv_post: row.p_psi_bv_post,
                             pos_ecef_post: row.pos_ecef_post,
-                            q_es_post: row.q_es_post,
-                            q_cs_post: row.q_cs_post,
+                            q_ev_post: row.q_ev_post,
+                            q_bv_post: row.q_bv_post,
                         });
                     }
                     if trace_match {
@@ -590,10 +606,10 @@ fn main() -> Result<()> {
                 let mis = quat_mul(
                     [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64],
                     quat_conj([
-                        qcs0[0] as f64,
-                        qcs0[1] as f64,
-                        qcs0[2] as f64,
-                        qcs0[3] as f64,
+                        q_bv0[0] as f64,
+                        q_bv0[1] as f64,
+                        q_bv0[2] as f64,
+                        q_bv0[3] as f64,
                     ]),
                 );
                 let (mroll, mpitch, myaw) =
@@ -609,8 +625,8 @@ fn main() -> Result<()> {
                 euler_mis_deg.push([mroll, mpitch, myaw]);
                 pos_ecef_m.push(pos_ecef);
                 vel_ecef_mps.push(vel_ecef);
-                q_es_out.push([n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64]);
-                q_cs_out.push([n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64]);
+                q_ev_out.push([n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64]);
+                q_bv_out.push([n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64]);
             }
         }
     }
@@ -630,8 +646,8 @@ fn main() -> Result<()> {
         euler_mis_deg,
         pos_ecef_m,
         vel_ecef_mps,
-        q_es: q_es_out,
-        q_cs: q_cs_out,
+        q_ev: q_ev_out,
+        q_bv: q_bv_out,
     };
     fs::write(&args.out_json, serde_json::to_vec(&out)?)?;
     if let Some(diag_json) = &args.diag_json {
@@ -733,16 +749,6 @@ fn mat3_transpose(a: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
     ]
 }
 
-fn mat3_mul(a: [[f64; 3]; 3], b: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
-    let mut out = [[0.0; 3]; 3];
-    for i in 0..3 {
-        for j in 0..3 {
-            out[i][j] = (0..3).map(|k| a[i][k] * b[k][j]).sum();
-        }
-    }
-    out
-}
-
 fn mat3_vec_mul(a: [[f64; 3]; 3], x: [f64; 3]) -> [f64; 3] {
     [
         a[0][0] * x[0] + a[0][1] * x[1] + a[0][2] * x[2],
@@ -755,15 +761,13 @@ fn skew(v: [f64; 3]) -> [[f64; 3]; 3] {
     [[0.0, -v[2], v[1]], [v[2], 0.0, -v[0]], [-v[1], v[0], 0.0]]
 }
 
-fn nhc_h_rows(c_ce: [[f64; 3]; 3], vel_e: [f64; 3], v_c: [f64; 3]) -> [[f64; 24]; 3] {
+fn nhc_h_rows(c_ve: [[f64; 3]; 3], vel_e: [f64; 3]) -> [[f64; 24]; 3] {
     let mut rows = [[0.0; 24]; 3];
     let sv = skew(vel_e);
-    let svc = skew([-v_c[0], -v_c[1], -v_c[2]]);
     for r in 0..3 {
         for c in 0..3 {
-            rows[r][3 + c] = c_ce[r][c];
-            rows[r][6 + c] = (0..3).map(|k| c_ce[r][k] * sv[k][c]).sum();
-            rows[r][21 + c] = svc[r][c];
+            rows[r][3 + c] = c_ve[r][c];
+            rows[r][6 + c] = (0..3).map(|k| c_ve[r][k] * sv[k][c]).sum();
         }
     }
     rows

@@ -82,6 +82,11 @@ pub(crate) fn quat_multiply_f32(p: [f32; 4], q: [f32; 4]) -> [f32; 4] {
     ]
 }
 
+#[cfg(test)]
+pub(crate) fn quat_conj_f32(q: [f32; 4]) -> [f32; 4] {
+    [q[0], -q[1], -q[2], -q[3]]
+}
+
 pub(crate) fn quat_from_yaw_f32(yaw_rad: f32) -> [f32; 4] {
     let half = 0.5 * yaw_rad;
     [cos_f32(half), 0.0, 0.0, sin_f32(half)]

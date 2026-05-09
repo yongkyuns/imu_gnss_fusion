@@ -12,18 +12,20 @@
 //! q_ev, v_e, p_e, b_g, b_a, s_g, s_a, q_bv
 //! ```
 //!
-//! `q_ev` rotates the vehicle frame into ECEF, and `q_bv` is the physical
-//! vehicle-to-body mount stored in the legacy `qcs*` fields. Raw body-frame IMU
-//! samples are rotated through `q_bv` during propagation. The 24-state error
-//! order in generated matrices and injection is:
+//! `q_ev` is the ECEF-frame attitude with respect to the vehicle frame:
+//! `R(q_ev) = C_ev` and `x_e = C_ev x_v`. `q_bv` is the physical
+//! vehicle-to-body mount stored in the legacy `qcs*` fields, with
+//! `R(q_bv) = C_bv` and `x_b = C_bv x_v`. Raw body-frame IMU samples are
+//! rotated through `C_vb = C_bv^T` during propagation. The 24-state error order
+//! in generated matrices and injection is:
 //!
 //! ```text
 //! dp_e, dv_e, dtheta_v, dba, dbg, dsa, dsg, dpsi_bv
 //! ```
 //!
 //! GNSS reference rows observe ECEF position and velocity, optionally whitening
-//! NED standard deviations into ECEF. NHC rows predict
-//! `v_v = C_ev^T v_e` and constrain its lateral and vertical components.
+//! NED standard deviations into ECEF. NHC rows use `R(q_ev) = C_ev`, predict
+//! `v_v = C_ev^T v_e`, and constrain its lateral and vertical components.
 
 #![allow(non_snake_case)]
 #![allow(clippy::excessive_precision)]
@@ -163,7 +165,7 @@ impl Filter {
 
     /// Sets the physical vehicle-to-body mount quaternion.
     ///
-    /// The quaternion must satisfy `x_b = C_bv(q) x_v`.
+    /// The quaternion must satisfy `R(q_bv) = C_bv`, `x_b = C_bv x_v`.
     pub fn set_mount_quat(&mut self, q_bv: [f32; 4]) {
         self.raw.nominal.qcs0 = q_bv[0];
         self.raw.nominal.qcs1 = q_bv[1];
@@ -1427,9 +1429,9 @@ fn extract_support_from_row(h: &[f32; ERROR_STATES], support: &mut [usize; ERROR
 
 /// Converts local-NED vehicle yaw into Full attitude plus identity mount.
 ///
-/// Returns `(q_ev, q_bv)`, where `q_ev` maps vehicle frame to ECEF and `q_bv`
-/// maps vehicle frame to raw body frame. The mount is identity because only yaw
-/// and location are provided here; callers set a physical mount separately.
+/// Returns `(q_ev, q_bv)`, where `R(q_ev) = C_ev` and `R(q_bv) = C_bv`.
+/// The mount is identity because only yaw and location are provided here;
+/// callers set a physical mount separately.
 pub fn full_vehicle_ecef_split(yaw_rad: f32, lat_deg: f64, lon_deg: f64) -> ([f32; 4], [f32; 4]) {
     let half_yaw = 0.5 * yaw_rad as f64;
     let q_ns = [cos_f64(half_yaw), 0.0, 0.0, sin_f64(half_yaw)];

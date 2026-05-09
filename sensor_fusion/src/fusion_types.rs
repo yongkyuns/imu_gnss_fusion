@@ -76,9 +76,8 @@ pub struct Update {
     pub filter_initialized_now: bool,
     /// Current physical vehicle-to-body mount quaternion, when available.
     ///
-    /// Its DCM maps vehicle-frame vectors into raw IMU body-frame vectors:
-    /// `x_b = C_bv(q) x_v`. Runtime propagation uses `C_bv(q)^T` to rotate
-    /// IMU samples into the vehicle frame.
+    /// `R(q_bv) = C_bv`, `x_b = C_bv x_v`. Runtime propagation uses
+    /// `C_vb = C_bv^T` to rotate IMU samples into the vehicle frame.
     pub mount_q_bv: Option<[f32; 4]>,
 }
 
@@ -111,8 +110,8 @@ pub enum MountMode {
     Auto,
     /// Use the supplied vehicle-to-body mount quaternion as a fixed mount.
     ///
-    /// The quaternion follows `x_b = C_bv(q) x_v`; mount states are frozen for
-    /// both Reduced and Full.
+    /// The quaternion follows `R(q_bv) = C_bv`, `x_b = C_bv x_v`; mount states
+    /// are frozen for both Reduced and Full.
     Manual([f32; 4]),
 }
 

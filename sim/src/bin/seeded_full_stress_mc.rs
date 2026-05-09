@@ -207,10 +207,10 @@ fn load_dataset(input_dir: &Path) -> Result<Dataset> {
 fn run_case(dataset: &Dataset, case: &StressCase, args: &Args) -> Result<CaseResult> {
     let q_nominal_mount = nominal_mount_quat();
     let q_mis = euler_to_quat_deg(dataset.truth_misalignment_deg);
-    let q_cs_true = quat_normalize(quat_mul(q_mis, q_nominal_mount));
+    let q_bv_true = quat_normalize(quat_mul(q_mis, q_nominal_mount));
     let q_seed_err = euler_to_quat_deg(case.seed_mount_error_deg);
-    let q_cs_seed = quat_normalize(quat_mul(q_seed_err, q_cs_true));
-    let c_seed = quat_to_rotmat(q_cs_seed);
+    let q_bv_seed = quat_normalize(quat_mul(q_seed_err, q_bv_true));
+    let c_seed = quat_to_rotmat(q_bv_seed);
 
     let init_gyro_index = nearest_time_index_gyro(&dataset.gyro, args.init_time_s)
         .context("no gyro samples available")?;
@@ -226,7 +226,7 @@ fn run_case(dataset: &Dataset, case: &StressCase, args: &Args) -> Result<CaseRes
 
     let yaw_init = initial_yaw_from_gnss(gnss_init);
     let q_ne = quat_ecef_to_ned(gnss_init.lat_deg, gnss_init.lon_deg);
-    let q_es = quat_normalize(quat_mul(quat_conj(q_ne), yaw_quat(yaw_init)));
+    let q_ev = quat_normalize(quat_mul(quat_conj(q_ne), yaw_quat(yaw_init)));
     let pos_ecef = lla_to_ecef(gnss_init.lat_deg, gnss_init.lon_deg, gnss_init.height_m);
     let c_en = ecef_to_ned_matrix(gnss_init.lat_deg, gnss_init.lon_deg);
     let vel_n = gnss_init
@@ -239,7 +239,7 @@ fn run_case(dataset: &Dataset, case: &StressCase, args: &Args) -> Result<CaseRes
 
     let mut full = Filter::new(ProcessNoise::reference_nsr_demo());
     full.init_from_reference_ecef_state(
-        q_es.map(|v| v as f32),
+        q_ev.map(|v| v as f32),
         pos_ecef,
         vel_ecef.map(|v| v as f32),
         [0.0, 0.0, 0.0],
@@ -355,19 +355,19 @@ fn run_case(dataset: &Dataset, case: &StressCase, args: &Args) -> Result<CaseRes
         );
 
         let n = full.nominal();
-        let q_es_hat = [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64];
-        let q_cs_resid = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
-        let q_cs_full = quat_normalize(quat_mul(q_cs_resid, q_cs_seed));
-        let q_mount_err = quat_normalize(quat_mul(q_cs_full, quat_conj(q_cs_true)));
-        let q_mount_full = quat_normalize(quat_mul(q_cs_full, quat_conj(q_nominal_mount)));
+        let q_ev_hat = [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64];
+        let q_bv_resid = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
+        let q_bv_full = quat_normalize(quat_mul(q_bv_resid, q_bv_seed));
+        let q_mount_err = quat_normalize(quat_mul(q_bv_full, quat_conj(q_bv_true)));
+        let q_mount_full = quat_normalize(quat_mul(q_bv_full, quat_conj(q_nominal_mount)));
         let mount_err_deg = quat_to_euler_deg(q_mount_err);
         let mount_full_deg = quat_to_euler_deg(q_mount_full);
 
         let pos_hat = full.shadow_pos_ecef();
         let (lat_hat, lon_hat, _) = ecef_to_lla(pos_hat);
         let q_ne_hat = quat_ecef_to_ned(lat_hat, lon_hat);
-        let q_ns_hat = quat_normalize(quat_mul(q_ne_hat, q_es_hat));
-        let q_nc_hat = quat_normalize(quat_mul(q_ns_hat, quat_conj(q_cs_resid)));
+        let q_ns_hat = quat_normalize(quat_mul(q_ne_hat, q_ev_hat));
+        let q_nc_hat = quat_normalize(quat_mul(q_ns_hat, quat_conj(q_bv_resid)));
         let car_euler_deg = quat_to_euler_deg(q_nc_hat);
         let truth_car_pitch = interp_truth_pitch(&dataset.truth_nav, curr_gyro.ttag_us);
 

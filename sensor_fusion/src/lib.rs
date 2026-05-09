@@ -11,14 +11,19 @@
 //! - `v`: vehicle frame, forward-right-down.
 //! - `n`: local NED navigation frame used by [`reduced`].
 //! - `e`: ECEF frame used by [`full`].
-//! - Active rotations use `x_a = C_ab x_b` and quaternion products compose as
-//!   `C(q1 * q2) = C(q1) C(q2)`.
+//! - Direction cosine matrix `C_ab` maps coordinates from frame `b` to frame
+//!   `a`: `x_a = C_ab x_b`.
+//! - Quaternion `q_ab` follows `R(q_ab) = C_ab`; products compose as
+//!   `R(q1 * q2) = R(q1) R(q2)`.
 //! - The mount quaternion stored in `qcs0..qcs3` by both filters is the current
-//!   physical vehicle-to-body mount. Its DCM maps `x_v` into `x_b`; the filters
-//!   use its transpose to rotate raw IMU vectors into the vehicle frame during
-//!   propagation.
-//! - Reduced attitude `q0..q3` maps vehicle frame to local NED (`q_nv`). Full
-//!   attitude `q0..q3` maps vehicle frame to ECEF (`q_ev`).
+//!   physical vehicle-to-body mount: `R(q_bv) = C_bv`, `x_b = C_bv x_v`. The
+//!   filters use `C_vb = C_bv^T` to rotate raw IMU vectors into the vehicle
+//!   frame during propagation.
+//! - Reduced attitude `q0..q3` is `q_nv`: the NED/navigation-frame attitude
+//!   with respect to the vehicle frame, with `R(q_nv) = C_nv` and
+//!   `x_n = C_nv x_v`.
+//! - Full attitude `q0..q3` is `q_ev`: the ECEF-frame attitude with respect to
+//!   the vehicle frame, with `R(q_ev) = C_ev` and `x_e = C_ev x_v`.
 //!
 //! Maintained mathematical references:
 //! `docs/align.pdf`, `docs/reduced.pdf`, and `docs/full.pdf`.
@@ -26,6 +31,8 @@
 #![no_std]
 #![allow(clippy::needless_range_loop)]
 
+#[cfg(test)]
+mod coordinate_conventions;
 mod covariance;
 mod fusion;
 mod fusion_types;

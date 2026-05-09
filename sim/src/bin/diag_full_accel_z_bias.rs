@@ -104,7 +104,7 @@ fn run_case(scenario: &Path, accel_z_bias_mps2: f64, args: &Args) -> Result<Resu
         .context("synthetic profile produced no GNSS samples")?;
 
     let q_ne0 = quat_ecef_to_ned(first_truth.lat_deg, first_truth.lon_deg);
-    let q_es0 = quat_mul(quat_conj(q_ne0), first_truth.q_bn);
+    let q_ev0 = quat_mul(quat_conj(q_ne0), first_truth.q_bn);
     let pos0 = lla_to_ecef(
         first_truth.lat_deg,
         first_truth.lon_deg,
@@ -117,7 +117,7 @@ fn run_case(scenario: &Path, accel_z_bias_mps2: f64, args: &Args) -> Result<Resu
     );
     let mut full = Filter::new(ProcessNoise::lsm6dso_104hz());
     full.init_from_reference_ecef_state(
-        q_es0.map(|v| v as f32),
+        q_ev0.map(|v| v as f32),
         pos0,
         vel0.map(|v| v as f32),
         [0.0; 3],

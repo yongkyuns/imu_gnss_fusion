@@ -2138,13 +2138,13 @@ fn transform_full_cov_to_reduced(
     ref_gnss: GenericGnssSample,
 ) -> [[f32; 18]; 18] {
     let mut t = [[0.0f32; ERROR_STATES]; 18];
-    let q_es = as_q64([
+    let q_ev = as_q64([
         full.nominal.q0,
         full.nominal.q1,
         full.nominal.q2,
         full.nominal.q3,
     ]);
-    let c_es = quat_to_rot(q_es);
+    let c_ev = quat_to_rot(q_ev);
     let pos_ned = ecef_to_ned(
         full.pos_ecef,
         lla_to_ecef(ref_gnss.lat_deg, ref_gnss.lon_deg, ref_gnss.height_m),
@@ -2163,7 +2163,7 @@ fn transform_full_cov_to_reduced(
 
     for reduced_i in 0..3 {
         for full_i in 0..3 {
-            t[reduced_i][6 + full_i] = c_es[full_i][reduced_i] as f32;
+            t[reduced_i][6 + full_i] = c_ev[full_i][reduced_i] as f32;
         }
     }
     for r in 0..3 {
@@ -2198,13 +2198,13 @@ fn transform_full_dx_to_reduced(
     dx: &[f32; ERROR_STATES],
     ref_gnss: GenericGnssSample,
 ) -> [f32; 18] {
-    let q_es = as_q64([
+    let q_ev = as_q64([
         full.nominal.q0,
         full.nominal.q1,
         full.nominal.q2,
         full.nominal.q3,
     ]);
-    let c_es = quat_to_rot(q_es);
+    let c_ev = quat_to_rot(q_ev);
     let pos_ned = ecef_to_ned(
         full.pos_ecef,
         lla_to_ecef(ref_gnss.lat_deg, ref_gnss.lon_deg, ref_gnss.height_m),
@@ -2224,7 +2224,7 @@ fn transform_full_dx_to_reduced(
     let mut out = [0.0f32; 18];
     for reduced_i in 0..3 {
         for full_i in 0..3 {
-            out[reduced_i] += c_es[full_i][reduced_i] as f32 * dx[6 + full_i];
+            out[reduced_i] += c_ev[full_i][reduced_i] as f32 * dx[6 + full_i];
         }
     }
     for r in 0..3 {

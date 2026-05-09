@@ -11,7 +11,7 @@
 \usepackage{hyperref}
 
 \title{Align Filter and Non-Holonomic Mount Observations}
-\author{sensor_fusion documentation}
+\author{sensor\_fusion documentation}
 \date{\today}
 
 \newcommand{\R}{\mathbb{R}}
@@ -27,7 +27,7 @@
 \section{Scope}
 
 This document records the mathematical model implemented by
-\texttt{sensor_fusion/src/align.rs}. The align filter is a standalone IMU-to-vehicle
+\path{sensor_fusion/src/align/mod.rs}. The align filter is a standalone IMU-to-vehicle
 mount estimator. It is not the augmented Reduced; it only estimates the mount
 quaternion and its three-dimensional small-angle covariance. The runtime fusion
 pipeline uses this mount as the coarse seed for the Reduced and Full
@@ -50,17 +50,18 @@ The project math notes use active rotation matrices
   x_a = C_{ab} x_b ,
 \end{equation}
 where \(C_{ab}\) maps a vector from frame \(b\) into frame \(a\). Quaternions
-use the same direction: \(q_{ab}\) denotes \(C_{ab}\), and
+use the same direction:
 \begin{equation}
-  C(q_1 \otimes q_2)=C(q_1)C(q_2).
+  R(q_{ab})=C_{ab},\qquad
+  R(q_1 \otimes q_2)=R(q_1)R(q_2).
 \end{equation}
 
-The align state stores \texttt{q\_vb}. In code this quaternion is converted to a
-matrix denoted here as \(C_{bv}\), the vehicle-to-body mount rotation:
+The align state stores the public physical vehicle-to-body mount \(q_{bv}\).
+Its rotation matrix is \(C_{bv}=R(q_{bv})\):
 \begin{equation}
-  x_b = C_{bv}(q_{vb}) x_v .
+  x_b = C_{bv} x_v .
 \end{equation}
-Its transpose rotates measured IMU vectors into the vehicle frame:
+The body/sensor-to-vehicle rotation is the transpose:
 \begin{equation}
   x_v = C_{vb} x_b = C_{bv}\T x_b .
 \end{equation}
@@ -72,19 +73,19 @@ For small-angle corrections, the implementation uses
 \end{equation}
 General roll/pitch/yaw mount corrections are left-injected,
 \begin{equation}
-  q_{vb}^{+}=\dq(\delta\theta)\otimes q_{vb}^{-},
+  q_{bv}^{+}=\dq(\delta\theta)\otimes q_{bv}^{-},
 \end{equation}
 while the horizontal heading update applies a vehicle-frame yaw correction on
 the right,
 \begin{equation}
-  q_{vb}^{+}=q_{vb}^{-}\otimes q_z(\delta\psi_v).
+  q_{bv}^{+}=q_{bv}^{-}\otimes q_z(\delta\psi_v).
 \end{equation}
 
 \section{State and Covariance}
 
 The nominal state is only the mount quaternion:
 \begin{equation}
-  x = q_{vb}\in \mathbb{S}^{3}.
+  x = q_{bv}\in \mathbb{S}^{3}.
 \end{equation}
 The covariance is defined on a three-state small-angle error:
 \begin{equation}
@@ -147,7 +148,7 @@ and wide yaw uncertainty.
 Align prediction does not mechanize attitude with gyro integration. The nominal
 mount is constant:
 \begin{equation}
-  q_{vb,k+1}^{-}=q_{vb,k}^{+}.
+  q_{bv,k+1}^{-}=q_{bv,k}^{+}.
 \end{equation}
 Only the diagonal covariance receives random-walk process noise:
 \begin{equation}
@@ -160,7 +161,7 @@ Only the diagonal covariance receives random-walk process noise:
 For a window mean gyroscope \(\omega_b\) and a body-frame acceleration-like
 vector \(a_b\), the code predicts vehicle-frame channels as
 \begin{equation}
-  h(q_{vb}) =
+  h(q_{bv}) =
   \begin{bmatrix}
   \omega_v \\ a_v
   \end{bmatrix}
@@ -170,7 +171,7 @@ vector \(a_b\), the code predicts vehicle-frame channels as
   \end{bmatrix},
   \qquad C_{vb}=C_{bv}\T .
 \end{equation}
-With the implemented left small-angle perturbation of \(q_{vb}\), the generated
+With the implemented left small-angle perturbation of \(q_{bv}\), the generated
 Jacobian rows used by the Kalman updates are
 \begin{equation}
   H_\omega = C_{vb}\crossmat{\omega_b},
@@ -188,7 +189,7 @@ Scalar and two-row updates use standard linear Kalman equations:
   \delta x &= Kr,\\
   P^{+} &\leftarrow (I-KH)P^{-}.
 \end{align}
-After each update, the small angle is injected into \(q_{vb}\) and \(P\) is
+After each update, the small angle is injected into \(q_{bv}\) and \(P\) is
 symmetrized. The implementation uses the simplified covariance update above,
 not the Joseph form.
 
@@ -260,7 +261,7 @@ The residual is treated as a vehicle-frame yaw observation:
   \delta\psi_v=-K_\psi e_\psi,\qquad
   K_\psi=\frac{P_{\psi\psi}}{P_{\psi\psi}+R_\psi}.
 \end{equation}
-The yaw correction is right-injected as \(q_{vb}^{+}=q_{vb}^{-}\otimes
+The yaw correction is right-injected as \(q_{bv}^{+}=q_{bv}^{-}\otimes
 q_z(\delta\psi_v)\). Roll/yaw and pitch/yaw cross-covariances are zeroed after
 this scalar yaw update.
 

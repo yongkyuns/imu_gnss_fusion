@@ -104,7 +104,9 @@ pub(crate) fn default_full_p_diag(
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NominalState {
-    /// Vehicle-to-ECEF attitude quaternion `q_ev`, scalar-first.
+    /// ECEF-frame attitude with respect to the vehicle frame.
+    ///
+    /// Scalar-first `q_ev`, with `R(q_ev) = C_ev` and `x_e = C_ev x_v`.
     pub q0: f32,
     pub q1: f32,
     pub q2: f32,
@@ -135,8 +137,8 @@ pub struct NominalState {
     pub saz: f32,
     /// Physical vehicle-to-body mount quaternion, stored in legacy `qcs*` fields.
     ///
-    /// Its DCM maps `x_v` into `x_b`; propagation uses its transpose to rotate
-    /// raw IMU samples into the vehicle frame.
+    /// `R(q_bv) = C_bv`, `x_b = C_bv x_v`; propagation uses
+    /// `C_vb = C_bv^T` to rotate raw IMU samples into the vehicle frame.
     pub qcs0: f32,
     pub qcs1: f32,
     pub qcs2: f32,

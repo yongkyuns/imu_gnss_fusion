@@ -1883,9 +1883,9 @@ fn append_full_sample(
     );
     map.push([lon, lat]);
     let q_ne = quat_ecef_to_ned(lat, lon);
-    let q_es = [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64];
-    let q_cs = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
-    let q_ns = quat_mul(q_ne, q_es);
+    let q_ev = [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64];
+    let q_bv = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
+    let q_ns = quat_mul(q_ne, q_ev);
     let q_vehicle = q_ns;
     let (r, p, y) = quat_rpy_deg(
         q_vehicle[0] as f32,
@@ -1910,7 +1910,7 @@ fn append_full_sample(
         yaw_deg: Some(y),
     });
 
-    let (mr, mp, my) = q_bv_to_reference_mount_rpy(q_cs);
+    let (mr, mp, my) = q_bv_to_reference_mount_rpy(q_bv);
     mount_roll.push([t_s, mr]);
     mount_pitch.push([t_s, mp]);
     mount_yaw.push([t_s, my]);

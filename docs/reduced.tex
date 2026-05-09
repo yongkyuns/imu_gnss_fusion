@@ -29,8 +29,9 @@
 
 This document describes the runtime augmented Reduced implemented by
 \path{sensor_fusion/src/reduced/} and the included generated model files. The
-filter estimates local-NED vehicle attitude, velocity, position, IMU biases, and
-the physical vehicle-to-body mount used during inertial propagation.
+filter estimates the NED-frame attitude with respect to the vehicle frame,
+velocity, position, IMU biases, and the physical vehicle-to-body mount used
+during inertial propagation.
 It is the primary runtime inertial/GNSS filter behind \texttt{SensorFusion}.
 
 \section{Frames and Mount Sources}
@@ -47,13 +48,15 @@ It is the primary runtime inertial/GNSS filter behind \texttt{SensorFusion}.
 
 Rotations follow
 \begin{equation}
-  x_a=C_{ab}x_b,\qquad C(q_1\otimes q_2)=C(q_1)C(q_2).
+  x_a=C_{ab}x_b,\qquad R(q_{ab})=C_{ab},\qquad
+  R(q_1\otimes q_2)=R(q_1)R(q_2).
 \end{equation}
 The align filter supplies a physical vehicle-to-body mount. In the Rust field
 layout this mount is stored in \texttt{qcs0..qcs3}, but its mathematical meaning
 is \(q_{bv}\):
 \begin{equation}
-  x_b=C_{bv}(q_{bv})x_v,\qquad x_v=C_{bv}(q_{bv})\T x_b .
+  C_{bv}=R(q_{bv}),\qquad x_b=C_{bv}x_v,\qquad
+  C_{vb}=C_{bv}\T,\qquad x_v=C_{vb}x_b .
 \end{equation}
 The fusion facade exposes a single mount mode. In \texttt{MountMode::Auto},
 Align seeds \(q_{bv}\) and Reduced continues estimating mount internally. In
@@ -115,14 +118,15 @@ Bias-corrected increments are
 \end{equation}
 The current mount rotates them into the vehicle frame:
 \begin{equation}
-  \Delta\theta_v^c=C_{bv}(q_{bv})\T\Delta\theta_b^c,\qquad
-  \Delta v_v^c=C_{bv}(q_{bv})\T\Delta v_b^c .
+  \Delta\theta_v^c=C_{vb}\Delta\theta_b^c,\qquad
+  \Delta v_v^c=C_{vb}\Delta v_b^c,\qquad C_{vb}=C_{bv}\T .
 \end{equation}
 The generated nominal equations implement
 \begin{align}
   q_{nv}^{+} &= \operatorname{normalize}\left(q_{nv}^{-}\otimes
   \dq(\Delta\theta_v^c)\right),\\
-  v_n^{+} &= v_n^{-}+C_{nv}(q_{nv}^{+})\Delta v_v^c+g_n\dt,\\
+  v_n^{+} &= v_n^{-}+C_{nv}\Delta v_v^c+g_n\dt,\qquad
+  C_{nv}=R(q_{nv}^{+}),\\
   p_n^{+} &= p_n^{-}+v_n^{+}\dt,\\
   b_g^{+}&=b_g^{-},\qquad b_a^{+}=b_a^{-},\qquad q_{bv}^{+}=q_{bv}^{-},
 \end{align}

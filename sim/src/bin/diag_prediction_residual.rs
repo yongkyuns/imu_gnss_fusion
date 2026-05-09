@@ -228,15 +228,15 @@ fn run_full(
     let first = generated.truth[0];
     let ref_ecef = lla_to_ecef(first.lat_deg, first.lon_deg, first.height_m);
     let q_ne = quat_ecef_to_ned(first.lat_deg, first.lon_deg);
-    let q_es = quat_mul(quat_conj(q_ne), first.q_bn);
+    let q_ev = quat_mul(quat_conj(q_ne), first.q_bn);
     let vel_ecef = ned_vector_to_ecef(first.lat_deg, first.lon_deg, first.vel_ned_mps);
     let mut full = full::Filter::new(ProcessNoise::default());
     full.init_from_reference_ecef_state(
         [
-            q_es[0] as f32,
-            q_es[1] as f32,
-            q_es[2] as f32,
-            q_es[3] as f32,
+            q_ev[0] as f32,
+            q_ev[1] as f32,
+            q_ev[2] as f32,
+            q_ev[3] as f32,
         ],
         ref_ecef,
         [vel_ecef[0] as f32, vel_ecef[1] as f32, vel_ecef[2] as f32],
