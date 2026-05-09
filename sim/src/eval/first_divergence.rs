@@ -156,6 +156,24 @@ pub struct BehaviorSample {
     pub align_mount_delta_q_deg: Option<f64>,
     pub align_mount_delta_vec_deg: Option<[f64; 3]>,
     pub align_mount_sigma_deg: Option<[f64; 3]>,
+    pub align_horiz_count: u32,
+    pub align_turn_gyro_count: u32,
+    pub align_horiz_delta_q_deg: Option<f64>,
+    pub align_horiz_delta_vec_deg: Option<[f64; 3]>,
+    pub align_turn_gyro_delta_q_deg: Option<f64>,
+    pub align_turn_gyro_delta_vec_deg: Option<[f64; 3]>,
+    pub align_horiz_angle_err_deg: Option<f64>,
+    pub align_horiz_effective_std_deg: Option<f64>,
+    pub align_horiz_speed_q: Option<f64>,
+    pub align_horiz_accel_q: Option<f64>,
+    pub align_horiz_turn_q: Option<f64>,
+    pub align_horiz_straight_q: Option<f64>,
+    pub align_horiz_turn_core_valid: bool,
+    pub align_horiz_straight_core_valid: bool,
+    pub align_horiz_obs_accel_vx: Option<f64>,
+    pub align_horiz_obs_accel_vy: Option<f64>,
+    pub align_horiz_gnss_norm_mps2: Option<f64>,
+    pub align_horiz_imu_norm_mps2: Option<f64>,
     pub reduced_mount_rpy_deg: Option<[f64; 3]>,
     pub reduced_mount_delta_deg: Option<[f64; 3]>,
     pub reduced_mount_delta_q_deg: Option<f64>,
@@ -220,6 +238,26 @@ struct AllocationEvent {
     nis: Option<f64>,
 }
 
+#[derive(Clone, Debug)]
+struct AlignEvent {
+    horiz_delta_q_deg: Option<f64>,
+    horiz_delta_vec_deg: Option<[f64; 3]>,
+    turn_gyro_delta_q_deg: Option<f64>,
+    turn_gyro_delta_vec_deg: Option<[f64; 3]>,
+    horiz_angle_err_deg: Option<f64>,
+    horiz_effective_std_deg: Option<f64>,
+    horiz_speed_q: Option<f64>,
+    horiz_accel_q: Option<f64>,
+    horiz_turn_q: Option<f64>,
+    horiz_straight_q: Option<f64>,
+    horiz_turn_core_valid: bool,
+    horiz_straight_core_valid: bool,
+    horiz_obs_accel_vx: Option<f64>,
+    horiz_obs_accel_vy: Option<f64>,
+    horiz_gnss_norm_mps2: Option<f64>,
+    horiz_imu_norm_mps2: Option<f64>,
+}
+
 pub fn run_generic_replay(dir: &Path, options: Options) -> Result<Report> {
     let replay = load_replay(dir)?;
     let samples = SampleCounts {
@@ -247,9 +285,11 @@ pub fn run_generic_replay(dir: &Path, options: Options) -> Result<Report> {
     let mut reduced_init_t_s = None;
     let mut full_init_t_s = None;
     let mut align_ready_t_s = None;
+    let mut align_events = Vec::new();
     let mut next_snapshot_t_s = f64::NEG_INFINITY;
     let mut prev_behavior = PreviousBehavior::default();
     let mut behavior_allocation_start = 0usize;
+    let mut behavior_align_start = 0usize;
 
     for_each_event(&replay.imu, &replay.gnss, |event| match event {
         ReplayEvent::Imu(_, sample) => {
@@ -282,9 +322,11 @@ pub fn run_generic_replay(dir: &Path, options: Options) -> Result<Report> {
                     &full,
                     &replay,
                     &allocations[behavior_allocation_start..],
+                    &align_events[behavior_align_start..],
                     &mut prev_behavior,
                 ));
                 behavior_allocation_start = allocations.len();
+                behavior_align_start = align_events.len();
                 next_snapshot_t_s = sample.t_s + options.sample_period_s.max(1.0e-3);
             }
         }
@@ -294,6 +336,7 @@ pub fn run_generic_replay(dir: &Path, options: Options) -> Result<Report> {
             }
             let reduced_update = reduced.process_gnss(fusion_gnss_sample(*sample));
             let full_update = full.process_gnss(fusion_gnss_sample(*sample));
+            collect_align_event(&reduced, &mut align_events);
             if reduced_update.mount_ready_changed && reduced_update.mount_ready {
                 align_ready_t_s.get_or_insert(sample.t_s);
             }
@@ -394,6 +437,42 @@ fn collect_reduced_allocations(
         });
     }
     *prev = diag;
+}
+
+fn collect_align_event(fusion: &SensorFusion, out: &mut Vec<AlignEvent>) {
+    let Some(debug) = fusion.align_debug() else {
+        return;
+    };
+    let q_start = Some(as_q64(debug.trace.q_start));
+    let after_gravity = debug.trace.after_gravity.map(as_q64);
+    let after_horiz = debug.trace.after_horiz_accel.map(as_q64);
+    let after_turn = debug.trace.after_turn_gyro.map(as_q64);
+    let horiz_prev = after_gravity.or(q_start);
+    let turn_prev = after_horiz.or(after_gravity).or(q_start);
+    out.push(AlignEvent {
+        horiz_delta_q_deg: delta_quat_angle_deg(after_horiz, horiz_prev),
+        horiz_delta_vec_deg: delta_quat_vec_deg(after_horiz, horiz_prev),
+        turn_gyro_delta_q_deg: delta_quat_angle_deg(after_turn, turn_prev),
+        turn_gyro_delta_vec_deg: delta_quat_vec_deg(after_turn, turn_prev),
+        horiz_angle_err_deg: debug
+            .trace
+            .horiz_angle_err_rad
+            .map(|v| v.to_degrees() as f64),
+        horiz_effective_std_deg: debug
+            .trace
+            .horiz_effective_std_rad
+            .map(|v| v.to_degrees() as f64),
+        horiz_speed_q: debug.trace.horiz_speed_q.map(f64::from),
+        horiz_accel_q: debug.trace.horiz_accel_q.map(f64::from),
+        horiz_turn_q: debug.trace.horiz_turn_q.map(f64::from),
+        horiz_straight_q: debug.trace.horiz_straight_q.map(f64::from),
+        horiz_turn_core_valid: debug.trace.horiz_turn_core_valid,
+        horiz_straight_core_valid: debug.trace.horiz_straight_core_valid,
+        horiz_obs_accel_vx: debug.trace.horiz_obs_accel_vx.map(f64::from),
+        horiz_obs_accel_vy: debug.trace.horiz_obs_accel_vy.map(f64::from),
+        horiz_gnss_norm_mps2: debug.trace.horiz_gnss_norm_mps2.map(f64::from),
+        horiz_imu_norm_mps2: debug.trace.horiz_imu_norm_mps2.map(f64::from),
+    });
 }
 
 fn collect_full_allocations(t_s: f64, fusion: &SensorFusion, out: &mut Vec<AllocationEvent>) {
@@ -531,6 +610,7 @@ fn collect_behavior_sample(
     full: &SensorFusion,
     replay: &Replay,
     interval_events: &[AllocationEvent],
+    interval_align_events: &[AlignEvent],
     prev: &mut PreviousBehavior,
 ) -> BehaviorSample {
     let reference_mount_rpy = nearest_rpy(&replay.reference_mount, t_s);
@@ -625,6 +705,7 @@ fn collect_behavior_sample(
     let imu_accel_norm_err_mps2 = (norm3(imu.accel_mps2) - 9.80665).abs();
     let interval_s = prev.t_s.map_or(0.0, |prev_t| (t_s - prev_t).max(0.0));
     let interval_summary = BehaviorAllocationSummary::from_events(interval_events);
+    let align_summary = AlignBehaviorSummary::from_events(interval_align_events);
     let motion_regime = classify_motion(
         gnss_speed_mps,
         gnss_course_rate_dps,
@@ -657,6 +738,24 @@ fn collect_behavior_sample(
         align_mount_delta_q_deg: delta_quat_angle_deg(align_mount_q, prev.align_mount_q_bv),
         align_mount_delta_vec_deg: delta_quat_vec_deg(align_mount_q, prev.align_mount_q_bv),
         align_mount_sigma_deg: align_mount_sigma,
+        align_horiz_count: align_summary.horiz_count,
+        align_turn_gyro_count: align_summary.turn_gyro_count,
+        align_horiz_delta_q_deg: align_summary.horiz_delta_q_deg(),
+        align_horiz_delta_vec_deg: align_summary.horiz_delta_vec_deg(),
+        align_turn_gyro_delta_q_deg: align_summary.turn_gyro_delta_q_deg(),
+        align_turn_gyro_delta_vec_deg: align_summary.turn_gyro_delta_vec_deg(),
+        align_horiz_angle_err_deg: align_summary.mean_horiz_angle_err_deg(),
+        align_horiz_effective_std_deg: align_summary.mean_horiz_effective_std_deg(),
+        align_horiz_speed_q: align_summary.mean_horiz_speed_q(),
+        align_horiz_accel_q: align_summary.mean_horiz_accel_q(),
+        align_horiz_turn_q: align_summary.mean_horiz_turn_q(),
+        align_horiz_straight_q: align_summary.mean_horiz_straight_q(),
+        align_horiz_turn_core_valid: align_summary.turn_core_valid_count > 0,
+        align_horiz_straight_core_valid: align_summary.straight_core_valid_count > 0,
+        align_horiz_obs_accel_vx: align_summary.mean_horiz_obs_accel_vx(),
+        align_horiz_obs_accel_vy: align_summary.mean_horiz_obs_accel_vy(),
+        align_horiz_gnss_norm_mps2: align_summary.mean_horiz_gnss_norm_mps2(),
+        align_horiz_imu_norm_mps2: align_summary.mean_horiz_imu_norm_mps2(),
         reduced_mount_rpy_deg: reduced_mount_rpy,
         reduced_mount_delta_deg: delta_rpy(reduced_mount_rpy, prev.reduced_mount_rpy_deg),
         reduced_mount_delta_q_deg: delta_quat_angle_deg(reduced_mount_q, prev.reduced_mount_q_bv),
@@ -698,6 +797,142 @@ fn collect_behavior_sample(
     prev.full_mount_rpy_deg = full_mount_rpy;
     prev.full_mount_q_bv = full_mount_q;
     sample
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct OptionalStats {
+    count: u32,
+    sum: f64,
+}
+
+impl OptionalStats {
+    fn push(&mut self, value: Option<f64>) {
+        if let Some(value) = value {
+            self.count += 1;
+            self.sum += value;
+        }
+    }
+
+    fn mean(self) -> Option<f64> {
+        (self.count > 0).then_some(self.sum / self.count as f64)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct AlignBehaviorSummary {
+    horiz_count: u32,
+    turn_gyro_count: u32,
+    horiz_delta_vec_deg: [f64; 3],
+    horiz_delta_q_deg: f64,
+    turn_gyro_delta_vec_deg: [f64; 3],
+    turn_gyro_delta_q_deg: f64,
+    horiz_angle_err_deg: OptionalStats,
+    horiz_effective_std_deg: OptionalStats,
+    horiz_speed_q: OptionalStats,
+    horiz_accel_q: OptionalStats,
+    horiz_turn_q: OptionalStats,
+    horiz_straight_q: OptionalStats,
+    turn_core_valid_count: u32,
+    straight_core_valid_count: u32,
+    horiz_obs_accel_vx: OptionalStats,
+    horiz_obs_accel_vy: OptionalStats,
+    horiz_gnss_norm_mps2: OptionalStats,
+    horiz_imu_norm_mps2: OptionalStats,
+}
+
+impl AlignBehaviorSummary {
+    fn from_events(events: &[AlignEvent]) -> Self {
+        let mut summary = Self::default();
+        for event in events {
+            if let Some(delta) = event.horiz_delta_q_deg {
+                summary.horiz_count += 1;
+                summary.horiz_delta_q_deg += delta;
+            }
+            if let Some(delta) = event.horiz_delta_vec_deg {
+                add3(&mut summary.horiz_delta_vec_deg, delta);
+            }
+            if let Some(delta) = event.turn_gyro_delta_q_deg {
+                summary.turn_gyro_count += 1;
+                summary.turn_gyro_delta_q_deg += delta;
+            }
+            if let Some(delta) = event.turn_gyro_delta_vec_deg {
+                add3(&mut summary.turn_gyro_delta_vec_deg, delta);
+            }
+            summary.horiz_angle_err_deg.push(event.horiz_angle_err_deg);
+            summary
+                .horiz_effective_std_deg
+                .push(event.horiz_effective_std_deg);
+            summary.horiz_speed_q.push(event.horiz_speed_q);
+            summary.horiz_accel_q.push(event.horiz_accel_q);
+            summary.horiz_turn_q.push(event.horiz_turn_q);
+            summary.horiz_straight_q.push(event.horiz_straight_q);
+            summary.horiz_obs_accel_vx.push(event.horiz_obs_accel_vx);
+            summary.horiz_obs_accel_vy.push(event.horiz_obs_accel_vy);
+            summary
+                .horiz_gnss_norm_mps2
+                .push(event.horiz_gnss_norm_mps2);
+            summary.horiz_imu_norm_mps2.push(event.horiz_imu_norm_mps2);
+            summary.turn_core_valid_count += u32::from(event.horiz_turn_core_valid);
+            summary.straight_core_valid_count += u32::from(event.horiz_straight_core_valid);
+        }
+        summary
+    }
+
+    fn horiz_delta_q_deg(&self) -> Option<f64> {
+        (self.horiz_count > 0).then_some(self.horiz_delta_q_deg)
+    }
+
+    fn horiz_delta_vec_deg(&self) -> Option<[f64; 3]> {
+        (self.horiz_count > 0).then_some(self.horiz_delta_vec_deg)
+    }
+
+    fn turn_gyro_delta_q_deg(&self) -> Option<f64> {
+        (self.turn_gyro_count > 0).then_some(self.turn_gyro_delta_q_deg)
+    }
+
+    fn turn_gyro_delta_vec_deg(&self) -> Option<[f64; 3]> {
+        (self.turn_gyro_count > 0).then_some(self.turn_gyro_delta_vec_deg)
+    }
+
+    fn mean_horiz_angle_err_deg(&self) -> Option<f64> {
+        self.horiz_angle_err_deg.mean()
+    }
+
+    fn mean_horiz_effective_std_deg(&self) -> Option<f64> {
+        self.horiz_effective_std_deg.mean()
+    }
+
+    fn mean_horiz_speed_q(&self) -> Option<f64> {
+        self.horiz_speed_q.mean()
+    }
+
+    fn mean_horiz_accel_q(&self) -> Option<f64> {
+        self.horiz_accel_q.mean()
+    }
+
+    fn mean_horiz_turn_q(&self) -> Option<f64> {
+        self.horiz_turn_q.mean()
+    }
+
+    fn mean_horiz_straight_q(&self) -> Option<f64> {
+        self.horiz_straight_q.mean()
+    }
+
+    fn mean_horiz_obs_accel_vx(&self) -> Option<f64> {
+        self.horiz_obs_accel_vx.mean()
+    }
+
+    fn mean_horiz_obs_accel_vy(&self) -> Option<f64> {
+        self.horiz_obs_accel_vy.mean()
+    }
+
+    fn mean_horiz_gnss_norm_mps2(&self) -> Option<f64> {
+        self.horiz_gnss_norm_mps2.mean()
+    }
+
+    fn mean_horiz_imu_norm_mps2(&self) -> Option<f64> {
+        self.horiz_imu_norm_mps2.mean()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -1278,6 +1513,61 @@ mod tests {
         assert_eq!(summary.reduced_gnss_mount_dx_deg, [1.0, 2.0, 3.0]);
         assert_eq!(summary.reduced_nhc_mount_dx_deg, [-0.5, 0.0, 0.25]);
         assert_eq!(summary.full_nhc_mount_dx_deg, [0.0, -1.0, 0.5]);
+    }
+
+    #[test]
+    fn align_behavior_summary_keeps_stage_corrections_separate() {
+        let events = vec![
+            AlignEvent {
+                horiz_delta_q_deg: Some(1.0),
+                horiz_delta_vec_deg: Some([1.0, 0.0, -0.5]),
+                turn_gyro_delta_q_deg: None,
+                turn_gyro_delta_vec_deg: None,
+                horiz_angle_err_deg: Some(4.0),
+                horiz_effective_std_deg: Some(2.0),
+                horiz_speed_q: Some(0.5),
+                horiz_accel_q: Some(0.25),
+                horiz_turn_q: Some(0.75),
+                horiz_straight_q: None,
+                horiz_turn_core_valid: true,
+                horiz_straight_core_valid: false,
+                horiz_obs_accel_vx: Some(1.0),
+                horiz_obs_accel_vy: Some(2.0),
+                horiz_gnss_norm_mps2: Some(3.0),
+                horiz_imu_norm_mps2: Some(4.0),
+            },
+            AlignEvent {
+                horiz_delta_q_deg: None,
+                horiz_delta_vec_deg: None,
+                turn_gyro_delta_q_deg: Some(2.0),
+                turn_gyro_delta_vec_deg: Some([0.25, -0.5, 0.0]),
+                horiz_angle_err_deg: None,
+                horiz_effective_std_deg: None,
+                horiz_speed_q: None,
+                horiz_accel_q: None,
+                horiz_turn_q: None,
+                horiz_straight_q: Some(0.4),
+                horiz_turn_core_valid: false,
+                horiz_straight_core_valid: true,
+                horiz_obs_accel_vx: None,
+                horiz_obs_accel_vy: None,
+                horiz_gnss_norm_mps2: None,
+                horiz_imu_norm_mps2: None,
+            },
+        ];
+        let summary = AlignBehaviorSummary::from_events(&events);
+        assert_eq!(summary.horiz_count, 1);
+        assert_eq!(summary.turn_gyro_count, 1);
+        assert_eq!(summary.horiz_delta_q_deg(), Some(1.0));
+        assert_eq!(summary.horiz_delta_vec_deg(), Some([1.0, 0.0, -0.5]));
+        assert_eq!(summary.turn_gyro_delta_q_deg(), Some(2.0));
+        assert_eq!(summary.turn_gyro_delta_vec_deg(), Some([0.25, -0.5, 0.0]));
+        assert_eq!(summary.mean_horiz_angle_err_deg(), Some(4.0));
+        assert_eq!(summary.mean_horiz_effective_std_deg(), Some(2.0));
+        assert_eq!(summary.mean_horiz_turn_q(), Some(0.75));
+        assert_eq!(summary.mean_horiz_straight_q(), Some(0.4));
+        assert_eq!(summary.turn_core_valid_count, 1);
+        assert_eq!(summary.straight_core_valid_count, 1);
     }
 
     #[test]

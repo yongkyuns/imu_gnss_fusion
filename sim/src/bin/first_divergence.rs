@@ -175,6 +175,8 @@ fn write_behavior_csv(path: &PathBuf, samples: &[BehaviorSample]) -> Result<()> 
         "t_s,interval_s,motion_regime,gnss_speed_mps,gnss_course_rate_dps,gnss_speed_rate_mps2,imu_gyro_norm_dps,imu_gyro_z_dps,imu_accel_norm_err_mps2,\
 ref_mount_roll_deg,ref_mount_pitch_deg,ref_mount_yaw_deg,ref_mount_delta_roll_deg,ref_mount_delta_pitch_deg,ref_mount_delta_yaw_deg,ref_mount_delta_q_deg,ref_mount_delta_qx_deg,ref_mount_delta_qy_deg,ref_mount_delta_qz_deg,\
 align_mount_roll_deg,align_mount_pitch_deg,align_mount_yaw_deg,align_mount_delta_roll_deg,align_mount_delta_pitch_deg,align_mount_delta_yaw_deg,align_mount_delta_q_deg,align_mount_delta_qx_deg,align_mount_delta_qy_deg,align_mount_delta_qz_deg,align_mount_sigma_roll_deg,align_mount_sigma_pitch_deg,align_mount_sigma_yaw_deg,\
+align_horiz_count,align_turn_gyro_count,align_horiz_delta_q_deg,align_horiz_delta_qx_deg,align_horiz_delta_qy_deg,align_horiz_delta_qz_deg,align_turn_gyro_delta_q_deg,align_turn_gyro_delta_qx_deg,align_turn_gyro_delta_qy_deg,align_turn_gyro_delta_qz_deg,\
+align_horiz_angle_err_deg,align_horiz_effective_std_deg,align_horiz_speed_q,align_horiz_accel_q,align_horiz_turn_q,align_horiz_straight_q,align_horiz_turn_core_valid,align_horiz_straight_core_valid,align_horiz_obs_accel_vx,align_horiz_obs_accel_vy,align_horiz_gnss_norm_mps2,align_horiz_imu_norm_mps2,\
 reduced_mount_roll_deg,reduced_mount_pitch_deg,reduced_mount_yaw_deg,reduced_mount_delta_roll_deg,reduced_mount_delta_pitch_deg,reduced_mount_delta_yaw_deg,reduced_mount_delta_q_deg,reduced_mount_delta_qx_deg,reduced_mount_delta_qy_deg,reduced_mount_delta_qz_deg,reduced_mount_error_roll_deg,reduced_mount_error_pitch_deg,reduced_mount_error_yaw_deg,reduced_mount_sigma_roll_deg,reduced_mount_sigma_pitch_deg,reduced_mount_sigma_yaw_deg,reduced_attitude_qerr_deg,\
 full_mount_roll_deg,full_mount_pitch_deg,full_mount_yaw_deg,full_mount_delta_roll_deg,full_mount_delta_pitch_deg,full_mount_delta_yaw_deg,full_mount_delta_q_deg,full_mount_delta_qx_deg,full_mount_delta_qy_deg,full_mount_delta_qz_deg,full_mount_error_roll_deg,full_mount_error_pitch_deg,full_mount_error_yaw_deg,full_mount_sigma_roll_deg,full_mount_sigma_pitch_deg,full_mount_sigma_yaw_deg,full_attitude_qerr_deg,\
 reduced_gnss_residual_abs,reduced_nhc_y_residual_abs,reduced_nhc_z_residual_abs,full_gnss_residual_abs,full_nhc_y_residual_abs,full_nhc_z_residual_abs,\
@@ -208,6 +210,24 @@ fn push_behavior_row(out: &mut String, sample: &BehaviorSample) {
     csv_opt(out, sample.align_mount_delta_q_deg);
     csv_vec3(out, sample.align_mount_delta_vec_deg);
     csv_vec3(out, sample.align_mount_sigma_deg);
+    csv_val(out, sample.align_horiz_count as f64);
+    csv_val(out, sample.align_turn_gyro_count as f64);
+    csv_opt(out, sample.align_horiz_delta_q_deg);
+    csv_vec3(out, sample.align_horiz_delta_vec_deg);
+    csv_opt(out, sample.align_turn_gyro_delta_q_deg);
+    csv_vec3(out, sample.align_turn_gyro_delta_vec_deg);
+    csv_opt(out, sample.align_horiz_angle_err_deg);
+    csv_opt(out, sample.align_horiz_effective_std_deg);
+    csv_opt(out, sample.align_horiz_speed_q);
+    csv_opt(out, sample.align_horiz_accel_q);
+    csv_opt(out, sample.align_horiz_turn_q);
+    csv_opt(out, sample.align_horiz_straight_q);
+    csv_bool(out, sample.align_horiz_turn_core_valid);
+    csv_bool(out, sample.align_horiz_straight_core_valid);
+    csv_opt(out, sample.align_horiz_obs_accel_vx);
+    csv_opt(out, sample.align_horiz_obs_accel_vy);
+    csv_opt(out, sample.align_horiz_gnss_norm_mps2);
+    csv_opt(out, sample.align_horiz_imu_norm_mps2);
     csv_vec3(out, sample.reduced_mount_rpy_deg);
     csv_vec3(out, sample.reduced_mount_delta_deg);
     csv_opt(out, sample.reduced_mount_delta_q_deg);
@@ -254,6 +274,11 @@ fn csv_opt(out: &mut String, value: Option<f64>) {
         Some(v) => csv_val(out, v),
         None => out.push(','),
     }
+}
+
+fn csv_bool(out: &mut String, value: bool) {
+    out.push_str(if value { "true" } else { "false" });
+    out.push(',');
 }
 
 fn csv_val(out: &mut String, value: f64) {
