@@ -116,9 +116,11 @@ The optional behavior CSV is a time-aligned stream for reverse-engineering
 reference/filter behavior. Each row includes motion cues, reference/align/
 Reduced/Full mount angles and deltas, Reduced/Full mount errors and covariance
 sigmas, attitude quaternion errors, and interval-summed GNSS/NHC residuals plus
-mount correction allocation. Reference covariance is not present in the current
-generic replay CSV schema; add it to the data exporter before expecting that
-field to be populated.
+mount correction allocation. Use the `*_mount_delta_q_*` columns for physical
+mount-change analysis; Euler/RPY deltas are retained for readability but can
+jump near equivalent angle representations. Reference covariance is not present
+in the current generic replay CSV schema; add it to the data exporter before
+expecting that field to be populated.
 
 ## Fixtures And Local Data
 

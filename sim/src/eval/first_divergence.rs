@@ -10,7 +10,9 @@ use crate::datasets::generic_replay::{
     fusion_gnss_sample, fusion_imu_sample, load_gnss_samples, load_imu_samples,
     load_reference_attitude_samples, load_reference_mount_samples, load_reference_position_samples,
 };
-use crate::eval::gnss_ins::{as_q64, quat_angle_deg, quat_from_rpy_alg_deg, quat_mul, wrap_deg180};
+use crate::eval::gnss_ins::{
+    as_q64, quat_angle_deg, quat_conj, quat_from_rpy_alg_deg, quat_mul, wrap_deg180,
+};
 use crate::eval::replay::{ReplayEvent, for_each_event};
 use crate::visualizer::pipeline::reference::{
     q_bv_to_reference_mount_rpy, reference_mount_rpy_to_q_bv,
@@ -147,16 +149,24 @@ pub struct BehaviorSample {
     pub imu_accel_norm_err_mps2: f64,
     pub reference_mount_rpy_deg: Option<[f64; 3]>,
     pub reference_mount_delta_deg: Option<[f64; 3]>,
+    pub reference_mount_delta_q_deg: Option<f64>,
+    pub reference_mount_delta_vec_deg: Option<[f64; 3]>,
     pub align_mount_rpy_deg: Option<[f64; 3]>,
     pub align_mount_delta_deg: Option<[f64; 3]>,
+    pub align_mount_delta_q_deg: Option<f64>,
+    pub align_mount_delta_vec_deg: Option<[f64; 3]>,
     pub align_mount_sigma_deg: Option<[f64; 3]>,
     pub reduced_mount_rpy_deg: Option<[f64; 3]>,
     pub reduced_mount_delta_deg: Option<[f64; 3]>,
+    pub reduced_mount_delta_q_deg: Option<f64>,
+    pub reduced_mount_delta_vec_deg: Option<[f64; 3]>,
     pub reduced_mount_error_deg: Option<[f64; 3]>,
     pub reduced_mount_sigma_deg: Option<[f64; 3]>,
     pub reduced_attitude_qerr_deg: Option<f64>,
     pub full_mount_rpy_deg: Option<[f64; 3]>,
     pub full_mount_delta_deg: Option<[f64; 3]>,
+    pub full_mount_delta_q_deg: Option<f64>,
+    pub full_mount_delta_vec_deg: Option<[f64; 3]>,
     pub full_mount_error_deg: Option<[f64; 3]>,
     pub full_mount_sigma_deg: Option<[f64; 3]>,
     pub full_attitude_qerr_deg: Option<f64>,
@@ -179,9 +189,13 @@ struct PreviousBehavior {
     gnss_speed_mps: Option<f64>,
     gnss_course_rad: Option<f64>,
     reference_mount_rpy_deg: Option<[f64; 3]>,
+    reference_mount_q_bv: Option<[f64; 4]>,
     align_mount_rpy_deg: Option<[f64; 3]>,
+    align_mount_q_bv: Option<[f64; 4]>,
     reduced_mount_rpy_deg: Option<[f64; 3]>,
+    reduced_mount_q_bv: Option<[f64; 4]>,
     full_mount_rpy_deg: Option<[f64; 3]>,
+    full_mount_q_bv: Option<[f64; 4]>,
 }
 
 #[derive(Clone, Debug)]
@@ -520,10 +534,12 @@ fn collect_behavior_sample(
     prev: &mut PreviousBehavior,
 ) -> BehaviorSample {
     let reference_mount_rpy = nearest_rpy(&replay.reference_mount, t_s);
+    let reference_mount_q = reference_mount_rpy.map(reference_mount_rpy_to_q_bv);
     let align_mount_rpy = reduced.align().map(|align| {
         let (r, p, y) = q_bv_to_reference_mount_rpy(as_q64(align.q_bv));
         [r, p, y]
     });
+    let align_mount_q = reduced.align().map(|align| as_q64(align.q_bv));
     let align_mount_sigma = reduced.align().map(|align| {
         [
             (align.P[0][0].max(0.0) as f64).sqrt().to_degrees(),
@@ -531,13 +547,16 @@ fn collect_behavior_sample(
             (align.P[2][2].max(0.0) as f64).sqrt().to_degrees(),
         ]
     });
-    let reduced_mount_rpy = reduced.reduced().map(|state| {
-        let (r, p, y) = q_bv_to_reference_mount_rpy(as_q64([
+    let reduced_mount_q = reduced.reduced().map(|state| {
+        as_q64([
             state.nominal.qcs0,
             state.nominal.qcs1,
             state.nominal.qcs2,
             state.nominal.qcs3,
-        ]));
+        ])
+    });
+    let reduced_mount_rpy = reduced_mount_q.map(|q| {
+        let (r, p, y) = q_bv_to_reference_mount_rpy(q);
         [r, p, y]
     });
     let reduced_mount_sigma = reduced.reduced().map(|state| {
@@ -560,13 +579,16 @@ fn collect_behavior_sample(
             )
         })
     });
-    let full_mount_rpy = full.full().map(|state| {
-        let (r, p, y) = q_bv_to_reference_mount_rpy(as_q64([
+    let full_mount_q = full.full().map(|state| {
+        as_q64([
             state.nominal.qcs0,
             state.nominal.qcs1,
             state.nominal.qcs2,
             state.nominal.qcs3,
-        ]));
+        ])
+    });
+    let full_mount_rpy = full_mount_q.map(|q| {
+        let (r, p, y) = q_bv_to_reference_mount_rpy(q);
         [r, p, y]
     });
     let full_mount_sigma = full.full().map(|state| {
@@ -622,16 +644,30 @@ fn collect_behavior_sample(
         imu_accel_norm_err_mps2,
         reference_mount_rpy_deg: reference_mount_rpy,
         reference_mount_delta_deg: delta_rpy(reference_mount_rpy, prev.reference_mount_rpy_deg),
+        reference_mount_delta_q_deg: delta_quat_angle_deg(
+            reference_mount_q,
+            prev.reference_mount_q_bv,
+        ),
+        reference_mount_delta_vec_deg: delta_quat_vec_deg(
+            reference_mount_q,
+            prev.reference_mount_q_bv,
+        ),
         align_mount_rpy_deg: align_mount_rpy,
         align_mount_delta_deg: delta_rpy(align_mount_rpy, prev.align_mount_rpy_deg),
+        align_mount_delta_q_deg: delta_quat_angle_deg(align_mount_q, prev.align_mount_q_bv),
+        align_mount_delta_vec_deg: delta_quat_vec_deg(align_mount_q, prev.align_mount_q_bv),
         align_mount_sigma_deg: align_mount_sigma,
         reduced_mount_rpy_deg: reduced_mount_rpy,
         reduced_mount_delta_deg: delta_rpy(reduced_mount_rpy, prev.reduced_mount_rpy_deg),
+        reduced_mount_delta_q_deg: delta_quat_angle_deg(reduced_mount_q, prev.reduced_mount_q_bv),
+        reduced_mount_delta_vec_deg: delta_quat_vec_deg(reduced_mount_q, prev.reduced_mount_q_bv),
         reduced_mount_error_deg: error_rpy(reduced_mount_rpy, reference_mount_rpy),
         reduced_mount_sigma_deg: reduced_mount_sigma,
         reduced_attitude_qerr_deg: reduced_attitude_qerr,
         full_mount_rpy_deg: full_mount_rpy,
         full_mount_delta_deg: delta_rpy(full_mount_rpy, prev.full_mount_rpy_deg),
+        full_mount_delta_q_deg: delta_quat_angle_deg(full_mount_q, prev.full_mount_q_bv),
+        full_mount_delta_vec_deg: delta_quat_vec_deg(full_mount_q, prev.full_mount_q_bv),
         full_mount_error_deg: error_rpy(full_mount_rpy, reference_mount_rpy),
         full_mount_sigma_deg: full_mount_sigma,
         full_attitude_qerr_deg: full_attitude_qerr,
@@ -654,9 +690,13 @@ fn collect_behavior_sample(
         prev.gnss_course_rad = gnss_course_rad;
     }
     prev.reference_mount_rpy_deg = reference_mount_rpy;
+    prev.reference_mount_q_bv = reference_mount_q;
     prev.align_mount_rpy_deg = align_mount_rpy;
+    prev.align_mount_q_bv = align_mount_q;
     prev.reduced_mount_rpy_deg = reduced_mount_rpy;
+    prev.reduced_mount_q_bv = reduced_mount_q;
     prev.full_mount_rpy_deg = full_mount_rpy;
+    prev.full_mount_q_bv = full_mount_q;
     sample
 }
 
@@ -960,6 +1000,29 @@ fn delta_rpy(current: Option<[f64; 3]>, previous: Option<[f64; 3]>) -> Option<[f
     error_rpy(current, previous)
 }
 
+fn delta_quat_angle_deg(current: Option<[f64; 4]>, previous: Option<[f64; 4]>) -> Option<f64> {
+    Some(quat_angle_deg(current?, previous?))
+}
+
+fn delta_quat_vec_deg(current: Option<[f64; 4]>, previous: Option<[f64; 4]>) -> Option<[f64; 3]> {
+    let current = current?;
+    let previous = previous?;
+    let mut dq = quat_mul(current, quat_conj(previous));
+    if dq[0] < 0.0 {
+        dq = [-dq[0], -dq[1], -dq[2], -dq[3]];
+    }
+    let v_norm = (dq[1] * dq[1] + dq[2] * dq[2] + dq[3] * dq[3]).sqrt();
+    if v_norm <= 1.0e-12 {
+        return Some([0.0, 0.0, 0.0]);
+    }
+    let angle = 2.0 * v_norm.atan2(dq[0]).to_degrees();
+    Some([
+        angle * dq[1] / v_norm,
+        angle * dq[2] / v_norm,
+        angle * dq[3] / v_norm,
+    ])
+}
+
 fn error_rpy(current: Option<[f64; 3]>, reference: Option<[f64; 3]>) -> Option<[f64; 3]> {
     let current = current?;
     let reference = reference?;
@@ -1215,5 +1278,13 @@ mod tests {
         assert_eq!(summary.reduced_gnss_mount_dx_deg, [1.0, 2.0, 3.0]);
         assert_eq!(summary.reduced_nhc_mount_dx_deg, [-0.5, 0.0, 0.25]);
         assert_eq!(summary.full_nhc_mount_dx_deg, [0.0, -1.0, 0.5]);
+    }
+
+    #[test]
+    fn quaternion_delta_uses_physical_rotation_not_euler_wrap() {
+        let prev = reference_mount_rpy_to_q_bv([179.0, 0.0, 0.0]);
+        let curr = reference_mount_rpy_to_q_bv([-179.0, 0.0, 0.0]);
+        let delta = delta_quat_angle_deg(Some(curr), Some(prev)).unwrap();
+        assert!(delta < 2.1, "delta={delta}");
     }
 }

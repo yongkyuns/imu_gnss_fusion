@@ -173,10 +173,10 @@ fn write_behavior_csv(path: &PathBuf, samples: &[BehaviorSample]) -> Result<()> 
     let mut out = String::new();
     out.push_str(
         "t_s,interval_s,motion_regime,gnss_speed_mps,gnss_course_rate_dps,gnss_speed_rate_mps2,imu_gyro_norm_dps,imu_gyro_z_dps,imu_accel_norm_err_mps2,\
-ref_mount_roll_deg,ref_mount_pitch_deg,ref_mount_yaw_deg,ref_mount_delta_roll_deg,ref_mount_delta_pitch_deg,ref_mount_delta_yaw_deg,\
-align_mount_roll_deg,align_mount_pitch_deg,align_mount_yaw_deg,align_mount_delta_roll_deg,align_mount_delta_pitch_deg,align_mount_delta_yaw_deg,align_mount_sigma_roll_deg,align_mount_sigma_pitch_deg,align_mount_sigma_yaw_deg,\
-reduced_mount_roll_deg,reduced_mount_pitch_deg,reduced_mount_yaw_deg,reduced_mount_delta_roll_deg,reduced_mount_delta_pitch_deg,reduced_mount_delta_yaw_deg,reduced_mount_error_roll_deg,reduced_mount_error_pitch_deg,reduced_mount_error_yaw_deg,reduced_mount_sigma_roll_deg,reduced_mount_sigma_pitch_deg,reduced_mount_sigma_yaw_deg,reduced_attitude_qerr_deg,\
-full_mount_roll_deg,full_mount_pitch_deg,full_mount_yaw_deg,full_mount_delta_roll_deg,full_mount_delta_pitch_deg,full_mount_delta_yaw_deg,full_mount_error_roll_deg,full_mount_error_pitch_deg,full_mount_error_yaw_deg,full_mount_sigma_roll_deg,full_mount_sigma_pitch_deg,full_mount_sigma_yaw_deg,full_attitude_qerr_deg,\
+ref_mount_roll_deg,ref_mount_pitch_deg,ref_mount_yaw_deg,ref_mount_delta_roll_deg,ref_mount_delta_pitch_deg,ref_mount_delta_yaw_deg,ref_mount_delta_q_deg,ref_mount_delta_qx_deg,ref_mount_delta_qy_deg,ref_mount_delta_qz_deg,\
+align_mount_roll_deg,align_mount_pitch_deg,align_mount_yaw_deg,align_mount_delta_roll_deg,align_mount_delta_pitch_deg,align_mount_delta_yaw_deg,align_mount_delta_q_deg,align_mount_delta_qx_deg,align_mount_delta_qy_deg,align_mount_delta_qz_deg,align_mount_sigma_roll_deg,align_mount_sigma_pitch_deg,align_mount_sigma_yaw_deg,\
+reduced_mount_roll_deg,reduced_mount_pitch_deg,reduced_mount_yaw_deg,reduced_mount_delta_roll_deg,reduced_mount_delta_pitch_deg,reduced_mount_delta_yaw_deg,reduced_mount_delta_q_deg,reduced_mount_delta_qx_deg,reduced_mount_delta_qy_deg,reduced_mount_delta_qz_deg,reduced_mount_error_roll_deg,reduced_mount_error_pitch_deg,reduced_mount_error_yaw_deg,reduced_mount_sigma_roll_deg,reduced_mount_sigma_pitch_deg,reduced_mount_sigma_yaw_deg,reduced_attitude_qerr_deg,\
+full_mount_roll_deg,full_mount_pitch_deg,full_mount_yaw_deg,full_mount_delta_roll_deg,full_mount_delta_pitch_deg,full_mount_delta_yaw_deg,full_mount_delta_q_deg,full_mount_delta_qx_deg,full_mount_delta_qy_deg,full_mount_delta_qz_deg,full_mount_error_roll_deg,full_mount_error_pitch_deg,full_mount_error_yaw_deg,full_mount_sigma_roll_deg,full_mount_sigma_pitch_deg,full_mount_sigma_yaw_deg,full_attitude_qerr_deg,\
 reduced_gnss_residual_abs,reduced_nhc_y_residual_abs,reduced_nhc_z_residual_abs,full_gnss_residual_abs,full_nhc_y_residual_abs,full_nhc_z_residual_abs,\
 reduced_gnss_mount_dx_roll_deg,reduced_gnss_mount_dx_pitch_deg,reduced_gnss_mount_dx_yaw_deg,reduced_nhc_mount_dx_roll_deg,reduced_nhc_mount_dx_pitch_deg,reduced_nhc_mount_dx_yaw_deg,\
 full_gnss_mount_dx_roll_deg,full_gnss_mount_dx_pitch_deg,full_gnss_mount_dx_yaw_deg,full_nhc_mount_dx_roll_deg,full_nhc_mount_dx_pitch_deg,full_nhc_mount_dx_yaw_deg\n",
@@ -201,16 +201,24 @@ fn push_behavior_row(out: &mut String, sample: &BehaviorSample) {
     csv_val(out, sample.imu_accel_norm_err_mps2);
     csv_vec3(out, sample.reference_mount_rpy_deg);
     csv_vec3(out, sample.reference_mount_delta_deg);
+    csv_opt(out, sample.reference_mount_delta_q_deg);
+    csv_vec3(out, sample.reference_mount_delta_vec_deg);
     csv_vec3(out, sample.align_mount_rpy_deg);
     csv_vec3(out, sample.align_mount_delta_deg);
+    csv_opt(out, sample.align_mount_delta_q_deg);
+    csv_vec3(out, sample.align_mount_delta_vec_deg);
     csv_vec3(out, sample.align_mount_sigma_deg);
     csv_vec3(out, sample.reduced_mount_rpy_deg);
     csv_vec3(out, sample.reduced_mount_delta_deg);
+    csv_opt(out, sample.reduced_mount_delta_q_deg);
+    csv_vec3(out, sample.reduced_mount_delta_vec_deg);
     csv_vec3(out, sample.reduced_mount_error_deg);
     csv_vec3(out, sample.reduced_mount_sigma_deg);
     csv_opt(out, sample.reduced_attitude_qerr_deg);
     csv_vec3(out, sample.full_mount_rpy_deg);
     csv_vec3(out, sample.full_mount_delta_deg);
+    csv_opt(out, sample.full_mount_delta_q_deg);
+    csv_vec3(out, sample.full_mount_delta_vec_deg);
     csv_vec3(out, sample.full_mount_error_deg);
     csv_vec3(out, sample.full_mount_sigma_deg);
     csv_opt(out, sample.full_attitude_qerr_deg);
