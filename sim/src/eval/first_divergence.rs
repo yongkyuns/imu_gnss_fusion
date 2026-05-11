@@ -316,13 +316,15 @@ pub fn run_generic_replay(dir: &Path, options: Options) -> Result<Report> {
                     &mut snapshots,
                 );
                 behavior_samples.push(collect_behavior_sample(
-                    sample.t_s,
-                    sample,
-                    &reduced,
-                    &full,
-                    &replay,
-                    &allocations[behavior_allocation_start..],
-                    &align_events[behavior_align_start..],
+                    BehaviorSampleInput {
+                        t_s: sample.t_s,
+                        imu: sample,
+                        reduced: &reduced,
+                        full: &full,
+                        replay: &replay,
+                        interval_events: &allocations[behavior_allocation_start..],
+                        interval_align_events: &align_events[behavior_align_start..],
+                    },
                     &mut prev_behavior,
                 ));
                 behavior_allocation_start = allocations.len();
@@ -403,7 +405,7 @@ fn collect_reduced_allocations(
         return;
     };
     let diag = state.update_diag;
-    for i in 0..UPDATE_DIAG_TYPES {
+    for (i, update) in REDUCED_UPDATE_NAMES.iter().enumerate() {
         let count_delta = diag.type_counts[i].saturating_sub(prev.type_counts[i]);
         if count_delta == 0 {
             continue;
@@ -411,7 +413,7 @@ fn collect_reduced_allocations(
         out.push(AllocationEvent {
             t_s,
             source: "Reduced",
-            update: REDUCED_UPDATE_NAMES[i],
+            update,
             mount_dx_deg: [
                 delta(diag.sum_dx_mount_roll[i], prev.sum_dx_mount_roll[i]).to_degrees() as f64,
                 delta(diag.sum_dx_mount_pitch[i], prev.sum_dx_mount_pitch[i]).to_degrees() as f64,
@@ -603,16 +605,29 @@ fn collect_snapshots(
     }
 }
 
-fn collect_behavior_sample(
+struct BehaviorSampleInput<'a> {
     t_s: f64,
-    imu: &GenericImuSample,
-    reduced: &SensorFusion,
-    full: &SensorFusion,
-    replay: &Replay,
-    interval_events: &[AllocationEvent],
-    interval_align_events: &[AlignEvent],
+    imu: &'a GenericImuSample,
+    reduced: &'a SensorFusion,
+    full: &'a SensorFusion,
+    replay: &'a Replay,
+    interval_events: &'a [AllocationEvent],
+    interval_align_events: &'a [AlignEvent],
+}
+
+fn collect_behavior_sample(
+    input: BehaviorSampleInput<'_>,
     prev: &mut PreviousBehavior,
 ) -> BehaviorSample {
+    let BehaviorSampleInput {
+        t_s,
+        imu,
+        reduced,
+        full,
+        replay,
+        interval_events,
+        interval_align_events,
+    } = input;
     let reference_mount_rpy = nearest_rpy(&replay.reference_mount, t_s);
     let reference_mount_q = reference_mount_rpy.map(reference_mount_rpy_to_q_bv);
     let align_mount_rpy = reduced.align().map(|align| {

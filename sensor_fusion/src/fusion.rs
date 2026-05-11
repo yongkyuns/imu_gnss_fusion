@@ -1255,10 +1255,11 @@ impl SensorFusion {
         );
         let low_dynamic = gyro_ema <= self.cfg.bootstrap.max_gyro_radps
             && accel_ema <= self.cfg.bootstrap.max_accel_norm_err_mps2;
-        let low_speed = self
-            .reduced_initialized
-            .then(|| self.reduced_speed_estimate_mps() <= RUNTIME_ZERO_SPEED_MPS)
-            .unwrap_or(false);
+        let low_speed = if self.reduced_initialized {
+            self.reduced_speed_estimate_mps() <= RUNTIME_ZERO_SPEED_MPS
+        } else {
+            false
+        };
         low_dynamic && low_speed
     }
 
