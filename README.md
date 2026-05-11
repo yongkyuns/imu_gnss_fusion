@@ -129,7 +129,7 @@ reference pages are:
 ![Architecture overview](docs/assets/architecture.png)
 
 The editable source for this diagram is [arch.pen](arch.pen). The exported
-screenshot above is checked in so the architecture stays visible on GitHub
+diagram asset above is checked in so the architecture stays visible on GitHub
 without requiring Pencil.
 
 The main replay path is:
@@ -137,8 +137,8 @@ The main replay path is:
 1. Data enters as hardware-agnostic `imu.csv` and `gnss.csv`, or as a synthetic scenario generated inside `sim`.
 2. `sim::datasets` converts CSV rows into timestamped IMU/GNSS samples.
 3. `sim::eval::replay` merges IMU and GNSS events in a consistent time order.
-4. `sensor_fusion` runs Align plus the Reduced and Full EKF implementations.
-5. `sim::visualizer` displays traces, map data, mount states, diagnostics, and summary statistics.
+4. `sensor_fusion` runs Align plus the configured Reduced or Full EKF.
+5. `sim::visualizer` compares Reduced and Full through separate replay passes and displays traces, map data, mount states, diagnostics, and summary statistics.
 
 The runtime Rust filter code consumes generated matrix/Jacobian snippets under `sensor_fusion/src/reduced/generated/` and `sensor_fusion/src/full/generated/`. The symbolic sources live in Python so model derivation stays reviewable while generated Rust stays fast and dependency-light.
 

@@ -62,7 +62,7 @@
 </text>
 <text class="label" x="72" y="672" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
 <tspan x="72" dy="0">mobile/ios experiment</tspan>
-<tspan x="72" dy="16.200000000000003">future generic replay exporter</tspan>
+<tspan x="72" dy="16.200000000000003">sensor display scaffold</tspan>
 </text>
 <rect x="380" y="140" width="285" height="760" rx="10" fill="#EEF6FF" stroke="#BAD1EE" stroke-width="1"/>
 <text x="398" y="158" fill="#173A63" font-size="19" font-weight="700" text-anchor="start">
@@ -81,8 +81,8 @@
 <tspan x="412" dy="0">synthetic_replay.rs</tspan>
 </text>
 <text class="label" x="412" y="388" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
-<tspan x="412" dy="0">legacy simulator exports</tspan>
-<tspan x="412" dy="16.200000000000003">converted into generic replay rows</tspan>
+<tspan x="412" dy="0">legacy/exported synthetic files</tspan>
+<tspan x="412" dy="16.200000000000003">normalized into replay rows</tspan>
 </text>
 <rect x="398" y="492" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#BAD1EE" stroke-width="1"/>
 <text x="412" y="504" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
@@ -94,7 +94,7 @@
 </text>
 <rect x="398" y="634" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#BAD1EE" stroke-width="1"/>
 <text x="412" y="646" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
-<tspan x="412" dy="0">package_dataset.py</tspan>
+<tspan x="412" dy="0">scripts/package_dataset.py</tspan>
 </text>
 <text class="label" x="412" y="672" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
 <tspan x="412" dy="0">gzip CSVs + manifest</tspan>
@@ -111,7 +111,7 @@
 <text class="label" x="752" y="246" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
 <tspan x="752" dy="0">GenericImuSample</tspan>
 <tspan x="752" dy="16.200000000000003">GenericGnssSample</tspan>
-<tspan x="752" dy="16.200000000000003">reference RPY samples</tspan>
+<tspan x="752" dy="16.200000000000003">optional reference traces</tspan>
 </text>
 <rect x="738" y="350" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#C3D1EF" stroke-width="1"/>
 <text x="752" y="362" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
@@ -119,7 +119,7 @@
 </text>
 <text class="label" x="752" y="388" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
 <tspan x="752" dy="0">time-ordered IMU/GNSS events</tspan>
-<tspan x="752" dy="16.200000000000003">one public sensor_fusion feed</tspan>
+<tspan x="752" dy="16.200000000000003">shared SensorFusion API feed</tspan>
 </text>
 <rect x="738" y="492" width="249" height="126" rx="8" fill="#FFFFFF" stroke="#C3D1EF" stroke-width="1"/>
 <text x="752" y="504" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
@@ -127,7 +127,7 @@
 </text>
 <text class="label" x="752" y="530" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
 <tspan x="752" dy="0">generic + synthetic builders</tspan>
-<tspan x="752" dy="16.200000000000003">PlotData, traces, summaries</tspan>
+<tspan x="752" dy="16.200000000000003">parallel Reduced/Full replays</tspan>
 </text>
 <rect x="738" y="660" width="249" height="126" rx="8" fill="#FFFFFF" stroke="#C3D1EF" stroke-width="1"/>
 <text x="752" y="672" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
@@ -136,7 +136,7 @@
 <text class="label" x="752" y="698" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
 <tspan x="752" dy="0">visualizer</tspan>
 <tspan x="752" dy="16.200000000000003">export_synthetic_replay_generic</tspan>
-<tspan x="752" dy="16.200000000000003">package_dataset.py</tspan>
+<tspan x="752" dy="16.200000000000003">replay diagnostics</tspan>
 </text>
 <rect x="1060" y="140" width="285" height="760" rx="10" fill="#FFF1F4" stroke="#E9B8C2" stroke-width="1"/>
 <text x="1078" y="158" fill="#632032" font-size="19" font-weight="700" text-anchor="start">
@@ -153,7 +153,7 @@
 </text>
 <rect x="1078" y="364" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#E9B8C2" stroke-width="1"/>
 <text x="1092" y="376" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
-<tspan x="1092" dy="0">align.rs / Align</tspan>
+<tspan x="1092" dy="0">align::Align</tspan>
 </text>
 <text class="label" x="1092" y="402" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
 <tspan x="1092" dy="0">stationary bootstrap</tspan>
@@ -161,7 +161,7 @@
 </text>
 <rect x="1078" y="506" width="249" height="126" rx="8" fill="#FFFFFF" stroke="#E9B8C2" stroke-width="1"/>
 <text x="1092" y="518" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
-<tspan x="1092" dy="0">reduced.rs / Reduced</tspan>
+<tspan x="1092" dy="0">reduced::Filter</tspan>
 </text>
 <text class="label" x="1092" y="544" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
 <tspan x="1092" dy="0">18 error states</tspan>
@@ -169,11 +169,11 @@
 </text>
 <rect x="1078" y="662" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#E9B8C2" stroke-width="1"/>
 <text x="1092" y="674" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
-<tspan x="1092" dy="0">full.rs / FullFilter</tspan>
+<tspan x="1092" dy="0">full::Filter</tspan>
 </text>
 <text class="label" x="1092" y="700" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
-<tspan x="1092" dy="0">24-state reference path</tspan>
-<tspan x="1092" dy="16.200000000000003">attitude, velocity, bias, mount states</tspan>
+<tspan x="1092" dy="0">24-state ECEF EKF</tspan>
+<tspan x="1092" dy="16.200000000000003">attitude, velocity, bias, scale, mount</tspan>
 </text>
 <rect x="1078" y="804" width="249" height="72" rx="8" fill="#FFFFFF" stroke="#E9B8C2" stroke-width="1"/>
 <text x="1092" y="816" fill="#172033" font-size="13" font-weight="700" text-anchor="start">
@@ -181,7 +181,7 @@
 </text>
 <text class="label" x="1092" y="840" fill="#536174" font-size="11" font-weight="normal" text-anchor="start">
 <tspan x="1092" dy="0">reduced/generated + full/generated</tspan>
-<tspan x="1092" dy="14.3">symbolic prediction + observations</tspan>
+<tspan x="1092" dy="14.3">SymPy-derived prediction + updates</tspan>
 </text>
 <rect x="1400" y="140" width="285" height="760" rx="10" fill="#FFF7E8" stroke="#E4C782" stroke-width="1"/>
 <text x="1418" y="158" fill="#5B3E10" font-size="19" font-weight="700" text-anchor="start">
@@ -201,8 +201,8 @@
 <tspan x="1432" dy="0">egui / wasm UI</tspan>
 </text>
 <text class="label" x="1432" y="388" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
-<tspan x="1432" dy="0">overview, map, attitude, mount</tspan>
-<tspan x="1432" dy="16.200000000000003">tuning controls + visibility toggles</tspan>
+<tspan x="1432" dy="0">overview, motion, mount, calibration</tspan>
+<tspan x="1432" dy="16.200000000000003">maps, tuning + trace toggles</tspan>
 </text>
 <rect x="1418" y="492" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#E4C782" stroke-width="1"/>
 <text x="1432" y="504" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
@@ -218,7 +218,7 @@
 <tspan x="1432" dy="0">hosted replay datasets</tspan>
 </text>
 <text class="label" x="1432" y="672" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
-<tspan x="1432" dy="0">web/datasets manifest</tspan>
+<tspan x="1432" dy="0">web/datasets/manifest.json</tspan>
 <tspan x="1432" dy="16.200000000000003">generic CSV gzip bundles</tspan>
 </text>
 <rect x="40" y="940" width="1645" height="190" rx="10" fill="#FFFFFF" stroke="#D8E0EA" stroke-width="1"/>
@@ -239,7 +239,8 @@
 <tspan x="478" dy="0">model generation</tspan>
 </text>
 <text class="label" x="478" y="1034" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
-<tspan x="478" dy="0">sensor_fusion/code_gen.py, src/reduced/formulation.py, src/full/formulation.py</tspan>
+<tspan x="478" dy="0">sensor_fusion/code_gen.py</tspan>
+<tspan x="478" dy="16.200000000000003">reduced/full formulation.py</tspan>
 <tspan x="478" dy="16.200000000000003">-&gt; generated Rust modules</tspan>
 </text>
 <rect x="868" y="996" width="380" height="108" rx="8" fill="#F3FAF8" stroke="#BBDDD2" stroke-width="1"/>
@@ -325,9 +326,9 @@
 <tspan x="1388" dy="0">traces + docs</tspan>
 </text>
 <text class="label" x="48" y="914" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
-<tspan x="48" dy="0">Real captures and synthetic scenarios converge on the same GenericReplay -&gt; replay merge -&gt; SensorFusion feed.</tspan>
+<tspan x="48" dy="0">Field captures and synthetic scenarios converge on GenericReplay -&gt; replay merge -&gt; SensorFusion API feeds.</tspan>
 </text>
 <text class="label" x="980" y="914" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
-<tspan x="980" dy="0">Device-specific parsing stays outside this repository; public artifacts are generic CSV, generated Rust, docs, and web demos.</tspan>
+<tspan x="980" dy="0">Device-specific parsing stays outside this repository; public artifacts are generic CSV, generated Rust, docs, and hosted web demos.</tspan>
 </text>
 </svg>
