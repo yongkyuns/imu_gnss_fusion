@@ -52,6 +52,58 @@ The project is useful for:
 - 🧪 generating synthetic trajectories for repeatable mount-angle experiments,
 - ✅ validating generated Kalman-model code against focused Rust tests.
 
+## 🚀 Quick Start
+
+Try the hosted visualizer first:
+
+- 🌐 [Open the web demo](https://yongkyuns.github.io/imu_gnss_fusion/)
+
+Requirements for local development:
+
+- Rust stable. The workspace uses Rust 2024 crates.
+- Python with `sympy` is only needed when regenerating Kalman-model Rust files.
+
+Build and test the main workspace:
+
+```bash
+cargo build --workspace --locked
+cargo test --workspace --locked
+```
+
+Run the native visualizer on a generic replay directory:
+
+```bash
+cargo run --release -p sim --bin visualizer -- \
+  --generic-replay-dir /path/to/replay-dir
+```
+
+Run the native visualizer on a synthetic scenario:
+
+```bash
+cargo run --release -p sim --bin visualizer -- \
+  --synthetic-motion-def sim/motion_profiles/city_blocks_15min.scenario \
+  --synthetic-noise low
+```
+
+Build and serve the browser visualizer locally:
+
+```bash
+cargo build -p sim --bin visualizer --release --target wasm32-unknown-unknown
+wasm-bindgen --target web --out-dir web/pkg \
+  target/wasm32-unknown-unknown/release/visualizer.wasm
+python3 -m http.server --directory web 8080
+```
+
+## 📚 Documentation
+
+- [docs/README.md](docs/README.md): documentation index.
+- [docs/testing.md](docs/testing.md): testing workflow.
+- [docs/math/frames.md](docs/math/frames.md): frame and quaternion conventions.
+- [docs/math/full.md](docs/math/full.md): Full EKF operational links.
+- [docs/reduced.pdf](docs/reduced.pdf): detailed Reduced EKF mount formulation.
+- [docs/align.pdf](docs/align.pdf): detailed Align/NHC formulation.
+- [docs/full.pdf](docs/full.pdf): detailed Full EKF formulation.
+
 ## 🧱 Workspace Layout
 
 | Path | Purpose |
@@ -61,67 +113,6 @@ The project is useful for:
 | `docs/` | Project documentation, math PDFs/TEX sources, and test guidance. |
 | `web/` | Static browser host for the wasm visualizer. |
 | `mobile/ios/` | Experimental iOS sensor collection app. |
-
-## 🧩 Module Overview
-
-The workspace is split so the embedded filter library is independent from
-offline tooling and visualization. The core sensor-fusion crate has three
-current algorithm modules:
-
-- `align`: a standalone mount-alignment estimator. It is being tuned to improve
-  overall stability, seed quality, and downstream filter performance.
-- `reduced`: a local-NED reduced-state EKF implementation of the IMU/GNSS
-  fusion problem.
-- `full`: a full-state ECEF EKF implementation of the same fusion problem.
-
-`reduced` and `full` are intentionally maintained side by side today so their
-math, tuning, covariance behavior, and replay accuracy can be compared. They are
-two implementations of the same navigation problem, not two separate end-user
-products. The intended direction is to consolidate them into a single filter
-implementation once the formulation and tuning tradeoffs are understood well
-enough.
-
-### `sensor_fusion` crate (`sensor_fusion/src`)
-
-| Module | Role |
-| --- | --- |
-| `SensorFusion` | Public facade for timestamped IMU, GNSS, and optional vehicle-speed samples. Owns Align, local anchoring, selected EKF initialization, and accessors used by apps. |
-| `align` | Standalone mount-alignment estimator from stationary gravity, GNSS-derived motion, turn-rate cues, and NHC-style constraints. Its output can seed the runtime EKF mount states. |
-| `reduced` | Local-NED reduced-state EKF implementation. This is one candidate runtime formulation for the same IMU/GNSS fusion problem solved by `full`. |
-| `full` | Full-state ECEF EKF implementation. It is used as the parallel formulation for comparison, diagnostics, and eventual consolidation with `reduced`. |
-| `math`, `nav`, `covariance`, generated wrappers | Internal reusable quaternion/vector math, WGS84/ECEF helpers, sparse covariance propagation, and generated symbolic model glue. |
-
-Symbolic model sources live next to the Rust crate:
-
-| Path | Role |
-| --- | --- |
-| `sensor_fusion/src/reduced/formulation.py` | SymPy source for Reduced generated Rust. |
-| `sensor_fusion/src/full/formulation.py` | SymPy source for Full generated Rust. |
-| `sensor_fusion/code_gen.py` | Shared Python code-generation helpers. |
-
-### `sim` crate (`sim/src`)
-
-| Module | Role |
-| --- | --- |
-| `datasets` | Generic replay CSV parsers, synthetic replay parsers, and seeded Full fixture loaders. |
-| `eval` | Replay ordering, trace lookup helpers, quaternion/math utilities, state summaries, and evaluation config snapshots. |
-| `synthetic` | Rust-native motion DSL, trajectory generation, IMU/GNSS noise injection, and synthetic truth/measured sample generation. |
-| `visualizer` | Shared native/web visualization model, replay pipelines, map/stat helpers, theme, UI modules, and background replay jobs. |
-| `bin/*` | CLI tools for visualization, dataset export, diagnostics, runtime benchmarking, and focused filter investigations. |
-
-The visualizer UI is intentionally modular:
-
-| Module | Role |
-| --- | --- |
-| `visualizer/ui/controls` | Always-visible top controls, web input selection, trace toggles, and run controls. |
-| `visualizer/ui/pages` | Overview, motion, mount, calibration, sensors, and diagnostics page composition. |
-| `visualizer/ui/plots` | Reusable plot sections, foldable overview tiles, shared cursor, log axes, and decimation. |
-| `visualizer/ui/maps` | Map tile providers, map overlays, markers, arrows, and synthetic local-trajectory drawing. |
-| `visualizer/ui/inspector` | Hover-window update allocation and covariance/residual inspector views. |
-| `visualizer/ui/tuning` | Align, Reduced, and Full tuning panels. |
-| `visualizer/ui/web` | Browser-only manifest loading, drag/drop CSV loading, worker orchestration, and synthetic web inputs. |
-| `visualizer/ui/runtime` | App construction, replay refresh, theme initialization, and egui frame update. |
-| `visualizer/ui/state`, `trace_query`, `colors`, `orthogonal`, `windows` | Shared UI state, trace sampling/classification, color policy, angle popups, and floating windows. |
 
 See [docs/README.md](docs/README.md) for the complete documentation index and
 [sim/README.md](sim/README.md) for the command-line tool map. The main deep
@@ -334,44 +325,6 @@ The timing source on this NuttX setup reports at millisecond granularity, so
 these numbers should be treated as budget-level embedded timings rather than
 cycle-accurate microbenchmarks.
 
-## 🚀 Quick Start
-
-Requirements:
-
-- Rust stable. The workspace uses Rust 2024 crates.
-- Python with `sympy` is only needed when regenerating Kalman-model Rust files.
-
-Build and test the main workspace:
-
-```bash
-cargo build --workspace --locked
-cargo test --workspace --locked
-```
-
-Run the visualizer on a generic replay directory:
-
-```bash
-cargo run --release -p sim --bin visualizer -- \
-  --generic-replay-dir /path/to/replay-dir
-```
-
-Run the visualizer on a synthetic scenario:
-
-```bash
-cargo run --release -p sim --bin visualizer -- \
-  --synthetic-motion-def sim/motion_profiles/city_blocks_15min.scenario \
-  --synthetic-noise low
-```
-
-Build the browser visualizer:
-
-```bash
-cargo build -p sim --bin visualizer --release --target wasm32-unknown-unknown
-wasm-bindgen --target web --out-dir web/pkg \
-  target/wasm32-unknown-unknown/release/visualizer.wasm
-python3 -m http.server --directory web 8080
-```
-
 ## 🎛️ Filter And Replay Modes
 
 The public `sensor_fusion::MountMode` and visualizer `--misalignment` option
@@ -483,16 +436,6 @@ cargo test --workspace --locked
 ```
 
 See [docs/testing.md](docs/testing.md) for focused test groups, fixtures, and expensive/local-data notes.
-
-## 📚 Documentation
-
-- [docs/README.md](docs/README.md): documentation index.
-- [docs/testing.md](docs/testing.md): testing workflow.
-- [docs/math/frames.md](docs/math/frames.md): frame and quaternion conventions.
-- [docs/math/full.md](docs/math/full.md): Full EKF operational links.
-- [docs/reduced.pdf](docs/reduced.pdf): detailed Reduced EKF mount formulation.
-- [docs/align.pdf](docs/align.pdf): detailed Align/NHC formulation.
-- [docs/full.pdf](docs/full.pdf): detailed Full EKF formulation.
 
 ## 📄 License
 
