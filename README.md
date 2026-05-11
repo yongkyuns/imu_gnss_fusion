@@ -24,7 +24,7 @@ than with any specific receiver or firmware stack.
 
 Rust is used because this project has no compatibility requirement with an
 existing C/C++ firmware codebase, and because Rust integrates cleanly with the
-native and browser-based egui simulator in this repository. The core algorithms
+native and browser-based [egui](https://github.com/emilk/egui) simulator in this repository. The core algorithms
 are intentionally straightforward and can be ported to C or C++ if a target
 project requires it; separate C/C++ wrapper APIs are not provided here. The
 runtime uses common embedded-friendly optimization strategies, including scalar
@@ -109,7 +109,7 @@ python3 -m http.server --directory web 8080
 | Path | Purpose |
 | --- | --- |
 | `sensor_fusion/` | `sensor_fusion` library crate. Contains Align, Full EKF, Reduced EKF, generated model code, and filter API tests. |
-| `sim/` | Replay, simulation, evaluation, diagnostics, and egui visualizer crate. |
+| `sim/` | Replay, simulation, evaluation, diagnostics, and [egui](https://github.com/emilk/egui) visualizer crate. |
 | `docs/` | Project documentation, math PDFs/TEX sources, and test guidance. |
 | `web/` | Static browser host for the wasm visualizer. |
 | `mobile/ios/` | Experimental iOS sensor collection app. |
