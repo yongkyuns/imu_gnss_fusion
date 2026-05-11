@@ -500,4 +500,5 @@ MIT. See [LICENSE](LICENSE).
 
 ## 🙏 References
 
-This project references `gnss-ins-sim` for synthetic IMU/GNSS data generation concepts and `open-aided-navigation` for loosely coupled Full EKF formulation concepts. These projects are references only; this repository does not vendor or depend on their source code.
+- [`gnss-ins-sim`](https://github.com/Aceinna/gnss-ins-sim): referenced for synthetic IMU/GNSS data generation concepts.
+- [`open-aided-navigation`](https://github.com/fedorbaklanov/open-aided-navigation): referenced for loosely coupled Full EKF formulation concepts.
