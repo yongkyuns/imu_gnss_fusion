@@ -47,10 +47,10 @@ web-based simulator:
 
 The project is useful for:
 
-- 📊 replaying hardware-agnostic IMU/GNSS CSV datasets,
-- 🧭 comparing Align, Full EKF, and Reduced EKF behavior,
-- 🧪 generating synthetic trajectories for repeatable mount-angle experiments,
-- ✅ validating generated Kalman-model code against focused Rust tests.
+- 📘 learning INS/GNSS mechanization and embedded implementation patterns,
+- 🛠️ customizing the baseline filter and iterating on tuning for your project needs,
+- 📊 evaluating behavior with synthetic trajectories and hardware-agnostic replay datasets,
+- 🧭 demonstrating and testing fusion behavior through the interactive visualizer.
 
 ## 🚀 Quick Start
 
