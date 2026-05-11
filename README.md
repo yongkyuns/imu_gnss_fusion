@@ -9,13 +9,41 @@
 
 ![IMU/GNSS Fusion web visualizer](screenshot.png)
 
-IMU/GNSS Fusion is a Rust workspace for experimenting with IMU, GNSS, and wheel-speed sensor fusion. It contains an embedded-oriented filter crate, offline replay and visualization tools, synthetic trajectory generation, and hardware-agnostic CSV replay support.
+IMU/GNSS Fusion is a personal Rust project for experimenting with ground-vehicle
+inertial/GNSS fusion. It contains an embedded-oriented filter crate, offline
+replay and visualization tools, synthetic trajectory generation, and
+hardware-agnostic CSV replay support.
 
-The project is currently an active filter-development workspace rather than a
-finished navigation product. The main work is tuning the standalone alignment
-estimator, comparing the two EKF formulations, and using synthetic plus
-reference-backed field data to understand accuracy, stability, and convergence
-limits.
+This project is under active development. INS/GNSS mechanization is a mature
+technology, but practical performance depends heavily on sensor quality,
+vehicle motion, mounting geometry, GNSS availability, and application domain.
+This implementation is aimed at ground vehicles using consumer-grade IMUs and
+GNSS receivers, with optional wheel-speed input when available. It is designed
+to be easy to integrate with standard timestamped IMU and GNSS outputs rather
+than with any specific receiver or firmware stack.
+
+Rust is used because this project has no compatibility requirement with an
+existing C/C++ firmware codebase, and because Rust integrates cleanly with the
+native and browser-based egui simulator in this repository. The core algorithms
+are intentionally straightforward and can be ported to C or C++ if a target
+project requires it; separate C/C++ wrapper APIs are not provided here. The
+runtime uses common embedded-friendly optimization strategies, including scalar
+measurement updates, so it should be practical on typical embedded targets such
+as ESP32- and STM32-class devices.
+
+The library can be initialized with known vehicle-to-IMU mounting angles, or it
+can estimate mounting internally. When automatic mount alignment is selected,
+the filter waits to initialize until it has observed enough valid GNSS-backed
+vehicle motion to produce a usable mount estimate.
+
+The repository provides two main ways to evaluate the filter in the native or
+web-based simulator:
+
+- Synthesized IMU/GNSS data generated from high-level motion profiles with
+  configurable noise levels.
+- Experimental replay datasets covering different mounting angles and driving
+  scenarios. These datasets include reference signals for comparative analysis;
+  the references are used for plots and evaluation, not as normal filter inputs.
 
 The project is useful for:
 
