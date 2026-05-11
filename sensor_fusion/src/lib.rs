@@ -15,7 +15,7 @@
 //!   `a`: `x_a = C_ab x_b`.
 //! - Quaternion `q_ab` follows `R(q_ab) = C_ab`; products compose as
 //!   `R(q1 * q2) = R(q1) R(q2)`.
-//! - The mount quaternion stored in `qcs0..qcs3` by both filters is the current
+//! - The mount quaternion stored in `q_bv0..q_bv3` by both filters is the current
 //!   physical vehicle-to-body mount: `R(q_bv) = C_bv`, `x_b = C_bv x_v`. The
 //!   filters use `C_vb = C_bv^T` to rotate raw IMU vectors into the vehicle
 //!   frame during propagation.

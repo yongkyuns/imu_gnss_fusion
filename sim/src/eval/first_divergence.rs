@@ -531,10 +531,10 @@ fn collect_snapshots(
     }
     if let Some(state) = reduced.reduced() {
         let q_mount = as_q64([
-            state.nominal.qcs0,
-            state.nominal.qcs1,
-            state.nominal.qcs2,
-            state.nominal.qcs3,
+            state.nominal.q_bv0,
+            state.nominal.q_bv1,
+            state.nominal.q_bv2,
+            state.nominal.q_bv3,
         ]);
         let q_att = as_q64([
             state.nominal.q0,
@@ -565,10 +565,10 @@ fn collect_snapshots(
     }
     if let Some(state) = full.full() {
         let q_mount = as_q64([
-            state.nominal.qcs0,
-            state.nominal.qcs1,
-            state.nominal.qcs2,
-            state.nominal.qcs3,
+            state.nominal.q_bv0,
+            state.nominal.q_bv1,
+            state.nominal.q_bv2,
+            state.nominal.q_bv3,
         ]);
         let mut snapshot = mount_snapshot(
             t_s,
@@ -629,10 +629,10 @@ fn collect_behavior_sample(
     });
     let reduced_mount_q = reduced.reduced().map(|state| {
         as_q64([
-            state.nominal.qcs0,
-            state.nominal.qcs1,
-            state.nominal.qcs2,
-            state.nominal.qcs3,
+            state.nominal.q_bv0,
+            state.nominal.q_bv1,
+            state.nominal.q_bv2,
+            state.nominal.q_bv3,
         ])
     });
     let reduced_mount_rpy = reduced_mount_q.map(|q| {
@@ -661,10 +661,10 @@ fn collect_behavior_sample(
     });
     let full_mount_q = full.full().map(|state| {
         as_q64([
-            state.nominal.qcs0,
-            state.nominal.qcs1,
-            state.nominal.qcs2,
-            state.nominal.qcs3,
+            state.nominal.q_bv0,
+            state.nominal.q_bv1,
+            state.nominal.q_bv2,
+            state.nominal.q_bv3,
         ])
     });
     let full_mount_rpy = full_mount_q.map(|q| {

@@ -66,7 +66,7 @@ struct RefInit {
     accel_bias_mps2: [f32; 3],
     gyro_scale: [f32; 3],
     accel_scale: [f32; 3],
-    #[serde(rename = "q_cs")]
+    #[serde(rename = "q_bv")]
     q_bv: [f32; 4],
     p_diag: [f32; 24],
     p_full: [[f32; 24]; 24],
@@ -86,7 +86,7 @@ struct Output {
     vel_ecef_mps: Vec<[f64; 3]>,
     #[serde(rename = "q_es")]
     q_ev: Vec<[f64; 4]>,
-    #[serde(rename = "q_cs")]
+    #[serde(rename = "q_bv")]
     q_bv: Vec<[f64; 4]>,
 }
 
@@ -258,7 +258,12 @@ fn main() -> Result<()> {
             q_ns[3] as f32,
         );
         let mis = quat_mul(
-            [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64],
+            [
+                n.q_bv0 as f64,
+                n.q_bv1 as f64,
+                n.q_bv2 as f64,
+                n.q_bv3 as f64,
+            ],
             quat_conj([
                 q_bv0[0] as f64,
                 q_bv0[1] as f64,
@@ -280,7 +285,12 @@ fn main() -> Result<()> {
         pos_ecef_m.push(pos_ecef);
         vel_ecef_mps.push(vel_ecef);
         q_ev_out.push([n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64]);
-        q_bv_out.push([n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64]);
+        q_bv_out.push([
+            n.q_bv0 as f64,
+            n.q_bv1 as f64,
+            n.q_bv2 as f64,
+            n.q_bv3 as f64,
+        ]);
     }
 
     for event in events {
@@ -372,7 +382,12 @@ fn main() -> Result<()> {
                     let p = full.covariance();
                     let n = full.nominal();
                     let q_ev_pre = [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64];
-                    let q_bv_pre = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
+                    let q_bv_pre = [
+                        n.q_bv0 as f64,
+                        n.q_bv1 as f64,
+                        n.q_bv2 as f64,
+                        n.q_bv3 as f64,
+                    ];
                     let pos_ecef_pre = full.shadow_pos_ecef();
                     let vel_ecef_pre = [n.vn as f64, n.ve as f64, n.vd as f64];
                     let omega_is_pre = [
@@ -493,8 +508,12 @@ fn main() -> Result<()> {
                         }
                         row.pos_ecef_post = full.shadow_pos_ecef();
                         row.q_ev_post = [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64];
-                        row.q_bv_post =
-                            [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
+                        row.q_bv_post = [
+                            n.q_bv0 as f64,
+                            n.q_bv1 as f64,
+                            n.q_bv2 as f64,
+                            n.q_bv3 as f64,
+                        ];
                     } else {
                         row.p_post_full = row.p_pre_full;
                         row.p_pos_psi_bv_post = row.p_pos_psi_bv_pre;
@@ -604,7 +623,12 @@ fn main() -> Result<()> {
                     q_ns[3] as f32,
                 );
                 let mis = quat_mul(
-                    [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64],
+                    [
+                        n.q_bv0 as f64,
+                        n.q_bv1 as f64,
+                        n.q_bv2 as f64,
+                        n.q_bv3 as f64,
+                    ],
                     quat_conj([
                         q_bv0[0] as f64,
                         q_bv0[1] as f64,
@@ -626,7 +650,12 @@ fn main() -> Result<()> {
                 pos_ecef_m.push(pos_ecef);
                 vel_ecef_mps.push(vel_ecef);
                 q_ev_out.push([n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64]);
-                q_bv_out.push([n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64]);
+                q_bv_out.push([
+                    n.q_bv0 as f64,
+                    n.q_bv1 as f64,
+                    n.q_bv2 as f64,
+                    n.q_bv3 as f64,
+                ]);
             }
         }
     }

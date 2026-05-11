@@ -1705,7 +1705,12 @@ fn append_reduced_motion_sample(
         return;
     };
     let n = &reduced.nominal;
-    let q_bv = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
+    let q_bv = [
+        n.q_bv0 as f64,
+        n.q_bv1 as f64,
+        n.q_bv2 as f64,
+        n.q_bv3 as f64,
+    ];
     let q_vehicle_to_ned = reduced_vehicle_attitude_q(reduced);
     let gyro_body = [
         sample.gyro_radps[0] - n.bgx as f64,
@@ -1739,7 +1744,12 @@ fn append_full_motion_sample(
         return;
     };
     let n = &full.nominal;
-    let q_bv = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
+    let q_bv = [
+        n.q_bv0 as f64,
+        n.q_bv1 as f64,
+        n.q_bv2 as f64,
+        n.q_bv3 as f64,
+    ];
     let (lat_deg, lon_deg, _) = ecef_to_lla(full.pos_e64);
     let q_vehicle_to_ned = quat_mul(
         quat_ecef_to_ned(lat_deg, lon_deg),
@@ -1871,10 +1881,10 @@ fn append_reduced_sample(
     yaw.push([t_s, y]);
 
     let q_bv = [
-        reduced.nominal.qcs0 as f64,
-        reduced.nominal.qcs1 as f64,
-        reduced.nominal.qcs2 as f64,
-        reduced.nominal.qcs3 as f64,
+        reduced.nominal.q_bv0 as f64,
+        reduced.nominal.q_bv1 as f64,
+        reduced.nominal.q_bv2 as f64,
+        reduced.nominal.q_bv3 as f64,
     ];
     let (mr, mp, my) = q_bv_to_reference_mount_rpy(q_bv);
     mount_roll.push([t_s, mr]);
@@ -2081,7 +2091,12 @@ fn append_full_sample(
     map.push([lon, lat]);
     let q_ne = quat_ecef_to_ned(lat, lon);
     let q_ev = [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64];
-    let q_bv = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
+    let q_bv = [
+        n.q_bv0 as f64,
+        n.q_bv1 as f64,
+        n.q_bv2 as f64,
+        n.q_bv3 as f64,
+    ];
     let q_ns = quat_mul(q_ne, q_ev);
     let q_vehicle = q_ns;
     let (r, p, y) = quat_rpy_deg(

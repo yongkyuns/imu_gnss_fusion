@@ -3,7 +3,7 @@
 //! These types are useful for focused tests and derivation checks. The
 //! production runtime is [`crate::reduced::Filter`]. Names match the current
 //! mount-in-propagation convention: `R(q_nv) = C_nv` and `R(q_bv) = C_bv`.
-//! The physical vehicle-to-body mount `q_bv` is stored in runtime `qcs*`
+//! The physical vehicle-to-body mount `q_bv` is stored in runtime `q_bv*`
 //! fields.
 
 use crate::math::{

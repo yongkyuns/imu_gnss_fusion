@@ -137,7 +137,7 @@ instead of adding one-off CSV parsers or filter replay loops.
 
 Full EKF accel and gyro diagnostic plots use the same raw body-frame IMU stream
 that is fed through the public `sensor_fusion` API. Reduced and Full mount plots
-use the current `qcs` mount quaternion directly, where `qcs` stores the physical
+use the current `q_bv` mount quaternion directly, where `q_bv` stores the physical
 vehicle-to-body mount `q_bv`.
 
 The Full EKF accel-bias states are additive correction states:

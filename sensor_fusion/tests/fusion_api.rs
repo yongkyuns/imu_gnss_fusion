@@ -146,13 +146,13 @@ fn freeze_misalignment_states_blocks_mount_updates() {
 
     let upd = system.process_gnss(gnss_sample(1.0));
     assert!(upd.reduced_initialized_now);
-    let qcs_before = {
+    let q_bv_before = {
         let reduced = system.reduced().unwrap();
         [
-            reduced.nominal.qcs0,
-            reduced.nominal.qcs1,
-            reduced.nominal.qcs2,
-            reduced.nominal.qcs3,
+            reduced.nominal.q_bv0,
+            reduced.nominal.q_bv1,
+            reduced.nominal.q_bv2,
+            reduced.nominal.q_bv3,
         ]
     };
 
@@ -163,13 +163,13 @@ fn freeze_misalignment_states_blocks_mount_updates() {
     });
 
     let reduced = system.reduced().unwrap();
-    let qcs_after = [
-        reduced.nominal.qcs0,
-        reduced.nominal.qcs1,
-        reduced.nominal.qcs2,
-        reduced.nominal.qcs3,
+    let q_bv_after = [
+        reduced.nominal.q_bv0,
+        reduced.nominal.q_bv1,
+        reduced.nominal.q_bv2,
+        reduced.nominal.q_bv3,
     ];
-    assert_eq!(qcs_after, qcs_before);
+    assert_eq!(q_bv_after, q_bv_before);
     assert_eq!(reduced.update_diag.last_dx_mount_yaw, 0.0);
     assert_eq!(reduced.update_diag.last_k_mount_yaw, 0.0);
     for i in 15..18 {
@@ -233,9 +233,9 @@ fn zero_velocity_update_does_not_inject_mount_error() {
         raw.p[17][5] = 0.01;
     }
 
-    let qcs_before = {
+    let q_bv_before = {
         let n = &reduced.raw().nominal;
-        [n.qcs0, n.qcs1, n.qcs2, n.qcs3]
+        [n.q_bv0, n.q_bv1, n.q_bv2, n.q_bv3]
     };
     let mount_cov_before = [
         reduced.raw().p[15][15],
@@ -250,7 +250,7 @@ fn zero_velocity_update_does_not_inject_mount_error() {
     assert_ne!(n.vn, 0.7);
     assert_ne!(n.ve, -0.3);
     assert_ne!(n.vd, 0.2);
-    assert_eq!([n.qcs0, n.qcs1, n.qcs2, n.qcs3], qcs_before);
+    assert_eq!([n.q_bv0, n.q_bv1, n.q_bv2, n.q_bv3], q_bv_before);
     assert_eq!(
         [raw.p[15][15], raw.p[16][16], raw.p[17][17]],
         mount_cov_before

@@ -307,10 +307,9 @@ cargo run -p sim --bin covariance_history -- \
 ```
 
 Important mount caveat: current Reduced and Full states store the physical
-vehicle-to-body mount in `qcs0..qcs3`. The name is legacy. Diagnostic code
+vehicle-to-body mount in `q_bv0..q_bv3`. The name is legacy. Diagnostic code
 should treat those fields as `q_bv`, with `R(q_bv) = C_bv` and
-`x_b = C_bv x_v`, rather than as an inverse or generic "car-to-sensor"
-quantity.
+`x_b = C_bv x_v`, rather than as an inverse/body-to-vehicle quantity.
 
 ## Web App Workflows
 
@@ -503,7 +502,7 @@ Script tests:
    `require_trace_schema`, `require_trace_points`, `sample_nearest_value`, and
    explicit trace names from `PlotData`.
 4. Compare physical quantities in the correct basis. Reduced and Full
-   `qcs0..qcs3` fields are the physical mount `q_bv`; use the inverse only
+   `q_bv0..q_bv3` fields are the physical mount `q_bv`; use the inverse only
    when explicitly rotating body-frame vectors back into the vehicle frame.
 5. Use tolerances that reflect the contract. Exact equality is appropriate for
    config snapshots and generated row names; replay/filter floating-point tests

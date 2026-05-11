@@ -595,10 +595,10 @@ impl HarnessState {
         let (roll, pitch, yaw) =
             quat_rpy_deg(q_vehicle[0], q_vehicle[1], q_vehicle[2], q_vehicle[3]);
         let q_mount = [
-            reduced.nominal.qcs0 as f64,
-            reduced.nominal.qcs1 as f64,
-            reduced.nominal.qcs2 as f64,
-            reduced.nominal.qcs3 as f64,
+            reduced.nominal.q_bv0 as f64,
+            reduced.nominal.q_bv1 as f64,
+            reduced.nominal.q_bv2 as f64,
+            reduced.nominal.q_bv3 as f64,
         ];
         let (mr, mp, my) = q_bv_to_reference_mount_rpy(q_mount);
         Some(CommonSnapshot {
@@ -651,10 +651,10 @@ impl HarnessState {
             q_ns[3] as f32,
         );
         let (mr, mp, my) = q_bv_to_reference_mount_rpy([
-            n.qcs0 as f64,
-            n.qcs1 as f64,
-            n.qcs2 as f64,
-            n.qcs3 as f64,
+            n.q_bv0 as f64,
+            n.q_bv1 as f64,
+            n.q_bv2 as f64,
+            n.q_bv3 as f64,
         ]);
         Some(CommonSnapshot {
             pos_ned_m: pos,

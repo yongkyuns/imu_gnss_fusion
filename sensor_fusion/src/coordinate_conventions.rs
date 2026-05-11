@@ -68,13 +68,13 @@ fn public_manual_mount_q_bv_maps_vehicle_vectors_to_body_vectors() {
     let reduced = reduced_system.reduced().unwrap();
     assert_quat_close(
         [
-            reduced.nominal.qcs0,
-            reduced.nominal.qcs1,
-            reduced.nominal.qcs2,
-            reduced.nominal.qcs3,
+            reduced.nominal.q_bv0,
+            reduced.nominal.q_bv1,
+            reduced.nominal.q_bv2,
+            reduced.nominal.q_bv3,
         ],
         q_bv,
-        "Reduced qcs stores q_bv",
+        "Reduced q_bv stores q_bv",
     );
 
     let mut full_system = SensorFusion::with_config(Config {
@@ -86,13 +86,13 @@ fn public_manual_mount_q_bv_maps_vehicle_vectors_to_body_vectors() {
     let full = full_system.full().unwrap();
     assert_quat_close(
         [
-            full.nominal.qcs0,
-            full.nominal.qcs1,
-            full.nominal.qcs2,
-            full.nominal.qcs3,
+            full.nominal.q_bv0,
+            full.nominal.q_bv1,
+            full.nominal.q_bv2,
+            full.nominal.q_bv3,
         ],
         q_bv,
-        "Full qcs stores q_bv",
+        "Full q_bv stores q_bv",
     );
 }
 

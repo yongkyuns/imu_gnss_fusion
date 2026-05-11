@@ -11,10 +11,10 @@ fn body_velocity_yz_jacobians_match_nominal_model_finite_difference() {
         vn: 8.0,
         ve: -1.5,
         vd: 0.35,
-        qcs0: 0.995_005,
-        qcs1: 0.045_023,
-        qcs2: -0.036_704,
-        qcs3: 0.081_264,
+        q_bv0: 0.995_005,
+        q_bv1: 0.045_023,
+        q_bv2: -0.036_704,
+        q_bv3: 0.081_264,
         ..NominalState::default()
     };
     let p = [[0.0; ERROR_STATES]; ERROR_STATES];
@@ -52,8 +52,11 @@ fn apply_error(nominal: &mut NominalState, state: usize, dx: f32) {
         15..=17 => {
             let mut dq = [1.0, 0.0, 0.0, 0.0];
             dq[state - 14] = 0.5 * dx;
-            let q = quat_mul(dq, [nominal.qcs0, nominal.qcs1, nominal.qcs2, nominal.qcs3]);
-            [nominal.qcs0, nominal.qcs1, nominal.qcs2, nominal.qcs3] = normalize(q);
+            let q = quat_mul(
+                dq,
+                [nominal.q_bv0, nominal.q_bv1, nominal.q_bv2, nominal.q_bv3],
+            );
+            [nominal.q_bv0, nominal.q_bv1, nominal.q_bv2, nominal.q_bv3] = normalize(q);
         }
         _ => {}
     }

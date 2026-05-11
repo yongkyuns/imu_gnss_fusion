@@ -148,7 +148,7 @@ x_v = C_vb x_b
 Raw IMU samples are not pre-rotated by callers. Reduced and Full rotate raw
 body-frame increments through `C_vb` internally during propagation. Reduced
 attitude `q0..q3` is `q_nv`; Full attitude `q0..q3` is `q_ev`. In both filters,
-the legacy `qcs0..qcs3` fields store the physical `q_bv` mount.
+the `q_bv0..q_bv3` fields store the physical `q_bv` mount.
 
 ### Reduced Filter
 

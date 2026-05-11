@@ -356,7 +356,12 @@ fn run_case(dataset: &Dataset, case: &StressCase, args: &Args) -> Result<CaseRes
 
         let n = full.nominal();
         let q_ev_hat = [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64];
-        let q_bv_resid = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
+        let q_bv_resid = [
+            n.q_bv0 as f64,
+            n.q_bv1 as f64,
+            n.q_bv2 as f64,
+            n.q_bv3 as f64,
+        ];
         let q_bv_full = quat_normalize(quat_mul(q_bv_resid, q_bv_seed));
         let q_mount_err = quat_normalize(quat_mul(q_bv_full, quat_conj(q_bv_true)));
         let q_mount_full = quat_normalize(quat_mul(q_bv_full, quat_conj(q_nominal_mount)));

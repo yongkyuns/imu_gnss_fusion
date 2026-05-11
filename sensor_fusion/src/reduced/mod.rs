@@ -6,7 +6,7 @@
 //! live under [`crate::reduced::state_ops`].
 //!
 //! Reduced follows the same mount-in-propagation convention as [`crate::full`]:
-//! raw IMU deltas are expressed in body frame `b`; `qcs0..qcs3` store the
+//! raw IMU deltas are expressed in body frame `b`; `q_bv0..q_bv3` store the
 //! physical vehicle-to-body mount `q_bv`, with `R(q_bv) = C_bv` and
 //! `x_b = C_bv x_v`; propagation rotates body increments through
 //! `C_vb = C_bv^T`; and the attitude quaternion is `q_nv`, the
@@ -59,7 +59,7 @@ impl Filter {
         let mut raw = State {
             nominal: NominalState {
                 q0: 1.0,
-                qcs0: 1.0,
+                q_bv0: 1.0,
                 ..NominalState::default()
             },
             p: [[0.0; ERROR_STATES]; ERROR_STATES],
@@ -135,10 +135,10 @@ impl Filter {
         self.raw.nominal.pn = gnss.pos_ned_m[0];
         self.raw.nominal.pe = gnss.pos_ned_m[1];
         self.raw.nominal.pd = gnss.pos_ned_m[2];
-        self.raw.nominal.qcs0 = 1.0;
-        self.raw.nominal.qcs1 = 0.0;
-        self.raw.nominal.qcs2 = 0.0;
-        self.raw.nominal.qcs3 = 0.0;
+        self.raw.nominal.q_bv0 = 1.0;
+        self.raw.nominal.q_bv1 = 0.0;
+        self.raw.nominal.q_bv2 = 0.0;
+        self.raw.nominal.q_bv3 = 0.0;
 
         self.raw.p = [[0.0; ERROR_STATES]; ERROR_STATES];
         let att_sigma_rad = 2.0 * core::f32::consts::PI / 180.0;
@@ -944,12 +944,12 @@ fn normalize_nominal_quat(nominal: &mut NominalState) {
 }
 
 fn normalize_nominal_mount_quat(nominal: &mut NominalState) {
-    let mut q = [nominal.qcs0, nominal.qcs1, nominal.qcs2, nominal.qcs3];
+    let mut q = [nominal.q_bv0, nominal.q_bv1, nominal.q_bv2, nominal.q_bv3];
     normalize_quat_f32(&mut q);
-    nominal.qcs0 = q[0];
-    nominal.qcs1 = q[1];
-    nominal.qcs2 = q[2];
-    nominal.qcs3 = q[3];
+    nominal.q_bv0 = q[0];
+    nominal.q_bv1 = q[1];
+    nominal.q_bv2 = q[2];
+    nominal.q_bv3 = q[3];
 }
 
 fn inject_error_state(nominal: &mut NominalState, dx: &[f32; ERROR_STATES]) {
@@ -975,13 +975,13 @@ fn inject_error_state(nominal: &mut NominalState, dx: &[f32; ERROR_STATES]) {
     nominal.bay += dx[13];
     nominal.baz += dx[14];
 
-    let dqcs = [1.0, 0.5 * dx[15], 0.5 * dx[16], 0.5 * dx[17]];
-    let qcs_old = [nominal.qcs0, nominal.qcs1, nominal.qcs2, nominal.qcs3];
-    let qcs_new = quat_multiply_f32(dqcs, qcs_old);
-    nominal.qcs0 = qcs_new[0];
-    nominal.qcs1 = qcs_new[1];
-    nominal.qcs2 = qcs_new[2];
-    nominal.qcs3 = qcs_new[3];
+    let dq_bv = [1.0, 0.5 * dx[15], 0.5 * dx[16], 0.5 * dx[17]];
+    let q_bv_old = [nominal.q_bv0, nominal.q_bv1, nominal.q_bv2, nominal.q_bv3];
+    let q_bv_new = quat_multiply_f32(dq_bv, q_bv_old);
+    nominal.q_bv0 = q_bv_new[0];
+    nominal.q_bv1 = q_bv_new[1];
+    nominal.q_bv2 = q_bv_new[2];
+    nominal.q_bv3 = q_bv_new[3];
     normalize_nominal_mount_quat(nominal);
 }
 

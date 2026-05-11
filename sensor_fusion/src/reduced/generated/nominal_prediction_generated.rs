@@ -1,26 +1,26 @@
 {
 // Generated Reduced nominal-state prediction
-let tmp_pred0: f32 = qcs0*qcs3;
-let tmp_pred1: f32 = qcs1*qcs2;
+let tmp_pred0: f32 = q_bv0*q_bv3;
+let tmp_pred1: f32 = q_bv1*q_bv2;
 let tmp_pred2: f32 = tmp_pred0 + tmp_pred1;
 let tmp_pred3: f32 = bgy*dt - day;
 let tmp_pred4: f32 = 1.0_f32*tmp_pred3;
-let tmp_pred5: f32 = qcs0*qcs2;
-let tmp_pred6: f32 = qcs1*qcs3;
+let tmp_pred5: f32 = q_bv0*q_bv2;
+let tmp_pred6: f32 = q_bv1*q_bv3;
 let tmp_pred7: f32 = tmp_pred5 - tmp_pred6;
 let tmp_pred8: f32 = bgz*dt - daz;
 let tmp_pred9: f32 = 1.0_f32*tmp_pred8;
 let tmp_pred10: f32 = bgx*dt - dax;
-let tmp_pred11: f32 = 2.0_f32*qcs2*qcs2;
-let tmp_pred12: f32 = 2.0_f32*qcs3*qcs3 - 1.0_f32;
+let tmp_pred11: f32 = 2.0_f32*q_bv2*q_bv2;
+let tmp_pred12: f32 = 2.0_f32*q_bv3*q_bv3 - 1.0_f32;
 let tmp_pred13: f32 = tmp_pred11 + tmp_pred12;
 let tmp_pred14: f32 = 0.5_f32*tmp_pred10*tmp_pred13 - tmp_pred2*tmp_pred4 + tmp_pred7*tmp_pred9;
-let tmp_pred15: f32 = qcs0*qcs1;
-let tmp_pred16: f32 = qcs2*qcs3;
+let tmp_pred15: f32 = q_bv0*q_bv1;
+let tmp_pred16: f32 = q_bv2*q_bv3;
 let tmp_pred17: f32 = tmp_pred15 + tmp_pred16;
 let tmp_pred18: f32 = tmp_pred0 - tmp_pred1;
 let tmp_pred19: f32 = 1.0_f32*tmp_pred10;
-let tmp_pred20: f32 = 2.0_f32*qcs1*qcs1;
+let tmp_pred20: f32 = 2.0_f32*q_bv1*q_bv1;
 let tmp_pred21: f32 = tmp_pred12 + tmp_pred20;
 let tmp_pred22: f32 = -tmp_pred17*tmp_pred9 + tmp_pred18*tmp_pred19 + 0.5_f32*tmp_pred21*tmp_pred3;
 let tmp_pred23: f32 = tmp_pred5 + tmp_pred6;

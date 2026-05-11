@@ -26,10 +26,9 @@ R(q_ab) = C_ab
 R(q1 * q2) = R(q1) R(q2)
 ```
 
-The align mount, the Reduced `qcs0..qcs3` fields, and the Full `qcs0..qcs3`
-fields all represent the same public physical vehicle-to-body mount `q_bv`. The
-generated state field name `qcs` is retained for layout compatibility, but its
-DCM is `C_bv = R(q_bv)`:
+The align mount, the Reduced `q_bv0..q_bv3` fields, and the Full `q_bv0..q_bv3`
+fields all represent the same public physical vehicle-to-body mount `q_bv`.
+Its DCM is `C_bv = R(q_bv)`:
 
 ```text
 x_b = C_bv x_v

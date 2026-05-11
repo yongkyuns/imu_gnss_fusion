@@ -153,7 +153,7 @@ Quaternions are scalar-first `[w, x, y, z]`.
 | `e` | ECEF frame used internally by Full. |
 
 The current implementation follows the mount-in-propagation convention. The
-public mount quaternion returned by Align and stored in the `qcs0..qcs3` fields
+public mount quaternion returned by Align and stored in the `q_bv0..q_bv3` fields
 of both filters is the physical vehicle-to-body mount `q_bv`, whose rotation
 matrix is `C_bv = R(q_bv)`:
 
@@ -225,10 +225,10 @@ fusion.process_vehicle_speed(VehicleSpeedSample {
 if let Some(reduced) = fusion.reduced() {
     let vn = reduced.nominal.vn;
     let mount_q = [
-        reduced.nominal.qcs0,
-        reduced.nominal.qcs1,
-        reduced.nominal.qcs2,
-        reduced.nominal.qcs3,
+        reduced.nominal.q_bv0,
+        reduced.nominal.q_bv1,
+        reduced.nominal.q_bv2,
+        reduced.nominal.q_bv3,
     ];
     let _ = (vn, mount_q);
 }

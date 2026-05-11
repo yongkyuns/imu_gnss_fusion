@@ -1,3 +1,42 @@
+"""Symbolic model generator for the Reduced local-NED EKF.
+
+This file is the source of truth for the Rust snippets included by
+`sensor_fusion/src/reduced/generated.rs`. Normal Rust builds do not execute this
+script; run it only when changing the Reduced mathematical model:
+
+    python sensor_fusion/src/reduced/formulation.py --emit-rust
+
+Frame and quaternion convention:
+
+- `n`: local navigation frame, North-East-Down.
+- `v`: vehicle frame, x forward, y right, z down.
+- `b`: IMU/body frame.
+- `q`: vehicle attitude in navigation coordinates, `q_nv`.
+  `R(q) = C_nv`, so `x_n = C_nv x_v`.
+- `q_bv`: physical vehicle-to-body mount. `R(q_bv) = C_bv`, so
+  `x_b = C_bv x_v`; `C_vb = C_bv.T` rotates raw IMU samples into vehicle frame.
+- Quaternion multiplication is active composition:
+  `R(q1 * q2) = R(q1) R(q2)`.
+
+Nominal state order generated here:
+
+    q_nv[4], v_n[3], p_n[3], gyro_bias_b[3], accel_bias_b[3], q_bv[4]
+
+Error state order generated here:
+
+    dtheta_nv[3], dv_n[3], dp_n[3], dbg_b[3], dba_b[3], dpsi_bv[3]
+
+Noise input order generated here:
+
+    gyro_delta_noise_b[3], accel_delta_noise_b[3],
+    gyro_bias_rw_b[3], accel_bias_rw_b[3], mount_rw_bv[3]
+
+The generated Reduced model intentionally uses scalar observation files for
+GNSS, stationary-gravity, and vehicle-frame velocity/NHC updates. Each scalar
+file contains H, K, and S for a one-dimensional Kalman update so runtime code can
+avoid a dense measurement inverse.
+"""
+
 import sys
 from pathlib import Path
 
@@ -15,6 +54,13 @@ GENERATED_RUST_DIR = SCRIPT_DIR / "generated"
 
 
 def create_symmetric_cov_matrix(n):
+    """Create symbolic covariance matrix with one symbol per upper-triangle cell.
+
+    The generated scalar-update expressions use this matrix to derive `H`,
+    `K = P H^T / S`, and `S = H P H^T + R`. Lower-triangle entries alias the
+    same upper-triangle symbols so the symbolic covariance is exactly symmetric.
+    """
+
     def create_cov(i, j):
         if j >= i:
             return Symbol(f"P[{i}][{j}]", real=True)
@@ -29,6 +75,23 @@ def create_symmetric_cov_matrix(n):
 
 
 def generate_observation_equations(p_cov, state, observation, variance, varname, linearization_subs=None):
+    """Derive one scalar EKF observation update.
+
+    Args:
+        p_cov: Symbolic covariance matrix for the Reduced error state.
+        state: Reduced error-state vector.
+        observation: Predicted scalar measurement expressed in terms of the
+            perturbed/true state.
+        variance: Measurement variance symbol emitted into generated Rust.
+        varname: Prefix for common-subexpression temporaries.
+        linearization_subs: Optional substitutions, usually zero-error
+            substitutions, applied after differentiating.
+
+    Returns:
+        SymPy CSE tuple for `[H, K, S]`, where `H` is row-vector Jacobian, `K` is
+        the covariance-weighted scalar gain, and `S` is innovation variance.
+    """
+
     h = Matrix([observation]).jacobian(state)
     if linearization_subs is not None:
         h = h.subs(linearization_subs)
@@ -41,6 +104,8 @@ def generate_observation_equations(p_cov, state, observation, variance, varname,
 
 
 def write_observation_equations(path, equations, state_dim):
+    """Emit generated Rust assignments for a scalar observation update."""
+
     gen = RustCodeGenerator(str(path))
     gen.print_string("Sub Expressions")
     gen.write_subexpressions(equations[0])
@@ -57,6 +122,8 @@ def write_observation_equations(path, equations, state_dim):
 
 
 def quat_to_rot(q):
+    """Return active DCM `C_ab = R(q_ab)` for quaternion `[w, x, y, z]`."""
+
     q0, q1, q2, q3 = q
     return Matrix(
         [
@@ -80,6 +147,8 @@ def quat_to_rot(q):
 
 
 def quat_mult(p, q):
+    """Hamilton product with active-composition convention."""
+
     return Matrix(
         [
             p[0] * q[0] - p[1] * q[1] - p[2] * q[2] - p[3] * q[3],
@@ -91,18 +160,37 @@ def quat_mult(p, q):
 
 
 def quat_conj(q):
+    """Quaternion conjugate; inverse for unit quaternions."""
+
     return Matrix([q[0], -q[1], -q[2], -q[3]])
 
 
 def delta_quat(dtheta):
+    """First-order small-angle quaternion `[1, 0.5*dtheta]`."""
+
     return Matrix([1, 0.5 * dtheta[0], 0.5 * dtheta[1], 0.5 * dtheta[2]])
 
 
 def skew(v):
+    """Skew matrix satisfying `skew(a) b = a x b`."""
+
     return Matrix([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
 
 
 def propagate_nominal(q, v, p, bg, ba, q_bv, d_ang, d_vel, dt, g_n):
+    """Reduced nominal mechanization used for generated prediction.
+
+    Inputs `d_ang` and `d_vel` are raw IMU increments in body frame `b` over
+    `dt`. Bias terms are body-frame rates/accelerations, so the bias increments
+    are `bias * dt`. The mount inverse `C_vb` rotates the bias-corrected
+    increments into the vehicle frame before attitude/velocity propagation.
+
+    This symbolic model generates only the nominal quantities updated by the
+    generated prediction snippet: attitude, velocity, and position. Bias and
+    mount nominal states are constant during propagation; their uncertainty
+    evolves through the generated error-state noise model.
+    """
+
     r_v_to_n = quat_to_rot(q)
     r_v_to_b = quat_to_rot(q_bv)
     r_b_to_v = r_v_to_b.T
@@ -118,29 +206,41 @@ def propagate_nominal(q, v, p, bg, ba, q_bv, d_ang, d_vel, dt, g_n):
     return q_new, v_new, p_new, bg_new, ba_new
 
 
-def inject_true_state(q, v, p, bg, ba, qcs, dtheta, dv, dp, dbg, dba, dpsi_cs):
+def inject_true_state(q, v, p, bg, ba, q_bv, dtheta, dv, dp, dbg, dba, dpsi_bv):
+    """Apply Reduced error-state perturbations to a nominal state.
+
+    Attitude and mount use left small-angle perturbations:
+    `q_true = q_nom * dq(dtheta)` for vehicle attitude and
+    `q_bv_true = dq(dpsi_bv) * q_bv_nom` for mount. This matches the reset and
+    covariance layout used by `sensor_fusion/src/reduced/mod.rs`.
+    """
+
     q_true = quat_mult(q, delta_quat(dtheta))
     v_true = v + dv
     p_true = p + dp
     bg_true = bg + dbg
     ba_true = ba + dba
-    qcs_true = quat_mult(delta_quat(dpsi_cs), qcs)
-    return q_true, v_true, p_true, bg_true, ba_true, qcs_true
+    q_bv_true = quat_mult(delta_quat(dpsi_bv), q_bv)
+    return q_true, v_true, p_true, bg_true, ba_true, q_bv_true
 
 
-def extract_error_state(q_nom, v_nom, p_nom, bg_nom, ba_nom, qcs_nom, q_true, v_true, p_true, bg_true, ba_true, qcs_true):
+def extract_error_state(q_nom, v_nom, p_nom, bg_nom, ba_nom, q_bv_nom, q_true, v_true, p_true, bg_true, ba_true, q_bv_true):
+    """Recover first-order Reduced error state from nominal and true states."""
+
     dq = quat_mult(quat_conj(q_nom), q_true)
     dtheta = Matrix([2 * dq[1], 2 * dq[2], 2 * dq[3]])
     dv = v_true - v_nom
     dp = p_true - p_nom
     dbg = bg_true - bg_nom
     dba = ba_true - ba_nom
-    dqcs = quat_mult(qcs_true, quat_conj(qcs_nom))
-    dpsi_cs = Matrix([2 * dqcs[1], 2 * dqcs[2], 2 * dqcs[3]])
-    return Matrix.vstack(dtheta, dv, dp, dbg, dba, dpsi_cs)
+    dq_bv = quat_mult(q_bv_true, quat_conj(q_bv_nom))
+    dpsi_bv = Matrix([2 * dq_bv[1], 2 * dq_bv[2], 2 * dq_bv[3]])
+    return Matrix.vstack(dtheta, dv, dp, dbg, dba, dpsi_bv)
 
 
 def build_symbolic_model():
+    """Build symbolic variables and nominal Reduced propagation graph."""
+
     dt = Symbol("dt", real=True)
     g = Symbol("g", real=True)
 
@@ -149,26 +249,26 @@ def build_symbolic_model():
     p = Matrix(symbols("pn pe pd", real=True))
     bg = Matrix(symbols("bgx bgy bgz", real=True))
     ba = Matrix(symbols("bax bay baz", real=True))
-    qcs = Matrix(symbols("qcs0 qcs1 qcs2 qcs3", real=True))
+    q_bv = Matrix(symbols("q_bv0 q_bv1 q_bv2 q_bv3", real=True))
 
     dtheta = Matrix(symbols("dtheta_x dtheta_y dtheta_z", real=True))
     dv = Matrix(symbols("dv_n dv_e dv_d", real=True))
     dp = Matrix(symbols("dp_n dp_e dp_d", real=True))
     dbg = Matrix(symbols("dbg_x dbg_y dbg_z", real=True))
     dba = Matrix(symbols("dba_x dba_y dba_z", real=True))
-    dpsi_cs = Matrix(symbols("dpsi_cs_x dpsi_cs_y dpsi_cs_z", real=True))
+    dpsi_bv = Matrix(symbols("dpsi_bv_x dpsi_bv_y dpsi_bv_z", real=True))
 
     d_ang = Matrix(symbols("dax day daz", real=True))
     d_vel = Matrix(symbols("dvx dvy dvz", real=True))
 
     g_n = Matrix([0, 0, g])
     q_new, v_new, p_new, bg_new, ba_new = propagate_nominal(
-        q, v, p, bg, ba, qcs, d_ang, d_vel, dt, g_n
+        q, v, p, bg, ba, q_bv, d_ang, d_vel, dt, g_n
     )
 
-    x_nom = Matrix.vstack(q, v, p, bg, ba, qcs)
-    x_nom_new = Matrix.vstack(q_new, v_new, p_new, bg_new, ba_new, qcs)
-    dx = Matrix.vstack(dtheta, dv, dp, dbg, dba, dpsi_cs)
+    x_nom = Matrix.vstack(q, v, p, bg, ba, q_bv)
+    x_nom_new = Matrix.vstack(q_new, v_new, p_new, bg_new, ba_new, q_bv)
+    dx = Matrix.vstack(dtheta, dv, dp, dbg, dba, dpsi_bv)
 
     return {
         "dt": dt,
@@ -177,13 +277,13 @@ def build_symbolic_model():
         "p": p,
         "bg": bg,
         "ba": ba,
-        "qcs": qcs,
+        "q_bv": q_bv,
         "dtheta": dtheta,
         "dv": dv,
         "dp": dp,
         "dbg": dbg,
         "dba": dba,
-        "dpsi_cs": dpsi_cs,
+        "dpsi_bv": dpsi_bv,
         "d_ang": d_ang,
         "d_vel": d_vel,
         "g_n": g_n,
@@ -197,6 +297,22 @@ def build_symbolic_model():
 
 
 def derive_error_dynamics():
+    """Derive discrete Reduced error transition `F` and noise-input `G`.
+
+    The method is a standard perturb-propagate-linearize construction:
+
+    1. Build a nominal state and a first-order perturbed "true" state.
+    2. Propagate both through the same nominal mechanization.
+    3. Add process noise to IMU increments, bias random walks, and mount random
+       walk.
+    4. Extract the post-propagation error state.
+    5. Differentiate with respect to previous error state and noise, then
+       evaluate at zero error/noise.
+
+    The resulting `F` and `G` are discrete-time matrices for one IMU increment,
+    not continuous-time matrices.
+    """
+
     model = build_symbolic_model()
 
     dt = model["dt"]
@@ -208,7 +324,7 @@ def derive_error_dynamics():
     dp = model["dp"]
     dbg = model["dbg"]
     dba = model["dba"]
-    dpsi_cs = model["dpsi_cs"]
+    dpsi_bv = model["dpsi_bv"]
     d_ang = model["d_ang"]
     d_vel = model["d_vel"]
     g_n = model["g_n"]
@@ -220,23 +336,23 @@ def derive_error_dynamics():
     n_mount = Matrix(symbols("n_mount_x n_mount_y n_mount_z", real=True))
     w = Matrix.vstack(n_dang, n_dvel, n_dbg, n_dba, n_mount)
 
-    q_true, v_true, p_true, bg_true, ba_true, qcs_true = inject_true_state(
+    q_true, v_true, p_true, bg_true, ba_true, q_bv_true = inject_true_state(
         model["q"],
         model["v"],
         model["p"],
         bg,
         ba,
-        model["qcs"],
+        model["q_bv"],
         dtheta,
         dv,
         dp,
         dbg,
         dba,
-        dpsi_cs,
+        dpsi_bv,
     )
 
     q_nom_new, v_nom_new, p_nom_new, bg_nom_new, ba_nom_new = propagate_nominal(
-        model["q"], model["v"], model["p"], bg, ba, model["qcs"], d_ang, d_vel, dt, g_n
+        model["q"], model["v"], model["p"], bg, ba, model["q_bv"], d_ang, d_vel, dt, g_n
     )
     q_true_new, v_true_new, p_true_new, bg_true_new, ba_true_new = propagate_nominal(
         q_true,
@@ -244,7 +360,7 @@ def derive_error_dynamics():
         p_true,
         bg_true,
         ba_true,
-        qcs_true,
+        q_bv_true,
         d_ang + n_dang,
         d_vel + n_dvel,
         dt,
@@ -252,8 +368,8 @@ def derive_error_dynamics():
     )
     bg_true_new += n_dbg * dt
     ba_true_new += n_dba * dt
-    qcs_nom_new = model["qcs"]
-    qcs_true_new = quat_mult(delta_quat(n_mount), qcs_true)
+    q_bv_nom_new = model["q_bv"]
+    q_bv_true_new = quat_mult(delta_quat(n_mount), q_bv_true)
 
     dx_next = extract_error_state(
         q_nom_new,
@@ -261,13 +377,13 @@ def derive_error_dynamics():
         p_nom_new,
         bg_nom_new,
         ba_nom_new,
-        qcs_nom_new,
+        q_bv_nom_new,
         q_true_new,
         v_true_new,
         p_true_new,
         bg_true_new,
         ba_true_new,
-        qcs_true_new,
+        q_bv_true_new,
     )
 
     zero_subs = {symbol: 0 for symbol in list(dx) + list(w)}
@@ -284,22 +400,36 @@ def derive_error_dynamics():
 
 
 def derive_measurement_model():
+    """Derive scalar Reduced observation models.
+
+    Generated scalar observations:
+
+    - GNSS position in local NED: `gps_pos_n/e/d`.
+    - GNSS velocity in local NED: `gps_vel_n/e/d`.
+    - Stationary gravity cues in vehicle frame: `stationary_accel_x/y`.
+    - Vehicle-frame velocity/NHC rows: `body_vel_x/y/z`.
+
+    All rows are linearized at zero error. Runtime code passes the residual
+    `z - h(x_nom)` and the generated row/gain/innovation variance to the shared
+    scalar-update path.
+    """
+
     model = build_symbolic_model()
     p_cov = create_symmetric_cov_matrix(model["state_dim_error"])
     zero_error_subs = {symbol: 0 for symbol in list(model["dx"])}
-    q_true, v_true, p_true, bg_true, ba_true, qcs_true = inject_true_state(
+    q_true, v_true, p_true, bg_true, ba_true, q_bv_true = inject_true_state(
         model["q"],
         model["v"],
         model["p"],
         model["bg"],
         model["ba"],
-        model["qcs"],
+        model["q_bv"],
         model["dtheta"],
         model["dv"],
         model["dp"],
         model["dbg"],
         model["dba"],
-        model["dpsi_cs"],
+        model["dpsi_bv"],
     )
     r_true_to_n = quat_to_rot(q_true)
     v_true_v = r_true_to_n.T * v_true
@@ -323,6 +453,8 @@ def derive_measurement_model():
 
 
 def emit_cse_matrix_assignments(path, title, matrix, variable_name, symbol_prefix, is_symmetric=False):
+    """Emit CSE-optimized Rust assignments for a matrix."""
+
     expr = cse(matrix, symbols(f"{symbol_prefix}0:4000"), optimizations="basic")
     gen = RustCodeGenerator(str(path))
     gen.print_string(title)
@@ -335,6 +467,8 @@ def emit_cse_matrix_assignments(path, title, matrix, variable_name, symbol_prefi
 
 
 def emit_matrix_supports(path, matrices):
+    """Emit sparse row-support metadata for generated covariance propagation."""
+
     with open(path, "w") as file:
         file.write("// Generated Reduced transition sparsity supports\n")
         for prefix, matrix, rows in matrices:
@@ -358,6 +492,12 @@ def emit_matrix_supports(path, matrices):
 
 
 def emit_nominal_prediction_rust(model):
+    """Emit the Reduced nominal prediction snippet.
+
+    Only attitude, velocity, and position assignments are generated here because
+    bias and mount nominal states are unchanged by propagation.
+    """
+
     q_new = model["x_nom_new"][0:4, 0]
     v_new = model["x_nom_new"][4:7, 0]
     p_new = model["x_nom_new"][7:10, 0]
@@ -381,6 +521,8 @@ def emit_nominal_prediction_rust(model):
 
 
 def emit_generated_rust():
+    """Regenerate all Reduced Rust fragments from the symbolic model."""
+
     model = derive_error_dynamics()
     meas = derive_measurement_model()
     GENERATED_RUST_DIR.mkdir(parents=True, exist_ok=True)

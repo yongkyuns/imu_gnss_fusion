@@ -57,7 +57,7 @@ coordinates:
 \begin{equation}
   C_{ev}=R(q_{ev}),\qquad x_e=C_{ev}x_v .
 \end{equation}
-The mount quaternion stored in the Rust fields \texttt{qcs0..qcs3} is the
+The mount quaternion stored in the Rust fields \texttt{q_bv0..q_bv3} is the
 physical vehicle-to-body mount \(q_{bv}\):
 \begin{equation}
   C_{bv}=R(q_{bv}),\qquad x_b=C_{bv}x_v,\qquad
@@ -92,7 +92,7 @@ Fields & Meaning \\
 \texttt{bax..baz} & accelerometer additive correction \(b_a\), meters per second squared \\
 \texttt{sgx..sgz} & gyro scale correction \(s_g\) \\
 \texttt{sax..saz} & accelerometer scale correction \(s_a\) \\
-\texttt{qcs0..qcs3} & physical vehicle-to-body mount quaternion \(q_{bv}\) \\
+\texttt{q_bv0..q_bv3} & physical vehicle-to-body mount quaternion \(q_{bv}\) \\
 \bottomrule
 \end{tabular}
 \end{center}

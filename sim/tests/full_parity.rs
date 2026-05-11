@@ -15,7 +15,7 @@ struct ReplayOutput {
     vel_ecef_mps: Vec<[f64; 3]>,
     #[serde(rename = "q_es")]
     q_ev: Vec<[f64; 4]>,
-    #[serde(rename = "q_cs")]
+    #[serde(rename = "q_bv")]
     q_bv: Vec<[f64; 4]>,
 }
 
@@ -40,7 +40,7 @@ struct GoldenCheckpoint {
     vel_ecef_mps: [f64; 3],
     #[serde(rename = "q_es")]
     q_ev: [f64; 4],
-    #[serde(rename = "q_cs")]
+    #[serde(rename = "q_bv")]
     q_bv: [f64; 4],
 }
 

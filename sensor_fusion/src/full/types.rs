@@ -135,14 +135,14 @@ pub struct NominalState {
     pub sax: f32,
     pub say: f32,
     pub saz: f32,
-    /// Physical vehicle-to-body mount quaternion, stored in legacy `qcs*` fields.
+    /// Physical vehicle-to-body mount quaternion `q_bv`.
     ///
     /// `R(q_bv) = C_bv`, `x_b = C_bv x_v`; propagation uses
     /// `C_vb = C_bv^T` to rotate raw IMU samples into the vehicle frame.
-    pub qcs0: f32,
-    pub qcs1: f32,
-    pub qcs2: f32,
-    pub qcs3: f32,
+    pub q_bv0: f32,
+    pub q_bv1: f32,
+    pub q_bv2: f32,
+    pub q_bv3: f32,
 }
 
 /// Two-sample IMU increment used by the full ECEF propagation model.
@@ -187,7 +187,7 @@ pub struct State {
     pub p: [[f32; ERROR_STATES]; ERROR_STATES],
     pub noise: ProcessNoise,
     pub pos_e64: [f64; 3],
-    pub qcs64: [f64; 4],
+    pub q_bv64: [f64; 4],
     pub last_dx: [f32; ERROR_STATES],
     pub last_dx_by_obs: [[f32; ERROR_STATES]; 8],
     pub last_obs_count: i32,
@@ -207,13 +207,13 @@ impl Default for State {
         Self {
             nominal: NominalState {
                 q0: 1.0,
-                qcs0: 1.0,
+                q_bv0: 1.0,
                 ..NominalState::default()
             },
             p,
             noise: ProcessNoise::reference_nsr_demo(),
             pos_e64: [0.0; 3],
-            qcs64: [1.0, 0.0, 0.0, 0.0],
+            q_bv64: [1.0, 0.0, 0.0, 0.0],
             last_dx: [0.0; ERROR_STATES],
             last_dx_by_obs: [[0.0; ERROR_STATES]; 8],
             last_obs_count: 0,

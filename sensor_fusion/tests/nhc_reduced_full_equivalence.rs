@@ -52,10 +52,10 @@ fn reduced_and_full_nhc_jacobians_match_after_attitude_basis_transform() {
         vn: 8.0,
         ve: -1.5,
         vd: 0.35,
-        qcs0: 0.995_005,
-        qcs1: 0.045_023,
-        qcs2: -0.036_704,
-        qcs3: 0.081_264,
+        q_bv0: 0.995_005,
+        q_bv1: 0.045_023,
+        q_bv2: -0.036_704,
+        q_bv3: 0.081_264,
         ..reduced::NominalState::default()
     };
     let full = full::NominalState {
@@ -66,10 +66,10 @@ fn reduced_and_full_nhc_jacobians_match_after_attitude_basis_transform() {
         vn: reduced.vn,
         ve: reduced.ve,
         vd: reduced.vd,
-        qcs0: reduced.qcs0,
-        qcs1: reduced.qcs1,
-        qcs2: reduced.qcs2,
-        qcs3: reduced.qcs3,
+        q_bv0: reduced.q_bv0,
+        q_bv1: reduced.q_bv1,
+        q_bv2: reduced.q_bv2,
+        q_bv3: reduced.q_bv3,
         ..full::NominalState::default()
     };
     let p = [[0.0; REDUCED_STATES]; REDUCED_STATES];
@@ -382,10 +382,10 @@ fn sample_reduced_nominal() -> reduced::NominalState {
         vn: 8.0,
         ve: -1.5,
         vd: 0.35,
-        qcs0: 0.995_005,
-        qcs1: 0.045_023,
-        qcs2: -0.036_704,
-        qcs3: 0.081_264,
+        q_bv0: 0.995_005,
+        q_bv1: 0.045_023,
+        q_bv2: -0.036_704,
+        q_bv3: 0.081_264,
         ..reduced::NominalState::default()
     }
 }
@@ -399,10 +399,10 @@ fn alternate_reduced_nominal() -> reduced::NominalState {
         vn: -3.5,
         ve: 7.25,
         vd: -1.2,
-        qcs0: 0.961_256_3,
-        qcs1: -0.037_259_74,
-        qcs2: 0.128_494_34,
-        qcs3: -0.241_015_14,
+        q_bv0: 0.961_256_3,
+        q_bv1: -0.037_259_74,
+        q_bv2: 0.128_494_34,
+        q_bv3: -0.241_015_14,
         ..reduced::NominalState::default()
     }
 }
@@ -416,10 +416,10 @@ fn sample_full_nominal(reduced: &reduced::NominalState) -> full::NominalState {
         vn: reduced.vn,
         ve: reduced.ve,
         vd: reduced.vd,
-        qcs0: reduced.qcs0,
-        qcs1: reduced.qcs1,
-        qcs2: reduced.qcs2,
-        qcs3: reduced.qcs3,
+        q_bv0: reduced.q_bv0,
+        q_bv1: reduced.q_bv1,
+        q_bv2: reduced.q_bv2,
+        q_bv3: reduced.q_bv3,
         sgx: 1.0,
         sgy: 1.0,
         sgz: 1.0,

@@ -31,14 +31,14 @@ pub struct NominalState {
     pub bax: f32,
     pub bay: f32,
     pub baz: f32,
-    /// Physical vehicle-to-body mount quaternion, stored in legacy `qcs*` fields.
+    /// Physical vehicle-to-body mount quaternion `q_bv`.
     ///
     /// `R(q_bv) = C_bv`, `x_b = C_bv x_v`; propagation uses
     /// `C_vb = C_bv^T` to rotate raw IMU increments into the vehicle frame.
-    pub qcs0: f32,
-    pub qcs1: f32,
-    pub qcs2: f32,
-    pub qcs3: f32,
+    pub q_bv0: f32,
+    pub q_bv1: f32,
+    pub q_bv2: f32,
+    pub q_bv3: f32,
 }
 
 #[repr(C)]
@@ -136,7 +136,7 @@ impl Default for State {
     fn default() -> Self {
         Self {
             nominal: NominalState {
-                qcs0: 1.0,
+                q_bv0: 1.0,
                 ..NominalState::default()
             },
             p: [[0.0; ERROR_STATES]; ERROR_STATES],

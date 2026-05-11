@@ -906,10 +906,10 @@ fn snapshot_state(
     let reduced = fusion.reduced()?;
     let truth = truth?;
     let q_bv = as_q64([
-        reduced.nominal.qcs0,
-        reduced.nominal.qcs1,
-        reduced.nominal.qcs2,
-        reduced.nominal.qcs3,
+        reduced.nominal.q_bv0,
+        reduced.nominal.q_bv1,
+        reduced.nominal.q_bv2,
+        reduced.nominal.q_bv3,
     ]);
     let q_vehicle = as_q64([
         reduced.nominal.q0,
@@ -957,10 +957,10 @@ fn snapshot_state(
         reduced.nominal.q3,
     ]));
     let c_c_s = quat_to_rotmat(as_q64([
-        reduced.nominal.qcs0,
-        reduced.nominal.qcs1,
-        reduced.nominal.qcs2,
-        reduced.nominal.qcs3,
+        reduced.nominal.q_bv0,
+        reduced.nominal.q_bv1,
+        reduced.nominal.q_bv2,
+        reduced.nominal.q_bv3,
     ]));
     let vel_seed = mat_vec(
         transpose3(c_n_b),

@@ -14,7 +14,7 @@
 //!
 //! `q_ev` is the ECEF-frame attitude with respect to the vehicle frame:
 //! `R(q_ev) = C_ev` and `x_e = C_ev x_v`. `q_bv` is the physical
-//! vehicle-to-body mount stored in the legacy `qcs*` fields, with
+//! vehicle-to-body mount stored in the `q_bv*` fields, with
 //! `R(q_bv) = C_bv` and `x_b = C_bv x_v`. Raw body-frame IMU samples are
 //! rotated through `C_vb = C_bv^T` during propagation. The 24-state error order
 //! in generated matrices and injection is:
@@ -79,8 +79,8 @@ impl Filter {
             ..State::default()
         };
         raw.nominal.q0 = 1.0;
-        raw.nominal.qcs0 = 1.0;
-        raw.qcs64 = [1.0, 0.0, 0.0, 0.0];
+        raw.nominal.q_bv0 = 1.0;
+        raw.q_bv64 = [1.0, 0.0, 0.0, 0.0];
         Self {
             raw,
             freeze_mount_states: false,
@@ -167,11 +167,11 @@ impl Filter {
     ///
     /// The quaternion must satisfy `R(q_bv) = C_bv`, `x_b = C_bv x_v`.
     pub fn set_mount_quat(&mut self, q_bv: [f32; 4]) {
-        self.raw.nominal.qcs0 = q_bv[0];
-        self.raw.nominal.qcs1 = q_bv[1];
-        self.raw.nominal.qcs2 = q_bv[2];
-        self.raw.nominal.qcs3 = q_bv[3];
-        self.raw.qcs64 = [
+        self.raw.nominal.q_bv0 = q_bv[0];
+        self.raw.nominal.q_bv1 = q_bv[1];
+        self.raw.nominal.q_bv2 = q_bv[2];
+        self.raw.nominal.q_bv3 = q_bv[3];
+        self.raw.q_bv64 = [
             q_bv[0] as f64,
             q_bv[1] as f64,
             q_bv[2] as f64,
@@ -405,10 +405,10 @@ impl Filter {
             self.raw.nominal.saz,
         ];
         let c_bv = quat_to_dcm_f32([
-            self.raw.nominal.qcs0,
-            self.raw.nominal.qcs1,
-            self.raw.nominal.qcs2,
-            self.raw.nominal.qcs3,
+            self.raw.nominal.q_bv0,
+            self.raw.nominal.q_bv1,
+            self.raw.nominal.q_bv2,
+            self.raw.nominal.q_bv3,
         ]);
         let c_vb = transpose3_f32(c_bv);
         let omega1 = [
@@ -1179,38 +1179,41 @@ impl Filter {
         self.raw.nominal.sgy += dx[19];
         self.raw.nominal.sgz += dx[20];
 
-        let dqcs = euler_to_quat_f32(dx[21], dx[22], dx[23]);
-        let dqcs0 = dqcs[0] as f64;
-        let dqcs1 = dqcs[1] as f64;
-        let dqcs2 = dqcs[2] as f64;
-        let dqcs3 = dqcs[3] as f64;
-        let qcs_old0 = self.raw.qcs64[0];
-        let qcs_old1 = self.raw.qcs64[1];
-        let qcs_old2 = self.raw.qcs64[2];
-        let qcs_old3 = self.raw.qcs64[3];
-        let mut qcs_new0 =
-            dqcs0 * qcs_old0 - dqcs1 * qcs_old1 - dqcs2 * qcs_old2 - dqcs3 * qcs_old3;
-        let mut qcs_new1 =
-            dqcs0 * qcs_old1 + dqcs1 * qcs_old0 + dqcs2 * qcs_old3 - dqcs3 * qcs_old2;
-        let mut qcs_new2 =
-            dqcs0 * qcs_old2 - dqcs1 * qcs_old3 + dqcs2 * qcs_old0 + dqcs3 * qcs_old1;
-        let mut qcs_new3 =
-            dqcs0 * qcs_old3 + dqcs1 * qcs_old2 - dqcs2 * qcs_old1 + dqcs3 * qcs_old0;
-        let qcs_norm = sqrt_f64(
-            qcs_new0 * qcs_new0 + qcs_new1 * qcs_new1 + qcs_new2 * qcs_new2 + qcs_new3 * qcs_new3,
+        let dq_bv = euler_to_quat_f32(dx[21], dx[22], dx[23]);
+        let dq_bv0 = dq_bv[0] as f64;
+        let dq_bv1 = dq_bv[1] as f64;
+        let dq_bv2 = dq_bv[2] as f64;
+        let dq_bv3 = dq_bv[3] as f64;
+        let q_bv_old0 = self.raw.q_bv64[0];
+        let q_bv_old1 = self.raw.q_bv64[1];
+        let q_bv_old2 = self.raw.q_bv64[2];
+        let q_bv_old3 = self.raw.q_bv64[3];
+        let mut q_bv_new0 =
+            dq_bv0 * q_bv_old0 - dq_bv1 * q_bv_old1 - dq_bv2 * q_bv_old2 - dq_bv3 * q_bv_old3;
+        let mut q_bv_new1 =
+            dq_bv0 * q_bv_old1 + dq_bv1 * q_bv_old0 + dq_bv2 * q_bv_old3 - dq_bv3 * q_bv_old2;
+        let mut q_bv_new2 =
+            dq_bv0 * q_bv_old2 - dq_bv1 * q_bv_old3 + dq_bv2 * q_bv_old0 + dq_bv3 * q_bv_old1;
+        let mut q_bv_new3 =
+            dq_bv0 * q_bv_old3 + dq_bv1 * q_bv_old2 - dq_bv2 * q_bv_old1 + dq_bv3 * q_bv_old0;
+        let q_bv_norm = sqrt_f64(
+            q_bv_new0 * q_bv_new0
+                + q_bv_new1 * q_bv_new1
+                + q_bv_new2 * q_bv_new2
+                + q_bv_new3 * q_bv_new3,
         );
-        if qcs_norm > 0.0 {
-            qcs_new0 /= qcs_norm;
-            qcs_new1 /= qcs_norm;
-            qcs_new2 /= qcs_norm;
-            qcs_new3 /= qcs_norm;
+        if q_bv_norm > 0.0 {
+            q_bv_new0 /= q_bv_norm;
+            q_bv_new1 /= q_bv_norm;
+            q_bv_new2 /= q_bv_norm;
+            q_bv_new3 /= q_bv_norm;
         } else {
-            qcs_new0 = 1.0;
-            qcs_new1 = 0.0;
-            qcs_new2 = 0.0;
-            qcs_new3 = 0.0;
+            q_bv_new0 = 1.0;
+            q_bv_new1 = 0.0;
+            q_bv_new2 = 0.0;
+            q_bv_new3 = 0.0;
         }
-        self.raw.qcs64 = [qcs_new0, qcs_new1, qcs_new2, qcs_new3];
+        self.raw.q_bv64 = [q_bv_new0, q_bv_new1, q_bv_new2, q_bv_new3];
         self.sync_nominal_mount_from_shadow();
     }
 
@@ -1235,10 +1238,10 @@ impl Filter {
     }
 
     fn sync_nominal_mount_from_shadow(&mut self) {
-        self.raw.nominal.qcs0 = self.raw.qcs64[0] as f32;
-        self.raw.nominal.qcs1 = self.raw.qcs64[1] as f32;
-        self.raw.nominal.qcs2 = self.raw.qcs64[2] as f32;
-        self.raw.nominal.qcs3 = self.raw.qcs64[3] as f32;
+        self.raw.nominal.q_bv0 = self.raw.q_bv64[0] as f32;
+        self.raw.nominal.q_bv1 = self.raw.q_bv64[1] as f32;
+        self.raw.nominal.q_bv2 = self.raw.q_bv64[2] as f32;
+        self.raw.nominal.q_bv3 = self.raw.q_bv64[3] as f32;
     }
 }
 

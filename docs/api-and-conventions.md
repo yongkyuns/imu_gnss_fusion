@@ -81,8 +81,8 @@ Important public quaternions:
   vehicle frame. `R(q_nv) = C_nv`, so `x_n = C_nv x_v`.
 - Full `q0..q3`: `q_ev`, the ECEF-frame attitude with respect to the vehicle
   frame. `R(q_ev) = C_ev`, so `x_e = C_ev x_v`.
-- Reduced and Full `qcs0..qcs3`: despite the legacy `qcs` field name, these
-  fields store the physical mount `q_bv`, not its inverse.
+- Reduced and Full `q_bv0..q_bv3`: physical mount quaternion components. These
+  fields store `q_bv`, not its inverse.
 
 Propagation consumes raw IMU samples in body frame `b`. Both Reduced and Full
 use `C_vb = C_bv^T` to rotate raw body-frame inertial measurements into the
@@ -321,7 +321,7 @@ q_nv, v_n, p_n, b_g_b, b_a_b, q_bv
 ```
 
 where `v_n` and `p_n` are `[north, east, down]`, body-frame biases are in raw
-IMU frame `b`, and `q_bv` is stored in `qcs0..qcs3`.
+IMU frame `b`, and `q_bv` is stored in `q_bv0..q_bv3`.
 
 Core standalone methods include:
 
@@ -388,9 +388,9 @@ embedded use, keep them allocation-free and avoid `std` dependencies in
 
 - Passing `q_vb` where the API expects `q_bv`. Manual mount APIs require
   vehicle-to-body: `x_b = C_bv x_v`.
-- Treating `qcs0..qcs3` as a generic "car-to-sensor" or inverse mount. In the
-  current public API and tests, both Reduced and Full store physical `q_bv` in
-  those fields.
+- Treating `q_bv0..q_bv3` as an inverse/body-to-vehicle mount. In the current
+  public API and tests, both Reduced and Full store physical `q_bv` in those
+  fields.
 - Forgetting that vectors in `ImuSample` are raw body-frame values. The facade
   and filters rotate them internally using the current mount.
 - Assuming Reduced and Full state field names use the same physical frame.

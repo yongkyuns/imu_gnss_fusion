@@ -44,9 +44,9 @@ C_vb = C_bv^T
 x_v = C_vb x_b
 ```
 
-The legacy Rust fields `qcs0..qcs3` in Reduced and Full store this physical
-`q_bv`. The name is historical; current mainline code should treat it as
-vehicle-to-body, not as a separate "car-to-sensor" convention.
+The Rust fields `q_bv0..q_bv3` in Reduced and Full store this physical
+`q_bv`. Code should treat them as vehicle-to-body mount components, never as an
+inverse/body-to-vehicle quaternion.
 
 Reduced attitude is `q_nv`, with `R(q_nv) = C_nv` and `x_n = C_nv x_v`.
 Full attitude is `q_ev`, with `R(q_ev) = C_ev` and `x_e = C_ev x_v`.
@@ -249,7 +249,7 @@ Rust field layout:
 | `pn, pe, pd` | Local NED position in m from the active anchor. |
 | `bgx..bgz` | Additive gyro correction in raw body frame, rad/s. |
 | `bax..baz` | Additive accelerometer correction in raw body frame, m/s^2. |
-| `qcs0..qcs3` | Physical vehicle-to-body mount `q_bv`. |
+| `q_bv0..q_bv3` | Physical vehicle-to-body mount `q_bv`. |
 
 ### Error State
 
@@ -460,14 +460,14 @@ Rust field layout:
 | `bax..baz` | Additive accelerometer correction in raw body frame. |
 | `sgx..sgz` | Gyro scale correction. |
 | `sax..saz` | Accelerometer scale correction. |
-| `qcs0..qcs3` | Physical vehicle-to-body mount `q_bv`. Public f32 mirror of `qcs64`. |
+| `q_bv0..q_bv3` | Physical vehicle-to-body mount `q_bv`. Public f32 mirror of `q_bv64`. |
 
 Full keeps f64 shadow fields for numerically sensitive values:
 
 | Field | Purpose |
 | --- | --- |
 | `pos_e64` | ECEF position propagated/injected in double precision. |
-| `qcs64` | Mount quaternion used internally for injection and normalization. |
+| `q_bv64` | Mount quaternion used internally for injection and normalization. |
 
 ### Error State
 

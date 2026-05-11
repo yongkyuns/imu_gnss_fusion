@@ -384,10 +384,10 @@ fn observation(filter: FilterKind, fusion: &SensorFusion, t_s: f64) -> Option<Mo
             Some(MountObservation {
                 t_s,
                 q_bv: [
-                    state.nominal.qcs0 as f64,
-                    state.nominal.qcs1 as f64,
-                    state.nominal.qcs2 as f64,
-                    state.nominal.qcs3 as f64,
+                    state.nominal.q_bv0 as f64,
+                    state.nominal.q_bv1 as f64,
+                    state.nominal.q_bv2 as f64,
+                    state.nominal.q_bv3 as f64,
                 ],
                 sigma_deg: [
                     sigma_deg(state.p[15][15]),
@@ -400,7 +400,7 @@ fn observation(filter: FilterKind, fusion: &SensorFusion, t_s: f64) -> Option<Mo
             let state = fusion.full()?;
             Some(MountObservation {
                 t_s,
-                q_bv: state.qcs64,
+                q_bv: state.q_bv64,
                 sigma_deg: [
                     sigma_deg(state.p[21][21]),
                     sigma_deg(state.p[22][22]),

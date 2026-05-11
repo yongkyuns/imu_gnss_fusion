@@ -193,10 +193,10 @@ impl SensorFusion {
         self.last_reduced_nhc_t_s = None;
         self.last_full_nhc_t_s = None;
         let n = &mut self.reduced.raw_mut().nominal;
-        n.qcs0 = q_bv[0];
-        n.qcs1 = q_bv[1];
-        n.qcs2 = q_bv[2];
-        n.qcs3 = q_bv[3];
+        n.q_bv0 = q_bv[0];
+        n.q_bv1 = q_bv[1];
+        n.q_bv2 = q_bv[2];
+        n.q_bv3 = q_bv[3];
         self.reduced.set_freeze_misalignment_states(true);
         self.full.set_mount_quat(q_bv);
         self.full.set_freeze_mount_states(true);
@@ -696,10 +696,10 @@ impl SensorFusion {
         let mut q = q_bv;
         normalize_quat_f32(&mut q);
         let n = &mut self.reduced.raw_mut().nominal;
-        n.qcs0 = q[0];
-        n.qcs1 = q[1];
-        n.qcs2 = q[2];
-        n.qcs3 = q[3];
+        n.q_bv0 = q[0];
+        n.q_bv1 = q[1];
+        n.q_bv2 = q[2];
+        n.q_bv3 = q[3];
     }
 
     /// Diagnostic hook that directly sets residual-mount covariance.
@@ -821,10 +821,10 @@ impl SensorFusion {
             .init_nominal_from_gnss(quat_from_yaw_f32(yaw), gnss);
         let raw = self.reduced.raw_mut();
         if let Some(q_bv) = self.reduced_mount_q_bv.or(self.mount_q_bv) {
-            raw.nominal.qcs0 = q_bv[0];
-            raw.nominal.qcs1 = q_bv[1];
-            raw.nominal.qcs2 = q_bv[2];
-            raw.nominal.qcs3 = q_bv[3];
+            raw.nominal.q_bv0 = q_bv[0];
+            raw.nominal.q_bv1 = q_bv[1];
+            raw.nominal.q_bv2 = q_bv[2];
+            raw.nominal.q_bv3 = q_bv[3];
         }
         raw.p[9][9] = sq_f32(self.cfg.gyro_bias_init_sigma_radps);
         raw.p[10][10] = raw.p[9][9];
@@ -1017,7 +1017,7 @@ impl SensorFusion {
 
     fn current_vehicle_vector_from_body(&self, vector_b: [f32; 3]) -> [f32; 3] {
         let n = &self.reduced.raw().nominal;
-        let c_bv = quat_to_dcm_f32([n.qcs0, n.qcs1, n.qcs2, n.qcs3]);
+        let c_bv = quat_to_dcm_f32([n.q_bv0, n.q_bv1, n.q_bv2, n.q_bv3]);
         mat_vec3_f32(transpose3_f32(c_bv), vector_b)
     }
 
@@ -1400,7 +1400,7 @@ impl SensorFusion {
         let omega_in_n = add3_f32(omega_ie_n, omega_en_n);
         let c_nv = quat_to_dcm_f32([nominal.q0, nominal.q1, nominal.q2, nominal.q3]);
         let omega_in_v = mat_vec3_f32(transpose3_f32(c_nv), omega_in_n);
-        let c_bv = quat_to_dcm_f32([nominal.qcs0, nominal.qcs1, nominal.qcs2, nominal.qcs3]);
+        let c_bv = quat_to_dcm_f32([nominal.q_bv0, nominal.q_bv1, nominal.q_bv2, nominal.q_bv3]);
         let omega_in_b = mat_vec3_f32(c_bv, omega_in_v);
         let gyro_predict = sub3_f32(gyro_body, omega_in_b);
         let coriolis_rate = cross3_f32(

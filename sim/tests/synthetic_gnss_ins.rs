@@ -887,10 +887,10 @@ fn run_reduced_on_samples_configured(
                     reference.truth[0].lon_deg,
                 );
                 let q_bv = as_q64([
-                    reduced.nominal.qcs0,
-                    reduced.nominal.qcs1,
-                    reduced.nominal.qcs2,
-                    reduced.nominal.qcs3,
+                    reduced.nominal.q_bv0,
+                    reduced.nominal.q_bv1,
+                    reduced.nominal.q_bv2,
+                    reduced.nominal.q_bv3,
                 ]);
                 let q_est_att = as_q64([
                     reduced.nominal.q0,

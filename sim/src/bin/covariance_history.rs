@@ -364,10 +364,10 @@ mount_qerr_deg,att_qerr_deg"
                     .map(|r| {
                         quat_angle_deg(
                             as_q64([
-                                reduced.nominal.qcs0,
-                                reduced.nominal.qcs1,
-                                reduced.nominal.qcs2,
-                                reduced.nominal.qcs3,
+                                reduced.nominal.q_bv0,
+                                reduced.nominal.q_bv1,
+                                reduced.nominal.q_bv2,
+                                reduced.nominal.q_bv3,
                             ]),
                             r,
                         )
@@ -465,10 +465,10 @@ mount_qerr_deg,att_qerr_deg"
             .map(|r| {
                 quat_angle_deg(
                     as_q64([
-                        full_snap.nominal.qcs0,
-                        full_snap.nominal.qcs1,
-                        full_snap.nominal.qcs2,
-                        full_snap.nominal.qcs3,
+                        full_snap.nominal.q_bv0,
+                        full_snap.nominal.q_bv1,
+                        full_snap.nominal.q_bv2,
+                        full_snap.nominal.q_bv3,
                     ]),
                     r,
                 )
@@ -1388,18 +1388,18 @@ struct StateMetrics {
 fn state_metrics(snapshot: &Snapshot, ref_gnss: GenericGnssSample) -> StateMetrics {
     let reduced_mount_q = snapshot.reduced.as_ref().map(|e| {
         as_q64([
-            e.nominal.qcs0,
-            e.nominal.qcs1,
-            e.nominal.qcs2,
-            e.nominal.qcs3,
+            e.nominal.q_bv0,
+            e.nominal.q_bv1,
+            e.nominal.q_bv2,
+            e.nominal.q_bv3,
         ])
     });
     let full_mount_q = snapshot.full.as_ref().map(|l| {
         as_q64([
-            l.nominal.qcs0,
-            l.nominal.qcs1,
-            l.nominal.qcs2,
-            l.nominal.qcs3,
+            l.nominal.q_bv0,
+            l.nominal.q_bv1,
+            l.nominal.q_bv2,
+            l.nominal.q_bv3,
         ])
     });
     StateMetrics {
@@ -1705,18 +1705,18 @@ fn selected_corr_pairs() -> [(&'static str, usize, usize); 8] {
 fn print_state_summary(snapshot: &Snapshot, ref_gnss: GenericGnssSample) {
     let reduced_mount_q = snapshot.reduced.as_ref().map(|e| {
         as_q64([
-            e.nominal.qcs0,
-            e.nominal.qcs1,
-            e.nominal.qcs2,
-            e.nominal.qcs3,
+            e.nominal.q_bv0,
+            e.nominal.q_bv1,
+            e.nominal.q_bv2,
+            e.nominal.q_bv3,
         ])
     });
     let full_mount_q = snapshot.full.as_ref().map(|l| {
         as_q64([
-            l.nominal.qcs0,
-            l.nominal.qcs1,
-            l.nominal.qcs2,
-            l.nominal.qcs3,
+            l.nominal.q_bv0,
+            l.nominal.q_bv1,
+            l.nominal.q_bv2,
+            l.nominal.q_bv3,
         ])
     });
     let ref_mount_q = snapshot.reference_mount_q_bv;
@@ -1958,10 +1958,10 @@ fn maybe_print_trace(
         .map(|r| {
             quat_angle_deg(
                 as_q64([
-                    reduced.nominal.qcs0,
-                    reduced.nominal.qcs1,
-                    reduced.nominal.qcs2,
-                    reduced.nominal.qcs3,
+                    reduced.nominal.q_bv0,
+                    reduced.nominal.q_bv1,
+                    reduced.nominal.q_bv2,
+                    reduced.nominal.q_bv3,
                 ]),
                 r,
             )
@@ -1971,10 +1971,10 @@ fn maybe_print_trace(
         .map(|r| {
             quat_angle_deg(
                 as_q64([
-                    full_snap.nominal.qcs0,
-                    full_snap.nominal.qcs1,
-                    full_snap.nominal.qcs2,
-                    full_snap.nominal.qcs3,
+                    full_snap.nominal.q_bv0,
+                    full_snap.nominal.q_bv1,
+                    full_snap.nominal.q_bv2,
+                    full_snap.nominal.q_bv3,
                 ]),
                 r,
             )

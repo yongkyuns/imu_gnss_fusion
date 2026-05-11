@@ -136,10 +136,10 @@ fn run_reduced(
     );
     {
         let n = &mut reduced.raw_mut().nominal;
-        n.qcs0 = q_mount[0] as f32;
-        n.qcs1 = q_mount[1] as f32;
-        n.qcs2 = q_mount[2] as f32;
-        n.qcs3 = q_mount[3] as f32;
+        n.q_bv0 = q_mount[0] as f32;
+        n.q_bv1 = q_mount[1] as f32;
+        n.q_bv2 = q_mount[2] as f32;
+        n.q_bv3 = q_mount[3] as f32;
     }
 
     let mut sum_vel_err2 = 0.0;
@@ -408,7 +408,12 @@ fn reduced_navigation_rate_corrections(
     let omega_in_n = add3(omega_ie_n, omega_en_n);
     let c_nv = quat_to_rotmat64([n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64]);
     let omega_in_v = mat3_vec64(transpose3(c_nv), omega_in_n);
-    let c_bv = quat_to_rotmat64([n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64]);
+    let c_bv = quat_to_rotmat64([
+        n.q_bv0 as f64,
+        n.q_bv1 as f64,
+        n.q_bv2 as f64,
+        n.q_bv3 as f64,
+    ]);
     let omega_in_b = mat3_vec64(c_bv, omega_in_v);
     let gyro_predict = sub3(gyro_body, omega_in_b);
     let coriolis_rate = cross3(
