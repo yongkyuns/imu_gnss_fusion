@@ -1,4 +1,4 @@
-# imu_gnss_fusion
+# IMU/GNSS Fusion
 
 [![CI](https://github.com/yongkyuns/imu_gnss_fusion/actions/workflows/ci.yml/badge.svg)](https://github.com/yongkyuns/imu_gnss_fusion/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -7,9 +7,9 @@
 
 🌐 **Hosted web app:** [yongkyuns.github.io/imu_gnss_fusion](https://yongkyuns.github.io/imu_gnss_fusion/)
 
-![imu_gnss_fusion web visualizer](screenshot.png)
+![IMU/GNSS Fusion web visualizer](screenshot.png)
 
-`imu_gnss_fusion` is a Rust workspace for experimenting with IMU, GNSS, and wheel-speed sensor fusion. It contains an embedded-oriented filter crate, offline replay and visualization tools, synthetic trajectory generation, and hardware-agnostic CSV replay support.
+IMU/GNSS Fusion is a Rust workspace for experimenting with IMU, GNSS, and wheel-speed sensor fusion. It contains an embedded-oriented filter crate, offline replay and visualization tools, synthetic trajectory generation, and hardware-agnostic CSV replay support.
 
 The project is currently an active filter-development workspace rather than a
 finished navigation product. The main work is tuning the standalone alignment

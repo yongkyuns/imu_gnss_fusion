@@ -1,6 +1,6 @@
 # Documentation
 
-This directory collects project-level notes for the IMU/GNSS fusion workspace. The root [README](../README.md) is the entrypoint for setup and common workflows; these pages keep deeper math, testing, and architecture details out of the main guide.
+This directory collects project-level notes for IMU/GNSS Fusion. The root [README](../README.md) is the entrypoint for setup and common workflows; these pages keep deeper math, testing, and architecture details out of the main guide.
 
 ## Start Here
 

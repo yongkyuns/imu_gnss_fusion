@@ -1,6 +1,6 @@
 # Repository Architecture
 
-This repository is a Rust workspace for IMU/GNSS filter development. It is
+IMU/GNSS Fusion is a Rust workspace for IMU/GNSS filter development. It is
 organized around a small embedded-oriented filter crate and a larger simulator,
 evaluation, and visualization crate. Data conversion, hosted datasets, browser
 hosting, docs, and the experimental iOS app sit around those two crates.

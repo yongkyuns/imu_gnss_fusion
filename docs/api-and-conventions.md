@@ -1,4 +1,4 @@
-# Sensor Fusion API and Coordinate Conventions
+# IMU/GNSS Fusion API and Coordinate Conventions
 
 This document describes the public `sensor_fusion` crate API and the frame,
 rotation, unit, initialization, and readiness conventions that callers must
