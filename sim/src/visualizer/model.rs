@@ -9,6 +9,8 @@ pub struct Trace {
 #[derive(Default)]
 pub struct PlotData {
     pub speed: Vec<Trace>,
+    pub vehicle_motion_gyro: Vec<Trace>,
+    pub vehicle_motion_accel: Vec<Trace>,
     pub sat_cn0: Vec<Trace>,
     pub imu_raw_gyro: Vec<Trace>,
     pub imu_raw_accel: Vec<Trace>,

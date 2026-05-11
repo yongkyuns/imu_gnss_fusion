@@ -48,6 +48,7 @@ fn generic_replay_input_and_csv_replay_jobs_produce_matching_plot_data() -> Resu
         reference_attitude_csv: Some(&reference_rpy_csv(&replay.reference_attitude)),
         reference_mount_csv: Some(&reference_rpy_csv(&replay.reference_mount)),
         reference_position_csv: None,
+        reference_motion_csv: None,
         config,
     })?;
 
@@ -66,6 +67,7 @@ fn synthetic_generic_input_and_csv_replay_share_auxiliary_trace_outputs() -> Res
         reference_attitude_csv: Some(&reference_rpy_csv(&replay.reference_attitude)),
         reference_mount_csv: Some(&reference_rpy_csv(&replay.reference_mount)),
         reference_position_csv: None,
+        reference_motion_csv: None,
         config,
     })?;
     let synthetic = build_synthetic_plot_data(
@@ -181,6 +183,7 @@ fn generated_generic_replay() -> Result<GenericReplayInput> {
         reference_attitude,
         reference_mount,
         reference_position: Vec::new(),
+        reference_motion: Vec::new(),
     })
 }
 

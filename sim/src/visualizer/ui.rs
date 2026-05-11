@@ -73,6 +73,8 @@ pub struct App {
     #[cfg(target_arch = "wasm32")]
     web_reference_position_csv: Option<NamedText>,
     #[cfg(target_arch = "wasm32")]
+    web_reference_motion_csv: Option<NamedText>,
+    #[cfg(target_arch = "wasm32")]
     web_mapbox_token: String,
     #[cfg(target_arch = "wasm32")]
     web_mapbox_token_applied: String,

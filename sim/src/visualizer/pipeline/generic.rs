@@ -4,12 +4,15 @@ use sensor_fusion::reduced::UPDATE_DIAG_TYPES;
 use sensor_fusion::{Config, Filter, SensorFusion};
 
 use crate::datasets::generic_replay::{
-    GenericGnssSample, GenericImuSample, GenericReferencePositionSample, GenericReferenceRpySample,
-    fusion_gnss_sample, fusion_imu_sample,
+    GenericGnssSample, GenericImuSample, GenericReferenceMotionSample,
+    GenericReferencePositionSample, GenericReferenceRpySample, fusion_gnss_sample,
+    fusion_imu_sample,
 };
-use crate::eval::gnss_ins::{as_q64, quat_angle_deg, quat_mul};
+use crate::eval::gnss_ins::{as_q64, quat_angle_deg, quat_conj, quat_mul, quat_rotate};
 use crate::eval::replay::{ReplayEvent, for_each_event};
-use crate::visualizer::math::{ecef_to_ned, lla_to_ecef, ned_to_lla_exact, quat_rpy_deg};
+use crate::visualizer::math::{
+    ecef_to_lla, ecef_to_ned, lla_to_ecef, ned_to_lla_exact, quat_rpy_deg,
+};
 use crate::visualizer::model::{
     HeadingSample, MapCursorSample, PlotData, StateContribution, StateCorrelation, Trace,
     UpdateInspectorSample, VisualizerMountMode,
@@ -26,6 +29,7 @@ pub use crate::visualizer::pipeline::reference::{
 const DIAG_BODY_VEL_Y: usize = 4;
 const DIAG_BODY_VEL_Z: usize = 5;
 const NHC_DIAG_TYPES: [(usize, &str); 2] = [(DIAG_BODY_VEL_Y, "NHC Y"), (DIAG_BODY_VEL_Z, "NHC Z")];
+const STANDARD_GRAVITY_MPS2: f64 = 9.80665;
 #[cfg(target_arch = "wasm32")]
 const WEB_BUILD_MAX_POINTS_PER_TRACE: usize =
     crate::visualizer::replay_job::WEB_TRANSPORT_MAX_POINTS_PER_TRACE;
@@ -36,6 +40,7 @@ pub struct GenericReplayInput {
     pub reference_attitude: Vec<GenericReferenceRpySample>,
     pub reference_mount: Vec<GenericReferenceRpySample>,
     pub reference_position: Vec<GenericReferencePositionSample>,
+    pub reference_motion: Vec<GenericReferenceMotionSample>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -105,6 +110,7 @@ impl GenericReplayInput {
             reference_attitude: Vec::new(),
             reference_mount: Vec::new(),
             reference_position: Vec::new(),
+            reference_motion: Vec::new(),
         }
     }
 }
@@ -199,6 +205,24 @@ pub fn parse_generic_replay_csvs_with_refs(
     reference_mount_csv: Option<&str>,
     reference_position_csv: Option<&str>,
 ) -> Result<GenericReplayInput> {
+    parse_generic_replay_csvs_with_optional_motion(
+        imu_csv,
+        gnss_csv,
+        reference_attitude_csv,
+        reference_mount_csv,
+        reference_position_csv,
+        None,
+    )
+}
+
+pub fn parse_generic_replay_csvs_with_optional_motion(
+    imu_csv: &str,
+    gnss_csv: &str,
+    reference_attitude_csv: Option<&str>,
+    reference_mount_csv: Option<&str>,
+    reference_position_csv: Option<&str>,
+    reference_motion_csv: Option<&str>,
+) -> Result<GenericReplayInput> {
     let mut imu = parse_imu_csv(imu_csv)?;
     let mut gnss = parse_gnss_csv(gnss_csv)?;
     let mut reference_attitude = reference_attitude_csv
@@ -211,6 +235,10 @@ pub fn parse_generic_replay_csvs_with_refs(
         .unwrap_or_default();
     let mut reference_position = reference_position_csv
         .map(parse_reference_position_csv)
+        .transpose()?
+        .unwrap_or_default();
+    let mut reference_motion = reference_motion_csv
+        .map(parse_reference_motion_csv)
         .transpose()?
         .unwrap_or_default();
     imu.sort_by(|a, b| {
@@ -238,6 +266,11 @@ pub fn parse_generic_replay_csvs_with_refs(
             .partial_cmp(&b.t_s)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
+    reference_motion.sort_by(|a, b| {
+        a.t_s
+            .partial_cmp(&b.t_s)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     if imu.is_empty() {
         bail!("imu.csv contained no samples");
     }
@@ -250,6 +283,7 @@ pub fn parse_generic_replay_csvs_with_refs(
         reference_attitude,
         reference_mount,
         reference_position,
+        reference_motion,
     })
 }
 
@@ -412,6 +446,8 @@ fn build_generic_replay_plot_data_impl(
     let mut reduced_bax = Vec::new();
     let mut reduced_bay = Vec::new();
     let mut reduced_baz = Vec::new();
+    let mut reduced_motion_gyro: [Vec<[f64; 2]>; 3] = std::array::from_fn(|_| Vec::new());
+    let mut reduced_motion_accel: [Vec<[f64; 2]>; 3] = std::array::from_fn(|_| Vec::new());
     let mut reduced_cov: [Vec<[f64; 2]>; 18] = std::array::from_fn(|_| Vec::new());
     let mut reduced_mount_dx: [Vec<[f64; 2]>; 3] = std::array::from_fn(|_| Vec::new());
     let mut reduced_nhc_mount_dx: [Vec<[f64; 2]>; 6] = std::array::from_fn(|_| Vec::new());
@@ -440,6 +476,13 @@ fn build_generic_replay_plot_data_impl(
             raw_accel_x.push([sample.t_s, sample.accel_mps2[0]]);
             raw_accel_y.push([sample.t_s, sample.accel_mps2[1]]);
             raw_accel_z.push([sample.t_s, sample.accel_mps2[2]]);
+            append_reduced_motion_sample(
+                sample.t_s,
+                sample,
+                &fusion,
+                &mut reduced_motion_gyro,
+                &mut reduced_motion_accel,
+            );
             append_reduced_sample(
                 sample.t_s,
                 &fusion,
@@ -612,6 +655,8 @@ fn build_generic_replay_plot_data_impl(
                 points: reduced_init_marker,
             },
         ],
+        vehicle_motion_gyro: axis_traces_deg_per_s("Reduced angular velocity", reduced_motion_gyro),
+        vehicle_motion_accel: axis_traces_mps2("Reduced linear acceleration", reduced_motion_accel),
         reduced_bias_gyro: vec![
             Trace {
                 name: "Reduced gyro bias X [deg/s]".to_string(),
@@ -831,6 +876,7 @@ fn add_auxiliary_generic_traces_impl(
     );
     populate_full_traces(data, ctx, progress);
     populate_reduced_bump_traces(data);
+    append_reference_motion_traces(data, &replay.reference_motion);
     if let Some(truth) = reference_attitude_series {
         let traces = [
             Trace {
@@ -1276,6 +1322,8 @@ fn populate_full_traces(
     let mut sax = Vec::new();
     let mut say = Vec::new();
     let mut saz = Vec::new();
+    let mut motion_gyro: [Vec<[f64; 2]>; 3] = std::array::from_fn(|_| Vec::new());
+    let mut motion_accel: [Vec<[f64; 2]>; 3] = std::array::from_fn(|_| Vec::new());
     let mut cov_bias: [Vec<[f64; 2]>; 12] = std::array::from_fn(|_| Vec::new());
     let mut cov_nonbias: [Vec<[f64; 2]>; 12] = std::array::from_fn(|_| Vec::new());
     let mut cov_mount: [Vec<[f64; 2]>; 3] = std::array::from_fn(|_| Vec::new());
@@ -1295,50 +1343,56 @@ fn populate_full_traces(
             if !output_sampling.keep_imu(index, imu_total) {
                 return;
             }
-            let Some(full) = full_fusion.full() else {
-                return;
-            };
-            append_full_sample(
+            append_full_motion_sample(
                 sample.t_s,
-                full,
-                ref_gnss,
-                ref_ecef,
-                &mut pos_n,
-                &mut pos_e,
-                &mut pos_d,
-                &mut vel_n,
-                &mut vel_e,
-                &mut vel_d,
-                &mut roll,
-                &mut pitch,
-                &mut yaw,
-                &mut mount_roll,
-                &mut mount_pitch,
-                &mut mount_yaw,
-                &mut bgx,
-                &mut bgy,
-                &mut bgz,
-                &mut bax,
-                &mut bay,
-                &mut accel_bias_z,
-                &mut sgx,
-                &mut sgy,
-                &mut sgz,
-                &mut sax,
-                &mut say,
-                &mut saz,
-                &mut cov_bias,
-                &mut cov_nonbias,
-                &mut cov_mount,
-                &mut dx_mount,
-                &mut nhc_innovation,
-                &mut gnss_pos_gate_norm,
-                &mut gnss_pos_gate_status,
-                &mut data.update_inspector,
-                &mut map,
-                &mut headings,
-                &mut data.map_cursor,
+                sample,
+                full_fusion.full(),
+                &mut motion_gyro,
+                &mut motion_accel,
             );
+            if let Some(full) = full_fusion.full() {
+                append_full_sample(
+                    sample.t_s,
+                    full,
+                    ref_gnss,
+                    ref_ecef,
+                    &mut pos_n,
+                    &mut pos_e,
+                    &mut pos_d,
+                    &mut vel_n,
+                    &mut vel_e,
+                    &mut vel_d,
+                    &mut roll,
+                    &mut pitch,
+                    &mut yaw,
+                    &mut mount_roll,
+                    &mut mount_pitch,
+                    &mut mount_yaw,
+                    &mut bgx,
+                    &mut bgy,
+                    &mut bgz,
+                    &mut bax,
+                    &mut bay,
+                    &mut accel_bias_z,
+                    &mut sgx,
+                    &mut sgy,
+                    &mut sgz,
+                    &mut sax,
+                    &mut say,
+                    &mut saz,
+                    &mut cov_bias,
+                    &mut cov_nonbias,
+                    &mut cov_mount,
+                    &mut dx_mount,
+                    &mut nhc_innovation,
+                    &mut gnss_pos_gate_norm,
+                    &mut gnss_pos_gate_status,
+                    &mut data.update_inspector,
+                    &mut map,
+                    &mut headings,
+                    &mut data.map_cursor,
+                );
+            }
             gyro_x.push([sample.t_s, sample.gyro_radps[0].to_degrees()]);
             gyro_y.push([sample.t_s, sample.gyro_radps[1].to_degrees()]);
             gyro_z.push([sample.t_s, sample.gyro_radps[2].to_degrees()]);
@@ -1437,6 +1491,10 @@ fn populate_full_traces(
             points: accel_z,
         },
     ];
+    data.vehicle_motion_gyro
+        .extend(axis_traces_deg_per_s("Full angular velocity", motion_gyro));
+    data.vehicle_motion_accel
+        .extend(axis_traces_mps2("Full linear acceleration", motion_accel));
     data.full_bias_gyro = vec![
         Trace {
             name: "Full gyro sensor bias X [deg/s]".to_string(),
@@ -1609,6 +1667,145 @@ fn reduced_nhc_mount_dx_traces(points: &[Vec<[f64; 2]>; 6]) -> Vec<Trace> {
         }
     }
     traces
+}
+
+fn append_reference_motion_traces(data: &mut PlotData, samples: &[GenericReferenceMotionSample]) {
+    if samples.is_empty() {
+        return;
+    }
+    let mut gyro: [Vec<[f64; 2]>; 3] = std::array::from_fn(|_| Vec::new());
+    let mut accel: [Vec<[f64; 2]>; 3] = std::array::from_fn(|_| Vec::new());
+    for sample in samples {
+        push_motion_triplet(
+            sample.t_s,
+            sample.gyro_vehicle_radps.map(f64::to_degrees),
+            &mut gyro,
+        );
+        push_motion_triplet(sample.t_s, sample.accel_vehicle_mps2, &mut accel);
+    }
+    let mut gyro_traces = axis_traces_deg_per_s("Reference angular velocity", gyro);
+    gyro_traces.extend(std::mem::take(&mut data.vehicle_motion_gyro));
+    data.vehicle_motion_gyro = gyro_traces;
+
+    let mut accel_traces = axis_traces_mps2("Reference linear acceleration", accel);
+    accel_traces.extend(std::mem::take(&mut data.vehicle_motion_accel));
+    data.vehicle_motion_accel = accel_traces;
+}
+
+fn append_reduced_motion_sample(
+    t_s: f64,
+    sample: &GenericImuSample,
+    fusion: &SensorFusion,
+    gyro: &mut [Vec<[f64; 2]>; 3],
+    accel: &mut [Vec<[f64; 2]>; 3],
+) {
+    let Some(reduced) = fusion.reduced() else {
+        push_motion_triplet(t_s, [0.0; 3], gyro);
+        push_motion_triplet(t_s, [0.0; 3], accel);
+        return;
+    };
+    let n = &reduced.nominal;
+    let q_bv = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
+    let q_vehicle_to_ned = reduced_vehicle_attitude_q(reduced);
+    let gyro_body = [
+        sample.gyro_radps[0] - n.bgx as f64,
+        sample.gyro_radps[1] - n.bgy as f64,
+        sample.gyro_radps[2] - n.bgz as f64,
+    ];
+    let accel_body = [
+        sample.accel_mps2[0] - n.bax as f64,
+        sample.accel_mps2[1] - n.bay as f64,
+        sample.accel_mps2[2] - n.baz as f64,
+    ];
+    let gyro_vehicle = rotate_body_to_vehicle(q_bv, gyro_body);
+    let accel_vehicle = gravity_compensate_vehicle_accel(
+        q_vehicle_to_ned,
+        rotate_body_to_vehicle(q_bv, accel_body),
+    );
+    push_motion_triplet(t_s, gyro_vehicle.map(f64::to_degrees), gyro);
+    push_motion_triplet(t_s, accel_vehicle, accel);
+}
+
+fn append_full_motion_sample(
+    t_s: f64,
+    sample: &GenericImuSample,
+    full: Option<&State>,
+    gyro: &mut [Vec<[f64; 2]>; 3],
+    accel: &mut [Vec<[f64; 2]>; 3],
+) {
+    let Some(full) = full else {
+        push_motion_triplet(t_s, [0.0; 3], gyro);
+        push_motion_triplet(t_s, [0.0; 3], accel);
+        return;
+    };
+    let n = &full.nominal;
+    let q_bv = [n.qcs0 as f64, n.qcs1 as f64, n.qcs2 as f64, n.qcs3 as f64];
+    let (lat_deg, lon_deg, _) = ecef_to_lla(full.pos_e64);
+    let q_vehicle_to_ned = quat_mul(
+        quat_ecef_to_ned(lat_deg, lon_deg),
+        [n.q0 as f64, n.q1 as f64, n.q2 as f64, n.q3 as f64],
+    );
+    let gyro_body = [
+        n.sgx as f64 * sample.gyro_radps[0] + n.bgx as f64,
+        n.sgy as f64 * sample.gyro_radps[1] + n.bgy as f64,
+        n.sgz as f64 * sample.gyro_radps[2] + n.bgz as f64,
+    ];
+    let accel_body = [
+        n.sax as f64 * sample.accel_mps2[0] + n.bax as f64,
+        n.say as f64 * sample.accel_mps2[1] + n.bay as f64,
+        n.saz as f64 * sample.accel_mps2[2] + n.baz as f64,
+    ];
+    let gyro_vehicle = rotate_body_to_vehicle(q_bv, gyro_body);
+    let accel_vehicle = gravity_compensate_vehicle_accel(
+        q_vehicle_to_ned,
+        rotate_body_to_vehicle(q_bv, accel_body),
+    );
+    push_motion_triplet(t_s, gyro_vehicle.map(f64::to_degrees), gyro);
+    push_motion_triplet(t_s, accel_vehicle, accel);
+}
+
+fn rotate_body_to_vehicle(q_bv: [f64; 4], value_body: [f64; 3]) -> [f64; 3] {
+    quat_rotate(quat_conj(q_bv), value_body)
+}
+
+fn gravity_compensate_vehicle_accel(
+    q_vehicle_to_ned: [f64; 4],
+    specific_force_vehicle: [f64; 3],
+) -> [f64; 3] {
+    let gravity_vehicle = quat_rotate(
+        quat_conj(q_vehicle_to_ned),
+        [0.0, 0.0, STANDARD_GRAVITY_MPS2],
+    );
+    [
+        specific_force_vehicle[0] + gravity_vehicle[0],
+        specific_force_vehicle[1] + gravity_vehicle[1],
+        specific_force_vehicle[2] + gravity_vehicle[2],
+    ]
+}
+
+fn push_motion_triplet(t_s: f64, values: [f64; 3], traces: &mut [Vec<[f64; 2]>; 3]) {
+    for (trace, value) in traces.iter_mut().zip(values) {
+        trace.push([t_s, value]);
+    }
+}
+
+fn axis_traces_deg_per_s(prefix: &str, points: [Vec<[f64; 2]>; 3]) -> Vec<Trace> {
+    axis_traces(prefix, "[deg/s]", points)
+}
+
+fn axis_traces_mps2(prefix: &str, points: [Vec<[f64; 2]>; 3]) -> Vec<Trace> {
+    axis_traces(prefix, "[m/s^2]", points)
+}
+
+fn axis_traces(prefix: &str, unit: &str, points: [Vec<[f64; 2]>; 3]) -> Vec<Trace> {
+    ["X", "Y", "Z"]
+        .into_iter()
+        .zip(points)
+        .map(|(axis, points)| Trace {
+            name: format!("{prefix} {axis} {unit}"),
+            points,
+        })
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2428,6 +2625,18 @@ fn parse_reference_position_csv(text: &str) -> Result<Vec<GenericReferencePositi
         .collect())
 }
 
+fn parse_reference_motion_csv(text: &str) -> Result<Vec<GenericReferenceMotionSample>> {
+    let rows = parse_numeric_rows(text, 7, "reference_motion.csv")?;
+    Ok(rows
+        .into_iter()
+        .map(|row| GenericReferenceMotionSample {
+            t_s: row[0],
+            gyro_vehicle_radps: [row[1], row[2], row[3]],
+            accel_vehicle_mps2: [row[4], row[5], row[6]],
+        })
+        .collect())
+}
+
 fn heading_deg_from_sample(heading_rad: Option<f64>, vel_ned_mps: [f64; 3]) -> Option<f64> {
     heading_rad
         .map(f64::to_degrees)
@@ -2600,6 +2809,7 @@ mod tests {
                 },
             ],
             reference_position: Vec::new(),
+            reference_motion: Vec::new(),
         };
 
         let seed = reference_mount_seed_q_bv(&replay, VisualizerMountMode::Manual).unwrap();
@@ -2629,6 +2839,7 @@ mod tests {
                 yaw_deg: 6.0,
             }],
             reference_position: Vec::new(),
+            reference_motion: Vec::new(),
         };
         let ref_ctx = GenericReplayRunContext::new(
             &replay,

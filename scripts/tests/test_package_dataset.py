@@ -29,6 +29,11 @@ REFERENCE_ATTITUDE_CSV = """t_s,roll_deg,pitch_deg,yaw_deg
 0.5,1.5,2.5,3.5
 """
 
+REFERENCE_MOTION_CSV = """t_s,wx_radps,wy_radps,wz_radps,ax_mps2,ay_mps2,az_mps2
+0.0,0.01,0.02,0.03,0.1,0.2,0.3
+0.5,0.04,0.05,0.06,0.4,0.5,0.6
+"""
+
 
 class PackageDatasetTests(unittest.TestCase):
     def test_packages_generic_replay_as_hosted_layout(self) -> None:
@@ -40,6 +45,9 @@ class PackageDatasetTests(unittest.TestCase):
             (source / "gnss.csv").write_text(GNSS_CSV, encoding="utf-8")
             (source / "reference_attitude.csv").write_text(
                 REFERENCE_ATTITUDE_CSV, encoding="utf-8"
+            )
+            (source / "reference_motion.csv").write_text(
+                REFERENCE_MOTION_CSV, encoding="utf-8"
             )
             output = tmp_path / "hosted"
 
@@ -65,6 +73,10 @@ class PackageDatasetTests(unittest.TestCase):
                 read_gzip_text(output / "reference_attitude.csv.gz"),
                 REFERENCE_ATTITUDE_CSV,
             )
+            self.assertEqual(
+                read_gzip_text(output / "reference_motion.csv.gz"),
+                REFERENCE_MOTION_CSV,
+            )
 
             manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["dataset_id"], "fixture")
@@ -72,12 +84,17 @@ class PackageDatasetTests(unittest.TestCase):
             self.assertEqual(manifest["source"]["format"], "generic")
             self.assertEqual(
                 manifest["samples"], {"imu": 2, "gnss": 2, "reference_attitude": 2}
+                | {"reference_motion": 2}
             )
             self.assertEqual(manifest["files"]["imu"]["path"], "imu.csv.gz")
             self.assertEqual(manifest["files"]["gnss"]["path"], "gnss.csv.gz")
             self.assertEqual(
                 manifest["files"]["reference_attitude"]["path"],
                 "reference_attitude.csv.gz",
+            )
+            self.assertEqual(
+                manifest["files"]["reference_motion"]["path"],
+                "reference_motion.csv.gz",
             )
             self.assertEqual(manifest["time_span_s"], {"start": 0.0, "end": 0.5})
 

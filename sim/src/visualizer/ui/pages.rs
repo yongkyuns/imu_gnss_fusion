@@ -52,8 +52,24 @@ impl App {
                     hovered_t_s = draw_analysis_sections_page(
                         ui,
                         "Motion",
-                        "Velocity, attitude errors, and raw attitude comparisons.",
+                        "Vehicle-frame motion, velocity, attitude errors, and raw attitude comparisons.",
                         vec![
+                            plot_section(
+                                "Vehicle Motion",
+                                true,
+                                vec![
+                                    plot_spec(
+                                        "Angular Velocity",
+                                        trace_refs(&self.data.vehicle_motion_gyro),
+                                        true,
+                                    ),
+                                    plot_spec(
+                                        "Gravity-compensated Acceleration",
+                                        trace_refs(&self.data.vehicle_motion_accel),
+                                        true,
+                                    ),
+                                ],
+                            ),
                             plot_section(
                                 "Velocity",
                                 true,

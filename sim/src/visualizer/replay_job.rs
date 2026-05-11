@@ -9,7 +9,7 @@ use std::thread;
 use super::model::{PlotData, Trace, VisualizerMountMode};
 use super::pipeline::generic::{
     GenericReplayInput, GenericReplayProgress, build_generic_replay_plot_data,
-    build_generic_replay_plot_data_with_progress, parse_generic_replay_csvs_with_refs,
+    build_generic_replay_plot_data_with_progress, parse_generic_replay_csvs_with_optional_motion,
 };
 use super::pipeline::{FilterCompareConfig, GnssOutageConfig};
 
@@ -23,6 +23,7 @@ pub struct GenericReplayCsvInputs {
     pub reference_attitude_csv: Option<String>,
     pub reference_mount_csv: Option<String>,
     pub reference_position_csv: Option<String>,
+    pub reference_motion_csv: Option<String>,
 }
 
 impl GenericReplayCsvInputs {
@@ -33,6 +34,7 @@ impl GenericReplayCsvInputs {
             reference_attitude_csv: None,
             reference_mount_csv: None,
             reference_position_csv: None,
+            reference_motion_csv: None,
         }
     }
 
@@ -48,6 +50,11 @@ impl GenericReplayCsvInputs {
 
     pub fn with_reference_position_csv(mut self, csv: impl Into<String>) -> Self {
         self.reference_position_csv = Some(csv.into());
+        self
+    }
+
+    pub fn with_reference_motion_csv(mut self, csv: impl Into<String>) -> Self {
+        self.reference_motion_csv = Some(csv.into());
         self
     }
 }
@@ -143,6 +150,7 @@ pub struct GenericReplayCsvJob<'a> {
     pub reference_attitude_csv: Option<&'a str>,
     pub reference_mount_csv: Option<&'a str>,
     pub reference_position_csv: Option<&'a str>,
+    pub reference_motion_csv: Option<&'a str>,
     pub config: GenericReplayJobConfig,
 }
 
@@ -168,12 +176,13 @@ pub struct GenericReplayJobResult {
 pub fn run_generic_replay_request(
     request: GenericReplayJobRequest,
 ) -> Result<GenericReplayJobResult> {
-    let replay = parse_generic_replay_csvs_with_refs(
+    let replay = parse_generic_replay_csvs_with_optional_motion(
         &request.inputs.imu_csv,
         &request.inputs.gnss_csv,
         request.inputs.reference_attitude_csv.as_deref(),
         request.inputs.reference_mount_csv.as_deref(),
         request.inputs.reference_position_csv.as_deref(),
+        request.inputs.reference_motion_csv.as_deref(),
     )?;
     let plot_data = build_generic_replay_plot_data_from_input(
         &replay,
@@ -203,12 +212,13 @@ pub fn run_generic_replay_job(
 }
 
 pub fn run_generic_csv_replay_job(job: GenericReplayCsvJob<'_>) -> Result<PlotData> {
-    let replay = parse_generic_replay_csvs_with_refs(
+    let replay = parse_generic_replay_csvs_with_optional_motion(
         job.imu_csv,
         job.gnss_csv,
         job.reference_attitude_csv,
         job.reference_mount_csv,
         job.reference_position_csv,
+        job.reference_motion_csv,
     )?;
     Ok(run_generic_replay_job(&replay, job.config))
 }
@@ -217,12 +227,13 @@ pub fn run_generic_csv_replay_job_with_progress(
     job: GenericReplayCsvJob<'_>,
     progress: &mut dyn FnMut(GenericReplayProgress),
 ) -> Result<PlotData> {
-    let replay = parse_generic_replay_csvs_with_refs(
+    let replay = parse_generic_replay_csvs_with_optional_motion(
         job.imu_csv,
         job.gnss_csv,
         job.reference_attitude_csv,
         job.reference_mount_csv,
         job.reference_position_csv,
+        job.reference_motion_csv,
     )?;
     let mut plot_data = build_generic_replay_plot_data_with_progress(
         &replay,
@@ -289,12 +300,13 @@ pub fn parse_and_build_generic_replay_plot_data(
     gnss_outages: GnssOutageConfig,
     output_policy: ReplayOutputPolicy,
 ) -> Result<PlotData> {
-    let replay = parse_generic_replay_csvs_with_refs(
+    let replay = parse_generic_replay_csvs_with_optional_motion(
         &inputs.imu_csv,
         &inputs.gnss_csv,
         inputs.reference_attitude_csv.as_deref(),
         inputs.reference_mount_csv.as_deref(),
         inputs.reference_position_csv.as_deref(),
+        inputs.reference_motion_csv.as_deref(),
     )?;
     Ok(build_generic_replay_plot_data_from_input(
         &replay,
@@ -324,6 +336,8 @@ pub fn decimate_for_transport(data: &mut PlotData, max_points_per_trace: usize) 
     }
 
     decimate_group(&mut data.speed, max_points_per_trace);
+    decimate_group(&mut data.vehicle_motion_gyro, max_points_per_trace);
+    decimate_group(&mut data.vehicle_motion_accel, max_points_per_trace);
     decimate_group(&mut data.sat_cn0, max_points_per_trace);
     decimate_group(&mut data.imu_raw_gyro, max_points_per_trace);
     decimate_group(&mut data.imu_raw_accel, max_points_per_trace);

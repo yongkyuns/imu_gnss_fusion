@@ -129,6 +129,8 @@ pub(super) fn create_app(
         #[cfg(target_arch = "wasm32")]
         web_reference_position_csv: None,
         #[cfg(target_arch = "wasm32")]
+        web_reference_motion_csv: None,
+        #[cfg(target_arch = "wasm32")]
         web_mapbox_token: mapbox_access_token.clone(),
         #[cfg(target_arch = "wasm32")]
         web_mapbox_token_applied: mapbox_access_token,

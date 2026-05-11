@@ -38,6 +38,12 @@
           "url": "../../web/datasets/urban-short-turn-loop-nominal-001/reference_mount.csv.gz",
           "sha256": "2de00193ba4fe67f70df2ca9938edd3af9f1bea4367eb1f30ce9310459addd9d",
           "bytes": 1632
+        },
+        {
+          "path": "reference_motion.csv.gz",
+          "url": "../../web/datasets/urban-short-turn-loop-nominal-001/reference_motion.csv.gz",
+          "sha256": "f053adaf6ceac60e52c1b57762a1a1b76aca41dc0289dbe4eb46ad0e840dbe36",
+          "bytes": 105419
         }
       ],
       "smoke": {
@@ -83,6 +89,12 @@
           "url": "../../web/datasets/urban-short-turn-loop-nominal-002/reference_mount.csv.gz",
           "sha256": "b91bae61c00feb20e45bce15bb463aa6fc0cc9f96463b42147002a9fd220c388",
           "bytes": 1706
+        },
+        {
+          "path": "reference_motion.csv.gz",
+          "url": "../../web/datasets/urban-short-turn-loop-nominal-002/reference_motion.csv.gz",
+          "sha256": "2de73c6b2b244899868baa9a6f4cf2212ca91bdd824c1e9f953986341dbd86f7",
+          "bytes": 142420
         }
       ],
       "smoke": {
@@ -128,6 +140,12 @@
           "url": "../../web/datasets/urban-medium-turn-loop-nominal-001/reference_mount.csv.gz",
           "sha256": "3760433b3d2740430aba9b0f5f1f205207fb910216166f6b3824dadbc8101402",
           "bytes": 2192
+        },
+        {
+          "path": "reference_motion.csv.gz",
+          "url": "../../web/datasets/urban-medium-turn-loop-nominal-001/reference_motion.csv.gz",
+          "sha256": "81d6af84464e2c27c886dc11a4a4860291b7e100dc9d56ee6216583aba9aa139",
+          "bytes": 217990
         }
       ],
       "smoke": {
@@ -173,6 +191,12 @@
           "url": "../../web/datasets/urban-medium-turn-loop-nominal-002/reference_mount.csv.gz",
           "sha256": "45722d59d3de2f69e174dfe1a770ab64e3d20de3163326430eac4ad967f6e41d",
           "bytes": 2056
+        },
+        {
+          "path": "reference_motion.csv.gz",
+          "url": "../../web/datasets/urban-medium-turn-loop-nominal-002/reference_motion.csv.gz",
+          "sha256": "ee25564ea970486ee2356b33e178d07edc71544c1e6c731806ccb25178e519c9",
+          "bytes": 183013
         }
       ],
       "smoke": {
@@ -218,6 +242,12 @@
           "url": "../../web/datasets/urban-long-turn-loop-nominal-001/reference_mount.csv.gz",
           "sha256": "7d69c78eb7a1f0a2d56ff13c2b5fa1f4621f6a3627c6e437486c2326840ba553",
           "bytes": 3097
+        },
+        {
+          "path": "reference_motion.csv.gz",
+          "url": "../../web/datasets/urban-long-turn-loop-nominal-001/reference_motion.csv.gz",
+          "sha256": "6e0282c118de641d93fbe189135e40b358a28183135efd29e413067f3e140bb9",
+          "bytes": 341519
         }
       ],
       "smoke": {
@@ -263,6 +293,12 @@
           "url": "../../web/datasets/parking-lot-figure8-nominal-001/reference_mount.csv.gz",
           "sha256": "84319dc2b6bb0cf990c779420dacd6e1c6f46007b7e9b131d636e0414ffb52fb",
           "bytes": 1621
+        },
+        {
+          "path": "reference_motion.csv.gz",
+          "url": "../../web/datasets/parking-lot-figure8-nominal-001/reference_motion.csv.gz",
+          "sha256": "8fb6519570b5fa84a6079d6f672f428ae5d94abdc99118c0276c2d92df96ca85",
+          "bytes": 63086
         }
       ],
       "smoke": {
@@ -308,6 +344,12 @@
           "url": "../../web/datasets/parking-lot-circle-turns-nominal-001/reference_mount.csv.gz",
           "sha256": "7e78ce6d661e0f92c3ec9afd21c3e221f3ff423ef7f6b20750b48b96569edd70",
           "bytes": 1118
+        },
+        {
+          "path": "reference_motion.csv.gz",
+          "url": "../../web/datasets/parking-lot-circle-turns-nominal-001/reference_motion.csv.gz",
+          "sha256": "1b2ffdb5f7168c974d7ba2ceac2c9ed785d334646c38cdb9b2264a728fca657a",
+          "bytes": 52187
         }
       ],
       "smoke": {
@@ -353,6 +395,12 @@
           "url": "../../web/datasets/urban-mixed-turns-nominal-001/reference_mount.csv.gz",
           "sha256": "1ba78eafae31abd53428b83a7efc61340afafe1f492a6e839a0bc3a01600151e",
           "bytes": 4427
+        },
+        {
+          "path": "reference_motion.csv.gz",
+          "url": "../../web/datasets/urban-mixed-turns-nominal-001/reference_motion.csv.gz",
+          "sha256": "527e13359b64634c5a30382d31ee2906b1d5a79286350bacc2255ca3f2abd62e",
+          "bytes": 363503
         }
       ],
       "smoke": {
@@ -398,6 +446,12 @@
           "url": "../../web/datasets/urban-stop-go-tight-turns-nominal-001/reference_mount.csv.gz",
           "sha256": "810198844a4fca5dd82ebed47f31214365f1e1f6e33e60fde640ad7d4fa9477d",
           "bytes": 4506
+        },
+        {
+          "path": "reference_motion.csv.gz",
+          "url": "../../web/datasets/urban-stop-go-tight-turns-nominal-001/reference_motion.csv.gz",
+          "sha256": "7700ed2abe70614001910e0b0bfdb84954c02f8babe3809813d1abde0cc02f0b",
+          "bytes": 240348
         }
       ],
       "smoke": {
@@ -443,6 +497,12 @@
           "url": "../../web/datasets/mixed-road-long-drive-nominal-001/reference_mount.csv.gz",
           "sha256": "3ecd9b9951c60d087cfd30039a787be895fbb0e6a12aa938c5010d9740af72be",
           "bytes": 9847
+        },
+        {
+          "path": "reference_motion.csv.gz",
+          "url": "../../web/datasets/mixed-road-long-drive-nominal-001/reference_motion.csv.gz",
+          "sha256": "d22982e7c50f479f346958df9821c6ade1b1b6063c6b4dbb3e6941e4c259f8c1",
+          "bytes": 959617
         }
       ],
       "smoke": {
@@ -488,6 +548,12 @@
           "url": "../../web/datasets/mixed-road-long-drive-large-mount-001/reference_mount.csv.gz",
           "sha256": "e2fe99366fe884462f6e0195999f434c2ccb0ef116a9e4fab2f57b70da5e42d5",
           "bytes": 5819
+        },
+        {
+          "path": "reference_motion.csv.gz",
+          "url": "../../web/datasets/mixed-road-long-drive-large-mount-001/reference_motion.csv.gz",
+          "sha256": "2fdefab0a3a914f181dd34fb11f1039961cee3cfac9222c8b104e546adfc4b4d",
+          "bytes": 981327
         }
       ],
       "smoke": {
@@ -533,6 +599,12 @@
           "url": "../../web/datasets/mixed-road-long-drive-large-mount-002/reference_mount.csv.gz",
           "sha256": "042111870860410e3026b2166c2feb845b2f4512c1febe4eee208a3a342a5410",
           "bytes": 11117
+        },
+        {
+          "path": "reference_motion.csv.gz",
+          "url": "../../web/datasets/mixed-road-long-drive-large-mount-002/reference_motion.csv.gz",
+          "sha256": "eb0f271215595cc89c3c58823386f001c22ffca2890a4e898a55221c31e97145",
+          "bytes": 1784221
         }
       ],
       "smoke": {
@@ -578,6 +650,12 @@
           "url": "../../web/datasets/urban-stop-go-large-mount-001/reference_mount.csv.gz",
           "sha256": "5b28dcc2d2079b6251b045eb9aba5d6683cb7f207b730920994f5e9b7940f171",
           "bytes": 3594
+        },
+        {
+          "path": "reference_motion.csv.gz",
+          "url": "../../web/datasets/urban-stop-go-large-mount-001/reference_motion.csv.gz",
+          "sha256": "f809551396e63722bb0af6df408c27fc6695a0c7710a0dcfc7e64a0a8f7d1aeb",
+          "bytes": 218693
         }
       ],
       "smoke": {
@@ -623,6 +701,12 @@
           "url": "../../web/datasets/urban-low-speed-low-signal-001/reference_mount.csv.gz",
           "sha256": "093a7bebc5f70ce4152ef835d25828946219dee85553465e84911deeaa43e39e",
           "bytes": 5380
+        },
+        {
+          "path": "reference_motion.csv.gz",
+          "url": "../../web/datasets/urban-low-speed-low-signal-001/reference_motion.csv.gz",
+          "sha256": "9d41cbdb0b3ee287b83a99ebff2d545e654d996e0fa80f20fefb09aba2cd9359",
+          "bytes": 117150
         }
       ],
       "smoke": {
@@ -668,6 +752,12 @@
           "url": "../../web/datasets/mixed-road-highway-low-signal-001/reference_mount.csv.gz",
           "sha256": "25f84e618ddaff27aab07d449e0e7b5c3a043a44aa448a04f0dbf54d4261b6ec",
           "bytes": 9511
+        },
+        {
+          "path": "reference_motion.csv.gz",
+          "url": "../../web/datasets/mixed-road-highway-low-signal-001/reference_motion.csv.gz",
+          "sha256": "b5b62312aa9c7180519090ebf120a994e88571b4b9c0a36143b83033f989ff65",
+          "bytes": 694534
         }
       ],
       "smoke": {
@@ -713,6 +803,12 @@
           "url": "../../web/datasets/covered-parking-urban-drive-gnss-outage-001/reference_mount.csv.gz",
           "sha256": "cf9c7b0b2bc9afae64aa48ed7d2a1da15804e8d6e9bffff9b4e6aa325f07d41a",
           "bytes": 11564
+        },
+        {
+          "path": "reference_motion.csv.gz",
+          "url": "../../web/datasets/covered-parking-urban-drive-gnss-outage-001/reference_motion.csv.gz",
+          "sha256": "fa1fb19cb93a55be93ff7c7e3f2d7b1816a88731cb6539767ef4c55abe547a1c",
+          "bytes": 1251659
         }
       ],
       "smoke": {
@@ -758,6 +854,12 @@
           "url": "../../web/datasets/covered-parking-urban-drive-data-gap-001/reference_mount.csv.gz",
           "sha256": "5b4f1c9c0cc44e20300524c0c4c6cd8a6f211b245350944ec0eefbed4f48a7bf",
           "bytes": 9927
+        },
+        {
+          "path": "reference_motion.csv.gz",
+          "url": "../../web/datasets/covered-parking-urban-drive-data-gap-001/reference_motion.csv.gz",
+          "sha256": "7dbf994199769e3bc0468feac6f0a79f49807b1fdafbf1e761106ce334fb91c3",
+          "bytes": 1356992
         }
       ],
       "smoke": {

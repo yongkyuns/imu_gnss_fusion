@@ -9,6 +9,7 @@ The package format is intentionally hardware agnostic:
   reference_position.csv.gz (optional)
   reference_attitude.csv.gz (optional)
   reference_mount.csv.gz (optional)
+  reference_motion.csv.gz (optional)
 
 Input can be an existing generic replay directory containing imu.csv/gnss.csv
 or a synthetic-export output directory that can be converted by the existing
@@ -68,6 +69,15 @@ REFERENCE_POSITION_HEADER = [
     "ve_mps",
     "vd_mps",
     "heading_rad",
+]
+REFERENCE_MOTION_HEADER = [
+    "t_s",
+    "wx_radps",
+    "wy_radps",
+    "wz_radps",
+    "ax_mps2",
+    "ay_mps2",
+    "az_mps2",
 ]
 
 
@@ -171,6 +181,7 @@ def package_dataset(args: argparse.Namespace) -> None:
         reference_attitude_text = read_optional_csv_text(generic_dir, "reference_attitude.csv")
         reference_mount_text = read_optional_csv_text(generic_dir, "reference_mount.csv")
         reference_position_text = read_optional_csv_text(generic_dir, "reference_position.csv")
+        reference_motion_text = read_optional_csv_text(generic_dir, "reference_motion.csv")
         imu_stats = validate_csv(imu_text, IMU_HEADER, "imu.csv")
         gnss_stats = validate_csv(gnss_text, GNSS_HEADER, "gnss.csv")
         reference_attitude_stats = (
@@ -192,6 +203,11 @@ def package_dataset(args: argparse.Namespace) -> None:
             if reference_position_text is not None
             else None
         )
+        reference_motion_stats = (
+            validate_csv(reference_motion_text, REFERENCE_MOTION_HEADER, "reference_motion.csv")
+            if reference_motion_text is not None
+            else None
+        )
 
         imu_file = write_gzip_csv(output_dir / "imu.csv.gz", imu_text)
         gnss_file = write_gzip_csv(output_dir / "gnss.csv.gz", gnss_text)
@@ -210,6 +226,11 @@ def package_dataset(args: argparse.Namespace) -> None:
             if reference_position_text is not None
             else None
         )
+        reference_motion_file = (
+            write_gzip_csv(output_dir / "reference_motion.csv.gz", reference_motion_text)
+            if reference_motion_text is not None
+            else None
+        )
         if args.keep_csv:
             (output_dir / "imu.csv").write_text(imu_text, encoding="utf-8")
             (output_dir / "gnss.csv").write_text(gnss_text, encoding="utf-8")
@@ -224,6 +245,10 @@ def package_dataset(args: argparse.Namespace) -> None:
             if reference_position_text is not None:
                 (output_dir / "reference_position.csv").write_text(
                     reference_position_text, encoding="utf-8"
+                )
+            if reference_motion_text is not None:
+                (output_dir / "reference_motion.csv").write_text(
+                    reference_motion_text, encoding="utf-8"
                 )
 
         files = {
@@ -264,6 +289,14 @@ def package_dataset(args: argparse.Namespace) -> None:
             time_values.extend(
                 [reference_position_stats.first_t_s, reference_position_stats.last_t_s]
             )
+        if reference_motion_file is not None and reference_motion_stats is not None:
+            files["reference_motion"] = file_manifest(
+                reference_motion_file,
+                reference_motion_stats,
+                REFERENCE_MOTION_HEADER,
+            )
+            samples["reference_motion"] = reference_motion_stats.rows
+            time_values.extend([reference_motion_stats.first_t_s, reference_motion_stats.last_t_s])
         manifest = {
             "manifest_version": 1,
             "dataset_id": dataset_id,
@@ -308,11 +341,13 @@ def ensure_output_dir(output_dir: Path, force: bool) -> None:
             "reference_attitude.csv.gz",
             "reference_mount.csv.gz",
             "reference_position.csv.gz",
+            "reference_motion.csv.gz",
             "imu.csv",
             "gnss.csv",
             "reference_attitude.csv",
             "reference_mount.csv",
             "reference_position.csv",
+            "reference_motion.csv",
         ]:
             path = output_dir / name
             if path.exists():

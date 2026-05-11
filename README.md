@@ -96,7 +96,14 @@ The visualizer UI is intentionally modular:
 | `visualizer/ui/state`, `trace_query`, `colors`, `orthogonal`, `windows` | Shared UI state, trace sampling/classification, color policy, angle popups, and floating windows. |
 
 See [docs/README.md](docs/README.md) for the complete documentation index and
-[sim/README.md](sim/README.md) for the command-line tool map.
+[sim/README.md](sim/README.md) for the command-line tool map. The main deep
+reference pages are:
+
+- [Repository architecture](docs/architecture.md)
+- [API and conventions](docs/api-and-conventions.md)
+- [Filter algorithms](docs/filter-algorithms.md)
+- [Data and simulation](docs/data-and-simulation.md)
+- [Visualizer, tools, and testing](docs/visualizer-tools-testing.md)
 
 ## 🗺️ Architecture
 
@@ -377,13 +384,17 @@ Replay directories can also include optional reference traces used only for eval
 reference_attitude.csv
 reference_mount.csv
 reference_position.csv
+reference_motion.csv
 ```
 
 Attitude and mount reference CSVs use `t_s,roll_deg,pitch_deg,yaw_deg`.
 Attitude references describe vehicle attitude in the local NED convention.
 Mount references describe the physical `q_bv` vehicle-to-body mount. Position
 references use
-`t_s,lat_deg,lon_deg,height_m,vn_mps,ve_mps,vd_mps,heading_rad`. They are
+`t_s,lat_deg,lon_deg,height_m,vn_mps,ve_mps,vd_mps,heading_rad`. Motion
+references use
+`t_s,wx_radps,wy_radps,wz_radps,ax_mps2,ay_mps2,az_mps2`, with vehicle-frame
+angular velocity and gravity-compensated linear acceleration. They are
 intentionally generic: a converter may derive them from any trusted reference
 system, but this repository does not depend on the reference device protocol.
 
@@ -410,6 +421,7 @@ gnss.csv.gz
 reference_position.csv.gz  # optional
 reference_attitude.csv.gz  # optional
 reference_mount.csv.gz     # optional
+reference_motion.csv.gz    # optional
 ```
 
 `scripts/package_dataset.py` can stage an existing generic replay directory or call `export_synthetic_replay_generic` for synthetic-export output. Raw `.bin` logs are intentionally not supported in this repository because device-specific parsing belongs outside the hardware-agnostic replay boundary.

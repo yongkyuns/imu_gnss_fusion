@@ -42,6 +42,13 @@ pub struct GenericReferenceRpySample {
     pub yaw_deg: f64,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct GenericReferenceMotionSample {
+    pub t_s: f64,
+    pub gyro_vehicle_radps: [f64; 3],
+    pub accel_vehicle_mps2: [f64; 3],
+}
+
 pub fn load_imu_samples(dir: &Path) -> Result<Vec<GenericImuSample>> {
     let rows = read_rows(&dir.join("imu.csv"), 7)?;
     Ok(rows
@@ -89,6 +96,14 @@ pub fn load_reference_position_samples(dir: &Path) -> Result<Vec<GenericReferenc
         return Ok(Vec::new());
     }
     parse_reference_position_rows(read_rows(&path, 8)?)
+}
+
+pub fn load_reference_motion_samples(dir: &Path) -> Result<Vec<GenericReferenceMotionSample>> {
+    let path = dir.join("reference_motion.csv");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    parse_reference_motion_rows(read_rows(&path, 7)?)
 }
 
 pub fn write_samples(
@@ -175,6 +190,17 @@ fn parse_reference_position_rows(
             height_m: row[3],
             vel_ned_mps: [row[4], row[5], row[6]],
             heading_rad: row.get(7).copied().filter(|v| v.is_finite()),
+        })
+        .collect())
+}
+
+fn parse_reference_motion_rows(rows: Vec<Vec<f64>>) -> Result<Vec<GenericReferenceMotionSample>> {
+    Ok(rows
+        .into_iter()
+        .map(|row| GenericReferenceMotionSample {
+            t_s: row[0],
+            gyro_vehicle_radps: [row[1], row[2], row[3]],
+            accel_vehicle_mps2: [row[4], row[5], row[6]],
         })
         .collect())
 }

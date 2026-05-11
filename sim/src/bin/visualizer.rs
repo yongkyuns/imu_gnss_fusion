@@ -13,7 +13,7 @@ use clap::{Parser, ValueEnum};
 #[cfg(not(target_arch = "wasm32"))]
 use sim::datasets::generic_replay::{
     load_gnss_samples, load_imu_samples, load_reference_attitude_samples,
-    load_reference_mount_samples, load_reference_position_samples,
+    load_reference_motion_samples, load_reference_mount_samples, load_reference_position_samples,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use sim::eval::gnss_ins::wrap_deg180;
@@ -243,11 +243,13 @@ fn main() -> Result<()> {
         let reference_attitude = load_reference_attitude_samples(replay_dir)?;
         let reference_mount = load_reference_mount_samples(replay_dir)?;
         let reference_position = load_reference_position_samples(replay_dir)?;
+        let reference_motion = load_reference_motion_samples(replay_dir)?;
         let input_records = imu.len()
             + gnss.len()
             + reference_attitude.len()
             + reference_mount.len()
-            + reference_position.len();
+            + reference_position.len()
+            + reference_motion.len();
         let t_read = Instant::now();
         let replay = GenericReplayInput {
             imu,
@@ -255,6 +257,7 @@ fn main() -> Result<()> {
             reference_attitude,
             reference_mount,
             reference_position,
+            reference_motion,
         };
         let data = run_generic_replay_job(
             &replay,
@@ -364,6 +367,8 @@ fn main() -> Result<()> {
     );
     for (name, nt, np) in [
         group_stats("speed", &data.speed),
+        group_stats("vehicle_motion_gyro", &data.vehicle_motion_gyro),
+        group_stats("vehicle_motion_accel", &data.vehicle_motion_accel),
         group_stats("sat_cn0", &data.sat_cn0),
         group_stats("imu_raw_gyro", &data.imu_raw_gyro),
         group_stats("imu_raw_accel", &data.imu_raw_accel),
@@ -694,6 +699,7 @@ struct WebReplayJobRequest {
     reference_attitude_csv: Option<String>,
     reference_mount_csv: Option<String>,
     reference_position_csv: Option<String>,
+    reference_motion_csv: Option<String>,
     source: Option<WebReplayJobSource>,
 }
 
@@ -719,6 +725,8 @@ struct WebReplayJobSource {
     reference_mount_csv: Option<String>,
     #[serde(default)]
     reference_position_csv: Option<String>,
+    #[serde(default)]
+    reference_motion_csv: Option<String>,
     #[serde(default)]
     motion_label: Option<String>,
     #[serde(default)]
@@ -957,13 +965,18 @@ fn build_web_csv_replay_input(
     let reference_position_csv = source
         .and_then(|source| source.reference_position_csv.as_deref())
         .or(request.reference_position_csv.as_deref());
-    let replay = sim::visualizer::pipeline::generic::parse_generic_replay_csvs_with_refs(
-        imu_csv,
-        gnss_csv,
-        reference_attitude_csv,
-        reference_mount_csv,
-        reference_position_csv,
-    )?;
+    let reference_motion_csv = source
+        .and_then(|source| source.reference_motion_csv.as_deref())
+        .or(request.reference_motion_csv.as_deref());
+    let replay =
+        sim::visualizer::pipeline::generic::parse_generic_replay_csvs_with_optional_motion(
+            imu_csv,
+            gnss_csv,
+            reference_attitude_csv,
+            reference_mount_csv,
+            reference_position_csv,
+            reference_motion_csv,
+        )?;
     Ok(WebReplayInput {
         source: "csv".to_string(),
         label: source
@@ -1188,6 +1201,7 @@ pub fn build_generic_replay_plot_data_json(
     reference_attitude_csv: Option<String>,
     reference_mount_csv: Option<String>,
     reference_position_csv: Option<String>,
+    reference_motion_csv: Option<String>,
 ) -> std::result::Result<String, JsValue> {
     let data = sim::visualizer::replay_job::run_generic_csv_replay_job(
         sim::visualizer::replay_job::GenericReplayCsvJob {
@@ -1196,6 +1210,7 @@ pub fn build_generic_replay_plot_data_json(
             reference_attitude_csv: reference_attitude_csv.as_deref(),
             reference_mount_csv: reference_mount_csv.as_deref(),
             reference_position_csv: reference_position_csv.as_deref(),
+            reference_motion_csv: reference_motion_csv.as_deref(),
             config: sim::visualizer::replay_job::GenericReplayJobConfig::web_transport(),
         },
     )

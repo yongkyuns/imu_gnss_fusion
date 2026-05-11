@@ -64,6 +64,25 @@
       "rows": 5361,
       "sha256": "b6af98f5eb76676500939380327c9d8ffc93ca31e3dd8ad565d77484c6279bc4"
     },
+    "reference_motion": {
+      "bytes": 105419,
+      "columns": [
+        "t_s",
+        "wx_radps",
+        "wy_radps",
+        "wz_radps",
+        "ax_mps2",
+        "ay_mps2",
+        "az_mps2"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.082,
+      "last_t_s": 176.96200000000002,
+      "media_type": "text/csv",
+      "path": "reference_motion.csv.gz",
+      "rows": 5361,
+      "sha256": "f053adaf6ceac60e52c1b57762a1a1b76aca41dc0289dbe4eb46ad0e840dbe36"
+    },
     "reference_mount": {
       "bytes": 1632,
       "columns": [
@@ -106,6 +125,7 @@
     "gnss": 354,
     "imu": 17604,
     "reference_attitude": 5361,
+    "reference_motion": 5361,
     "reference_mount": 354,
     "reference_position": 5361
   },

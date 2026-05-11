@@ -5,6 +5,8 @@ use super::model::{PlotData, Trace};
 pub fn trace_stats(data: &PlotData) -> (usize, usize) {
     let groups = [
         &data.speed,
+        &data.vehicle_motion_gyro,
+        &data.vehicle_motion_accel,
         &data.sat_cn0,
         &data.imu_raw_gyro,
         &data.imu_raw_accel,
@@ -68,6 +70,8 @@ pub fn trace_stats(data: &PlotData) -> (usize, usize) {
 pub fn trace_time_bounds(data: &PlotData) -> Option<(f64, f64)> {
     let groups = [
         &data.speed,
+        &data.vehicle_motion_gyro,
+        &data.vehicle_motion_accel,
         &data.sat_cn0,
         &data.imu_raw_gyro,
         &data.imu_raw_accel,

@@ -59,6 +59,10 @@ pub(super) struct WebDatasetEntry {
     reference_position: Option<String>,
     #[serde(default, alias = "reference_position_csv_gz")]
     reference_position_gz: Option<String>,
+    #[serde(default, alias = "reference_motion_csv")]
+    reference_motion: Option<String>,
+    #[serde(default, alias = "reference_motion_csv_gz")]
+    reference_motion_gz: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -121,6 +125,7 @@ pub(super) enum WebReplayWorkerJob {
         reference_attitude_csv: Option<String>,
         reference_mount_csv: Option<String>,
         reference_position_csv: Option<String>,
+        reference_motion_csv: Option<String>,
     },
     Synthetic {
         label: String,
@@ -139,6 +144,7 @@ pub(super) struct WebDatasetFiles {
     pub(super) reference_attitude: Option<NamedText>,
     pub(super) reference_mount: Option<NamedText>,
     pub(super) reference_position: Option<NamedText>,
+    pub(super) reference_motion: Option<NamedText>,
 }
 
 impl WebDatasetState {
@@ -308,6 +314,7 @@ pub(super) fn web_replay_worker_request(
             reference_attitude_csv,
             reference_mount_csv,
             reference_position_csv,
+            reference_motion_csv,
         } => {
             let _ = Reflect::set(
                 &source,
@@ -357,6 +364,13 @@ pub(super) fn web_replay_worker_request(
                 let _ = Reflect::set(
                     &source,
                     &JsValue::from_str("referencePositionCsv"),
+                    &JsValue::from_str(reference),
+                );
+            }
+            if let Some(reference) = reference_motion_csv {
+                let _ = Reflect::set(
+                    &source,
+                    &JsValue::from_str("referenceMotionCsv"),
                     &JsValue::from_str(reference),
                 );
             }
@@ -544,6 +558,10 @@ pub(super) async fn web_fetch_dataset(
         web_fetch_optional_dataset_csv(&manifest_url, &entry, "reference_position")
             .await?
             .map(|(name, text)| NamedText { name, text });
+    let reference_motion =
+        web_fetch_optional_dataset_csv(&manifest_url, &entry, "reference_motion")
+            .await?
+            .map(|(name, text)| NamedText { name, text });
     Ok(WebDatasetFiles {
         label,
         imu,
@@ -551,6 +569,7 @@ pub(super) async fn web_fetch_dataset(
         reference_attitude,
         reference_mount,
         reference_position,
+        reference_motion,
     })
 }
 
@@ -573,6 +592,10 @@ async fn web_fetch_dataset_csv(
         "reference_position" => (
             entry.reference_position.as_deref(),
             entry.reference_position_gz.as_deref(),
+        ),
+        "reference_motion" => (
+            entry.reference_motion.as_deref(),
+            entry.reference_motion_gz.as_deref(),
         ),
         _ => return Err(format!("unsupported dataset file kind: {kind}")),
     };
@@ -633,6 +656,9 @@ async fn web_fetch_optional_dataset_csv(
         "reference_mount" => entry.reference_mount.is_some() || entry.reference_mount_gz.is_some(),
         "reference_position" => {
             entry.reference_position.is_some() || entry.reference_position_gz.is_some()
+        }
+        "reference_motion" => {
+            entry.reference_motion.is_some() || entry.reference_motion_gz.is_some()
         }
         _ => false,
     };
@@ -1080,6 +1106,7 @@ impl App {
                         self.web_reference_attitude_csv = files.reference_attitude;
                         self.web_reference_mount_csv = files.reference_mount;
                         self.web_reference_position_csv = files.reference_position;
+                        self.web_reference_motion_csv = files.reference_motion;
                         self.web_run_progress = self.web_run_progress.max(0.02);
                         self.start_web_replay_build(label, imu_name, gnss_name, ctx);
                     }
@@ -1214,6 +1241,10 @@ impl App {
             .web_reference_position_csv
             .as_ref()
             .map(|reference| reference.text.clone());
+        let reference_motion_text = self
+            .web_reference_motion_csv
+            .as_ref()
+            .map(|reference| reference.text.clone());
         let estimated_duration_s = estimate_web_replay_duration_s(&imu_text, &gnss_text);
         self.start_web_replay_worker(
             WebReplayWorkerJob::Csv {
@@ -1225,6 +1256,7 @@ impl App {
                 reference_attitude_csv: reference_attitude_text,
                 reference_mount_csv: reference_mount_text,
                 reference_position_csv: reference_position_text,
+                reference_motion_csv: reference_motion_text,
             },
             estimated_duration_s,
             ctx,
@@ -1502,6 +1534,8 @@ impl App {
                 self.web_reference_mount_csv = Some(named);
             } else if lower.contains("reference_position") || lower.contains("ref_pos") {
                 self.web_reference_position_csv = Some(named);
+            } else if lower.contains("reference_motion") || lower.contains("ref_motion") {
+                self.web_reference_motion_csv = Some(named);
             } else if lower.contains("gnss") {
                 self.web_gnss_csv = Some(named);
             } else if lower.contains("imu") || lower.contains("acc") || lower.contains("gyro") {

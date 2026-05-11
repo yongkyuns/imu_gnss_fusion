@@ -46,13 +46,14 @@ The browser loads `datasets/manifest.json` at startup. Entries are hardware-agno
       "gnss_gz": "gnss.csv.gz",
       "reference_position_gz": "reference_position.csv.gz",
       "reference_attitude_gz": "reference_attitude.csv.gz",
-      "reference_mount_gz": "reference_mount.csv.gz"
+      "reference_mount_gz": "reference_mount.csv.gz",
+      "reference_motion_gz": "reference_motion.csv.gz"
     }
   ]
 }
 ```
 
-If `imu_gz`/`gnss_gz` are omitted, the loader tries `imu.csv.gz` and `gnss.csv.gz` under `base_url`, then falls back to plain `imu.csv` and `gnss.csv`. Plain CSV paths can also be set explicitly with `imu` and `gnss`. Reference files are optional and only fetched when listed explicitly. `reference_position.csv` is rendered as the fused reference trajectory on the map, while `gnss.csv` remains the GNSS-only trajectory and filter input.
+If `imu_gz`/`gnss_gz` are omitted, the loader tries `imu.csv.gz` and `gnss.csv.gz` under `base_url`, then falls back to plain `imu.csv` and `gnss.csv`. Plain CSV paths can also be set explicitly with `imu` and `gnss`. Reference files are optional and only fetched when listed explicitly. `reference_position.csv` is rendered as the fused reference trajectory on the map, `reference_motion.csv` provides vehicle-frame reference angular velocity and gravity-compensated acceleration in the Motion tab, and `gnss.csv` remains the GNSS-only trajectory and filter input.
 
 ## FPS benchmark
 

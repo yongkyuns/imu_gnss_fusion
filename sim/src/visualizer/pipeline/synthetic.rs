@@ -1,9 +1,9 @@
 use anyhow::Result;
 
 use crate::datasets::generic_replay::{
-    GenericGnssSample, GenericImuSample, GenericReferenceRpySample,
+    GenericGnssSample, GenericImuSample, GenericReferenceMotionSample, GenericReferenceRpySample,
 };
-use crate::eval::gnss_ins::{quat_angle_deg, quat_rotate};
+use crate::eval::gnss_ins::{quat_angle_deg, quat_conj, quat_rotate};
 use crate::synthetic::gnss_ins_path::{
     GpsNoiseModel, ImuAccuracy, MeasurementNoiseConfig, MotionProfile, PathGenConfig,
     generate_with_noise,
@@ -17,6 +17,8 @@ use crate::visualizer::pipeline::generic::{
     reference_mount_rpy_to_q_bv,
 };
 use crate::visualizer::pipeline::{FilterCompareConfig, GnssOutageConfig};
+
+const STANDARD_GRAVITY_MPS2: f64 = 9.80665;
 
 #[derive(Clone, Copy, Debug)]
 pub enum SyntheticNoiseMode {
@@ -170,6 +172,7 @@ pub fn build_synthetic_replay_input(
             yaw_deg: mount_yaw_deg,
         },
     ];
+    let reference_motion = synthetic_reference_motion(&measured.reference, imu_dt_s);
     Ok((
         GenericReplayInput {
             imu,
@@ -177,6 +180,7 @@ pub fn build_synthetic_replay_input(
             reference_attitude,
             reference_mount,
             reference_position: Vec::new(),
+            reference_motion,
         },
         [
             q_truth_mount[0] as f32,
@@ -366,6 +370,7 @@ fn build_synthetic_plot_data_impl(
         reference_attitude,
         reference_mount,
         reference_position: Vec::new(),
+        reference_motion: synthetic_reference_motion(&measured.reference, 1.0 / synth_cfg.imu_hz),
     };
     let reduced_mount_seed = mount_mode.uses_ref_mount().then_some([
         q_truth_mount[0] as f32,
@@ -657,6 +662,30 @@ fn replace_trace_points(traces: &mut [Trace], name: &str, points: Vec<[f64; 2]>)
     if let Some(trace) = traces.iter_mut().find(|trace| trace.name == name) {
         trace.points = points;
     }
+}
+
+fn synthetic_reference_motion(
+    reference: &crate::synthetic::gnss_ins_path::GeneratedPath,
+    imu_dt_s: f64,
+) -> Vec<GenericReferenceMotionSample> {
+    reference
+        .imu
+        .iter()
+        .zip(reference.truth.iter())
+        .map(|(imu, truth)| {
+            let gravity_vehicle =
+                quat_rotate(quat_conj(truth.q_bn), [0.0, 0.0, STANDARD_GRAVITY_MPS2]);
+            GenericReferenceMotionSample {
+                t_s: imu.t_s + imu_dt_s,
+                gyro_vehicle_radps: imu.gyro_vehicle_radps,
+                accel_vehicle_mps2: [
+                    imu.accel_vehicle_mps2[0] + gravity_vehicle[0],
+                    imu.accel_vehicle_mps2[1] + gravity_vehicle[1],
+                    imu.accel_vehicle_mps2[2] + gravity_vehicle[2],
+                ],
+            }
+        })
+        .collect()
 }
 
 fn sample_trace_at(trace: &Trace, t_s: f64) -> Option<f64> {

@@ -4,6 +4,11 @@ This directory collects project-level notes for the IMU/GNSS fusion workspace. T
 
 ## Start Here
 
+- [Repository architecture](architecture.md): crate boundaries, module ownership, generated code, replay data flow, browser flow, and documentation ownership.
+- [API and conventions](api-and-conventions.md): public `sensor_fusion` API contract, frames, quaternions, units, mount modes, readiness, and integration pitfalls.
+- [Filter algorithms](filter-algorithms.md): Align, Reduced, and Full EKF state vectors, propagation, update families, covariance behavior, tuning, generated code, and observability limits.
+- [Data and simulation](data-and-simulation.md): generic replay CSV schemas, optional references, synthetic motion DSL, noise models, hosted dataset packaging, and external converter checklist.
+- [Visualizer, tools, and testing](visualizer-tools-testing.md): native/web visualizer architecture, UI trace groups, worker flow, diagnostics, command-line tools, CI, and regression-test workflow.
 - [Testing](testing.md): local test commands, targeted suites, fixtures, and expensive-data notes.
 - [Frame conventions](math/frames.md): short index for navigation, ECEF, raw body, vehicle, and mount frames.
 - [Full EKF notes](math/full.md): concise operational links for the Full EKF.
