@@ -238,6 +238,26 @@ pub(super) fn draw_align_tuning(ui: &mut egui::Ui, cfg: &mut FilterCompareConfig
             0.0..=1.0,
         );
     });
+    ui.collapsing("Post-coarse refinement", |ui| {
+        ui.checkbox(
+            &mut align.refine_after_coarse_ready,
+            "Smooth after coarse ready",
+        );
+        drag_f32(
+            ui,
+            "Process noise scale",
+            &mut align.refine_process_noise_scale,
+            0.01,
+            0.0..=1.0,
+        );
+        drag_f32(
+            ui,
+            "Observation std scale",
+            &mut align.refine_observation_std_scale,
+            0.1,
+            1.0..=20.0,
+        );
+    });
     ui.collapsing("Motion gates", |ui| {
         drag_f32(
             ui,

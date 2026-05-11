@@ -37,6 +37,12 @@ pub const GRAVITY_MPS2: f32 = 9.80665;
 pub struct AlignConfig {
     /// Mount process-noise standard deviation per roll, pitch, and yaw state, in radians.
     pub q_mount_std_rad: [f32; ALIGN_N_STATES],
+    /// Enables lower-bandwidth refinement after the coarse-alignment covariance gates pass.
+    pub refine_after_coarse_ready: bool,
+    /// Scale applied to mount process noise during post-coarse refinement.
+    pub refine_process_noise_scale: f32,
+    /// Scale applied to observation standard deviations during post-coarse refinement.
+    pub refine_observation_std_scale: f32,
     /// Gravity-vector observation standard deviation, in meters per second squared.
     pub r_gravity_std_mps2: f32,
     /// Horizontal-acceleration heading observation standard deviation, in radians.
@@ -83,6 +89,9 @@ impl Default for AlignConfig {
                 0.0005_f32.to_radians(),
                 0.00005_f32.to_radians(),
             ],
+            refine_after_coarse_ready: false,
+            refine_process_noise_scale: 1.0,
+            refine_observation_std_scale: 1.0,
             r_gravity_std_mps2: 0.56,
             r_horiz_heading_std_rad: 2.0_f32.to_radians(),
             r_turn_heading_std_rad: 0.2_f32.to_radians(),
@@ -165,6 +174,12 @@ pub struct AlignUpdateTrace {
     pub horiz_straight_core_valid: bool,
     /// Quaternion after the turn-gyro update, if applied.
     pub after_turn_gyro: Option<[f32; 4]>,
+    /// Whether post-coarse refinement bandwidth scaling was active for this update.
+    pub refinement_active: bool,
+    /// Process-noise scale used by prediction for this update.
+    pub refinement_process_noise_scale: f32,
+    /// Observation standard-deviation scale used by measurements for this update.
+    pub refinement_observation_std_scale: f32,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -242,8 +257,10 @@ impl Align {
     /// Propagates mount covariance by `dt` seconds without changing the nominal quaternion.
     pub fn predict(&mut self, dt: f32) {
         let dt = dt.max(1.0e-3);
+        let process_scale = self.refinement_process_noise_scale();
         for i in 0..3 {
-            self.P[i][i] += self.cfg.q_mount_std_rad[i] * self.cfg.q_mount_std_rad[i] * dt;
+            let q = self.cfg.q_mount_std_rad[i] * process_scale;
+            self.P[i][i] += q * q * dt;
         }
     }
 
@@ -259,9 +276,13 @@ impl Align {
     ) -> (f32, AlignUpdateTrace) {
         let mut trace = AlignUpdateTrace {
             q_start: self.q_bv,
+            refinement_active: self.refinement_active(),
+            refinement_process_noise_scale: self.refinement_process_noise_scale(),
+            refinement_observation_std_scale: self.refinement_observation_std_scale(),
             ..AlignUpdateTrace::default()
         };
         self.predict(window.dt);
+        let observation_scale = self.refinement_observation_std_scale();
 
         let v_prev = window.gnss_vel_prev_n;
         let v_curr = window.gnss_vel_curr_n;
@@ -316,7 +337,8 @@ impl Align {
         }
         if self.cfg.use_gravity && stationary {
             let gravity_state_mask = [true, true, false];
-            let r_gravity = self.cfg.r_gravity_std_mps2 * self.cfg.r_gravity_std_mps2;
+            let gravity_std = self.cfg.r_gravity_std_mps2 * observation_scale;
+            let r_gravity = gravity_std * gravity_std;
             score += apply_update2_scaled_masked(
                 &mut self.q_bv,
                 &mut self.P,
@@ -367,7 +389,7 @@ impl Align {
             trace.horiz_speed_q = Some(speed_q);
             trace.horiz_accel_q = Some(accel_q);
 
-            let effective_std = if turn_core_valid {
+            let base_effective_std = if turn_core_valid {
                 let dominance = ((a_lat.abs() / (a_long.abs() + 0.2)) - 1.5) / 1.5;
                 let lat_q =
                     ((a_lat.abs() - self.cfg.min_lat_acc_mps2.max(0.7)) / 1.0).clamp(0.0, 1.0);
@@ -385,6 +407,7 @@ impl Align {
                 trace.horiz_straight_q = Some(straight_q);
                 self.cfg.r_horiz_heading_std_rad / straight_q
             };
+            let effective_std = observation_scale * base_effective_std;
 
             let cross = horiz_obs[3] * a_lat - horiz_obs[4] * a_long;
             let dot = horiz_obs[3] * a_long + horiz_obs[4] * a_lat;
@@ -409,7 +432,8 @@ impl Align {
             };
             let state_mask = [true, true, turn_gyro_yaw_scale > 0.0];
             let state_scale = [1.0, 1.0, turn_gyro_yaw_scale];
-            let r_turn_gyro = self.cfg.r_turn_gyro_std_radps * self.cfg.r_turn_gyro_std_radps;
+            let turn_gyro_std = self.cfg.r_turn_gyro_std_radps * observation_scale;
+            let r_turn_gyro = turn_gyro_std * turn_gyro_std;
             score += apply_update2_scaled_masked(
                 &mut self.q_bv,
                 &mut self.P,
@@ -462,6 +486,26 @@ impl Align {
             && sqrt_f32(self.P[0][0].max(0.0)).to_degrees() <= 0.15
             && sqrt_f32(self.P[1][1].max(0.0)).to_degrees() <= 0.15
             && sqrt_f32(self.P[2][2].max(0.0)).to_degrees() <= 0.15
+    }
+
+    fn refinement_active(&self) -> bool {
+        self.cfg.refine_after_coarse_ready && self.coarse_aligned
+    }
+
+    fn refinement_process_noise_scale(&self) -> f32 {
+        if self.refinement_active() {
+            self.cfg.refine_process_noise_scale.max(0.0)
+        } else {
+            1.0
+        }
+    }
+
+    fn refinement_observation_std_scale(&self) -> f32 {
+        if self.refinement_active() {
+            self.cfg.refine_observation_std_scale.max(1.0e-3)
+        } else {
+            1.0
+        }
     }
 
     fn turn_consistency_update(
@@ -816,7 +860,8 @@ fn apply_update1_masked(
     let s = vec3_dot(h, ph) + r_var;
     let s_inv = if s.abs() > 1.0e-20 { 1.0 / s } else { 1.0 };
     let k = [ph[0] * s_inv, ph[1] * s_inv, ph[2] * s_inv];
-    inject_small_angle(q_bv, [k[0] * y, k[1] * y, k[2] * y]);
+    let dtheta = [k[0] * y, k[1] * y, k[2] * y];
+    inject_small_angle(q_bv, dtheta);
 
     let mut i_minus_kh = [[0.0; 3]; 3];
     for i in 0..3 {
@@ -962,4 +1007,70 @@ fn wrap_pi_mod(rad: f32) -> f32 {
         y += two_pi;
     }
     y - core::f32::consts::PI
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn post_coarse_refinement_scales_prediction_noise() {
+        let cfg = AlignConfig {
+            q_mount_std_rad: [0.01, 0.02, 0.03],
+            refine_after_coarse_ready: true,
+            refine_process_noise_scale: 0.25,
+            ..AlignConfig::default()
+        };
+        let mut align = Align::new(cfg);
+        align.coarse_aligned = true;
+        let before = align.P;
+
+        align.predict(2.0);
+
+        for axis in 0..3 {
+            let q = cfg.q_mount_std_rad[axis] * cfg.refine_process_noise_scale;
+            let expected = before[axis][axis] + q * q * 2.0;
+            let actual = align.P[axis][axis];
+            assert!(
+                (actual - expected).abs() <= 1.0e-9,
+                "axis {axis}: expected {expected}, got {actual}"
+            );
+        }
+    }
+
+    #[test]
+    fn refinement_is_inactive_before_coarse_ready() {
+        let cfg = AlignConfig {
+            q_mount_std_rad: [0.01, 0.02, 0.03],
+            refine_after_coarse_ready: true,
+            refine_process_noise_scale: 0.25,
+            refine_observation_std_scale: 4.0,
+            ..AlignConfig::default()
+        };
+        let mut align = Align::new(cfg);
+        let before = align.P;
+
+        align.predict(2.0);
+
+        for axis in 0..3 {
+            let q = cfg.q_mount_std_rad[axis];
+            let expected = before[axis][axis] + q * q * 2.0;
+            let actual = align.P[axis][axis];
+            assert!(
+                (actual - expected).abs() <= 1.0e-9,
+                "axis {axis}: expected {expected}, got {actual}"
+            );
+        }
+        assert_eq!(align.refinement_observation_std_scale(), 1.0);
+    }
+
+    #[test]
+    fn default_config_preserves_original_refinement_behavior() {
+        let mut align = Align::new(AlignConfig::default());
+        align.coarse_aligned = true;
+
+        assert!(!align.refinement_active());
+        assert_eq!(align.refinement_process_noise_scale(), 1.0);
+        assert_eq!(align.refinement_observation_std_scale(), 1.0);
+    }
 }

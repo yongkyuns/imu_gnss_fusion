@@ -195,6 +195,9 @@ mod tests {
         };
         cfg.align.min_speed_mps = 1.5;
         cfg.align.q_mount_std_rad = [1.0e-5, 2.0e-5, 3.0e-5];
+        cfg.align.refine_after_coarse_ready = true;
+        cfg.align.refine_process_noise_scale = 0.2;
+        cfg.align.refine_observation_std_scale = 3.0;
         cfg.full_init.mount_sigma_deg = 4.0;
         cfg.full_init.mount_yaw_sigma_deg = 8.0;
         cfg.noise.full.as_mut().unwrap().mount_align_rw_var = 2.0e-8;
@@ -214,6 +217,18 @@ mod tests {
         );
         assert_eq!(decoded.align.min_speed_mps, cfg.align.min_speed_mps);
         assert_eq!(decoded.align.q_mount_std_rad, cfg.align.q_mount_std_rad);
+        assert_eq!(
+            decoded.align.refine_after_coarse_ready,
+            cfg.align.refine_after_coarse_ready
+        );
+        assert_eq!(
+            decoded.align.refine_process_noise_scale,
+            cfg.align.refine_process_noise_scale
+        );
+        assert_eq!(
+            decoded.align.refine_observation_std_scale,
+            cfg.align.refine_observation_std_scale
+        );
         assert_eq!(
             decoded.full_init.mount_sigma_deg,
             cfg.full_init.mount_sigma_deg

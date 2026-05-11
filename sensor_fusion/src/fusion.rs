@@ -39,7 +39,6 @@ const CAN_SPEED_SIGN_INFER_MIN_MPS: f32 = 1.0;
 const FULL_GNSS_POS_MIN_STD_M: f32 = 0.1;
 const FULL_GNSS_VEL_MIN_STD_MPS: f32 = 0.01;
 const FULL_GNSS_VERTICAL_POS_STD_SCALE: f32 = 2.5;
-const FULL_NHC_GNSS_SPEED_MAX_AGE_S: f32 = 1.0;
 
 #[derive(Clone, Copy, Debug, Default)]
 struct Anchor {
@@ -924,20 +923,10 @@ impl SensorFusion {
                 self.last_full_gnss_fuse_t_s = Some(gnss.t_s);
             }
         }
-        let nhc_gate_speed_mps = self.last_full_gnss.and_then(|gnss| {
-            let age_s = sample.t_s - gnss.t_s;
-            (0.0..=FULL_NHC_GNSS_SPEED_MAX_AGE_S)
-                .contains(&age_s)
-                .then(|| {
-                    sqrt_f32(
-                        gnss.vel_ned_mps[0] * gnss.vel_ned_mps[0]
-                            + gnss.vel_ned_mps[1] * gnss.vel_ned_mps[1],
-                    )
-                })
-        });
+        let estimated_speed_mps = self.full_speed_estimate_mps();
         let (full_nhc_gate_speed_mps, full_nhc_dt) = if self.cfg.nhc_update_period_s > 0.0 {
             let full_nhc_active = runtime_nhc_active(sample.accel_mps2, sample.gyro_radps)
-                && nhc_gate_speed_mps.is_some_and(nhc_speed_allows_update);
+                && nhc_speed_allows_update(estimated_speed_mps);
             let full_nhc_dt = self.nhc_observation_interval(
                 self.last_full_nhc_t_s,
                 sample.t_s,
@@ -945,9 +934,12 @@ impl SensorFusion {
                 full_nhc_active,
             );
             self.last_full_nhc_t_s = full_nhc_dt.1;
-            (full_nhc_dt.0.and(nhc_gate_speed_mps), full_nhc_dt.0)
+            (full_nhc_dt.0.map(|_| estimated_speed_mps), full_nhc_dt.0)
         } else {
-            (nhc_gate_speed_mps, Some(dt))
+            (
+                nhc_speed_allows_update(estimated_speed_mps).then_some(estimated_speed_mps),
+                Some(dt),
+            )
         };
         self.full.fuse_reference_batch_full_with_nhc_speed_and_r(
             gps_pos,
@@ -1264,8 +1256,9 @@ impl SensorFusion {
         let low_dynamic = gyro_ema <= self.cfg.bootstrap.max_gyro_radps
             && accel_ema <= self.cfg.bootstrap.max_accel_norm_err_mps2;
         let low_speed = self
-            .last_gnss
-            .is_some_and(|g| horiz_speed(g.vel_ned_mps) <= RUNTIME_ZERO_SPEED_MPS);
+            .reduced_initialized
+            .then(|| self.reduced_speed_estimate_mps() <= RUNTIME_ZERO_SPEED_MPS)
+            .unwrap_or(false);
         low_dynamic && low_speed
     }
 
@@ -1276,9 +1269,7 @@ impl SensorFusion {
         accel_vehicle: [f32; 3],
         gyro_vehicle: [f32; 3],
     ) -> Option<[f32; 2]> {
-        let speed_allows_nhc = self
-            .last_gnss
-            .is_some_and(|g| nhc_speed_allows_update(horiz_speed(g.vel_ned_mps)));
+        let speed_allows_nhc = nhc_speed_allows_update(self.reduced_speed_estimate_mps());
         let nhc_active = runtime_nhc_active(accel_vehicle, gyro_vehicle) && speed_allows_nhc;
         let (obs_dt, last_t_s) =
             self.nhc_observation_interval(self.last_reduced_nhc_t_s, t_s, dt, nhc_active);
@@ -1366,6 +1357,16 @@ impl SensorFusion {
         n.bax = n.bax.clamp(-max_accel, max_accel);
         n.bay = n.bay.clamp(-max_accel, max_accel);
         n.baz = n.baz.clamp(-max_accel, max_accel);
+    }
+
+    fn reduced_speed_estimate_mps(&self) -> f32 {
+        let nominal = &self.reduced.raw().nominal;
+        vec_norm3_f32([nominal.vn, nominal.ve, nominal.vd])
+    }
+
+    fn full_speed_estimate_mps(&self) -> f32 {
+        let nominal = &self.full.raw().nominal;
+        vec_norm3_f32([nominal.vn, nominal.ve, nominal.vd])
     }
 
     fn reduced_navigation_rate_corrections(

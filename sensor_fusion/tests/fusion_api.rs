@@ -72,6 +72,57 @@ fn full_filter_initializes_through_public_sensor_fusion_api() {
 }
 
 #[test]
+fn reduced_nhc_uses_estimated_motion_during_gnss_outage() {
+    let mut system = SensorFusion::with_mount([1.0, 0.0, 0.0, 0.0]);
+    system.set_nhc_update_period_s(0.0);
+
+    let update = system.process_gnss(gnss_sample(1.0));
+    assert!(update.reduced_initialized_now);
+
+    let before = system.reduced().unwrap().update_diag.total_updates;
+    let _ = system.process_imu(ImuSample {
+        t_s: 2.20,
+        gyro_radps: [0.0, 0.0, 0.0],
+        accel_mps2: [0.0, 0.0, 9.80665],
+    });
+    let _ = system.process_imu(ImuSample {
+        t_s: 2.21,
+        gyro_radps: [0.0, 0.0, 0.0],
+        accel_mps2: [0.0, 0.0, 9.80665],
+    });
+
+    assert!(system.reduced().unwrap().update_diag.total_updates > before);
+}
+
+#[test]
+fn full_nhc_uses_estimated_motion_during_gnss_outage() {
+    let mut system = SensorFusion::with_config(Config {
+        filter: Filter::Full,
+        mount_mode: MountMode::Manual([1.0, 0.0, 0.0, 0.0]),
+    });
+    system.set_nhc_update_period_s(0.0);
+
+    let update = system.process_gnss(gnss_sample(1.0));
+    assert!(update.filter_initialized_now);
+
+    let _ = system.process_imu(ImuSample {
+        t_s: 2.20,
+        gyro_radps: [0.0, 0.0, 0.0],
+        accel_mps2: [0.0, 0.0, 9.80665],
+    });
+    let _ = system.process_imu(ImuSample {
+        t_s: 2.21,
+        gyro_radps: [0.0, 0.0, 0.0],
+        accel_mps2: [0.0, 0.0, 9.80665],
+    });
+
+    let full = system.full().unwrap();
+    let obs_types = &full.last_obs_types[..full.last_obs_count as usize];
+    assert!(obs_types.contains(&7));
+    assert!(obs_types.contains(&8));
+}
+
+#[test]
 fn vehicle_speed_sample_pulls_forward_velocity_upward() {
     let mut system = SensorFusion::with_mount([1.0, 0.0, 0.0, 0.0]);
     let upd = system.process_gnss(gnss_sample(1.0));

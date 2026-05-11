@@ -438,11 +438,8 @@ pub(super) fn web_replay_worker_request(
         &JsValue::from_str("misalignment"),
         &JsValue::from_str(misalignment.cli_value()),
     );
-    let _ = Reflect::set(
-        &request,
-        &JsValue::from_str("ekfCfg"),
-        &serde_wasm_bindgen::to_value(&filter_cfg).unwrap_or(JsValue::NULL),
-    );
+    let filter_cfg_value = serde_wasm_bindgen::to_value(&filter_cfg).unwrap_or(JsValue::NULL);
+    let _ = Reflect::set(&request, &JsValue::from_str("filterCfg"), &filter_cfg_value);
     let _ = Reflect::set(
         &request,
         &JsValue::from_str("gnssOutages"),

@@ -682,7 +682,7 @@ struct WebReplayJobRequest {
     job_id: u64,
     #[serde(default)]
     misalignment: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "ekfCfg")]
     filter_cfg: Option<sim::visualizer::pipeline::FilterCompareConfig>,
     #[serde(default)]
     gnss_outages: Option<sim::visualizer::pipeline::GnssOutageConfig>,
