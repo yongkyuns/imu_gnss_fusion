@@ -103,7 +103,9 @@ pub fn load_reference_motion_samples(dir: &Path) -> Result<Vec<GenericReferenceM
     if !path.exists() {
         return Ok(Vec::new());
     }
-    parse_reference_motion_rows(read_rows(&path, 7)?)
+    let text =
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+    parse_reference_motion_csv_text(&text, &path.display().to_string())
 }
 
 pub fn write_samples(
@@ -194,15 +196,63 @@ fn parse_reference_position_rows(
         .collect())
 }
 
-fn parse_reference_motion_rows(rows: Vec<Vec<f64>>) -> Result<Vec<GenericReferenceMotionSample>> {
-    Ok(rows
+pub(crate) fn parse_reference_motion_csv_text(
+    text: &str,
+    label: &str,
+) -> Result<Vec<GenericReferenceMotionSample>> {
+    let mut out = Vec::new();
+    for (line_idx, line) in text.lines().enumerate() {
+        if line_idx == 0 || line.trim().is_empty() {
+            continue;
+        }
+        let row = line
+            .split(',')
+            .map(|part| {
+                let trimmed = part.trim();
+                if trimmed.eq_ignore_ascii_case("nan") {
+                    Ok(f64::NAN)
+                } else {
+                    trimmed.parse::<f64>().with_context(|| {
+                        format!("failed to parse numeric field in {label}: {line}")
+                    })
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if !(row.len() == 7 || row.len() == 13) {
+            bail!("{label} expected 7 or 13 columns per row");
+        }
+        out.push(reference_motion_sample_from_row(&row));
+    }
+    Ok(out)
+}
+
+fn reference_motion_sample_from_row(row: &[f64]) -> GenericReferenceMotionSample {
+    let mut gyro = [row[1], row[2], row[3]];
+    let mut accel = [row[4], row[5], row[6]];
+
+    if row.len() >= 13 {
+        for axis in 0..3 {
+            if row[7 + axis] <= 0.0 {
+                gyro[axis] = f64::NAN;
+            }
+            if row[10 + axis] <= 0.0 {
+                accel[axis] = f64::NAN;
+            }
+        }
+    } else if gyro
         .into_iter()
-        .map(|row| GenericReferenceMotionSample {
-            t_s: row[0],
-            gyro_vehicle_radps: [row[1], row[2], row[3]],
-            accel_vehicle_mps2: [row[4], row[5], row[6]],
-        })
-        .collect())
+        .chain(accel)
+        .all(|value| value.is_finite() && value.abs() <= 1.0e-12)
+    {
+        gyro = [f64::NAN; 3];
+        accel = [f64::NAN; 3];
+    }
+
+    GenericReferenceMotionSample {
+        t_s: row[0],
+        gyro_vehicle_radps: gyro,
+        accel_vehicle_mps2: accel,
+    }
 }
 
 fn write_imu_csv(path: &Path, samples: &[GenericImuSample]) -> Result<()> {
@@ -289,4 +339,44 @@ fn read_rows(path: &Path, cols: usize) -> Result<Vec<Vec<f64>>> {
         out.push(row);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reference_motion_all_zero_legacy_rows_are_missing_samples() {
+        let samples = parse_reference_motion_csv_text(
+            "t_s,wx_radps,wy_radps,wz_radps,ax_mps2,ay_mps2,az_mps2\n\
+             0.0,0,0,0,0,0,0\n\
+             0.1,0,0,0.2,1.0,0,0\n",
+            "test reference_motion.csv",
+        )
+        .unwrap();
+
+        assert_eq!(samples.len(), 2);
+        assert!(samples[0].gyro_vehicle_radps.iter().all(|v| v.is_nan()));
+        assert!(samples[0].accel_vehicle_mps2.iter().all(|v| v.is_nan()));
+        assert_eq!(samples[1].gyro_vehicle_radps, [0.0, 0.0, 0.2]);
+        assert_eq!(samples[1].accel_vehicle_mps2, [1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn reference_motion_validity_columns_mask_individual_axes() {
+        let samples = parse_reference_motion_csv_text(
+            "t_s,wx_radps,wy_radps,wz_radps,ax_mps2,ay_mps2,az_mps2,wx_valid,wy_valid,wz_valid,ax_valid,ay_valid,az_valid\n\
+             0.0,1,2,3,4,5,6,1,0,1,0,1,1\n",
+            "test reference_motion.csv",
+        )
+        .unwrap();
+
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].gyro_vehicle_radps[0], 1.0);
+        assert!(samples[0].gyro_vehicle_radps[1].is_nan());
+        assert_eq!(samples[0].gyro_vehicle_radps[2], 3.0);
+        assert!(samples[0].accel_vehicle_mps2[0].is_nan());
+        assert_eq!(samples[0].accel_vehicle_mps2[1], 5.0);
+        assert_eq!(samples[0].accel_vehicle_mps2[2], 6.0);
+    }
 }

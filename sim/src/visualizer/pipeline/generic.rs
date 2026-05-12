@@ -6,7 +6,7 @@ use sensor_fusion::{Config, Filter, SensorFusion};
 use crate::datasets::generic_replay::{
     GenericGnssSample, GenericImuSample, GenericReferenceMotionSample,
     GenericReferencePositionSample, GenericReferenceRpySample, fusion_gnss_sample,
-    fusion_imu_sample,
+    fusion_imu_sample, parse_reference_motion_csv_text,
 };
 use crate::eval::gnss_ins::{as_q64, quat_angle_deg, quat_conj, quat_mul, quat_rotate};
 use crate::eval::replay::{ReplayEvent, for_each_event};
@@ -1795,7 +1795,9 @@ fn gravity_compensate_vehicle_accel(
 
 fn push_motion_triplet(t_s: f64, values: [f64; 3], traces: &mut [Vec<[f64; 2]>; 3]) {
     for (trace, value) in traces.iter_mut().zip(values) {
-        trace.push([t_s, value]);
+        if t_s.is_finite() && value.is_finite() {
+            trace.push([t_s, value]);
+        }
     }
 }
 
@@ -2641,15 +2643,7 @@ fn parse_reference_position_csv(text: &str) -> Result<Vec<GenericReferencePositi
 }
 
 fn parse_reference_motion_csv(text: &str) -> Result<Vec<GenericReferenceMotionSample>> {
-    let rows = parse_numeric_rows(text, 7, "reference_motion.csv")?;
-    Ok(rows
-        .into_iter()
-        .map(|row| GenericReferenceMotionSample {
-            t_s: row[0],
-            gyro_vehicle_radps: [row[1], row[2], row[3]],
-            accel_vehicle_mps2: [row[4], row[5], row[6]],
-        })
-        .collect())
+    parse_reference_motion_csv_text(text, "reference_motion.csv")
 }
 
 fn heading_deg_from_sample(heading_rad: Option<f64>, vel_ned_mps: [f64; 3]) -> Option<f64> {
