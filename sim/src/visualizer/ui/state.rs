@@ -75,13 +75,79 @@ fn is_reduced_trace_name(name: &str) -> bool {
 }
 
 fn is_full_trace_name(name: &str) -> bool {
-    name.starts_with("Full")
-        || name.contains(" Full")
-        || name.contains("full")
-        || name.contains("mount")
+    name.starts_with("Full") || name.contains(" Full") || name.contains("full")
 }
 
 pub(super) fn display_filter_trace_name(name: &str) -> String {
     name.replace("Full", FULL_FILTER_LABEL)
         .replace("Reduced", REDUCED_FILTER_LABEL)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn trace(name: &str) -> Trace {
+        Trace {
+            name: name.to_string(),
+            points: vec![[0.0, 0.0]],
+        }
+    }
+
+    #[test]
+    fn full_toggle_only_hides_full_traces() {
+        let visibility = TraceVisibility {
+            show_reference: true,
+            show_align: true,
+            show_reduced: true,
+            show_full: false,
+        };
+
+        assert!(visibility.allows(&trace("Reference mount roll [deg]")));
+        assert!(visibility.allows(&trace("Align mount quaternion error [deg]")));
+        assert!(visibility.allows(&trace("Reduced mount roll [deg]")));
+        assert!(visibility.allows(&trace("mount ready")));
+        assert!(!visibility.allows(&trace("Full mount roll [deg]")));
+        assert!(!visibility.allows(&trace("Full sigma state 0")));
+    }
+
+    #[test]
+    fn source_toggles_are_independent_for_mount_traces() {
+        let reference_off = TraceVisibility {
+            show_reference: false,
+            show_align: true,
+            show_reduced: true,
+            show_full: true,
+        };
+        assert!(!reference_off.allows(&trace("Reference mount pitch [deg]")));
+        assert!(reference_off.allows(&trace("Align pitch [deg]")));
+        assert!(reference_off.allows(&trace("Reduced mount pitch [deg]")));
+        assert!(reference_off.allows(&trace("Full mount pitch [deg]")));
+
+        let align_off = TraceVisibility {
+            show_reference: true,
+            show_align: false,
+            show_reduced: true,
+            show_full: true,
+        };
+        assert!(!align_off.allows(&trace("Align yaw [deg]")));
+        assert!(align_off.allows(&trace("Reference mount yaw [deg]")));
+        assert!(align_off.allows(&trace("Reduced mount yaw [deg]")));
+        assert!(align_off.allows(&trace("Full mount yaw [deg]")));
+
+        let reduced_off = TraceVisibility {
+            show_reference: true,
+            show_align: true,
+            show_reduced: false,
+            show_full: true,
+        };
+        assert!(!reduced_off.allows(&trace("Reduced mount roll [deg]")));
+        assert!(!reduced_off.allows(&trace("Reduced accel bias sigma X [m/s^2]")));
+        assert!(!reduced_off.allows(&trace("Reduced state_0")));
+        assert!(!reduced_off.allows(&trace("Reduced pitch HPF [deg]")));
+        assert!(!reduced_off.allows(&trace("Reduced vehicle speed [m/s]")));
+        assert!(reduced_off.allows(&trace("Reference mount roll [deg]")));
+        assert!(reduced_off.allows(&trace("Align roll [deg]")));
+        assert!(reduced_off.allows(&trace("Full mount roll [deg]")));
+    }
 }

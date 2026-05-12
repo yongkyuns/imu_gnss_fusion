@@ -588,12 +588,12 @@ fn synthetic_inputs_populate_visualizer_reduced_traces() -> Result<()> {
     require_trace_schema(
         "reduced_bump_pitch_speed",
         &data.reduced_bump_pitch_speed,
-        &["Reduced pitch [deg]", "vehicle speed [m/s]"],
+        &["Reduced pitch [deg]", "Reduced vehicle speed [m/s]"],
     )?;
     require_trace_schema(
         "reduced_bump_diag",
         &data.reduced_bump_diag,
-        &["Pitch HPF [deg]", "Pitch RMS EMA [deg]"],
+        &["Reduced pitch HPF [deg]", "Reduced pitch RMS EMA [deg]"],
     )?;
     require_trace_schema(
         "align_cmp_att",

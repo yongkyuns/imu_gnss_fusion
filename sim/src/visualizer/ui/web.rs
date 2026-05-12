@@ -985,11 +985,11 @@ impl App {
                 ui.heading("Building replay");
                 ui.add_space(8.0);
                 ui.add(
-                    egui::ProgressBar::new(self.web_run_progress.clamp(0.0, 0.95))
+                    egui::ProgressBar::new(self.web_run_progress.clamp(0.0, 1.0))
                         .desired_width((ui.available_width() * 0.45).clamp(220.0, 520.0))
                         .text(format!(
                             "{:.0}%",
-                            100.0 * self.web_run_progress.clamp(0.0, 0.95)
+                            100.0 * self.web_run_progress.clamp(0.0, 1.0)
                         )),
                 );
                 ui.add_space(6.0);

@@ -715,33 +715,33 @@ fn build_generic_replay_plot_data_impl(
         ],
         reduced_cov_bias: vec![
             Trace {
-                name: "accel bias sigma X [m/s^2]".to_string(),
+                name: "Reduced accel bias sigma X [m/s^2]".to_string(),
                 points: reduced_cov[12].clone(),
             },
             Trace {
-                name: "accel bias sigma Y [m/s^2]".to_string(),
+                name: "Reduced accel bias sigma Y [m/s^2]".to_string(),
                 points: reduced_cov[13].clone(),
             },
             Trace {
-                name: "accel bias sigma Z [m/s^2]".to_string(),
+                name: "Reduced accel bias sigma Z [m/s^2]".to_string(),
                 points: reduced_cov[14].clone(),
             },
             Trace {
-                name: "gyro bias sigma X [deg/s]".to_string(),
+                name: "Reduced gyro bias sigma X [deg/s]".to_string(),
                 points: reduced_cov[9].clone(),
             },
             Trace {
-                name: "gyro bias sigma Y [deg/s]".to_string(),
+                name: "Reduced gyro bias sigma Y [deg/s]".to_string(),
                 points: reduced_cov[10].clone(),
             },
             Trace {
-                name: "gyro bias sigma Z [deg/s]".to_string(),
+                name: "Reduced gyro bias sigma Z [deg/s]".to_string(),
                 points: reduced_cov[11].clone(),
             },
         ],
         reduced_cov_nonbias: (0..9)
             .map(|i| Trace {
-                name: format!("state_{i}"),
+                name: format!("Reduced state_{i}"),
                 points: reduced_cov[i].clone(),
             })
             .collect(),
@@ -1628,7 +1628,7 @@ fn populate_reduced_bump_traces(data: &mut PlotData) {
             points: pitch.clone(),
         },
         Trace {
-            name: "vehicle speed [m/s]".to_string(),
+            name: "Reduced vehicle speed [m/s]".to_string(),
             points: speed,
         },
     ];
@@ -1646,11 +1646,11 @@ fn populate_reduced_bump_traces(data: &mut PlotData) {
     }
     data.reduced_bump_diag = vec![
         Trace {
-            name: "Pitch HPF [deg]".to_string(),
+            name: "Reduced pitch HPF [deg]".to_string(),
             points: hpf,
         },
         Trace {
-            name: "Pitch RMS EMA [deg]".to_string(),
+            name: "Reduced pitch RMS EMA [deg]".to_string(),
             points: abs_ema,
         },
     ];

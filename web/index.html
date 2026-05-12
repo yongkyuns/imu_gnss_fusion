@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>IMU/GNSS Filter Evaluation</title>
     <style>
       html,
@@ -14,9 +14,14 @@
         background: #11151c;
       }
 
+      body {
+        padding: 0 0 env(safe-area-inset-bottom, 0px);
+        box-sizing: border-box;
+      }
+
       #visualizer_canvas {
         width: 100vw;
-        height: 100vh;
+        height: calc(var(--visual-viewport-height, 100dvh) - env(safe-area-inset-bottom, 0px));
         display: block;
       }
 
@@ -42,6 +47,16 @@
     <script src="./local-config.js"></script>
     <script type="module">
       const status = document.getElementById("status");
+      const updateVisualViewportSize = () => {
+        const viewport = window.visualViewport;
+        const height = viewport?.height || window.innerHeight || document.documentElement.clientHeight;
+        document.documentElement.style.setProperty("--visual-viewport-height", `${Math.max(1, height)}px`);
+      };
+      updateVisualViewportSize();
+      window.addEventListener("resize", updateVisualViewportSize, { passive: true });
+      window.addEventListener("orientationchange", updateVisualViewportSize, { passive: true });
+      window.visualViewport?.addEventListener("resize", updateVisualViewportSize, { passive: true });
+      window.visualViewport?.addEventListener("scroll", updateVisualViewportSize, { passive: true });
       const mapboxTokenStorageKey = "imu_gnss_fusion.mapbox_token";
       const themeStorageKey = "imu_gnss_fusion.theme";
       window.__imuGnssFusionInitialMapboxToken = () => {
