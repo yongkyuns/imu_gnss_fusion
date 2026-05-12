@@ -9,6 +9,8 @@ use super::App;
 use super::inspector::{render_update_inspector_contents, update_inspector_view_model};
 use super::state::TuningPanel;
 use super::tuning::{draw_align_tuning, draw_full_tuning, draw_reduced_tuning};
+#[cfg(target_arch = "wasm32")]
+use super::web::web_remember_mapbox_token;
 
 impl App {
     pub(super) fn draw_tuning_window(&mut self, ctx: &egui::Context) {
@@ -134,6 +136,59 @@ impl App {
             });
         if !open {
             self.show_update_inspector = false;
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(super) fn draw_mapbox_token_window(&mut self, ctx: &egui::Context) {
+        if !self.show_mapbox_token_window {
+            return;
+        }
+
+        let mut open = true;
+        let mut changed = false;
+        let mut clear = false;
+        egui::Window::new("Mapbox Token")
+            .open(&mut open)
+            .resizable(false)
+            .collapsible(false)
+            .default_width(360.0)
+            .show(ctx, |ui| {
+                ui.label("Optional Mapbox access token");
+                ui.label(
+                    egui::RichText::new("Leave blank to use the OpenStreetMap/CARTO fallback.")
+                        .weak(),
+                );
+                ui.add_space(6.0);
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut self.web_mapbox_token)
+                        .desired_width(f32::INFINITY)
+                        .password(true)
+                        .hint_text("pk..."),
+                );
+                changed |= response.changed();
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Clear").clicked() {
+                        clear = true;
+                    }
+                    if ui.button("Close").clicked() {
+                        self.show_mapbox_token_window = false;
+                    }
+                });
+            });
+
+        if clear {
+            self.web_mapbox_token.clear();
+            changed = true;
+        }
+        if changed || self.web_mapbox_token != self.web_mapbox_token_applied {
+            web_remember_mapbox_token(&self.web_mapbox_token);
+            self.refresh_map_tiles(ctx);
+            self.web_mapbox_token_applied = self.web_mapbox_token.clone();
+        }
+        if !open {
+            self.show_mapbox_token_window = false;
         }
     }
 }

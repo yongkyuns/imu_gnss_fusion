@@ -587,7 +587,7 @@ impl App {
             show_heading: self.show_heading,
             cursor_t_s,
         };
-        ui.add_sized(
+        let _map_response = ui.add_sized(
             size,
             Map::new(
                 Some(&mut self.map_tiles),
@@ -597,6 +597,25 @@ impl App {
             .with_plugin(track)
             .double_click_to_zoom(true),
         );
+        #[cfg(target_arch = "wasm32")]
+        self.draw_mapbox_token_button(ui, _map_response.rect);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn draw_mapbox_token_button(&mut self, ui: &mut egui::Ui, map_rect: egui::Rect) {
+        let button_size = egui::vec2(78.0, 28.0);
+        if map_rect.width() < button_size.x + 16.0 || map_rect.height() < button_size.y + 16.0 {
+            return;
+        }
+        let button_rect =
+            egui::Rect::from_min_size(map_rect.right_top() + egui::vec2(-86.0, 8.0), button_size);
+        if ui
+            .put(button_rect, egui::Button::new("Mapbox"))
+            .on_hover_text("Set optional Mapbox token")
+            .clicked()
+        {
+            self.show_mapbox_token_window = true;
+        }
     }
 
     fn draw_synthetic_trajectory_body(

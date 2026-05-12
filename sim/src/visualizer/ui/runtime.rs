@@ -135,6 +135,8 @@ pub(super) fn create_app(
         #[cfg(target_arch = "wasm32")]
         web_mapbox_token_applied: mapbox_access_token,
         #[cfg(target_arch = "wasm32")]
+        show_mapbox_token_window: false,
+        #[cfg(target_arch = "wasm32")]
         web_scenario: WebSyntheticScenario::CityBlocks,
         #[cfg(target_arch = "wasm32")]
         web_synthetic_noise: web_query_synthetic_noise().unwrap_or(WebSyntheticNoise::Truth),
@@ -271,6 +273,8 @@ impl eframe::App for App {
         self.draw_top_controls(ctx);
         self.draw_tuning_window(ctx);
         self.draw_update_inspector_window(ctx);
+        #[cfg(target_arch = "wasm32")]
+        self.draw_mapbox_token_window(ctx);
 
         #[cfg(target_arch = "wasm32")]
         if self.web_datasets.loading_dataset || self.web_datasets.loading_replay {

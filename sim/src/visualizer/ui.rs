@@ -79,6 +79,8 @@ pub struct App {
     #[cfg(target_arch = "wasm32")]
     web_mapbox_token_applied: String,
     #[cfg(target_arch = "wasm32")]
+    show_mapbox_token_window: bool,
+    #[cfg(target_arch = "wasm32")]
     web_scenario: WebSyntheticScenario,
     #[cfg(target_arch = "wasm32")]
     web_synthetic_noise: WebSyntheticNoise,

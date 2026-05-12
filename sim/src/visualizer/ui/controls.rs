@@ -11,7 +11,6 @@ use super::state::{FULL_FILTER_LABEL, REDUCED_FILTER_LABEL, TuningPanel};
 use super::web::{
     WEB_MAX_POINTS_PER_TRACE, WEB_MIN_POINTS_PER_TRACE, WebDatasetEntry, WebInputMode,
     WebRealDataSource, WebSyntheticNoise, WebSyntheticScenario, draw_web_run_button,
-    web_remember_mapbox_token,
 };
 
 impl App {
@@ -54,17 +53,7 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 ui.heading("IMU/GNSS Filter Evaluation");
                 ui.separator();
-                ui.label(if self.has_itow {
-                    "time axis: relative seconds from first GNSS epoch"
-                } else {
-                    "time axis: relative seconds"
-                });
-                ui.separator();
-                ui.label(format!(
-                    "FPS {:.1} | detail {}",
-                    self.fps_ema.max(fps),
-                    self.max_points_per_trace
-                ));
+                ui.label(format!("FPS {:.1}", self.fps_ema.max(fps)));
                 ui.separator();
                 ui.label("Theme");
                 let mut selected_theme = self.ui_theme;
@@ -74,38 +63,29 @@ impl App {
                     self.set_ui_theme(selected_theme, ctx);
                 }
                 ui.separator();
-                ui.label("Traces");
+                help_label(
+                    ui,
+                    "Traces",
+                    "Show or hide result groups globally across plots. Reference is truth/reference data when available, Align is the standalone mount estimator, and Reduced/Full are the two filter implementations.",
+                );
                 ui.checkbox(&mut self.show_reference, "Reference");
                 ui.checkbox(&mut self.show_align, "Align");
                 ui.checkbox(&mut self.show_reduced, REDUCED_FILTER_LABEL);
                 ui.checkbox(&mut self.show_full, FULL_FILTER_LABEL);
                 ui.separator();
-                ui.label("Map");
+                help_label(
+                    ui,
+                    "Map",
+                    "Control map overlays. GNSS toggles GNSS/reference trajectory traces, Heading toggles directional arrows, and the optional Mapbox token is set from the map corner button.",
+                );
                 ui.checkbox(&mut self.show_gnss_map, "GNSS");
                 ui.checkbox(&mut self.show_heading, "Heading");
-                if ui.button("Recenter").clicked() {
-                    self.map_memory.follow_my_position();
-                }
-                #[cfg(target_arch = "wasm32")]
-                {
-                    ui.label("Mapbox");
-                    let token_width = ui.available_width().clamp(100.0, 180.0);
-                    let response = ui.add(
-                        egui::TextEdit::singleline(&mut self.web_mapbox_token)
-                            .desired_width(token_width)
-                            .password(true),
-                    );
-                    if response.changed() {
-                        web_remember_mapbox_token(&self.web_mapbox_token);
-                        self.refresh_map_tiles(ctx);
-                        self.web_mapbox_token_applied = self.web_mapbox_token.clone();
-                    } else if self.web_mapbox_token != self.web_mapbox_token_applied {
-                        self.refresh_map_tiles(ctx);
-                        self.web_mapbox_token_applied = self.web_mapbox_token.clone();
-                    }
-                }
                 ui.separator();
-                ui.label("Tune");
+                help_label(
+                    ui,
+                    "Tune",
+                    "Open filter tuning panels. Adjusted values are used when the simulation is run again or replay is applied.",
+                );
                 if ui.button(REDUCED_FILTER_LABEL).clicked() {
                     self.tuning_panel = Some(TuningPanel::Reduced);
                 }
@@ -116,7 +96,13 @@ impl App {
                     self.tuning_panel = Some(TuningPanel::Full);
                 }
                 ui.separator();
-                ui.toggle_value(&mut self.show_update_inspector, "Inspector");
+                let inspector_response =
+                    ui.toggle_value(&mut self.show_update_inspector, "Inspector");
+                show_immediate_help(
+                    ui,
+                    &inspector_response,
+                    "Open the update inspector window. Hover a plot to inspect recent measurement residuals and state correlations near that timestamp.",
+                );
             });
             ui.horizontal_wrapped(|ui| {
                 ui.selectable_value(&mut self.page, Page::Overview, "Overview");
@@ -354,6 +340,22 @@ impl App {
                 }
             }
         });
+    }
+}
+
+fn help_label(ui: &mut egui::Ui, text: &'static str, help: &'static str) {
+    let response =
+        ui.add(egui::Label::new(egui::RichText::new(text).underline()).sense(egui::Sense::hover()));
+    show_immediate_help(ui, &response, help);
+}
+
+fn show_immediate_help(ui: &mut egui::Ui, response: &egui::Response, help: &'static str) {
+    if response.hovered() {
+        egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), response.id, response.rect)
+            .width(360.0)
+            .show(|ui| {
+                ui.label(help);
+            });
     }
 }
 
