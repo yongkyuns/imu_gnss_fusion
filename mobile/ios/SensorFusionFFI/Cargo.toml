@@ -1,0 +1,16 @@
+[package]
+name = "sensor_fusion_ffi"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[workspace]
+
+[lib]
+name = "sensor_fusion_ffi"
+path = "src/lib.rs"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+sensor_fusion = { path = "../../../sensor_fusion" }

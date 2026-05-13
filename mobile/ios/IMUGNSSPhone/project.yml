@@ -16,23 +16,61 @@ targets:
     settings:
       base:
         SWIFT_OBJC_BRIDGING_HEADER: App/IMUGNSSPhone-Bridging-Header.h
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        FRAMEWORK_SEARCH_PATHS:
+          - $(inherited)
+          - $(PROJECT_DIR)/../build
+        HEADER_SEARCH_PATHS:
+          - $(inherited)
+          - $(PROJECT_DIR)/../build/include
+          - $(PROJECT_DIR)/../SensorFusionFFI/include
+      configs:
+        Debug:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) DEBUG"
     sources:
       - path: App
         excludes:
           - EKF/generated/**
+          - Analysis/Tests/**
+    dependencies:
+      - framework: ../build/SensorFusionFFI.xcframework
+        embed: false
     info:
       path: App/Info.plist
       properties:
-        CFBundleDisplayName: IMU GNSS Phone
-        UILaunchScreen: {}
+        CFBundleDisplayName: Motion Fusion
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+          UIImageName: LaunchSplash
+          UIImageRespectsSafeAreaInsets: false
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         NSLocationWhenInUseUsageDescription: "Location is used to show GNSS position, speed, and accuracy."
+        NSLocationAlwaysAndWhenInUseUsageDescription: "Location is used to continue the active tracking session while the app is in the background."
         NSMotionUsageDescription: "Motion data is used to show accelerometer and gyroscope readings."
+        UIBackgroundModes:
+          - location
+  IMUGNSSPhoneTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: App/Analysis/Tests
+    dependencies:
+      - target: IMUGNSSPhone
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ykshin.ekf.imugnssphone.tests
+        GENERATE_INFOPLIST_FILE: YES
 schemes:
   IMUGNSSPhone:
     build:
       targets:
         IMUGNSSPhone: all
+        IMUGNSSPhoneTests: [test]
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - IMUGNSSPhoneTests

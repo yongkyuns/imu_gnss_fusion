@@ -1,0 +1,546 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0A8E314C7F0E699F782F481E /* RawSessionLogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CA04E4149EBCF37E8B70112 /* RawSessionLogTests.swift */; };
+		1350542115AE72857E3CF9E7 /* IMUGNSSPhoneApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71F862D1F149E3C83E1B4EBB /* IMUGNSSPhoneApp.swift */; };
+		34101B548D55B84338CE8F40 /* DeveloperComparisonTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F545E9978287177F167E63CB /* DeveloperComparisonTests.swift */; };
+		3FA0DF4A6D846B8C96B03F56 /* MotionKinematics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F4792405B22C6897CC10911 /* MotionKinematics.swift */; };
+		448303428B7AFD898578DDE6 /* RawSessionFileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E80DDC2ABBEF69B940B47203 /* RawSessionFileStore.swift */; };
+		4CCF0F4865CBA60204B3146A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 41CE6DB2282095B66DEC3E6C /* Assets.xcassets */; };
+		540AD335D46E6C9BA62C65C5 /* DeveloperComparison.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8220177DC5F925633A3234CF /* DeveloperComparison.swift */; };
+		5A4B75BD8D0068E6753C5125 /* RawSessionLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FE4D5872E0CCD8175DC5BA5 /* RawSessionLog.swift */; };
+		6588F26F47350EE6FA5810BE /* NavigationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67E25FBA2D389509C370DACC /* NavigationModels.swift */; };
+		821FA366DB0ABF60821F3EA1 /* MapRenderPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11AB526DD8B6E81BBE8B00C4 /* MapRenderPolicy.swift */; };
+		8859B3425B5BFC7CD30D64B1 /* VehicleMotionDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 094B6ED23826D37CA19877C9 /* VehicleMotionDisplay.swift */; };
+		92082A405A90911B711698B0 /* SensorStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69016EA42814D5CD9B35E7B6 /* SensorStore.swift */; };
+		9B262FEBCD96AC0FBB39D809 /* MapRenderPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A140A6622AD524F605DCA5EF /* MapRenderPolicyTests.swift */; };
+		A28D05F0835892528688A77F /* FusionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58BC795608E08C7BC4688153 /* FusionEngine.swift */; };
+		A76A1793EABCA14894B12AC8 /* GnssFusionInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFCB25446DA7D3D6A2DC4368 /* GnssFusionInput.swift */; };
+		AA0D38BCB55D8D41E5145937 /* SensorFusionFFI.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 216E95E609CC9EE1DAD187AB /* SensorFusionFFI.xcframework */; };
+		B3F545C868B847362CA2FF83 /* MotionAnalysisTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CFADB04713B1B5BBC861ED3 /* MotionAnalysisTests.swift */; };
+		B913FAB3C199614F82632398 /* FusionHealth.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD37CB158BB37D599B43EF50 /* FusionHealth.swift */; };
+		BBCB9BEE6962CF14A29237C9 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 064866943C3B066A4F4483B6 /* ContentView.swift */; };
+		F3FEC82933575AAAD7EF4874 /* GnssFusionInputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8B34295A214912826BC4E69 /* GnssFusionInputTests.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		4EE99B9AD4BCEDB2EDE10B00 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C2E6CBE6BB9FEA69AADA80B9 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 330B20CADF834FF5F463822C;
+			remoteInfo = IMUGNSSPhone;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		064866943C3B066A4F4483B6 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		094B6ED23826D37CA19877C9 /* VehicleMotionDisplay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VehicleMotionDisplay.swift; sourceTree = "<group>"; };
+		11AB526DD8B6E81BBE8B00C4 /* MapRenderPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapRenderPolicy.swift; sourceTree = "<group>"; };
+		216E95E609CC9EE1DAD187AB /* SensorFusionFFI.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = SensorFusionFFI.xcframework; path = ../build/SensorFusionFFI.xcframework; sourceTree = "<group>"; };
+		41CE6DB2282095B66DEC3E6C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		58BC795608E08C7BC4688153 /* FusionEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FusionEngine.swift; sourceTree = "<group>"; };
+		5FE4D5872E0CCD8175DC5BA5 /* RawSessionLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawSessionLog.swift; sourceTree = "<group>"; };
+		67E25FBA2D389509C370DACC /* NavigationModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationModels.swift; sourceTree = "<group>"; };
+		69016EA42814D5CD9B35E7B6 /* SensorStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensorStore.swift; sourceTree = "<group>"; };
+		6CFADB04713B1B5BBC861ED3 /* MotionAnalysisTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionAnalysisTests.swift; sourceTree = "<group>"; };
+		71F862D1F149E3C83E1B4EBB /* IMUGNSSPhoneApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IMUGNSSPhoneApp.swift; sourceTree = "<group>"; };
+		7F4792405B22C6897CC10911 /* MotionKinematics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionKinematics.swift; sourceTree = "<group>"; };
+		8220177DC5F925633A3234CF /* DeveloperComparison.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeveloperComparison.swift; sourceTree = "<group>"; };
+		8CA04E4149EBCF37E8B70112 /* RawSessionLogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawSessionLogTests.swift; sourceTree = "<group>"; };
+		9DB13586A10D13A7A4E5BCF3 /* IMUGNSSPhoneTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = IMUGNSSPhoneTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A140A6622AD524F605DCA5EF /* MapRenderPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapRenderPolicyTests.swift; sourceTree = "<group>"; };
+		A509E6299C597B39FA74E9B6 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		DD37CB158BB37D599B43EF50 /* FusionHealth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FusionHealth.swift; sourceTree = "<group>"; };
+		E6386F87275B56D1FB856B99 /* IMUGNSSPhone-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "IMUGNSSPhone-Bridging-Header.h"; sourceTree = "<group>"; };
+		E69330CEE244184E9EC347F0 /* IMUGNSSPhone.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = IMUGNSSPhone.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E80DDC2ABBEF69B940B47203 /* RawSessionFileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawSessionFileStore.swift; sourceTree = "<group>"; };
+		E8B34295A214912826BC4E69 /* GnssFusionInputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GnssFusionInputTests.swift; sourceTree = "<group>"; };
+		F545E9978287177F167E63CB /* DeveloperComparisonTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeveloperComparisonTests.swift; sourceTree = "<group>"; };
+		FFCB25446DA7D3D6A2DC4368 /* GnssFusionInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GnssFusionInput.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		16F2586DA0D9DA225DD3039A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA0D38BCB55D8D41E5145937 /* SensorFusionFFI.xcframework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		3D123017F8574D4004D95142 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				41CE6DB2282095B66DEC3E6C /* Assets.xcassets */,
+				064866943C3B066A4F4483B6 /* ContentView.swift */,
+				58BC795608E08C7BC4688153 /* FusionEngine.swift */,
+				E6386F87275B56D1FB856B99 /* IMUGNSSPhone-Bridging-Header.h */,
+				71F862D1F149E3C83E1B4EBB /* IMUGNSSPhoneApp.swift */,
+				A509E6299C597B39FA74E9B6 /* Info.plist */,
+				69016EA42814D5CD9B35E7B6 /* SensorStore.swift */,
+				EAD103761C636E088713EDCA /* Analysis */,
+				3DAA79CC27080430F3704BA0 /* Models */,
+				4937FDA704BE154C552E8023 /* Replay */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		3DAA79CC27080430F3704BA0 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				DD37CB158BB37D599B43EF50 /* FusionHealth.swift */,
+				11AB526DD8B6E81BBE8B00C4 /* MapRenderPolicy.swift */,
+				67E25FBA2D389509C370DACC /* NavigationModels.swift */,
+				094B6ED23826D37CA19877C9 /* VehicleMotionDisplay.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		435FAD823F0854C31859B699 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				E69330CEE244184E9EC347F0 /* IMUGNSSPhone.app */,
+				9DB13586A10D13A7A4E5BCF3 /* IMUGNSSPhoneTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		4937FDA704BE154C552E8023 /* Replay */ = {
+			isa = PBXGroup;
+			children = (
+				E80DDC2ABBEF69B940B47203 /* RawSessionFileStore.swift */,
+				5FE4D5872E0CCD8175DC5BA5 /* RawSessionLog.swift */,
+			);
+			path = Replay;
+			sourceTree = "<group>";
+		};
+		6261EF319E2698F6345D0B3E /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				F545E9978287177F167E63CB /* DeveloperComparisonTests.swift */,
+				E8B34295A214912826BC4E69 /* GnssFusionInputTests.swift */,
+				A140A6622AD524F605DCA5EF /* MapRenderPolicyTests.swift */,
+				6CFADB04713B1B5BBC861ED3 /* MotionAnalysisTests.swift */,
+				8CA04E4149EBCF37E8B70112 /* RawSessionLogTests.swift */,
+			);
+			name = Tests;
+			path = App/Analysis/Tests;
+			sourceTree = "<group>";
+		};
+		6400D2FCC4906CFA8FE1746A /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				216E95E609CC9EE1DAD187AB /* SensorFusionFFI.xcframework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		A23724E3B0D669BDBDDA6A10 = {
+			isa = PBXGroup;
+			children = (
+				3D123017F8574D4004D95142 /* App */,
+				6261EF319E2698F6345D0B3E /* Tests */,
+				6400D2FCC4906CFA8FE1746A /* Frameworks */,
+				435FAD823F0854C31859B699 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		EAD103761C636E088713EDCA /* Analysis */ = {
+			isa = PBXGroup;
+			children = (
+				8220177DC5F925633A3234CF /* DeveloperComparison.swift */,
+				FFCB25446DA7D3D6A2DC4368 /* GnssFusionInput.swift */,
+				7F4792405B22C6897CC10911 /* MotionKinematics.swift */,
+			);
+			path = Analysis;
+			sourceTree = "<group>";
+		};
+		"TEMP_9795A298-9C9D-4FA0-931B-13E936359721" /* EKF */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = EKF;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		330B20CADF834FF5F463822C /* IMUGNSSPhone */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C315E3C80B5F7BB5E3068177 /* Build configuration list for PBXNativeTarget "IMUGNSSPhone" */;
+			buildPhases = (
+				CA9758FA25E7F6314B087DA9 /* Sources */,
+				706E49D467CFBBC6BA7A469D /* Resources */,
+				16F2586DA0D9DA225DD3039A /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = IMUGNSSPhone;
+			packageProductDependencies = (
+			);
+			productName = IMUGNSSPhone;
+			productReference = E69330CEE244184E9EC347F0 /* IMUGNSSPhone.app */;
+			productType = "com.apple.product-type.application";
+		};
+		E68871D051F9BF74C95F58D3 /* IMUGNSSPhoneTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C2B634D98DA4F0E8C6276AA8 /* Build configuration list for PBXNativeTarget "IMUGNSSPhoneTests" */;
+			buildPhases = (
+				6A5D1CF9169EAC140A6ED704 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				751ED6913B00B587E4EC241C /* PBXTargetDependency */,
+			);
+			name = IMUGNSSPhoneTests;
+			packageProductDependencies = (
+			);
+			productName = IMUGNSSPhoneTests;
+			productReference = 9DB13586A10D13A7A4E5BCF3 /* IMUGNSSPhoneTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		C2E6CBE6BB9FEA69AADA80B9 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+			};
+			buildConfigurationList = DA539E1249AD75045C7F5420 /* Build configuration list for PBXProject "IMUGNSSPhone" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = A23724E3B0D669BDBDDA6A10;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				330B20CADF834FF5F463822C /* IMUGNSSPhone */,
+				E68871D051F9BF74C95F58D3 /* IMUGNSSPhoneTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		706E49D467CFBBC6BA7A469D /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4CCF0F4865CBA60204B3146A /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		6A5D1CF9169EAC140A6ED704 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				34101B548D55B84338CE8F40 /* DeveloperComparisonTests.swift in Sources */,
+				F3FEC82933575AAAD7EF4874 /* GnssFusionInputTests.swift in Sources */,
+				9B262FEBCD96AC0FBB39D809 /* MapRenderPolicyTests.swift in Sources */,
+				B3F545C868B847362CA2FF83 /* MotionAnalysisTests.swift in Sources */,
+				0A8E314C7F0E699F782F481E /* RawSessionLogTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CA9758FA25E7F6314B087DA9 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BBCB9BEE6962CF14A29237C9 /* ContentView.swift in Sources */,
+				540AD335D46E6C9BA62C65C5 /* DeveloperComparison.swift in Sources */,
+				A28D05F0835892528688A77F /* FusionEngine.swift in Sources */,
+				B913FAB3C199614F82632398 /* FusionHealth.swift in Sources */,
+				A76A1793EABCA14894B12AC8 /* GnssFusionInput.swift in Sources */,
+				1350542115AE72857E3CF9E7 /* IMUGNSSPhoneApp.swift in Sources */,
+				821FA366DB0ABF60821F3EA1 /* MapRenderPolicy.swift in Sources */,
+				3FA0DF4A6D846B8C96B03F56 /* MotionKinematics.swift in Sources */,
+				6588F26F47350EE6FA5810BE /* NavigationModels.swift in Sources */,
+				448303428B7AFD898578DDE6 /* RawSessionFileStore.swift in Sources */,
+				5A4B75BD8D0068E6753C5125 /* RawSessionLog.swift in Sources */,
+				92082A405A90911B711698B0 /* SensorStore.swift in Sources */,
+				8859B3425B5BFC7CD30D64B1 /* VehicleMotionDisplay.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		751ED6913B00B587E4EC241C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 330B20CADF834FF5F463822C /* IMUGNSSPhone */;
+			targetProxy = 4EE99B9AD4BCEDB2EDE10B00 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		366261E1614C50365B20974E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ykshin.ekf.imugnssphone;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		4FFE93CA07285C9BB0A78D1F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/../build",
+					"\"../build\"",
+				);
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/../build/include",
+					"$(PROJECT_DIR)/../SensorFusionFFI/include",
+				);
+				INFOPLIST_FILE = App/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG";
+				SWIFT_OBJC_BRIDGING_HEADER = "App/IMUGNSSPhone-Bridging-Header.h";
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		6AAFB818DDAC2D5D401EAB2B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.ykshin.ekf.imugnssphone.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/IMUGNSSPhone.app/IMUGNSSPhone";
+			};
+			name = Release;
+		};
+		74EF59B7A50BFD02791E59E1 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ykshin.ekf.imugnssphone;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		837088946903B61EFBE90F37 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.ykshin.ekf.imugnssphone.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/IMUGNSSPhone.app/IMUGNSSPhone";
+			};
+			name = Debug;
+		};
+		C03B7CAB2143DECBD3715088 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/../build",
+					"\"../build\"",
+				);
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/../build/include",
+					"$(PROJECT_DIR)/../SensorFusionFFI/include",
+				);
+				INFOPLIST_FILE = App/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				SDKROOT = iphoneos;
+				SWIFT_OBJC_BRIDGING_HEADER = "App/IMUGNSSPhone-Bridging-Header.h";
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		C2B634D98DA4F0E8C6276AA8 /* Build configuration list for PBXNativeTarget "IMUGNSSPhoneTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				837088946903B61EFBE90F37 /* Debug */,
+				6AAFB818DDAC2D5D401EAB2B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		C315E3C80B5F7BB5E3068177 /* Build configuration list for PBXNativeTarget "IMUGNSSPhone" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4FFE93CA07285C9BB0A78D1F /* Debug */,
+				C03B7CAB2143DECBD3715088 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		DA539E1249AD75045C7F5420 /* Build configuration list for PBXProject "IMUGNSSPhone" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				74EF59B7A50BFD02791E59E1 /* Debug */,
+				366261E1614C50365B20974E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = C2E6CBE6BB9FEA69AADA80B9 /* Project object */;
+}

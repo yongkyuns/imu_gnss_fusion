@@ -22,6 +22,11 @@ final class SensorStore: NSObject, ObservableObject {
         var timestamp: Date = .now
     }
 
+    enum StreamMode: String {
+        case live = "Live"
+        case playback = "Playback"
+    }
+
     @Published var authorization: CLAuthorizationStatus = .notDetermined
     @Published var latitude: Double?
     @Published var longitude: Double?
@@ -46,10 +51,35 @@ final class SensorStore: NSObject, ObservableObject {
     @Published var ekfEulerHistory: [TimedVec3Sample] = []
     @Published var ekfGyroBiasHistory: [TimedVec3Sample] = []
     @Published var ekfAccelBiasHistory: [TimedVec3Sample] = []
+    @Published var fusedPositionHistory: [TimedVec3Sample] = []
+    @Published var ekfInitialized: Bool = false
+    @Published var ekfMountReady: Bool = false
+    @Published var fusedLatitude: Double?
+    @Published var fusedLongitude: Double?
+    @Published var fusedAltitudeM: Double?
+    @Published var fusedPosNorthM: Double?
+    @Published var fusedPosEastM: Double?
+    @Published var fusedPosDownM: Double?
+    @Published var vehicleForwardMps: Double?
+    @Published var vehicleRightMps: Double?
+    @Published var vehicleDownMps: Double?
+    @Published var fusionConfidence: Double = 0.0
+    @Published var vehicleSegment: VehicleMotionDisplay.Segment?
+    @Published var streamMode: StreamMode = .live
+    @Published var isRecording: Bool = false
+    @Published var recordedSessions: [RawSessionSummary] = []
+    @Published var activeSessionName: String?
+    @Published var replayProgress: Double = 0.0
+#if DEBUG
+    @Published var iosAttitudeEulerDeg: TimedVec3Sample?
+#endif
 
     private let locationManager = CLLocationManager()
     private let motionManager = CMMotionManager()
     private let altimeter = CMAltimeter()
+    private let fusionEngine = FusionEngine()
+    private let rawSessionStore = RawSessionFileStore()
+    private let rawLogLock = NSLock()
     private let motionQueue = OperationQueue()
     private let barometerQueue = OperationQueue()
     private var nedReference: CLLocation?
@@ -58,14 +88,24 @@ final class SensorStore: NSObject, ObservableObject {
     private var streamStartTime: Date?
     private var lastMotionPublishTS: TimeInterval?
     private var lastBaroPublishTS: TimeInterval?
+    private var lastFusionUiPublishTS: TimeInterval?
+    private var activeRawLog: RawSessionLog?
+    private var playbackTask: Task<Void, Never>?
+    private var lastRecordingCheckpointEventCount = 0
     private let motionPublishMinDtSec = 1.0 / 20.0
     private let baroPublishMinDtSec = 1.0 / 10.0
+    private let fusionUiPublishMinDtSec = 1.0 / 10.0
+    private let recordingCheckpointEventInterval = 250
+
     override init() {
         super.init()
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
         locationManager.distanceFilter = kCLDistanceFilterNone
         locationManager.activityType = .otherNavigation
+        locationManager.pausesLocationUpdatesAutomatically = false
+        locationManager.allowsBackgroundLocationUpdates = true
+        locationManager.showsBackgroundLocationIndicator = true
         authorization = locationManager.authorizationStatus
 
         motionQueue.name = "imu_gnss_phone.motion.queue"
@@ -76,15 +116,26 @@ final class SensorStore: NSObject, ObservableObject {
         barometerQueue.qualityOfService = .userInitiated
         barometerQueue.maxConcurrentOperationCount = 1
 
+        loadRecordedSessions()
+    }
+
+    deinit {
+        checkpointRecording()
     }
 
     func start() {
+        playbackTask?.cancel()
+        playbackTask = nil
+        streamMode = .live
+        activeSessionName = nil
+        replayProgress = 0.0
         nedReference = nil
         lastBarometerSample = nil
         filteredVerticalUpMps = nil
         streamStartTime = nil
         lastMotionPublishTS = nil
         lastBaroPublishTS = nil
+        lastFusionUiPublishTS = nil
         nedPositionHistory.removeAll(keepingCapacity: true)
         nedVelocityHistory.removeAll(keepingCapacity: true)
         imuAccelHistory.removeAll(keepingCapacity: true)
@@ -93,9 +144,31 @@ final class SensorStore: NSObject, ObservableObject {
         ekfEulerHistory.removeAll(keepingCapacity: true)
         ekfGyroBiasHistory.removeAll(keepingCapacity: true)
         ekfAccelBiasHistory.removeAll(keepingCapacity: true)
+        fusedPositionHistory.removeAll(keepingCapacity: true)
+        ekfInitialized = false
+        ekfMountReady = false
+        fusedLatitude = nil
+        fusedLongitude = nil
+        fusedAltitudeM = nil
+        fusedPosNorthM = nil
+        fusedPosEastM = nil
+        fusedPosDownM = nil
+        vehicleForwardMps = nil
+        vehicleRightMps = nil
+        vehicleDownMps = nil
+        fusionConfidence = 0.0
+        vehicleSegment = nil
+#if DEBUG
+        iosAttitudeEulerDeg = nil
+#endif
+        motionQueue.addOperation { [weak self] in
+            self?.fusionEngine.resetReducedAuto()
+        }
 
         if authorization == .notDetermined {
             locationManager.requestWhenInUseAuthorization()
+        } else if authorization == .authorizedWhenInUse {
+            locationManager.requestAlwaysAuthorization()
         }
         if authorization == .authorizedWhenInUse || authorization == .authorizedAlways {
             locationManager.startUpdatingLocation()
@@ -107,15 +180,41 @@ final class SensorStore: NSObject, ObservableObject {
             motionManager.startDeviceMotionUpdates(to: motionQueue) { [weak self] data, _ in
                 guard let self, let data else { return }
                 let timestampSec = data.timestamp
-                let ax = (data.userAcceleration.x + data.gravity.x) * g0Mps2
-                let ay = (data.userAcceleration.y + data.gravity.y) * g0Mps2
-                let az = (data.userAcceleration.z + data.gravity.z) * g0Mps2
+                let sampleDate = self.dateFromMotionTimestamp(timestampSec)
+                let accel = self.bodySpecificForceMps2(from: data)
+                let ax = accel.x
+                let ay = accel.y
+                let az = accel.z
                 let gx = data.rotationRate.x
                 let gy = data.rotationRate.y
                 let gz = data.rotationRate.z
+#if DEBUG
+                let attitude = data.attitude
+                let attitudeRollRad: Double? = attitude.roll
+                let attitudePitchRad: Double? = attitude.pitch
+                let attitudeYawRad: Double? = attitude.yaw
+#else
+                let attitudeRollRad: Double? = nil
+                let attitudePitchRad: Double? = nil
+                let attitudeYawRad: Double? = nil
+#endif
+
+                self.recordImuSample(
+                    sampleDate: sampleDate,
+                    sourceUptimeSec: timestampSec,
+                    ax: ax,
+                    ay: ay,
+                    az: az,
+                    gx: gx,
+                    gy: gy,
+                    gz: gz,
+                    attitudeRollRad: attitudeRollRad,
+                    attitudePitchRad: attitudePitchRad,
+                    attitudeYawRad: attitudeYawRad
+                )
 
                 self.runEkfPredict(
-                    timestampSec: timestampSec,
+                    sampleDate: sampleDate,
                     ax: ax,
                     ay: ay,
                     az: az,
@@ -129,37 +228,15 @@ final class SensorStore: NSObject, ObservableObject {
                 }
                 self.lastMotionPublishTS = data.timestamp
                 Task { @MainActor in
-                    self.motion = MotionSample(
-                        ax: ax,
-                        ay: ay,
-                        az: az,
-                        gx: gx,
-                        gy: gy,
-                        gz: gz,
-                        timestamp: Date()
+                    self.publishImuSample(ax: ax, ay: ay, az: az, gx: gx, gy: gy, gz: gz, sampleDate: sampleDate)
+#if DEBUG
+                    self.publishIosAttitude(
+                        rollRad: attitude.roll,
+                        pitchRad: attitude.pitch,
+                        yawRad: attitude.yaw,
+                        sampleDate: sampleDate
                     )
-                    let tSec = self.relativeTimeSeconds(for: self.motion.timestamp)
-                    self.appendSample(
-                        to: &self.imuAccelHistory,
-                        sample: TimedVec3Sample(
-                            tSec: tSec,
-                            x: self.motion.ax,
-                            y: self.motion.ay,
-                            z: self.motion.az
-                        ),
-                        maxCount: 240
-                    )
-                    self.appendSample(
-                        to: &self.imuGyroHistory,
-                        sample: TimedVec3Sample(
-                            tSec: tSec,
-                            x: self.motion.gx,
-                            y: self.motion.gy,
-                            z: self.motion.gz
-                        ),
-                        maxCount: 240
-                    )
-                    self.appendEkfSamplesFromState(tSec: tSec)
+#endif
                 }
             }
         }
@@ -182,6 +259,14 @@ final class SensorStore: NSObject, ObservableObject {
                     }
                 }
                 self.lastBarometerSample = (hM, tS)
+                let sampleDate = self.dateFromMotionTimestamp(tS)
+                self.recordBarometerSample(
+                    sampleDate: sampleDate,
+                    sourceUptimeSec: tS,
+                    relativeAltitudeM: hM,
+                    pressureKPa: data.pressure.doubleValue,
+                    verticalDownVelocityMps: vDown
+                )
 
                 guard let vDown else { return }
                 if let last = self.lastBaroPublishTS, (tS - last) < self.baroPublishMinDtSec {
@@ -189,19 +274,7 @@ final class SensorStore: NSObject, ObservableObject {
                 }
                 self.lastBaroPublishTS = tS
                 Task { @MainActor in
-                    self.velDownMps = vDown
-                    let now = Date()
-                    let tSec = self.relativeTimeSeconds(for: now)
-                    self.appendSample(
-                        to: &self.nedVelocityHistory,
-                        sample: TimedVec3Sample(
-                            tSec: tSec,
-                            x: self.velNorthMps,
-                            y: self.velEastMps,
-                            z: self.velDownMps
-                        ),
-                        maxCount: 240
-                    )
+                    self.publishBarometerVelocity(vDown: vDown, sampleDate: sampleDate)
                 }
             }
         } else {
@@ -212,6 +285,9 @@ final class SensorStore: NSObject, ObservableObject {
     }
 
     func stop() {
+        finishRecordingIfNeeded()
+        playbackTask?.cancel()
+        playbackTask = nil
         locationManager.stopUpdatingLocation()
         locationManager.stopUpdatingHeading()
         motionManager.stopDeviceMotionUpdates()
@@ -222,6 +298,480 @@ final class SensorStore: NSObject, ObservableObject {
         streamStartTime = nil
         lastMotionPublishTS = nil
         lastBaroPublishTS = nil
+        lastFusionUiPublishTS = nil
+        streamMode = .live
+        activeSessionName = nil
+        replayProgress = 0.0
+    }
+
+    func startRecording() {
+        guard streamMode == .live else { return }
+        let log = RawSessionLog(
+            name: "Drive \(Date().formatted(date: .abbreviated, time: .shortened))",
+            startTime: Date()
+        )
+        rawLogLock.lock()
+        activeRawLog = log
+        lastRecordingCheckpointEventCount = 0
+        rawLogLock.unlock()
+        isRecording = true
+        activeSessionName = log.name
+    }
+
+    func stopRecording() {
+        finishRecordingIfNeeded()
+    }
+
+    func prepareForForegroundTracking() {
+        locationManager.allowsBackgroundLocationUpdates = true
+        locationManager.showsBackgroundLocationIndicator = false
+        if authorization == .authorizedWhenInUse {
+            locationManager.requestAlwaysAuthorization()
+        }
+    }
+
+    func prepareForBackgroundTracking() {
+        checkpointRecording()
+        locationManager.allowsBackgroundLocationUpdates = true
+        locationManager.showsBackgroundLocationIndicator = true
+        if authorization == .authorizedAlways {
+            locationManager.startUpdatingLocation()
+            locationManager.startUpdatingHeading()
+        }
+    }
+
+    func applicationWillTerminate() {
+        checkpointRecording()
+    }
+
+    func loadRecordedSessions() {
+        do {
+            recordedSessions = try rawSessionStore.summaries()
+        } catch {
+            print("Failed to load raw sessions: \(error)")
+            recordedSessions = []
+        }
+    }
+
+    func deleteSession(_ summary: RawSessionSummary) {
+        do {
+            try rawSessionStore.delete(summary)
+            loadRecordedSessions()
+        } catch {
+            print("Failed to delete raw session: \(error)")
+        }
+    }
+
+    func replaySession(_ summary: RawSessionSummary, speedMultiplier: Double = 10.0) {
+        guard let fileURL = summary.fileURL else { return }
+        finishRecordingIfNeeded()
+        locationManager.stopUpdatingLocation()
+        locationManager.stopUpdatingHeading()
+        motionManager.stopDeviceMotionUpdates()
+        altimeter.stopRelativeAltitudeUpdates()
+        playbackTask?.cancel()
+
+        let speed = max(speedMultiplier, 0.1)
+        streamMode = .playback
+        activeSessionName = summary.name
+        replayProgress = 0.0
+        resetRuntimeState()
+
+        playbackTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let log = try self.rawSessionStore.load(from: fileURL)
+                let events = try RawSessionTimeline.events(for: log)
+                let duration = max(log.durationSec, 0.001)
+                var previousElapsed = 0.0
+
+                for event in events {
+                    if Task.isCancelled { return }
+                    let delay = max(0.0, event.elapsedSec - previousElapsed) / speed
+                    if delay > 0.0 {
+                        try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000.0))
+                    }
+                    previousElapsed = event.elapsedSec
+                    self.applyReplayEvent(event, sessionStart: log.startTime)
+                    await MainActor.run {
+                        self.replayProgress = min(max(event.elapsedSec / duration, 0.0), 1.0)
+                    }
+                }
+                await MainActor.run {
+                    self.replayProgress = 1.0
+                }
+            } catch {
+                print("Replay failed: \(error)")
+                await MainActor.run {
+                    self.streamMode = .live
+                    self.activeSessionName = nil
+                    self.replayProgress = 0.0
+                }
+            }
+        }
+    }
+
+    func stopPlayback() {
+        playbackTask?.cancel()
+        playbackTask = nil
+        streamMode = .live
+        activeSessionName = nil
+        replayProgress = 0.0
+    }
+
+    private func resetRuntimeState() {
+        nedReference = nil
+        lastBarometerSample = nil
+        filteredVerticalUpMps = nil
+        streamStartTime = nil
+        lastMotionPublishTS = nil
+        lastBaroPublishTS = nil
+        lastFusionUiPublishTS = nil
+        nedPositionHistory.removeAll(keepingCapacity: true)
+        nedVelocityHistory.removeAll(keepingCapacity: true)
+        imuAccelHistory.removeAll(keepingCapacity: true)
+        imuGyroHistory.removeAll(keepingCapacity: true)
+        ekfVelocityHistory.removeAll(keepingCapacity: true)
+        ekfEulerHistory.removeAll(keepingCapacity: true)
+        ekfGyroBiasHistory.removeAll(keepingCapacity: true)
+        ekfAccelBiasHistory.removeAll(keepingCapacity: true)
+        fusedPositionHistory.removeAll(keepingCapacity: true)
+        ekfInitialized = false
+        ekfMountReady = false
+        latitude = nil
+        longitude = nil
+        altitudeM = nil
+        posNorthM = nil
+        posEastM = nil
+        posDownM = nil
+        speedMps = nil
+        courseDeg = nil
+        velNorthMps = nil
+        velEastMps = nil
+        velDownMps = nil
+        horizontalAccuracyM = nil
+        verticalAccuracyM = nil
+        locationTimestamp = nil
+        fusedLatitude = nil
+        fusedLongitude = nil
+        fusedAltitudeM = nil
+        fusedPosNorthM = nil
+        fusedPosEastM = nil
+        fusedPosDownM = nil
+        vehicleForwardMps = nil
+        vehicleRightMps = nil
+        vehicleDownMps = nil
+        fusionConfidence = 0.0
+        vehicleSegment = nil
+#if DEBUG
+        iosAttitudeEulerDeg = nil
+#endif
+        motionQueue.addOperation { [weak self] in
+            self?.fusionEngine.resetReducedAuto()
+        }
+    }
+
+    private func recordImuSample(
+        sampleDate: Date,
+        sourceUptimeSec: Double,
+        ax: Double,
+        ay: Double,
+        az: Double,
+        gx: Double,
+        gy: Double,
+        gz: Double,
+        attitudeRollRad: Double?,
+        attitudePitchRad: Double?,
+        attitudeYawRad: Double?
+    ) {
+        guard let elapsed = recordingElapsed(for: sampleDate) else { return }
+        appendRawEvent(.imu(
+            RawImuSample(
+                sourceUptimeSec: sourceUptimeSec,
+                accelXMps2: ax,
+                accelYMps2: ay,
+                accelZMps2: az,
+                gyroXRadps: gx,
+                gyroYRadps: gy,
+                gyroZRadps: gz,
+                attitudeReferenceFrame: "default",
+                attitudeRollRad: attitudeRollRad,
+                attitudePitchRad: attitudePitchRad,
+                attitudeYawRad: attitudeYawRad
+            ),
+            elapsedSec: elapsed,
+            wallTime: sampleDate
+        ))
+    }
+
+    private func recordGnssSample(
+        sampleDate: Date,
+        latitudeDeg: Double,
+        longitudeDeg: Double,
+        altitudeM: Double,
+        horizontalAccuracyM: Double?,
+        verticalAccuracyM: Double?,
+        speedMps: Double?,
+        courseDeg: Double?,
+        speedAccuracyMps: Double?,
+        courseAccuracyDeg: Double?,
+        posN: Double?,
+        posE: Double?,
+        posD: Double?,
+        velN: Double?,
+        velE: Double?,
+        velD: Double?
+    ) {
+        guard let elapsed = recordingElapsed(for: sampleDate) else { return }
+        appendRawEvent(.gnss(
+            RawGnssSample(
+                latitudeDeg: latitudeDeg,
+                longitudeDeg: longitudeDeg,
+                altitudeM: altitudeM,
+                horizontalAccuracyM: horizontalAccuracyM,
+                verticalAccuracyM: verticalAccuracyM,
+                speedMps: speedMps,
+                courseDeg: courseDeg,
+                speedAccuracyMps: speedAccuracyMps,
+                courseAccuracyDeg: courseAccuracyDeg,
+                positionNorthM: posN,
+                positionEastM: posE,
+                positionDownM: posD,
+                velocityNorthMps: velN,
+                velocityEastMps: velE,
+                velocityDownMps: velD
+            ),
+            elapsedSec: elapsed,
+            wallTime: sampleDate
+        ))
+    }
+
+    private func recordBarometerSample(
+        sampleDate: Date,
+        sourceUptimeSec: Double,
+        relativeAltitudeM: Double,
+        pressureKPa: Double?,
+        verticalDownVelocityMps: Double?
+    ) {
+        guard let elapsed = recordingElapsed(for: sampleDate) else { return }
+        appendRawEvent(.barometer(
+            RawBarometerSample(
+                sourceUptimeSec: sourceUptimeSec,
+                relativeAltitudeM: relativeAltitudeM,
+                pressureKPa: pressureKPa,
+                derivedVerticalVelocityDownMps: verticalDownVelocityMps
+            ),
+            elapsedSec: elapsed,
+            wallTime: sampleDate
+        ))
+    }
+
+    private func recordingElapsed(for date: Date) -> Double? {
+        rawLogLock.lock()
+        defer { rawLogLock.unlock() }
+        guard let startTime = activeRawLog?.startTime else { return nil }
+        return max(0.0, date.timeIntervalSince(startTime))
+    }
+
+    private func appendRawEvent(_ event: RawSensorEventEnvelope) {
+        var checkpoint: RawSessionLog?
+        rawLogLock.lock()
+        if var log = activeRawLog {
+            log.events.append(event)
+            activeRawLog = log
+            if log.events.count - lastRecordingCheckpointEventCount >= recordingCheckpointEventInterval {
+                lastRecordingCheckpointEventCount = log.events.count
+                checkpoint = log
+            }
+        }
+        rawLogLock.unlock()
+
+        if let checkpoint {
+            saveRecordingCheckpoint(checkpoint)
+        }
+    }
+
+    private func applyReplayEvent(_ event: RawReplayEvent, sessionStart: Date) {
+        let sampleDate = sessionStart.addingTimeInterval(event.elapsedSec)
+
+        switch event {
+        case .imu(_, let sample):
+            motionQueue.addOperation { [weak self] in
+                self?.runEkfPredict(
+                    sampleDate: sampleDate,
+                    ax: sample.accelXMps2,
+                    ay: sample.accelYMps2,
+                    az: sample.accelZMps2,
+                    gx: sample.gyroXRadps,
+                    gy: sample.gyroYRadps,
+                    gz: sample.gyroZRadps
+                )
+            }
+            Task { @MainActor in
+                self.publishImuSample(
+                    ax: sample.accelXMps2,
+                    ay: sample.accelYMps2,
+                    az: sample.accelZMps2,
+                    gx: sample.gyroXRadps,
+                    gy: sample.gyroYRadps,
+                    gz: sample.gyroZRadps,
+                    sampleDate: sampleDate
+                )
+#if DEBUG
+                if let rollRad = sample.attitudeRollRad,
+                   let pitchRad = sample.attitudePitchRad,
+                   let yawRad = sample.attitudeYawRad {
+                    self.publishIosAttitude(
+                        rollRad: rollRad,
+                        pitchRad: pitchRad,
+                        yawRad: yawRad,
+                        sampleDate: sampleDate
+                    )
+                }
+#endif
+            }
+
+        case .gnss(_, let sample):
+            let fallbackPosition = fallbackNedPosition(
+                latitudeDeg: sample.latitudeDeg,
+                longitudeDeg: sample.longitudeDeg,
+                altitudeM: sample.altitudeM,
+                horizontalAccuracyM: sample.horizontalAccuracyM,
+                verticalAccuracyM: sample.verticalAccuracyM,
+                sampleDate: sampleDate
+            )
+            let fallbackVelocity = fallbackNedVelocity(speedMps: sample.speedMps, courseDeg: sample.courseDeg)
+            let posN = sample.positionNorthM ?? fallbackPosition.n
+            let posE = sample.positionEastM ?? fallbackPosition.e
+            let posD = sample.positionDownM ?? fallbackPosition.d
+            let velN = sample.velocityNorthMps ?? fallbackVelocity.n
+            let velE = sample.velocityEastMps ?? fallbackVelocity.e
+            let velD = sample.velocityDownMps ?? velDownMps
+            let hAcc = sample.horizontalAccuracyM ?? 25.0
+            let vAcc = sample.verticalAccuracyM ?? 50.0
+
+            motionQueue.addOperation { [weak self] in
+                self?.runEkfFuseGps(
+                    sampleDate: sampleDate,
+                    latitudeDeg: sample.latitudeDeg,
+                    longitudeDeg: sample.longitudeDeg,
+                    altitudeM: sample.altitudeM,
+                    posN: posN,
+                    posE: posE,
+                    posD: posD,
+                    velN: velN,
+                    velE: velE,
+                    velD: velD,
+                    hAcc: hAcc,
+                    vAcc: vAcc,
+                    courseDeg: sample.courseDeg,
+                    speedAccuracyMps: sample.speedAccuracyMps
+                )
+            }
+            Task { @MainActor in
+                self.publishGnssSample(
+                    sampleDate: sampleDate,
+                    latitudeDeg: sample.latitudeDeg,
+                    longitudeDeg: sample.longitudeDeg,
+                    altitudeM: sample.altitudeM,
+                    posN: posN,
+                    posE: posE,
+                    posD: posD,
+                    speedMps: sample.speedMps,
+                    courseDeg: sample.courseDeg,
+                    velN: velN,
+                    velE: velE,
+                    velD: velD,
+                    horizontalAccuracyM: sample.horizontalAccuracyM,
+                    verticalAccuracyM: sample.verticalAccuracyM
+                )
+            }
+
+        case .barometer(_, let sample):
+            guard let vDown = sample.derivedVerticalVelocityDownMps else { return }
+            Task { @MainActor in
+                self.publishBarometerVelocity(vDown: vDown, sampleDate: sampleDate)
+            }
+        }
+    }
+
+    private func fallbackNedPosition(
+        latitudeDeg: Double,
+        longitudeDeg: Double,
+        altitudeM: Double,
+        horizontalAccuracyM: Double?,
+        verticalAccuracyM: Double?,
+        sampleDate: Date
+    ) -> (n: Double?, e: Double?, d: Double?) {
+        let coordinate = CLLocationCoordinate2D(latitude: latitudeDeg, longitude: longitudeDeg)
+        guard CLLocationCoordinate2DIsValid(coordinate) else { return (nil, nil, nil) }
+        let location = CLLocation(
+            coordinate: coordinate,
+            altitude: altitudeM,
+            horizontalAccuracy: horizontalAccuracyM ?? 25.0,
+            verticalAccuracy: verticalAccuracyM ?? 50.0,
+            timestamp: sampleDate
+        )
+        return computeNEDPositionFromGnss(current: location)
+    }
+
+    private func fallbackNedVelocity(speedMps: Double?, courseDeg: Double?) -> (n: Double?, e: Double?) {
+        guard let speedMps, let courseDeg, speedMps >= 0.0 else {
+            return (nil, nil)
+        }
+        let headingRad = courseDeg * .pi / 180.0
+        return (speedMps * cos(headingRad), speedMps * sin(headingRad))
+    }
+
+    private func finishRecordingIfNeeded() {
+        rawLogLock.lock()
+        let log = activeRawLog
+        activeRawLog = nil
+        lastRecordingCheckpointEventCount = 0
+        rawLogLock.unlock()
+
+        guard let log else {
+            isRecording = false
+            if streamMode == .live {
+                activeSessionName = nil
+            }
+            return
+        }
+        guard !log.events.isEmpty else {
+            isRecording = false
+            if streamMode == .live {
+                activeSessionName = nil
+            }
+            return
+        }
+        do {
+            _ = try rawSessionStore.save(log)
+            loadRecordedSessions()
+        } catch {
+            print("Failed to save raw session: \(error)")
+        }
+        isRecording = false
+        if streamMode == .live {
+            activeSessionName = nil
+        }
+    }
+
+    func checkpointRecording() {
+        rawLogLock.lock()
+        let log = activeRawLog
+        lastRecordingCheckpointEventCount = log?.events.count ?? 0
+        rawLogLock.unlock()
+
+        guard let log, !log.events.isEmpty else { return }
+        saveRecordingCheckpoint(log)
+    }
+
+    private func saveRecordingCheckpoint(_ log: RawSessionLog) {
+        do {
+            _ = try rawSessionStore.save(log)
+        } catch {
+            print("Failed to checkpoint raw session: \(error)")
+        }
     }
 }
 
@@ -229,6 +779,9 @@ extension SensorStore: CLLocationManagerDelegate {
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         Task { @MainActor in
             self.authorization = manager.authorizationStatus
+            if self.authorization == .authorizedWhenInUse {
+                manager.requestAlwaysAuthorization()
+            }
             if self.authorization == .authorizedWhenInUse || self.authorization == .authorizedAlways {
                 manager.startUpdatingLocation()
                 manager.startUpdatingHeading()
@@ -249,9 +802,37 @@ extension SensorStore: CLLocationManagerDelegate {
         let velD = self.velDownMps
         let hAcc = loc.horizontalAccuracy
         let vAcc = loc.verticalAccuracy
-        let tSecForEkf = loc.timestamp.timeIntervalSince1970
+        let latitudeDeg = loc.coordinate.latitude
+        let longitudeDeg = loc.coordinate.longitude
+        let altitudeM = loc.altitude
+        let courseDeg = loc.course >= 0 ? loc.course : nil
+        let speedMps = loc.speed >= 0 ? loc.speed : nil
+        let speedAccuracyMps = loc.speedAccuracy >= 0 ? loc.speedAccuracy : nil
+        let courseAccuracyDeg = loc.courseAccuracy >= 0 ? loc.courseAccuracy : nil
+        recordGnssSample(
+            sampleDate: loc.timestamp,
+            latitudeDeg: latitudeDeg,
+            longitudeDeg: longitudeDeg,
+            altitudeM: altitudeM,
+            horizontalAccuracyM: hAcc >= 0 ? hAcc : nil,
+            verticalAccuracyM: vAcc >= 0 ? vAcc : nil,
+            speedMps: speedMps,
+            courseDeg: courseDeg,
+            speedAccuracyMps: speedAccuracyMps,
+            courseAccuracyDeg: courseAccuracyDeg,
+            posN: posN,
+            posE: posE,
+            posD: posD,
+            velN: velN,
+            velE: velE,
+            velD: velD
+        )
         motionQueue.addOperation { [weak self] in
             self?.runEkfFuseGps(
+                sampleDate: loc.timestamp,
+                latitudeDeg: latitudeDeg,
+                longitudeDeg: longitudeDeg,
+                altitudeM: altitudeM,
                 posN: posN,
                 posE: posE,
                 posD: posD,
@@ -260,47 +841,28 @@ extension SensorStore: CLLocationManagerDelegate {
                 velD: velD,
                 hAcc: hAcc,
                 vAcc: vAcc,
-                timestampSec: tSecForEkf
+                courseDeg: courseDeg,
+                speedAccuracyMps: speedAccuracyMps
             )
         }
 
         Task { @MainActor in
-            self.latitude = loc.coordinate.latitude
-            self.longitude = loc.coordinate.longitude
-            self.altitudeM = loc.altitude
-            self.posNorthM = nedPosition.n
-            self.posEastM = nedPosition.e
-            self.posDownM = nedPosition.d
-            self.speedMps = loc.speed >= 0 ? loc.speed : nil
-            self.courseDeg = loc.course >= 0 ? loc.course : nil
-            self.velNorthMps = nedVelocity.n
-            self.velEastMps = nedVelocity.e
-            self.horizontalAccuracyM = loc.horizontalAccuracy
-            self.verticalAccuracyM = loc.verticalAccuracy
-            self.locationTimestamp = loc.timestamp
-
-            let tSec = self.relativeTimeSeconds(for: loc.timestamp)
-            self.appendSample(
-                to: &self.nedPositionHistory,
-                sample: TimedVec3Sample(
-                    tSec: tSec,
-                    x: self.posNorthM,
-                    y: self.posEastM,
-                    z: self.posDownM
-                ),
-                maxCount: 240
+            self.publishGnssSample(
+                sampleDate: loc.timestamp,
+                latitudeDeg: latitudeDeg,
+                longitudeDeg: longitudeDeg,
+                altitudeM: altitudeM,
+                posN: nedPosition.n,
+                posE: nedPosition.e,
+                posD: nedPosition.d,
+                speedMps: speedMps,
+                courseDeg: courseDeg,
+                velN: nedVelocity.n,
+                velE: nedVelocity.e,
+                velD: self.velDownMps,
+                horizontalAccuracyM: hAcc >= 0 ? hAcc : nil,
+                verticalAccuracyM: vAcc >= 0 ? vAcc : nil
             )
-            self.appendSample(
-                to: &self.nedVelocityHistory,
-                sample: TimedVec3Sample(
-                    tSec: tSec,
-                    x: self.velNorthMps,
-                    y: self.velEastMps,
-                    z: self.velDownMps
-                ),
-                maxCount: 240
-            )
-            self.appendEkfSamplesFromState(tSec: tSec)
         }
     }
 
@@ -349,7 +911,7 @@ extension SensorStore: CLLocationManagerDelegate {
     }
 
     private func runEkfPredict(
-        timestampSec: TimeInterval,
+        sampleDate: Date,
         ax: Double,
         ay: Double,
         az: Double,
@@ -357,16 +919,19 @@ extension SensorStore: CLLocationManagerDelegate {
         gy: Double,
         gz: Double
     ) {
-        _ = timestampSec
-        _ = ax
-        _ = ay
-        _ = az
-        _ = gx
-        _ = gy
-        _ = gz
+        let result = fusionEngine.processImu(
+            sampleDate: sampleDate,
+            accelMps2: (x: ax, y: ay, z: az),
+            gyroRadps: (x: gx, y: gy, z: gz)
+        )
+        publishFusionResult(result, sampleDate: sampleDate)
     }
 
     private func runEkfFuseGps(
+        sampleDate: Date,
+        latitudeDeg: Double,
+        longitudeDeg: Double,
+        altitudeM: Double,
         posN: Double?,
         posE: Double?,
         posD: Double?,
@@ -375,22 +940,334 @@ extension SensorStore: CLLocationManagerDelegate {
         velD: Double?,
         hAcc: Double,
         vAcc: Double,
-        timestampSec: TimeInterval
+        courseDeg: Double?,
+        speedAccuracyMps: Double?
     ) {
         _ = posN
         _ = posE
         _ = posD
-        _ = velN
-        _ = velE
-        _ = velD
-        _ = hAcc
-        _ = vAcc
-        _ = timestampSec
+        guard let input = GnssFusionInput.make(
+            latitudeDeg: latitudeDeg,
+            longitudeDeg: longitudeDeg,
+            altitudeM: altitudeM,
+            velN: velN,
+            velE: velE,
+            velD: velD,
+            hAcc: hAcc,
+            vAcc: vAcc,
+            courseDeg: courseDeg,
+            speedAccuracyMps: speedAccuracyMps
+        ) else {
+            return
+        }
+        let result = fusionEngine.processGnss(
+            sampleDate: sampleDate,
+            latitudeDeg: latitudeDeg,
+            longitudeDeg: longitudeDeg,
+            altitudeM: altitudeM,
+            positionStdM: (
+                n: input.positionStdM.north,
+                e: input.positionStdM.east,
+                d: input.positionStdM.down
+            ),
+            velocityNedMps: (
+                n: input.velocityNedMps.north,
+                e: input.velocityNedMps.east,
+                d: input.velocityNedMps.down
+            ),
+            velocityStdMps: (
+                n: input.velocityStdMps.north,
+                e: input.velocityStdMps.east,
+                d: input.velocityStdMps.down
+            ),
+            headingRad: input.headingRad
+        )
+        publishFusionResult(result, sampleDate: sampleDate)
+    }
+
+    private func publishFusionResult(_ result: FusionResult?, sampleDate: Date) {
+        guard let result else { return }
+        guard shouldPublishFusionUi(status: result.status) else { return }
+        Task { @MainActor in
+            let tSec = self.relativeTimeSeconds(for: sampleDate)
+            self.applyFusionStatus(result.status)
+            if let snapshot = result.snapshot {
+                self.appendEkfSamplesFromState(snapshot, tSec: tSec)
+            }
+        }
+    }
+
+    private func shouldPublishFusionUi(status: FusionStatus) -> Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        let isStateTransition = status.mountReadyChanged
+            || status.reducedInitializedNow
+            || status.filterInitializedNow
+        if isStateTransition {
+            lastFusionUiPublishTS = now
+            return true
+        }
+        guard let lastFusionUiPublishTS else {
+            self.lastFusionUiPublishTS = now
+            return true
+        }
+        guard now - lastFusionUiPublishTS >= fusionUiPublishMinDtSec else {
+            return false
+        }
+        self.lastFusionUiPublishTS = now
+        return true
     }
 
     @MainActor
-    private func appendEkfSamplesFromState(tSec: Double) {
-        _ = tSec
+    private func applyFusionStatus(_ status: FusionStatus) {
+        ekfInitialized = status.filterInitialized
+        ekfMountReady = status.mountReady
+        let health = FusionHealth.evaluate(
+            mountReady: status.mountReady,
+            initialized: status.filterInitialized,
+            gnssAccuracy: GnssAccuracy(
+                horizontalAccuracyM: horizontalAccuracyM,
+                verticalAccuracyM: verticalAccuracyM
+            )
+        )
+        fusionConfidence = health.fusedConfidence
+    }
+
+    @MainActor
+    private func appendEkfSamplesFromState(_ snapshot: FusionSnapshot, tSec: Double) {
+        ekfInitialized = snapshot.initialized
+        ekfMountReady = snapshot.mountReady
+        fusedPosNorthM = snapshot.positionNedM.north
+        fusedPosEastM = snapshot.positionNedM.east
+        fusedPosDownM = snapshot.positionNedM.down
+        if let coordinate = snapshot.coordinate {
+            fusedLatitude = coordinate.latitudeDeg
+            fusedLongitude = coordinate.longitudeDeg
+            fusedAltitudeM = coordinate.altitudeM
+        }
+
+        let nedVelocity = NavigationVectorNED(
+            north: snapshot.velocityNedMps.n,
+            east: snapshot.velocityNedMps.e,
+            down: snapshot.velocityNedMps.d
+        )
+        let health = FusionHealth.evaluate(
+            mountReady: snapshot.mountReady,
+            initialized: snapshot.initialized,
+            gnssAccuracy: GnssAccuracy(
+                horizontalAccuracyM: horizontalAccuracyM,
+                verticalAccuracyM: verticalAccuracyM
+            )
+        )
+        let motionDisplay = VehicleMotionDisplay.make(
+            nedVelocityMps: nedVelocity,
+            attitudeQNV: snapshot.attitudeQNV,
+            yawRateRadps: motion.gz,
+            longitudinalAccelerationMps2: motion.ax,
+            verticalAccelerationMps2: motion.az,
+            health: health
+        )
+        vehicleForwardMps = motionDisplay.vehicleVelocityFRDMps.forward
+        vehicleRightMps = motionDisplay.vehicleVelocityFRDMps.right
+        vehicleDownMps = motionDisplay.vehicleVelocityFRDMps.down
+        vehicleSegment = motionDisplay.segment
+        fusionConfidence = health.fusedConfidence
+
+        appendSample(
+            to: &fusedPositionHistory,
+            sample: TimedVec3Sample(
+                tSec: tSec,
+                x: snapshot.positionNedM.north,
+                y: snapshot.positionNedM.east,
+                z: snapshot.positionNedM.down
+            ),
+            maxCount: 240
+        )
+        appendSample(
+            to: &ekfVelocityHistory,
+            sample: TimedVec3Sample(
+                tSec: tSec,
+                x: snapshot.velocityNedMps.n,
+                y: snapshot.velocityNedMps.e,
+                z: snapshot.velocityNedMps.d
+            ),
+            maxCount: 240
+        )
+        appendSample(
+            to: &ekfEulerHistory,
+            sample: TimedVec3Sample(
+                tSec: tSec,
+                x: snapshot.eulerRad.roll * 180.0 / .pi,
+                y: snapshot.eulerRad.pitch * 180.0 / .pi,
+                z: snapshot.eulerRad.yaw * 180.0 / .pi
+            ),
+            maxCount: 240
+        )
+        appendSample(
+            to: &ekfGyroBiasHistory,
+            sample: TimedVec3Sample(
+                tSec: tSec,
+                x: snapshot.gyroBiasRadps.x,
+                y: snapshot.gyroBiasRadps.y,
+                z: snapshot.gyroBiasRadps.z
+            ),
+            maxCount: 240
+        )
+        appendSample(
+            to: &ekfAccelBiasHistory,
+            sample: TimedVec3Sample(
+                tSec: tSec,
+                x: snapshot.accelBiasMps2.x,
+                y: snapshot.accelBiasMps2.y,
+                z: snapshot.accelBiasMps2.z
+            ),
+            maxCount: 240
+        )
+    }
+
+    @MainActor
+    private func publishImuSample(
+        ax: Double,
+        ay: Double,
+        az: Double,
+        gx: Double,
+        gy: Double,
+        gz: Double,
+        sampleDate: Date
+    ) {
+        motion = MotionSample(
+            ax: ax,
+            ay: ay,
+            az: az,
+            gx: gx,
+            gy: gy,
+            gz: gz,
+            timestamp: sampleDate
+        )
+        let tSec = relativeTimeSeconds(for: sampleDate)
+        appendSample(
+            to: &imuAccelHistory,
+            sample: TimedVec3Sample(
+                tSec: tSec,
+                x: ax,
+                y: ay,
+                z: az
+            ),
+            maxCount: 240
+        )
+        appendSample(
+            to: &imuGyroHistory,
+            sample: TimedVec3Sample(
+                tSec: tSec,
+                x: gx,
+                y: gy,
+                z: gz
+            ),
+            maxCount: 240
+        )
+    }
+
+    @MainActor
+    private func publishGnssSample(
+        sampleDate: Date,
+        latitudeDeg: Double,
+        longitudeDeg: Double,
+        altitudeM: Double,
+        posN: Double?,
+        posE: Double?,
+        posD: Double?,
+        speedMps: Double?,
+        courseDeg: Double?,
+        velN: Double?,
+        velE: Double?,
+        velD: Double?,
+        horizontalAccuracyM: Double?,
+        verticalAccuracyM: Double?
+    ) {
+        latitude = latitudeDeg
+        longitude = longitudeDeg
+        self.altitudeM = altitudeM
+        posNorthM = posN
+        posEastM = posE
+        posDownM = posD
+        self.speedMps = speedMps
+        self.courseDeg = courseDeg
+        velNorthMps = velN
+        velEastMps = velE
+        if let velD {
+            velDownMps = velD
+        }
+        self.horizontalAccuracyM = horizontalAccuracyM
+        self.verticalAccuracyM = verticalAccuracyM
+        locationTimestamp = sampleDate
+
+        let tSec = relativeTimeSeconds(for: sampleDate)
+        appendSample(
+            to: &nedPositionHistory,
+            sample: TimedVec3Sample(
+                tSec: tSec,
+                x: posN,
+                y: posE,
+                z: posD
+            ),
+            maxCount: 240
+        )
+        appendSample(
+            to: &nedVelocityHistory,
+            sample: TimedVec3Sample(
+                tSec: tSec,
+                x: velN,
+                y: velE,
+                z: velDownMps
+            ),
+            maxCount: 240
+        )
+    }
+
+    @MainActor
+    private func publishBarometerVelocity(vDown: Double, sampleDate: Date) {
+        velDownMps = vDown
+        let tSec = relativeTimeSeconds(for: sampleDate)
+        appendSample(
+            to: &nedVelocityHistory,
+            sample: TimedVec3Sample(
+                tSec: tSec,
+                x: velNorthMps,
+                y: velEastMps,
+                z: velDownMps
+            ),
+            maxCount: 240
+        )
+    }
+
+#if DEBUG
+    @MainActor
+    private func publishIosAttitude(
+        rollRad: Double,
+        pitchRad: Double,
+        yawRad: Double,
+        sampleDate: Date
+    ) {
+        iosAttitudeEulerDeg = TimedVec3Sample(
+            tSec: relativeTimeSeconds(for: sampleDate),
+            x: rollRad * 180.0 / .pi,
+            y: pitchRad * 180.0 / .pi,
+            z: yawRad * 180.0 / .pi
+        )
+    }
+#endif
+
+    private func dateFromMotionTimestamp(_ timestampSec: TimeInterval) -> Date {
+        let uptimeDelta = timestampSec - ProcessInfo.processInfo.systemUptime
+        return Date(timeIntervalSinceNow: uptimeDelta)
+    }
+
+    private func bodySpecificForceMps2(from data: CMDeviceMotion) -> (x: Double, y: Double, z: Double) {
+        // Treated as raw body-frame specific force for now; validate axes/signs on-device before trusting EKF traces.
+        (
+            x: (data.userAcceleration.x + data.gravity.x) * g0Mps2,
+            y: (data.userAcceleration.y + data.gravity.y) * g0Mps2,
+            z: (data.userAcceleration.z + data.gravity.z) * g0Mps2
+        )
     }
 
     private func relativeTimeSeconds(for date: Date) -> Double {

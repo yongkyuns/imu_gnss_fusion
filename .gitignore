@@ -20,3 +20,5 @@ docs/*.toc
 doc.pdf
 /web/pkg/
 /web/local-config.js
+/mobile/ios/build/
+/mobile/ios/SensorFusionFFI/target/
