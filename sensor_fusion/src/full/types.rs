@@ -1,6 +1,10 @@
 //! Public Full-filter state, configuration, and diagnostic data layouts.
 
-use crate::{ProcessNoise, math::sq_f32};
+use crate::{
+    ProcessNoise,
+    covariance::rotate_diag3_to_target,
+    math::{sq_f32, transpose3_f32},
+};
 
 /// Number of full-filter error-state components.
 pub const ERROR_STATES: usize = 24;
@@ -18,8 +22,10 @@ pub struct InitConfig {
     pub pos_min_sigma_m: f32,
     /// Minimum one-sigma velocity uncertainty, in meters per second.
     pub vel_min_sigma_mps: f32,
-    /// Initial attitude one-sigma uncertainty, in degrees.
+    /// Initial vehicle roll/pitch attitude one-sigma uncertainty, in degrees.
     pub attitude_sigma_deg: f32,
+    /// Initial vehicle yaw attitude one-sigma uncertainty, in degrees.
+    pub attitude_yaw_sigma_deg: f32,
     /// Initial gyro-bias one-sigma uncertainty, in degrees per second.
     pub gyro_bias_sigma_dps: f32,
     /// Initial accelerometer-bias one-sigma uncertainty, in meters per second squared.
@@ -39,12 +45,13 @@ impl Default for InitConfig {
         Self {
             pos_min_sigma_m: 0.5,
             vel_min_sigma_mps: 0.2,
-            attitude_sigma_deg: 20.0,
+            attitude_sigma_deg: 2.0,
+            attitude_yaw_sigma_deg: 6.0,
             gyro_bias_sigma_dps: 0.125,
             accel_bias_sigma_mps2: 0.15,
             gyro_scale_sigma: 0.02,
             accel_scale_sigma: 0.0,
-            mount_sigma_deg: 2.0,
+            mount_sigma_deg: 1.2,
             mount_yaw_sigma_deg: 6.0,
         }
     }
@@ -73,10 +80,10 @@ pub(crate) fn default_full_p_diag(
     p[4] = vel_var;
     p[5] = vel_var;
 
-    let attitude_var = sq_f32(init.attitude_sigma_deg.to_radians());
-    p[6] = attitude_var;
-    p[7] = attitude_var;
-    p[8] = attitude_var;
+    let attitude_rp_var = sq_f32(init.attitude_sigma_deg.to_radians());
+    p[6] = attitude_rp_var;
+    p[7] = attitude_rp_var;
+    p[8] = sq_f32(init.attitude_yaw_sigma_deg.to_radians());
 
     let gyro_bias_sigma = init.gyro_bias_sigma_dps.to_radians();
     p[9] = init.accel_bias_sigma_mps2 * init.accel_bias_sigma_mps2;
@@ -98,6 +105,85 @@ pub(crate) fn default_full_p_diag(
     p[22] = mount_var;
     p[23] = sq_f32(init.mount_yaw_sigma_deg.to_radians());
     p
+}
+
+/// Builds the default Full covariance in the filter's ECEF error basis.
+///
+/// Position and velocity input standard deviations are expressed in local NED
+/// axes. The Full state stores those errors in ECEF axes, and its attitude
+/// error is likewise represented in the ECEF basis. This helper rotates the
+/// desired local covariance blocks into the basis used by the Full filter,
+/// leaving body-frame bias/scale and vehicle-frame mount blocks diagonal.
+#[doc(hidden)]
+pub fn default_full_covariance(
+    c_ne: [[f32; 3]; 3],
+    c_ev: [[f32; 3]; 3],
+    pos_std_m: [f32; 3],
+    vel_std_mps: [f32; 3],
+    init: InitConfig,
+) -> [[f32; ERROR_STATES]; ERROR_STATES] {
+    let diag = default_full_p_diag(pos_std_m, vel_std_mps, init);
+    let mut p = [[0.0; ERROR_STATES]; ERROR_STATES];
+    for (i, value) in diag.into_iter().enumerate() {
+        p[i][i] = value;
+    }
+
+    let pos_vars = [
+        sq_f32(pos_std_m[0].max(init.pos_min_sigma_m)),
+        sq_f32(pos_std_m[1].max(init.pos_min_sigma_m)),
+        sq_f32(pos_std_m[2].max(init.pos_min_sigma_m)),
+    ];
+    set_ecef_from_ned_diag(&mut p, 0, c_ne, pos_vars);
+
+    let vel_vars = [
+        sq_f32(vel_std_mps[0].max(init.vel_min_sigma_mps)),
+        sq_f32(vel_std_mps[1].max(init.vel_min_sigma_mps)),
+        sq_f32(vel_std_mps[2].max(init.vel_min_sigma_mps)),
+    ];
+    set_ecef_from_ned_diag(&mut p, 3, c_ne, vel_vars);
+
+    let attitude_vars = [
+        sq_f32(init.attitude_sigma_deg.to_radians()),
+        sq_f32(init.attitude_sigma_deg.to_radians()),
+        sq_f32(init.attitude_yaw_sigma_deg.to_radians()),
+    ];
+    set_ecef_from_local_diag(&mut p, 6, c_ev, attitude_vars);
+
+    p
+}
+
+fn set_ecef_from_ned_diag(
+    p: &mut [[f32; ERROR_STATES]; ERROR_STATES],
+    offset: usize,
+    c_ne: [[f32; 3]; 3],
+    diag_ned: [f32; 3],
+) {
+    set_covariance_block(
+        p,
+        offset,
+        rotate_diag3_to_target(transpose3_f32(c_ne), diag_ned),
+    );
+}
+
+fn set_ecef_from_local_diag(
+    p: &mut [[f32; ERROR_STATES]; ERROR_STATES],
+    offset: usize,
+    c_el: [[f32; 3]; 3],
+    diag_local: [f32; 3],
+) {
+    set_covariance_block(p, offset, rotate_diag3_to_target(c_el, diag_local));
+}
+
+fn set_covariance_block(
+    p: &mut [[f32; ERROR_STATES]; ERROR_STATES],
+    offset: usize,
+    block: [[f32; 3]; 3],
+) {
+    for i in 0..3 {
+        for j in 0..3 {
+            p[offset + i][offset + j] = block[i][j];
+        }
+    }
 }
 
 /// Full-filter nominal state.

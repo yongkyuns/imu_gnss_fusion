@@ -43,7 +43,8 @@ use crate::math::{
 use crate::nav::{
     WGS84_OMEGA_IE, dcm_ecef_to_ned_f32, ecef_to_llh_f32, gravity_ecef_j2_f32, quat_ecef_to_ned_f64,
 };
-pub(crate) use types::default_full_p_diag;
+#[doc(hidden)]
+pub use types::default_full_covariance;
 pub use types::{
     ERROR_STATES, GnssPositionGateDiag, ImuDelta, InitConfig, NOISE_STATES, NominalState, State,
 };
@@ -873,20 +874,14 @@ impl Filter {
                 self.raw.pos_e64[1] as f32,
                 self.raw.pos_e64[2] as f32,
             ]);
-            let c_en = dcm_ecef_to_ned_f32(lat_rad, lon_rad);
+            let c_ne = dcm_ecef_to_ned_f32(lat_rad, lon_rad);
+            let c_en = transpose3_f32(c_ne);
             let r_n_diag = [
                 h_acc_m * h_acc_m,
                 h_acc_m * h_acc_m,
                 (2.5 * h_acc_m) * (2.5 * h_acc_m),
             ];
-            let mut r_e = [[0.0; 3]; 3];
-            for i in 0..3 {
-                for j in 0..3 {
-                    for (k, r_n_k) in r_n_diag.iter().enumerate() {
-                        r_e[i][j] += c_en[i][k] * *r_n_k * c_en[j][k];
-                    }
-                }
-            }
+            let r_e = covariance::rotate_diag3_to_target(c_en, r_n_diag);
             let u11 = libm::sqrtf(libm::fmaxf(r_e[0][0], 1.0e-9));
             let u12 = r_e[0][1] / u11;
             let u13 = r_e[0][2] / u11;
@@ -970,20 +965,14 @@ impl Filter {
                     pos_for_llh[1] as f32,
                     pos_for_llh[2] as f32,
                 ]);
-                let c_en_meas = dcm_ecef_to_ned_f32(lat_meas, lon_meas);
+                let c_ne_meas = dcm_ecef_to_ned_f32(lat_meas, lon_meas);
+                let c_en_meas = transpose3_f32(c_ne_meas);
                 let mut vel_cov_n_diag = [0.0; 3];
                 for i in 0..3 {
                     let std_i = libm::fmaxf(vel_std_ned_mps[i], 1.0e-3);
                     vel_cov_n_diag[i] = std_i * std_i;
                 }
-                let mut vel_cov_e = [[0.0; 3]; 3];
-                for i in 0..3 {
-                    for j in 0..3 {
-                        for (k, cov_n_k) in vel_cov_n_diag.iter().enumerate() {
-                            vel_cov_e[i][j] += c_en_meas[j][k] * *cov_n_k * c_en_meas[i][k];
-                        }
-                    }
-                }
+                let vel_cov_e = covariance::rotate_diag3_to_target(c_en_meas, vel_cov_n_diag);
                 let l11 = libm::sqrtf(libm::fmaxf(vel_cov_e[0][0], 1.0e-9));
                 let l21 = vel_cov_e[1][0] / l11;
                 let l31 = vel_cov_e[2][0] / l11;
@@ -1458,9 +1447,60 @@ pub fn full_vehicle_ecef_split(yaw_rad: f32, lat_deg: f64, lon_deg: f64) -> ([f3
     )
 }
 
+#[doc(hidden)]
+pub fn default_full_nav_covariance(
+    yaw_rad: f32,
+    lat_deg: f64,
+    lon_deg: f64,
+    pos_std_m: [f32; 3],
+    vel_std_mps: [f32; 3],
+    init: InitConfig,
+) -> [[f32; ERROR_STATES]; ERROR_STATES] {
+    let (q_ev, _) = full_vehicle_ecef_split(yaw_rad, lat_deg, lon_deg);
+    default_full_covariance(
+        crate::nav::ecef_to_ned_matrix_f32(lat_deg, lon_deg),
+        quat_to_dcm_f32(q_ev),
+        pos_std_m,
+        vel_std_mps,
+        init,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_init_covariance_rotates_local_attitude_basis() {
+        let init = InitConfig::default();
+        assert_eq!(init.attitude_sigma_deg, 2.0);
+        assert_eq!(init.attitude_yaw_sigma_deg, 6.0);
+        assert_eq!(init.mount_sigma_deg, 1.2);
+        assert_eq!(init.mount_yaw_sigma_deg, 6.0);
+
+        let yaw_rad = 35.0_f32.to_radians();
+        let lat_deg = 37.2;
+        let lon_deg = -122.1;
+        let p = default_full_nav_covariance(yaw_rad, lat_deg, lon_deg, [0.5; 3], [0.2; 3], init);
+        let (q_ev, _) = full_vehicle_ecef_split(yaw_rad, lat_deg, lon_deg);
+        let c_ev = quat_to_dcm_f32(q_ev);
+        let mut local_att = [[0.0; 3]; 3];
+        for i in 0..3 {
+            for j in 0..3 {
+                for e_i in 0..3 {
+                    for e_j in 0..3 {
+                        local_att[i][j] += c_ev[e_i][i] * p[6 + e_i][6 + e_j] * c_ev[e_j][j];
+                    }
+                }
+            }
+        }
+        assert!((local_att[0][0].sqrt().to_degrees() - 2.0).abs() < 1.0e-4);
+        assert!((local_att[1][1].sqrt().to_degrees() - 2.0).abs() < 1.0e-4);
+        assert!((local_att[2][2].sqrt().to_degrees() - 6.0).abs() < 1.0e-4);
+        assert!(local_att[0][1].abs() < 1.0e-8);
+        assert!(local_att[0][2].abs() < 1.0e-8);
+        assert!(local_att[1][2].abs() < 1.0e-8);
+    }
 
     #[test]
     fn reset_jacobian_matches_first_order_quaternion_reset() {

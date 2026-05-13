@@ -35,7 +35,9 @@ use sim::visualizer::pipeline::synthetic::{
 
 const DIAG_BODY_VEL_Y: usize = 4;
 const DIAG_BODY_VEL_Z: usize = 5;
-const FULL_NHC_GNSS_SPEED_MAX_AGE_S: f64 = 1.0;
+const RUNTIME_NHC_MIN_SPEED_MPS: f32 = 0.05;
+const RUNTIME_NHC_MAX_GYRO_NORM_RADPS: f32 = 0.2;
+const RUNTIME_NHC_MAX_ACCEL_NORM_ERR_MPS2: f32 = 1.0;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -83,9 +85,17 @@ struct Args {
     #[arg(long)]
     allocation_csv: Option<PathBuf>,
 
+    /// Optional CSV path for per-row Reduced/Full GNSS update parity diagnostics.
+    #[arg(long)]
+    gnss_parity_csv: Option<PathBuf>,
+
     /// Optional replay-relative interval summary window, formatted as start,end seconds.
     #[arg(long, value_delimiter = ',')]
     summary_window: Option<Vec<f64>>,
+
+    /// Optional replay-relative GNSS parity CSV window, formatted as start,end seconds.
+    #[arg(long, value_delimiter = ',')]
+    gnss_parity_window: Option<Vec<f64>>,
 
     /// Optional replay-relative duration cap, in seconds.
     #[arg(long)]
@@ -159,9 +169,13 @@ struct Args {
     #[arg(long)]
     full_accel_scale_sigma: Option<f32>,
 
-    /// Diagnostic-only override for full attitude initial sigma, in degrees.
+    /// Diagnostic-only override for full roll/pitch attitude initial sigma, in degrees.
     #[arg(long)]
     full_attitude_sigma_deg: Option<f32>,
+
+    /// Diagnostic-only override for full yaw attitude initial sigma, in degrees.
+    #[arg(long)]
+    full_attitude_yaw_sigma_deg: Option<f32>,
 
     /// Diagnostic-only override for full mount roll/pitch initial sigma, in degrees.
     #[arg(long)]
@@ -290,6 +304,220 @@ struct AllocationCsv {
     prev_sum_h_mount_norm: [f32; UPDATE_DIAG_TYPES],
     prev_sum_k_mount_norm: [f32; UPDATE_DIAG_TYPES],
     initialized: bool,
+}
+
+struct GnssParityCsv {
+    writer: BufWriter<File>,
+    window_abs: Option<[f64; 2]>,
+}
+
+impl GnssParityCsv {
+    fn create(path: &PathBuf, window_abs: Option<[f64; 2]>) -> Result<Self> {
+        let mut writer = BufWriter::new(
+            File::create(path).with_context(|| format!("failed to create {}", path.display()))?,
+        );
+        writeln!(
+            writer,
+            "rel_s,t_s,system,event,obs_index,update_type,\
+residual,effective_residual,innovation_var,nis,\
+k_att_roll,k_att_pitch,k_att_yaw,k_mount_roll,k_mount_pitch,k_mount_yaw,\
+dx_att_roll_deg,dx_att_pitch_deg,dx_att_yaw_deg,\
+dx_vel_n_mps,dx_vel_e_mps,dx_vel_d_mps,\
+dx_mount_roll_deg,dx_mount_pitch_deg,dx_mount_yaw_deg,\
+mount_roll_sigma_deg,mount_pitch_sigma_deg,mount_yaw_sigma_deg,\
+att_roll_sigma_deg,att_pitch_sigma_deg,att_yaw_sigma_deg"
+        )?;
+        Ok(Self { writer, window_abs })
+    }
+
+    fn record_reduced(
+        &mut self,
+        replay: &Replay,
+        event: &str,
+        t_s: f64,
+        reduced: Option<&reduced::State>,
+        full_ready: bool,
+    ) -> Result<()> {
+        let Some(reduced) = reduced else {
+            return Ok(());
+        };
+        if !full_ready || !self.in_window(t_s) {
+            return Ok(());
+        }
+        let count = reduced
+            .last_obs_count
+            .clamp(0, reduced.last_obs_types.len() as i32) as usize;
+        if count == 0 {
+            return Ok(());
+        }
+        let rel_s = t_s - replay_start_t_s(replay).unwrap_or(0.0);
+        let mut pos_xy_count = 0usize;
+        let mut vel_xy_count = 0usize;
+        for obs_idx in 0..count {
+            let ty = reduced.last_obs_types[obs_idx] as usize;
+            let label = match reduced_gnss_row_label(ty, &mut pos_xy_count, &mut vel_xy_count) {
+                Some(label) => label,
+                None => continue,
+            };
+            let residual = reduced.last_residuals[obs_idx];
+            let effective_residual = reduced.last_effective_residuals[obs_idx];
+            let innovation_var = reduced.last_innovation_vars[obs_idx];
+            let nis = scalar_nis(effective_residual, innovation_var);
+            let k = &reduced.last_k_by_obs[obs_idx];
+            let dx = &reduced.last_dx_by_obs[obs_idx];
+            self.write_row(
+                rel_s,
+                t_s,
+                "reduced",
+                event,
+                obs_idx,
+                label,
+                residual,
+                effective_residual,
+                innovation_var,
+                nis,
+                [k[0], k[1], k[2], k[15], k[16], k[17]],
+                [
+                    dx[0], dx[1], dx[2], dx[3], dx[4], dx[5], dx[15], dx[16], dx[17],
+                ],
+                &reduced.p,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn record_full(
+        &mut self,
+        replay: &Replay,
+        event: &str,
+        t_s: f64,
+        full: &full::Filter,
+        ref_gnss: GenericGnssSample,
+    ) -> Result<()> {
+        if !self.in_window(t_s) || full.last_obs_types().is_empty() {
+            return Ok(());
+        }
+        let rel_s = t_s - replay_start_t_s(replay).unwrap_or(0.0);
+        let full_snap = FullSnapshot {
+            nominal: *full.nominal(),
+            p: *full.covariance(),
+            pos_ecef: full.shadow_pos_ecef(),
+            last_dx: *full.last_dx(),
+            last_obs_types: full.last_obs_types().to_vec(),
+        };
+        let p_as_reduced = transform_full_cov_to_reduced(&full_snap, ref_gnss);
+        for (obs_idx, ty) in full.last_obs_types().iter().copied().enumerate() {
+            let ty = ty as usize;
+            if !matches!(ty, 1..=6) {
+                continue;
+            }
+            let row_dx = &full.last_dx_by_obs()[obs_idx];
+            let dx_as_reduced = transform_full_dx_to_reduced(&full_snap, row_dx, ref_gnss);
+            let effective_residual = full.last_effective_residuals()[obs_idx];
+            let residual = full.last_residuals()[obs_idx];
+            let innovation_var = full.last_innovation_vars()[obs_idx];
+            let nis = scalar_nis(effective_residual, innovation_var);
+            let k_as_reduced = if effective_residual.abs() > 1.0e-9 {
+                let mut k_full = [0.0f32; ERROR_STATES];
+                for i in 0..ERROR_STATES {
+                    k_full[i] = row_dx[i] / effective_residual;
+                }
+                transform_full_dx_to_reduced(&full_snap, &k_full, ref_gnss)
+            } else {
+                [0.0; 18]
+            };
+            self.write_row(
+                rel_s,
+                t_s,
+                "full",
+                event,
+                obs_idx,
+                full_obs_type_label(ty),
+                residual,
+                effective_residual,
+                innovation_var,
+                nis,
+                [
+                    k_as_reduced[0],
+                    k_as_reduced[1],
+                    k_as_reduced[2],
+                    k_as_reduced[15],
+                    k_as_reduced[16],
+                    k_as_reduced[17],
+                ],
+                [
+                    dx_as_reduced[0],
+                    dx_as_reduced[1],
+                    dx_as_reduced[2],
+                    dx_as_reduced[3],
+                    dx_as_reduced[4],
+                    dx_as_reduced[5],
+                    dx_as_reduced[15],
+                    dx_as_reduced[16],
+                    dx_as_reduced[17],
+                ],
+                &p_as_reduced,
+            )?;
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn write_row(
+        &mut self,
+        rel_s: f64,
+        t_s: f64,
+        system: &str,
+        event: &str,
+        obs_idx: usize,
+        label: &str,
+        residual: f32,
+        effective_residual: f32,
+        innovation_var: f32,
+        nis: f32,
+        k: [f32; 6],
+        dx: [f32; 9],
+        p: &[[f32; 18]; 18],
+    ) -> Result<()> {
+        writeln!(
+            self.writer,
+            "{rel_s:.6},{t_s:.6},{system},{event},{obs_idx},{label},\
+{residual:.9},{effective_residual:.9},{innovation_var:.9},{nis:.9},\
+{:.9},{:.9},{:.9},{:.9},{:.9},{:.9},\
+{:.9},{:.9},{:.9},\
+{:.9},{:.9},{:.9},\
+{:.9},{:.9},{:.9},\
+{:.9},{:.9},{:.9},\
+{:.9},{:.9},{:.9}",
+            k[0],
+            k[1],
+            k[2],
+            k[3],
+            k[4],
+            k[5],
+            rad_f32_to_deg(dx[0]),
+            rad_f32_to_deg(dx[1]),
+            rad_f32_to_deg(dx[2]),
+            dx[3],
+            dx[4],
+            dx[5],
+            rad_f32_to_deg(dx[6]),
+            rad_f32_to_deg(dx[7]),
+            rad_f32_to_deg(dx[8]),
+            sigma_deg(p, 15),
+            sigma_deg(p, 16),
+            sigma_deg(p, 17),
+            sigma_deg(p, 0),
+            sigma_deg(p, 1),
+            sigma_deg(p, 2),
+        )?;
+        Ok(())
+    }
+
+    fn in_window(&self, t_s: f64) -> bool {
+        self.window_abs
+            .is_none_or(|[start, end]| (start..=end).contains(&t_s))
+    }
 }
 
 impl AllocationCsv {
@@ -482,18 +710,26 @@ mount_qerr_deg,att_qerr_deg"
             let ty = ty as usize;
             let row_dx = &full.last_dx_by_obs()[obs_idx];
             let dx_as_reduced = transform_full_dx_to_reduced(&full_snap, row_dx, ref_gnss);
-            let residual = full.last_residuals()[obs_idx];
+            let effective_residual = full.last_effective_residuals()[obs_idx];
             let innovation_var = full.last_innovation_vars()[obs_idx];
             let nis = if innovation_var > 0.0 {
-                residual * residual / innovation_var
+                effective_residual * effective_residual / innovation_var
             } else {
                 f32::NAN
+            };
+            let k_mount_norm = if effective_residual.abs() > 1.0e-9 {
+                let kx = row_dx[21] / effective_residual;
+                let ky = row_dx[22] / effective_residual;
+                let kz = row_dx[23] / effective_residual;
+                (kx * kx + ky * ky + kz * kz).sqrt()
+            } else {
+                0.0
             };
             writeln!(
                 self.writer,
                 "{rel_s:.6},{t_s:.6},full,imu,{},1,\
-{:.9},{:.9},{:.9},NaN,NaN,\
-{:.9},{:.9},{:.9},\
+	{:.9},{:.9},{:.9},0.000000000,{:.9},\
+	{:.9},{:.9},{:.9},\
 {:.9},{:.9},{:.9},\
 {:.9},{:.9},{:.9},\
 {:.9},{:.9},{:.9},\
@@ -502,9 +738,10 @@ mount_qerr_deg,att_qerr_deg"
 {:.9},{:.9},{:.9},\
 {mount_qerr:.9},{att_qerr:.9}",
                 full_obs_type_label(ty),
-                residual,
-                residual.abs(),
+                effective_residual,
+                effective_residual.abs(),
                 nis,
+                k_mount_norm,
                 rad_f32_to_deg(dx_as_reduced[0]),
                 rad_f32_to_deg(dx_as_reduced[1]),
                 rad_f32_to_deg(dx_as_reduced[2]),
@@ -569,6 +806,11 @@ fn main() -> Result<()> {
     {
         anyhow::bail!("--summary-window expects exactly two values: start,end");
     }
+    if let Some(window) = args.gnss_parity_window.as_ref()
+        && window.len() != 2
+    {
+        anyhow::bail!("--gnss-parity-window expects exactly two values: start,end");
+    }
     let mut replay = load_replay_from_args(&args)?;
     sort_replay(&mut replay);
     let Some(t0) = replay_start_t_s(&replay) else {
@@ -586,8 +828,17 @@ fn main() -> Result<()> {
     targets_abs.dedup_by(|a, b| (*a - *b).abs() < 1.0e-9);
     let trace_window_abs = args.trace_window.as_ref().map(|w| [t0 + w[0], t0 + w[1]]);
     let allocation_window_abs = args.summary_window.as_ref().map(|w| [t0 + w[0], t0 + w[1]]);
+    let gnss_parity_window_abs = args
+        .gnss_parity_window
+        .as_ref()
+        .or(args.summary_window.as_ref())
+        .map(|w| [t0 + w[0], t0 + w[1]]);
     let mut allocation_csv = match &args.allocation_csv {
         Some(path) => Some(AllocationCsv::create(path, allocation_window_abs)?),
+        None => None,
+    };
+    let mut gnss_parity_csv = match &args.gnss_parity_csv {
+        Some(path) => Some(GnssParityCsv::create(path, gnss_parity_window_abs)?),
         None => None,
     };
     let snapshots = run_diagnostics(
@@ -596,6 +847,7 @@ fn main() -> Result<()> {
         &targets_abs,
         trace_window_abs,
         allocation_csv.as_mut(),
+        gnss_parity_csv.as_mut(),
     )?;
     print_snapshots(&snapshots, &replay);
     if let Some(window) = args.summary_window.as_ref() {
@@ -733,6 +985,7 @@ fn run_diagnostics(
     targets_abs: &[f64],
     trace_window_abs: Option<[f64; 2]>,
     mut allocation_csv: Option<&mut AllocationCsv>,
+    mut gnss_parity_csv: Option<&mut GnssParityCsv>,
 ) -> Result<Vec<Snapshot>> {
     let mut cfg = FilterCompareConfig {
         freeze_misalignment_states: args.freeze_misalignment_states,
@@ -791,6 +1044,12 @@ fn run_diagnostics(
         cfg.full_init.attitude_sigma_deg = sigma;
     }
     if let Some(sigma) = args
+        .full_attitude_yaw_sigma_deg
+        .filter(|v| v.is_finite() && *v >= 0.0)
+    {
+        cfg.full_init.attitude_yaw_sigma_deg = sigma;
+    }
+    if let Some(sigma) = args
         .full_mount_sigma_deg
         .filter(|v| v.is_finite() && *v >= 0.0)
     {
@@ -821,6 +1080,7 @@ fn run_diagnostics(
     let mut latest_gnss: Option<GenericGnssSample> = None;
     let mut full_gnss_cursor = 0usize;
     let mut last_gnss_used_t_s = f64::NEG_INFINITY;
+    let mut last_full_nhc_t_s: Option<f64> = None;
     let mut full_obs_counts = [0u32; 9];
     let mut full_mount_dx_sum = [0.0f32; 3];
     let mut full_mount_dx_abs_sum = [0.0f32; 3];
@@ -918,12 +1178,28 @@ fn run_diagnostics(
                         };
                         last_gnss_used_t_s = gnss.t_s;
                     }
-                    let nhc_gate_speed_mps = latest_gnss.and_then(|gnss| {
-                        let age_s = sample.t_s - gnss.t_s;
-                        (0.0..=FULL_NHC_GNSS_SPEED_MAX_AGE_S)
-                            .contains(&age_s)
-                            .then(|| gnss.vel_ned_mps[0].hypot(gnss.vel_ned_mps[1]) as f32)
-                    });
+                    let estimated_speed_mps = full_speed_estimate_mps(&full);
+                    let (nhc_gate_speed_mps, full_nhc_dt) = if cfg.nhc_update_period_s > 0.0 {
+                        let active = runtime_nhc_active(
+                            sample.accel_mps2.map(|v| v as f32),
+                            sample.gyro_radps.map(|v| v as f32),
+                        ) && estimated_speed_mps > RUNTIME_NHC_MIN_SPEED_MPS;
+                        let interval = nhc_observation_interval(
+                            last_full_nhc_t_s,
+                            sample.t_s,
+                            dt,
+                            cfg.nhc_update_period_s as f64,
+                            active,
+                        );
+                        last_full_nhc_t_s = interval.1;
+                        (interval.0.map(|_| estimated_speed_mps), interval.0)
+                    } else {
+                        (
+                            (estimated_speed_mps > RUNTIME_NHC_MIN_SPEED_MPS)
+                                .then_some(estimated_speed_mps),
+                            Some(dt.max(1.0e-3) as f32),
+                        )
+                    };
                     full.fuse_reference_batch_full_with_nhc_speed_and_r(
                         gps_pos,
                         gps_vel,
@@ -935,7 +1211,7 @@ fn run_diagnostics(
                         cfg.r_body_vel_z,
                         sample.gyro_radps.map(|v| v as f32),
                         sample.accel_mps2.map(|v| v as f32),
-                        dt as f32,
+                        full_nhc_dt.unwrap_or(dt.max(1.0e-3) as f32),
                     );
                     if !full.last_obs_types().is_empty() {
                         let dx = full.last_dx();
@@ -1048,6 +1324,12 @@ fn run_diagnostics(
                     let _ = csv.record_full(replay, sample.t_s, &full, ref_gnss);
                 }
             }
+            if let Some(csv) = gnss_parity_csv.as_deref_mut() {
+                let _ = csv.record_reduced(replay, "imu", sample.t_s, fusion.reduced(), full_ready);
+                if full_ready {
+                    let _ = csv.record_full(replay, "imu", sample.t_s, &full, ref_gnss);
+                }
+            }
         }
         ReplayEvent::Gnss(index, sample) => {
             let _ = fusion.process_gnss(scaled_fusion_gnss_sample(
@@ -1081,9 +1363,17 @@ fn run_diagnostics(
                         sample.lon_deg,
                         pos_ecef,
                         vel_ecef,
-                        Some(default_full_p_diag(*sample, cfg)),
+                        None,
                         None,
                     );
+                    full.set_covariance(full::default_full_nav_covariance(
+                        yaw_rad,
+                        sample.lat_deg,
+                        sample.lon_deg,
+                        sample.pos_std_m.map(|v| v as f32),
+                        sample.vel_std_mps.map(|v| v as f32),
+                        cfg.full_init,
+                    ));
                     if let Some(seed_q) = align_fusion.mount_q_bv() {
                         full.set_mount_quat(seed_q);
                     }
@@ -1202,6 +1492,48 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: FilterCompareConfig) {
     fusion.set_mount_settle_time_s(cfg.mount_settle_time_s);
     fusion.set_mount_settle_release_sigma_rad(cfg.mount_settle_release_sigma_deg.to_radians());
     fusion.set_mount_settle_zero_cross_covariance(cfg.mount_settle_zero_cross_covariance);
+}
+
+fn full_speed_estimate_mps(full: &full::Filter) -> f32 {
+    let n = full.nominal();
+    (n.vn * n.vn + n.ve * n.ve + n.vd * n.vd).sqrt()
+}
+
+fn runtime_nhc_active(accel_mps2: [f32; 3], gyro_radps: [f32; 3]) -> bool {
+    let gyro_norm = (gyro_radps[0] * gyro_radps[0]
+        + gyro_radps[1] * gyro_radps[1]
+        + gyro_radps[2] * gyro_radps[2])
+        .sqrt();
+    let accel_norm = (accel_mps2[0] * accel_mps2[0]
+        + accel_mps2[1] * accel_mps2[1]
+        + accel_mps2[2] * accel_mps2[2])
+        .sqrt();
+    gyro_norm < RUNTIME_NHC_MAX_GYRO_NORM_RADPS
+        && (accel_norm - 9.81).abs() < RUNTIME_NHC_MAX_ACCEL_NORM_ERR_MPS2
+}
+
+fn nhc_observation_interval(
+    last_t_s: Option<f64>,
+    t_s: f64,
+    fallback_dt_s: f64,
+    period_s: f64,
+    active: bool,
+) -> (Option<f32>, Option<f64>) {
+    if !active {
+        return (None, Some(t_s));
+    }
+    let fallback_dt_s = fallback_dt_s.max(1.0e-3);
+    if period_s <= 0.0 {
+        return (Some(fallback_dt_s as f32), Some(t_s));
+    }
+    let Some(last_t_s) = last_t_s else {
+        return (Some(fallback_dt_s as f32), Some(t_s));
+    };
+    let elapsed_s = t_s - last_t_s;
+    if elapsed_s + 1.0e-4 < period_s {
+        return (None, Some(last_t_s));
+    }
+    (Some(elapsed_s.max(fallback_dt_s) as f32), Some(t_s))
 }
 
 fn capture_due_snapshots(
@@ -1650,6 +1982,44 @@ fn full_obs_type_label(ty: usize) -> &'static str {
         7 => "nhc_y",
         8 => "nhc_z",
         _ => "unknown",
+    }
+}
+
+fn reduced_gnss_row_label(
+    ty: usize,
+    pos_xy_count: &mut usize,
+    vel_xy_count: &mut usize,
+) -> Option<&'static str> {
+    match ty {
+        0 => {
+            let label = match *pos_xy_count {
+                0 => "pos_n",
+                1 => "pos_e",
+                _ => "pos_xy_extra",
+            };
+            *pos_xy_count += 1;
+            Some(label)
+        }
+        8 => Some("pos_d"),
+        1 => {
+            let label = match *vel_xy_count {
+                0 => "vel_n",
+                1 => "vel_e",
+                _ => "vel_xy_extra",
+            };
+            *vel_xy_count += 1;
+            Some(label)
+        }
+        9 => Some("vel_d"),
+        _ => None,
+    }
+}
+
+fn scalar_nis(effective_residual: f32, innovation_var: f32) -> f32 {
+    if innovation_var > 0.0 {
+        effective_residual * effective_residual / innovation_var
+    } else {
+        f32::NAN
     }
 }
 
@@ -2470,49 +2840,6 @@ fn col_norm3(a: &[[f32; 3]; 3], col: usize) -> f64 {
         sum += v * v;
     }
     sum.sqrt()
-}
-
-fn default_full_p_diag(gnss: GenericGnssSample, cfg: FilterCompareConfig) -> [f32; ERROR_STATES] {
-    let mut p = [1.0_f32; ERROR_STATES];
-    let init = cfg.full_init;
-    let pos_n_sigma = (gnss.pos_std_m[0] as f32).max(init.pos_min_sigma_m);
-    let pos_e_sigma = (gnss.pos_std_m[1] as f32).max(init.pos_min_sigma_m);
-    let pos_d_sigma = (gnss.pos_std_m[2] as f32).max(init.pos_min_sigma_m);
-    p[0] = pos_n_sigma * pos_n_sigma;
-    p[1] = pos_e_sigma * pos_e_sigma;
-    p[2] = pos_d_sigma * pos_d_sigma;
-    let vel_sigma = gnss
-        .vel_std_mps
-        .iter()
-        .copied()
-        .fold(0.0_f64, f64::max)
-        .max(init.vel_min_sigma_mps as f64) as f32;
-    let vel_var = vel_sigma * vel_sigma;
-    p[3] = vel_var;
-    p[4] = vel_var;
-    p[5] = vel_var;
-    let attitude_var = init.attitude_sigma_deg.to_radians().powi(2);
-    p[6] = attitude_var;
-    p[7] = attitude_var;
-    p[8] = attitude_var;
-    let gyro_bias_sigma = init.gyro_bias_sigma_dps.to_radians();
-    p[9] = init.accel_bias_sigma_mps2 * init.accel_bias_sigma_mps2;
-    p[10] = p[9];
-    p[11] = p[9];
-    p[12] = gyro_bias_sigma * gyro_bias_sigma;
-    p[13] = p[12];
-    p[14] = p[12];
-    p[15] = init.accel_scale_sigma * init.accel_scale_sigma;
-    p[16] = p[15];
-    p[17] = p[15];
-    p[18] = init.gyro_scale_sigma * init.gyro_scale_sigma;
-    p[19] = p[18];
-    p[20] = p[18];
-    let mount_var = init.mount_sigma_deg.to_radians().powi(2);
-    p[21] = mount_var;
-    p[22] = mount_var;
-    p[23] = init.mount_yaw_sigma_deg.to_radians().powi(2);
-    p
 }
 
 fn full_imu_delta_from_vehicle(

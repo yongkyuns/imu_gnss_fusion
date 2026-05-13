@@ -397,8 +397,15 @@ pub(super) fn draw_full_tuning(ui: &mut egui::Ui, cfg: &mut FilterCompareConfig)
         );
         drag_f32(
             ui,
-            "Attitude sigma deg",
+            "Attitude roll/pitch sigma deg",
             &mut init.attitude_sigma_deg,
+            0.5,
+            0.0..=180.0,
+        );
+        drag_f32(
+            ui,
+            "Attitude yaw sigma deg",
+            &mut init.attitude_yaw_sigma_deg,
             0.5,
             0.0..=180.0,
         );

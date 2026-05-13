@@ -66,6 +66,7 @@ impl Filter {
             noise,
             stationary_diag: StationaryDiag::default(),
             update_diag: UpdateDiag::default(),
+            ..State::default()
         };
         for i in 0..ERROR_STATES {
             raw.p[i][i] = 1.0;
@@ -186,6 +187,7 @@ impl Filter {
         if imu.dt <= 0.0 || !imu.dt.is_finite() {
             return;
         }
+        self.clear_last_batch_diag();
         let (f, g) = self.compute_error_transition_with_noise(imu);
         generated::predict_nominal_with_gravity(&mut self.raw.nominal, imu, self.gravity_mss);
         normalize_nominal_quat(&mut self.raw.nominal);
@@ -578,6 +580,7 @@ impl Filter {
 
     #[allow(clippy::needless_range_loop, clippy::neg_cmp_op_on_partial_ord)]
     fn fuse_body_vel_yz_batch(&mut self, r_body_vel_y: f32, r_body_vel_z: f32) {
+        self.clear_last_batch_diag();
         let obs_y = generated::body_vel_y_observation(&self.raw.nominal, &self.raw.p, r_body_vel_y);
         let obs_z = generated::body_vel_z_observation(&self.raw.nominal, &self.raw.p, r_body_vel_z);
         let v_vehicle = nominal_vehicle_velocity(&self.raw.nominal);
@@ -586,6 +589,7 @@ impl Filter {
             (obs_z, -v_vehicle[2], r_body_vel_z, DIAG_BODY_VEL_Z),
         ];
         let mut dx = [0.0; ERROR_STATES];
+        let mut obs_count = 0usize;
 
         for (obs_index, (obs, residual, r_body_vel, diag_type)) in
             observations.into_iter().enumerate()
@@ -625,6 +629,15 @@ impl Filter {
             for i in 0..ERROR_STATES {
                 dx[i] += diag_dx[i];
             }
+            if obs_count < MAX_BATCH_OBS {
+                self.raw.last_obs_types[obs_count] = diag_type as i32;
+                self.raw.last_residuals[obs_count] = residual;
+                self.raw.last_effective_residuals[obs_count] = effective_residual;
+                self.raw.last_innovation_vars[obs_count] = s;
+                self.raw.last_k_by_obs[obs_count] = diag_k;
+                self.raw.last_dx_by_obs[obs_count] = diag_dx;
+                obs_count += 1;
+            }
             self.record_update_diag(diag_type, effective_residual, s, &obs.h, &diag_k, &diag_dx);
             for i in 0..ERROR_STATES {
                 for j in i..ERROR_STATES {
@@ -639,6 +652,8 @@ impl Filter {
         self.raw.update_diag.last_dx_mount_roll = dx[15];
         self.raw.update_diag.last_dx_mount_pitch = dx[16];
         self.raw.update_diag.last_dx_mount_yaw = dx[17];
+        self.raw.last_dx = dx;
+        self.raw.last_obs_count = obs_count as i32;
         inject_error_state(&mut self.raw.nominal, &dx);
         apply_reset(&mut self.raw.p, &dx);
         if self.freeze_misalignment_states {
@@ -653,6 +668,7 @@ impl Filter {
         k: &[f32; ERROR_STATES],
         dx: &[f32; ERROR_STATES],
     ) {
+        self.clear_last_batch_diag();
         update_covariance_joseph_scalar(&mut self.raw.p, innovation_var, h, k);
         inject_error_state(&mut self.raw.nominal, dx);
         apply_reset(&mut self.raw.p, dx);
@@ -669,10 +685,12 @@ impl Filter {
         variances: &[f32; MAX_BATCH_OBS],
         diag_types: &[usize; MAX_BATCH_OBS],
     ) {
+        self.clear_last_batch_diag();
         if obs_count == 0 || obs_count > MAX_BATCH_OBS {
             return;
         }
         let mut dx = [0.0; ERROR_STATES];
+        let mut recorded_obs = 0usize;
 
         for row in 0..obs_count {
             let h = &h_rows[row];
@@ -708,6 +726,15 @@ impl Filter {
             for i in 0..ERROR_STATES {
                 dx[i] += row_dx[i];
             }
+            if recorded_obs < MAX_BATCH_OBS {
+                self.raw.last_obs_types[recorded_obs] = diag_types[row] as i32;
+                self.raw.last_residuals[recorded_obs] = residuals[row];
+                self.raw.last_effective_residuals[recorded_obs] = effective_residual;
+                self.raw.last_innovation_vars[recorded_obs] = s;
+                self.raw.last_k_by_obs[recorded_obs] = k;
+                self.raw.last_dx_by_obs[recorded_obs] = row_dx;
+                recorded_obs += 1;
+            }
             self.record_update_diag(diag_types[row], effective_residual, s, h, &k, &row_dx);
             for i in 0..ERROR_STATES {
                 for j in i..ERROR_STATES {
@@ -720,12 +747,25 @@ impl Filter {
         self.raw.update_diag.last_dx_mount_roll = dx[15];
         self.raw.update_diag.last_dx_mount_pitch = dx[16];
         self.raw.update_diag.last_dx_mount_yaw = dx[17];
+        self.raw.last_dx = dx;
+        self.raw.last_obs_count = recorded_obs as i32;
 
         inject_error_state(&mut self.raw.nominal, &dx);
         apply_reset(&mut self.raw.p, &dx);
         if self.freeze_misalignment_states {
             freeze_mount_covariance(&mut self.raw.p);
         }
+    }
+
+    fn clear_last_batch_diag(&mut self) {
+        self.raw.last_dx = [0.0; ERROR_STATES];
+        self.raw.last_dx_by_obs = [[0.0; ERROR_STATES]; 8];
+        self.raw.last_k_by_obs = [[0.0; ERROR_STATES]; 8];
+        self.raw.last_obs_count = 0;
+        self.raw.last_obs_types = [0; 8];
+        self.raw.last_residuals = [0.0; 8];
+        self.raw.last_effective_residuals = [0.0; 8];
+        self.raw.last_innovation_vars = [0.0; 8];
     }
 
     fn freeze_mount_update_if_needed(

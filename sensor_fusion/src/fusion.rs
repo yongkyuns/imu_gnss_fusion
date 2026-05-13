@@ -13,7 +13,7 @@
 
 use crate::ProcessNoise;
 use crate::align::{Align, AlignConfig, AlignUpdateTrace, AlignWindowSummary, GRAVITY_MPS2};
-use crate::full::{self, default_full_p_diag};
+use crate::full;
 use crate::fusion_types::RuntimeConfig;
 pub use crate::fusion_types::{
     AlignDebug, Config, Filter, GnssSample, ImuSample, MountMode, Update, VehicleSpeedDirection,
@@ -864,13 +864,17 @@ impl SensorFusion {
             gnss.lon_deg,
             pos_ecef,
             vel_ecef,
-            Some(default_full_p_diag(
-                gnss.pos_std_m,
-                gnss.vel_std_mps,
-                self.cfg.full_init,
-            )),
+            None,
             None,
         );
+        self.full.set_covariance(full::default_full_nav_covariance(
+            yaw_rad,
+            gnss.lat_deg,
+            gnss.lon_deg,
+            gnss.pos_std_m,
+            gnss.vel_std_mps,
+            self.cfg.full_init,
+        ));
         if let Some(seed_q) = self.mount_q_bv {
             self.full.set_mount_quat(seed_q);
         }

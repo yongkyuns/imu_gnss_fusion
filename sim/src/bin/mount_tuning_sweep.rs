@@ -365,7 +365,8 @@ fn config_for_variant(variant: Variant) -> FilterCompareConfig {
         .mount_roll_sigma_deg
         .max(variant.mount_pitch_sigma_deg);
     cfg.full_init.mount_yaw_sigma_deg = variant.mount_yaw_sigma_deg;
-    cfg.full_init.attitude_sigma_deg = variant.attitude_rp_sigma_deg.max(variant.yaw_sigma_deg);
+    cfg.full_init.attitude_sigma_deg = variant.attitude_rp_sigma_deg;
+    cfg.full_init.attitude_yaw_sigma_deg = variant.yaw_sigma_deg;
     if let Some(noise) = cfg.noise.reduced.as_mut() {
         noise.mount_align_rw_var = variant.mount_rw_var;
         *noise = noise.with_mount_align_rw_var_axes(variant.mount_rw_var_axes);

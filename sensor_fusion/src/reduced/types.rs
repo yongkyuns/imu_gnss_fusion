@@ -130,6 +130,14 @@ pub struct State {
     pub noise: ProcessNoise,
     pub stationary_diag: StationaryDiag,
     pub update_diag: UpdateDiag,
+    pub last_dx: [f32; ERROR_STATES],
+    pub last_dx_by_obs: [[f32; ERROR_STATES]; 8],
+    pub last_k_by_obs: [[f32; ERROR_STATES]; 8],
+    pub last_obs_count: i32,
+    pub last_obs_types: [i32; 8],
+    pub last_residuals: [f32; 8],
+    pub last_effective_residuals: [f32; 8],
+    pub last_innovation_vars: [f32; 8],
 }
 
 impl Default for State {
@@ -143,6 +151,14 @@ impl Default for State {
             noise: ProcessNoise::lsm6dso_104hz(),
             stationary_diag: StationaryDiag::default(),
             update_diag: UpdateDiag::default(),
+            last_dx: [0.0; ERROR_STATES],
+            last_dx_by_obs: [[0.0; ERROR_STATES]; 8],
+            last_k_by_obs: [[0.0; ERROR_STATES]; 8],
+            last_obs_count: 0,
+            last_obs_types: [0; 8],
+            last_residuals: [0.0; 8],
+            last_effective_residuals: [0.0; 8],
+            last_innovation_vars: [0.0; 8],
         }
     }
 }

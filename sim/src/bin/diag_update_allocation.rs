@@ -4,7 +4,7 @@ use anyhow::Result;
 use clap::Parser;
 use sensor_fusion::ProcessNoise;
 use sensor_fusion::SensorFusion;
-use sensor_fusion::full::{ERROR_STATES, Filter, ImuDelta};
+use sensor_fusion::full::{self, Filter, ImuDelta};
 use sensor_fusion::reduced::{UPDATE_DIAG_TYPES, UpdateDiag};
 use sim::datasets::generic_replay::{
     GenericGnssSample, GenericImuSample, fusion_gnss_sample, fusion_imu_sample,
@@ -307,9 +307,17 @@ fn run_full_allocation(
                 sample.lon_deg,
                 pos_ecef,
                 vel_ecef,
-                Some(default_full_p_diag(*sample, cfg)),
+                None,
                 None,
             );
+            full.set_covariance(full::default_full_nav_covariance(
+                yaw_rad,
+                sample.lat_deg,
+                sample.lon_deg,
+                sample.pos_std_m.map(|v| v as f32),
+                sample.vel_std_mps.map(|v| v as f32),
+                cfg.full_init,
+            ));
             full.set_mount_quat(q_mount);
             ready = true;
             gnss_cursor = index + 1;
@@ -456,48 +464,6 @@ fn apply_fusion_config(fusion: &mut SensorFusion, cfg: FilterCompareConfig) {
     fusion.set_mount_settle_time_s(cfg.mount_settle_time_s);
     fusion.set_mount_settle_release_sigma_rad(cfg.mount_settle_release_sigma_deg.to_radians());
     fusion.set_mount_settle_zero_cross_covariance(cfg.mount_settle_zero_cross_covariance);
-}
-
-fn default_full_p_diag(gnss: GenericGnssSample, cfg: FilterCompareConfig) -> [f32; ERROR_STATES] {
-    let mut p = [1.0_f32; ERROR_STATES];
-    let init = cfg.full_init;
-    let pos_n_sigma = (gnss.pos_std_m[0] as f32).max(init.pos_min_sigma_m);
-    let pos_e_sigma = (gnss.pos_std_m[1] as f32).max(init.pos_min_sigma_m);
-    let pos_d_sigma = (gnss.pos_std_m[2] as f32).max(init.pos_min_sigma_m);
-    p[0] = pos_n_sigma * pos_n_sigma;
-    p[1] = pos_e_sigma * pos_e_sigma;
-    p[2] = pos_d_sigma * pos_d_sigma;
-    let vel_sigma = gnss
-        .vel_std_mps
-        .iter()
-        .copied()
-        .fold(0.0_f64, f64::max)
-        .max(init.vel_min_sigma_mps as f64) as f32;
-    let vel_var = vel_sigma * vel_sigma;
-    p[3] = vel_var;
-    p[4] = vel_var;
-    p[5] = vel_var;
-    let attitude_var = init.attitude_sigma_deg.to_radians().powi(2);
-    p[6] = attitude_var;
-    p[7] = attitude_var;
-    p[8] = attitude_var;
-    let gyro_bias_sigma = init.gyro_bias_sigma_dps.to_radians();
-    p[9] = init.accel_bias_sigma_mps2 * init.accel_bias_sigma_mps2;
-    p[10] = p[9];
-    p[11] = p[9];
-    p[12] = gyro_bias_sigma * gyro_bias_sigma;
-    p[13] = p[12];
-    p[14] = p[12];
-    p[15] = init.accel_scale_sigma * init.accel_scale_sigma;
-    p[16] = p[15];
-    p[17] = p[15];
-    p[18] = init.gyro_scale_sigma * init.gyro_scale_sigma;
-    p[19] = p[18];
-    p[20] = p[18];
-    p[21] = init.mount_sigma_deg.to_radians().powi(2);
-    p[22] = p[21];
-    p[23] = init.mount_yaw_sigma_deg.to_radians().powi(2);
-    p
 }
 
 fn full_imu_delta(prev: GenericImuSample, curr: GenericImuSample, dt: f64) -> ImuDelta {
