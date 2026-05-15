@@ -422,8 +422,8 @@ fn solve_linear(a: &mut [[f64; 5]; 5], b: &mut [f64; 5], n: usize) -> Option<[f6
     for col in 0..n {
         let mut pivot = col;
         let mut pivot_abs = a[col][col].abs();
-        for row in (col + 1)..n {
-            let v = a[row][col].abs();
+        for (row, row_values) in a.iter().enumerate().take(n).skip(col + 1) {
+            let v = row_values[col].abs();
             if v > pivot_abs {
                 pivot = row;
                 pivot_abs = v;

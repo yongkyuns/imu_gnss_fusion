@@ -12,7 +12,7 @@ pub(super) enum DataOrigin {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum TuningPanel {
-    EKF,
+    Ekf,
     Align,
 }
 

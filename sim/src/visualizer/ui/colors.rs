@@ -90,7 +90,7 @@ pub(super) fn shared_cursor_color(visuals: &egui::Visuals) -> egui::Color32 {
 #[derive(Clone, Copy)]
 pub(super) enum SeriesColor {
     Reference,
-    EKF,
+    Ekf,
     Align,
 }
 
@@ -100,8 +100,8 @@ impl SeriesColor {
         match self {
             Self::Reference if dark => egui::Color32::from_rgb(235, 238, 244),
             Self::Reference => egui::Color32::from_rgb(34, 43, 55),
-            Self::EKF if dark => egui::Color32::from_rgb(120, 170, 255),
-            Self::EKF => egui::Color32::from_rgb(35, 105, 200),
+            Self::Ekf if dark => egui::Color32::from_rgb(120, 170, 255),
+            Self::Ekf => egui::Color32::from_rgb(35, 105, 200),
             Self::Align if dark => egui::Color32::from_rgb(244, 190, 96),
             Self::Align => egui::Color32::from_rgb(168, 93, 22),
         }

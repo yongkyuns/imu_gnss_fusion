@@ -102,16 +102,12 @@ impl SensorFusion {
     pub fn with_mount(q_bv: [f32; 4]) -> Self {
         Self::with_config(Config {
             mount_mode: MountMode::Manual(q_bv),
-            ..Config::default()
         })
     }
 
     /// Creates a fusion pipeline using the requested mount mode.
     pub fn with_mount_mode(mode: MountMode) -> Self {
-        Self::with_config(Config {
-            mount_mode: mode,
-            ..Config::default()
-        })
+        Self::with_config(Config { mount_mode: mode })
     }
 
     /// Creates a fusion pipeline from explicit public configuration.

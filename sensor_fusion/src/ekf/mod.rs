@@ -1,7 +1,7 @@
 //! EKF runtime, public state structs, and standalone state helpers.
 //!
 //! Mathematical details are maintained in `docs/ekf.pdf`.
-//! The runtime filter is [`Filter`]. Public structs in this module define the
+//! The runtime filter is [`crate::ekf::Filter`]. Public structs in this module define the
 //! generated-code and diagnostics data layout. Focused state-operation helpers
 //! live under [`crate::ekf::state_ops`].
 //!

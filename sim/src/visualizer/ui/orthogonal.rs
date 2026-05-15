@@ -96,13 +96,13 @@ fn angle_samples_for_axis(
         OrthogonalViewKind::Vehicle => &[
             ("Reference", "Reference", SeriesColor::Reference),
             ("Synthetic truth", "Reference", SeriesColor::Reference),
-            ("EKF", "EKF", SeriesColor::EKF),
+            ("EKF", "EKF", SeriesColor::Ekf),
         ],
         OrthogonalViewKind::Mount => &[
             ("Reference mount", "Reference", SeriesColor::Reference),
             ("Synthetic truth mount", "Reference", SeriesColor::Reference),
             ("Align", "Align", SeriesColor::Align),
-            ("EKF mount", "EKF", SeriesColor::EKF),
+            ("EKF mount", "EKF", SeriesColor::Ekf),
         ],
     };
     prefixes

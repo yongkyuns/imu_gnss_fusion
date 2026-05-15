@@ -86,7 +86,7 @@ impl App {
                     "Open filter tuning panels. Adjusted values are used when the simulation is run again or replay is applied.",
                 );
                 if ui.button(EKF_FILTER_LABEL).clicked() {
-                    self.tuning_panel = Some(TuningPanel::EKF);
+                    self.tuning_panel = Some(TuningPanel::Ekf);
                 }
                 if ui.button("Align").clicked() {
                     self.tuning_panel = Some(TuningPanel::Align);

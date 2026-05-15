@@ -20,7 +20,7 @@ impl App {
         let mut open = true;
         let mut apply_replay = false;
         let title = match panel {
-            TuningPanel::EKF => "EKF Tuning",
+            TuningPanel::Ekf => "EKF Tuning",
             TuningPanel::Align => "Align Tuning",
         };
         egui::Window::new(title)
@@ -29,7 +29,7 @@ impl App {
             .default_width(620.0)
             .show(ctx, |ui| {
                 match panel {
-                    TuningPanel::EKF => {
+                    TuningPanel::Ekf => {
                         draw_ekf_tuning(ui, &mut self.tuning_misalignment, &mut self.tuning_cfg)
                     }
                     TuningPanel::Align => draw_align_tuning(ui, &mut self.tuning_cfg),
@@ -39,7 +39,7 @@ impl App {
                     if ui.button("Reset section defaults").clicked() {
                         let defaults = FusionTuningConfig::default();
                         match panel {
-                            TuningPanel::EKF => {
+                            TuningPanel::Ekf => {
                                 self.tuning_misalignment = VisualizerMountMode::Auto;
                                 self.tuning_gnss_outages = GnssOutageConfig::default();
                                 self.tuning_cfg.r_body_vel = defaults.r_body_vel;
