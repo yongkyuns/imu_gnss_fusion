@@ -49,7 +49,7 @@
       "sha256": "2354998adc41507b79f251a4a305296f4197a51b3d82bfa1d3bb6e7049fcbcba"
     },
     "reference_attitude": {
-      "bytes": 308585,
+      "bytes": 309059,
       "columns": [
         "t_s",
         "roll_deg",
@@ -57,15 +57,15 @@
         "yaw_deg"
       ],
       "encoding": "gzip",
-      "first_t_s": 0.125,
-      "last_t_s": 1256.138,
+      "first_t_s": 0.0,
+      "last_t_s": 1256.013,
       "media_type": "text/csv",
       "path": "reference_attitude.csv.gz",
       "rows": 38062,
-      "sha256": "48e1db6c0a4ea54093c4ed6d5b4b34a96b83b8f0d865139fceace4e706c366b8"
+      "sha256": "0e57ccf3d70b94f2c9c40f121b8e1f99cdeb2288127bfd02333b3a67f0a7870d"
     },
     "reference_motion": {
-      "bytes": 117150,
+      "bytes": 117148,
       "columns": [
         "t_s",
         "wx_radps",
@@ -76,15 +76,15 @@
         "az_mps2"
       ],
       "encoding": "gzip",
-      "first_t_s": 0.125,
-      "last_t_s": 1256.138,
+      "first_t_s": 0.0,
+      "last_t_s": 1256.013,
       "media_type": "text/csv",
       "path": "reference_motion.csv.gz",
       "rows": 38062,
-      "sha256": "9d41cbdb0b3ee287b83a99ebff2d545e654d996e0fa80f20fefb09aba2cd9359"
+      "sha256": "7dacab2cc47f069e75becf706f1ed7bcc9fd4485dca8a0be2a78eee538b396cd"
     },
     "reference_mount": {
-      "bytes": 5380,
+      "bytes": 6970,
       "columns": [
         "t_s",
         "roll_deg",
@@ -92,12 +92,12 @@
         "yaw_deg"
       ],
       "encoding": "gzip",
-      "first_t_s": 0.0,
-      "last_t_s": 1255.5,
+      "first_t_s": -0.125,
+      "last_t_s": 1255.375,
       "media_type": "text/csv",
       "path": "reference_mount.csv.gz",
       "rows": 2512,
-      "sha256": "093a7bebc5f70ce4152ef835d25828946219dee85553465e84911deeaa43e39e"
+      "sha256": "02d97e62a54a911f8fce48f7aacf2ad77b849d9a485c9cce177153b1e9a01e3e"
     },
     "reference_position": {
       "bytes": 697275,
@@ -134,8 +134,8 @@
     "format": "generic"
   },
   "time_span_s": {
-    "end": 1256.138,
-    "start": -0.00785561239719391
+    "end": 1256.0299006615878,
+    "start": -0.125
   },
   "title": "Urban low-speed drive, low signal 001"
 }

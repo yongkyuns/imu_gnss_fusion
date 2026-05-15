@@ -632,6 +632,144 @@ fn synthetic_inputs_populate_visualizer_reduced_traces() -> Result<()> {
 }
 
 #[test]
+fn synthetic_faulted_motion_drives_mount_error_without_internal_seed() -> Result<()> {
+    let scenario = "\
+initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
+wait 20s
+accelerate 0.8 for=20s
+turn left 10 for=18s
+turn right 10 for=18s
+coast for=24s
+repeat 8 {
+    accelerate 0.8 for=10s
+    turn left 10 for=20s
+    brake 0.8 for=10s
+    turn right 10 for=20s
+}
+";
+    let data = build_synthetic_plot_data(
+        &SyntheticVisualizerConfig {
+            motion_def: None,
+            motion_label: "faulted_mount_recovery.scenario".to_string(),
+            motion_text: Some(scenario.to_string()),
+            noise_mode: SyntheticNoiseMode::Truth,
+            disable_imu_noise: false,
+            disable_gnss_noise: false,
+            seed: 42,
+            mount_rpy_deg: [5.0, -5.0, 5.0],
+            imu_hz: 25.0,
+            gnss_hz: 2.0,
+            gnss_time_shift_ms: 0.0,
+            early_vel_bias_ned_mps: [0.8, 0.25, 0.0],
+            early_fault_window_s: Some((130.0, 250.0)),
+        },
+        VisualizerMountMode::Auto,
+        FilterCompareConfig::default(),
+        GnssOutageConfig::default(),
+    )?;
+
+    let reduced_qerr = require_trace(
+        "reduced_misalignment",
+        &data.reduced_misalignment,
+        "Reduced mount quaternion error [deg]",
+    )?;
+    let full_qerr = require_trace(
+        "full_misalignment",
+        &data.full_misalignment,
+        "Full mount quaternion error [deg]",
+    )?;
+    let reduced_peak = trace_window_max(reduced_qerr, 130.0, 300.0);
+    let reduced_final = final_trace_value(reduced_qerr)?;
+    let full_peak = trace_window_max(full_qerr, 130.0, 300.0);
+    let full_final = final_trace_value(full_qerr)?;
+    assert!(
+        reduced_peak > reduced_final + 0.1 || full_peak > full_final + 0.1,
+        "faulted synthetic motion should create a visible mount-error recovery: reduced peak/final={reduced_peak:.3}/{reduced_final:.3}, full peak/final={full_peak:.3}/{full_final:.3}"
+    );
+    Ok(())
+}
+
+#[test]
+fn synthetic_mount_recovery_profiles_initialize_all_filters() -> Result<()> {
+    let profiles = [
+        (
+            "straight",
+            "\
+initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
+wait 20s
+accelerate 0.8 for=20s
+turn left 10 for=18s
+turn right 10 for=18s
+coast for=24s
+wait for=420s
+",
+        ),
+        (
+            "accel_brake",
+            "\
+initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
+wait 20s
+accelerate 0.8 for=20s
+turn left 10 for=18s
+turn right 10 for=18s
+coast for=24s
+repeat 12 {
+    accelerate 1.0 for=15s
+    coast for=10s
+    brake 1.0 for=15s
+    coast for=10s
+}
+",
+        ),
+    ];
+    for (label, scenario) in profiles {
+        let data = build_synthetic_plot_data(
+            &SyntheticVisualizerConfig {
+                motion_def: None,
+                motion_label: format!("mount_recovery_{label}.scenario"),
+                motion_text: Some(scenario.to_string()),
+                noise_mode: SyntheticNoiseMode::Truth,
+                disable_imu_noise: false,
+                disable_gnss_noise: false,
+                seed: 42,
+                mount_rpy_deg: [5.0, -5.0, 5.0],
+                imu_hz: 25.0,
+                gnss_hz: 2.0,
+                gnss_time_shift_ms: 0.0,
+                early_vel_bias_ned_mps: [0.8, 0.25, 0.0],
+                early_fault_window_s: Some((130.0, 250.0)),
+            },
+            VisualizerMountMode::Auto,
+            FilterCompareConfig::default(),
+            GnssOutageConfig::default(),
+        )?;
+        assert!(
+            require_trace(
+                "reduced_misalignment",
+                &data.reduced_misalignment,
+                "Reduced mount roll [deg]",
+            )?
+            .points
+            .len()
+                > 10,
+            "{label} did not initialize Reduced"
+        );
+        assert!(
+            require_trace(
+                "full_misalignment",
+                &data.full_misalignment,
+                "Full mount roll [deg]",
+            )?
+            .points
+            .len()
+                > 10,
+            "{label} did not initialize Full"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn synthetic_symmetric_figure8_does_not_create_full_mount_roll_drift() -> Result<()> {
     let scenario = "\
 initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
@@ -772,6 +910,15 @@ fn final_trace_value(trace: &sim::visualizer::model::Trace) -> Result<f64> {
         .last()
         .map(|point| point[1])
         .ok_or_else(|| anyhow::anyhow!("trace '{}' has no points", trace.name))
+}
+
+fn trace_window_max(trace: &sim::visualizer::model::Trace, start_s: f64, end_s: f64) -> f64 {
+    trace
+        .points
+        .iter()
+        .filter(|point| (start_s..=end_s).contains(&point[0]))
+        .map(|point| point[1])
+        .fold(f64::NEG_INFINITY, f64::max)
 }
 
 #[derive(Clone, Copy, Debug)]

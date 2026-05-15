@@ -48,6 +48,28 @@ xcodegen generate
 2. Select an iPhone (simulator has no real GNSS/IMU).
 3. Run the app and grant Location + Motion permissions.
 
+## Export `.motionfusion` Recordings
+
+Use the stdlib-only exporter to inspect an iOS raw session recording and create
+web visualizer inputs:
+
+```bash
+cd mobile/ios
+python3 scripts/export_motionfusion.py ~/Downloads/session.motionfusion --output-dir /tmp/session-web
+```
+
+The output directory contains:
+
+- `imu.csv` with `t_s,gx_radps,gy_radps,gz_radps,ax_mps2,ay_mps2,az_mps2`
+- `gnss.csv` with the generic web replay GNSS columns
+- `summary.txt` with counts, duration, IMU/GNSS rates, missing GNSS velocity
+  rows, and accel/gyro magnitude statistics
+
+Rows with explicit GNSS NED velocity are exported directly. Rows without
+explicit NED velocity are counted in the summary; when possible, the exporter
+derives north/east velocity from speed/course, otherwise it skips the row so
+playback does not feed a synthetic zero-velocity update.
+
 ## Notes
 
 - `project.yml` links `../build/SensorFusionFFI.xcframework` with XcodeGen's

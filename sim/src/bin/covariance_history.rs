@@ -6,6 +6,7 @@
     clippy::too_many_arguments
 )]
 
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
@@ -23,12 +24,12 @@ use sim::datasets::generic_replay::{
     fusion_imu_sample, load_gnss_samples, load_imu_samples, load_reference_attitude_samples,
     load_reference_mount_samples,
 };
-use sim::eval::gnss_ins::{as_q64, quat_angle_deg, quat_mul};
+use sim::eval::gnss_ins::{as_q64, quat_angle_deg, quat_conj, quat_mul};
 use sim::eval::replay::{ReplayEvent, for_each_event};
 use sim::visualizer::math::{ecef_to_ned, lla_to_ecef};
 use sim::visualizer::model::VisualizerMountMode;
 use sim::visualizer::pipeline::FilterCompareConfig;
-use sim::visualizer::pipeline::generic::reference_mount_rpy_to_q_bv;
+use sim::visualizer::pipeline::reference::reference_mount_rpy_to_q_bv;
 use sim::visualizer::pipeline::synthetic::{
     SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_replay_input,
 };
@@ -89,6 +90,14 @@ struct Args {
     #[arg(long)]
     gnss_parity_csv: Option<PathBuf>,
 
+    /// Optional CSV path for per-row Reduced/Full diagnostics in a common Reduced/NED basis.
+    #[arg(long)]
+    row_basis_csv: Option<PathBuf>,
+
+    /// Optional CSV path for Full P(velocity,mount) covariance accounting diagnostics.
+    #[arg(long)]
+    pvm_accounting_csv: Option<PathBuf>,
+
     /// Optional replay-relative interval summary window, formatted as start,end seconds.
     #[arg(long, value_delimiter = ',')]
     summary_window: Option<Vec<f64>>,
@@ -96,6 +105,14 @@ struct Args {
     /// Optional replay-relative GNSS parity CSV window, formatted as start,end seconds.
     #[arg(long, value_delimiter = ',')]
     gnss_parity_window: Option<Vec<f64>>,
+
+    /// Optional replay-relative row-basis CSV window, formatted as start,end seconds.
+    #[arg(long, value_delimiter = ',')]
+    row_basis_window: Option<Vec<f64>>,
+
+    /// Optional replay-relative Full P(velocity,mount) accounting window, formatted as start,end seconds.
+    #[arg(long, value_delimiter = ',')]
+    pvm_accounting_window: Option<Vec<f64>>,
 
     /// Optional replay-relative duration cap, in seconds.
     #[arg(long)]
@@ -185,6 +202,10 @@ struct Args {
     #[arg(long)]
     full_mount_yaw_sigma_deg: Option<f32>,
 
+    /// Diagnostic-only scale applied to standalone Full GNSS velocity standard deviations.
+    #[arg(long, default_value_t = 1.0)]
+    full_gnss_vel_std_scale: f32,
+
     /// Diagnostic-only scale applied to Reduced GNSS position standard deviations.
     #[arg(long, default_value_t = 1.0)]
     reduced_gnss_pos_std_scale: f64,
@@ -196,6 +217,22 @@ struct Args {
     /// Diagnostic-only scale applied to Reduced GNSS velocity standard deviations.
     #[arg(long, default_value_t = 1.0)]
     reduced_gnss_vel_std_scale: f64,
+
+    /// Diagnostic-only scale for direct mount correction from GNSS velocity rows.
+    #[arg(long, default_value_t = 1.0)]
+    gnss_vel_mount_gain_scale: f32,
+
+    /// Sliding-window width for mount-drive conflict diagnostics.
+    #[arg(long, default_value_t = 5.0)]
+    mount_drive_window_s: f64,
+
+    /// Diagnostic-only adaptive GNSS velocity standard-deviation inflation from mount-drive conflict.
+    #[arg(long)]
+    adaptive_gnss_velocity_r: bool,
+
+    /// GNSS velocity standard-deviation scale used while adaptive conflict is active.
+    #[arg(long, default_value_t = 3.0)]
+    adaptive_gnss_velocity_std_scale: f32,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -309,6 +346,596 @@ struct AllocationCsv {
 struct GnssParityCsv {
     writer: BufWriter<File>,
     window_abs: Option<[f64; 2]>,
+}
+
+struct RowBasisCsv {
+    writer: BufWriter<File>,
+    window_abs: Option<[f64; 2]>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct PvmPhaseStats {
+    count: u64,
+    net: [[f64; 3]; 3],
+    activity_fro: f64,
+    activity_abs: f64,
+    mount_dx_sum_deg: [f64; 3],
+    mount_dx_abs_sum_deg: [f64; 3],
+    mount_score_deg2: f64,
+    mount_axis_score_deg2: [f64; 3],
+}
+
+#[derive(Clone, Copy, Default)]
+struct MountDrivePhaseStats {
+    count: u64,
+    dx_sum_deg: [f64; 3],
+    dx_abs_sum_deg: [f64; 3],
+    score_deg2: f64,
+    axis_score_deg2: [f64; 3],
+    nis_sum: f64,
+    nis_weight: f64,
+    nis_max: f64,
+    effective_residual_abs_sum: f64,
+}
+
+impl MountDrivePhaseStats {
+    fn record(&mut self, error_deg: [f64; 3], dx_deg: [f64; 3], nis: f64, effective_residual: f64) {
+        self.count += 1;
+        let (score, _) = mount_correction_score(error_deg, dx_deg);
+        self.score_deg2 += score;
+        if nis.is_finite() {
+            self.nis_sum += nis;
+            self.nis_weight += 1.0;
+            self.nis_max = self.nis_max.max(nis);
+        }
+        if effective_residual.is_finite() {
+            self.effective_residual_abs_sum += effective_residual.abs();
+        }
+        for idx in 0..3 {
+            self.dx_sum_deg[idx] += dx_deg[idx];
+            self.dx_abs_sum_deg[idx] += dx_deg[idx].abs();
+            self.axis_score_deg2[idx] += -error_deg[idx] * dx_deg[idx];
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct MountDriveWindow {
+    gnss_velocity: MountDrivePhaseStats,
+    nhc: MountDrivePhaseStats,
+}
+
+impl MountDriveWindow {
+    fn phase_mut(&mut self, phase: &str) -> Option<&mut MountDrivePhaseStats> {
+        match phase {
+            "gnss_velocity" => Some(&mut self.gnss_velocity),
+            "nhc" => Some(&mut self.nhc),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct AdaptiveGnssVelocityStats {
+    activations: u32,
+    scaled_gnss_count: u32,
+    last_scale: f32,
+    last_conflict_deg: f64,
+    last_conflict_ratio: f64,
+    last_gnss_nis_mean: f64,
+    last_nhc_nis_mean: f64,
+}
+
+#[derive(Clone)]
+struct AdaptiveGnssVelocityScale {
+    enabled: bool,
+    window_s: f64,
+    std_scale: f32,
+    min_conflict_deg: f64,
+    min_conflict_ratio: f64,
+    min_gnss_nis_ratio: f64,
+    current_window: Option<i64>,
+    window: MountDriveWindow,
+    evidence: MountDriveWindow,
+    current_scale: f32,
+    stats: AdaptiveGnssVelocityStats,
+}
+
+impl AdaptiveGnssVelocityScale {
+    fn new(enabled: bool, window_s: f64, std_scale: f32) -> Self {
+        Self {
+            enabled,
+            window_s: window_s.max(0.5),
+            std_scale: std_scale.max(1.0),
+            min_conflict_deg: 0.25,
+            min_conflict_ratio: 0.45,
+            min_gnss_nis_ratio: 2.0,
+            current_window: None,
+            window: MountDriveWindow::default(),
+            evidence: MountDriveWindow::default(),
+            current_scale: 1.0,
+            stats: AdaptiveGnssVelocityStats::default(),
+        }
+    }
+
+    fn current_scale(&self) -> f32 {
+        if self.enabled {
+            self.current_scale
+        } else {
+            1.0
+        }
+    }
+
+    fn mark_gnss_used(&mut self) {
+        if self.enabled && self.current_scale > 1.0 {
+            self.stats.scaled_gnss_count += 1;
+        }
+    }
+
+    fn record(
+        &mut self,
+        rel_s: f64,
+        phase: &str,
+        error_deg: [f64; 3],
+        dx_deg: [f64; 3],
+        nis: f64,
+        effective_residual: f64,
+    ) {
+        if !self.enabled
+            || !matches!(phase, "gnss_velocity" | "nhc")
+            || !rel_s.is_finite()
+            || !dx_deg.iter().all(|v| v.is_finite())
+        {
+            return;
+        }
+        let window_idx = (rel_s / self.window_s).floor() as i64;
+        if self.current_window != Some(window_idx) {
+            self.current_window = Some(window_idx);
+            self.window = MountDriveWindow::default();
+        }
+        decay_mount_drive_window(&mut self.evidence, 0.97);
+        if let Some(stats) = self.window.phase_mut(phase) {
+            stats.record(error_deg, dx_deg, nis, effective_residual);
+        }
+        if let Some(stats) = self.evidence.phase_mut(phase) {
+            stats.record(error_deg, dx_deg, nis, effective_residual);
+        }
+        self.update_scale();
+    }
+
+    fn update_scale(&mut self) {
+        let gnss = self.evidence.gnss_velocity;
+        let nhc = self.evidence.nhc;
+        if gnss.count == 0 || nhc.count == 0 {
+            self.current_scale = 1.0;
+            return;
+        }
+        let gnss_norm = vec3_norm(gnss.dx_sum_deg);
+        let nhc_norm = vec3_norm(nhc.dx_sum_deg);
+        let denom = gnss_norm + nhc_norm;
+        if denom <= 0.0 {
+            self.current_scale = 1.0;
+            return;
+        }
+        let conflict_deg = (denom - vec3_norm(vec3_add(gnss.dx_sum_deg, nhc.dx_sum_deg))).max(0.0);
+        let conflict_ratio = conflict_deg / denom;
+        let gnss_nis_mean = gnss.nis_sum / gnss.nis_weight.max(1.0);
+        let nhc_nis_mean = nhc.nis_sum / nhc.nis_weight.max(1.0);
+        let gnss_less_credible = gnss.score_deg2 < 0.0
+            && gnss_nis_mean > (nhc_nis_mean + 1.0e-9) * self.min_gnss_nis_ratio;
+        let scale = if conflict_deg >= self.min_conflict_deg
+            && conflict_ratio >= self.min_conflict_ratio
+            && gnss_less_credible
+        {
+            self.std_scale
+        } else {
+            1.0
+        };
+        if self.current_scale <= 1.0 && scale > 1.0 {
+            self.stats.activations += 1;
+        }
+        self.current_scale = scale;
+        self.stats.last_scale = scale;
+        self.stats.last_conflict_deg = conflict_deg;
+        self.stats.last_conflict_ratio = conflict_ratio;
+        self.stats.last_gnss_nis_mean = gnss_nis_mean;
+        self.stats.last_nhc_nis_mean = nhc_nis_mean;
+    }
+
+    fn print_summary(&self, label: &str) {
+        if !self.enabled {
+            return;
+        }
+        println!(
+            "[covhist-adaptive] system={label} activations={} scaled_gnss_count={} last_scale={:.3} last_conflict_deg={:.6} last_ratio={:.3} last_nis_mean_gnss={:.3} last_nis_mean_nhc={:.3}",
+            self.stats.activations,
+            self.stats.scaled_gnss_count,
+            self.stats.last_scale,
+            self.stats.last_conflict_deg,
+            self.stats.last_conflict_ratio,
+            self.stats.last_gnss_nis_mean,
+            self.stats.last_nhc_nis_mean,
+        );
+    }
+}
+
+fn decay_mount_drive_window(window: &mut MountDriveWindow, factor: f64) {
+    decay_mount_drive_phase(&mut window.gnss_velocity, factor);
+    decay_mount_drive_phase(&mut window.nhc, factor);
+}
+
+fn decay_mount_drive_phase(phase: &mut MountDrivePhaseStats, factor: f64) {
+    phase.nis_sum *= factor;
+    phase.nis_weight *= factor;
+    phase.effective_residual_abs_sum *= factor;
+    phase.score_deg2 *= factor;
+    for idx in 0..3 {
+        phase.dx_sum_deg[idx] *= factor;
+        phase.dx_abs_sum_deg[idx] *= factor;
+        phase.axis_score_deg2[idx] *= factor;
+    }
+}
+
+struct PvmAccountingCsv {
+    writer: BufWriter<File>,
+    window_abs: Option<[f64; 2]>,
+    stats: [PvmPhaseStats; PVM_PHASES.len()],
+    mount_drive_window_s: f64,
+    mount_drive_windows: BTreeMap<(u8, i64), MountDriveWindow>,
+}
+
+#[derive(Clone, Copy)]
+struct MountDirectionDiag {
+    error_deg: [f64; 3],
+    dx_deg: Option<[f64; 3]>,
+}
+
+impl MountDirectionDiag {
+    fn no_dx(error_deg: [f64; 3]) -> Self {
+        Self {
+            error_deg,
+            dx_deg: None,
+        }
+    }
+
+    fn with_dx(error_deg: [f64; 3], dx_deg: [f64; 3]) -> Self {
+        Self {
+            error_deg,
+            dx_deg: Some(dx_deg),
+        }
+    }
+}
+
+const PVM_PHASES: [&str; 7] = [
+    "propagation",
+    "gnss_position",
+    "gnss_velocity",
+    "nhc",
+    "zero_velocity",
+    "remainder",
+    "reset",
+];
+
+impl PvmAccountingCsv {
+    fn create(
+        path: &PathBuf,
+        window_abs: Option<[f64; 2]>,
+        mount_drive_window_s: f64,
+    ) -> Result<Self> {
+        let mut writer = BufWriter::new(
+            File::create(path).with_context(|| format!("failed to create {}", path.display()))?,
+        );
+        writeln!(
+            writer,
+            "rel_s,t_s,system,event,phase,obs_index,obs_type,\
+residual,effective_residual,innovation_var,nis,\
+pvm_vn_roll_before,pvm_vn_pitch_before,pvm_vn_yaw_before,\
+pvm_ve_roll_before,pvm_ve_pitch_before,pvm_ve_yaw_before,\
+pvm_vd_roll_before,pvm_vd_pitch_before,pvm_vd_yaw_before,\
+pvm_vn_roll_delta,pvm_vn_pitch_delta,pvm_vn_yaw_delta,\
+pvm_ve_roll_delta,pvm_ve_pitch_delta,pvm_ve_yaw_delta,\
+pvm_vd_roll_delta,pvm_vd_pitch_delta,pvm_vd_yaw_delta,\
+pvm_vn_roll_after,pvm_vn_pitch_after,pvm_vn_yaw_after,\
+pvm_ve_roll_after,pvm_ve_pitch_after,pvm_ve_yaw_after,\
+pvm_vd_roll_after,pvm_vd_pitch_after,pvm_vd_yaw_after,\
+before_fro,delta_fro,after_fro,delta_abs_sum,\
+mount_err_roll_deg,mount_err_pitch_deg,mount_err_yaw_deg,\
+dx_mount_roll_deg,dx_mount_pitch_deg,dx_mount_yaw_deg,\
+mount_correction_score_deg2,mount_correction_cos,\
+delta_pvm_err_vn,delta_pvm_err_ve,delta_pvm_err_vd,\
+after_pvm_err_vn,after_pvm_err_ve,after_pvm_err_vd"
+        )?;
+        Ok(Self {
+            writer,
+            window_abs,
+            stats: [PvmPhaseStats::default(); PVM_PHASES.len()],
+            mount_drive_window_s,
+            mount_drive_windows: BTreeMap::new(),
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_delta(
+        &mut self,
+        replay: &Replay,
+        system: &str,
+        event: &str,
+        t_s: f64,
+        phase: &str,
+        obs_index: Option<usize>,
+        obs_type: &str,
+        residual: f32,
+        effective_residual: f32,
+        innovation_var: f32,
+        before: [[f64; 3]; 3],
+        delta: [[f64; 3]; 3],
+        mount_direction: MountDirectionDiag,
+    ) -> Result<[[f64; 3]; 3]> {
+        let after = matrix3_add(before, delta);
+        if !self.in_window(t_s) {
+            return Ok(after);
+        }
+        let rel_s = t_s - replay_start_t_s(replay).unwrap_or(0.0);
+        let dx_deg = mount_direction.dx_deg.unwrap_or([f64::NAN; 3]);
+        let (mount_score_deg2, mount_score_cos) =
+            mount_correction_score(mount_direction.error_deg, dx_deg);
+        let nis = scalar_nis(effective_residual, innovation_var);
+        if let Some(phase_idx) = pvm_phase_idx(phase) {
+            let stats = &mut self.stats[phase_idx];
+            stats.count += 1;
+            stats.activity_fro += matrix3_fro(delta);
+            stats.activity_abs += matrix3_abs_sum(delta);
+            for r in 0..3 {
+                for c in 0..3 {
+                    stats.net[r][c] += delta[r][c];
+                }
+            }
+            if dx_deg.iter().all(|v| v.is_finite()) {
+                stats.mount_score_deg2 += mount_score_deg2;
+                for idx in 0..3 {
+                    stats.mount_dx_sum_deg[idx] += dx_deg[idx];
+                    stats.mount_dx_abs_sum_deg[idx] += dx_deg[idx].abs();
+                    stats.mount_axis_score_deg2[idx] +=
+                        -mount_direction.error_deg[idx] * dx_deg[idx];
+                }
+            }
+        }
+        self.record_mount_drive_window(
+            system,
+            rel_s,
+            phase,
+            mount_direction.error_deg,
+            dx_deg,
+            f64::from(nis),
+            f64::from(effective_residual),
+        );
+        let obs_index = obs_index
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "-".to_owned());
+        let error_rad = mount_direction.error_deg.map(f64::to_radians);
+        let delta_pvm_err = matrix3_vec(delta, error_rad);
+        let after_pvm_err = matrix3_vec(after, error_rad);
+        writeln!(
+            self.writer,
+            "{rel_s:.6},{t_s:.6},{system},{event},{phase},{obs_index},{obs_type},\
+{residual:.9},{effective_residual:.9},{innovation_var:.9},{nis:.9},\
+{:.12},{:.12},{:.12},{:.12},{:.12},{:.12},{:.12},{:.12},{:.12},\
+{:.12},{:.12},{:.12},{:.12},{:.12},{:.12},{:.12},{:.12},{:.12},\
+{:.12},{:.12},{:.12},{:.12},{:.12},{:.12},{:.12},{:.12},{:.12},\
+{:.12},{:.12},{:.12},{:.12},\
+{:.12},{:.12},{:.12},{:.12},{:.12},{:.12},{:.12},{:.12},\
+{:.12},{:.12},{:.12},{:.12},{:.12},{:.12}",
+            before[0][0],
+            before[0][1],
+            before[0][2],
+            before[1][0],
+            before[1][1],
+            before[1][2],
+            before[2][0],
+            before[2][1],
+            before[2][2],
+            delta[0][0],
+            delta[0][1],
+            delta[0][2],
+            delta[1][0],
+            delta[1][1],
+            delta[1][2],
+            delta[2][0],
+            delta[2][1],
+            delta[2][2],
+            after[0][0],
+            after[0][1],
+            after[0][2],
+            after[1][0],
+            after[1][1],
+            after[1][2],
+            after[2][0],
+            after[2][1],
+            after[2][2],
+            matrix3_fro(before),
+            matrix3_fro(delta),
+            matrix3_fro(after),
+            matrix3_abs_sum(delta),
+            mount_direction.error_deg[0],
+            mount_direction.error_deg[1],
+            mount_direction.error_deg[2],
+            dx_deg[0],
+            dx_deg[1],
+            dx_deg[2],
+            mount_score_deg2,
+            mount_score_cos,
+            delta_pvm_err[0],
+            delta_pvm_err[1],
+            delta_pvm_err[2],
+            after_pvm_err[0],
+            after_pvm_err[1],
+            after_pvm_err[2],
+        )?;
+        Ok(after)
+    }
+
+    fn print_summary(&self) {
+        if self.stats.iter().all(|s| s.count == 0) {
+            return;
+        }
+        println!("[covhist-pvm] P(velocity,mount) accounting summary");
+        for (idx, phase) in PVM_PHASES.iter().enumerate() {
+            let stats = self.stats[idx];
+            if stats.count == 0 {
+                continue;
+            }
+            println!(
+                "  phase={phase:<13} count={} net_fro={:.6e} activity_fro={:.6e} activity_abs={:.6e}",
+                stats.count,
+                matrix3_fro(stats.net),
+                stats.activity_fro,
+                stats.activity_abs,
+            );
+            if stats
+                .mount_dx_sum_deg
+                .iter()
+                .any(|v| v.is_finite() && v.abs() > 0.0)
+            {
+                println!(
+                    "    mount_drive score_deg2={:.6e} axis_score_deg2=[{:.6e},{:.6e},{:.6e}] dx_sum_deg=[{:.6e},{:.6e},{:.6e}] dx_abs_sum_deg=[{:.6e},{:.6e},{:.6e}]",
+                    stats.mount_score_deg2,
+                    stats.mount_axis_score_deg2[0],
+                    stats.mount_axis_score_deg2[1],
+                    stats.mount_axis_score_deg2[2],
+                    stats.mount_dx_sum_deg[0],
+                    stats.mount_dx_sum_deg[1],
+                    stats.mount_dx_sum_deg[2],
+                    stats.mount_dx_abs_sum_deg[0],
+                    stats.mount_dx_abs_sum_deg[1],
+                    stats.mount_dx_abs_sum_deg[2],
+                );
+            }
+            print_matrix3("    net", stats.net);
+        }
+        self.print_mount_drive_conflicts();
+    }
+
+    fn in_window(&self, t_s: f64) -> bool {
+        self.window_abs
+            .is_none_or(|[start, end]| (start..=end).contains(&t_s))
+    }
+
+    fn record_mount_drive_window(
+        &mut self,
+        system: &str,
+        rel_s: f64,
+        phase: &str,
+        error_deg: [f64; 3],
+        dx_deg: [f64; 3],
+        nis: f64,
+        effective_residual: f64,
+    ) {
+        if !matches!(phase, "gnss_velocity" | "nhc")
+            || !rel_s.is_finite()
+            || !dx_deg.iter().all(|v| v.is_finite())
+            || self.mount_drive_window_s <= 0.0
+        {
+            return;
+        }
+        let system_id = match system {
+            "reduced" => 0,
+            "full" => 1,
+            _ => return,
+        };
+        let window_idx = (rel_s / self.mount_drive_window_s).floor() as i64;
+        let window = self
+            .mount_drive_windows
+            .entry((system_id, window_idx))
+            .or_default();
+        match phase {
+            "gnss_velocity" => {
+                window
+                    .gnss_velocity
+                    .record(error_deg, dx_deg, nis, effective_residual)
+            }
+            "nhc" => window
+                .nhc
+                .record(error_deg, dx_deg, nis, effective_residual),
+            _ => {}
+        }
+    }
+
+    fn print_mount_drive_conflicts(&self) {
+        let mut rows = Vec::new();
+        for (&(system_id, window_idx), window) in &self.mount_drive_windows {
+            let gnss = window.gnss_velocity;
+            let nhc = window.nhc;
+            if gnss.count == 0 || nhc.count == 0 {
+                continue;
+            }
+            let gnss_norm = vec3_norm(gnss.dx_sum_deg);
+            let nhc_norm = vec3_norm(nhc.dx_sum_deg);
+            let net = vec3_add(gnss.dx_sum_deg, nhc.dx_sum_deg);
+            let conflict_deg = (gnss_norm + nhc_norm - vec3_norm(net)).max(0.0);
+            let denom = gnss_norm + nhc_norm;
+            if denom <= 0.0 {
+                continue;
+            }
+            let conflict_ratio = conflict_deg / denom;
+            rows.push((
+                conflict_deg,
+                conflict_ratio,
+                system_id,
+                window_idx,
+                gnss,
+                nhc,
+            ));
+        }
+        if rows.is_empty() {
+            return;
+        }
+        rows.sort_by(|a, b| b.0.total_cmp(&a.0));
+        println!(
+            "[covhist-pvm] mount-drive conflict windows (width={:.3}s, top={})",
+            self.mount_drive_window_s,
+            rows.len().min(10)
+        );
+        for (conflict_deg, conflict_ratio, system_id, window_idx, gnss, nhc) in
+            rows.into_iter().take(10)
+        {
+            let system = match system_id {
+                0 => "reduced",
+                1 => "full",
+                _ => "unknown",
+            };
+            let start = window_idx as f64 * self.mount_drive_window_s;
+            let end = start + self.mount_drive_window_s;
+            println!(
+                "  system={system:<7} window={start:.3}-{end:.3}s conflict_deg={conflict_deg:.6} ratio={conflict_ratio:.3} gnss_score={:.6} nhc_score={:.6}",
+                gnss.score_deg2, nhc.score_deg2,
+            );
+            println!(
+                "    gnss_nis_mean={:.3} gnss_nis_max={:.3} nhc_nis_mean={:.3} nhc_nis_max={:.3}",
+                gnss.nis_sum / gnss.nis_weight.max(1.0),
+                gnss.nis_max,
+                nhc.nis_sum / nhc.nis_weight.max(1.0),
+                nhc.nis_max,
+            );
+            println!(
+                "    gnss_dx_sum_deg=[{:.6},{:.6},{:.6}] nhc_dx_sum_deg=[{:.6},{:.6},{:.6}]",
+                gnss.dx_sum_deg[0],
+                gnss.dx_sum_deg[1],
+                gnss.dx_sum_deg[2],
+                nhc.dx_sum_deg[0],
+                nhc.dx_sum_deg[1],
+                nhc.dx_sum_deg[2],
+            );
+            println!(
+                "    gnss_axis_score=[{:.6},{:.6},{:.6}] nhc_axis_score=[{:.6},{:.6},{:.6}]",
+                gnss.axis_score_deg2[0],
+                gnss.axis_score_deg2[1],
+                gnss.axis_score_deg2[2],
+                nhc.axis_score_deg2[0],
+                nhc.axis_score_deg2[1],
+                nhc.axis_score_deg2[2],
+            );
+        }
+    }
 }
 
 impl GnssParityCsv {
@@ -517,6 +1144,343 @@ att_roll_sigma_deg,att_pitch_sigma_deg,att_yaw_sigma_deg"
     fn in_window(&self, t_s: f64) -> bool {
         self.window_abs
             .is_none_or(|[start, end]| (start..=end).contains(&t_s))
+    }
+}
+
+impl RowBasisCsv {
+    fn create(path: &PathBuf, window_abs: Option<[f64; 2]>) -> Result<Self> {
+        let mut writer = BufWriter::new(
+            File::create(path).with_context(|| format!("failed to create {}", path.display()))?,
+        );
+        writeln!(
+            writer,
+            "rel_s,t_s,system,event,obs_index,update_type,\
+residual,effective_residual,innovation_var,nis,\
+h_att_roll,h_att_pitch,h_att_yaw,h_vel_n,h_vel_e,h_vel_d,h_pos_n,h_pos_e,h_pos_d,\
+h_gyro_bias_x,h_gyro_bias_y,h_gyro_bias_z,h_accel_bias_x,h_accel_bias_y,h_accel_bias_z,\
+h_mount_roll,h_mount_pitch,h_mount_yaw,\
+k_att_roll,k_att_pitch,k_att_yaw,k_vel_n,k_vel_e,k_vel_d,k_pos_n,k_pos_e,k_pos_d,\
+k_gyro_bias_x,k_gyro_bias_y,k_gyro_bias_z,k_accel_bias_x,k_accel_bias_y,k_accel_bias_z,\
+k_mount_roll,k_mount_pitch,k_mount_yaw,\
+dx_att_roll_deg,dx_att_pitch_deg,dx_att_yaw_deg,dx_vel_n_mps,dx_vel_e_mps,dx_vel_d_mps,\
+dx_pos_n_m,dx_pos_e_m,dx_pos_d_m,dx_gyro_bias_x_dps,dx_gyro_bias_y_dps,dx_gyro_bias_z_dps,\
+dx_accel_bias_x_mps2,dx_accel_bias_y_mps2,dx_accel_bias_z_mps2,\
+dx_mount_roll_deg,dx_mount_pitch_deg,dx_mount_yaw_deg,\
+p_att_trace,p_vel_trace,p_pos_trace,p_gyro_bias_trace,p_accel_bias_trace,p_mount_trace,\
+p_att_mount_fro,p_vel_mount_fro,p_pos_mount_fro,p_gyro_bias_mount_fro,p_accel_bias_mount_fro,\
+corr_att_roll_mount_roll,corr_att_pitch_mount_pitch,corr_att_yaw_mount_yaw,\
+mount_roll_sigma_deg,mount_pitch_sigma_deg,mount_yaw_sigma_deg,\
+att_roll_sigma_deg,att_pitch_sigma_deg,att_yaw_sigma_deg"
+        )?;
+        Ok(Self { writer, window_abs })
+    }
+
+    fn record_reduced(
+        &mut self,
+        replay: &Replay,
+        event: &str,
+        t_s: f64,
+        reduced: Option<&reduced::State>,
+        full_ready: bool,
+    ) -> Result<()> {
+        let Some(reduced) = reduced else {
+            return Ok(());
+        };
+        if !full_ready || !self.in_window(t_s) {
+            return Ok(());
+        }
+        let rel_s = t_s - replay_start_t_s(replay).unwrap_or(0.0);
+        let count = reduced
+            .last_obs_count
+            .clamp(0, reduced.last_obs_types.len() as i32) as usize;
+        let mut pos_xy_count = 0usize;
+        let mut vel_xy_count = 0usize;
+        let mut zero_xy_count = 0usize;
+        for obs_idx in 0..count {
+            let ty = reduced.last_obs_types[obs_idx] as usize;
+            let label =
+                reduced_row_label(ty, &mut pos_xy_count, &mut vel_xy_count, &mut zero_xy_count);
+            self.write_row(
+                rel_s,
+                t_s,
+                "reduced",
+                event,
+                obs_idx,
+                label,
+                reduced.last_residuals[obs_idx],
+                reduced.last_effective_residuals[obs_idx],
+                reduced.last_innovation_vars[obs_idx],
+                scalar_nis(
+                    reduced.last_effective_residuals[obs_idx],
+                    reduced.last_innovation_vars[obs_idx],
+                ),
+                &reduced.last_h_by_obs[obs_idx],
+                &reduced.last_k_by_obs[obs_idx],
+                &reduced.last_dx_by_obs[obs_idx],
+                &reduced.p,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn record_full(
+        &mut self,
+        replay: &Replay,
+        event: &str,
+        t_s: f64,
+        full: &full::Filter,
+        ref_gnss: GenericGnssSample,
+    ) -> Result<()> {
+        if !self.in_window(t_s) || full.last_obs_types().is_empty() {
+            return Ok(());
+        }
+        let rel_s = t_s - replay_start_t_s(replay).unwrap_or(0.0);
+        let full_snap = FullSnapshot {
+            nominal: *full.nominal(),
+            p: *full.covariance(),
+            pos_ecef: full.shadow_pos_ecef(),
+            last_dx: *full.last_dx(),
+            last_obs_types: full.last_obs_types().to_vec(),
+        };
+        let p_as_reduced = transform_full_cov_to_reduced(&full_snap, ref_gnss);
+        for (obs_idx, ty) in full.last_obs_types().iter().copied().enumerate() {
+            let h_as_reduced =
+                transform_full_h_to_reduced(&full_snap, &full.last_h_by_obs()[obs_idx], ref_gnss);
+            let k_as_reduced =
+                transform_full_dx_to_reduced(&full_snap, &full.last_k_by_obs()[obs_idx], ref_gnss);
+            let dx_as_reduced =
+                transform_full_dx_to_reduced(&full_snap, &full.last_dx_by_obs()[obs_idx], ref_gnss);
+            let effective_residual = full.last_effective_residuals()[obs_idx];
+            let innovation_var = full.last_innovation_vars()[obs_idx];
+            self.write_row(
+                rel_s,
+                t_s,
+                "full",
+                event,
+                obs_idx,
+                full_obs_type_label(ty as usize),
+                full.last_residuals()[obs_idx],
+                effective_residual,
+                innovation_var,
+                scalar_nis(effective_residual, innovation_var),
+                &h_as_reduced,
+                &k_as_reduced,
+                &dx_as_reduced,
+                &p_as_reduced,
+            )?;
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn write_row(
+        &mut self,
+        rel_s: f64,
+        t_s: f64,
+        system: &str,
+        event: &str,
+        obs_idx: usize,
+        label: &str,
+        residual: f32,
+        effective_residual: f32,
+        innovation_var: f32,
+        nis: f32,
+        h: &[f32; 18],
+        k: &[f32; 18],
+        dx: &[f32; 18],
+        p: &[[f32; 18]; 18],
+    ) -> Result<()> {
+        let mut values = Vec::with_capacity(75);
+        values.extend(h.iter().map(|v| format!("{v:.9}")));
+        values.extend(k.iter().map(|v| format!("{v:.9}")));
+        values.extend([
+            format!("{:.9}", rad_f32_to_deg(dx[0])),
+            format!("{:.9}", rad_f32_to_deg(dx[1])),
+            format!("{:.9}", rad_f32_to_deg(dx[2])),
+            format!("{:.9}", dx[3]),
+            format!("{:.9}", dx[4]),
+            format!("{:.9}", dx[5]),
+            format!("{:.9}", dx[6]),
+            format!("{:.9}", dx[7]),
+            format!("{:.9}", dx[8]),
+            format!("{:.9}", rad_f32_to_dps(dx[9])),
+            format!("{:.9}", rad_f32_to_dps(dx[10])),
+            format!("{:.9}", rad_f32_to_dps(dx[11])),
+            format!("{:.9}", dx[12]),
+            format!("{:.9}", dx[13]),
+            format!("{:.9}", dx[14]),
+            format!("{:.9}", rad_f32_to_deg(dx[15])),
+            format!("{:.9}", rad_f32_to_deg(dx[16])),
+            format!("{:.9}", rad_f32_to_deg(dx[17])),
+            format!("{:.9}", block_trace(p, 0)),
+            format!("{:.9}", block_trace(p, 3)),
+            format!("{:.9}", block_trace(p, 6)),
+            format!("{:.9}", block_trace(p, 9)),
+            format!("{:.9}", block_trace(p, 12)),
+            format!("{:.9}", block_trace(p, 15)),
+            format!("{:.9}", block_fro(p, 0, 15)),
+            format!("{:.9}", block_fro(p, 3, 15)),
+            format!("{:.9}", block_fro(p, 6, 15)),
+            format!("{:.9}", block_fro(p, 9, 15)),
+            format!("{:.9}", block_fro(p, 12, 15)),
+            format!("{:.9}", corr_from_cov(p, 0, 15)),
+            format!("{:.9}", corr_from_cov(p, 1, 16)),
+            format!("{:.9}", corr_from_cov(p, 2, 17)),
+            format!("{:.9}", sigma_deg(p, 15)),
+            format!("{:.9}", sigma_deg(p, 16)),
+            format!("{:.9}", sigma_deg(p, 17)),
+            format!("{:.9}", sigma_deg(p, 0)),
+            format!("{:.9}", sigma_deg(p, 1)),
+            format!("{:.9}", sigma_deg(p, 2)),
+        ]);
+        writeln!(
+            self.writer,
+            "{rel_s:.6},{t_s:.6},{system},{event},{obs_idx},{label},\
+{residual:.9},{effective_residual:.9},{innovation_var:.9},{nis:.9},{}",
+            values.join(","),
+        )?;
+        Ok(())
+    }
+
+    fn in_window(&self, t_s: f64) -> bool {
+        self.window_abs
+            .is_none_or(|[start, end]| (start..=end).contains(&t_s))
+    }
+}
+
+fn record_reduced_pvm_change(
+    csv: &mut PvmAccountingCsv,
+    replay: &Replay,
+    event: &str,
+    t_s: f64,
+    before: &reduced::State,
+    after: &reduced::State,
+) -> Result<()> {
+    let before_pvm = pvm_block_from_common(&before.p);
+    let after_pvm = pvm_block_from_common(&after.p);
+    let mount_error_deg = reduced_mount_error_deg(replay, before);
+    let obs_count = after
+        .last_obs_count
+        .clamp(0, after.last_obs_types.len() as i32) as usize;
+    if obs_count == 0 {
+        return csv
+            .record_delta(
+                replay,
+                "reduced",
+                event,
+                t_s,
+                "propagation",
+                None,
+                "predict",
+                f32::NAN,
+                f32::NAN,
+                f32::NAN,
+                before_pvm,
+                matrix3_sub(after_pvm, before_pvm),
+                MountDirectionDiag::no_dx(mount_error_deg),
+            )
+            .map(|_| ());
+    }
+
+    let mut running = before_pvm;
+    let mut row_sum = [[0.0f64; 3]; 3];
+    let mut pos_xy_count = 0usize;
+    let mut vel_xy_count = 0usize;
+    let mut zero_xy_count = 0usize;
+    for obs_idx in 0..obs_count {
+        let ty = after.last_obs_types[obs_idx] as usize;
+        let innovation_var = after.last_innovation_vars[obs_idx];
+        if !innovation_var.is_finite() || innovation_var <= 0.0 {
+            continue;
+        }
+        let native_delta =
+            reduced_covariance_row_delta(&after.last_k_by_obs[obs_idx], innovation_var);
+        let delta = pvm_block_from_common(&native_delta);
+        row_sum = matrix3_add(row_sum, delta);
+        let label = reduced_row_label(ty, &mut pos_xy_count, &mut vel_xy_count, &mut zero_xy_count);
+        let phase = reduced_pvm_phase_for_obs(ty);
+        running = csv.record_delta(
+            replay,
+            "reduced",
+            event,
+            t_s,
+            phase,
+            Some(obs_idx),
+            label,
+            after.last_residuals[obs_idx],
+            after.last_effective_residuals[obs_idx],
+            innovation_var,
+            running,
+            delta,
+            MountDirectionDiag::with_dx(
+                mount_error_deg,
+                [
+                    rad_f32_to_deg(after.last_dx_by_obs[obs_idx][15]),
+                    rad_f32_to_deg(after.last_dx_by_obs[obs_idx][16]),
+                    rad_f32_to_deg(after.last_dx_by_obs[obs_idx][17]),
+                ],
+            ),
+        )?;
+    }
+    let remainder_delta = matrix3_sub(after_pvm, matrix3_add(before_pvm, row_sum));
+    csv.record_delta(
+        replay,
+        "reduced",
+        event,
+        t_s,
+        "remainder",
+        None,
+        "predict_reset",
+        f32::NAN,
+        f32::NAN,
+        f32::NAN,
+        running,
+        remainder_delta,
+        MountDirectionDiag::no_dx(mount_error_deg),
+    )
+    .map(|_| ())
+}
+
+fn record_reduced_mount_drive_adaptive(
+    replay: &Replay,
+    t_s: f64,
+    before: &reduced::State,
+    after: &reduced::State,
+    adaptive: &mut AdaptiveGnssVelocityScale,
+) {
+    let obs_count = after
+        .last_obs_count
+        .clamp(0, after.last_obs_types.len() as i32) as usize;
+    if obs_count == 0 {
+        return;
+    }
+    let mount_error_deg = reduced_mount_error_deg(replay, before);
+    let rel_s = t_s - replay_start_t_s(replay).unwrap_or(0.0);
+    for obs_idx in 0..obs_count {
+        let ty = after.last_obs_types[obs_idx] as usize;
+        let phase = reduced_pvm_phase_for_obs(ty);
+        if !matches!(phase, "gnss_velocity" | "nhc") {
+            continue;
+        }
+        let innovation_var = after.last_innovation_vars[obs_idx];
+        if !innovation_var.is_finite() || innovation_var <= 0.0 {
+            continue;
+        }
+        adaptive.record(
+            rel_s,
+            phase,
+            mount_error_deg,
+            [
+                rad_f32_to_deg(after.last_dx_by_obs[obs_idx][15]),
+                rad_f32_to_deg(after.last_dx_by_obs[obs_idx][16]),
+                rad_f32_to_deg(after.last_dx_by_obs[obs_idx][17]),
+            ],
+            f64::from(scalar_nis(
+                after.last_effective_residuals[obs_idx],
+                innovation_var,
+            )),
+            f64::from(after.last_effective_residuals[obs_idx]),
+        );
     }
 }
 
@@ -811,6 +1775,16 @@ fn main() -> Result<()> {
     {
         anyhow::bail!("--gnss-parity-window expects exactly two values: start,end");
     }
+    if let Some(window) = args.row_basis_window.as_ref()
+        && window.len() != 2
+    {
+        anyhow::bail!("--row-basis-window expects exactly two values: start,end");
+    }
+    if let Some(window) = args.pvm_accounting_window.as_ref()
+        && window.len() != 2
+    {
+        anyhow::bail!("--pvm-accounting-window expects exactly two values: start,end");
+    }
     let mut replay = load_replay_from_args(&args)?;
     sort_replay(&mut replay);
     let Some(t0) = replay_start_t_s(&replay) else {
@@ -833,12 +1807,34 @@ fn main() -> Result<()> {
         .as_ref()
         .or(args.summary_window.as_ref())
         .map(|w| [t0 + w[0], t0 + w[1]]);
+    let row_basis_window_abs = args
+        .row_basis_window
+        .as_ref()
+        .or(args.summary_window.as_ref())
+        .map(|w| [t0 + w[0], t0 + w[1]]);
+    let pvm_accounting_window_abs = args
+        .pvm_accounting_window
+        .as_ref()
+        .or(args.summary_window.as_ref())
+        .map(|w| [t0 + w[0], t0 + w[1]]);
     let mut allocation_csv = match &args.allocation_csv {
         Some(path) => Some(AllocationCsv::create(path, allocation_window_abs)?),
         None => None,
     };
     let mut gnss_parity_csv = match &args.gnss_parity_csv {
         Some(path) => Some(GnssParityCsv::create(path, gnss_parity_window_abs)?),
+        None => None,
+    };
+    let mut row_basis_csv = match &args.row_basis_csv {
+        Some(path) => Some(RowBasisCsv::create(path, row_basis_window_abs)?),
+        None => None,
+    };
+    let mut pvm_accounting_csv = match &args.pvm_accounting_csv {
+        Some(path) => Some(PvmAccountingCsv::create(
+            path,
+            pvm_accounting_window_abs,
+            args.mount_drive_window_s,
+        )?),
         None => None,
     };
     let snapshots = run_diagnostics(
@@ -848,7 +1844,12 @@ fn main() -> Result<()> {
         trace_window_abs,
         allocation_csv.as_mut(),
         gnss_parity_csv.as_mut(),
+        row_basis_csv.as_mut(),
+        pvm_accounting_csv.as_mut(),
     )?;
+    if let Some(csv) = pvm_accounting_csv.as_ref() {
+        csv.print_summary();
+    }
     print_snapshots(&snapshots, &replay);
     if let Some(window) = args.summary_window.as_ref() {
         print_interval_summary(&snapshots, &replay, [window[0], window[1]]);
@@ -986,6 +1987,8 @@ fn run_diagnostics(
     trace_window_abs: Option<[f64; 2]>,
     mut allocation_csv: Option<&mut AllocationCsv>,
     mut gnss_parity_csv: Option<&mut GnssParityCsv>,
+    mut row_basis_csv: Option<&mut RowBasisCsv>,
+    mut pvm_accounting_csv: Option<&mut PvmAccountingCsv>,
 ) -> Result<Vec<Snapshot>> {
     let mut cfg = FilterCompareConfig {
         freeze_misalignment_states: args.freeze_misalignment_states,
@@ -1067,6 +2070,7 @@ fn run_diagnostics(
 
     let mut fusion = SensorFusion::new();
     apply_fusion_config(&mut fusion, cfg);
+    fusion.analysis_set_gnss_velocity_mount_gain_scale(args.gnss_vel_mount_gain_scale);
     if let Some(seed_q_bv) = reference_mount_seed_q_bv(replay, args.misalignment) {
         fusion.set_misalignment(seed_q_bv);
     }
@@ -1075,6 +2079,7 @@ fn run_diagnostics(
     apply_fusion_config(&mut align_fusion, cfg);
 
     let mut full = full::Filter::new(cfg.noise.full.unwrap_or_else(ProcessNoise::lsm6dso_104hz));
+    full.analysis_set_gnss_velocity_mount_gain_scale(args.gnss_vel_mount_gain_scale);
     let mut full_ready = false;
     let mut last_imu: Option<GenericImuSample> = None;
     let mut latest_gnss: Option<GenericGnssSample> = None;
@@ -1096,6 +2101,12 @@ fn run_diagnostics(
     let mut full_effective_residual_abs_sum_by_type = [0.0f32; 9];
     let mut full_nis_sum_by_type = [0.0f32; 9];
     let mut full_nis_max_by_type = [0.0f32; 9];
+    let mut reduced_adaptive_gnss = AdaptiveGnssVelocityScale::new(
+        args.adaptive_gnss_velocity_r,
+        args.mount_drive_window_s,
+        args.adaptive_gnss_velocity_std_scale,
+    );
+    let mut full_adaptive_gnss = reduced_adaptive_gnss.clone();
     let mut trace_state = TraceState::default();
     let mut latest_transition: Option<TransitionSnapshot> = None;
     let mut reduced_attitude_covariance_override_applied = false;
@@ -1105,7 +2116,30 @@ fn run_diagnostics(
 
     for_each_event(&replay.imu, &replay.gnss, |event| match event {
         ReplayEvent::Imu(_, sample) => {
+            let reduced_before_predict = (pvm_accounting_csv.is_some()
+                || reduced_adaptive_gnss.enabled)
+                .then(|| fusion.reduced().cloned())
+                .flatten();
             let _ = fusion.process_imu(fusion_imu_sample(*sample));
+            if let (Some(csv), Some(before), Some(after)) = (
+                pvm_accounting_csv.as_deref_mut(),
+                reduced_before_predict.as_ref(),
+                fusion.reduced(),
+            ) && full_ready
+            {
+                let _ = record_reduced_pvm_change(csv, replay, "imu", sample.t_s, before, after);
+            }
+            if let (Some(before), Some(after)) = (reduced_before_predict.as_ref(), fusion.reduced())
+                && full_ready
+            {
+                record_reduced_mount_drive_adaptive(
+                    replay,
+                    sample.t_s,
+                    before,
+                    after,
+                    &mut reduced_adaptive_gnss,
+                );
+            }
             let _ = align_fusion.process_imu(fusion_imu_sample(*sample));
             let Some(prev) = last_imu.replace(*sample) else {
                 capture_due_snapshots(
@@ -1146,7 +2180,49 @@ fn run_diagnostics(
                         sample.accel_mps2,
                         dt,
                     );
+                    let pvm_before_predict = pvm_accounting_csv.as_ref().map(|_| FullSnapshot {
+                        nominal: *full.nominal(),
+                        p: *full.covariance(),
+                        pos_ecef: full.shadow_pos_ecef(),
+                        last_dx: *full.last_dx(),
+                        last_obs_types: full.last_obs_types().to_vec(),
+                    });
                     full.predict(imu);
+                    if let (Some(csv), Some(before_snap)) =
+                        (pvm_accounting_csv.as_deref_mut(), pvm_before_predict)
+                    {
+                        let after_snap = FullSnapshot {
+                            nominal: *full.nominal(),
+                            p: *full.covariance(),
+                            pos_ecef: full.shadow_pos_ecef(),
+                            last_dx: *full.last_dx(),
+                            last_obs_types: full.last_obs_types().to_vec(),
+                        };
+                        let before = pvm_block_from_common(&transform_full_cov_to_reduced(
+                            &before_snap,
+                            ref_gnss,
+                        ));
+                        let after = pvm_block_from_common(&transform_full_cov_to_reduced(
+                            &after_snap,
+                            ref_gnss,
+                        ));
+                        let delta = matrix3_sub(after, before);
+                        let _ = csv.record_delta(
+                            replay,
+                            "full",
+                            "imu",
+                            sample.t_s,
+                            "propagation",
+                            None,
+                            "predict",
+                            f32::NAN,
+                            f32::NAN,
+                            f32::NAN,
+                            before,
+                            delta,
+                            MountDirectionDiag::no_dx(full_mount_error_deg(replay, &before_snap)),
+                        );
+                    }
                     while full_gnss_cursor < replay.gnss.len()
                         && replay.gnss[full_gnss_cursor].t_s <= sample.t_s + 1.0e-9
                     {
@@ -1170,7 +2246,16 @@ fn run_diagnostics(
                         gps_pos_std = ((gnss.pos_std_m[0] + gnss.pos_std_m[1] + gnss.pos_std_m[2])
                             / 3.0)
                             .max(0.1) as f32;
-                        gps_vel_std = Some(gnss.vel_std_mps.map(|v| v.max(0.01) as f32));
+                        let vel_scale = if args.full_gnss_vel_std_scale.is_finite()
+                            && args.full_gnss_vel_std_scale > 0.0
+                        {
+                            args.full_gnss_vel_std_scale
+                        } else {
+                            1.0
+                        } * full_adaptive_gnss.current_scale();
+                        gps_vel_std =
+                            Some(gnss.vel_std_mps.map(|v| v.max(0.01) as f32 * vel_scale));
+                        full_adaptive_gnss.mark_gnss_used();
                         dt_since_gnss = if last_gnss_used_t_s.is_finite() {
                             (gnss.t_s - last_gnss_used_t_s).clamp(1.0e-3, 1.0) as f32
                         } else {
@@ -1200,6 +2285,15 @@ fn run_diagnostics(
                             Some(dt.max(1.0e-3) as f32),
                         )
                     };
+                    let pvm_before_batch = (pvm_accounting_csv.is_some()
+                        || full_adaptive_gnss.enabled)
+                        .then(|| FullSnapshot {
+                            nominal: *full.nominal(),
+                            p: *full.covariance(),
+                            pos_ecef: full.shadow_pos_ecef(),
+                            last_dx: *full.last_dx(),
+                            last_obs_types: full.last_obs_types().to_vec(),
+                        });
                     full.fuse_reference_batch_full_with_nhc_speed_and_r(
                         gps_pos,
                         gps_vel,
@@ -1214,6 +2308,117 @@ fn run_diagnostics(
                         full_nhc_dt.unwrap_or(dt.max(1.0e-3) as f32),
                     );
                     if !full.last_obs_types().is_empty() {
+                        if let Some(before_snap) = pvm_before_batch.as_ref() {
+                            for (obs_idx, ty) in full.last_obs_types().iter().copied().enumerate() {
+                                let phase = full_pvm_phase_for_obs(ty as usize);
+                                if !matches!(phase, "gnss_velocity" | "nhc") {
+                                    continue;
+                                }
+                                let innovation_var = full.last_innovation_vars()[obs_idx];
+                                if !innovation_var.is_finite() || innovation_var <= 0.0 {
+                                    continue;
+                                }
+                                full_adaptive_gnss.record(
+                                    sample.t_s - replay_start_t_s(replay).unwrap_or(0.0),
+                                    phase,
+                                    full_mount_error_deg(replay, before_snap),
+                                    [
+                                        rad_f32_to_deg(full.last_dx_by_obs()[obs_idx][21]),
+                                        rad_f32_to_deg(full.last_dx_by_obs()[obs_idx][22]),
+                                        rad_f32_to_deg(full.last_dx_by_obs()[obs_idx][23]),
+                                    ],
+                                    f64::from(scalar_nis(
+                                        full.last_effective_residuals()[obs_idx],
+                                        innovation_var,
+                                    )),
+                                    f64::from(full.last_effective_residuals()[obs_idx]),
+                                );
+                            }
+                        }
+                        if let (Some(csv), Some(before_snap)) =
+                            (pvm_accounting_csv.as_deref_mut(), pvm_before_batch.as_ref())
+                        {
+                            let after_snap = FullSnapshot {
+                                nominal: *full.nominal(),
+                                p: *full.covariance(),
+                                pos_ecef: full.shadow_pos_ecef(),
+                                last_dx: *full.last_dx(),
+                                last_obs_types: full.last_obs_types().to_vec(),
+                            };
+                            let before_common =
+                                transform_full_cov_to_reduced(before_snap, ref_gnss);
+                            let after_common = transform_full_cov_to_reduced(&after_snap, ref_gnss);
+                            let mut running = pvm_block_from_common(&before_common);
+                            let mut row_sum = [[0.0f64; 3]; 3];
+                            for (obs_idx, ty) in full.last_obs_types().iter().copied().enumerate() {
+                                let innovation_var = full.last_innovation_vars()[obs_idx];
+                                if !innovation_var.is_finite() || innovation_var <= 0.0 {
+                                    continue;
+                                }
+                                let native_delta = full_covariance_row_delta(
+                                    &full.last_k_by_obs()[obs_idx],
+                                    innovation_var,
+                                );
+                                let delta_snap = FullSnapshot {
+                                    nominal: before_snap.nominal,
+                                    p: native_delta,
+                                    pos_ecef: before_snap.pos_ecef,
+                                    last_dx: [0.0; ERROR_STATES],
+                                    last_obs_types: Vec::new(),
+                                };
+                                let delta_common = pvm_block_from_common(
+                                    &transform_full_cov_to_reduced(&delta_snap, ref_gnss),
+                                );
+                                row_sum = matrix3_add(row_sum, delta_common);
+                                let phase = full_pvm_phase_for_obs(ty as usize);
+                                if let Ok(next_running) = csv.record_delta(
+                                    replay,
+                                    "full",
+                                    "imu",
+                                    sample.t_s,
+                                    phase,
+                                    Some(obs_idx),
+                                    full_obs_type_label(ty as usize),
+                                    full.last_residuals()[obs_idx],
+                                    full.last_effective_residuals()[obs_idx],
+                                    innovation_var,
+                                    running,
+                                    delta_common,
+                                    MountDirectionDiag::with_dx(
+                                        full_mount_error_deg(replay, &before_snap),
+                                        [
+                                            rad_f32_to_deg(full.last_dx_by_obs()[obs_idx][21]),
+                                            rad_f32_to_deg(full.last_dx_by_obs()[obs_idx][22]),
+                                            rad_f32_to_deg(full.last_dx_by_obs()[obs_idx][23]),
+                                        ],
+                                    ),
+                                ) {
+                                    running = next_running;
+                                }
+                            }
+                            let reset_delta = matrix3_sub(
+                                pvm_block_from_common(&after_common),
+                                matrix3_add(pvm_block_from_common(&before_common), row_sum),
+                            );
+                            let _ = csv.record_delta(
+                                replay,
+                                "full",
+                                "imu",
+                                sample.t_s,
+                                "reset",
+                                None,
+                                "reset",
+                                f32::NAN,
+                                f32::NAN,
+                                f32::NAN,
+                                running,
+                                reset_delta,
+                                MountDirectionDiag::no_dx(full_mount_error_deg(
+                                    replay,
+                                    &before_snap,
+                                )),
+                            );
+                        }
                         let dx = full.last_dx();
                         let full_snap = FullSnapshot {
                             nominal: *full.nominal(),
@@ -1330,14 +2535,21 @@ fn run_diagnostics(
                     let _ = csv.record_full(replay, "imu", sample.t_s, &full, ref_gnss);
                 }
             }
+            if let Some(csv) = row_basis_csv.as_deref_mut() {
+                let _ = csv.record_reduced(replay, "imu", sample.t_s, fusion.reduced(), full_ready);
+                if full_ready {
+                    let _ = csv.record_full(replay, "imu", sample.t_s, &full, ref_gnss);
+                }
+            }
         }
         ReplayEvent::Gnss(index, sample) => {
             let _ = fusion.process_gnss(scaled_fusion_gnss_sample(
                 *sample,
                 args.reduced_gnss_pos_std_scale,
                 args.reduced_gnss_pos_d_std_scale,
-                args.reduced_gnss_vel_std_scale,
+                args.reduced_gnss_vel_std_scale * f64::from(reduced_adaptive_gnss.current_scale()),
             ));
+            reduced_adaptive_gnss.mark_gnss_used();
             if !reduced_attitude_covariance_override_applied
                 && let Some(sigma_deg) = args
                     .reduced_attitude_roll_pitch_sigma_deg
@@ -1466,6 +2678,8 @@ fn run_diagnostics(
         final_t,
         &mut snapshots,
     );
+    reduced_adaptive_gnss.print_summary("reduced");
+    full_adaptive_gnss.print_summary("full");
     Ok(snapshots)
 }
 
@@ -2015,6 +3229,32 @@ fn reduced_gnss_row_label(
     }
 }
 
+fn reduced_row_label(
+    ty: usize,
+    pos_xy_count: &mut usize,
+    vel_xy_count: &mut usize,
+    zero_xy_count: &mut usize,
+) -> &'static str {
+    if let Some(label) = reduced_gnss_row_label(ty, pos_xy_count, vel_xy_count) {
+        return label;
+    }
+    match ty {
+        2 => {
+            let label = match *zero_xy_count {
+                0 => "zero_vel_n",
+                1 => "zero_vel_e",
+                _ => "zero_vel_xy_extra",
+            };
+            *zero_xy_count += 1;
+            label
+        }
+        4 => "nhc_y",
+        5 => "nhc_z",
+        10 => "zero_vel_d",
+        _ => "unknown",
+    }
+}
+
 fn scalar_nis(effective_residual: f32, innovation_var: f32) -> f32 {
     if innovation_var > 0.0 {
         effective_residual * effective_residual / innovation_var
@@ -2464,6 +3704,238 @@ fn sigma_deg(p: &[[f32; 18]; 18], idx: usize) -> f64 {
     (p[idx][idx].max(0.0).sqrt() as f64).to_degrees()
 }
 
+fn block_trace(p: &[[f32; 18]; 18], start: usize) -> f64 {
+    (0..3).map(|i| p[start + i][start + i] as f64).sum()
+}
+
+fn block_fro(p: &[[f32; 18]; 18], row_start: usize, col_start: usize) -> f64 {
+    let mut sum = 0.0;
+    for r in 0..3 {
+        for c in 0..3 {
+            let v = p[row_start + r][col_start + c] as f64;
+            sum += v * v;
+        }
+    }
+    sum.sqrt()
+}
+
+fn pvm_block_from_common(p: &[[f32; 18]; 18]) -> [[f64; 3]; 3] {
+    let mut out = [[0.0; 3]; 3];
+    for r in 0..3 {
+        for c in 0..3 {
+            out[r][c] = p[3 + r][15 + c] as f64;
+        }
+    }
+    out
+}
+
+fn reduced_mount_error_deg(replay: &Replay, state: &reduced::State) -> [f64; 3] {
+    mount_error_deg_from_q_bv(
+        replay,
+        [
+            state.nominal.q_bv0 as f64,
+            state.nominal.q_bv1 as f64,
+            state.nominal.q_bv2 as f64,
+            state.nominal.q_bv3 as f64,
+        ],
+    )
+}
+
+fn full_mount_error_deg(replay: &Replay, state: &FullSnapshot) -> [f64; 3] {
+    mount_error_deg_from_q_bv(
+        replay,
+        [
+            state.nominal.q_bv0 as f64,
+            state.nominal.q_bv1 as f64,
+            state.nominal.q_bv2 as f64,
+            state.nominal.q_bv3 as f64,
+        ],
+    )
+}
+
+fn mount_error_deg_from_q_bv(replay: &Replay, q_bv: [f64; 4]) -> [f64; 3] {
+    let Some(reference) = final_reference_mount_rpy(replay) else {
+        return [f64::NAN; 3];
+    };
+    let q_ref = reference_mount_rpy_to_q_bv(reference);
+    let q_correction = quat_mul(q_ref, quat_conj(q_bv));
+    let correction = quat_log_small_angle(q_correction);
+    [
+        -correction[0].to_degrees(),
+        -correction[1].to_degrees(),
+        -correction[2].to_degrees(),
+    ]
+}
+
+fn final_reference_mount_rpy(replay: &Replay) -> Option<[f64; 3]> {
+    replay
+        .reference_mount
+        .iter()
+        .rev()
+        .find(|sample| {
+            sample.roll_deg.is_finite()
+                && sample.pitch_deg.is_finite()
+                && sample.yaw_deg.is_finite()
+        })
+        .map(|sample| [sample.roll_deg, sample.pitch_deg, sample.yaw_deg])
+}
+
+fn quat_log_small_angle(q: [f64; 4]) -> [f64; 3] {
+    let norm = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
+    if norm <= 1.0e-12 {
+        return [0.0; 3];
+    }
+    let mut w = q[0] / norm;
+    let mut v = [q[1] / norm, q[2] / norm, q[3] / norm];
+    if w < 0.0 {
+        w = -w;
+        v = [-v[0], -v[1], -v[2]];
+    }
+    let v_norm = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if v_norm <= 1.0e-12 {
+        return [2.0 * v[0], 2.0 * v[1], 2.0 * v[2]];
+    }
+    let angle = 2.0 * v_norm.atan2(w);
+    [
+        angle * v[0] / v_norm,
+        angle * v[1] / v_norm,
+        angle * v[2] / v_norm,
+    ]
+}
+
+fn matrix3_add(a: [[f64; 3]; 3], b: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let mut out = [[0.0; 3]; 3];
+    for r in 0..3 {
+        for c in 0..3 {
+            out[r][c] = a[r][c] + b[r][c];
+        }
+    }
+    out
+}
+
+fn matrix3_sub(a: [[f64; 3]; 3], b: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let mut out = [[0.0; 3]; 3];
+    for r in 0..3 {
+        for c in 0..3 {
+            out[r][c] = a[r][c] - b[r][c];
+        }
+    }
+    out
+}
+
+fn matrix3_vec(a: [[f64; 3]; 3], x: [f64; 3]) -> [f64; 3] {
+    [
+        a[0][0] * x[0] + a[0][1] * x[1] + a[0][2] * x[2],
+        a[1][0] * x[0] + a[1][1] * x[1] + a[1][2] * x[2],
+        a[2][0] * x[0] + a[2][1] * x[1] + a[2][2] * x[2],
+    ]
+}
+
+fn matrix3_fro(a: [[f64; 3]; 3]) -> f64 {
+    let mut sum = 0.0;
+    for row in a {
+        for value in row {
+            sum += value * value;
+        }
+    }
+    sum.sqrt()
+}
+
+fn matrix3_abs_sum(a: [[f64; 3]; 3]) -> f64 {
+    let mut sum = 0.0;
+    for row in a {
+        for value in row {
+            sum += value.abs();
+        }
+    }
+    sum
+}
+
+fn vec3_add(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+fn vec3_norm(v: [f64; 3]) -> f64 {
+    (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+}
+
+fn mount_correction_score(error_deg: [f64; 3], dx_deg: [f64; 3]) -> (f64, f64) {
+    if !error_deg.iter().chain(dx_deg.iter()).all(|v| v.is_finite()) {
+        return (f64::NAN, f64::NAN);
+    }
+    let dot = error_deg[0] * dx_deg[0] + error_deg[1] * dx_deg[1] + error_deg[2] * dx_deg[2];
+    let err_norm =
+        (error_deg[0] * error_deg[0] + error_deg[1] * error_deg[1] + error_deg[2] * error_deg[2])
+            .sqrt();
+    let dx_norm = (dx_deg[0] * dx_deg[0] + dx_deg[1] * dx_deg[1] + dx_deg[2] * dx_deg[2]).sqrt();
+    let score = -dot;
+    let cos = if err_norm > 1.0e-12 && dx_norm > 1.0e-12 {
+        score / (err_norm * dx_norm)
+    } else {
+        f64::NAN
+    };
+    (score, cos)
+}
+
+fn print_matrix3(label: &str, a: [[f64; 3]; 3]) {
+    println!(
+        "{label}=[[{:.6e},{:.6e},{:.6e}],[{:.6e},{:.6e},{:.6e}],[{:.6e},{:.6e},{:.6e}]]",
+        a[0][0], a[0][1], a[0][2], a[1][0], a[1][1], a[1][2], a[2][0], a[2][1], a[2][2],
+    );
+}
+
+fn pvm_phase_idx(phase: &str) -> Option<usize> {
+    PVM_PHASES.iter().position(|candidate| *candidate == phase)
+}
+
+fn full_pvm_phase_for_obs(obs_type: usize) -> &'static str {
+    match obs_type {
+        1..=3 => "gnss_position",
+        4..=6 => "gnss_velocity",
+        7 | 8 => "nhc",
+        _ => "reset",
+    }
+}
+
+fn reduced_pvm_phase_for_obs(obs_type: usize) -> &'static str {
+    match obs_type {
+        0 | 8 => "gnss_position",
+        1 | 9 => "gnss_velocity",
+        4 | 5 => "nhc",
+        2 | 10 => "zero_velocity",
+        _ => "reset",
+    }
+}
+
+fn full_covariance_row_delta(
+    k: &[f32; ERROR_STATES],
+    innovation_var: f32,
+) -> [[f32; ERROR_STATES]; ERROR_STATES] {
+    let mut out = [[0.0; ERROR_STATES]; ERROR_STATES];
+    if !innovation_var.is_finite() || innovation_var <= 0.0 {
+        return out;
+    }
+    for i in 0..ERROR_STATES {
+        for j in 0..ERROR_STATES {
+            out[i][j] = -innovation_var * k[i] * k[j];
+        }
+    }
+    out
+}
+
+fn reduced_covariance_row_delta(k: &[f32; 18], innovation_var: f32) -> [[f32; 18]; 18] {
+    let mut out = [[0.0; 18]; 18];
+    if !innovation_var.is_finite() || innovation_var <= 0.0 {
+        return out;
+    }
+    for i in 0..18 {
+        for j in 0..18 {
+            out[i][j] = -innovation_var * k[i] * k[j];
+        }
+    }
+    out
+}
+
 fn block_rms_abs_diff(
     a: &[[f32; 18]; 18],
     b: &[[f32; 18]; 18],
@@ -2611,6 +4083,54 @@ fn transform_full_dx_to_reduced(
     out
 }
 
+fn transform_full_h_to_reduced(
+    full: &FullSnapshot,
+    h: &[f32; ERROR_STATES],
+    ref_gnss: GenericGnssSample,
+) -> [f32; 18] {
+    let q_ev = as_q64([
+        full.nominal.q0,
+        full.nominal.q1,
+        full.nominal.q2,
+        full.nominal.q3,
+    ]);
+    let c_ev = quat_to_rot(q_ev);
+    let pos_ned = ecef_to_ned(
+        full.pos_ecef,
+        lla_to_ecef(ref_gnss.lat_deg, ref_gnss.lon_deg, ref_gnss.height_m),
+        ref_gnss.lat_deg,
+        ref_gnss.lon_deg,
+    );
+    let (lat, lon, _) = sim::visualizer::math::ned_to_lla_exact(
+        pos_ned[0],
+        pos_ned[1],
+        pos_ned[2],
+        ref_gnss.lat_deg,
+        ref_gnss.lon_deg,
+        ref_gnss.height_m,
+    );
+    let c_ne = ecef_to_ned_matrix(lat, lon);
+
+    let mut out = [0.0f32; 18];
+    for reduced_i in 0..3 {
+        for full_i in 0..3 {
+            out[reduced_i] += h[6 + full_i] * c_ev[full_i][reduced_i] as f32;
+        }
+    }
+    for r in 0..3 {
+        for c in 0..3 {
+            out[3 + r] += h[3 + c] * c_ne[r][c] as f32;
+            out[6 + r] += h[c] * c_ne[r][c] as f32;
+        }
+    }
+    for i in 0..3 {
+        out[9 + i] = -h[12 + i];
+        out[12 + i] = -h[9 + i];
+        out[15 + i] = h[21 + i];
+    }
+    out
+}
+
 fn transition_snapshot(
     fusion: &SensorFusion,
     full: &full::Filter,
@@ -2746,37 +4266,115 @@ fn print_common_gnss_gain_summary(
     let Some((gnss, dt_since_gnss)) = nearest_gnss_with_period(&replay.gnss, snapshot.t_s) else {
         return;
     };
+    let reduced_vel = snapshot.reduced.map(|state| {
+        [
+            state.nominal.vn as f64,
+            state.nominal.ve as f64,
+            state.nominal.vd as f64,
+        ]
+    });
+    let full_vel = snapshot.full.as_ref().map(|full| {
+        let pos_ned = ecef_to_ned(
+            full.pos_ecef,
+            lla_to_ecef(gnss.lat_deg, gnss.lon_deg, gnss.height_m),
+            gnss.lat_deg,
+            gnss.lon_deg,
+        );
+        let (lat, lon, _) = sim::visualizer::math::ned_to_lla_exact(
+            pos_ned[0],
+            pos_ned[1],
+            pos_ned[2],
+            gnss.lat_deg,
+            gnss.lon_deg,
+            gnss.height_m,
+        );
+        let c_ne = ecef_to_ned_matrix(lat, lon);
+        mat_vec3_f64(
+            c_ne,
+            [
+                full.nominal.vn as f64,
+                full.nominal.ve as f64,
+                full.nominal.vd as f64,
+            ],
+        )
+    });
     let pos_r_scale = 1.0 / (dt_since_gnss as f32).clamp(1.0e-3, 1.0);
     let rows = [
         (
             "pos_n",
             6usize,
             gnss.pos_std_m[0] as f32 * gnss.pos_std_m[0] as f32 * pos_r_scale,
+            None,
         ),
         (
             "pos_e",
             7usize,
             gnss.pos_std_m[1] as f32 * gnss.pos_std_m[1] as f32 * pos_r_scale,
+            None,
         ),
         (
             "vel_n",
             3usize,
             gnss.vel_std_mps[0] as f32 * gnss.vel_std_mps[0] as f32,
+            Some(0usize),
         ),
         (
             "vel_e",
             4usize,
             gnss.vel_std_mps[1] as f32 * gnss.vel_std_mps[1] as f32,
+            Some(1usize),
+        ),
+        (
+            "vel_d",
+            5usize,
+            gnss.vel_std_mps[2] as f32 * gnss.vel_std_mps[2] as f32,
+            Some(2usize),
         ),
     ];
-    for (label, state, r) in rows {
+    for (label, state, r, vel_axis) in rows {
         let reduced_gain = scalar_mount_gain(p_reduced, state, r);
         let full_gain = scalar_mount_gain(p_full, state, r);
+        let (reduced_residual, full_residual) = vel_axis
+            .and_then(|axis| {
+                Some((
+                    gnss.vel_ned_mps[axis] - reduced_vel?[axis],
+                    gnss.vel_ned_mps[axis] - full_vel?[axis],
+                ))
+            })
+            .unwrap_or((f64::NAN, f64::NAN));
+        let reduced_s = p_reduced[state][state] as f64 + r as f64;
+        let full_s = p_full[state][state] as f64 + r as f64;
+        let full_with_reduced_vel_mount_gain = if (3..=5).contains(&state) && full_s > 0.0 {
+            [
+                p_reduced[15][state] as f64 / full_s,
+                p_reduced[16][state] as f64 / full_s,
+                p_reduced[17][state] as f64 / full_s,
+            ]
+        } else {
+            full_gain
+        };
+        let full_with_reduced_s_gain = if (3..=5).contains(&state) && reduced_s > 0.0 {
+            [
+                p_full[15][state] as f64 / reduced_s,
+                p_full[16][state] as f64 / reduced_s,
+                p_full[17][state] as f64 / reduced_s,
+            ]
+        } else {
+            full_gain
+        };
         println!(
-            "[covhist] common_gnss_mount_gain row={} dt_gnss={:.3} r={:.6e} reduced=[{:.6e},{:.6e},{:.6e}] full=[{:.6e},{:.6e},{:.6e}] norm_ratio={:.3}",
+            "[covhist] common_gnss_mount_gain row={} dt_gnss={:.3} r={:.6e} residual_reduced={:.6e} residual_full={:.6e} s_reduced={:.6e} s_full={:.6e} mount_yaw_dx_deg_reduced={:.6e} mount_yaw_dx_deg_full={:.6e} full_dx_with_reduced_vel_mount={:.6e} full_dx_with_reduced_s={:.6e} reduced=[{:.6e},{:.6e},{:.6e}] full=[{:.6e},{:.6e},{:.6e}] norm_ratio={:.3}",
             label,
             dt_since_gnss,
             r,
+            reduced_residual,
+            full_residual,
+            reduced_s,
+            full_s,
+            (reduced_gain[2] * reduced_residual).to_degrees(),
+            (full_gain[2] * full_residual).to_degrees(),
+            (full_with_reduced_vel_mount_gain[2] * full_residual).to_degrees(),
+            (full_with_reduced_s_gain[2] * full_residual).to_degrees(),
             reduced_gain[0],
             reduced_gain[1],
             reduced_gain[2],
@@ -2820,6 +4418,14 @@ fn scalar_mount_gain(p: &[[f32; 18]; 18], state: usize, r: f32) -> [f64; 3] {
 
 fn norm3(v: [f64; 3]) -> f64 {
     (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+}
+
+fn mat_vec3_f64(m: [[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
+    [
+        m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+        m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+        m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2],
+    ]
 }
 
 fn mat3_rms_abs_diff(a: &[[f32; 3]; 3], b: &[[f32; 3]; 3]) -> f64 {

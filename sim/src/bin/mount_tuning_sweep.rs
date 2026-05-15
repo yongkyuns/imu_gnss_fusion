@@ -33,7 +33,7 @@ struct Args {
     #[arg(long, default_value = "reduced,full")]
     filters: String,
     /// Comma-separated Reduced and Full mount roll/pitch initial sigmas, in degrees.
-    #[arg(long, default_value = "1.2")]
+    #[arg(long, default_value = "1.7")]
     mount_roll_pitch_init_sigma_deg: String,
     /// Optional comma-separated mount roll initial sigmas, in degrees.
     #[arg(long)]

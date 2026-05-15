@@ -167,6 +167,30 @@ impl App {
                                                 WebSyntheticScenario::StraightAccelBrake
                                                     .display_label(),
                                             );
+                                            ui.selectable_value(
+                                                &mut self.web_scenario,
+                                                WebSyntheticScenario::ObservabilityStraight,
+                                                WebSyntheticScenario::ObservabilityStraight
+                                                    .display_label(),
+                                            );
+                                            ui.selectable_value(
+                                                &mut self.web_scenario,
+                                                WebSyntheticScenario::ObservabilityAccelBrake,
+                                                WebSyntheticScenario::ObservabilityAccelBrake
+                                                    .display_label(),
+                                            );
+                                            ui.selectable_value(
+                                                &mut self.web_scenario,
+                                                WebSyntheticScenario::ObservabilityTurns,
+                                                WebSyntheticScenario::ObservabilityTurns
+                                                    .display_label(),
+                                            );
+                                            ui.selectable_value(
+                                                &mut self.web_scenario,
+                                                WebSyntheticScenario::ObservabilityTurnsAccel,
+                                                WebSyntheticScenario::ObservabilityTurnsAccel
+                                                    .display_label(),
+                                            );
                                         });
                                     let noise_label = ui.add(
                                         egui::Label::new(egui::RichText::new("Noise:").underline())

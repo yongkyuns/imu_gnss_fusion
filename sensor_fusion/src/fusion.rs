@@ -78,6 +78,7 @@ pub struct SensorFusion {
     last_reduced_nhc_t_s: Option<f32>,
     last_full_nhc_t_s: Option<f32>,
     bootstrap_prev_reduced_gnss: Option<crate::reduced::GnssSample>,
+    gnss_velocity_mount_gain_scale: f32,
     anchor: Anchor,
     interval_imu_sum_gyro: [f32; 3],
     interval_imu_sum_accel: [f32; 3],
@@ -150,6 +151,7 @@ impl SensorFusion {
             last_reduced_nhc_t_s: None,
             last_full_nhc_t_s: None,
             bootstrap_prev_reduced_gnss: None,
+            gnss_velocity_mount_gain_scale: 1.0,
             anchor: Anchor::default(),
             interval_imu_sum_gyro: [0.0; 3],
             interval_imu_sum_accel: [0.0; 3],
@@ -206,12 +208,16 @@ impl SensorFusion {
     pub fn set_reduced_noise(&mut self, noise: ProcessNoise) {
         self.cfg.noise.reduced = noise;
         self.reduced.raw_mut().noise = noise;
+        self.reduced
+            .analysis_set_gnss_velocity_mount_gain_scale(self.gnss_velocity_mount_gain_scale);
     }
 
     /// Replaces the Full prediction-noise configuration.
     pub fn set_full_noise(&mut self, noise: ProcessNoise) {
         self.cfg.noise.full = noise;
         self.full = full::Filter::new(noise);
+        self.full
+            .analysis_set_gnss_velocity_mount_gain_scale(self.gnss_velocity_mount_gain_scale);
         self.full.set_freeze_mount_states(self.manual_mount_mode());
         if let Some(q_bv) = self.mount_q_bv {
             self.full.set_mount_quat(q_bv);
@@ -776,6 +782,20 @@ impl SensorFusion {
         raw.p[1][1] = var;
     }
 
+    /// Diagnostic hook that scales direct mount correction from GNSS velocity rows.
+    ///
+    /// `1.0` is the normal filter behavior. Values below one are intended for
+    /// offline residual-allocation experiments.
+    pub fn analysis_set_gnss_velocity_mount_gain_scale(&mut self, scale: f32) {
+        if !scale.is_finite() || scale < 0.0 {
+            return;
+        }
+        self.gnss_velocity_mount_gain_scale = scale;
+        self.reduced
+            .analysis_set_gnss_velocity_mount_gain_scale(scale);
+        self.full.analysis_set_gnss_velocity_mount_gain_scale(scale);
+    }
+
     fn effective_freeze_misalignment_states(&self) -> bool {
         self.cfg.freeze_misalignment_states || self.manual_mount_mode()
     }
@@ -802,6 +822,8 @@ impl SensorFusion {
 
     fn initialize_reduced_from_gnss(&mut self, gnss: crate::reduced::GnssSample) {
         self.reduced = crate::reduced::Filter::new(self.cfg.noise.reduced);
+        self.reduced
+            .analysis_set_gnss_velocity_mount_gain_scale(self.gnss_velocity_mount_gain_scale);
         if self.anchor.valid {
             self.reduced.set_gravity_mss(self.anchor.gravity_mss);
         }
@@ -858,6 +880,8 @@ impl SensorFusion {
         let pos_ecef = lla_to_ecef_f64(gnss.lat_deg, gnss.lon_deg, gnss.height_m);
         let vel_ecef = ned_vector_to_ecef_f32(gnss.lat_deg, gnss.lon_deg, gnss.vel_ned_mps);
         self.full = full::Filter::new(self.cfg.noise.full);
+        self.full
+            .analysis_set_gnss_velocity_mount_gain_scale(self.gnss_velocity_mount_gain_scale);
         self.full.init_vehicle_from_nav_ecef_state(
             yaw_rad,
             gnss.lat_deg,

@@ -49,7 +49,7 @@
       "sha256": "88b31137e3d1af44899fbd35ff8611b8e924f157ec78c0f61d88923ed52add73"
     },
     "reference_attitude": {
-      "bytes": 1188390,
+      "bytes": 1188545,
       "columns": [
         "t_s",
         "roll_deg",
@@ -57,15 +57,15 @@
         "yaw_deg"
       ],
       "encoding": "gzip",
-      "first_t_s": 0.042,
-      "last_t_s": 2608.065,
+      "first_t_s": 0.0,
+      "last_t_s": 2608.023,
       "media_type": "text/csv",
       "path": "reference_attitude.csv.gz",
       "rows": 79032,
-      "sha256": "3c598784aa8ab2a50b8a3ab0798b0a61184c302188221e25c217966859cc15fa"
+      "sha256": "e06526c463fdce8e88b24294e1d35848ca79bfbf5502837361d8de3b8e0a0703"
     },
     "reference_motion": {
-      "bytes": 1784221,
+      "bytes": 1784241,
       "columns": [
         "t_s",
         "wx_radps",
@@ -76,15 +76,15 @@
         "az_mps2"
       ],
       "encoding": "gzip",
-      "first_t_s": 0.042,
-      "last_t_s": 2608.065,
+      "first_t_s": 0.0,
+      "last_t_s": 2608.023,
       "media_type": "text/csv",
       "path": "reference_motion.csv.gz",
       "rows": 79032,
-      "sha256": "eb0f271215595cc89c3c58823386f001c22ffca2890a4e898a55221c31e97145"
+      "sha256": "addaef5be20b18ad8a14c722a3eedbbbceaf2705f618ecb642b341de224beb70"
     },
     "reference_mount": {
-      "bytes": 11117,
+      "bytes": 14397,
       "columns": [
         "t_s",
         "roll_deg",
@@ -92,12 +92,12 @@
         "yaw_deg"
       ],
       "encoding": "gzip",
-      "first_t_s": 0.0,
-      "last_t_s": 2607.5,
+      "first_t_s": -0.042,
+      "last_t_s": 2607.458,
       "media_type": "text/csv",
       "path": "reference_mount.csv.gz",
       "rows": 5216,
-      "sha256": "042111870860410e3026b2166c2feb845b2f4512c1febe4eee208a3a342a5410"
+      "sha256": "d07d3b45ed2e6e4de33e50b9a5072cc9cfb522ceb569502fdc59b636c400d723"
     },
     "reference_position": {
       "bytes": 2102825,
@@ -134,7 +134,7 @@
     "format": "generic"
   },
   "time_span_s": {
-    "end": 2608.065,
+    "end": 2608.023,
     "start": -0.06650719273090362
   },
   "title": "Mixed-road long drive, large mount offset 002"

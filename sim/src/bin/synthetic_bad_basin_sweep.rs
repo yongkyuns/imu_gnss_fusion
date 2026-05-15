@@ -68,7 +68,7 @@ struct Args {
     early_fault_end_s: f64,
     #[arg(long, default_value_t = 0.5)]
     r_body_vel: f32,
-    #[arg(long, default_value_t = 0.05)]
+    #[arg(long, default_value_t = 0.5)]
     r_body_vel_z: f32,
     #[arg(long, default_value_t = 2.0)]
     yaw_init_sigma_deg: f32,

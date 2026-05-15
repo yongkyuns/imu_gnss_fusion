@@ -43,6 +43,8 @@ final class SensorStore: NSObject, ObservableObject {
     @Published var verticalAccuracyM: Double?
     @Published var locationTimestamp: Date?
     @Published var motion: MotionSample = .init()
+    @Published var gnssRouteHistory: [TimedVec3Sample] = []
+    @Published var fusedRouteHistory: [TimedVec3Sample] = []
     @Published var nedPositionHistory: [TimedVec3Sample] = []
     @Published var nedVelocityHistory: [TimedVec3Sample] = []
     @Published var imuAccelHistory: [TimedVec3Sample] = []
@@ -70,6 +72,7 @@ final class SensorStore: NSObject, ObservableObject {
     @Published var recordedSessions: [RawSessionSummary] = []
     @Published var activeSessionName: String?
     @Published var replayProgress: Double = 0.0
+    @Published var streamHealth: StreamHealth = .starting
 #if DEBUG
     @Published var iosAttitudeEulerDeg: TimedVec3Sample?
 #endif
@@ -80,8 +83,11 @@ final class SensorStore: NSObject, ObservableObject {
     private let fusionEngine = FusionEngine()
     private let rawSessionStore = RawSessionFileStore()
     private let rawLogLock = NSLock()
+    private let streamGenerationLock = NSLock()
     private let motionQueue = OperationQueue()
+    private let fusionQueue = OperationQueue()
     private let barometerQueue = OperationQueue()
+    private let recordingQueue = OperationQueue()
     private var nedReference: CLLocation?
     private var lastBarometerSample: (hM: Double, tS: TimeInterval)?
     private var filteredVerticalUpMps: Double?
@@ -89,13 +95,32 @@ final class SensorStore: NSObject, ObservableObject {
     private var lastMotionPublishTS: TimeInterval?
     private var lastBaroPublishTS: TimeInterval?
     private var lastFusionUiPublishTS: TimeInterval?
+    private var lastFusionSampleDate: Date?
+    private var lastFusionImuSampleDate: Date?
+    private var lastStreamHealthPublishTS: TimeInterval?
+    private var lastImuUiSampleDate: Date?
+    private var lastMotionErrorMessage: String?
+    private var lastLocationErrorMessage: String?
+    private var lastRecordingErrorMessage: String?
     private var activeRawLog: RawSessionLog?
+    private var activeRawEvents: [RawSensorEventEnvelope] = []
+    private var pendingRecordedSessions: [RawSessionSummary] = []
     private var playbackTask: Task<Void, Never>?
+    private var streamHealthTask: Task<Void, Never>?
     private var lastRecordingCheckpointEventCount = 0
-    private let motionPublishMinDtSec = 1.0 / 20.0
+    private var lastRecordingCheckpointUptimeSec: TimeInterval = 0.0
+    private var streamGeneration = 0
+    private let motionPublishMinDtSec = 1.0 / 10.0
     private let baroPublishMinDtSec = 1.0 / 10.0
     private let fusionUiPublishMinDtSec = 1.0 / 10.0
-    private let recordingCheckpointEventInterval = 250
+    private let streamHealthPublishMinDtSec = 0.5
+    private let replayProgressPublishMinDtSec = 1.0 / 15.0
+    private let chartHistoryMaxCount = 240
+    private let routeHistoryMaxCount = 21_600
+    private let routeSampleMinDtSec = 1.0
+    private let recordingCheckpointEventInterval = 5_000
+    private let recordingCheckpointMinIntervalSec: TimeInterval = 30.0
+    private let maximumPendingLiveFusionOperations = 50
 
     override init() {
         super.init()
@@ -112,23 +137,35 @@ final class SensorStore: NSObject, ObservableObject {
         motionQueue.qualityOfService = .userInitiated
         motionQueue.maxConcurrentOperationCount = 1
 
+        fusionQueue.name = "imu_gnss_phone.fusion.queue"
+        fusionQueue.qualityOfService = .userInitiated
+        fusionQueue.maxConcurrentOperationCount = 1
+
         barometerQueue.name = "imu_gnss_phone.barometer.queue"
         barometerQueue.qualityOfService = .userInitiated
         barometerQueue.maxConcurrentOperationCount = 1
+
+        recordingQueue.name = "imu_gnss_phone.recording.queue"
+        recordingQueue.qualityOfService = .utility
+        recordingQueue.maxConcurrentOperationCount = 1
 
         loadRecordedSessions()
     }
 
     deinit {
         checkpointRecording()
+        streamHealthTask?.cancel()
     }
 
     func start() {
+        let generation = advanceStreamGeneration()
         playbackTask?.cancel()
         playbackTask = nil
+        fusionQueue.cancelAllOperations()
         streamMode = .live
         activeSessionName = nil
         replayProgress = 0.0
+        startStreamHealthMonitor(generation: generation)
         nedReference = nil
         lastBarometerSample = nil
         filteredVerticalUpMps = nil
@@ -136,6 +173,20 @@ final class SensorStore: NSObject, ObservableObject {
         lastMotionPublishTS = nil
         lastBaroPublishTS = nil
         lastFusionUiPublishTS = nil
+        lastStreamHealthPublishTS = nil
+        lastImuUiSampleDate = nil
+        lastMotionErrorMessage = nil
+        lastLocationErrorMessage = nil
+        lastRecordingErrorMessage = nil
+        streamHealth = .starting
+        lastStreamHealthPublishTS = nil
+        lastImuUiSampleDate = nil
+        lastMotionErrorMessage = nil
+        lastLocationErrorMessage = nil
+        lastRecordingErrorMessage = nil
+        streamHealth = .starting
+        gnssRouteHistory.removeAll(keepingCapacity: true)
+        fusedRouteHistory.removeAll(keepingCapacity: true)
         nedPositionHistory.removeAll(keepingCapacity: true)
         nedVelocityHistory.removeAll(keepingCapacity: true)
         imuAccelHistory.removeAll(keepingCapacity: true)
@@ -161,8 +212,9 @@ final class SensorStore: NSObject, ObservableObject {
 #if DEBUG
         iosAttitudeEulerDeg = nil
 #endif
-        motionQueue.addOperation { [weak self] in
-            self?.fusionEngine.resetReducedAuto()
+        fusionQueue.addOperation { [weak self] in
+            guard let self, self.isCurrentGeneration(generation) else { return }
+            self.resetFusionEngineState()
         }
 
         if authorization == .notDetermined {
@@ -177,8 +229,16 @@ final class SensorStore: NSObject, ObservableObject {
 
         if motionManager.isDeviceMotionAvailable {
             motionManager.deviceMotionUpdateInterval = 1.0 / 100.0
-            motionManager.startDeviceMotionUpdates(to: motionQueue) { [weak self] data, _ in
-                guard let self, let data else { return }
+            motionManager.startDeviceMotionUpdates(to: motionQueue) { [weak self] data, error in
+                guard let self, self.isCurrentGeneration(generation) else { return }
+                if let error {
+                    self.publishStreamError(channel: .motion, error: error)
+                    return
+                }
+                guard let data else {
+                    self.publishStreamError(channel: .motion, message: "Device motion sample was unavailable.")
+                    return
+                }
                 let timestampSec = data.timestamp
                 let sampleDate = self.dateFromMotionTimestamp(timestampSec)
                 let accel = self.bodySpecificForceMps2(from: data)
@@ -213,21 +273,24 @@ final class SensorStore: NSObject, ObservableObject {
                     attitudeYawRad: attitudeYawRad
                 )
 
-                self.runEkfPredict(
-                    sampleDate: sampleDate,
-                    ax: ax,
-                    ay: ay,
-                    az: az,
-                    gx: gx,
-                    gy: gy,
-                    gz: gz
-                )
+                self.enqueueFusion(generation: generation, dropsWhenBacklogged: true) { store in
+                    store.runEkfPredict(
+                        sampleDate: sampleDate,
+                        ax: ax,
+                        ay: ay,
+                        az: az,
+                        gx: gx,
+                        gy: gy,
+                        gz: gz
+                    )
+                }
 
                 if let last = self.lastMotionPublishTS, (data.timestamp - last) < self.motionPublishMinDtSec {
                     return
                 }
                 self.lastMotionPublishTS = data.timestamp
                 Task { @MainActor in
+                    guard self.isCurrentGeneration(generation) else { return }
                     self.publishImuSample(ax: ax, ay: ay, az: az, gx: gx, gy: gy, gz: gz, sampleDate: sampleDate)
 #if DEBUG
                     self.publishIosAttitude(
@@ -239,11 +302,19 @@ final class SensorStore: NSObject, ObservableObject {
 #endif
                 }
             }
+        } else {
+            lastMotionErrorMessage = "Device motion is unavailable on this device."
+            updateStreamHealth(now: Date(), force: true)
         }
 
         if CMAltimeter.isRelativeAltitudeAvailable() {
-            altimeter.startRelativeAltitudeUpdates(to: barometerQueue) { [weak self] data, _ in
-                guard let self, let data else { return }
+            altimeter.startRelativeAltitudeUpdates(to: barometerQueue) { [weak self] data, error in
+                guard let self, self.isCurrentGeneration(generation) else { return }
+                if let error {
+                    self.publishStreamError(channel: .barometer, error: error)
+                    return
+                }
+                guard let data else { return }
                 let hM = data.relativeAltitude.doubleValue
                 let tS = data.timestamp
 
@@ -274,6 +345,7 @@ final class SensorStore: NSObject, ObservableObject {
                 }
                 self.lastBaroPublishTS = tS
                 Task { @MainActor in
+                    guard self.isCurrentGeneration(generation) else { return }
                     self.publishBarometerVelocity(vDown: vDown, sampleDate: sampleDate)
                 }
             }
@@ -285,9 +357,13 @@ final class SensorStore: NSObject, ObservableObject {
     }
 
     func stop() {
+        _ = advanceStreamGeneration()
         finishRecordingIfNeeded()
         playbackTask?.cancel()
         playbackTask = nil
+        streamHealthTask?.cancel()
+        streamHealthTask = nil
+        fusionQueue.cancelAllOperations()
         locationManager.stopUpdatingLocation()
         locationManager.stopUpdatingHeading()
         motionManager.stopDeviceMotionUpdates()
@@ -299,9 +375,12 @@ final class SensorStore: NSObject, ObservableObject {
         lastMotionPublishTS = nil
         lastBaroPublishTS = nil
         lastFusionUiPublishTS = nil
+        lastStreamHealthPublishTS = nil
+        lastImuUiSampleDate = nil
         streamMode = .live
         activeSessionName = nil
         replayProgress = 0.0
+        updateStreamHealth(now: Date(), force: true)
     }
 
     func startRecording() {
@@ -312,10 +391,13 @@ final class SensorStore: NSObject, ObservableObject {
         )
         rawLogLock.lock()
         activeRawLog = log
+        activeRawEvents.removeAll(keepingCapacity: true)
         lastRecordingCheckpointEventCount = 0
+        lastRecordingCheckpointUptimeSec = ProcessInfo.processInfo.systemUptime
         rawLogLock.unlock()
         isRecording = true
         activeSessionName = log.name
+        updateStreamHealth(now: Date(), force: true)
     }
 
     func stopRecording() {
@@ -342,34 +424,53 @@ final class SensorStore: NSObject, ObservableObject {
 
     func applicationWillTerminate() {
         checkpointRecording()
+        recordingQueue.waitUntilAllOperationsAreFinished()
     }
 
     func loadRecordedSessions() {
-        do {
-            recordedSessions = try rawSessionStore.summaries()
-        } catch {
-            print("Failed to load raw sessions: \(error)")
-            recordedSessions = []
+        recordingQueue.addOperation { [weak self] in
+            guard let self else { return }
+            do {
+                let summaries = try self.rawSessionStore.summaries()
+                Task { @MainActor in
+                    self.recordedSessions = self.mergedRecordedSessions(with: summaries)
+                }
+            } catch {
+                print("Failed to load raw sessions: \(error)")
+                Task { @MainActor in
+                    self.recordedSessions = self.pendingRecordedSessions
+                }
+            }
         }
     }
 
     func deleteSession(_ summary: RawSessionSummary) {
-        do {
-            try rawSessionStore.delete(summary)
-            loadRecordedSessions()
-        } catch {
-            print("Failed to delete raw session: \(error)")
+        recordingQueue.addOperation { [weak self] in
+            guard let self else { return }
+            do {
+                try self.rawSessionStore.delete(summary)
+                let summaries = try self.rawSessionStore.summaries()
+                Task { @MainActor in
+                    self.pendingRecordedSessions.removeAll { $0.id == summary.id }
+                    self.recordedSessions = self.mergedRecordedSessions(with: summaries)
+                }
+            } catch {
+                print("Failed to delete raw session: \(error)")
+            }
         }
     }
 
     func replaySession(_ summary: RawSessionSummary, speedMultiplier: Double = 10.0) {
         guard let fileURL = summary.fileURL else { return }
+        let generation = advanceStreamGeneration()
         finishRecordingIfNeeded()
         locationManager.stopUpdatingLocation()
         locationManager.stopUpdatingHeading()
         motionManager.stopDeviceMotionUpdates()
         altimeter.stopRelativeAltitudeUpdates()
         playbackTask?.cancel()
+        streamHealthTask?.cancel()
+        fusionQueue.cancelAllOperations()
 
         let speed = max(speedMultiplier, 0.1)
         streamMode = .playback
@@ -384,6 +485,7 @@ final class SensorStore: NSObject, ObservableObject {
                 let events = try RawSessionTimeline.events(for: log)
                 let duration = max(log.durationSec, 0.001)
                 var previousElapsed = 0.0
+                var lastProgressPublish = ProcessInfo.processInfo.systemUptime
 
                 for event in events {
                     if Task.isCancelled { return }
@@ -392,17 +494,24 @@ final class SensorStore: NSObject, ObservableObject {
                         try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000.0))
                     }
                     previousElapsed = event.elapsedSec
-                    self.applyReplayEvent(event, sessionStart: log.startTime)
-                    await MainActor.run {
-                        self.replayProgress = min(max(event.elapsedSec / duration, 0.0), 1.0)
+                    self.applyReplayEvent(event, sessionStart: log.startTime, generation: generation)
+                    let now = ProcessInfo.processInfo.systemUptime
+                    if now - lastProgressPublish >= self.replayProgressPublishMinDtSec {
+                        lastProgressPublish = now
+                        await MainActor.run {
+                            guard self.isCurrentGeneration(generation) else { return }
+                            self.replayProgress = min(max(event.elapsedSec / duration, 0.0), 1.0)
+                        }
                     }
                 }
                 await MainActor.run {
+                    guard self.isCurrentGeneration(generation) else { return }
                     self.replayProgress = 1.0
                 }
             } catch {
                 print("Replay failed: \(error)")
                 await MainActor.run {
+                    guard self.isCurrentGeneration(generation) else { return }
                     self.streamMode = .live
                     self.activeSessionName = nil
                     self.replayProgress = 0.0
@@ -412,11 +521,14 @@ final class SensorStore: NSObject, ObservableObject {
     }
 
     func stopPlayback() {
+        _ = advanceStreamGeneration()
         playbackTask?.cancel()
         playbackTask = nil
+        fusionQueue.cancelAllOperations()
         streamMode = .live
         activeSessionName = nil
         replayProgress = 0.0
+        start()
     }
 
     private func resetRuntimeState() {
@@ -427,6 +539,8 @@ final class SensorStore: NSObject, ObservableObject {
         lastMotionPublishTS = nil
         lastBaroPublishTS = nil
         lastFusionUiPublishTS = nil
+        gnssRouteHistory.removeAll(keepingCapacity: true)
+        fusedRouteHistory.removeAll(keepingCapacity: true)
         nedPositionHistory.removeAll(keepingCapacity: true)
         nedVelocityHistory.removeAll(keepingCapacity: true)
         imuAccelHistory.removeAll(keepingCapacity: true)
@@ -466,8 +580,11 @@ final class SensorStore: NSObject, ObservableObject {
 #if DEBUG
         iosAttitudeEulerDeg = nil
 #endif
-        motionQueue.addOperation { [weak self] in
-            self?.fusionEngine.resetReducedAuto()
+        fusionQueue.cancelAllOperations()
+        let generation = currentStreamGeneration()
+        fusionQueue.addOperation { [weak self] in
+            guard let self, self.isCurrentGeneration(generation) else { return }
+            self.resetFusionEngineState()
         }
     }
 
@@ -577,10 +694,15 @@ final class SensorStore: NSObject, ObservableObject {
         var checkpoint: RawSessionLog?
         rawLogLock.lock()
         if var log = activeRawLog {
-            log.events.append(event)
-            activeRawLog = log
-            if log.events.count - lastRecordingCheckpointEventCount >= recordingCheckpointEventInterval {
-                lastRecordingCheckpointEventCount = log.events.count
+            activeRawEvents.append(event)
+            let eventCount = activeRawEvents.count
+            let now = ProcessInfo.processInfo.systemUptime
+            let hasEnoughEvents = eventCount - lastRecordingCheckpointEventCount >= recordingCheckpointEventInterval
+            let hasEnoughTime = now - lastRecordingCheckpointUptimeSec >= recordingCheckpointMinIntervalSec
+            if hasEnoughEvents && hasEnoughTime {
+                lastRecordingCheckpointEventCount = eventCount
+                lastRecordingCheckpointUptimeSec = now
+                log.events = activeRawEvents
                 checkpoint = log
             }
         }
@@ -591,13 +713,13 @@ final class SensorStore: NSObject, ObservableObject {
         }
     }
 
-    private func applyReplayEvent(_ event: RawReplayEvent, sessionStart: Date) {
+    private func applyReplayEvent(_ event: RawReplayEvent, sessionStart: Date, generation: Int) {
         let sampleDate = sessionStart.addingTimeInterval(event.elapsedSec)
 
         switch event {
         case .imu(_, let sample):
-            motionQueue.addOperation { [weak self] in
-                self?.runEkfPredict(
+            enqueueFusion(generation: generation) { store in
+                store.runEkfPredict(
                     sampleDate: sampleDate,
                     ax: sample.accelXMps2,
                     ay: sample.accelYMps2,
@@ -608,6 +730,7 @@ final class SensorStore: NSObject, ObservableObject {
                 )
             }
             Task { @MainActor in
+                guard self.isCurrentGeneration(generation) else { return }
                 self.publishImuSample(
                     ax: sample.accelXMps2,
                     ay: sample.accelYMps2,
@@ -650,8 +773,8 @@ final class SensorStore: NSObject, ObservableObject {
             let hAcc = sample.horizontalAccuracyM ?? 25.0
             let vAcc = sample.verticalAccuracyM ?? 50.0
 
-            motionQueue.addOperation { [weak self] in
-                self?.runEkfFuseGps(
+            enqueueFusion(generation: generation) { store in
+                store.runEkfFuseGps(
                     sampleDate: sampleDate,
                     latitudeDeg: sample.latitudeDeg,
                     longitudeDeg: sample.longitudeDeg,
@@ -669,6 +792,7 @@ final class SensorStore: NSObject, ObservableObject {
                 )
             }
             Task { @MainActor in
+                guard self.isCurrentGeneration(generation) else { return }
                 self.publishGnssSample(
                     sampleDate: sampleDate,
                     latitudeDeg: sample.latitudeDeg,
@@ -690,6 +814,7 @@ final class SensorStore: NSObject, ObservableObject {
         case .barometer(_, let sample):
             guard let vDown = sample.derivedVerticalVelocityDownMps else { return }
             Task { @MainActor in
+                guard self.isCurrentGeneration(generation) else { return }
                 self.publishBarometerVelocity(vDown: vDown, sampleDate: sampleDate)
             }
         }
@@ -716,17 +841,21 @@ final class SensorStore: NSObject, ObservableObject {
     }
 
     private func fallbackNedVelocity(speedMps: Double?, courseDeg: Double?) -> (n: Double?, e: Double?) {
-        guard let speedMps, let courseDeg, speedMps >= 0.0 else {
-            return (nil, nil)
-        }
-        let headingRad = courseDeg * .pi / 180.0
-        return (speedMps * cos(headingRad), speedMps * sin(headingRad))
+        guard let velocity = GnssVelocityResolver.horizontalVelocity(
+            speedMps: speedMps,
+            courseDeg: courseDeg
+        ) else { return (nil, nil) }
+        return (velocity.northMps, velocity.eastMps)
     }
 
     private func finishRecordingIfNeeded() {
         rawLogLock.lock()
-        let log = activeRawLog
+        var log = activeRawLog
+        if log != nil {
+            log?.events = activeRawEvents
+        }
         activeRawLog = nil
+        activeRawEvents.removeAll(keepingCapacity: true)
         lastRecordingCheckpointEventCount = 0
         rawLogLock.unlock()
 
@@ -744,12 +873,11 @@ final class SensorStore: NSObject, ObservableObject {
             }
             return
         }
-        do {
-            _ = try rawSessionStore.save(log)
-            loadRecordedSessions()
-        } catch {
-            print("Failed to save raw session: \(error)")
-        }
+        let pendingSummary = log.summary(fileURL: nil)
+        pendingRecordedSessions.removeAll { $0.id == pendingSummary.id }
+        pendingRecordedSessions.insert(pendingSummary, at: 0)
+        recordedSessions = mergedRecordedSessions(with: recordedSessions.filter { !$0.isPendingSave })
+        saveRecording(log, reason: "save raw session", refreshSummaries: true)
         isRecording = false
         if streamMode == .live {
             activeSessionName = nil
@@ -758,8 +886,12 @@ final class SensorStore: NSObject, ObservableObject {
 
     func checkpointRecording() {
         rawLogLock.lock()
-        let log = activeRawLog
-        lastRecordingCheckpointEventCount = log?.events.count ?? 0
+        var log = activeRawLog
+        if log != nil {
+            log?.events = activeRawEvents
+        }
+        lastRecordingCheckpointEventCount = activeRawEvents.count
+        lastRecordingCheckpointUptimeSec = ProcessInfo.processInfo.systemUptime
         rawLogLock.unlock()
 
         guard let log, !log.events.isEmpty else { return }
@@ -767,11 +899,149 @@ final class SensorStore: NSObject, ObservableObject {
     }
 
     private func saveRecordingCheckpoint(_ log: RawSessionLog) {
-        do {
-            _ = try rawSessionStore.save(log)
-        } catch {
-            print("Failed to checkpoint raw session: \(error)")
+        saveRecording(log, reason: "checkpoint raw session", refreshSummaries: false)
+    }
+
+    private func saveRecording(_ log: RawSessionLog, reason: String, refreshSummaries: Bool) {
+        recordingQueue.addOperation { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try self.rawSessionStore.save(log)
+                Task { @MainActor in
+                    self.lastRecordingErrorMessage = nil
+                    self.updateStreamHealth(now: Date(), force: true)
+                }
+                if refreshSummaries {
+                    Task { @MainActor in
+                        self.pendingRecordedSessions.removeAll { $0.id == log.id }
+                        self.loadRecordedSessions()
+                    }
+                }
+            } catch {
+                print("Failed to \(reason): \(error)")
+                Task { @MainActor in
+                    self.lastRecordingErrorMessage = error.localizedDescription
+                    if refreshSummaries {
+                        self.pendingRecordedSessions.removeAll { $0.id == log.id }
+                        self.recordedSessions = self.mergedRecordedSessions(
+                            with: self.recordedSessions.filter { !$0.isPendingSave }
+                        )
+                    }
+                    self.updateStreamHealth(now: Date(), force: true)
+                }
+            }
         }
+    }
+
+    private func mergedRecordedSessions(with savedSummaries: [RawSessionSummary]) -> [RawSessionSummary] {
+        let savedIDs = Set(savedSummaries.map(\.id))
+        let pending = pendingRecordedSessions.filter { !savedIDs.contains($0.id) }
+        return (pending + savedSummaries).sorted { lhs, rhs in
+            lhs.startTime > rhs.startTime
+        }
+    }
+
+    private enum StreamErrorChannel {
+        case motion
+        case barometer
+        case location
+    }
+
+    private func advanceStreamGeneration() -> Int {
+        streamGenerationLock.lock()
+        streamGeneration += 1
+        let generation = streamGeneration
+        streamGenerationLock.unlock()
+        return generation
+    }
+
+    private func currentStreamGeneration() -> Int {
+        streamGenerationLock.lock()
+        let generation = streamGeneration
+        streamGenerationLock.unlock()
+        return generation
+    }
+
+    private func isCurrentGeneration(_ generation: Int) -> Bool {
+        streamGenerationLock.lock()
+        let isCurrent = generation == streamGeneration
+        streamGenerationLock.unlock()
+        return isCurrent
+    }
+
+    private func enqueueFusion(
+        generation: Int,
+        dropsWhenBacklogged: Bool = false,
+        _ operation: @escaping (SensorStore) -> Void
+    ) {
+        if dropsWhenBacklogged, fusionQueue.operationCount > maximumPendingLiveFusionOperations {
+            return
+        }
+        fusionQueue.addOperation { [weak self] in
+            guard let self, self.isCurrentGeneration(generation) else { return }
+            operation(self)
+        }
+    }
+
+    private func startStreamHealthMonitor(generation: Int) {
+        streamHealthTask?.cancel()
+        streamHealthTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard let self else { return }
+                await MainActor.run {
+                    guard self.isCurrentGeneration(generation) else { return }
+                    self.updateStreamHealth(now: Date(), force: true)
+                }
+            }
+        }
+    }
+
+    private func updateStreamHealth(now: Date, force: Bool = false) {
+        let uptime = ProcessInfo.processInfo.systemUptime
+        if !force,
+           let lastStreamHealthPublishTS,
+           uptime - lastStreamHealthPublishTS < streamHealthPublishMinDtSec {
+            return
+        }
+        lastStreamHealthPublishTS = uptime
+        streamHealth = StreamHealth.evaluate(
+            now: now,
+            lastImuSampleDate: lastImuUiSampleDate,
+            lastGnssSampleDate: locationTimestamp,
+            motionError: lastMotionErrorMessage,
+            locationError: lastLocationErrorMessage,
+            recordingError: lastRecordingErrorMessage,
+            isRecording: isRecording
+        )
+        if streamHealth.imu == .stale {
+            fusionConfidence = min(fusionConfidence, 0.2)
+        }
+    }
+
+    private func publishStreamError(channel: StreamErrorChannel, error: Error) {
+        publishStreamError(channel: channel, message: error.localizedDescription)
+    }
+
+    private func publishStreamError(channel: StreamErrorChannel, message: String) {
+        Task { @MainActor in
+            switch channel {
+            case .motion:
+                self.lastMotionErrorMessage = message
+            case .barometer:
+                break
+            case .location:
+                self.lastLocationErrorMessage = message
+            }
+            self.updateStreamHealth(now: Date(), force: true)
+        }
+    }
+
+    private func isUsableLiveLocation(_ location: CLLocation, now: Date = Date()) -> Bool {
+        guard CLLocationCoordinate2DIsValid(location.coordinate) else { return false }
+        guard location.horizontalAccuracy >= 0.0 else { return false }
+        guard now.timeIntervalSince(location.timestamp) <= 5.0 else { return false }
+        return true
     }
 }
 
@@ -791,6 +1061,12 @@ extension SensorStore: CLLocationManagerDelegate {
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let loc = locations.last else { return }
+        guard streamMode == .playback || isUsableLiveLocation(loc) else {
+            publishStreamError(channel: .location, message: "Location sample was stale or invalid.")
+            return
+        }
+        lastLocationErrorMessage = nil
+        let generation = currentStreamGeneration()
         let nedPosition = computeNEDPositionFromGnss(current: loc)
         let nedVelocity = computeNEDVelocityFromGnss(current: loc)
 
@@ -827,8 +1103,8 @@ extension SensorStore: CLLocationManagerDelegate {
             velE: velE,
             velD: velD
         )
-        motionQueue.addOperation { [weak self] in
-            self?.runEkfFuseGps(
+        enqueueFusion(generation: generation) { store in
+            store.runEkfFuseGps(
                 sampleDate: loc.timestamp,
                 latitudeDeg: latitudeDeg,
                 longitudeDeg: longitudeDeg,
@@ -847,6 +1123,7 @@ extension SensorStore: CLLocationManagerDelegate {
         }
 
         Task { @MainActor in
+            guard self.isCurrentGeneration(generation) else { return }
             self.publishGnssSample(
                 sampleDate: loc.timestamp,
                 latitudeDeg: latitudeDeg,
@@ -868,17 +1145,16 @@ extension SensorStore: CLLocationManagerDelegate {
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         print("Location error: \(error)")
+        publishStreamError(channel: .location, error: error)
     }
 
     private func computeNEDVelocityFromGnss(current: CLLocation) -> (n: Double?, e: Double?, d: Double?) {
-        guard current.speed >= 0, current.course >= 0 else {
-            return (nil, nil, nil)
-        }
-        let headingRad = current.course * .pi / 180.0
-        let vn = current.speed * cos(headingRad)
-        let ve = current.speed * sin(headingRad)
+        guard let velocity = GnssVelocityResolver.horizontalVelocity(
+            speedMps: current.speed,
+            courseDeg: current.course
+        ) else { return (nil, nil, nil) }
         // Vertical velocity is provided by barometer updates in this app.
-        return (vn, ve, nil)
+        return (velocity.northMps, velocity.eastMps, nil)
     }
 
     private func computeNEDPositionFromGnss(current: CLLocation) -> (n: Double?, e: Double?, d: Double?) {
@@ -919,11 +1195,17 @@ extension SensorStore: CLLocationManagerDelegate {
         gy: Double,
         gz: Double
     ) {
+        let processingDate = FusionTimingPolicy.processingDate(
+            for: sampleDate,
+            after: lastFusionSampleDate
+        )
         let result = fusionEngine.processImu(
-            sampleDate: sampleDate,
+            sampleDate: processingDate,
             accelMps2: (x: ax, y: ay, z: az),
             gyroRadps: (x: gx, y: gy, z: gz)
         )
+        lastFusionSampleDate = processingDate
+        lastFusionImuSampleDate = sampleDate
         publishFusionResult(result, sampleDate: sampleDate)
     }
 
@@ -946,6 +1228,12 @@ extension SensorStore: CLLocationManagerDelegate {
         _ = posN
         _ = posE
         _ = posD
+        guard FusionTimingPolicy.hasFreshImu(
+            for: sampleDate,
+            lastImuSampleDate: lastFusionImuSampleDate
+        ) else {
+            return
+        }
         guard let input = GnssFusionInput.make(
             latitudeDeg: latitudeDeg,
             longitudeDeg: longitudeDeg,
@@ -960,8 +1248,12 @@ extension SensorStore: CLLocationManagerDelegate {
         ) else {
             return
         }
+        let processingDate = FusionTimingPolicy.processingDate(
+            for: sampleDate,
+            after: lastFusionSampleDate
+        )
         let result = fusionEngine.processGnss(
-            sampleDate: sampleDate,
+            sampleDate: processingDate,
             latitudeDeg: latitudeDeg,
             longitudeDeg: longitudeDeg,
             altitudeM: altitudeM,
@@ -982,7 +1274,14 @@ extension SensorStore: CLLocationManagerDelegate {
             ),
             headingRad: input.headingRad
         )
+        lastFusionSampleDate = processingDate
         publishFusionResult(result, sampleDate: sampleDate)
+    }
+
+    private func resetFusionEngineState() {
+        lastFusionSampleDate = nil
+        lastFusionImuSampleDate = nil
+        fusionEngine.resetReducedAuto()
     }
 
     private func publishFusionResult(_ result: FusionResult?, sampleDate: Date) {
@@ -1027,7 +1326,8 @@ extension SensorStore: CLLocationManagerDelegate {
             gnssAccuracy: GnssAccuracy(
                 horizontalAccuracyM: horizontalAccuracyM,
                 verticalAccuracyM: verticalAccuracyM
-            )
+            ),
+            streamHealth: streamHealth
         )
         fusionConfidence = health.fusedConfidence
     }
@@ -1056,7 +1356,8 @@ extension SensorStore: CLLocationManagerDelegate {
             gnssAccuracy: GnssAccuracy(
                 horizontalAccuracyM: horizontalAccuracyM,
                 verticalAccuracyM: verticalAccuracyM
-            )
+            ),
+            streamHealth: streamHealth
         )
         let motionDisplay = VehicleMotionDisplay.make(
             nedVelocityMps: nedVelocity,
@@ -1080,7 +1381,17 @@ extension SensorStore: CLLocationManagerDelegate {
                 y: snapshot.positionNedM.east,
                 z: snapshot.positionNedM.down
             ),
-            maxCount: 240
+            maxCount: chartHistoryMaxCount
+        )
+        appendRouteSample(
+            to: &fusedRouteHistory,
+            sample: TimedVec3Sample(
+                tSec: tSec,
+                x: snapshot.positionNedM.north,
+                y: snapshot.positionNedM.east,
+                z: snapshot.positionNedM.down
+            ),
+            minIntervalSec: routeSampleMinDtSec
         )
         appendSample(
             to: &ekfVelocityHistory,
@@ -1090,7 +1401,7 @@ extension SensorStore: CLLocationManagerDelegate {
                 y: snapshot.velocityNedMps.e,
                 z: snapshot.velocityNedMps.d
             ),
-            maxCount: 240
+            maxCount: chartHistoryMaxCount
         )
         appendSample(
             to: &ekfEulerHistory,
@@ -1100,7 +1411,7 @@ extension SensorStore: CLLocationManagerDelegate {
                 y: snapshot.eulerRad.pitch * 180.0 / .pi,
                 z: snapshot.eulerRad.yaw * 180.0 / .pi
             ),
-            maxCount: 240
+            maxCount: chartHistoryMaxCount
         )
         appendSample(
             to: &ekfGyroBiasHistory,
@@ -1110,7 +1421,7 @@ extension SensorStore: CLLocationManagerDelegate {
                 y: snapshot.gyroBiasRadps.y,
                 z: snapshot.gyroBiasRadps.z
             ),
-            maxCount: 240
+            maxCount: chartHistoryMaxCount
         )
         appendSample(
             to: &ekfAccelBiasHistory,
@@ -1120,7 +1431,7 @@ extension SensorStore: CLLocationManagerDelegate {
                 y: snapshot.accelBiasMps2.y,
                 z: snapshot.accelBiasMps2.z
             ),
-            maxCount: 240
+            maxCount: chartHistoryMaxCount
         )
     }
 
@@ -1134,6 +1445,8 @@ extension SensorStore: CLLocationManagerDelegate {
         gz: Double,
         sampleDate: Date
     ) {
+        lastImuUiSampleDate = sampleDate
+        lastMotionErrorMessage = nil
         motion = MotionSample(
             ax: ax,
             ay: ay,
@@ -1152,7 +1465,7 @@ extension SensorStore: CLLocationManagerDelegate {
                 y: ay,
                 z: az
             ),
-            maxCount: 240
+            maxCount: chartHistoryMaxCount
         )
         appendSample(
             to: &imuGyroHistory,
@@ -1162,8 +1475,9 @@ extension SensorStore: CLLocationManagerDelegate {
                 y: gy,
                 z: gz
             ),
-            maxCount: 240
+            maxCount: chartHistoryMaxCount
         )
+        updateStreamHealth(now: Date(), force: false)
     }
 
     @MainActor
@@ -1183,6 +1497,7 @@ extension SensorStore: CLLocationManagerDelegate {
         horizontalAccuracyM: Double?,
         verticalAccuracyM: Double?
     ) {
+        lastLocationErrorMessage = nil
         latitude = latitudeDeg
         longitude = longitudeDeg
         self.altitudeM = altitudeM
@@ -1209,7 +1524,16 @@ extension SensorStore: CLLocationManagerDelegate {
                 y: posE,
                 z: posD
             ),
-            maxCount: 240
+            maxCount: chartHistoryMaxCount
+        )
+        appendRouteSample(
+            to: &gnssRouteHistory,
+            sample: TimedVec3Sample(
+                tSec: tSec,
+                x: posN,
+                y: posE,
+                z: posD
+            )
         )
         appendSample(
             to: &nedVelocityHistory,
@@ -1219,8 +1543,9 @@ extension SensorStore: CLLocationManagerDelegate {
                 y: velE,
                 z: velDownMps
             ),
-            maxCount: 240
+            maxCount: chartHistoryMaxCount
         )
+        updateStreamHealth(now: Date(), force: false)
     }
 
     @MainActor
@@ -1235,7 +1560,7 @@ extension SensorStore: CLLocationManagerDelegate {
                 y: velEastMps,
                 z: velDownMps
             ),
-            maxCount: 240
+            maxCount: chartHistoryMaxCount
         )
     }
 
@@ -1287,5 +1612,18 @@ extension SensorStore: CLLocationManagerDelegate {
         if buffer.count > maxCount {
             buffer.removeFirst(buffer.count - maxCount)
         }
+    }
+
+    private func appendRouteSample(
+        to buffer: inout [TimedVec3Sample],
+        sample: TimedVec3Sample,
+        minIntervalSec: Double? = nil
+    ) {
+        if let minIntervalSec,
+           let previous = buffer.last,
+           sample.tSec - previous.tSec < minIntervalSec {
+            return
+        }
+        appendSample(to: &buffer, sample: sample, maxCount: routeHistoryMaxCount)
     }
 }

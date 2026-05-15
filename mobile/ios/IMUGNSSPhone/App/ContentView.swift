@@ -151,7 +151,7 @@ private struct DriveView: View {
             currentLongitude: store.longitude,
             currentNorthM: store.posNorthM,
             currentEastM: store.posEastM,
-            positionHistory: store.nedPositionHistory
+            positionHistory: store.gnssRouteHistory
         )
     }
 
@@ -163,7 +163,7 @@ private struct DriveView: View {
             currentLongitude: store.fusedLongitude,
             currentNorthM: store.fusedPosNorthM,
             currentEastM: store.fusedPosEastM,
-            positionHistory: store.fusedPositionHistory
+            positionHistory: store.fusedRouteHistory
         )
     }
 
@@ -263,6 +263,14 @@ private struct TopMapStatusBar: View {
                 .lineLimit(1)
             Divider()
                 .frame(height: 18)
+            Image(systemName: streamHealthImage)
+                .imageScale(.small)
+                .foregroundStyle(streamHealthTint)
+            Text(store.streamHealth.shortTitle)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+            Divider()
+                .frame(height: 18)
             Image(systemName: gnssQuality.systemImage)
                 .imageScale(.small)
                 .foregroundStyle(gnssQuality.tint)
@@ -295,6 +303,28 @@ private struct TopMapStatusBar: View {
             return .purple
         }
         return .green
+    }
+
+    private var streamHealthTint: Color {
+        switch store.streamHealth.severity {
+        case .nominal:
+            return .green
+        case .warning:
+            return .orange
+        case .critical:
+            return .red
+        }
+    }
+
+    private var streamHealthImage: String {
+        switch store.streamHealth.severity {
+        case .nominal:
+            return "waveform"
+        case .warning:
+            return "exclamationmark.triangle.fill"
+        case .critical:
+            return "xmark.octagon.fill"
+        }
     }
 }
 
@@ -398,7 +428,8 @@ private struct DriveTelemetryDrawer: View {
             gnssAccuracy: GnssAccuracy(
                 horizontalAccuracyM: store.horizontalAccuracyM,
                 verticalAccuracyM: store.verticalAccuracyM
-            )
+            ),
+            streamHealth: store.streamHealth
         )
     }
 
@@ -574,7 +605,7 @@ private struct ExpandedMotionRows: View {
         VStack(spacing: 8) {
             valueRow("Fused Pn / Pe", "\(format(store.fusedPosNorthM, decimals: 1)) / \(format(store.fusedPosEastM, decimals: 1)) m")
             valueRow("Velocity Vn / Ve / Vd", "\(format(store.velNorthMps, decimals: 1)) / \(format(store.velEastMps, decimals: 1)) / \(format(store.velDownMps, decimals: 1)) m/s")
-            valueRow("Route Samples", "\(store.nedPositionHistory.count) GNSS, \(store.fusedPositionHistory.count) fused")
+            valueRow("Route Samples", "\(store.gnssRouteHistory.count) GNSS, \(store.fusedRouteHistory.count) fused")
         }
         .font(.caption)
         .padding(.top, 2)
@@ -774,7 +805,8 @@ private struct DriveMetricSheet: View {
             gnssAccuracy: GnssAccuracy(
                 horizontalAccuracyM: store.horizontalAccuracyM,
                 verticalAccuracyM: store.verticalAccuracyM
-            )
+            ),
+            streamHealth: store.streamHealth
         )
     }
 
@@ -859,7 +891,7 @@ private struct ReviewView: View {
         NavigationStack {
             List {
                 Section("Current Drive") {
-                    valueRow("Route Points", "\(store.nedPositionHistory.count)")
+                    valueRow("Route Points", "\(store.gnssRouteHistory.count)")
                     valueRow("Latest Speed (m/s)", format(store.speedMps, decimals: 2))
                     valueRow("Latest hAcc (m)", format(store.horizontalAccuracyM, decimals: 2))
                     valueRow("Initialized", yesNo(store.ekfInitialized))
@@ -906,13 +938,23 @@ private struct RawSessionRow: View {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "waveform.path.ecg.rectangle")
                     .font(.title3)
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(summary.isPendingSave ? .secondary : Color.accentColor)
                     .frame(width: 28)
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(summary.name)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(2)
+                    HStack(spacing: 6) {
+                        Text(summary.name)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(2)
+                        if summary.isPendingSave {
+                            Text("Saving")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(.quaternary, in: Capsule())
+                        }
+                    }
                     Text(summary.startTime.formatted(date: .abbreviated, time: .shortened))
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -921,14 +963,20 @@ private struct RawSessionRow: View {
 
                 Spacer(minLength: 8)
 
-                Button {
-                    store.replaySession(summary)
-                } label: {
-                    Image(systemName: "play.fill")
+                if summary.isPendingSave {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 44, height: 32)
+                } else {
+                    Button {
+                        store.replaySession(summary)
+                    } label: {
+                        Image(systemName: "play.fill")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(summary.fileURL == nil || store.isRecording)
+                    .accessibilityLabel("Replay session")
                 }
-                .buttonStyle(.bordered)
-                .disabled(summary.fileURL == nil || store.isRecording)
-                .accessibilityLabel("Replay session")
             }
 
             HStack(spacing: 8) {
@@ -939,10 +987,12 @@ private struct RawSessionRow: View {
             }
         }
         .swipeActions(edge: .trailing) {
-            Button(role: .destructive) {
-                store.deleteSession(summary)
-            } label: {
-                Label("Delete", systemImage: "trash")
+            if !summary.isPendingSave {
+                Button(role: .destructive) {
+                    store.deleteSession(summary)
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
             }
         }
         .padding(.vertical, 4)
@@ -1553,22 +1603,19 @@ private struct RawGNSSMapView: UIViewRepresentable {
             title: "Fused"
         )
 
-        let now = Date()
-        let elapsed = context.coordinator.lastCameraRefitDate.map { now.timeIntervalSince($0) }
         let shouldForceRefit = context.coordinator.lastViewportRefreshToken != viewportRefreshToken
-        if shouldForceRefit || MapCameraPolicy.shouldRefit(
-            previousKey: context.coordinator.lastCameraViewportKey,
-            nextKey: routeKey.viewportKey,
-            elapsedSinceLastRefitSec: elapsed
+        if MapCameraPolicy.shouldRefit(
+            isForced: shouldForceRefit,
+            hasExistingViewport: context.coordinator.lastCameraViewportKey != nil,
+            hasVisibleRoute: routeKey.hasVisibleRoute
         ) {
             context.coordinator.lastViewportRefreshToken = viewportRefreshToken
             context.coordinator.lastCameraViewportKey = routeKey.viewportKey
-            context.coordinator.lastCameraRefitDate = now
-            setVisibleRoute(on: mapView)
+            setVisibleRoute(on: mapView, animated: shouldForceRefit)
         }
     }
 
-    private func setVisibleRoute(on mapView: MKMapView) {
+    private func setVisibleRoute(on mapView: MKMapView, animated: Bool) {
         let visibleCoordinates = gnssCoordinates + fusedCoordinates
         if visibleCoordinates.count >= 2 {
             let polyline = MKPolyline(coordinates: visibleCoordinates, count: visibleCoordinates.count)
@@ -1593,7 +1640,7 @@ private struct RawGNSSMapView: UIViewRepresentable {
             mapView.setVisibleMapRect(
                 rect,
                 edgePadding: UIEdgeInsets(top: 96, left: 32, bottom: 240, right: 32),
-                animated: true
+                animated: animated
             )
         } else if let currentCoordinate {
             mapView.setRegion(
@@ -1601,7 +1648,7 @@ private struct RawGNSSMapView: UIViewRepresentable {
                     center: currentCoordinate,
                     span: MKCoordinateSpan(latitudeDelta: 0.008, longitudeDelta: 0.008)
                 ),
-                animated: true
+                animated: animated
             )
         }
     }
@@ -1615,9 +1662,13 @@ private struct RawGNSSMapView: UIViewRepresentable {
         var currentCourseDeg: Double?
         var lastRouteOverlayKey: RouteKey?
         var lastCameraViewportKey: String?
-        var lastCameraRefitDate: Date?
         var lastViewportRefreshToken: Int?
+        private var lastRouteOverlayUpdateDate: Date?
+        private var lastGnssRoutePointCount: Int?
+        private var lastFusedRoutePointCount: Int?
         private var accuracyOverlay: MKCircle?
+        private var accuracyOverlayCoordinate: CLLocationCoordinate2D?
+        private var accuracyOverlayRadiusM: Double?
         private var gnssRouteOverlay: MKPolyline?
         private var fusedRouteOverlay: MKPolyline?
         private let gnssAnnotationLayer = MapAnnotationLayer()
@@ -1628,19 +1679,37 @@ private struct RawGNSSMapView: UIViewRepresentable {
             coordinate: CLLocationCoordinate2D?,
             horizontalAccuracyM: Double?
         ) {
+            guard let horizontalAccuracyM,
+                  let coordinate,
+                  horizontalAccuracyM > 0.0,
+                  horizontalAccuracyM.isFinite
+            else {
+                if let accuracyOverlay {
+                    mapView.removeOverlay(accuracyOverlay)
+                    self.accuracyOverlay = nil
+                }
+                accuracyOverlayCoordinate = nil
+                accuracyOverlayRadiusM = nil
+                return
+            }
+
+            if let previousCoordinate = accuracyOverlayCoordinate,
+               let previousRadius = accuracyOverlayRadiusM,
+               abs(previousCoordinate.latitude - coordinate.latitude) < 1.0e-7,
+               abs(previousCoordinate.longitude - coordinate.longitude) < 1.0e-7,
+               abs(previousRadius - horizontalAccuracyM) < 0.25 {
+                return
+            }
+
             if let accuracyOverlay {
                 mapView.removeOverlay(accuracyOverlay)
                 self.accuracyOverlay = nil
             }
 
-            guard let horizontalAccuracyM,
-                  let coordinate,
-                  horizontalAccuracyM > 0.0,
-                  horizontalAccuracyM.isFinite
-            else { return }
-
             let overlay = MKCircle(center: coordinate, radius: horizontalAccuracyM)
             accuracyOverlay = overlay
+            accuracyOverlayCoordinate = coordinate
+            accuracyOverlayRadiusM = horizontalAccuracyM
             mapView.addOverlay(overlay)
         }
 
@@ -1651,7 +1720,20 @@ private struct RawGNSSMapView: UIViewRepresentable {
             routeKey: RouteKey
         ) {
             guard routeKey != lastRouteOverlayKey else { return }
+            let now = Date()
+            let elapsed = lastRouteOverlayUpdateDate.map { now.timeIntervalSince($0) }
+            guard MapRouteOverlayPolicy.shouldUpdate(
+                previousGnssCount: lastGnssRoutePointCount,
+                previousFusedCount: lastFusedRoutePointCount,
+                nextGnssCount: gnssCoordinates.count,
+                nextFusedCount: fusedCoordinates.count,
+                elapsedSinceLastUpdateSec: elapsed
+            ) else { return }
+
             lastRouteOverlayKey = routeKey
+            lastRouteOverlayUpdateDate = now
+            lastGnssRoutePointCount = gnssCoordinates.count
+            lastFusedRoutePointCount = fusedCoordinates.count
 
             if let gnssRouteOverlay {
                 mapView.removeOverlay(gnssRouteOverlay)
@@ -1768,6 +1850,9 @@ private struct RawGNSSMapView: UIViewRepresentable {
         let currentLongitude: Double?
         let fusedCurrentLatitude: Double?
         let fusedCurrentLongitude: Double?
+        var hasVisibleRoute: Bool {
+            gnssCount > 0 || fusedCount > 0 || currentLatitude != nil || fusedCurrentLatitude != nil
+        }
         var viewportKey: String {
             [
                 String(gnssCount),

@@ -73,6 +73,32 @@ final class RawSessionLogTests: XCTestCase {
         XCTAssertEqual(decoded.summary().barometerCount, 1)
     }
 
+    func testSummaryWithoutFileURLRepresentsPendingSave() {
+        let pending = RawSessionSummary(
+            id: UUID(uuidString: "61F52895-D66D-478C-9B54-149DA8AD5A6C")!,
+            name: "Saving Drive",
+            startTime: Date(timeIntervalSince1970: 1_700_000_000),
+            durationSec: 12.0,
+            imuCount: 100,
+            gnssCount: 12,
+            barometerCount: 12,
+            fileURL: nil
+        )
+        let saved = RawSessionSummary(
+            id: pending.id,
+            name: pending.name,
+            startTime: pending.startTime,
+            durationSec: pending.durationSec,
+            imuCount: pending.imuCount,
+            gnssCount: pending.gnssCount,
+            barometerCount: pending.barometerCount,
+            fileURL: URL(fileURLWithPath: "/tmp/saved.motionfusion")
+        )
+
+        XCTAssertTrue(pending.isPendingSave)
+        XCTAssertFalse(saved.isPendingSave)
+    }
+
     func testTimelineValidatesEnvelopePayloads() {
         let invalid = RawSensorEventEnvelope(
             kind: .imu,

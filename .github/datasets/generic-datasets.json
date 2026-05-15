@@ -30,20 +30,20 @@
         {
           "path": "reference_attitude.csv.gz",
           "url": "../../web/datasets/urban-short-turn-loop-nominal-001/reference_attitude.csv.gz",
-          "sha256": "b6af98f5eb76676500939380327c9d8ffc93ca31e3dd8ad565d77484c6279bc4",
-          "bytes": 72356
+          "sha256": "d43e84633e0f550ef940dcb3de5c1b329fc5047dfc8a1bf4b2f6e57de70e4e50",
+          "bytes": 72362
         },
         {
           "path": "reference_mount.csv.gz",
           "url": "../../web/datasets/urban-short-turn-loop-nominal-001/reference_mount.csv.gz",
-          "sha256": "2de00193ba4fe67f70df2ca9938edd3af9f1bea4367eb1f30ce9310459addd9d",
-          "bytes": 1632
+          "sha256": "bbaaab7033e524c040fda104019a7dc93e8fe62f6fdb5977ec4ef681188cd5b8",
+          "bytes": 1772
         },
         {
           "path": "reference_motion.csv.gz",
           "url": "../../web/datasets/urban-short-turn-loop-nominal-001/reference_motion.csv.gz",
-          "sha256": "f053adaf6ceac60e52c1b57762a1a1b76aca41dc0289dbe4eb46ad0e840dbe36",
-          "bytes": 105419
+          "sha256": "d30d5e40222b914dca0e5075db345c42e0728a984490c4c0d1edf40a8852bd87",
+          "bytes": 105433
         }
       ],
       "smoke": {
@@ -81,20 +81,20 @@
         {
           "path": "reference_attitude.csv.gz",
           "url": "../../web/datasets/urban-short-turn-loop-nominal-002/reference_attitude.csv.gz",
-          "sha256": "8935dd6081de7804f69a63de81f69aa4873f563322827fbb448692a16090cc37",
-          "bytes": 88009
+          "sha256": "baf72a30fe11a18c27faa20de2a7ed4fa32c1699772b7fcc3e368e508ce2c22e",
+          "bytes": 87956
         },
         {
           "path": "reference_mount.csv.gz",
           "url": "../../web/datasets/urban-short-turn-loop-nominal-002/reference_mount.csv.gz",
-          "sha256": "b91bae61c00feb20e45bce15bb463aa6fc0cc9f96463b42147002a9fd220c388",
-          "bytes": 1706
+          "sha256": "01f807da6dc7be285ac2958b767c51287c1871c8cb663a977f93a170f174617b",
+          "bytes": 1837
         },
         {
           "path": "reference_motion.csv.gz",
           "url": "../../web/datasets/urban-short-turn-loop-nominal-002/reference_motion.csv.gz",
-          "sha256": "2de73c6b2b244899868baa9a6f4cf2212ca91bdd824c1e9f953986341dbd86f7",
-          "bytes": 142420
+          "sha256": "40a4b2b9cc54b1806b60261d8cb3059b941b8bbb1511d9613e59b03e4ed1b100",
+          "bytes": 142376
         }
       ],
       "smoke": {
@@ -132,20 +132,20 @@
         {
           "path": "reference_attitude.csv.gz",
           "url": "../../web/datasets/urban-medium-turn-loop-nominal-001/reference_attitude.csv.gz",
-          "sha256": "c10e7cce3c500f140c0f64f03b4daeb63786da3834a1d28a166a7e2b4929155d",
-          "bytes": 134115
+          "sha256": "2f1c9b08f4aa501a15d50de93067444e20a4011e178686c13a6c185b736b01f3",
+          "bytes": 134085
         },
         {
           "path": "reference_mount.csv.gz",
           "url": "../../web/datasets/urban-medium-turn-loop-nominal-001/reference_mount.csv.gz",
-          "sha256": "3760433b3d2740430aba9b0f5f1f205207fb910216166f6b3824dadbc8101402",
-          "bytes": 2192
+          "sha256": "9867234a7438c3c8802503e4f2937e7f8bd58ed59906acacd213580929b18b93",
+          "bytes": 2549
         },
         {
           "path": "reference_motion.csv.gz",
           "url": "../../web/datasets/urban-medium-turn-loop-nominal-001/reference_motion.csv.gz",
-          "sha256": "81d6af84464e2c27c886dc11a4a4860291b7e100dc9d56ee6216583aba9aa139",
-          "bytes": 217990
+          "sha256": "d046675b79077e5e959e01aea9104278030e9af7da92fc6e8f7edbdcb31bc2e4",
+          "bytes": 217914
         }
       ],
       "smoke": {
@@ -183,26 +183,77 @@
         {
           "path": "reference_attitude.csv.gz",
           "url": "../../web/datasets/urban-medium-turn-loop-nominal-002/reference_attitude.csv.gz",
-          "sha256": "bb0bdb98b4d0941c497b9c536358f35ea8effe112539ddca301e689a3a656921",
-          "bytes": 113629
+          "sha256": "9471a220a58b90dc54f9e2305bfcfe5d0aa9e987a5196df2c074ac594c7351b5",
+          "bytes": 113625
         },
         {
           "path": "reference_mount.csv.gz",
           "url": "../../web/datasets/urban-medium-turn-loop-nominal-002/reference_mount.csv.gz",
-          "sha256": "45722d59d3de2f69e174dfe1a770ab64e3d20de3163326430eac4ad967f6e41d",
-          "bytes": 2056
+          "sha256": "a51071d269e695b9966c73c4c3d1449cdf8785f9d2eb070b90d6f19f963be1c8",
+          "bytes": 2257
         },
         {
           "path": "reference_motion.csv.gz",
           "url": "../../web/datasets/urban-medium-turn-loop-nominal-002/reference_motion.csv.gz",
-          "sha256": "ee25564ea970486ee2356b33e178d07edc71544c1e6c731806ccb25178e519c9",
-          "bytes": 183013
+          "sha256": "baf0259f3ccfea536cbbd31b2088e3ffe7ecd5df6f57628082e2f5a129d958fe",
+          "bytes": 182870
         }
       ],
       "smoke": {
         "enabled": false,
         "max_imu_rows": 20000,
         "max_gnss_rows": 400,
+        "misalignment": "auto"
+      }
+    },
+    {
+      "id": "parkinglot-maneuvers",
+      "version": "v1",
+      "description": "Parking lot maneuvers",
+      "license": "MIT",
+      "replay_dir": ".",
+      "files": [
+        {
+          "path": "imu.csv.gz",
+          "url": "../../web/datasets/parkinglot-maneuvers/imu.csv.gz",
+          "sha256": "a292bf6853ef386a276f48896e6ec2a8525b50bca2746f5b99daa2592482c10f",
+          "bytes": 2328861
+        },
+        {
+          "path": "gnss.csv.gz",
+          "url": "../../web/datasets/parkinglot-maneuvers/gnss.csv.gz",
+          "sha256": "2a34daaea1b0d2e1fdc59f3e7f7cb265da80b6a0a0223585b67b908e5a8889c9",
+          "bytes": 73041
+        },
+        {
+          "path": "reference_position.csv.gz",
+          "url": "../../web/datasets/parkinglot-maneuvers/reference_position.csv.gz",
+          "sha256": "8e2e1867fa020133a37447c59ba70878730aa1b9fbabd5e003581020434988b7",
+          "bytes": 533907
+        },
+        {
+          "path": "reference_attitude.csv.gz",
+          "url": "../../web/datasets/parkinglot-maneuvers/reference_attitude.csv.gz",
+          "sha256": "4a4f8778797d85fc5659c3a2fc0daa171bf64ca7628a5b8cb301b856055f9d2b",
+          "bytes": 271849
+        },
+        {
+          "path": "reference_mount.csv.gz",
+          "url": "../../web/datasets/parkinglot-maneuvers/reference_mount.csv.gz",
+          "sha256": "15f1b91089447e42c92dd41ecfe897df01ee534d251063d8fabc84629169978d",
+          "bytes": 5718
+        },
+        {
+          "path": "reference_motion.csv.gz",
+          "url": "../../web/datasets/parkinglot-maneuvers/reference_motion.csv.gz",
+          "sha256": "fc5ccc9631d96a8bb68389f62cf556661a09ba9addc20ae0eb6d1a74c90e0718",
+          "bytes": 388045
+        }
+      ],
+      "smoke": {
+        "enabled": false,
+        "max_imu_rows": 65893,
+        "max_gnss_rows": 1292,
         "misalignment": "auto"
       }
     },
@@ -285,20 +336,20 @@
         {
           "path": "reference_attitude.csv.gz",
           "url": "../../web/datasets/parking-lot-figure8-nominal-001/reference_attitude.csv.gz",
-          "sha256": "2b6fdfe2cfbb36a7b3995eea3aa284f6c19fefd1f33944b4fffb96c613bba8da",
-          "bytes": 61101
+          "sha256": "cf9240dacd09a2dec3ddd9acbdd59e9746270bfa6630803ebcc7b7ed9c00ee04",
+          "bytes": 61169
         },
         {
           "path": "reference_mount.csv.gz",
           "url": "../../web/datasets/parking-lot-figure8-nominal-001/reference_mount.csv.gz",
-          "sha256": "84319dc2b6bb0cf990c779420dacd6e1c6f46007b7e9b131d636e0414ffb52fb",
-          "bytes": 1621
+          "sha256": "bc77a41f4c1ef30d5b2dc3b21d005b3e07731a51cbfec481e1a75de1a9c3aedf",
+          "bytes": 1752
         },
         {
           "path": "reference_motion.csv.gz",
           "url": "../../web/datasets/parking-lot-figure8-nominal-001/reference_motion.csv.gz",
-          "sha256": "8fb6519570b5fa84a6079d6f672f428ae5d94abdc99118c0276c2d92df96ca85",
-          "bytes": 63086
+          "sha256": "8d6d0aaee0bbd6f9cd7f9c359391dd2d3c0074776d832fb5c90fc84b6be8eede",
+          "bytes": 63025
         }
       ],
       "smoke": {
@@ -336,20 +387,20 @@
         {
           "path": "reference_attitude.csv.gz",
           "url": "../../web/datasets/parking-lot-circle-turns-nominal-001/reference_attitude.csv.gz",
-          "sha256": "f9930e6f4be799bbbe1da5f3717fc3bcc6f36b521c1fdff239c5192567b5603f",
-          "bytes": 40041
+          "sha256": "c68660ea2a9d1fb2c12122d98460bdf21ce8d1a080d0a045c43602b66f42138e",
+          "bytes": 39997
         },
         {
           "path": "reference_mount.csv.gz",
           "url": "../../web/datasets/parking-lot-circle-turns-nominal-001/reference_mount.csv.gz",
-          "sha256": "7e78ce6d661e0f92c3ec9afd21c3e221f3ff423ef7f6b20750b48b96569edd70",
-          "bytes": 1118
+          "sha256": "7d9e67186deca035c657bd6e59d62b6635491fb20615ad42968bb03376c37452",
+          "bytes": 1196
         },
         {
           "path": "reference_motion.csv.gz",
           "url": "../../web/datasets/parking-lot-circle-turns-nominal-001/reference_motion.csv.gz",
-          "sha256": "1b2ffdb5f7168c974d7ba2ceac2c9ed785d334646c38cdb9b2264a728fca657a",
-          "bytes": 52187
+          "sha256": "68f26943ea8a00d33adb8ac8cb912930cbd51cf46ee6bccdf71fd7870e0506ad",
+          "bytes": 52191
         }
       ],
       "smoke": {
@@ -387,20 +438,20 @@
         {
           "path": "reference_attitude.csv.gz",
           "url": "../../web/datasets/urban-mixed-turns-nominal-001/reference_attitude.csv.gz",
-          "sha256": "ddf471b6ab899691f3b979fef63c3eb37adbc9ca0ac3ea6b7fb6a3618256cc1b",
-          "bytes": 225401
+          "sha256": "64ec99077ebd9c74ae52c5c104ad8a6f58bf768b31bed0142a60c694a6cbebe6",
+          "bytes": 225473
         },
         {
           "path": "reference_mount.csv.gz",
           "url": "../../web/datasets/urban-mixed-turns-nominal-001/reference_mount.csv.gz",
-          "sha256": "1ba78eafae31abd53428b83a7efc61340afafe1f492a6e839a0bc3a01600151e",
-          "bytes": 4427
+          "sha256": "4c55858ec16e105c3163d1906e5e21a8d454abcfa1f8034a1a2a462337aa9d0a",
+          "bytes": 4897
         },
         {
           "path": "reference_motion.csv.gz",
           "url": "../../web/datasets/urban-mixed-turns-nominal-001/reference_motion.csv.gz",
-          "sha256": "527e13359b64634c5a30382d31ee2906b1d5a79286350bacc2255ca3f2abd62e",
-          "bytes": 363503
+          "sha256": "f84958c7d50dcea06d8a7a1543e610e5d1d7e2b20da639eef73754a914b52e76",
+          "bytes": 363521
         }
       ],
       "smoke": {
@@ -591,20 +642,20 @@
         {
           "path": "reference_attitude.csv.gz",
           "url": "../../web/datasets/mixed-road-long-drive-large-mount-002/reference_attitude.csv.gz",
-          "sha256": "3c598784aa8ab2a50b8a3ab0798b0a61184c302188221e25c217966859cc15fa",
-          "bytes": 1188390
+          "sha256": "e06526c463fdce8e88b24294e1d35848ca79bfbf5502837361d8de3b8e0a0703",
+          "bytes": 1188545
         },
         {
           "path": "reference_mount.csv.gz",
           "url": "../../web/datasets/mixed-road-long-drive-large-mount-002/reference_mount.csv.gz",
-          "sha256": "042111870860410e3026b2166c2feb845b2f4512c1febe4eee208a3a342a5410",
-          "bytes": 11117
+          "sha256": "d07d3b45ed2e6e4de33e50b9a5072cc9cfb522ceb569502fdc59b636c400d723",
+          "bytes": 14397
         },
         {
           "path": "reference_motion.csv.gz",
           "url": "../../web/datasets/mixed-road-long-drive-large-mount-002/reference_motion.csv.gz",
-          "sha256": "eb0f271215595cc89c3c58823386f001c22ffca2890a4e898a55221c31e97145",
-          "bytes": 1784221
+          "sha256": "addaef5be20b18ad8a14c722a3eedbbbceaf2705f618ecb642b341de224beb70",
+          "bytes": 1784241
         }
       ],
       "smoke": {
@@ -693,20 +744,20 @@
         {
           "path": "reference_attitude.csv.gz",
           "url": "../../web/datasets/urban-low-speed-low-signal-001/reference_attitude.csv.gz",
-          "sha256": "48e1db6c0a4ea54093c4ed6d5b4b34a96b83b8f0d865139fceace4e706c366b8",
-          "bytes": 308585
+          "sha256": "0e57ccf3d70b94f2c9c40f121b8e1f99cdeb2288127bfd02333b3a67f0a7870d",
+          "bytes": 309059
         },
         {
           "path": "reference_mount.csv.gz",
           "url": "../../web/datasets/urban-low-speed-low-signal-001/reference_mount.csv.gz",
-          "sha256": "093a7bebc5f70ce4152ef835d25828946219dee85553465e84911deeaa43e39e",
-          "bytes": 5380
+          "sha256": "02d97e62a54a911f8fce48f7aacf2ad77b849d9a485c9cce177153b1e9a01e3e",
+          "bytes": 6970
         },
         {
           "path": "reference_motion.csv.gz",
           "url": "../../web/datasets/urban-low-speed-low-signal-001/reference_motion.csv.gz",
-          "sha256": "9d41cbdb0b3ee287b83a99ebff2d545e654d996e0fa80f20fefb09aba2cd9359",
-          "bytes": 117150
+          "sha256": "7dacab2cc47f069e75becf706f1ed7bcc9fd4485dca8a0be2a78eee538b396cd",
+          "bytes": 117148
         }
       ],
       "smoke": {

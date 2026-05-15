@@ -12,13 +12,17 @@
 		34101B548D55B84338CE8F40 /* DeveloperComparisonTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F545E9978287177F167E63CB /* DeveloperComparisonTests.swift */; };
 		3FA0DF4A6D846B8C96B03F56 /* MotionKinematics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F4792405B22C6897CC10911 /* MotionKinematics.swift */; };
 		448303428B7AFD898578DDE6 /* RawSessionFileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E80DDC2ABBEF69B940B47203 /* RawSessionFileStore.swift */; };
+		482E5665EA18D0EE961A75FB /* GnssVelocityResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ADA9A17CB9984000D5F6EBE /* GnssVelocityResolver.swift */; };
 		4CCF0F4865CBA60204B3146A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 41CE6DB2282095B66DEC3E6C /* Assets.xcassets */; };
 		540AD335D46E6C9BA62C65C5 /* DeveloperComparison.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8220177DC5F925633A3234CF /* DeveloperComparison.swift */; };
 		5A4B75BD8D0068E6753C5125 /* RawSessionLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FE4D5872E0CCD8175DC5BA5 /* RawSessionLog.swift */; };
 		6588F26F47350EE6FA5810BE /* NavigationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67E25FBA2D389509C370DACC /* NavigationModels.swift */; };
+		6E27FF2B30066F26B0510954 /* GnssVelocityResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F58B536FB1DF8A26345B349 /* GnssVelocityResolverTests.swift */; };
 		821FA366DB0ABF60821F3EA1 /* MapRenderPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11AB526DD8B6E81BBE8B00C4 /* MapRenderPolicy.swift */; };
 		8859B3425B5BFC7CD30D64B1 /* VehicleMotionDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 094B6ED23826D37CA19877C9 /* VehicleMotionDisplay.swift */; };
 		92082A405A90911B711698B0 /* SensorStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69016EA42814D5CD9B35E7B6 /* SensorStore.swift */; };
+		96D57BEB8ADB83CB924822EA /* StreamHealthTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9573E30F277A6F2DC717EBFA /* StreamHealthTests.swift */; };
+		9780EB0C5AEB63EE042B5BF2 /* FusionTimingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49F24324DC070AD1AAD3F487 /* FusionTimingPolicy.swift */; };
 		9B262FEBCD96AC0FBB39D809 /* MapRenderPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A140A6622AD524F605DCA5EF /* MapRenderPolicyTests.swift */; };
 		A28D05F0835892528688A77F /* FusionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58BC795608E08C7BC4688153 /* FusionEngine.swift */; };
 		A76A1793EABCA14894B12AC8 /* GnssFusionInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFCB25446DA7D3D6A2DC4368 /* GnssFusionInput.swift */; };
@@ -26,6 +30,8 @@
 		B3F545C868B847362CA2FF83 /* MotionAnalysisTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CFADB04713B1B5BBC861ED3 /* MotionAnalysisTests.swift */; };
 		B913FAB3C199614F82632398 /* FusionHealth.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD37CB158BB37D599B43EF50 /* FusionHealth.swift */; };
 		BBCB9BEE6962CF14A29237C9 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 064866943C3B066A4F4483B6 /* ContentView.swift */; };
+		CFD5752864F9342A7084C273 /* StreamHealth.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB1827800952B687FFF88E94 /* StreamHealth.swift */; };
+		F1E43DD3900D9FC461587AC7 /* FusionTimingPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04080336EC82C34573366F80 /* FusionTimingPolicyTests.swift */; };
 		F3FEC82933575AAAD7EF4874 /* GnssFusionInputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8B34295A214912826BC4E69 /* GnssFusionInputTests.swift */; };
 /* End PBXBuildFile section */
 
@@ -40,12 +46,16 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		04080336EC82C34573366F80 /* FusionTimingPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FusionTimingPolicyTests.swift; sourceTree = "<group>"; };
 		064866943C3B066A4F4483B6 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		094B6ED23826D37CA19877C9 /* VehicleMotionDisplay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VehicleMotionDisplay.swift; sourceTree = "<group>"; };
 		11AB526DD8B6E81BBE8B00C4 /* MapRenderPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapRenderPolicy.swift; sourceTree = "<group>"; };
+		1F58B536FB1DF8A26345B349 /* GnssVelocityResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GnssVelocityResolverTests.swift; sourceTree = "<group>"; };
 		216E95E609CC9EE1DAD187AB /* SensorFusionFFI.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = SensorFusionFFI.xcframework; path = ../build/SensorFusionFFI.xcframework; sourceTree = "<group>"; };
 		41CE6DB2282095B66DEC3E6C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		49F24324DC070AD1AAD3F487 /* FusionTimingPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FusionTimingPolicy.swift; sourceTree = "<group>"; };
 		58BC795608E08C7BC4688153 /* FusionEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FusionEngine.swift; sourceTree = "<group>"; };
+		5ADA9A17CB9984000D5F6EBE /* GnssVelocityResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GnssVelocityResolver.swift; sourceTree = "<group>"; };
 		5FE4D5872E0CCD8175DC5BA5 /* RawSessionLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawSessionLog.swift; sourceTree = "<group>"; };
 		67E25FBA2D389509C370DACC /* NavigationModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationModels.swift; sourceTree = "<group>"; };
 		69016EA42814D5CD9B35E7B6 /* SensorStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensorStore.swift; sourceTree = "<group>"; };
@@ -54,6 +64,7 @@
 		7F4792405B22C6897CC10911 /* MotionKinematics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionKinematics.swift; sourceTree = "<group>"; };
 		8220177DC5F925633A3234CF /* DeveloperComparison.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeveloperComparison.swift; sourceTree = "<group>"; };
 		8CA04E4149EBCF37E8B70112 /* RawSessionLogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawSessionLogTests.swift; sourceTree = "<group>"; };
+		9573E30F277A6F2DC717EBFA /* StreamHealthTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamHealthTests.swift; sourceTree = "<group>"; };
 		9DB13586A10D13A7A4E5BCF3 /* IMUGNSSPhoneTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = IMUGNSSPhoneTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A140A6622AD524F605DCA5EF /* MapRenderPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapRenderPolicyTests.swift; sourceTree = "<group>"; };
 		A509E6299C597B39FA74E9B6 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -62,6 +73,7 @@
 		E69330CEE244184E9EC347F0 /* IMUGNSSPhone.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = IMUGNSSPhone.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E80DDC2ABBEF69B940B47203 /* RawSessionFileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawSessionFileStore.swift; sourceTree = "<group>"; };
 		E8B34295A214912826BC4E69 /* GnssFusionInputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GnssFusionInputTests.swift; sourceTree = "<group>"; };
+		EB1827800952B687FFF88E94 /* StreamHealth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamHealth.swift; sourceTree = "<group>"; };
 		F545E9978287177F167E63CB /* DeveloperComparisonTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeveloperComparisonTests.swift; sourceTree = "<group>"; };
 		FFCB25446DA7D3D6A2DC4368 /* GnssFusionInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GnssFusionInput.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -99,8 +111,10 @@
 			isa = PBXGroup;
 			children = (
 				DD37CB158BB37D599B43EF50 /* FusionHealth.swift */,
+				49F24324DC070AD1AAD3F487 /* FusionTimingPolicy.swift */,
 				11AB526DD8B6E81BBE8B00C4 /* MapRenderPolicy.swift */,
 				67E25FBA2D389509C370DACC /* NavigationModels.swift */,
+				EB1827800952B687FFF88E94 /* StreamHealth.swift */,
 				094B6ED23826D37CA19877C9 /* VehicleMotionDisplay.swift */,
 			);
 			path = Models;
@@ -128,10 +142,13 @@
 			isa = PBXGroup;
 			children = (
 				F545E9978287177F167E63CB /* DeveloperComparisonTests.swift */,
+				04080336EC82C34573366F80 /* FusionTimingPolicyTests.swift */,
 				E8B34295A214912826BC4E69 /* GnssFusionInputTests.swift */,
+				1F58B536FB1DF8A26345B349 /* GnssVelocityResolverTests.swift */,
 				A140A6622AD524F605DCA5EF /* MapRenderPolicyTests.swift */,
 				6CFADB04713B1B5BBC861ED3 /* MotionAnalysisTests.swift */,
 				8CA04E4149EBCF37E8B70112 /* RawSessionLogTests.swift */,
+				9573E30F277A6F2DC717EBFA /* StreamHealthTests.swift */,
 			);
 			name = Tests;
 			path = App/Analysis/Tests;
@@ -160,12 +177,13 @@
 			children = (
 				8220177DC5F925633A3234CF /* DeveloperComparison.swift */,
 				FFCB25446DA7D3D6A2DC4368 /* GnssFusionInput.swift */,
+				5ADA9A17CB9984000D5F6EBE /* GnssVelocityResolver.swift */,
 				7F4792405B22C6897CC10911 /* MotionKinematics.swift */,
 			);
 			path = Analysis;
 			sourceTree = "<group>";
 		};
-		"TEMP_9795A298-9C9D-4FA0-931B-13E936359721" /* EKF */ = {
+		"TEMP_B310F628-7758-4E49-ADD2-861B4E6952D9" /* EKF */ = {
 			isa = PBXGroup;
 			children = (
 			);
@@ -258,10 +276,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				34101B548D55B84338CE8F40 /* DeveloperComparisonTests.swift in Sources */,
+				F1E43DD3900D9FC461587AC7 /* FusionTimingPolicyTests.swift in Sources */,
 				F3FEC82933575AAAD7EF4874 /* GnssFusionInputTests.swift in Sources */,
+				6E27FF2B30066F26B0510954 /* GnssVelocityResolverTests.swift in Sources */,
 				9B262FEBCD96AC0FBB39D809 /* MapRenderPolicyTests.swift in Sources */,
 				B3F545C868B847362CA2FF83 /* MotionAnalysisTests.swift in Sources */,
 				0A8E314C7F0E699F782F481E /* RawSessionLogTests.swift in Sources */,
+				96D57BEB8ADB83CB924822EA /* StreamHealthTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -273,7 +294,9 @@
 				540AD335D46E6C9BA62C65C5 /* DeveloperComparison.swift in Sources */,
 				A28D05F0835892528688A77F /* FusionEngine.swift in Sources */,
 				B913FAB3C199614F82632398 /* FusionHealth.swift in Sources */,
+				9780EB0C5AEB63EE042B5BF2 /* FusionTimingPolicy.swift in Sources */,
 				A76A1793EABCA14894B12AC8 /* GnssFusionInput.swift in Sources */,
+				482E5665EA18D0EE961A75FB /* GnssVelocityResolver.swift in Sources */,
 				1350542115AE72857E3CF9E7 /* IMUGNSSPhoneApp.swift in Sources */,
 				821FA366DB0ABF60821F3EA1 /* MapRenderPolicy.swift in Sources */,
 				3FA0DF4A6D846B8C96B03F56 /* MotionKinematics.swift in Sources */,
@@ -281,6 +304,7 @@
 				448303428B7AFD898578DDE6 /* RawSessionFileStore.swift in Sources */,
 				5A4B75BD8D0068E6753C5125 /* RawSessionLog.swift in Sources */,
 				92082A405A90911B711698B0 /* SensorStore.swift in Sources */,
+				CFD5752864F9342A7084C273 /* StreamHealth.swift in Sources */,
 				8859B3425B5BFC7CD30D64B1 /* VehicleMotionDisplay.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

@@ -49,7 +49,7 @@
       "sha256": "db585024923ad4b4cc7f905b794901949d5465913f570da02704501d39db6308"
     },
     "reference_attitude": {
-      "bytes": 72356,
+      "bytes": 72362,
       "columns": [
         "t_s",
         "roll_deg",
@@ -57,15 +57,15 @@
         "yaw_deg"
       ],
       "encoding": "gzip",
-      "first_t_s": 0.082,
-      "last_t_s": 176.96200000000002,
+      "first_t_s": 0.0,
+      "last_t_s": 176.88,
       "media_type": "text/csv",
       "path": "reference_attitude.csv.gz",
       "rows": 5361,
-      "sha256": "b6af98f5eb76676500939380327c9d8ffc93ca31e3dd8ad565d77484c6279bc4"
+      "sha256": "d43e84633e0f550ef940dcb3de5c1b329fc5047dfc8a1bf4b2f6e57de70e4e50"
     },
     "reference_motion": {
-      "bytes": 105419,
+      "bytes": 105433,
       "columns": [
         "t_s",
         "wx_radps",
@@ -76,15 +76,15 @@
         "az_mps2"
       ],
       "encoding": "gzip",
-      "first_t_s": 0.082,
-      "last_t_s": 176.96200000000002,
+      "first_t_s": 0.0,
+      "last_t_s": 176.88,
       "media_type": "text/csv",
       "path": "reference_motion.csv.gz",
       "rows": 5361,
-      "sha256": "f053adaf6ceac60e52c1b57762a1a1b76aca41dc0289dbe4eb46ad0e840dbe36"
+      "sha256": "d30d5e40222b914dca0e5075db345c42e0728a984490c4c0d1edf40a8852bd87"
     },
     "reference_mount": {
-      "bytes": 1632,
+      "bytes": 1772,
       "columns": [
         "t_s",
         "roll_deg",
@@ -92,12 +92,12 @@
         "yaw_deg"
       ],
       "encoding": "gzip",
-      "first_t_s": 0.0,
-      "last_t_s": 176.5,
+      "first_t_s": -0.082,
+      "last_t_s": 176.418,
       "media_type": "text/csv",
       "path": "reference_mount.csv.gz",
       "rows": 354,
-      "sha256": "2de00193ba4fe67f70df2ca9938edd3af9f1bea4367eb1f30ce9310459addd9d"
+      "sha256": "bbaaab7033e524c040fda104019a7dc93e8fe62f6fdb5977ec4ef681188cd5b8"
     },
     "reference_position": {
       "bytes": 141003,
@@ -134,7 +134,7 @@
     "format": "generic"
   },
   "time_span_s": {
-    "end": 176.96200000000002,
+    "end": 176.8877995237708,
     "start": -0.082
   },
   "title": "Urban short turn loop 001"

@@ -56,33 +56,72 @@ final class MapRenderPolicyTests: XCTestCase {
         XCTAssertEqual(mapView.annotations.count, 0)
     }
 
-    func testCameraRefitPolicyThrottlesContinuousCoordinateChanges() {
+    func testCameraRefitPolicyOnlyFitsInitiallyOrOnExplicitRecenter() {
         XCTAssertTrue(
             MapCameraPolicy.shouldRefit(
-                previousKey: nil,
-                nextKey: "initial",
-                elapsedSinceLastRefitSec: nil
+                isForced: false,
+                hasExistingViewport: false,
+                hasVisibleRoute: true
             )
         )
         XCTAssertFalse(
             MapCameraPolicy.shouldRefit(
-                previousKey: "old",
-                nextKey: "new",
-                elapsedSinceLastRefitSec: 0.25
+                isForced: false,
+                hasExistingViewport: true,
+                hasVisibleRoute: true
             )
         )
         XCTAssertTrue(
             MapCameraPolicy.shouldRefit(
-                previousKey: "old",
-                nextKey: "new",
-                elapsedSinceLastRefitSec: MapCameraPolicy.minimumRefitIntervalSec
+                isForced: true,
+                hasExistingViewport: true,
+                hasVisibleRoute: true
             )
         )
         XCTAssertFalse(
             MapCameraPolicy.shouldRefit(
-                previousKey: "same",
-                nextKey: "same",
-                elapsedSinceLastRefitSec: 10.0
+                isForced: false,
+                hasExistingViewport: false,
+                hasVisibleRoute: false
+            )
+        )
+    }
+
+    func testRouteOverlayPolicyThrottlesContinuousRouteGrowth() {
+        XCTAssertTrue(
+            MapRouteOverlayPolicy.shouldUpdate(
+                previousGnssCount: nil,
+                previousFusedCount: nil,
+                nextGnssCount: 2,
+                nextFusedCount: 0,
+                elapsedSinceLastUpdateSec: nil
+            )
+        )
+        XCTAssertFalse(
+            MapRouteOverlayPolicy.shouldUpdate(
+                previousGnssCount: 100,
+                previousFusedCount: 80,
+                nextGnssCount: 101,
+                nextFusedCount: 81,
+                elapsedSinceLastUpdateSec: 0.1
+            )
+        )
+        XCTAssertTrue(
+            MapRouteOverlayPolicy.shouldUpdate(
+                previousGnssCount: 100,
+                previousFusedCount: 80,
+                nextGnssCount: 101,
+                nextFusedCount: 81,
+                elapsedSinceLastUpdateSec: MapRouteOverlayPolicy.minimumUpdateIntervalSec
+            )
+        )
+        XCTAssertTrue(
+            MapRouteOverlayPolicy.shouldUpdate(
+                previousGnssCount: 100,
+                previousFusedCount: 80,
+                nextGnssCount: 0,
+                nextFusedCount: 80,
+                elapsedSinceLastUpdateSec: 0.1
             )
         )
     }

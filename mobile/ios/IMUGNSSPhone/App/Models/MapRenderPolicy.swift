@@ -81,16 +81,35 @@ final class MapAnnotationLayer {
 }
 
 enum MapCameraPolicy {
-    static let minimumRefitIntervalSec = 2.0
-
     static func shouldRefit(
-        previousKey: String?,
-        nextKey: String,
-        elapsedSinceLastRefitSec: TimeInterval?
+        isForced: Bool,
+        hasExistingViewport: Bool,
+        hasVisibleRoute: Bool
     ) -> Bool {
-        guard previousKey != nextKey else { return false }
-        guard let elapsedSinceLastRefitSec else { return true }
-        return elapsedSinceLastRefitSec >= minimumRefitIntervalSec
+        isForced || (!hasExistingViewport && hasVisibleRoute)
+    }
+}
+
+enum MapRouteOverlayPolicy {
+    static let minimumUpdateIntervalSec: TimeInterval = 0.75
+
+    static func shouldUpdate(
+        previousGnssCount: Int?,
+        previousFusedCount: Int?,
+        nextGnssCount: Int,
+        nextFusedCount: Int,
+        elapsedSinceLastUpdateSec: TimeInterval?
+    ) -> Bool {
+        guard let previousGnssCount, let previousFusedCount else { return true }
+
+        let previousVisibility = (previousGnssCount >= 2, previousFusedCount >= 2)
+        let nextVisibility = (nextGnssCount >= 2, nextFusedCount >= 2)
+        if previousVisibility != nextVisibility {
+            return true
+        }
+
+        guard let elapsedSinceLastUpdateSec else { return true }
+        return elapsedSinceLastUpdateSec >= minimumUpdateIntervalSec
     }
 }
 

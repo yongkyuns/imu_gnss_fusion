@@ -63,13 +63,14 @@ const MAX_NHC_GYRO_NORM_RADPS: f32 = 0.2;
 const MAX_NHC_ACCEL_NORM_ERR_MPS2: f32 = 1.0;
 const NHC_REFERENCE_MAX_DT_S: f32 = 1.0;
 const DEFAULT_NHC_R_Y: f32 = 0.1_f32 * 0.1_f32;
-const DEFAULT_NHC_R_Z: f32 = 0.05_f32 * 0.05_f32;
+const DEFAULT_NHC_R_Z: f32 = 0.5;
 
 /// Full-coupled ECEF INS/GNSS filter used for reference comparisons.
 #[derive(Clone, Debug)]
 pub struct Filter {
     raw: State,
     freeze_mount_states: bool,
+    gnss_velocity_mount_gain_scale: f32,
 }
 
 impl Filter {
@@ -85,6 +86,7 @@ impl Filter {
         Self {
             raw,
             freeze_mount_states: false,
+            gnss_velocity_mount_gain_scale: 1.0,
         }
     }
 
@@ -125,6 +127,16 @@ impl Filter {
     /// Returns per-observation-row contributions from the last batch update.
     pub fn last_dx_by_obs(&self) -> &[[f32; ERROR_STATES]; 8] {
         &self.raw.last_dx_by_obs
+    }
+
+    /// Returns per-observation-row Jacobians from the last batch update.
+    pub fn last_h_by_obs(&self) -> &[[f32; ERROR_STATES]; 8] {
+        &self.raw.last_h_by_obs
+    }
+
+    /// Returns per-observation-row Kalman gains from the last batch update.
+    pub fn last_k_by_obs(&self) -> &[[f32; ERROR_STATES]; 8] {
+        &self.raw.last_k_by_obs
     }
 
     /// Returns raw residuals from the last batch update.
@@ -185,6 +197,17 @@ impl Filter {
         self.freeze_mount_states = freeze;
         if freeze {
             freeze_mount_covariance(&mut self.raw.p);
+        }
+    }
+
+    /// Diagnostic-only scale for direct mount correction from GNSS velocity rows.
+    ///
+    /// `1.0` preserves the Kalman correction exactly. Values below one reduce
+    /// only the direct mount-state injection from GNSS velocity rows; other
+    /// state corrections and covariance propagation are left unchanged.
+    pub fn analysis_set_gnss_velocity_mount_gain_scale(&mut self, scale: f32) {
+        if scale.is_finite() && scale >= 0.0 {
+            self.gnss_velocity_mount_gain_scale = scale;
         }
     }
 
@@ -794,6 +817,8 @@ impl Filter {
         }
         self.raw.last_obs_count = 0;
         self.raw.last_obs_types = [0; 8];
+        self.raw.last_h_by_obs = [[0.0; ERROR_STATES]; 8];
+        self.raw.last_k_by_obs = [[0.0; ERROR_STATES]; 8];
         self.raw.last_dx_by_obs = [[0.0; ERROR_STATES]; 8];
         self.raw.last_residuals = [0.0; 8];
         self.raw.last_effective_residuals = [0.0; 8];
@@ -1059,6 +1084,8 @@ impl Filter {
         variances: &[f32; 8],
     ) {
         let mut dx = [0.0; ERROR_STATES];
+        let mut h_by_obs = [[0.0; ERROR_STATES]; 8];
+        let mut k_by_obs = [[0.0; ERROR_STATES]; 8];
         let mut dx_by_obs = [[0.0; ERROR_STATES]; 8];
         let mut residual_diag = [0.0; 8];
         let mut effective_residual_diag = [0.0; 8];
@@ -1098,11 +1125,25 @@ impl Filter {
                 effective_residual_diag[obs] = effective_residual;
                 innovation_var_diag[obs] = s;
                 let alpha = effective_residual / s;
+                let mut row_k_vec = [0.0; ERROR_STATES];
+                let mut row_dx_vec = [0.0; ERROR_STATES];
                 for i in 0..ERROR_STATES {
-                    let row_dx = ph[i] * alpha;
-                    dx_by_obs[obs][i] = row_dx;
-                    dx[i] += row_dx;
+                    row_k_vec[i] = ph[i] / s;
+                    row_dx_vec[i] = ph[i] * alpha;
                 }
+                if matches!(self.raw.last_obs_types[obs], 4..=6) {
+                    scale_mount_entries(
+                        &mut row_k_vec,
+                        &mut row_dx_vec,
+                        self.gnss_velocity_mount_gain_scale,
+                    );
+                }
+                for i in 0..ERROR_STATES {
+                    k_by_obs[obs][i] = row_k_vec[i];
+                    dx_by_obs[obs][i] = row_dx_vec[i];
+                    dx[i] += row_dx_vec[i];
+                }
+                h_by_obs[obs] = *h_obs;
                 for i in 0..ERROR_STATES {
                     for j in i..ERROR_STATES {
                         let updated = p[i][j] - (ph[i] * ph[j]) / s;
@@ -1118,10 +1159,15 @@ impl Filter {
             for row in &mut dx_by_obs {
                 block_mount_injection(row);
             }
+            for row in &mut k_by_obs {
+                block_mount_injection(row);
+            }
             freeze_mount_covariance(&mut self.raw.p);
         }
 
         self.raw.last_dx.copy_from_slice(&dx);
+        self.raw.last_h_by_obs = h_by_obs;
+        self.raw.last_k_by_obs = k_by_obs;
         self.raw.last_dx_by_obs = dx_by_obs;
         self.raw.last_residuals = residual_diag;
         self.raw.last_effective_residuals = effective_residual_diag;
@@ -1257,7 +1303,6 @@ fn predict_covariance_sparse(
 
 fn apply_reset(p: &mut [[f32; ERROR_STATES]; ERROR_STATES], dx: &[f32; ERROR_STATES]) {
     apply_reset_block(p, 6, [dx[6], dx[7], dx[8]]);
-    apply_reset_block(p, 21, [dx[21], dx[22], dx[23]]);
     covariance::symmetrize(p);
 }
 
@@ -1265,6 +1310,16 @@ fn block_mount_injection(dx: &mut [f32; ERROR_STATES]) {
     dx[21] = 0.0;
     dx[22] = 0.0;
     dx[23] = 0.0;
+}
+
+fn scale_mount_entries(k: &mut [f32; ERROR_STATES], dx: &mut [f32; ERROR_STATES], scale: f32) {
+    if (scale - 1.0).abs() <= f32::EPSILON {
+        return;
+    }
+    for idx in 21..24 {
+        k[idx] *= scale;
+        dx[idx] *= scale;
+    }
 }
 
 fn freeze_mount_covariance(p: &mut [[f32; ERROR_STATES]; ERROR_STATES]) {

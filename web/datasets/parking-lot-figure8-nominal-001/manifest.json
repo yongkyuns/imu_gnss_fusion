@@ -49,7 +49,7 @@
       "sha256": "54c4430f015c269c5b2adc6c73cb15460823c009e261cf7dc5644eb54a736e78"
     },
     "reference_attitude": {
-      "bytes": 61101,
+      "bytes": 61169,
       "columns": [
         "t_s",
         "roll_deg",
@@ -57,15 +57,15 @@
         "yaw_deg"
       ],
       "encoding": "gzip",
-      "first_t_s": 0.158,
-      "last_t_s": 151.001,
+      "first_t_s": 0.0,
+      "last_t_s": 150.843,
       "media_type": "text/csv",
       "path": "reference_attitude.csv.gz",
       "rows": 4572,
-      "sha256": "2b6fdfe2cfbb36a7b3995eea3aa284f6c19fefd1f33944b4fffb96c613bba8da"
+      "sha256": "cf9240dacd09a2dec3ddd9acbdd59e9746270bfa6630803ebcc7b7ed9c00ee04"
     },
     "reference_motion": {
-      "bytes": 63086,
+      "bytes": 63025,
       "columns": [
         "t_s",
         "wx_radps",
@@ -76,15 +76,15 @@
         "az_mps2"
       ],
       "encoding": "gzip",
-      "first_t_s": 0.158,
-      "last_t_s": 151.001,
+      "first_t_s": 0.0,
+      "last_t_s": 150.843,
       "media_type": "text/csv",
       "path": "reference_motion.csv.gz",
       "rows": 4572,
-      "sha256": "8fb6519570b5fa84a6079d6f672f428ae5d94abdc99118c0276c2d92df96ca85"
+      "sha256": "8d6d0aaee0bbd6f9cd7f9c359391dd2d3c0074776d832fb5c90fc84b6be8eede"
     },
     "reference_mount": {
-      "bytes": 1621,
+      "bytes": 1752,
       "columns": [
         "t_s",
         "roll_deg",
@@ -92,12 +92,12 @@
         "yaw_deg"
       ],
       "encoding": "gzip",
-      "first_t_s": 0.0,
-      "last_t_s": 150.5,
+      "first_t_s": -0.158,
+      "last_t_s": 150.342,
       "media_type": "text/csv",
       "path": "reference_mount.csv.gz",
       "rows": 302,
-      "sha256": "84319dc2b6bb0cf990c779420dacd6e1c6f46007b7e9b131d636e0414ffb52fb"
+      "sha256": "bc77a41f4c1ef30d5b2dc3b21d005b3e07731a51cbfec481e1a75de1a9c3aedf"
     },
     "reference_position": {
       "bytes": 119471,
@@ -134,7 +134,7 @@
     "format": "generic"
   },
   "time_span_s": {
-    "end": 151.001,
+    "end": 150.843,
     "start": -0.158
   },
   "title": "Parking-lot figure eight 001"

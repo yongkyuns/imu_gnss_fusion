@@ -49,7 +49,7 @@
       "sha256": "b36cc0905b9beb52273e8f0d7daade0802077e788bed8f705c9807ed69542e80"
     },
     "reference_attitude": {
-      "bytes": 134115,
+      "bytes": 134085,
       "columns": [
         "t_s",
         "roll_deg",
@@ -57,15 +57,15 @@
         "yaw_deg"
       ],
       "encoding": "gzip",
-      "first_t_s": 0.196,
-      "last_t_s": 309.67,
+      "first_t_s": 0.0,
+      "last_t_s": 309.474,
       "media_type": "text/csv",
       "path": "reference_attitude.csv.gz",
       "rows": 9379,
-      "sha256": "c10e7cce3c500f140c0f64f03b4daeb63786da3834a1d28a166a7e2b4929155d"
+      "sha256": "2f1c9b08f4aa501a15d50de93067444e20a4011e178686c13a6c185b736b01f3"
     },
     "reference_motion": {
-      "bytes": 217990,
+      "bytes": 217914,
       "columns": [
         "t_s",
         "wx_radps",
@@ -76,15 +76,15 @@
         "az_mps2"
       ],
       "encoding": "gzip",
-      "first_t_s": 0.196,
-      "last_t_s": 309.67,
+      "first_t_s": 0.0,
+      "last_t_s": 309.474,
       "media_type": "text/csv",
       "path": "reference_motion.csv.gz",
       "rows": 9379,
-      "sha256": "81d6af84464e2c27c886dc11a4a4860291b7e100dc9d56ee6216583aba9aa139"
+      "sha256": "d046675b79077e5e959e01aea9104278030e9af7da92fc6e8f7edbdcb31bc2e4"
     },
     "reference_mount": {
-      "bytes": 2192,
+      "bytes": 2549,
       "columns": [
         "t_s",
         "roll_deg",
@@ -92,12 +92,12 @@
         "yaw_deg"
       ],
       "encoding": "gzip",
-      "first_t_s": 0.0,
-      "last_t_s": 309.0,
+      "first_t_s": -0.196,
+      "last_t_s": 308.80400000000003,
       "media_type": "text/csv",
       "path": "reference_mount.csv.gz",
       "rows": 619,
-      "sha256": "3760433b3d2740430aba9b0f5f1f205207fb910216166f6b3824dadbc8101402"
+      "sha256": "9867234a7438c3c8802503e4f2937e7f8bd58ed59906acacd213580929b18b93"
     },
     "reference_position": {
       "bytes": 256581,
@@ -134,7 +134,7 @@
     "format": "generic"
   },
   "time_span_s": {
-    "end": 309.67,
+    "end": 309.4766274699569,
     "start": -0.196
   },
   "title": "Urban medium turn loop 001"

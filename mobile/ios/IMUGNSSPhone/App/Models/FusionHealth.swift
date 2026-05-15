@@ -42,6 +42,17 @@ struct GnssAccuracy: Equatable, Sendable {
     }
 }
 
+private extension StreamHealth.ChannelState {
+    var blocksFusion: Bool {
+        switch self {
+        case .live:
+            return false
+        case .waiting, .stale, .unavailable, .error:
+            return true
+        }
+    }
+}
+
 struct FusionHealth: Equatable, Sendable {
     enum Status: String, Equatable, Sendable {
         case ready
@@ -75,6 +86,7 @@ struct FusionHealth: Equatable, Sendable {
         mountReady: Bool,
         initialized: Bool,
         gnssAccuracy: GnssAccuracy,
+        streamHealth: StreamHealth? = nil,
         goodHorizontalAccuracyM: Double = 8.0,
         fairHorizontalAccuracyM: Double = 25.0
     ) -> FusionHealth {
@@ -84,7 +96,12 @@ struct FusionHealth: Equatable, Sendable {
         )
 
         let status: Status
-        switch (mountReady, initialized, quality) {
+        if let streamHealth, streamHealth.imu.blocksFusion {
+            status = .needsMotion
+        } else if let streamHealth, streamHealth.gnss.blocksFusion {
+            status = .poorGNSS
+        } else {
+            switch (mountReady, initialized, quality) {
         case (_, _, .unavailable), (_, _, .poor):
             status = .poorGNSS
         case (false, false, _):
@@ -95,6 +112,7 @@ struct FusionHealth: Equatable, Sendable {
             status = .needsMotion
         case (true, true, _):
             status = .ready
+            }
         }
 
         return FusionHealth(

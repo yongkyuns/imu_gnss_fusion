@@ -183,6 +183,80 @@ fn reduced_and_full_nhc_update_match_after_covariance_basis_transform() {
 }
 
 #[test]
+fn reduced_and_full_nhc_reset_match_when_mount_covariance_is_not_reset() {
+    let reduced = sample_reduced_nominal();
+    let full = sample_full_nominal(&reduced);
+    let c_es = quat_to_rot([reduced.q0, reduced.q1, reduced.q2, reduced.q3]);
+    let mut p_reduced = sample_reduced_covariance();
+    let mut p_full = transform_reduced_cov_to_full(&p_reduced, c_es);
+
+    let reduced_y = generated_reduced::body_vel_y_observation(&reduced, &p_reduced, 1.0).h;
+    let reduced_z = generated_reduced::body_vel_z_observation(&reduced, &p_reduced, 1.0).h;
+    let (full_vy, full_y) = generated_full::nhc_y(&full);
+    let (full_vz, full_z) = generated_full::nhc_z(&full);
+
+    let mut dx_reduced = [0.0; REDUCED_STATES];
+    scalar_update_reduced(
+        &mut p_reduced,
+        &mut dx_reduced,
+        &reduced_y,
+        &REDUCED_NHC_Y_SUPPORT,
+        -full_vy,
+        1.0,
+    );
+    scalar_update_reduced(
+        &mut p_reduced,
+        &mut dx_reduced,
+        &reduced_z,
+        &REDUCED_NHC_Z_SUPPORT,
+        -full_vz,
+        1.0,
+    );
+    apply_reduced_runtime_reset(&mut p_reduced, &dx_reduced);
+
+    let mut dx_full = [0.0; FULL_STATES];
+    scalar_update_full(
+        &mut p_full,
+        &mut dx_full,
+        &full_y,
+        &generated_full::NHC_Y_SUPPORT,
+        -full_vy,
+        1.0,
+    );
+    scalar_update_full(
+        &mut p_full,
+        &mut dx_full,
+        &full_z,
+        &generated_full::NHC_Z_SUPPORT,
+        -full_vz,
+        1.0,
+    );
+    let mut p_full_with_mount_reset = p_full;
+    apply_full_runtime_reset(&mut p_full, &dx_full, false);
+    apply_full_runtime_reset(&mut p_full_with_mount_reset, &dx_full, true);
+
+    let p_full_as_reduced = transform_full_cov_to_reduced(&p_full, c_es);
+    let p_full_mount_reset_as_reduced =
+        transform_full_cov_to_reduced(&p_full_with_mount_reset, c_es);
+    let common = [0usize, 1, 2, 3, 4, 5, 9, 10, 11, 12, 13, 14, 15, 16, 17];
+    let no_mount_reset_mismatch = max_cov_mismatch(&p_reduced, &p_full_as_reduced, &common);
+    let with_mount_reset_mismatch =
+        max_cov_mismatch(&p_reduced, &p_full_mount_reset_as_reduced, &common);
+
+    assert!(
+        no_mount_reset_mismatch < 5.0e-6,
+        "Full attitude-only reset should match Reduced reset, mismatch={}",
+        no_mount_reset_mismatch
+    );
+    assert!(
+        with_mount_reset_mismatch > no_mount_reset_mismatch * 10.0,
+        "Full mount covariance reset should be distinguishable from Reduced reset: no_mount={} with_mount={}",
+        no_mount_reset_mismatch,
+        with_mount_reset_mismatch
+    );
+}
+
+#[test]
 fn reduced_and_full_mount_transition_blocks_match_after_basis_transform() {
     let reduced = sample_reduced_nominal();
     let full = sample_full_nominal(&reduced);
@@ -621,6 +695,115 @@ fn predict_cov_full(
         }
     }
     out
+}
+
+fn apply_reduced_runtime_reset(
+    p: &mut [[f32; REDUCED_STATES]; REDUCED_STATES],
+    dx: &[f32; REDUCED_STATES],
+) {
+    apply_reset_block_reduced(p, 0, [dx[0], dx[1], dx[2]]);
+    symmetrize(p);
+}
+
+fn apply_full_runtime_reset(
+    p: &mut [[f32; FULL_STATES]; FULL_STATES],
+    dx: &[f32; FULL_STATES],
+    reset_mount: bool,
+) {
+    apply_reset_block_full(p, 6, [dx[6], dx[7], dx[8]]);
+    if reset_mount {
+        apply_reset_block_full(p, 21, [dx[21], dx[22], dx[23]]);
+    }
+    symmetrize(p);
+}
+
+fn apply_reset_block_reduced(
+    p: &mut [[f32; REDUCED_STATES]; REDUCED_STATES],
+    offset: usize,
+    dtheta: [f32; 3],
+) {
+    let reset = generated_reduced::attitude_reset_jacobian(dtheta);
+    apply_reset_block(p, offset, reset);
+}
+
+fn apply_reset_block_full(
+    p: &mut [[f32; FULL_STATES]; FULL_STATES],
+    offset: usize,
+    dtheta: [f32; 3],
+) {
+    let reset = generated_full::reset_jacobian(dtheta);
+    apply_reset_block(p, offset, reset);
+}
+
+fn apply_reset_block<const N: usize>(p: &mut [[f32; N]; N], offset: usize, reset: [[f32; 3]; 3]) {
+    let mut p_aa = [[0.0; 3]; 3];
+    let mut p_ab = [[0.0; N]; 3];
+    let mut next_aa = [[0.0; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            p_aa[i][j] = p[offset + i][offset + j];
+        }
+        for j in 0..N {
+            p_ab[i][j] = p[offset + i][j];
+        }
+    }
+    for i in 0..3 {
+        for j in 0..3 {
+            for k in 0..3 {
+                next_aa[i][j] += reset[i][k] * p_aa[k][j];
+            }
+        }
+    }
+    for i in 0..3 {
+        for j in 0..3 {
+            let mut accum = 0.0;
+            for k in 0..3 {
+                accum += next_aa[i][k] * reset[j][k];
+            }
+            p[offset + i][offset + j] = accum;
+            p[offset + j][offset + i] = accum;
+        }
+    }
+    for i in 0..3 {
+        for j in 0..N {
+            if (offset..offset + 3).contains(&j) {
+                continue;
+            }
+            let mut accum = 0.0;
+            for k in 0..3 {
+                accum += reset[i][k] * p_ab[k][j];
+            }
+            p[offset + i][j] = accum;
+            p[j][offset + i] = accum;
+        }
+    }
+}
+
+fn symmetrize<const N: usize>(p: &mut [[f32; N]; N]) {
+    for i in 0..N {
+        for j in (i + 1)..N {
+            let avg = 0.5 * (p[i][j] + p[j][i]);
+            p[i][j] = avg;
+            p[j][i] = avg;
+        }
+    }
+}
+
+fn max_cov_mismatch(
+    a: &[[f32; REDUCED_STATES]; REDUCED_STATES],
+    b: &[[f32; REDUCED_STATES]; REDUCED_STATES],
+    states: &[usize],
+) -> f32 {
+    let mut max_err = 0.0;
+    for &i in states {
+        for &j in states {
+            let err = (a[i][j] - b[i][j]).abs();
+            if err > max_err {
+                max_err = err;
+            }
+        }
+    }
+    max_err
 }
 
 fn full_from_reduced_coeff(full_idx: usize, reduced_idx: usize, c_es: [[f32; 3]; 3]) -> f32 {

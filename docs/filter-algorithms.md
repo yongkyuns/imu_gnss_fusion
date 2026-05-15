@@ -286,7 +286,8 @@ Important initialization defaults in the Reduced source/facade include:
 | Yaw sigma | `6 deg` in the facade. |
 | Gyro-bias sigma | `0.125 deg/s`. |
 | Accelerometer-bias sigma | `0.15 m/s^2`. |
-| Mount roll/pitch sigma | `1.2 deg` in the facade. |
+| Mount roll sigma | `1.7 deg` in the facade. |
+| Mount pitch sigma | `1.2 deg` in the facade. |
 | Mount yaw sigma | `6 deg` in the facade. |
 
 The lower-level `init_nominal_from_gnss` uses an internal `10 deg` residual
@@ -393,7 +394,7 @@ The default NHC variances are:
 
 ```text
 r_body_vel_y = 0.5
-r_body_vel_z = 0.05
+r_body_vel_z = 0.5
 ```
 
 These are variances, not standard deviations. The lateral and vertical values
@@ -631,7 +632,7 @@ The default Full NHC variances are:
 
 ```text
 DEFAULT_NHC_R_Y = 0.1^2
-DEFAULT_NHC_R_Z = 0.05^2
+DEFAULT_NHC_R_Z = 0.5
 ```
 
 When the facade calls Full through common runtime settings, it passes the
@@ -882,7 +883,7 @@ Operationally important defaults from `RuntimeConfig`:
 
 ```text
 r_body_vel_y = 0.5
-r_body_vel_z = 0.05
+r_body_vel_z = 0.5
 nhc_update_period_s = 0.1
 r_vehicle_speed = 0.04
 r_zero_vel = 0.0

@@ -21,7 +21,7 @@ pub struct FilterCompareConfig {
     #[serde(default = "default_mount_roll_pitch_init_sigma_deg")]
     pub mount_roll_pitch_init_sigma_deg: f32,
     /// Initial mount roll sigma, in degrees.
-    #[serde(default = "default_mount_roll_pitch_init_sigma_deg")]
+    #[serde(default = "default_mount_roll_init_sigma_deg")]
     pub mount_roll_init_sigma_deg: f32,
     /// Initial mount pitch sigma, in degrees.
     #[serde(default = "default_mount_roll_pitch_init_sigma_deg")]
@@ -59,7 +59,7 @@ impl Default for FilterCompareConfig {
             gyro_bias_init_sigma_dps: 0.125,
             accel_bias_init_sigma_mps2: 0.15,
             mount_roll_pitch_init_sigma_deg: default_mount_roll_pitch_init_sigma_deg(),
-            mount_roll_init_sigma_deg: default_mount_roll_pitch_init_sigma_deg(),
+            mount_roll_init_sigma_deg: default_mount_roll_init_sigma_deg(),
             mount_pitch_init_sigma_deg: default_mount_roll_pitch_init_sigma_deg(),
             mount_init_sigma_deg: 6.0,
             r_vehicle_speed: 0.04,
@@ -86,11 +86,15 @@ fn default_r_body_vel_y() -> f32 {
 }
 
 fn default_r_body_vel_z() -> f32 {
-    0.05
+    0.5
 }
 
 fn default_mount_roll_pitch_init_sigma_deg() -> f32 {
     1.2
+}
+
+fn default_mount_roll_init_sigma_deg() -> f32 {
+    1.7
 }
 
 fn default_attitude_roll_pitch_init_sigma_deg() -> f32 {
@@ -298,6 +302,14 @@ mod tests {
         assert_eq!(decoded.r_body_vel_z, default_r_body_vel_z());
         assert_eq!(
             decoded.mount_roll_pitch_init_sigma_deg,
+            default_mount_roll_pitch_init_sigma_deg()
+        );
+        assert_eq!(
+            decoded.mount_roll_init_sigma_deg,
+            default_mount_roll_init_sigma_deg()
+        );
+        assert_eq!(
+            decoded.mount_pitch_init_sigma_deg,
             default_mount_roll_pitch_init_sigma_deg()
         );
         assert!(decoded.noise.reduced.is_some());

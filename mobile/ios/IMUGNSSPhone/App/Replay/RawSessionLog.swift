@@ -9,6 +9,10 @@ struct RawSessionSummary: Identifiable, Equatable, Sendable {
     let gnssCount: Int
     let barometerCount: Int
     let fileURL: URL?
+
+    var isPendingSave: Bool {
+        fileURL == nil
+    }
 }
 
 struct RawSessionLog: Codable, Equatable, Sendable {

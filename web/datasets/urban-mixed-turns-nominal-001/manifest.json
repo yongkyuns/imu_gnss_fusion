@@ -49,7 +49,7 @@
       "sha256": "bec365b835ac07eaf7af7a06a5f56008d85c240bd00bac406c39d71cacd18fc5"
     },
     "reference_attitude": {
-      "bytes": 225401,
+      "bytes": 225473,
       "columns": [
         "t_s",
         "roll_deg",
@@ -57,15 +57,15 @@
         "yaw_deg"
       ],
       "encoding": "gzip",
-      "first_t_s": 0.193,
-      "last_t_s": 521.692,
+      "first_t_s": 0.0,
+      "last_t_s": 521.499,
       "media_type": "text/csv",
       "path": "reference_attitude.csv.gz",
       "rows": 15804,
-      "sha256": "ddf471b6ab899691f3b979fef63c3eb37adbc9ca0ac3ea6b7fb6a3618256cc1b"
+      "sha256": "64ec99077ebd9c74ae52c5c104ad8a6f58bf768b31bed0142a60c694a6cbebe6"
     },
     "reference_motion": {
-      "bytes": 363503,
+      "bytes": 363521,
       "columns": [
         "t_s",
         "wx_radps",
@@ -76,15 +76,15 @@
         "az_mps2"
       ],
       "encoding": "gzip",
-      "first_t_s": 0.193,
-      "last_t_s": 521.692,
+      "first_t_s": 0.0,
+      "last_t_s": 521.499,
       "media_type": "text/csv",
       "path": "reference_motion.csv.gz",
       "rows": 15804,
-      "sha256": "527e13359b64634c5a30382d31ee2906b1d5a79286350bacc2255ca3f2abd62e"
+      "sha256": "f84958c7d50dcea06d8a7a1543e610e5d1d7e2b20da639eef73754a914b52e76"
     },
     "reference_mount": {
-      "bytes": 4427,
+      "bytes": 4897,
       "columns": [
         "t_s",
         "roll_deg",
@@ -92,12 +92,12 @@
         "yaw_deg"
       ],
       "encoding": "gzip",
-      "first_t_s": 0.0,
-      "last_t_s": 521.0,
+      "first_t_s": -0.193,
+      "last_t_s": 520.807,
       "media_type": "text/csv",
       "path": "reference_mount.csv.gz",
       "rows": 1043,
-      "sha256": "1ba78eafae31abd53428b83a7efc61340afafe1f492a6e839a0bc3a01600151e"
+      "sha256": "4c55858ec16e105c3163d1906e5e21a8d454abcfa1f8034a1a2a462337aa9d0a"
     },
     "reference_position": {
       "bytes": 403419,
@@ -134,7 +134,7 @@
     "format": "generic"
   },
   "time_span_s": {
-    "end": 521.692,
+    "end": 521.532,
     "start": -0.193
   },
   "title": "Urban mixed turns 001"

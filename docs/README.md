@@ -93,6 +93,7 @@ review the Rust diff.
 - [Reduced EKF mount formulation PDF](reduced.pdf) and [TEX](reduced.tex).
 - [Align/NHC formulation PDF](align.pdf) and [TEX](align.tex).
 - [Full EKF formulation PDF](full.pdf) and [TEX](full.tex).
+- [Roll observability PDF](roll-observability.pdf) and [TEX](roll-observability.tex).
 
 ## Documentation Conventions
 

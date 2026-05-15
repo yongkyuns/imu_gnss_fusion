@@ -49,7 +49,7 @@
       "sha256": "e2728d1318add67525a5098b942782f0964c0ee895882b09b459622677c95cbe"
     },
     "reference_attitude": {
-      "bytes": 88009,
+      "bytes": 87956,
       "columns": [
         "t_s",
         "roll_deg",
@@ -57,15 +57,15 @@
         "yaw_deg"
       ],
       "encoding": "gzip",
-      "first_t_s": 0.021,
-      "last_t_s": 190.002,
+      "first_t_s": 0.0,
+      "last_t_s": 189.981,
       "media_type": "text/csv",
       "path": "reference_attitude.csv.gz",
       "rows": 5758,
-      "sha256": "8935dd6081de7804f69a63de81f69aa4873f563322827fbb448692a16090cc37"
+      "sha256": "baf72a30fe11a18c27faa20de2a7ed4fa32c1699772b7fcc3e368e508ce2c22e"
     },
     "reference_motion": {
-      "bytes": 142420,
+      "bytes": 142376,
       "columns": [
         "t_s",
         "wx_radps",
@@ -76,15 +76,15 @@
         "az_mps2"
       ],
       "encoding": "gzip",
-      "first_t_s": 0.021,
-      "last_t_s": 190.002,
+      "first_t_s": 0.0,
+      "last_t_s": 189.981,
       "media_type": "text/csv",
       "path": "reference_motion.csv.gz",
       "rows": 5758,
-      "sha256": "2de73c6b2b244899868baa9a6f4cf2212ca91bdd824c1e9f953986341dbd86f7"
+      "sha256": "40a4b2b9cc54b1806b60261d8cb3059b941b8bbb1511d9613e59b03e4ed1b100"
     },
     "reference_mount": {
-      "bytes": 1706,
+      "bytes": 1837,
       "columns": [
         "t_s",
         "roll_deg",
@@ -92,12 +92,12 @@
         "yaw_deg"
       ],
       "encoding": "gzip",
-      "first_t_s": 0.0,
-      "last_t_s": 189.5,
+      "first_t_s": -0.021,
+      "last_t_s": 189.479,
       "media_type": "text/csv",
       "path": "reference_mount.csv.gz",
       "rows": 380,
-      "sha256": "b91bae61c00feb20e45bce15bb463aa6fc0cc9f96463b42147002a9fd220c388"
+      "sha256": "01f807da6dc7be285ac2958b767c51287c1871c8cb663a977f93a170f174617b"
     },
     "reference_position": {
       "bytes": 155080,
@@ -134,7 +134,7 @@
     "format": "generic"
   },
   "time_span_s": {
-    "end": 190.002,
+    "end": 189.981,
     "start": -0.021
   },
   "title": "Urban short turn loop 002"

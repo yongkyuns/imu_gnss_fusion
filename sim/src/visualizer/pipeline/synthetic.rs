@@ -568,10 +568,14 @@ fn add_synthetic_overlays(data: &mut PlotData, traces: SyntheticOverlayTraces) {
     );
     data.reduced_misalignment.push(Trace {
         name: "Reduced mount quaternion error [deg]".to_string(),
-        points: mount_error_points(&data.reduced_misalignment, traces.q_truth_mount),
+        points: mount_error_points(&data.reduced_misalignment, "Reduced", traces.q_truth_mount),
     });
     data.reduced_misalignment
         .extend(synthetic_mount_traces(traces.q_truth_mount, traces.end_t_s));
+    data.full_misalignment.push(Trace {
+        name: "Full mount quaternion error [deg]".to_string(),
+        points: mount_error_points(&data.full_misalignment, "Full", traces.q_truth_mount),
+    });
     data.reduced_map.insert(
         0,
         Trace {
@@ -599,23 +603,21 @@ fn synthetic_mount_traces(q_truth_mount: [f64; 4], end_t_s: f64) -> [Trace; 3] {
     ]
 }
 
-fn mount_error_points(traces: &[Trace], q_truth_mount: [f64; 4]) -> Vec<[f64; 2]> {
-    let Some(roll) = traces
-        .iter()
-        .find(|trace| trace.name == "Reduced mount roll [deg]")
-    else {
+fn mount_error_points(
+    traces: &[Trace],
+    system_label: &str,
+    q_truth_mount: [f64; 4],
+) -> Vec<[f64; 2]> {
+    let roll_name = format!("{system_label} mount roll [deg]");
+    let pitch_name = format!("{system_label} mount pitch [deg]");
+    let yaw_name = format!("{system_label} mount yaw [deg]");
+    let Some(roll) = traces.iter().find(|trace| trace.name == roll_name) else {
         return Vec::new();
     };
-    let Some(pitch) = traces
-        .iter()
-        .find(|trace| trace.name == "Reduced mount pitch [deg]")
-    else {
+    let Some(pitch) = traces.iter().find(|trace| trace.name == pitch_name) else {
         return Vec::new();
     };
-    let Some(yaw) = traces
-        .iter()
-        .find(|trace| trace.name == "Reduced mount yaw [deg]")
-    else {
+    let Some(yaw) = traces.iter().find(|trace| trace.name == yaw_name) else {
         return Vec::new();
     };
     roll.points

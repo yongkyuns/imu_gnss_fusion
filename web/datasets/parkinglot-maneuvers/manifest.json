@@ -1,0 +1,141 @@
+{
+  "created_utc": "2026-05-14T01:57:14Z",
+  "dataset_id": "parkinglot-maneuvers",
+  "files": {
+    "gnss": {
+      "bytes": 73041,
+      "columns": [
+        "t_s",
+        "lat_deg",
+        "lon_deg",
+        "height_m",
+        "vn_mps",
+        "ve_mps",
+        "vd_mps",
+        "pos_std_n_m",
+        "pos_std_e_m",
+        "pos_std_d_m",
+        "vel_std_n_mps",
+        "vel_std_e_mps",
+        "vel_std_d_mps",
+        "heading_rad"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 16.407,
+      "last_t_s": 661.907,
+      "media_type": "text/csv",
+      "path": "gnss.csv.gz",
+      "rows": 1292,
+      "sha256": "2a34daaea1b0d2e1fdc59f3e7f7cb265da80b6a0a0223585b67b908e5a8889c9"
+    },
+    "imu": {
+      "bytes": 2328861,
+      "columns": [
+        "t_s",
+        "gx_radps",
+        "gy_radps",
+        "gz_radps",
+        "ax_mps2",
+        "ay_mps2",
+        "az_mps2"
+      ],
+      "encoding": "gzip",
+      "first_t_s": -0.032358355283737185,
+      "last_t_s": 662.2701719623208,
+      "media_type": "text/csv",
+      "path": "imu.csv.gz",
+      "rows": 65893,
+      "sha256": "a292bf6853ef386a276f48896e6ec2a8525b50bca2746f5b99daa2592482c10f"
+    },
+    "reference_attitude": {
+      "bytes": 271849,
+      "columns": [
+        "t_s",
+        "roll_deg",
+        "pitch_deg",
+        "yaw_deg"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.0,
+      "last_t_s": 662.265,
+      "media_type": "text/csv",
+      "path": "reference_attitude.csv.gz",
+      "rows": 20061,
+      "sha256": "4a4f8778797d85fc5659c3a2fc0daa171bf64ca7628a5b8cb301b856055f9d2b"
+    },
+    "reference_motion": {
+      "bytes": 388045,
+      "columns": [
+        "t_s",
+        "wx_radps",
+        "wy_radps",
+        "wz_radps",
+        "ax_mps2",
+        "ay_mps2",
+        "az_mps2"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.0,
+      "last_t_s": 662.265,
+      "media_type": "text/csv",
+      "path": "reference_motion.csv.gz",
+      "rows": 20061,
+      "sha256": "fc5ccc9631d96a8bb68389f62cf556661a09ba9addc20ae0eb6d1a74c90e0718"
+    },
+    "reference_mount": {
+      "bytes": 5718,
+      "columns": [
+        "t_s",
+        "roll_deg",
+        "pitch_deg",
+        "yaw_deg"
+      ],
+      "encoding": "gzip",
+      "first_t_s": -0.093,
+      "last_t_s": 661.907,
+      "media_type": "text/csv",
+      "path": "reference_mount.csv.gz",
+      "rows": 1325,
+      "sha256": "15f1b91089447e42c92dd41ecfe897df01ee534d251063d8fabc84629169978d"
+    },
+    "reference_position": {
+      "bytes": 533907,
+      "columns": [
+        "t_s",
+        "lat_deg",
+        "lon_deg",
+        "height_m",
+        "vn_mps",
+        "ve_mps",
+        "vd_mps",
+        "heading_rad"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 16.653,
+      "last_t_s": 662.265,
+      "media_type": "text/csv",
+      "path": "reference_position.csv.gz",
+      "rows": 19565,
+      "sha256": "8e2e1867fa020133a37447c59ba70878730aa1b9fbabd5e003581020434988b7"
+    }
+  },
+  "manifest_version": 1,
+  "samples": {
+    "gnss": 1292,
+    "imu": 65893,
+    "reference_attitude": 20061,
+    "reference_motion": 20061,
+    "reference_mount": 1325,
+    "reference_position": 19565
+  },
+  "schema": "generic-replay-v1",
+  "source": {
+    "format": "generic",
+    "input_path": "/Users/ykshin/Dev/me/ekf/simulation/ubx_viewer/data/ubx_raw_20260513_213028"
+  },
+  "time_span_s": {
+    "end": 662.2701719623208,
+    "start": -0.093
+  },
+  "title": "Parking lot maneuvers"
+}

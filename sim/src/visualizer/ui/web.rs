@@ -131,6 +131,7 @@ pub(super) enum WebReplayWorkerJob {
         label: String,
         motion_label: String,
         motion_text: String,
+        mount_rpy_deg: [f64; 3],
         noise: WebSyntheticNoise,
         early_vel_bias_ned_mps: [f64; 3],
         early_fault_window_s: Option<[f64; 2]>,
@@ -206,6 +207,10 @@ pub(super) enum WebSyntheticScenario {
     FigureEightEarlyVelocityFault,
     FigureEightRollExcitation,
     StraightAccelBrake,
+    ObservabilityStraight,
+    ObservabilityAccelBrake,
+    ObservabilityTurns,
+    ObservabilityTurnsAccel,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -379,6 +384,7 @@ pub(super) fn web_replay_worker_request(
             label,
             motion_label,
             motion_text,
+            mount_rpy_deg,
             noise,
             early_vel_bias_ned_mps,
             early_fault_window_s,
@@ -409,7 +415,7 @@ pub(super) fn web_replay_worker_request(
                 &JsValue::from_str(noise.cli_value()),
             );
             let _ = Reflect::set(&source, &JsValue::from_str("seed"), &JsValue::from_f64(1.0));
-            let mount_rpy_deg = js_number_array(&[5.0, -5.0, 5.0]);
+            let mount_rpy_deg = js_number_array(mount_rpy_deg);
             let _ = Reflect::set(
                 &source,
                 &JsValue::from_str("mountRpyDeg"),
@@ -488,6 +494,18 @@ pub(super) fn web_query_synthetic_scenario() -> Option<WebSyntheticScenario> {
         Some("straight" | "straight_accel_brake" | "straight-accel-brake") => {
             Some(WebSyntheticScenario::StraightAccelBrake)
         }
+        Some("obs_straight" | "observability_straight" | "observability-straight") => {
+            Some(WebSyntheticScenario::ObservabilityStraight)
+        }
+        Some("obs_accel" | "observability_accel_brake" | "observability-accel-brake") => {
+            Some(WebSyntheticScenario::ObservabilityAccelBrake)
+        }
+        Some("obs_turns" | "observability_turns" | "observability-turns") => {
+            Some(WebSyntheticScenario::ObservabilityTurns)
+        }
+        Some("obs_turns_accel" | "observability_turns_accel" | "observability-turns-accel") => {
+            Some(WebSyntheticScenario::ObservabilityTurnsAccel)
+        }
         _ => None,
     }
 }
@@ -530,10 +548,16 @@ async fn web_fetch_text(url: &str) -> std::result::Result<String, String> {
 pub(super) async fn web_fetch_manifest(
     url: String,
 ) -> std::result::Result<Vec<WebDatasetEntry>, String> {
-    let text = web_fetch_text(&url).await?;
+    let fetch_url = cache_busted_url(&url);
+    let text = web_fetch_text(&fetch_url).await?;
     let manifest: WebDatasetManifest =
         serde_json::from_str(&text).map_err(|err| format!("{url}: bad manifest JSON: {err}"))?;
     Ok(manifest.datasets)
+}
+
+fn cache_busted_url(url: &str) -> String {
+    let separator = if url.contains('?') { '&' } else { '?' };
+    format!("{url}{separator}v={:.0}", Date::now())
 }
 
 pub(super) async fn web_fetch_dataset(
@@ -805,6 +829,10 @@ impl WebSyntheticScenario {
             Self::FigureEightEarlyVelocityFault => "Figure eight early GNSS fault",
             Self::FigureEightRollExcitation => "Figure eight roll excitation + GNSS fault",
             Self::StraightAccelBrake => "Straight accel/brake",
+            Self::ObservabilityStraight => "Mount recovery: straight constant",
+            Self::ObservabilityAccelBrake => "Mount recovery: accel/brake",
+            Self::ObservabilityTurns => "Mount recovery: turns only",
+            Self::ObservabilityTurnsAccel => "Mount recovery: turns + accel/brake",
         }
     }
 
@@ -824,6 +852,22 @@ impl WebSyntheticScenario {
                 "straight_accel_brake_builtin.scenario",
                 STRAIGHT_ACCEL_BRAKE_SCENARIO,
             ),
+            Self::ObservabilityStraight => (
+                "observability_straight_builtin.scenario",
+                OBSERVABILITY_STRAIGHT_SCENARIO,
+            ),
+            Self::ObservabilityAccelBrake => (
+                "observability_accel_brake_builtin.scenario",
+                OBSERVABILITY_ACCEL_BRAKE_SCENARIO,
+            ),
+            Self::ObservabilityTurns => (
+                "observability_turns_builtin.scenario",
+                OBSERVABILITY_TURNS_SCENARIO,
+            ),
+            Self::ObservabilityTurnsAccel => (
+                "observability_turns_accel_builtin.scenario",
+                OBSERVABILITY_TURNS_ACCEL_SCENARIO,
+            ),
         }
     }
 
@@ -832,10 +876,18 @@ impl WebSyntheticScenario {
             Self::FigureEightEarlyVelocityFault | Self::FigureEightRollExcitation => {
                 ([0.5, 0.0, 0.0], Some([120.0, 360.0]))
             }
+            Self::ObservabilityStraight
+            | Self::ObservabilityAccelBrake
+            | Self::ObservabilityTurns
+            | Self::ObservabilityTurnsAccel => ([0.8, 0.25, 0.0], Some([130.0, 250.0])),
             Self::CityBlocks | Self::FigureEight | Self::StraightAccelBrake => {
                 ([0.0, 0.0, 0.0], None)
             }
         }
+    }
+
+    pub(super) fn mount_rpy_deg(self) -> [f64; 3] {
+        [5.0, -5.0, 5.0]
     }
 }
 
@@ -943,6 +995,59 @@ repeat 2 {
     wait 20s
     brake 0.5m/s^2 for 20s
     wait 15s
+}
+"#;
+
+const OBSERVABILITY_STRAIGHT_SCENARIO: &str = r#"
+initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
+wait 20s
+accelerate 0.8 for=20s
+turn left 10 for=18s
+turn right 10 for=18s
+coast for=24s
+wait for=420s
+"#;
+
+const OBSERVABILITY_ACCEL_BRAKE_SCENARIO: &str = r#"
+initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
+wait 20s
+accelerate 0.8 for=20s
+turn left 10 for=18s
+turn right 10 for=18s
+coast for=24s
+repeat 12 {
+    accelerate 1.0 for=15s
+    coast for=10s
+    brake 1.0 for=15s
+    coast for=10s
+}
+"#;
+
+const OBSERVABILITY_TURNS_SCENARIO: &str = r#"
+initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
+wait 20s
+accelerate 0.8 for=20s
+turn left 10 for=18s
+turn right 10 for=18s
+coast for=24s
+repeat 10 {
+    turn left 10 for=24s
+    turn right 10 for=24s
+}
+"#;
+
+const OBSERVABILITY_TURNS_ACCEL_SCENARIO: &str = r#"
+initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
+wait 20s
+accelerate 0.8 for=20s
+turn left 10 for=18s
+turn right 10 for=18s
+coast for=24s
+repeat 8 {
+    accelerate 0.8 for=10s
+    turn left 10 for=20s
+    brake 0.8 for=10s
+    turn right 10 for=20s
 }
 "#;
 
@@ -1424,12 +1529,14 @@ impl App {
     pub(super) fn refresh_from_web_synthetic(&mut self, ctx: &egui::Context) {
         let (label, text) = self.web_scenario.scenario_text();
         let (early_vel_bias_ned_mps, early_fault_window_s) = self.web_scenario.early_fault();
+        let mount_rpy_deg = self.web_scenario.mount_rpy_deg();
         self.web_input_mode = WebInputMode::Synthetic;
         self.start_web_replay_worker(
             WebReplayWorkerJob::Synthetic {
                 label: self.web_scenario.display_label().to_string(),
                 motion_label: label.to_string(),
                 motion_text: text.to_string(),
+                mount_rpy_deg,
                 noise: self.web_synthetic_noise,
                 early_vel_bias_ned_mps,
                 early_fault_window_s,

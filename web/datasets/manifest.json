@@ -49,6 +49,18 @@
       "reference_motion_gz": "reference_motion.csv.gz"
     },
     {
+      "id": "parkinglot-maneuvers",
+      "label": "Parking lot maneuvers",
+      "description": "Parking-lot maneuver dataset with several turns, brief stops, nominal GNSS coverage, and a large sensor mount offset.",
+      "base_url": "parkinglot-maneuvers",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz",
+      "reference_attitude_gz": "reference_attitude.csv.gz",
+      "reference_mount_gz": "reference_mount.csv.gz",
+      "reference_position_gz": "reference_position.csv.gz",
+      "reference_motion_gz": "reference_motion.csv.gz"
+    },
+    {
       "id": "urban-long-turn-loop-nominal-001",
       "label": "Urban long turn loop 001",
       "description": "Longer urban drive with repeated turns and nominal GNSS coverage.",

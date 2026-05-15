@@ -51,6 +51,7 @@ pub struct Filter {
     raw: State,
     freeze_misalignment_states: bool,
     gravity_mss: f32,
+    gnss_velocity_mount_gain_scale: f32,
 }
 
 impl Filter {
@@ -75,6 +76,7 @@ impl Filter {
             raw,
             freeze_misalignment_states: false,
             gravity_mss: generated::GRAVITY_MSS,
+            gnss_velocity_mount_gain_scale: 1.0,
         }
     }
 
@@ -110,6 +112,17 @@ impl Filter {
         self.freeze_misalignment_states = freeze;
         if freeze {
             freeze_mount_covariance(&mut self.raw.p);
+        }
+    }
+
+    /// Diagnostic-only scale for direct mount correction from GNSS velocity rows.
+    ///
+    /// `1.0` preserves the Kalman correction exactly. Values below one reduce
+    /// only the direct mount-state injection from GNSS velocity rows; other
+    /// state corrections and covariance propagation are left unchanged.
+    pub fn analysis_set_gnss_velocity_mount_gain_scale(&mut self, scale: f32) {
+        if scale.is_finite() && scale >= 0.0 {
+            self.gnss_velocity_mount_gain_scale = scale;
         }
     }
 
@@ -468,6 +481,8 @@ impl Filter {
         if block_mount {
             block_mount_injection(&mut k);
             block_mount_injection(&mut dx);
+        } else {
+            scale_mount_entries(&mut k, &mut dx, self.gnss_velocity_mount_gain_scale);
         }
         self.freeze_mount_update_if_needed(&mut k, &mut dx);
         let diag = if r_vel_n == RUNTIME_ZERO_VEL_R_DIAG {
@@ -491,6 +506,8 @@ impl Filter {
         if block_mount {
             block_mount_injection(&mut k);
             block_mount_injection(&mut dx);
+        } else {
+            scale_mount_entries(&mut k, &mut dx, self.gnss_velocity_mount_gain_scale);
         }
         self.freeze_mount_update_if_needed(&mut k, &mut dx);
         let diag = if r_vel_e == RUNTIME_ZERO_VEL_R_DIAG {
@@ -514,6 +531,8 @@ impl Filter {
         if block_mount {
             block_mount_injection(&mut k);
             block_mount_injection(&mut dx);
+        } else {
+            scale_mount_entries(&mut k, &mut dx, self.gnss_velocity_mount_gain_scale);
         }
         self.freeze_mount_update_if_needed(&mut k, &mut dx);
         let diag = if r_vel_d == RUNTIME_ZERO_VEL_R_DIAG {
@@ -634,6 +653,7 @@ impl Filter {
                 self.raw.last_residuals[obs_count] = residual;
                 self.raw.last_effective_residuals[obs_count] = effective_residual;
                 self.raw.last_innovation_vars[obs_count] = s;
+                self.raw.last_h_by_obs[obs_count] = obs.h;
                 self.raw.last_k_by_obs[obs_count] = diag_k;
                 self.raw.last_dx_by_obs[obs_count] = diag_dx;
                 obs_count += 1;
@@ -722,6 +742,8 @@ impl Filter {
             if self.freeze_misalignment_states {
                 block_mount_injection(&mut k);
                 block_mount_injection(&mut row_dx);
+            } else if matches!(diag_types[row], DIAG_GPS_VEL | DIAG_GPS_VEL_D) {
+                scale_mount_entries(&mut k, &mut row_dx, self.gnss_velocity_mount_gain_scale);
             }
             for i in 0..ERROR_STATES {
                 dx[i] += row_dx[i];
@@ -731,6 +753,7 @@ impl Filter {
                 self.raw.last_residuals[recorded_obs] = residuals[row];
                 self.raw.last_effective_residuals[recorded_obs] = effective_residual;
                 self.raw.last_innovation_vars[recorded_obs] = s;
+                self.raw.last_h_by_obs[recorded_obs] = *h;
                 self.raw.last_k_by_obs[recorded_obs] = k;
                 self.raw.last_dx_by_obs[recorded_obs] = row_dx;
                 recorded_obs += 1;
@@ -759,6 +782,7 @@ impl Filter {
 
     fn clear_last_batch_diag(&mut self) {
         self.raw.last_dx = [0.0; ERROR_STATES];
+        self.raw.last_h_by_obs = [[0.0; ERROR_STATES]; 8];
         self.raw.last_dx_by_obs = [[0.0; ERROR_STATES]; 8];
         self.raw.last_k_by_obs = [[0.0; ERROR_STATES]; 8];
         self.raw.last_obs_count = 0;
@@ -911,6 +935,16 @@ fn block_mount_injection(dx: &mut [f32; ERROR_STATES]) {
     dx[15] = 0.0;
     dx[16] = 0.0;
     dx[17] = 0.0;
+}
+
+fn scale_mount_entries(k: &mut [f32; ERROR_STATES], dx: &mut [f32; ERROR_STATES], scale: f32) {
+    if (scale - 1.0).abs() <= f32::EPSILON {
+        return;
+    }
+    for idx in 15..18 {
+        k[idx] *= scale;
+        dx[idx] *= scale;
+    }
 }
 
 fn freeze_mount_covariance(p: &mut [[f32; ERROR_STATES]; ERROR_STATES]) {
