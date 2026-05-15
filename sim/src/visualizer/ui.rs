@@ -37,6 +37,10 @@ const SYNTHETIC_TRAJECTORY_MAX_POINTS: usize = 2_000;
 const LOG_Y_FLOOR: f64 = 1.0e-6;
 pub struct App {
     data: PlotData,
+    ghost_data: Option<PlotData>,
+    current_run_key: Option<String>,
+    #[cfg(target_arch = "wasm32")]
+    pending_run_key: Option<String>,
     has_itow: bool,
     fps_ema: f32,
     last_frame_time_s: f64,

@@ -47,6 +47,21 @@ impl App {
                 let roll_attitude_error = attitude_error_traces(&self.data, "roll");
                 let pitch_attitude_error = attitude_error_traces(&self.data, "pitch");
                 let yaw_attitude_error = attitude_error_traces(&self.data, "yaw");
+                let ghost_roll_attitude_error = self
+                    .ghost_data
+                    .as_ref()
+                    .map(|data| attitude_error_traces(data, "roll"))
+                    .unwrap_or_default();
+                let ghost_pitch_attitude_error = self
+                    .ghost_data
+                    .as_ref()
+                    .map(|data| attitude_error_traces(data, "pitch"))
+                    .unwrap_or_default();
+                let ghost_yaw_attitude_error = self
+                    .ghost_data
+                    .as_ref()
+                    .map(|data| attitude_error_traces(data, "yaw"))
+                    .unwrap_or_default();
                 let mut hovered_t_s = None;
                 egui::CentralPanel::default().show(ctx, |ui| {
                     hovered_t_s = draw_analysis_sections_page(
@@ -104,13 +119,16 @@ impl App {
                                 "Attitude Error",
                                 true,
                                 vec![
-                                    plot_spec("Roll Error", trace_refs(&roll_attitude_error), true),
+                                    plot_spec("Roll Error", trace_refs(&roll_attitude_error), true)
+                                        .with_ghost_traces(trace_refs(&ghost_roll_attitude_error)),
                                     plot_spec(
                                         "Pitch Error",
                                         trace_refs(&pitch_attitude_error),
                                         true,
-                                    ),
-                                    plot_spec("Yaw Error", trace_refs(&yaw_attitude_error), true),
+                                    )
+                                    .with_ghost_traces(trace_refs(&ghost_pitch_attitude_error)),
+                                    plot_spec("Yaw Error", trace_refs(&yaw_attitude_error), true)
+                                        .with_ghost_traces(trace_refs(&ghost_yaw_attitude_error)),
                                 ],
                             ),
                             plot_section(
@@ -156,6 +174,7 @@ impl App {
                         self.max_points_per_trace,
                         self.trace_visibility(),
                         self.shared_cursor_t_s,
+                        self.ghost_data.as_ref(),
                     );
                 });
                 self.shared_cursor_t_s = hovered_t_s;
@@ -246,6 +265,7 @@ impl App {
                         self.max_points_per_trace,
                         self.trace_visibility(),
                         self.shared_cursor_t_s,
+                        self.ghost_data.as_ref(),
                     );
                 });
                 self.shared_cursor_t_s = hovered_t_s;
@@ -308,6 +328,7 @@ impl App {
                         self.max_points_per_trace,
                         self.trace_visibility(),
                         self.shared_cursor_t_s,
+                        self.ghost_data.as_ref(),
                     );
                 });
                 self.shared_cursor_t_s = hovered_t_s;
@@ -321,52 +342,34 @@ impl App {
                     hovered_t_s = draw_analysis_sections_page(
                         ui,
                         "Sensors",
-                        "Raw, calibrated, and filter input sensor signals.",
-                        vec![
-                            plot_section(
-                                "Source Sensors",
-                                true,
-                                vec![
-                                    plot_spec(
-                                        "GNSS Signal Strength",
-                                        trace_refs(&self.data.sat_cn0),
-                                        false,
-                                    ),
-                                    plot_spec(
-                                        "Raw IMU Gyro",
-                                        trace_refs(&self.data.imu_raw_gyro),
-                                        true,
-                                    ),
-                                    plot_spec(
-                                        "Raw IMU Accel",
-                                        trace_refs(&self.data.imu_raw_accel),
-                                        true,
-                                    ),
-                                    plot_spec("Calibrated IMU Gyro", imu_cal_gyro, true),
-                                    plot_spec("Calibrated IMU Accel", imu_cal_accel, true),
-                                ],
-                            ),
-                            plot_section(
-                                "Advanced Filter Inputs",
-                                false,
-                                vec![
-                                    plot_spec(
-                                        "EKF Raw IMU Gyro Input",
-                                        trace_refs(&self.data.ekf_meas_gyro),
-                                        true,
-                                    ),
-                                    plot_spec(
-                                        "EKF Raw IMU Accel Input",
-                                        trace_refs(&self.data.ekf_meas_accel),
-                                        true,
-                                    ),
-                                    plot_spec("Other Signals", trace_refs(&self.data.other), true),
-                                ],
-                            ),
-                        ],
+                        "Raw and calibrated sensor signals.",
+                        vec![plot_section(
+                            "Source Sensors",
+                            true,
+                            vec![
+                                plot_spec(
+                                    "GNSS Signal Strength",
+                                    trace_refs(&self.data.sat_cn0),
+                                    false,
+                                ),
+                                plot_spec(
+                                    "Raw IMU Gyro",
+                                    trace_refs(&self.data.imu_raw_gyro),
+                                    true,
+                                ),
+                                plot_spec(
+                                    "Raw IMU Accel",
+                                    trace_refs(&self.data.imu_raw_accel),
+                                    true,
+                                ),
+                                plot_spec("Calibrated IMU Gyro", imu_cal_gyro, true),
+                                plot_spec("Calibrated IMU Accel", imu_cal_accel, true),
+                            ],
+                        )],
                         self.max_points_per_trace,
                         self.trace_visibility(),
                         self.shared_cursor_t_s,
+                        self.ghost_data.as_ref(),
                     );
                 });
                 self.shared_cursor_t_s = hovered_t_s;
@@ -375,36 +378,12 @@ impl App {
                 }
             }
             Page::Diagnostics => {
-                let bump_pitch: Vec<&Trace> = self
-                    .data
-                    .ekf_bump_pitch_speed
-                    .iter()
-                    .filter(|t| t.name.contains("pitch"))
-                    .collect();
-                let bump_speed: Vec<&Trace> = self
-                    .data
-                    .ekf_bump_pitch_speed
-                    .iter()
-                    .filter(|t| t.name.contains("speed"))
-                    .collect();
-                let bump_time: Vec<&Trace> = self
-                    .data
-                    .ekf_bump_diag
-                    .iter()
-                    .filter(|t| !t.name.contains("FFT dom"))
-                    .collect();
-                let bump_fft: Vec<&Trace> = self
-                    .data
-                    .ekf_bump_diag
-                    .iter()
-                    .filter(|t| t.name.contains("FFT dom"))
-                    .collect();
                 let mut hovered_t_s = None;
                 egui::CentralPanel::default().show(ctx, |ui| {
                     hovered_t_s = draw_analysis_sections_page(
                         ui,
                         "Diagnostics",
-                        "Alignment windows, bump detector signals, and update contributions.",
+                        "Alignment windows and update contributions.",
                         vec![
                             plot_section(
                                 "Align Internals",
@@ -446,25 +425,56 @@ impl App {
                                     true,
                                 )],
                             ),
-                            plot_section(
-                                "EKF Detectors",
-                                false,
-                                vec![
-                                    plot_spec("EKF Bump Pitch", bump_pitch, true),
-                                    plot_spec("EKF Bump Speed", bump_speed, true),
-                                    plot_spec("EKF Bump Time-domain Diagnostics", bump_time, true),
-                                    plot_spec("EKF Bump FFT Diagnostics", bump_fft, true),
-                                    plot_spec(
-                                        "EKF Stationary Diagnostics",
-                                        trace_refs(&self.data.ekf_stationary_diag),
-                                        true,
-                                    ),
-                                ],
-                            ),
                         ],
                         self.max_points_per_trace,
                         self.trace_visibility(),
                         self.shared_cursor_t_s,
+                        self.ghost_data.as_ref(),
+                    );
+                });
+                self.shared_cursor_t_s = hovered_t_s;
+                if let Some(t_s) = hovered_t_s {
+                    self.update_inspector_cursor_t_s = Some(t_s);
+                }
+            }
+            Page::Events => {
+                let bump_pitch: Vec<&Trace> = self
+                    .data
+                    .ekf_bump_pitch_speed
+                    .iter()
+                    .filter(|t| t.name.contains("pitch"))
+                    .collect();
+                let bump_speed: Vec<&Trace> = self
+                    .data
+                    .ekf_bump_pitch_speed
+                    .iter()
+                    .filter(|t| t.name.contains("speed"))
+                    .collect();
+                let bump_time: Vec<&Trace> = self.data.ekf_bump_diag.iter().collect();
+                let mut hovered_t_s = None;
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    hovered_t_s = draw_analysis_sections_page(
+                        ui,
+                        "Events",
+                        "Detector signals for bumps, stationarity, and related motion events.",
+                        vec![plot_section(
+                            "EKF Detectors",
+                            true,
+                            vec![
+                                plot_spec("EKF Bump Pitch", bump_pitch, true),
+                                plot_spec("EKF Bump Speed", bump_speed, true),
+                                plot_spec("Speed Bump Detector", bump_time, true),
+                                plot_spec(
+                                    "EKF Stationary Diagnostics",
+                                    trace_refs(&self.data.ekf_stationary_diag),
+                                    true,
+                                ),
+                            ],
+                        )],
+                        self.max_points_per_trace,
+                        self.trace_visibility(),
+                        self.shared_cursor_t_s,
+                        self.ghost_data.as_ref(),
                     );
                 });
                 self.shared_cursor_t_s = hovered_t_s;
@@ -512,10 +522,12 @@ impl App {
                     .any(|trace| trace.name == sample.trace_name)
             })
             .collect();
+        let road_events: Vec<_> = self.data.road_events.iter().collect();
         let track = TrackOverlay {
             traces: map_traces,
             headings,
             cursor_samples,
+            road_events,
             show_heading: self.show_heading,
             cursor_t_s,
         };
@@ -633,6 +645,14 @@ impl App {
                     .into_iter()
                     .filter(|trace| visibility.allows(trace))
                     .collect();
+                let ghost_speed: Vec<Trace> = self
+                    .ghost_data
+                    .as_ref()
+                    .map(vehicle_body_velocity_traces)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|trace| visibility.allows(trace))
+                    .collect();
                 let mount: Vec<Trace> = concat_trace_refs_matching(
                     [
                         self.data.ekf_misalignment.as_slice(),
@@ -673,7 +693,8 @@ impl App {
                 .filter(|trace| visibility.allows(trace))
                 .cloned()
                 .collect();
-                let speed_spec = plot_spec("Vehicle Speed", trace_refs(&speed), true);
+                let speed_spec = plot_spec("Vehicle Speed", trace_refs(&speed), true)
+                    .with_ghost_traces(trace_refs(&ghost_speed));
                 let mount_spec = plot_spec("Mount Angles", trace_refs(&mount), true)
                     .with_interaction(PlotInteraction::OrthogonalPopup {
                         title: "Mount Alignment",
@@ -695,6 +716,7 @@ impl App {
                         &speed_spec,
                         self.max_points_per_trace,
                         cursor_t_s,
+                        self.ghost_data.as_ref(),
                     ) {
                         hovered_t_s = Some(t_s);
                     }
@@ -703,6 +725,7 @@ impl App {
                         &mount_spec,
                         self.max_points_per_trace,
                         hovered_t_s.or(cursor_t_s),
+                        self.ghost_data.as_ref(),
                     ) {
                         hovered_t_s = Some(t_s);
                     }
@@ -711,6 +734,7 @@ impl App {
                         &attitude_spec,
                         self.max_points_per_trace,
                         hovered_t_s.or(cursor_t_s),
+                        self.ghost_data.as_ref(),
                     ) {
                         hovered_t_s = Some(t_s);
                     }
@@ -719,6 +743,7 @@ impl App {
                         &biases_spec,
                         self.max_points_per_trace,
                         hovered_t_s.or(cursor_t_s),
+                        self.ghost_data.as_ref(),
                     ) {
                         hovered_t_s = Some(t_s);
                     }
@@ -732,6 +757,7 @@ impl App {
                             &speed_spec,
                             self.max_points_per_trace,
                             cursor_t_s,
+                            self.ghost_data.as_ref(),
                         ) {
                             hovered_t_s = Some(t_s);
                         }
@@ -740,6 +766,7 @@ impl App {
                             &mount_spec,
                             self.max_points_per_trace,
                             hovered_t_s.or(cursor_t_s),
+                            self.ghost_data.as_ref(),
                         ) {
                             hovered_t_s = Some(t_s);
                         }
@@ -748,6 +775,7 @@ impl App {
                             &attitude_spec,
                             self.max_points_per_trace,
                             hovered_t_s.or(cursor_t_s),
+                            self.ghost_data.as_ref(),
                         ) {
                             hovered_t_s = Some(t_s);
                         }
@@ -756,6 +784,7 @@ impl App {
                             &biases_spec,
                             self.max_points_per_trace,
                             hovered_t_s.or(cursor_t_s),
+                            self.ghost_data.as_ref(),
                         ) {
                             hovered_t_s = Some(t_s);
                         }

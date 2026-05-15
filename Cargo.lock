@@ -2872,6 +2872,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "road_events"
+version = "0.1.0"
+
+[[package]]
 name = "roxmltree"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3116,6 +3120,7 @@ dependencies = [
  "js-sys",
  "rand 0.9.2",
  "rayon",
+ "road_events",
  "sensor_fusion",
  "serde",
  "serde-wasm-bindgen",

@@ -1,7 +1,13 @@
 #![cfg(target_arch = "wasm32")]
 //! Browser-only dataset loading, replay worker orchestration, and web input helpers.
 
-use std::{cell::RefCell, io::Read, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+    io::Read,
+    rc::Rc,
+};
 
 use eframe::egui;
 use flate2::read::GzDecoder;
@@ -176,6 +182,59 @@ impl WebReplayWorkerJob {
             Self::Csv { label, .. } | Self::Synthetic { label, .. } => label,
         }
     }
+
+    pub(super) fn run_key(&self) -> String {
+        let mut hasher = DefaultHasher::new();
+        match self {
+            Self::Csv {
+                label,
+                imu_name,
+                gnss_name,
+                imu_csv,
+                gnss_csv,
+                reference_attitude_csv,
+                reference_mount_csv,
+                reference_position_csv,
+                reference_motion_csv,
+            } => {
+                "csv".hash(&mut hasher);
+                label.hash(&mut hasher);
+                imu_name.hash(&mut hasher);
+                gnss_name.hash(&mut hasher);
+                imu_csv.hash(&mut hasher);
+                gnss_csv.hash(&mut hasher);
+                reference_attitude_csv.hash(&mut hasher);
+                reference_mount_csv.hash(&mut hasher);
+                reference_position_csv.hash(&mut hasher);
+                reference_motion_csv.hash(&mut hasher);
+            }
+            Self::Synthetic {
+                label,
+                motion_label,
+                motion_text,
+                mount_rpy_deg,
+                noise,
+                early_vel_bias_ned_mps,
+                early_fault_window_s,
+            } => {
+                "synthetic".hash(&mut hasher);
+                label.hash(&mut hasher);
+                motion_label.hash(&mut hasher);
+                motion_text.hash(&mut hasher);
+                noise.cli_value().hash(&mut hasher);
+                hash_f64_array(mount_rpy_deg, &mut hasher);
+                hash_f64_array(early_vel_bias_ned_mps, &mut hasher);
+                early_fault_window_s
+                    .map(|window| window.map(f64::to_bits))
+                    .hash(&mut hasher);
+            }
+        }
+        format!("{:016x}", hasher.finish())
+    }
+}
+
+fn hash_f64_array<const N: usize>(values: &[f64; N], hasher: &mut DefaultHasher) {
+    values.map(f64::to_bits).hash(hasher);
 }
 
 impl WebDatasetEntry {
@@ -1268,7 +1327,8 @@ impl App {
                     Ok(output) => match serde_json::from_str::<PlotData>(&output.json) {
                         Ok(data) => {
                             let is_synthetic = output.source == "synthetic";
-                            self.data = data;
+                            let run_key = self.pending_run_key.take();
+                            self.replace_plot_data(data, run_key);
                             self.map_center = map_center_from_traces(&self.data.ekf_map);
                             self.has_itow = false;
                             self.data_origin = if is_synthetic {
@@ -1291,10 +1351,12 @@ impl App {
                             };
                         }
                         Err(err) => {
+                            self.pending_run_key = None;
                             self.web_status = format!("Replay result decode failed: {err}");
                         }
                     },
                     Err(err) => {
+                        self.pending_run_key = None;
                         self.web_status = format!("CSV replay failed: {err}");
                     }
                 }
@@ -1375,10 +1437,15 @@ impl App {
         ctx: &egui::Context,
     ) {
         let label = job.label().to_string();
+        let run_key = job.run_key();
         let run_cfg = self.tuning_cfg;
         self.web_run_started_time_s = web_now_s();
         self.web_run_estimated_duration_s = estimated_duration_s;
         self.finish_web_replay_worker();
+        if self.current_run_key.as_ref() != Some(&run_key) {
+            self.ghost_data = None;
+        }
+        self.pending_run_key = Some(run_key);
         *self.web_datasets.pending_replay.borrow_mut() = None;
         self.web_datasets.replay_job_id = self.web_datasets.replay_job_id.wrapping_add(1);
         self.web_datasets.replay_cfg = run_cfg;

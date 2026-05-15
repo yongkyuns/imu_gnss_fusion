@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use road_events::{SpeedBumpConfig, SpeedBumpDetector, SpeedBumpSample};
 use sensor_fusion::SensorFusion;
 use sensor_fusion::ekf::UPDATE_DIAG_TYPES;
 
@@ -11,8 +12,8 @@ use crate::eval::gnss_ins::{as_q64, quat_angle_deg, quat_conj, quat_rotate};
 use crate::eval::replay::{ReplayEvent, for_each_event};
 use crate::visualizer::math::{ecef_to_ned, lla_to_ecef, quat_rpy_deg};
 use crate::visualizer::model::{
-    HeadingSample, MapCursorSample, PlotData, StateContribution, StateCorrelation, Trace,
-    UpdateInspectorSample, VisualizerMountMode,
+    HeadingSample, MapCursorSample, PlotData, RoadEventSample, StateContribution, StateCorrelation,
+    Trace, UpdateInspectorSample, VisualizerMountMode,
 };
 use crate::visualizer::pipeline::reference::{
     final_reference_mount_rpy, reference_mount_seed_q_bv, reference_rpy_at, rpy_series_from_samples,
@@ -459,11 +460,40 @@ fn build_generic_replay_plot_data_impl(
     let mut ekf_heading = Vec::new();
     let mut mount_ready_marker = Vec::new();
     let mut ekf_init_marker = Vec::new();
+    let mut bump_detector = SpeedBumpDetector::new(SpeedBumpConfig::default());
+    let mut bump_pitch_hpf = Vec::new();
+    let mut bump_pitch_noise = Vec::new();
+    let mut bump_vertical_accel_hpf = Vec::new();
+    let mut bump_vertical_accel_noise = Vec::new();
+    let mut road_events = Vec::new();
 
     for_each_event(&replay.imu, &replay.gnss, |event| match event {
         ReplayEvent::Imu(index, sample) => {
             progress.report_stage(0.0, 0.55, sample.t_s);
             let _ = fusion.process_imu(fusion_imu_sample(*sample));
+            if let Some(detector_sample) =
+                speed_bump_detector_sample(sample.t_s, sample, &fusion, ref_gnss)
+            {
+                let (diag, event) = bump_detector.update(detector_sample);
+                bump_pitch_hpf.push([diag.t_s as f64, diag.pitch_hpf_deg as f64]);
+                bump_pitch_noise.push([diag.t_s as f64, diag.pitch_noise_deg as f64]);
+                bump_vertical_accel_hpf
+                    .push([diag.t_s as f64, diag.vertical_accel_hpf_mps2 as f64]);
+                bump_vertical_accel_noise
+                    .push([diag.t_s as f64, diag.vertical_accel_noise_mps2 as f64]);
+                if let Some(event) = event
+                    && let Some([lat, lon, _]) = fusion.position_lla_f64()
+                {
+                    road_events.push(RoadEventSample {
+                        kind: "speed bump".to_string(),
+                        t_s: event.t_s as f64,
+                        lon_deg: lon,
+                        lat_deg: lat,
+                        confidence: event.confidence as f64,
+                        speed_mps: detector_sample.speed_mps as f64,
+                    });
+                }
+            }
             if !output_sampling.keep_imu(index, imu_total) {
                 return;
             }
@@ -821,11 +851,20 @@ fn build_generic_replay_plot_data_impl(
                 points: ekf_outage_map,
             },
         ],
+        road_events,
         map_cursor,
         ekf_map_heading: ekf_heading,
         update_inspector,
         ..PlotData::default()
     };
+    populate_ekf_bump_pitch_speed(&mut data);
+    populate_ekf_bump_diagnostics(
+        &mut data,
+        bump_pitch_hpf,
+        bump_pitch_noise,
+        bump_vertical_accel_hpf,
+        bump_vertical_accel_noise,
+    );
     add_auxiliary_generic_traces_impl(&mut data, &ctx, None, None, &mut progress);
     progress.complete();
     data
@@ -871,7 +910,7 @@ fn add_auxiliary_generic_traces_impl(
         replay.reference_mount.as_slice(),
         progress,
     );
-    populate_ekf_bump_traces(data);
+    populate_ekf_bump_pitch_speed(data);
     append_reference_motion_traces(data, &replay.reference_motion);
     if let Some(truth) = reference_attitude_series {
         let traces = [
@@ -1260,7 +1299,10 @@ fn populate_align_traces(
     ];
 }
 
-fn populate_ekf_bump_traces(data: &mut PlotData) {
+fn populate_ekf_bump_pitch_speed(data: &mut PlotData) {
+    if !data.ekf_bump_pitch_speed.is_empty() {
+        return;
+    }
     let pitch = data
         .ekf_cmp_att
         .iter()
@@ -1282,26 +1324,31 @@ fn populate_ekf_bump_traces(data: &mut PlotData) {
             points: speed,
         },
     ];
-    let mut hpf = Vec::new();
-    let mut abs_ema = Vec::new();
-    let mut ema = 0.0;
-    let mut rms_ema = 0.0;
-    let alpha = 0.02;
-    for [t, v] in pitch {
-        ema = (1.0 - alpha) * ema + alpha * v;
-        let hp = v - ema;
-        rms_ema = (1.0 - alpha) * rms_ema + alpha * hp * hp;
-        hpf.push([t, hp]);
-        abs_ema.push([t, rms_ema.sqrt()]);
-    }
+}
+
+fn populate_ekf_bump_diagnostics(
+    data: &mut PlotData,
+    pitch_hpf: Vec<[f64; 2]>,
+    pitch_noise: Vec<[f64; 2]>,
+    vertical_accel_hpf: Vec<[f64; 2]>,
+    vertical_accel_noise: Vec<[f64; 2]>,
+) {
     data.ekf_bump_diag = vec![
         Trace {
-            name: "EKF pitch HPF [deg]".to_string(),
-            points: hpf,
+            name: "Speed bump pitch HPF [deg]".to_string(),
+            points: pitch_hpf,
         },
         Trace {
-            name: "EKF pitch RMS EMA [deg]".to_string(),
-            points: abs_ema,
+            name: "Speed bump pitch noise floor [deg]".to_string(),
+            points: pitch_noise,
+        },
+        Trace {
+            name: "Speed bump vertical accel HPF [m/s^2]".to_string(),
+            points: vertical_accel_hpf,
+        },
+        Trace {
+            name: "Speed bump vertical accel noise floor [m/s^2]".to_string(),
+            points: vertical_accel_noise,
         },
     ];
 }
@@ -1354,6 +1401,15 @@ fn append_ekf_motion_sample(
         push_motion_triplet(t_s, [0.0; 3], accel);
         return;
     };
+    let (gyro_vehicle, accel_vehicle) = ekf_vehicle_motion(sample, ekf);
+    push_motion_triplet(t_s, gyro_vehicle.map(f64::to_degrees), gyro);
+    push_motion_triplet(t_s, accel_vehicle, accel);
+}
+
+fn ekf_vehicle_motion(
+    sample: &GenericImuSample,
+    ekf: &sensor_fusion::ekf::State,
+) -> ([f64; 3], [f64; 3]) {
     let n = &ekf.nominal;
     let q_bv = [
         n.q_bv0 as f64,
@@ -1377,8 +1433,31 @@ fn append_ekf_motion_sample(
         q_vehicle_to_ned,
         rotate_body_to_vehicle(q_bv, accel_body),
     );
-    push_motion_triplet(t_s, gyro_vehicle.map(f64::to_degrees), gyro);
-    push_motion_triplet(t_s, accel_vehicle, accel);
+    (gyro_vehicle, accel_vehicle)
+}
+
+fn speed_bump_detector_sample(
+    t_s: f64,
+    sample: &GenericImuSample,
+    fusion: &SensorFusion,
+    ref_gnss: Option<GenericGnssSample>,
+) -> Option<SpeedBumpSample> {
+    let ekf = fusion.ekf()?;
+    let (_, accel_vehicle) = ekf_vehicle_motion(sample, ekf);
+    let display_vel = ekf_display_velocity_ned(fusion, ekf, ref_gnss);
+    let q_vehicle = ekf_vehicle_attitude_q(ekf);
+    let (_, pitch_deg, _) = quat_rpy_deg(
+        q_vehicle[0] as f32,
+        q_vehicle[1] as f32,
+        q_vehicle[2] as f32,
+        q_vehicle[3] as f32,
+    );
+    Some(SpeedBumpSample {
+        t_s: t_s as f32,
+        speed_mps: display_vel[0].hypot(display_vel[1]) as f32,
+        pitch_deg: pitch_deg as f32,
+        vertical_accel_mps2: accel_vehicle[2] as f32,
+    })
 }
 
 fn rotate_body_to_vehicle(q_bv: [f64; 4], value_body: [f64; 3]) -> [f64; 3] {

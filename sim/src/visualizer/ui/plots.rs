@@ -2,11 +2,11 @@
 
 use eframe::egui;
 use egui_plot::{
-    GridInput, GridMark, Legend, Line, LineStyle, Plot, PlotPoint, PlotPoints, Points, VLine,
-    log_grid_spacer,
+    ColorConflictHandling, GridInput, GridMark, Legend, Line, LineStyle, Plot, PlotPoint,
+    PlotPoints, Points, VLine, log_grid_spacer,
 };
 
-use crate::visualizer::model::Trace;
+use crate::visualizer::model::{PlotData, Trace};
 
 use super::colors::shared_cursor_color;
 use super::orthogonal::{OrthogonalViewKind, draw_orthogonal_views_popup};
@@ -23,6 +23,7 @@ const TIME_SERIES_PLOT_FRAME_PADDING: f32 = 26.0;
 pub(super) struct PlotSpec<'a> {
     title: &'static str,
     traces: Vec<&'a Trace>,
+    ghost_traces: Vec<&'a Trace>,
     show_legend: bool,
     y_axis: PlotYAxis,
     interaction: PlotInteraction,
@@ -60,6 +61,11 @@ impl<'a> PlotSpec<'a> {
 
     pub(super) fn with_log_y(mut self, floor: f64, unit: Option<&'static str>) -> Self {
         self.y_axis = PlotYAxis::Log10 { floor, unit };
+        self
+    }
+
+    pub(super) fn with_ghost_traces(mut self, ghost_traces: Vec<&'a Trace>) -> Self {
+        self.ghost_traces = ghost_traces;
         self
     }
 }
@@ -111,6 +117,7 @@ pub(super) fn plot_spec<'a>(
     PlotSpec {
         title,
         traces,
+        ghost_traces: Vec::new(),
         show_legend,
         y_axis: PlotYAxis::Linear,
         interaction: PlotInteraction::None,
@@ -122,8 +129,9 @@ pub(super) fn draw_plot_spec_with_cursor_time(
     spec: &PlotSpec<'_>,
     max_points_per_trace: usize,
     cursor_t_s: Option<f64>,
+    ghost_data: Option<&PlotData>,
 ) -> Option<f64> {
-    draw_plot_spec_with_title_label(ui, spec, max_points_per_trace, cursor_t_s, true)
+    draw_plot_spec_with_title_label(ui, spec, max_points_per_trace, cursor_t_s, true, ghost_data)
 }
 
 pub(super) fn draw_overview_plot_spec(
@@ -131,13 +139,20 @@ pub(super) fn draw_overview_plot_spec(
     spec: &PlotSpec<'_>,
     max_points_per_trace: usize,
     cursor_t_s: Option<f64>,
+    ghost_data: Option<&PlotData>,
 ) -> Option<f64> {
     let mut hovered_t_s = None;
     egui::CollapsingHeader::new(spec.title)
         .default_open(true)
         .show(ui, |ui| {
-            hovered_t_s =
-                draw_plot_spec_with_title_label(ui, spec, max_points_per_trace, cursor_t_s, false);
+            hovered_t_s = draw_plot_spec_with_title_label(
+                ui,
+                spec,
+                max_points_per_trace,
+                cursor_t_s,
+                false,
+                ghost_data,
+            );
         });
     hovered_t_s
 }
@@ -147,6 +162,7 @@ pub(super) fn page_header(ui: &mut egui::Ui, title: &str, _subtitle: &str) {
     ui.add_space(6.0);
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn draw_analysis_sections_page(
     ui: &mut egui::Ui,
     title: &str,
@@ -155,6 +171,7 @@ pub(super) fn draw_analysis_sections_page(
     max_points_per_trace: usize,
     visibility: TraceVisibility,
     cursor_t_s: Option<f64>,
+    ghost_data: Option<&PlotData>,
 ) -> Option<f64> {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -186,6 +203,7 @@ pub(super) fn draw_analysis_sections_page(
                                     section.plots,
                                     max_points_per_trace,
                                     hovered_t_s.or(cursor_t_s),
+                                    ghost_data,
                                 ) {
                                     hovered_t_s = Some(t_s);
                                 }
@@ -197,6 +215,7 @@ pub(super) fn draw_analysis_sections_page(
                             section.plots,
                             max_points_per_trace,
                             hovered_t_s.or(cursor_t_s),
+                            ghost_data,
                         ) {
                             hovered_t_s = Some(t_s);
                         }
@@ -214,11 +233,14 @@ fn draw_plot_spec_with_title_label(
     max_points_per_trace: usize,
     cursor_t_s: Option<f64>,
     show_title_label: bool,
+    ghost_data: Option<&PlotData>,
 ) -> Option<f64> {
+    let ghost_traces = spec_ghost_traces(spec, ghost_data);
     let hovered_t_s = draw_plot_with_cursor_time(
         ui,
         spec.title,
         spec.traces.iter().copied(),
+        ghost_traces.iter().copied(),
         spec.show_legend,
         spec.y_axis,
         show_title_label,
@@ -249,6 +271,13 @@ fn filter_visible_plots<'a>(
         .map(|mut plot| {
             plot.traces
                 .retain(|trace| visibility.allows_in_plot(plot.title, trace));
+            let active_names: Vec<&str> = plot
+                .traces
+                .iter()
+                .map(|trace| trace.name.as_str())
+                .collect();
+            plot.ghost_traces
+                .retain(|trace| active_names.contains(&trace.name.as_str()));
             plot
         })
         .filter(|plot| plot.traces.iter().any(|trace| !trace.points.is_empty()))
@@ -260,6 +289,7 @@ fn draw_plot_grid(
     plots: Vec<PlotSpec<'_>>,
     max_points_per_trace: usize,
     cursor_t_s: Option<f64>,
+    ghost_data: Option<&PlotData>,
 ) -> Option<f64> {
     let mut hovered_t_s = None;
     let min_plot_width = 560.0;
@@ -272,12 +302,28 @@ fn draw_plot_grid(
                 &spec,
                 max_points_per_trace,
                 hovered_t_s.or(cursor_t_s),
+                ghost_data,
             ) {
                 hovered_t_s = Some(t_s);
             }
         }
     });
     hovered_t_s
+}
+
+fn spec_ghost_traces<'a>(spec: &PlotSpec<'a>, ghost_data: Option<&'a PlotData>) -> Vec<&'a Trace> {
+    let mut ghosts = spec.ghost_traces.clone();
+    if let Some(ghost_data) = ghost_data {
+        for trace in &spec.traces {
+            if ghosts.iter().any(|ghost| ghost.name == trace.name) {
+                continue;
+            }
+            if let Some(ghost) = ghost_data.trace_by_name(&trace.name) {
+                ghosts.push(ghost);
+            }
+        }
+    }
+    ghosts
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -379,11 +425,21 @@ fn time_in_range(t_s: f64, range: Option<(f64, f64)>) -> bool {
     t_s.is_finite() && t_s >= min_t && t_s <= max_t
 }
 
+fn auto_plot_color(index: usize) -> egui::Color32 {
+    let golden_ratio = (5.0_f32.sqrt() - 1.0) / 2.0;
+    egui::epaint::Hsva::new(index as f32 * golden_ratio, 0.85, 0.5, 1.0).into()
+}
+
+fn ghost_plot_color(color: egui::Color32) -> egui::Color32 {
+    egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 82)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn draw_plot_with_cursor_time<'a, I>(
     ui: &mut egui::Ui,
     title: &str,
     traces: I,
+    ghost_traces: I,
     show_legend: bool,
     y_axis: PlotYAxis,
     show_title_label: bool,
@@ -575,6 +631,30 @@ where
         out
     }
 
+    fn draw_trace_ghost_line(
+        plot_ui: &mut egui_plot::PlotUi<'_>,
+        trace: &Trace,
+        color: egui::Color32,
+        y_axis: PlotYAxis,
+        xmin: f64,
+        xmax: f64,
+        max_points_per_trace: usize,
+    ) {
+        let points = visible_decimated(&trace.points, xmin, xmax, max_points_per_trace);
+        let points = transform_points_for_axis(points, y_axis);
+        for segment in finite_line_segments(points) {
+            let points: PlotPoints<'_> = segment.into();
+            let display_name = display_filter_trace_name(&trace.name);
+            plot_ui.line(
+                Line::new(display_name.clone(), points)
+                    .id(display_name)
+                    .color(ghost_plot_color(color))
+                    .width(1.2)
+                    .allow_hover(false),
+            );
+        }
+    }
+
     #[cfg(target_arch = "wasm32")]
     {
         let plot_height = responsive_plot_height(ui.available_width());
@@ -592,6 +672,7 @@ where
                     ui,
                     title,
                     traces,
+                    ghost_traces,
                     show_legend,
                     y_axis,
                     show_title_label,
@@ -611,6 +692,7 @@ where
                     ui,
                     title,
                     traces,
+                    ghost_traces,
                     show_legend,
                     y_axis,
                     show_title_label,
@@ -627,6 +709,7 @@ where
         ui: &mut egui::Ui,
         title: &str,
         traces: I,
+        ghost_traces: I,
         show_legend: bool,
         y_axis: PlotYAxis,
         show_title_label: bool,
@@ -638,6 +721,7 @@ where
         I: IntoIterator<Item = &'a Trace>,
     {
         let traces: Vec<&Trace> = traces.into_iter().collect();
+        let ghost_traces: Vec<&Trace> = ghost_traces.into_iter().collect();
         egui::Frame::group(ui.style())
             .fill(ui.visuals().window_fill)
             .inner_margin(egui::Margin::same(8))
@@ -654,8 +738,12 @@ where
                     });
                     return None;
                 }
-                let data_time_range = trace_time_range(traces.iter().copied());
-                let data_value_range = trace_value_range_for_axis(traces.iter().copied(), y_axis);
+                let data_time_range =
+                    trace_time_range(traces.iter().chain(ghost_traces.iter()).copied());
+                let data_value_range = trace_value_range_for_axis(
+                    traces.iter().chain(ghost_traces.iter()).copied(),
+                    y_axis,
+                );
 
                 let mut plot = Plot::new(title)
                     .height(plot_height)
@@ -683,7 +771,9 @@ where
                     plot = plot.include_y(range.0).include_y(range.1);
                 }
                 if show_legend {
-                    plot = plot.legend(Legend::default());
+                    plot = plot.legend(
+                        Legend::default().color_conflict_handling(ColorConflictHandling::PickLast),
+                    );
                 }
                 let shared_cursor_color = shared_cursor_color(ui.visuals());
                 plot.show(ui, |plot_ui| {
@@ -698,9 +788,22 @@ where
                     let max_hover_dist_sq =
                         plot_ui.ctx().style().interaction.interact_radius.powi(2);
                     let mut nearest_hover: Option<(String, PlotPoint, f32)> = None;
-                    for t in &traces {
+                    for (idx, t) in traces.iter().enumerate() {
                         if t.points.is_empty() {
                             continue;
+                        }
+                        let line_color = auto_plot_color(idx);
+                        if let Some(ghost) = ghost_traces.iter().find(|ghost| ghost.name == t.name)
+                        {
+                            draw_trace_ghost_line(
+                                plot_ui,
+                                ghost,
+                                line_color,
+                                y_axis,
+                                xmin,
+                                xmax,
+                                max_points_per_trace,
+                            );
                         }
                         let ekf = visible_decimated(&t.points, xmin, xmax, max_points_per_trace);
                         let ekf = transform_points_for_axis(ekf, y_axis);
@@ -725,12 +828,17 @@ where
                         if t.name == "yaw initialized" {
                             let points: PlotPoints<'_> = ekf.into();
                             plot_ui.points(
-                                Points::new(display_filter_trace_name(&t.name), points).radius(4.0),
+                                Points::new(display_filter_trace_name(&t.name), points)
+                                    .radius(4.0)
+                                    .color(line_color),
                             );
                         } else {
                             for segment in finite_line_segments(ekf) {
                                 let points: PlotPoints<'_> = segment.into();
-                                plot_ui.line(Line::new(display_filter_trace_name(&t.name), points));
+                                plot_ui.line(
+                                    Line::new(display_filter_trace_name(&t.name), points)
+                                        .color(line_color),
+                                );
                             }
                         }
                     }

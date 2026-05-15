@@ -106,6 +106,7 @@ impl App {
                 ui.selectable_value(&mut self.page, Page::Mount, "Mount");
                 ui.selectable_value(&mut self.page, Page::Calibration, "Calibration");
                 ui.selectable_value(&mut self.page, Page::Sensors, "Sensors");
+                ui.selectable_value(&mut self.page, Page::Events, "Events");
                 ui.selectable_value(&mut self.page, Page::Diagnostics, "Diagnostics");
             });
             {

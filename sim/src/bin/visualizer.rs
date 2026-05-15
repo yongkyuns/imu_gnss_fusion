@@ -412,6 +412,13 @@ fn main() -> Result<()> {
         max_gap_sec(&data.imu_cal_gyro),
         max_gap_sec(&data.imu_cal_accel),
     );
+    eprintln!("[profile] road_events count={}", data.road_events.len());
+    for event in &data.road_events {
+        eprintln!(
+            "[profile] road_event kind={} t_s={:.3} confidence={:.3} lat={:.8} lon={:.8}",
+            event.kind, event.t_s, event.confidence, event.lat_deg, event.lon_deg
+        );
+    }
     for (group, traces) in [
         ("imu_raw_gyro", &data.imu_raw_gyro),
         ("imu_raw_accel", &data.imu_raw_accel),
@@ -460,6 +467,18 @@ fn main() -> Result<()> {
         dump_traces_near_time(
             "align_axis_err",
             &data.align_axis_err,
+            t_s,
+            args.dump_window_s,
+        );
+        dump_traces_near_time(
+            "ekf_bump_diag",
+            &data.ekf_bump_diag,
+            t_s,
+            args.dump_window_s,
+        );
+        dump_traces_near_time(
+            "ekf_bump_pitch_speed",
+            &data.ekf_bump_pitch_speed,
             t_s,
             args.dump_window_s,
         );

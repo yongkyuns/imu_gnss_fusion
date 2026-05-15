@@ -5,7 +5,7 @@ use walkers::sources::{Attribution, Mapbox, MapboxStyle, TileSource};
 use walkers::{HttpTiles, MapMemory, Plugin, TileId, lon_lat};
 
 use crate::visualizer::math::{ecef_to_ned, heading_endpoint, lla_to_ecef};
-use crate::visualizer::model::{HeadingSample, MapCursorSample, PlotData, Trace};
+use crate::visualizer::model::{HeadingSample, MapCursorSample, PlotData, RoadEventSample, Trace};
 use crate::visualizer::theme::UiTheme;
 
 use super::colors::{
@@ -119,6 +119,7 @@ pub(super) struct TrackOverlay<'a> {
     pub(super) traces: Vec<&'a Trace>,
     pub(super) headings: Vec<&'a HeadingSample>,
     pub(super) cursor_samples: Vec<&'a MapCursorSample>,
+    pub(super) road_events: Vec<&'a RoadEventSample>,
     pub(super) show_heading: bool,
     pub(super) cursor_t_s: Option<f64>,
 }
@@ -225,6 +226,8 @@ impl Plugin for TrackOverlay<'_> {
             );
         }
 
+        draw_road_event_markers(&painter, projector, view, &self.road_events, visuals);
+
         if self.show_heading
             && let Some(mouse_pos) = ui.input(|i| i.pointer.hover_pos())
             && map_rect.contains(mouse_pos)
@@ -257,6 +260,53 @@ impl Plugin for TrackOverlay<'_> {
                 );
             }
         }
+    }
+}
+
+fn draw_road_event_markers(
+    painter: &egui::Painter,
+    projector: &walkers::Projector,
+    view: MapViewBounds,
+    events: &[&RoadEventSample],
+    visuals: &egui::Visuals,
+) {
+    let color = if visuals.dark_mode {
+        egui::Color32::from_rgb(255, 212, 92)
+    } else {
+        egui::Color32::from_rgb(190, 109, 0)
+    };
+    let stroke = egui::Stroke::new(1.4, marker_outline_color(visuals));
+    let hover_pos = painter.ctx().input(|input| input.pointer.hover_pos());
+    for event in events {
+        if !view.contains(event.lon_deg, event.lat_deg) {
+            continue;
+        }
+        let projected = projector.project(lon_lat(event.lon_deg, event.lat_deg));
+        let pos = egui::pos2(projected.x, projected.y);
+        painter.circle_filled(pos, 6.5, color);
+        painter.circle_stroke(pos, 6.5, stroke);
+        let Some(hover_pos) = hover_pos else {
+            continue;
+        };
+        if pos.distance_sq(hover_pos) > 12.0_f32 * 12.0_f32 {
+            continue;
+        }
+        let label = format!(
+            "bump {:.0}%\nt={:.2}s\n{:.1} km/h",
+            100.0 * event.confidence.clamp(0.0, 1.0),
+            event.t_s,
+            3.6 * event.speed_mps
+        );
+        let bg_min = pos + egui::vec2(8.0, -26.0);
+        let bg_rect = egui::Rect::from_min_size(bg_min, egui::vec2(88.0, 54.0));
+        painter.rect_filled(bg_rect, 4.0, tooltip_fill(visuals));
+        painter.text(
+            bg_min + egui::vec2(6.0, 2.0),
+            egui::Align2::LEFT_TOP,
+            label,
+            egui::FontId::monospace(12.0),
+            tooltip_text_color(visuals),
+        );
     }
 }
 

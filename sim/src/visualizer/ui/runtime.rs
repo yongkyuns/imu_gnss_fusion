@@ -2,6 +2,10 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+};
 
 use eframe::egui;
 use walkers::MapMemory;
@@ -93,6 +97,10 @@ pub(super) fn create_app(
     #[cfg_attr(not(target_arch = "wasm32"), allow(unused_mut))]
     let mut app = App {
         data,
+        ghost_data: None,
+        current_run_key: replay.as_ref().map(replay_run_key),
+        #[cfg(target_arch = "wasm32")]
+        pending_run_key: None,
         has_itow,
         fps_ema: 0.0,
         last_frame_time_s: 0.0,
@@ -180,6 +188,17 @@ pub(super) fn create_app(
 }
 
 impl App {
+    pub(super) fn replace_plot_data(&mut self, data: PlotData, run_key: Option<String>) {
+        self.ghost_data = match (&self.current_run_key, &run_key) {
+            (Some(current), Some(next)) if current == next && self.data.has_trace_points() => {
+                Some(self.data.clone())
+            }
+            _ => None,
+        };
+        self.current_run_key = run_key;
+        self.data = data;
+    }
+
     pub(super) fn trace_visibility(&self) -> TraceVisibility {
         TraceVisibility {
             show_reference: self.show_reference,
@@ -217,7 +236,7 @@ impl App {
         if let Some(synthetic) = &replay.synthetic {
             match build_synthetic_plot_data(synthetic, misalignment, filter_cfg, gnss_outages) {
                 Ok(data) => {
-                    self.data = data;
+                    self.replace_plot_data(data, Some(replay_run_key(replay)));
                     self.map_center = map_center_from_traces(&self.data.ekf_map);
                     self.has_itow = false;
                     self.data_origin = DataOrigin::Synthetic;
@@ -232,6 +251,16 @@ impl App {
                 Some("Generic CSV replay can be loaded from the browser UI".to_string());
         }
     }
+}
+
+pub(super) fn replay_run_key(replay: &ReplayState) -> String {
+    if let Some(synthetic) = &replay.synthetic {
+        return format!("synthetic:{synthetic:?}:max={:?}", replay.max_records);
+    }
+    let mut hasher = DefaultHasher::new();
+    replay.bytes.hash(&mut hasher);
+    replay.max_records.hash(&mut hasher);
+    format!("csv:{:016x}", hasher.finish())
 }
 
 impl eframe::App for App {
