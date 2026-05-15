@@ -437,10 +437,11 @@ fn solve_linear(a: &mut [[f64; 5]; 5], b: &mut [f64; 5], n: usize) -> Option<[f6
             b.swap(pivot, col);
         }
         let diag = a[col][col];
-        for c in col..n {
-            a[col][c] /= diag;
+        for value in a[col].iter_mut().take(n).skip(col) {
+            *value /= diag;
         }
         b[col] /= diag;
+        let pivot_row = a[col];
         for row in 0..n {
             if row == col {
                 continue;
@@ -449,8 +450,8 @@ fn solve_linear(a: &mut [[f64; 5]; 5], b: &mut [f64; 5], n: usize) -> Option<[f6
             if f == 0.0 {
                 continue;
             }
-            for c in col..n {
-                a[row][c] -= f * a[col][c];
+            for (value, pivot_value) in a[row].iter_mut().zip(pivot_row.iter()).take(n).skip(col) {
+                *value -= f * *pivot_value;
             }
             b[row] -= f * b[col];
         }
