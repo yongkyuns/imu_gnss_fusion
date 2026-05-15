@@ -1,7 +1,7 @@
-use crate::visualizer::pipeline::FilterCompareConfig;
+use crate::visualizer::pipeline::FusionTuningConfig;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct FilterCompareConfigSnapshot {
+pub struct FusionTuningConfigSnapshot {
     pub r_body_vel: f32,
     pub r_body_vel_z: f32,
     pub attitude_roll_pitch_init_sigma_deg: f32,
@@ -25,11 +25,10 @@ pub struct FilterCompareConfigSnapshot {
     pub predict_imu_lpf_cutoff_hz: Option<f64>,
     pub predict_imu_decimation: usize,
     pub yaw_init_speed_mps: f64,
-    pub reduced_noise_configured: bool,
-    pub full_noise_configured: bool,
+    pub ekf_noise_configured: bool,
 }
 
-pub const FILTER_COMPARE_DEFAULTS: FilterCompareConfigSnapshot = FilterCompareConfigSnapshot {
+pub const FUSION_TUNING_DEFAULTS: FusionTuningConfigSnapshot = FusionTuningConfigSnapshot {
     r_body_vel: 0.5,
     r_body_vel_z: 0.5,
     attitude_roll_pitch_init_sigma_deg: 2.0,
@@ -53,12 +52,11 @@ pub const FILTER_COMPARE_DEFAULTS: FilterCompareConfigSnapshot = FilterCompareCo
     predict_imu_lpf_cutoff_hz: None,
     predict_imu_decimation: 1,
     yaw_init_speed_mps: 0.0,
-    reduced_noise_configured: true,
-    full_noise_configured: true,
+    ekf_noise_configured: true,
 };
 
-pub fn snapshot_filter_compare_config(cfg: &FilterCompareConfig) -> FilterCompareConfigSnapshot {
-    FilterCompareConfigSnapshot {
+pub fn snapshot_fusion_tuning_config(cfg: &FusionTuningConfig) -> FusionTuningConfigSnapshot {
+    FusionTuningConfigSnapshot {
         r_body_vel: cfg.r_body_vel,
         r_body_vel_z: cfg.r_body_vel_z,
         attitude_roll_pitch_init_sigma_deg: cfg.attitude_roll_pitch_init_sigma_deg,
@@ -82,7 +80,6 @@ pub fn snapshot_filter_compare_config(cfg: &FilterCompareConfig) -> FilterCompar
         predict_imu_lpf_cutoff_hz: cfg.predict_imu_lpf_cutoff_hz,
         predict_imu_decimation: cfg.predict_imu_decimation,
         yaw_init_speed_mps: cfg.yaw_init_speed_mps,
-        reduced_noise_configured: cfg.noise.reduced.is_some(),
-        full_noise_configured: cfg.noise.full.is_some(),
+        ekf_noise_configured: cfg.noise.ekf.is_some(),
     }
 }

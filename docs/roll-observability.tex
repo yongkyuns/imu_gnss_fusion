@@ -30,8 +30,8 @@
 \section{Scope}
 
 This note formulates roll and pitch observability for a generic local
-error-state EKF using the project's Reduced NED convention. The same local
-analysis applies to the Full ECEF filter after projecting ECEF velocity and
+error-state EKF using the project's local NED convention. The same local
+analysis applies to the ECEF EKF after projecting ECEF velocity and
 attitude into the local vehicle frame. The purpose is to show why vehicle
 attitude and mount attitude are strongly coupled, and why non-holonomic
 constraints (NHC), velocity observations, and excitation are required to
@@ -44,7 +44,7 @@ mounting error.
 
 \section{Generic Local EKF Context}
 
-The local EKF convention is the Reduced convention:
+The local EKF convention is:
 \begin{equation}
   x_n=C_{nv}x_v,\qquad x_v=C_{nv}\T x_n ,
 \end{equation}
@@ -74,9 +74,9 @@ into the vehicle frame:
 \begin{equation}
   \delta v_v \approx C_{nv}\T\delta v_n .
 \end{equation}
-Full uses \(v_v=C_{ev}\T v_e\), but once this projection is made the local
+The ECEF EKF uses \(v_v=C_{ev}\T v_e\), but once this projection is made the local
 roll/pitch ambiguity has the same structure. Therefore the rest of the document
-uses the Reduced NED notation.
+uses the local NED notation.
 
 \subsection{Measurements}
 
@@ -452,7 +452,7 @@ absorb the same residual.
 \section{Recommended Replay Diagnostic}
 
 For each replay window, compute the linearized rows for NHC and velocity
-observations in the local Reduced basis and accumulate
+observations in the local EKF basis and accumulate
 \begin{equation}
   \Lambda_W=\sum_{k\in W} H_k\T R_k^{-1}H_k .
 \end{equation}
@@ -475,17 +475,17 @@ and is the most useful scalar observability metric.
 \section{Implemented Synthetic Experiment}
 
 The repository includes a repeatable diagnostic that exercises this theory in
-the Reduced NED convention:
+the local NED convention:
 \begin{verbatim}
 cargo run --release -p sim --bin diag_mount_observability
 \end{verbatim}
 The diagnostic generates truth-noise synthetic scenarios with the same injected
 initial mount error, computes the Schur-complement information proxies above,
-and then runs the Reduced EKF with two covariance splits:
+and then runs the EKF with two covariance splits:
 \begin{itemize}[nosep]
-  \item \texttt{qerr\_mnt\_loose}: tighter vehicle-attitude covariance and
+  \item \texttt{qerr\_mount\_flex}: tighter vehicle-attitude covariance and
         looser mount covariance,
-  \item \texttt{qerr\_att\_loose}: looser vehicle-attitude covariance and
+  \item \texttt{qerr\_att\_flex}: looser vehicle-attitude covariance and
         tighter mount covariance.
 \end{itemize}
 If the data do not uniquely separate vehicle attitude from mount attitude, the

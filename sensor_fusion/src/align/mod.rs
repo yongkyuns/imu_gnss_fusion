@@ -1,9 +1,8 @@
 //! IMU-to-vehicle mount alignment from stationary gravity and GNSS-derived motion windows.
 //!
-//! The full formulation is documented in
-//! `docs/align.pdf`. In short, the filter state is the
-//! vehicle-to-body mount quaternion `q_bv` plus a 3 by 3 covariance over the
-//! mount small angle `[roll, pitch, yaw]`.
+//! The formulation is documented in `docs/align.pdf`. In short, the filter
+//! state is the vehicle-to-body mount quaternion `q_bv` plus a 3 by 3
+//! covariance over the mount small angle `[roll, pitch, yaw]`.
 //!
 //! ```text
 //! R(q_bv) = C_bv
@@ -837,20 +836,20 @@ fn apply_update1_masked(
     state_mask: [bool; 3],
 ) -> f32 {
     let obs = align_obs(*q_bv, gyro_b, accel_b);
-    let h_full = align_obs_jacobian(*q_bv, gyro_b, accel_b);
+    let h_all = align_obs_jacobian(*q_bv, gyro_b, accel_b);
     let h = [
         if state_mask[0] {
-            h_full[obs_idx][0]
+            h_all[obs_idx][0]
         } else {
             0.0
         },
         if state_mask[1] {
-            h_full[obs_idx][1]
+            h_all[obs_idx][1]
         } else {
             0.0
         },
         if state_mask[2] {
-            h_full[obs_idx][2]
+            h_all[obs_idx][2]
         } else {
             0.0
         },
@@ -889,13 +888,13 @@ fn apply_update2_scaled_masked(
     state_scale: [f32; 3],
 ) -> f32 {
     let obs = align_obs(*q_bv, gyro_b, accel_b);
-    let h_full = align_obs_jacobian(*q_bv, gyro_b, accel_b);
+    let h_all = align_obs_jacobian(*q_bv, gyro_b, accel_b);
     let mut h0 = [0.0; 3];
     let mut h1 = [0.0; 3];
     for i in 0..3 {
         if state_mask[i] {
-            h0[i] = state_scale[i] * h_full[obs_idx[0]][i];
-            h1[i] = state_scale[i] * h_full[obs_idx[1]][i];
+            h0[i] = state_scale[i] * h_all[obs_idx[0]][i];
+            h1[i] = state_scale[i] * h_all[obs_idx[1]][i];
         }
     }
     let y = [z[0] - obs[obs_idx[0]], z[1] - obs[obs_idx[1]]];

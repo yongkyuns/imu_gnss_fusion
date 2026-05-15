@@ -12,7 +12,7 @@ use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{ErrorEvent, MessageEvent, Worker, WorkerOptions, WorkerType};
 
 use crate::visualizer::model::{PlotData, VisualizerMountMode};
-use crate::visualizer::pipeline::{FilterCompareConfig, GnssOutageConfig};
+use crate::visualizer::pipeline::{FusionTuningConfig, GnssOutageConfig};
 use crate::visualizer::stats::map_center_from_traces;
 use crate::visualizer::theme::UiTheme;
 
@@ -81,7 +81,7 @@ pub(super) struct WebDatasetState {
     pub(super) loading_dataset: bool,
     pub(super) loading_replay: bool,
     pub(super) replay_job_id: u64,
-    pub(super) replay_cfg: FilterCompareConfig,
+    pub(super) replay_cfg: FusionTuningConfig,
     pub(super) pending: Rc<RefCell<Option<WebDatasetTaskResult>>>,
     pub(super) pending_replay: Rc<RefCell<Option<WebReplayTaskResult>>>,
     pub(super) replay_worker: Option<Worker>,
@@ -160,7 +160,7 @@ impl WebDatasetState {
             loading_dataset: false,
             loading_replay: false,
             replay_job_id: 0,
-            replay_cfg: FilterCompareConfig::default(),
+            replay_cfg: FusionTuningConfig::default(),
             pending: Rc::new(RefCell::new(None)),
             pending_replay: Rc::new(RefCell::new(None)),
             replay_worker: None,
@@ -294,7 +294,7 @@ pub(super) fn web_replay_worker_request(
     job_id: u64,
     job: &WebReplayWorkerJob,
     misalignment: VisualizerMountMode,
-    filter_cfg: FilterCompareConfig,
+    filter_cfg: FusionTuningConfig,
     gnss_outages: GnssOutageConfig,
 ) -> Object {
     let request = Object::new();
@@ -1269,7 +1269,7 @@ impl App {
                         Ok(data) => {
                             let is_synthetic = output.source == "synthetic";
                             self.data = data;
-                            self.map_center = map_center_from_traces(&self.data.reduced_map);
+                            self.map_center = map_center_from_traces(&self.data.ekf_map);
                             self.has_itow = false;
                             self.data_origin = if is_synthetic {
                                 DataOrigin::Synthetic

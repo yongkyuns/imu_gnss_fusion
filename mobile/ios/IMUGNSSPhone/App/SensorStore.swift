@@ -1281,7 +1281,7 @@ extension SensorStore: CLLocationManagerDelegate {
     private func resetFusionEngineState() {
         lastFusionSampleDate = nil
         lastFusionImuSampleDate = nil
-        fusionEngine.resetReducedAuto()
+        fusionEngine.resetEkfAuto()
     }
 
     private func publishFusionResult(_ result: FusionResult?, sampleDate: Date) {
@@ -1299,7 +1299,7 @@ extension SensorStore: CLLocationManagerDelegate {
     private func shouldPublishFusionUi(status: FusionStatus) -> Bool {
         let now = ProcessInfo.processInfo.systemUptime
         let isStateTransition = status.mountReadyChanged
-            || status.reducedInitializedNow
+            || status.ekfInitializedNow
             || status.filterInitializedNow
         if isStateTransition {
             lastFusionUiPublishTS = now

@@ -1,7 +1,6 @@
 use sensor_fusion::ProcessNoise;
 use sensor_fusion::{
-    Config, Filter, GnssSample, ImuSample, MountMode, SensorFusion, VehicleSpeedDirection,
-    VehicleSpeedSample,
+    GnssSample, ImuSample, SensorFusion, VehicleSpeedDirection, VehicleSpeedSample,
 };
 
 fn gnss_sample(t_s: f32) -> GnssSample {
@@ -26,60 +25,29 @@ fn stationary_gnss_sample(t_s: f32) -> GnssSample {
 }
 
 #[test]
-fn manual_mount_initializes_reduced_from_gnss_and_freezes_mount_states() {
+fn manual_mount_initializes_ekf_from_gnss_and_freezes_mount_states() {
     let mut system = SensorFusion::with_mount([1.0, 0.0, 0.0, 0.0]);
     let upd = system.process_gnss(gnss_sample(1.0));
     assert!(upd.mount_ready);
-    assert!(upd.reduced_initialized_now);
-    let reduced = system.reduced().unwrap();
+    assert!(upd.ekf_initialized_now);
+    let ekf = system.ekf().unwrap();
     for i in 15..18 {
-        for j in 0..reduced.p.len() {
-            assert_eq!(reduced.p[i][j], 0.0);
-            assert_eq!(reduced.p[j][i], 0.0);
+        for j in 0..ekf.p.len() {
+            assert_eq!(ekf.p[i][j], 0.0);
+            assert_eq!(ekf.p[j][i], 0.0);
         }
     }
 }
 
 #[test]
-fn public_config_selects_filter_and_mount_mode() {
-    let system = SensorFusion::with_config(Config {
-        filter: Filter::Full,
-        mount_mode: MountMode::Manual([1.0, 0.0, 0.0, 0.0]),
-    });
-
-    assert_eq!(system.filter(), Filter::Full);
-}
-
-#[test]
-fn full_filter_initializes_through_public_sensor_fusion_api() {
-    let mut system = SensorFusion::with_config(Config {
-        filter: Filter::Full,
-        mount_mode: MountMode::Manual([1.0, 0.0, 0.0, 0.0]),
-    });
-
-    let update = system.process_gnss(gnss_sample(1.0));
-
-    assert!(update.filter_initialized);
-    assert!(update.filter_initialized_now);
-    let full = system.full().unwrap();
-    for i in 21..24 {
-        for j in 0..full.p.len() {
-            assert_eq!(full.p[i][j], 0.0);
-            assert_eq!(full.p[j][i], 0.0);
-        }
-    }
-    assert!(system.reduced().is_none());
-}
-
-#[test]
-fn reduced_nhc_uses_estimated_motion_during_gnss_outage() {
+fn ekf_nhc_uses_estimated_motion_during_gnss_outage() {
     let mut system = SensorFusion::with_mount([1.0, 0.0, 0.0, 0.0]);
     system.set_nhc_update_period_s(0.0);
 
     let update = system.process_gnss(gnss_sample(1.0));
-    assert!(update.reduced_initialized_now);
+    assert!(update.ekf_initialized_now);
 
-    let before = system.reduced().unwrap().update_diag.total_updates;
+    let before = system.ekf().unwrap().update_diag.total_updates;
     let _ = system.process_imu(ImuSample {
         t_s: 2.20,
         gyro_radps: [0.0, 0.0, 0.0],
@@ -91,49 +59,21 @@ fn reduced_nhc_uses_estimated_motion_during_gnss_outage() {
         accel_mps2: [0.0, 0.0, 9.80665],
     });
 
-    assert!(system.reduced().unwrap().update_diag.total_updates > before);
-}
-
-#[test]
-fn full_nhc_uses_estimated_motion_during_gnss_outage() {
-    let mut system = SensorFusion::with_config(Config {
-        filter: Filter::Full,
-        mount_mode: MountMode::Manual([1.0, 0.0, 0.0, 0.0]),
-    });
-    system.set_nhc_update_period_s(0.0);
-
-    let update = system.process_gnss(gnss_sample(1.0));
-    assert!(update.filter_initialized_now);
-
-    let _ = system.process_imu(ImuSample {
-        t_s: 2.20,
-        gyro_radps: [0.0, 0.0, 0.0],
-        accel_mps2: [0.0, 0.0, 9.80665],
-    });
-    let _ = system.process_imu(ImuSample {
-        t_s: 2.21,
-        gyro_radps: [0.0, 0.0, 0.0],
-        accel_mps2: [0.0, 0.0, 9.80665],
-    });
-
-    let full = system.full().unwrap();
-    let obs_types = &full.last_obs_types[..full.last_obs_count as usize];
-    assert!(obs_types.contains(&7));
-    assert!(obs_types.contains(&8));
+    assert!(system.ekf().unwrap().update_diag.total_updates > before);
 }
 
 #[test]
 fn vehicle_speed_sample_pulls_forward_velocity_upward() {
     let mut system = SensorFusion::with_mount([1.0, 0.0, 0.0, 0.0]);
     let upd = system.process_gnss(gnss_sample(1.0));
-    assert!(upd.reduced_initialized_now);
-    let vn_before = system.reduced().unwrap().nominal.vn;
+    assert!(upd.ekf_initialized_now);
+    let vn_before = system.ekf().unwrap().nominal.vn;
     let _ = system.process_vehicle_speed(VehicleSpeedSample {
         t_s: 1.1,
         speed_mps: 6.0,
         direction: VehicleSpeedDirection::Forward,
     });
-    let vn_after = system.reduced().unwrap().nominal.vn;
+    let vn_after = system.ekf().unwrap().nominal.vn;
     assert!(vn_after > vn_before);
     assert!(vn_after < 6.0);
 }
@@ -145,14 +85,14 @@ fn freeze_misalignment_states_blocks_mount_updates() {
     system.set_r_vehicle_speed(0.001);
 
     let upd = system.process_gnss(gnss_sample(1.0));
-    assert!(upd.reduced_initialized_now);
+    assert!(upd.ekf_initialized_now);
     let q_bv_before = {
-        let reduced = system.reduced().unwrap();
+        let ekf = system.ekf().unwrap();
         [
-            reduced.nominal.q_bv0,
-            reduced.nominal.q_bv1,
-            reduced.nominal.q_bv2,
-            reduced.nominal.q_bv3,
+            ekf.nominal.q_bv0,
+            ekf.nominal.q_bv1,
+            ekf.nominal.q_bv2,
+            ekf.nominal.q_bv3,
         ]
     };
 
@@ -162,20 +102,20 @@ fn freeze_misalignment_states_blocks_mount_updates() {
         direction: VehicleSpeedDirection::Forward,
     });
 
-    let reduced = system.reduced().unwrap();
+    let ekf = system.ekf().unwrap();
     let q_bv_after = [
-        reduced.nominal.q_bv0,
-        reduced.nominal.q_bv1,
-        reduced.nominal.q_bv2,
-        reduced.nominal.q_bv3,
+        ekf.nominal.q_bv0,
+        ekf.nominal.q_bv1,
+        ekf.nominal.q_bv2,
+        ekf.nominal.q_bv3,
     ];
     assert_eq!(q_bv_after, q_bv_before);
-    assert_eq!(reduced.update_diag.last_dx_mount_yaw, 0.0);
-    assert_eq!(reduced.update_diag.last_k_mount_yaw, 0.0);
+    assert_eq!(ekf.update_diag.last_dx_mount_yaw, 0.0);
+    assert_eq!(ekf.update_diag.last_k_mount_yaw, 0.0);
     for i in 15..18 {
         for j in 0..18 {
-            assert_eq!(reduced.p[i][j], 0.0);
-            assert_eq!(reduced.p[j][i], 0.0);
+            assert_eq!(ekf.p[i][j], 0.0);
+            assert_eq!(ekf.p[j][i], 0.0);
         }
     }
 }
@@ -187,25 +127,25 @@ fn manual_mount_settle_phase_keeps_mount_states_frozen() {
     system.set_mount_settle_release_sigma_rad(4.0_f32.to_radians());
 
     let upd = system.process_gnss(gnss_sample(1.0));
-    assert!(upd.reduced_initialized_now);
+    assert!(upd.ekf_initialized_now);
     for i in 15..18 {
-        assert_eq!(system.reduced().unwrap().p[i][i], 0.0);
+        assert_eq!(system.ekf().unwrap().p[i][i], 0.0);
     }
 
     let _ = system.process_gnss(gnss_sample(1.5));
     for i in 15..18 {
-        assert_eq!(system.reduced().unwrap().p[i][i], 0.0);
+        assert_eq!(system.ekf().unwrap().p[i][i], 0.0);
     }
 
     let _ = system.process_gnss(gnss_sample(2.2));
-    let reduced = system.reduced().unwrap();
+    let ekf = system.ekf().unwrap();
     for i in 15..18 {
-        assert_eq!(reduced.p[i][i], 0.0);
+        assert_eq!(ekf.p[i][i], 0.0);
     }
     for i in 15..18 {
         for j in 0..18 {
-            assert_eq!(reduced.p[i][j], 0.0);
-            assert_eq!(reduced.p[j][i], 0.0);
+            assert_eq!(ekf.p[i][j], 0.0);
+            assert_eq!(ekf.p[j][i], 0.0);
         }
     }
 }
@@ -215,9 +155,9 @@ fn zero_velocity_update_does_not_inject_mount_error() {
     const DIAG_ZERO_VEL: usize = 2;
     const DIAG_ZERO_VEL_D: usize = 10;
 
-    let mut reduced = sensor_fusion::reduced::Filter::new(ProcessNoise::default());
+    let mut ekf = sensor_fusion::ekf::Filter::new(ProcessNoise::default());
     {
-        let raw = reduced.raw_mut();
+        let raw = ekf.raw_mut();
         raw.nominal.vn = 0.7;
         raw.nominal.ve = -0.3;
         raw.nominal.vd = 0.2;
@@ -234,18 +174,18 @@ fn zero_velocity_update_does_not_inject_mount_error() {
     }
 
     let q_bv_before = {
-        let n = &reduced.raw().nominal;
+        let n = &ekf.raw().nominal;
         [n.q_bv0, n.q_bv1, n.q_bv2, n.q_bv3]
     };
     let mount_cov_before = [
-        reduced.raw().p[15][15],
-        reduced.raw().p[16][16],
-        reduced.raw().p[17][17],
+        ekf.raw().p[15][15],
+        ekf.raw().p[16][16],
+        ekf.raw().p[17][17],
     ];
 
-    reduced.fuse_zero_vel(0.01);
+    ekf.fuse_zero_vel(0.01);
 
-    let raw = reduced.raw();
+    let raw = ekf.raw();
     let n = &raw.nominal;
     assert_ne!(n.vn, 0.7);
     assert_ne!(n.ve, -0.3);
@@ -269,14 +209,14 @@ fn unknown_direction_uses_predicted_sign_when_state_is_confident() {
     gnss.vel_ned_mps = [-3.0, 0.0, 0.0];
     gnss.heading_rad = Some(core::f32::consts::PI);
     let upd = system.process_gnss(gnss);
-    assert!(upd.reduced_initialized_now);
-    let vn_before = system.reduced().unwrap().nominal.vn;
+    assert!(upd.ekf_initialized_now);
+    let vn_before = system.ekf().unwrap().nominal.vn;
     let _ = system.process_vehicle_speed(VehicleSpeedSample {
         t_s: 1.1,
         speed_mps: 4.0,
         direction: VehicleSpeedDirection::Unknown,
     });
-    let vn_after = system.reduced().unwrap().nominal.vn;
+    let vn_after = system.ekf().unwrap().nominal.vn;
     assert!(vn_after < vn_before);
     assert!(vn_after > -4.0);
 }

@@ -1,7 +1,7 @@
 //! Public facade types and internal configuration for [`crate::SensorFusion`].
 
+use crate::ProcessNoise;
 use crate::align::{AlignConfig, AlignUpdateTrace, AlignWindowSummary};
-use crate::{ProcessNoise, full};
 
 /// One timestamped IMU sample in the raw IMU body frame `b`.
 #[derive(Clone, Copy, Debug)]
@@ -62,33 +62,19 @@ pub enum VehicleSpeedDirection {
 /// Status returned after each fusion input sample.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Update {
-    /// Whether a mount estimate is ready for Reduced initialization or propagation.
+    /// Whether a mount estimate is ready for EKF initialization or propagation.
     pub mount_ready: bool,
     /// Whether `mount_ready` changed during this input sample.
     pub mount_ready_changed: bool,
-    /// Whether the Reduced has been initialized from GNSS.
-    pub reduced_initialized: bool,
-    /// Whether Reduced initialization happened during this input sample.
-    pub reduced_initialized_now: bool,
-    /// Whether the configured runtime filter has been initialized from GNSS.
-    pub filter_initialized: bool,
-    /// Whether the configured runtime filter initialized during this input sample.
-    pub filter_initialized_now: bool,
+    /// Whether the EKF has been initialized from GNSS.
+    pub ekf_initialized: bool,
+    /// Whether EKF initialization happened during this input sample.
+    pub ekf_initialized_now: bool,
     /// Current physical vehicle-to-body mount quaternion, when available.
     ///
     /// `R(q_bv) = C_bv`, `x_b = C_bv x_v`. Runtime propagation uses
     /// `C_vb = C_bv^T` to rotate IMU samples into the vehicle frame.
     pub mount_q_bv: Option<[f32; 4]>,
-}
-
-/// Runtime filter selected by [`Config`].
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Filter {
-    /// Reduced-state local-NED EKF.
-    #[default]
-    Reduced,
-    /// Full-state ECEF EKF.
-    Full,
 }
 
 /// Last alignment window and update trace captured by [`crate::SensorFusion`].
@@ -111,15 +97,13 @@ pub enum MountMode {
     /// Use the supplied vehicle-to-body mount quaternion as a fixed mount.
     ///
     /// The quaternion follows `R(q_bv) = C_bv`, `x_b = C_bv x_v`; mount states
-    /// are frozen for both Reduced and Full.
+    /// are frozen.
     Manual([f32; 4]),
 }
 
 /// Public construction configuration for [`crate::SensorFusion`].
 #[derive(Clone, Copy, Debug)]
 pub struct Config {
-    /// Runtime filter family selected by the caller.
-    pub filter: Filter,
     /// Source used for the initial physical vehicle-to-body mount estimate.
     pub mount_mode: MountMode,
 }
@@ -127,7 +111,6 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            filter: Filter::Reduced,
             mount_mode: MountMode::Auto,
         }
     }
@@ -161,36 +144,30 @@ impl Default for BootstrapConfig {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct NoiseConfig {
-    pub(crate) reduced: ProcessNoise,
-    pub(crate) full: ProcessNoise,
+    pub(crate) ekf: ProcessNoise,
 }
 
 impl Default for NoiseConfig {
     fn default() -> Self {
         Self {
-            reduced: ProcessNoise {
+            ekf: ProcessNoise {
                 gyro_var: 2.287_311_3e-7 * 10.0_f32,
                 accel_var: 2.450_421_4e-5 * 15.0_f32,
                 gyro_bias_rw_var: 0.0002e-9,
                 accel_bias_rw_var: 0.002e-9,
-                gyro_scale_rw_var: 0.0,
-                accel_scale_rw_var: 0.0,
                 mount_align_rw_var: 0.0,
                 mount_align_rw_var_axes: [0.0; 3],
                 mount_align_rw_var_axes_enabled: false,
             },
-            full: ProcessNoise::lsm6dso_104hz(),
         }
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RuntimeConfig {
-    pub(crate) filter: Filter,
     pub(crate) align: AlignConfig,
     pub(crate) bootstrap: BootstrapConfig,
     pub(crate) noise: NoiseConfig,
-    pub(crate) full_init: full::InitConfig,
     pub(crate) attitude_roll_pitch_init_sigma_rad: f32,
     pub(crate) yaw_init_sigma_rad: f32,
     pub(crate) gyro_bias_init_sigma_radps: f32,
@@ -216,11 +193,9 @@ pub(crate) struct RuntimeConfig {
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
-            filter: Filter::Reduced,
             align: AlignConfig::default(),
             bootstrap: BootstrapConfig::default(),
             noise: NoiseConfig::default(),
-            full_init: full::InitConfig::default(),
             attitude_roll_pitch_init_sigma_rad: 2.0_f32.to_radians(),
             yaw_init_sigma_rad: 6.0_f32.to_radians(),
             gyro_bias_init_sigma_radps: 0.125_f32.to_radians(),

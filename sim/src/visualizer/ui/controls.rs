@@ -6,7 +6,7 @@ use crate::visualizer::model::Page;
 use crate::visualizer::theme::UiTheme;
 
 use super::App;
-use super::state::{FULL_FILTER_LABEL, REDUCED_FILTER_LABEL, TuningPanel};
+use super::state::{EKF_FILTER_LABEL, TuningPanel};
 #[cfg(target_arch = "wasm32")]
 use super::web::{
     WEB_MAX_POINTS_PER_TRACE, WEB_MIN_POINTS_PER_TRACE, WebDatasetEntry, WebInputMode,
@@ -66,12 +66,11 @@ impl App {
                 help_label(
                     ui,
                     "Traces",
-                    "Show or hide result groups globally across plots. Reference is truth/reference data when available, Align is the standalone mount estimator, and Reduced/Full are the two filter implementations.",
+                    "Show or hide result groups globally across plots. Reference is truth/reference data when available, Align is the standalone mount estimator, and EKF is the runtime filter.",
                 );
                 ui.checkbox(&mut self.show_reference, "Reference");
                 ui.checkbox(&mut self.show_align, "Align");
-                ui.checkbox(&mut self.show_reduced, REDUCED_FILTER_LABEL);
-                ui.checkbox(&mut self.show_full, FULL_FILTER_LABEL);
+                ui.checkbox(&mut self.show_ekf, EKF_FILTER_LABEL);
                 ui.separator();
                 help_label(
                     ui,
@@ -86,14 +85,11 @@ impl App {
                     "Tune",
                     "Open filter tuning panels. Adjusted values are used when the simulation is run again or replay is applied.",
                 );
-                if ui.button(REDUCED_FILTER_LABEL).clicked() {
-                    self.tuning_panel = Some(TuningPanel::Reduced);
+                if ui.button(EKF_FILTER_LABEL).clicked() {
+                    self.tuning_panel = Some(TuningPanel::EKF);
                 }
                 if ui.button("Align").clicked() {
                     self.tuning_panel = Some(TuningPanel::Align);
-                }
-                if ui.button(FULL_FILTER_LABEL).clicked() {
-                    self.tuning_panel = Some(TuningPanel::Full);
                 }
                 ui.separator();
                 let inspector_response =

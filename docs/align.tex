@@ -28,10 +28,9 @@
 
 This document records the mathematical model implemented by
 \path{sensor_fusion/src/align/mod.rs}. The align filter is a standalone IMU-to-vehicle
-mount estimator. It is not the augmented Reduced; it only estimates the mount
-quaternion and its three-dimensional small-angle covariance. The runtime fusion
-pipeline uses this mount as the coarse seed for the Reduced and Full
-paths.
+mount estimator. It estimates the mount quaternion and its three-dimensional
+small-angle covariance. The runtime fusion pipeline uses this mount as the
+coarse seed for EKF initialization.
 
 \section{Frames and Quaternion Convention}
 
@@ -268,7 +267,7 @@ this scalar yaw update.
 \section{Turn Consistency and Planar-Gyro Observation}
 
 Turn windows require minimum speed, course rate, and lateral acceleration.
-Before turn-heading observations receive full trust, a ring buffer checks
+Before turn-heading observations receive nominal trust, a ring buffer checks
 \begin{equation}
   a_{\mathrm{lat}}\approx v\,\dot\chi
 \end{equation}
@@ -294,8 +293,8 @@ the one-sigma roll, pitch, and yaw covariances are all below the configured
 ready gates. Important limitations of the current model are:
 \begin{itemize}[leftmargin=1.5em]
 \item Gravity observes roll and pitch only during stationary windows.
-\item Horizontal acceleration is reduced to a heading/yaw residual; it does not
-directly solve a full vector mount least-squares problem.
+\item Horizontal acceleration is projected into a heading/yaw residual; it does not
+directly solve a complete vector mount least-squares problem.
 \item The mount process model is a random walk with no vehicle dynamics.
 \item The yaw update is a scalar vehicle-frame correction, while other mount
 updates use left-injected body-frame small angles.

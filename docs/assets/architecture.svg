@@ -81,7 +81,7 @@
 <tspan x="412" dy="0">synthetic_replay.rs</tspan>
 </text>
 <text class="label" x="412" y="388" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
-<tspan x="412" dy="0">legacy/exported synthetic files</tspan>
+<tspan x="412" dy="0">exported synthetic files</tspan>
 <tspan x="412" dy="16.200000000000003">normalized into replay rows</tspan>
 </text>
 <rect x="398" y="492" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#BAD1EE" stroke-width="1"/>
@@ -127,7 +127,7 @@
 </text>
 <text class="label" x="752" y="530" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
 <tspan x="752" dy="0">generic + synthetic builders</tspan>
-<tspan x="752" dy="16.200000000000003">parallel Reduced/Full replays</tspan>
+<tspan x="752" dy="16.200000000000003">EKF replay traces</tspan>
 </text>
 <rect x="738" y="660" width="249" height="126" rx="8" fill="#FFFFFF" stroke="#C3D1EF" stroke-width="1"/>
 <text x="752" y="672" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
@@ -161,7 +161,7 @@
 </text>
 <rect x="1078" y="506" width="249" height="126" rx="8" fill="#FFFFFF" stroke="#E9B8C2" stroke-width="1"/>
 <text x="1092" y="518" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
-<tspan x="1092" dy="0">reduced::Filter</tspan>
+<tspan x="1092" dy="0">EKF runtime</tspan>
 </text>
 <text class="label" x="1092" y="544" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
 <tspan x="1092" dy="0">18 error states</tspan>
@@ -169,18 +169,18 @@
 </text>
 <rect x="1078" y="662" width="249" height="112" rx="8" fill="#FFFFFF" stroke="#E9B8C2" stroke-width="1"/>
 <text x="1092" y="674" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
-<tspan x="1092" dy="0">full::Filter</tspan>
+<tspan x="1092" dy="0">ekf::State</tspan>
 </text>
 <text class="label" x="1092" y="700" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
-<tspan x="1092" dy="0">24-state ECEF EKF</tspan>
-<tspan x="1092" dy="16.200000000000003">attitude, velocity, bias, scale, mount</tspan>
+<tspan x="1092" dy="0">local NED EKF</tspan>
+<tspan x="1092" dy="16.200000000000003">attitude, velocity, bias, mount</tspan>
 </text>
 <rect x="1078" y="804" width="249" height="72" rx="8" fill="#FFFFFF" stroke="#E9B8C2" stroke-width="1"/>
 <text x="1092" y="816" fill="#172033" font-size="13" font-weight="700" text-anchor="start">
 <tspan x="1092" dy="0">generated models</tspan>
 </text>
 <text class="label" x="1092" y="840" fill="#536174" font-size="11" font-weight="normal" text-anchor="start">
-<tspan x="1092" dy="0">reduced/generated + full/generated</tspan>
+<tspan x="1092" dy="0">generated EKF code</tspan>
 <tspan x="1092" dy="14.3">SymPy-derived prediction + updates</tspan>
 </text>
 <rect x="1400" y="140" width="285" height="760" rx="10" fill="#FFF7E8" stroke="#E4C782" stroke-width="1"/>
@@ -240,7 +240,7 @@
 </text>
 <text class="label" x="478" y="1034" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
 <tspan x="478" dy="0">sensor_fusion/code_gen.py</tspan>
-<tspan x="478" dy="16.200000000000003">reduced/full formulation.py</tspan>
+<tspan x="478" dy="16.200000000000003">EKF formulation.py</tspan>
 <tspan x="478" dy="16.200000000000003">-&gt; generated Rust modules</tspan>
 </text>
 <rect x="868" y="996" width="380" height="108" rx="8" fill="#F3FAF8" stroke="#BBDDD2" stroke-width="1"/>

@@ -51,7 +51,7 @@ Options:
   --sample-memory         Also sample JS heap, DOM counters, and wasm memory during the run
   --memory-sample-ms <n>  Memory sampling interval when --sample-memory is set (default: 1000)
   --min-fps <n>           Exit non-zero if mean FPS is below this threshold
-  --json                  Print the full JSON result instead of a short text summary
+  --json                  Print the entire JSON result instead of a short text summary
   --help                  Show this help
 `);
 }

@@ -1,15 +1,15 @@
-//! Reduced, align, and full tuning panel controls.
+//! EKF and align tuning panel controls.
 
 use eframe::egui;
 use sensor_fusion::ProcessNoise;
 
 use crate::visualizer::model::VisualizerMountMode;
-use crate::visualizer::pipeline::FilterCompareConfig;
+use crate::visualizer::pipeline::FusionTuningConfig;
 
-pub(super) fn draw_reduced_tuning(
+pub(super) fn draw_ekf_tuning(
     ui: &mut egui::Ui,
     misalignment: &mut VisualizerMountMode,
-    cfg: &mut FilterCompareConfig,
+    cfg: &mut FusionTuningConfig,
 ) {
     ui.horizontal_wrapped(|ui| {
         ui.label("Mount mode");
@@ -138,8 +138,8 @@ pub(super) fn draw_reduced_tuning(
     ui.collapsing("Prediction", |ui| {
         let noise = cfg
             .noise
-            .reduced
-            .get_or_insert_with(|| FilterCompareConfig::default().noise.reduced.unwrap());
+            .ekf
+            .get_or_insert_with(|| FusionTuningConfig::default().noise.ekf.unwrap());
         drag_f32(ui, "Gyro var", &mut noise.gyro_var, 1.0e-7, 0.0..=1.0);
         drag_f32(ui, "Accel var", &mut noise.accel_var, 1.0e-5, 0.0..=100.0);
         drag_f32(
@@ -181,7 +181,7 @@ pub(super) fn draw_reduced_tuning(
     });
 }
 
-pub(super) fn draw_align_tuning(ui: &mut egui::Ui, cfg: &mut FilterCompareConfig) {
+pub(super) fn draw_align_tuning(ui: &mut egui::Ui, cfg: &mut FusionTuningConfig) {
     drag_f32(
         ui,
         "Align handoff delay s",
@@ -339,118 +339,6 @@ pub(super) fn draw_align_tuning(ui: &mut egui::Ui, cfg: &mut FilterCompareConfig
     });
     ui.checkbox(&mut align.use_gravity, "Use gravity updates");
     ui.checkbox(&mut align.use_turn_gyro, "Use turn gyro updates");
-}
-
-pub(super) fn draw_full_tuning(ui: &mut egui::Ui, cfg: &mut FilterCompareConfig) {
-    ui.collapsing("Prediction noise", |ui| {
-        let noise = cfg
-            .noise
-            .full
-            .get_or_insert_with(|| FilterCompareConfig::default().noise.full.unwrap());
-        drag_f32(ui, "Gyro var", &mut noise.gyro_var, 1.0e-7, 0.0..=1.0);
-        drag_f32(ui, "Accel var", &mut noise.accel_var, 1.0e-5, 0.0..=100.0);
-        drag_f32(
-            ui,
-            "Gyro bias RW var",
-            &mut noise.gyro_bias_rw_var,
-            1.0e-13,
-            0.0..=1.0e-6,
-        );
-        drag_f32(
-            ui,
-            "Accel bias RW var",
-            &mut noise.accel_bias_rw_var,
-            1.0e-12,
-            0.0..=1.0e-6,
-        );
-        drag_f32(
-            ui,
-            "Gyro scale RW var",
-            &mut noise.gyro_scale_rw_var,
-            1.0e-11,
-            0.0..=1.0e-6,
-        );
-        drag_f32(
-            ui,
-            "Accel scale RW var",
-            &mut noise.accel_scale_rw_var,
-            1.0e-11,
-            0.0..=1.0e-6,
-        );
-        mount_rw_controls(ui, noise);
-    });
-    ui.collapsing("Initial covariance", |ui| {
-        let init = &mut cfg.full_init;
-        drag_f32(
-            ui,
-            "Position min sigma m",
-            &mut init.pos_min_sigma_m,
-            0.1,
-            0.0..=100.0,
-        );
-        drag_f32(
-            ui,
-            "Velocity min sigma m/s",
-            &mut init.vel_min_sigma_mps,
-            0.1,
-            0.0..=50.0,
-        );
-        drag_f32(
-            ui,
-            "Attitude roll/pitch sigma deg",
-            &mut init.attitude_sigma_deg,
-            0.5,
-            0.0..=180.0,
-        );
-        drag_f32(
-            ui,
-            "Attitude yaw sigma deg",
-            &mut init.attitude_yaw_sigma_deg,
-            0.5,
-            0.0..=180.0,
-        );
-        drag_f32(
-            ui,
-            "Gyro bias sigma deg/s",
-            &mut init.gyro_bias_sigma_dps,
-            0.01,
-            0.0..=10.0,
-        );
-        drag_f32(
-            ui,
-            "Accel bias sigma m/s^2",
-            &mut init.accel_bias_sigma_mps2,
-            0.01,
-            0.0..=10.0,
-        );
-        drag_f32(
-            ui,
-            "Gyro scale sigma",
-            &mut init.gyro_scale_sigma,
-            0.001,
-            0.0..=1.0,
-        );
-        drag_f32(
-            ui,
-            "Accel scale sigma",
-            &mut init.accel_scale_sigma,
-            0.001,
-            0.0..=1.0,
-        );
-        slider_f32(
-            ui,
-            "Mount roll/pitch sigma deg",
-            &mut init.mount_sigma_deg,
-            0.0..=10.0,
-        );
-        drag_f32(
-            ui,
-            "Mount yaw sigma deg",
-            &mut init.mount_yaw_sigma_deg,
-            0.5,
-            0.0..=180.0,
-        );
-    });
 }
 
 fn drag_f32(

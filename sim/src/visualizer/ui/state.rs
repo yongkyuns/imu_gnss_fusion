@@ -2,8 +2,7 @@
 
 use crate::visualizer::model::Trace;
 
-pub(super) const REDUCED_FILTER_LABEL: &str = "Reduced";
-pub(super) const FULL_FILTER_LABEL: &str = "Full";
+pub(super) const EKF_FILTER_LABEL: &str = "EKF";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DataOrigin {
@@ -13,17 +12,15 @@ pub(super) enum DataOrigin {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum TuningPanel {
-    Reduced,
+    EKF,
     Align,
-    Full,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct TraceVisibility {
     pub show_reference: bool,
     pub show_align: bool,
-    pub show_reduced: bool,
-    pub show_full: bool,
+    pub show_ekf: bool,
 }
 
 impl TraceVisibility {
@@ -39,10 +36,7 @@ impl TraceVisibility {
         if !self.show_align && (is_align_trace_name(name) || is_align_plot_title(plot_title)) {
             return false;
         }
-        if !self.show_reduced && is_reduced_trace_name(name) {
-            return false;
-        }
-        if !self.show_full && is_full_trace_name(name) {
+        if !self.show_ekf && is_ekf_trace_name(name) {
             return false;
         }
         true
@@ -65,22 +59,17 @@ fn is_align_plot_title(title: &str) -> bool {
     title.starts_with("Align ")
 }
 
-fn is_reduced_trace_name(name: &str) -> bool {
-    name.starts_with("Reduced")
-        || name.contains(" Reduced")
-        || name.contains("reduced")
-        || name.contains("Reduced initialized")
-        || name.contains("reduced initialized")
+fn is_ekf_trace_name(name: &str) -> bool {
+    name.starts_with("EKF")
+        || name.contains(" EKF")
+        || name.contains("ekf")
+        || name.contains("EKF initialized")
+        || name.contains("ekf initialized")
         || name.contains("mount ready")
 }
 
-fn is_full_trace_name(name: &str) -> bool {
-    name.starts_with("Full") || name.contains(" Full") || name.contains("full")
-}
-
 pub(super) fn display_filter_trace_name(name: &str) -> String {
-    name.replace("Full", FULL_FILTER_LABEL)
-        .replace("Reduced", REDUCED_FILTER_LABEL)
+    name.replace("EKF", EKF_FILTER_LABEL)
 }
 
 #[cfg(test)]
@@ -95,20 +84,17 @@ mod tests {
     }
 
     #[test]
-    fn full_toggle_only_hides_full_traces() {
+    fn ekf_toggle_hides_ekf_traces() {
         let visibility = TraceVisibility {
             show_reference: true,
             show_align: true,
-            show_reduced: true,
-            show_full: false,
+            show_ekf: true,
         };
 
         assert!(visibility.allows(&trace("Reference mount roll [deg]")));
         assert!(visibility.allows(&trace("Align mount quaternion error [deg]")));
-        assert!(visibility.allows(&trace("Reduced mount roll [deg]")));
+        assert!(visibility.allows(&trace("EKF mount roll [deg]")));
         assert!(visibility.allows(&trace("mount ready")));
-        assert!(!visibility.allows(&trace("Full mount roll [deg]")));
-        assert!(!visibility.allows(&trace("Full sigma state 0")));
     }
 
     #[test]
@@ -116,38 +102,32 @@ mod tests {
         let reference_off = TraceVisibility {
             show_reference: false,
             show_align: true,
-            show_reduced: true,
-            show_full: true,
+            show_ekf: true,
         };
         assert!(!reference_off.allows(&trace("Reference mount pitch [deg]")));
         assert!(reference_off.allows(&trace("Align pitch [deg]")));
-        assert!(reference_off.allows(&trace("Reduced mount pitch [deg]")));
-        assert!(reference_off.allows(&trace("Full mount pitch [deg]")));
+        assert!(reference_off.allows(&trace("EKF mount pitch [deg]")));
 
         let align_off = TraceVisibility {
             show_reference: true,
             show_align: false,
-            show_reduced: true,
-            show_full: true,
+            show_ekf: true,
         };
         assert!(!align_off.allows(&trace("Align yaw [deg]")));
         assert!(align_off.allows(&trace("Reference mount yaw [deg]")));
-        assert!(align_off.allows(&trace("Reduced mount yaw [deg]")));
-        assert!(align_off.allows(&trace("Full mount yaw [deg]")));
+        assert!(align_off.allows(&trace("EKF mount yaw [deg]")));
 
-        let reduced_off = TraceVisibility {
+        let ekf_off = TraceVisibility {
             show_reference: true,
             show_align: true,
-            show_reduced: false,
-            show_full: true,
+            show_ekf: false,
         };
-        assert!(!reduced_off.allows(&trace("Reduced mount roll [deg]")));
-        assert!(!reduced_off.allows(&trace("Reduced accel bias sigma X [m/s^2]")));
-        assert!(!reduced_off.allows(&trace("Reduced state_0")));
-        assert!(!reduced_off.allows(&trace("Reduced pitch HPF [deg]")));
-        assert!(!reduced_off.allows(&trace("Reduced vehicle speed [m/s]")));
-        assert!(reduced_off.allows(&trace("Reference mount roll [deg]")));
-        assert!(reduced_off.allows(&trace("Align roll [deg]")));
-        assert!(reduced_off.allows(&trace("Full mount roll [deg]")));
+        assert!(!ekf_off.allows(&trace("EKF mount roll [deg]")));
+        assert!(!ekf_off.allows(&trace("EKF accel bias sigma X [m/s^2]")));
+        assert!(!ekf_off.allows(&trace("EKF state_0")));
+        assert!(!ekf_off.allows(&trace("EKF pitch HPF [deg]")));
+        assert!(!ekf_off.allows(&trace("EKF vehicle speed [m/s]")));
+        assert!(ekf_off.allows(&trace("Reference mount roll [deg]")));
+        assert!(ekf_off.allows(&trace("Align roll [deg]")));
     }
 }

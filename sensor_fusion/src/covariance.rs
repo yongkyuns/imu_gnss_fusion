@@ -10,20 +10,12 @@ pub(crate) struct SparseCovariancePolicy {
 }
 
 impl SparseCovariancePolicy {
-    pub(crate) const REDUCED: Self = Self {
+    pub(crate) const EKF: Self = Self {
         skip_zero_f_i: true,
         skip_zero_f_j: true,
         skip_zero_g_i: true,
         skip_zero_g_j: true,
         skip_zero_q: false,
-    };
-
-    pub(crate) const FULL: Self = Self {
-        skip_zero_f_i: false,
-        skip_zero_f_j: false,
-        skip_zero_g_i: false,
-        skip_zero_g_j: false,
-        skip_zero_q: true,
     };
 }
 
@@ -90,44 +82,5 @@ pub(crate) fn symmetrize<const N: usize>(p: &mut [[f32; N]; N]) {
             p[i][j] = sym;
             p[j][i] = sym;
         }
-    }
-}
-
-/// Rotates a diagonal covariance from a source frame into a target frame.
-///
-/// `c_target_source` must satisfy `x_target = c_target_source * x_source`.
-/// The returned matrix is `C * diag(diag_source) * C^T`.
-pub(crate) fn rotate_diag3_to_target(
-    c_target_source: [[f32; 3]; 3],
-    diag_source: [f32; 3],
-) -> [[f32; 3]; 3] {
-    let mut out = [[0.0; 3]; 3];
-    for target_i in 0..3 {
-        for target_j in 0..3 {
-            for source_i in 0..3 {
-                out[target_i][target_j] += c_target_source[target_i][source_i]
-                    * diag_source[source_i]
-                    * c_target_source[target_j][source_i];
-            }
-        }
-    }
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::rotate_diag3_to_target;
-
-    #[test]
-    fn rotate_diag3_uses_target_from_source_convention() {
-        let c_target_source = [[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]];
-        let out = rotate_diag3_to_target(c_target_source, [1.0, 4.0, 9.0]);
-
-        assert_eq!(out[0][0], 4.0);
-        assert_eq!(out[1][1], 1.0);
-        assert_eq!(out[2][2], 9.0);
-        assert_eq!(out[0][1], 0.0);
-        assert_eq!(out[0][2], 0.0);
-        assert_eq!(out[1][2], 0.0);
     }
 }

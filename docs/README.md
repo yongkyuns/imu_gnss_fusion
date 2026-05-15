@@ -1,29 +1,43 @@
 # Documentation
 
-This directory collects project-level notes for IMU/GNSS Fusion. The root [README](../README.md) is the entrypoint for setup and common workflows; these pages keep deeper math, testing, and architecture details out of the main guide.
+This directory collects project-level notes for IMU/GNSS Fusion. The root
+[README](../README.md) is the setup entrypoint; these pages keep deeper
+architecture, math, replay, and testing details out of the main guide.
 
 ## Start Here
 
-- [Repository architecture](architecture.md): crate boundaries, module ownership, generated code, replay data flow, browser flow, and documentation ownership.
-- [API and conventions](api-and-conventions.md): public `sensor_fusion` API contract, frames, quaternions, units, mount modes, readiness, and integration pitfalls.
-- [Filter algorithms](filter-algorithms.md): Align, Reduced, and Full EKF state vectors, propagation, update families, covariance behavior, tuning, generated code, and observability limits.
-- [Data and simulation](data-and-simulation.md): generic replay CSV schemas, optional references, synthetic motion DSL, noise models, hosted dataset packaging, and external converter checklist.
-- [Visualizer, tools, and testing](visualizer-tools-testing.md): native/web visualizer architecture, UI trace groups, worker flow, diagnostics, command-line tools, CI, and regression-test workflow.
-- [Testing](testing.md): local test commands, targeted suites, fixtures, and expensive-data notes.
-- [Reduced vs Full investigation notes](reduced-full-differences.md): known implementation and tuning differences to account for when comparing filter behavior.
-- [Frame conventions](math/frames.md): short index for navigation, ECEF, raw body, vehicle, and mount frames.
-- [Full EKF notes](math/full.md): concise operational links for the Full EKF.
-- [Simulation tooling map](../sim/README.md): stable `sim` binaries, generic replay schema, and supported visualizer modes.
-- [Browser visualizer](../web/README.md): wasm build and static hosting instructions.
+- [Repository architecture](architecture.md): crate boundaries, module
+  ownership, generated code, replay data flow, browser flow, and documentation
+  ownership.
+- [API and conventions](api-and-conventions.md): public `sensor_fusion` API
+  contract, frames, quaternions, units, mount modes, readiness, and integration
+  pitfalls.
+- [EKF algorithms](filter-algorithms.md): runtime state, propagation, update
+  families, covariance behavior, tuning, generated code, and observability
+  limits.
+- [Data and simulation](data-and-simulation.md): generic replay CSV schemas,
+  optional references, synthetic motion DSL, noise models, hosted dataset
+  packaging, and external converter checklist.
+- [Visualizer, tools, and testing](visualizer-tools-testing.md): native/web
+  visualizer architecture, UI trace groups, worker flow, diagnostics,
+  command-line tools, CI, and regression-test workflow.
+- [EKF diagnostics](ekf-diagnostics.md): current diagnostic tools and what to
+  record from replay investigations.
+- [Testing](testing.md): local test commands, targeted suites, fixtures, and
+  expensive-data notes.
+- [Frame conventions](math/frames.md): short index for navigation, ECEF, raw
+  body, vehicle, and mount frames.
+- [EKF math notes](math/ekf.md): concise links for formulation PDFs/TEX.
+- [Simulation tooling map](../sim/README.md): stable `sim` binaries, generic
+  replay schema, and supported visualizer modes.
+- [Browser visualizer](../web/README.md): wasm build and static hosting
+  instructions.
 
 ## Repository Structure
 
-The repository is organized around one reusable filter crate and one tooling
-crate:
-
 | Path | Contents |
 | --- | --- |
-| `sensor_fusion/` | `sensor_fusion` Rust library, generated filter formulas, SymPy model sources, and filter-level tests. |
+| `sensor_fusion/` | `sensor_fusion` Rust library, EKF runtime, generated formulas, SymPy model sources, and filter-level tests. |
 | `sim/` | Offline replay, evaluation, synthetic data generation, diagnostics, native visualizer, and browser visualizer entrypoint. |
 | `docs/` | Math PDFs/TEX, frame notes, testing notes, and architecture assets. |
 | `web/` | Static host for the wasm visualizer and hosted generic replay datasets. |
@@ -40,16 +54,12 @@ with optional generic reference CSVs for visualization and evaluation.
 
 | Module | Responsibility |
 | --- | --- |
-| `align` | Mount-alignment filter. Estimates the `q_bv` vehicle-to-body mount quaternion from stationary gravity, GNSS-derived acceleration, turn-rate windows, and nonholonomic cues. |
-| `SensorFusion` | High-level runtime API. Accepts timestamped sensor samples, manages alignment and Reduced initialization, owns the local WGS84 anchor, and exposes current filter states. |
-| `reduced` | Reduced EKF runtime, process-noise configuration, public state/sample/diagnostic structs, and focused state helpers. |
-| `full` | Full-state ECEF EKF used for comparison and diagnostics. Includes Full prediction, GNSS and NHC updates, and Full-specific process-noise configuration. |
-| `math`, `nav`, `covariance`, generated wrappers | Internal shared helpers for quaternion/vector math, WGS84/ECEF navigation, generated-model glue, and covariance propagation. |
+| `align` | Mount-alignment estimator. Estimates the `q_bv` vehicle-to-body mount quaternion from stationary gravity, GNSS-derived acceleration, turn-rate windows, and nonholonomic cues. |
+| `SensorFusion` | High-level runtime API. Accepts timestamped sensor samples, manages alignment and EKF initialization, owns local anchoring, and exposes current runtime state. |
+| `math`, `nav`, `covariance`, generated wrappers | Internal helpers for quaternion/vector math, WGS84/ECEF navigation, generated-model glue, and covariance propagation. |
 
-Generated files under `sensor_fusion/src/reduced/generated/` and
-`sensor_fusion/src/full/generated/` should not be edited by hand. Update
-`sensor_fusion/src/reduced/formulation.py` or `sensor_fusion/src/full/formulation.py`, regenerate, then
-review the Rust diff.
+Generated files should not be edited by hand. Update the matching symbolic
+formulation source, regenerate, then review the Rust diff.
 
 ### `sim` (`sim/src`)
 
@@ -57,48 +67,31 @@ review the Rust diff.
 | --- | --- |
 | `datasets/generic_replay` | Hardware-agnostic replay schema and CSV readers/writers for `imu.csv`, `gnss.csv`, and optional references. |
 | `datasets/synthetic_replay` | Loader for generated synthetic truth/measured sample files. |
-| `datasets/seeded_full` | Fixture loader for seeded Full EKF diagnostics. |
 | `eval/replay` | Canonical IMU/GNSS event merge order used by tests, diagnostics, and visualization. |
 | `eval/gnss_ins` | Quaternion, rotation, and signal-source helpers used by synthetic and replay analysis. |
 | `eval/state_summary` and `eval/trace` | Trace lookup, sampling, convergence summaries, and final/tail error metrics. |
 | `synthetic/motion_dsl` | Rust-native high-level motion syntax for synthetic scenarios. |
 | `synthetic/gnss_ins_path` | Path generation, Earth model helpers, generated truth samples, IMU/GNSS noise models, and noisy measurement generation. |
 | `visualizer/model` | Serializable plot, map, page, heading, contribution, and update-inspector data structures. |
-| `visualizer/pipeline/generic` | Generic CSV replay pipeline used by native and browser visualization. Feeds the public `SensorFusion` API and builds all plot groups. |
+| `visualizer/pipeline/generic` | Generic CSV replay pipeline used by native and browser visualization. Feeds the public `SensorFusion` API and builds plot groups. |
 | `visualizer/pipeline/synthetic` | Synthetic scenario pipeline. Generates synthetic samples, converts them to the same generic replay path, and adds truth overlays. |
 | `visualizer/replay_job` | Shared replay-job orchestration and web transport decimation. |
 | `visualizer/theme`, `stats`, `math` | UI theme, trace/map statistics, and coordinate/math helpers. |
 | `visualizer/ui/*` | Modular egui UI implementation for controls, pages, plots, maps, inspector, tuning, web loading, runtime, colors, and popups. |
 
-### Visualizer UI Modules
-
-| Module | Responsibility |
-| --- | --- |
-| `ui/controls` | Top bar, input selectors, web run controls, map controls, global trace visibility, and page tabs. |
-| `ui/pages` | Page layout for overview, motion, mount, calibration, sensors, and diagnostics. |
-| `ui/plots` | Reusable plot sections, foldable overview plots, decimation, shared cursor lines, log-scale formatting, and hover popups. |
-| `ui/maps` | Mapbox/CARTO tile selection, map overlay drawing, hover markers, heading arrows, and synthetic local-map rendering. |
-| `ui/inspector` | Five-second hover-window update allocation, mount error ledger, covariance/residual tables, and heatmap rendering. |
-| `ui/tuning` | Align, Reduced, and Full filter tuning controls. |
-| `ui/web` | Browser-only manifest loading, gzip/CSV loading, dropped-file staging, worker requests, and synthetic scenario/noise inputs. |
-| `ui/runtime` | App construction, startup theme/density, replay refresh, and egui update loop. |
-| `ui/state` | Trace labels, trace visibility classification, data-origin state, and tuning-panel state. |
-| `ui/trace_query` | Pure trace filtering, interpolation, mount-reference lookup, and derived trace helpers. |
-| `ui/colors` | Shared color policy for plots, map overlays, markers, and tooltips. |
-| `ui/orthogonal` | Vehicle and sensor orthogonal angle popups for attitude and mount plots. |
-| `ui/windows` | Floating tuning and update-inspector windows. |
-
 ## Detailed Math Notes
 
-- [Reduced EKF mount formulation PDF](reduced.pdf) and [TEX](reduced.tex).
 - [Align/NHC formulation PDF](align.pdf) and [TEX](align.tex).
-- [Full EKF formulation PDF](full.pdf) and [TEX](full.tex).
+- [EKF formulation PDF](ekf.pdf) and [TEX](ekf.tex).
 - [Roll observability PDF](roll-observability.pdf) and [TEX](roll-observability.tex).
 
 ## Documentation Conventions
 
 - Keep README-level material short and operational.
 - Prefer `sim/README.md` for crate-specific tool inventory and diagnostics.
-- Put estimator conventions and equations in the formulation PDFs under `docs/`, with TEX kept as the editable source.
-- Keep `docs/math/*.md` as index and operational-reference pages, not duplicate derivations.
-- When generated Rust changes, update both the symbolic source notes and the testing notes if the verification path changes.
+- Put estimator conventions and equations in the formulation PDFs under
+  `docs/`, with TEX kept as the editable source.
+- Keep `docs/math/*.md` as index and operational-reference pages, not duplicate
+  derivations.
+- When generated Rust changes, update both the symbolic source notes and the
+  testing notes if the verification path changes.

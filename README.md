@@ -9,61 +9,38 @@
 
 ![IMU/GNSS Fusion web visualizer](screenshot.png)
 
-IMU/GNSS Fusion is a personal Rust project for experimenting with ground-vehicle
-inertial/GNSS fusion. It contains an embedded-oriented filter crate, offline
-replay and visualization tools, synthetic trajectory generation, and
-hardware-agnostic CSV replay support.
+IMU/GNSS Fusion is a Rust workspace for experimenting with ground-vehicle
+inertial/GNSS fusion. It contains an embedded-oriented EKF crate, offline replay
+and visualization tools, synthetic trajectory generation, and hardware-agnostic
+CSV replay support.
 
-This project is under active development. INS/GNSS mechanization is a mature
-technology, but practical performance depends heavily on sensor quality,
-vehicle motion, mounting geometry, GNSS availability, and application domain.
-This implementation is aimed at ground vehicles using consumer-grade IMUs and
-GNSS receivers, with optional wheel-speed input when available. It is designed
-to be easy to integrate with standard timestamped IMU and GNSS outputs rather
-than with any specific receiver or firmware stack.
+The implementation targets consumer-grade IMUs and GNSS receivers on ground
+vehicles, with optional wheel-speed input when available. It is designed to
+integrate with standard timestamped IMU and GNSS outputs rather than any
+specific receiver, firmware stack, or logger format.
 
-Rust is used because this project has no compatibility requirement with an
-existing C/C++ firmware codebase, and because Rust integrates cleanly with the
-native and browser-based [egui](https://github.com/emilk/egui) simulator in this repository. The core algorithms
-are intentionally straightforward and can be ported to C or C++ if a target
-project requires it; separate C/C++ wrapper APIs are not provided here. The
-runtime uses common embedded-friendly optimization strategies, including scalar
-measurement updates, so it should be practical on typical embedded targets such
-as ESP32- and STM32-class devices.
+Rust is used because it fits the no-std filter crate, the native simulator, and
+the browser visualizer in one workspace. The core algorithms are intentionally
+straightforward and use embedded-friendly patterns such as scalar measurement
+updates.
 
 The library can be initialized with known vehicle-to-IMU mounting angles, or it
-can estimate mounting internally. When automatic mount alignment is selected,
-the filter waits to initialize until it has observed enough valid GNSS-backed
-vehicle motion to produce a usable mount estimate.
+can estimate mounting internally. In automatic mount mode, the runtime waits
+until it has enough valid GNSS-backed vehicle motion to produce a usable mount
+seed before EKF initialization.
 
-The repository provides two main ways to evaluate the filter in the native or
-web-based simulator:
-
-- Synthesized IMU/GNSS data generated from high-level motion profiles with
-  configurable noise levels.
-- Experimental replay datasets covering different mounting angles and driving
-  scenarios. These datasets include reference signals for comparative analysis;
-  the references are used for plots and evaluation, not as normal filter inputs.
-
-The project is useful for:
-
-- 📘 learning INS/GNSS mechanization and embedded implementation patterns,
-- 🛠️ customizing the baseline filter and iterating on tuning for your project needs,
-- 📊 evaluating behavior with synthetic trajectories and hardware-agnostic replay datasets,
-- 🧭 demonstrating and testing fusion behavior through the interactive visualizer.
-
-## 🚀 Quick Start
+## Quick Start
 
 Try the hosted visualizer first:
 
-- 🌐 [Open the web demo](https://yongkyuns.github.io/imu_gnss_fusion/)
+- [Open the web demo](https://yongkyuns.github.io/imu_gnss_fusion/)
 
 Requirements for local development:
 
 - Rust stable. The workspace uses Rust 2024 crates.
-- Python with `sympy` is only needed when regenerating Kalman-model Rust files.
+- Python with `sympy` only when regenerating generated EKF Rust files.
 
-Build and test the main workspace:
+Build and test the workspace:
 
 ```bash
 cargo build --workspace --locked
@@ -94,66 +71,55 @@ wasm-bindgen --target web --out-dir web/pkg \
 python3 -m http.server --directory web 8080
 ```
 
-## 📚 Documentation
+## Documentation
 
 - [docs/README.md](docs/README.md): documentation index.
 - [docs/testing.md](docs/testing.md): testing workflow.
 - [docs/math/frames.md](docs/math/frames.md): frame and quaternion conventions.
-- [docs/math/full.md](docs/math/full.md): Full EKF operational links.
-- [docs/reduced.pdf](docs/reduced.pdf): detailed Reduced EKF mount formulation.
-- [docs/align.pdf](docs/align.pdf): detailed Align/NHC formulation.
-- [docs/full.pdf](docs/full.pdf): detailed Full EKF formulation.
+- [docs/math/ekf.md](docs/math/ekf.md): EKF math note index.
+- [docs/filter-algorithms.md](docs/filter-algorithms.md): EKF runtime behavior.
+- [docs/data-and-simulation.md](docs/data-and-simulation.md): replay data and synthetic simulation.
+- [docs/visualizer-tools-testing.md](docs/visualizer-tools-testing.md): visualizer, tools, and test workflow.
 
-## 🧱 Workspace Layout
+## Workspace Layout
 
 | Path | Purpose |
 | --- | --- |
-| `sensor_fusion/` | `sensor_fusion` library crate. Contains Align, Full EKF, Reduced EKF, generated model code, and filter API tests. |
-| `sim/` | Replay, simulation, evaluation, diagnostics, and [egui](https://github.com/emilk/egui) visualizer crate. |
+| `sensor_fusion/` | `sensor_fusion` library crate, EKF runtime, alignment, generated model code, and filter API tests. |
+| `sim/` | Replay, simulation, evaluation, diagnostics, and egui visualizer crate. |
 | `docs/` | Project documentation, math PDFs/TEX sources, and test guidance. |
 | `web/` | Static browser host for the wasm visualizer. |
 | `mobile/ios/` | Experimental iOS sensor collection app. |
 
-See [docs/README.md](docs/README.md) for the complete documentation index and
-[sim/README.md](sim/README.md) for the command-line tool map. The main deep
-reference pages are:
-
-- [Repository architecture](docs/architecture.md)
-- [API and conventions](docs/api-and-conventions.md)
-- [Filter algorithms](docs/filter-algorithms.md)
-- [Data and simulation](docs/data-and-simulation.md)
-- [Visualizer, tools, and testing](docs/visualizer-tools-testing.md)
-
-## 🗺️ Architecture
+## Architecture
 
 ![Architecture overview](docs/assets/architecture.png)
 
 The editable source for this diagram is [arch.pen](arch.pen). The exported
-diagram asset above is checked in so the architecture stays visible on GitHub
-without requiring Pencil.
+diagram asset is checked in so the architecture stays visible on GitHub without
+requiring Pencil.
 
-The main replay path is:
+Main replay path:
 
-1. Data enters as hardware-agnostic `imu.csv` and `gnss.csv`, or as a synthetic scenario generated inside `sim`.
+1. Data enters as hardware-agnostic `imu.csv` and `gnss.csv`, or as a synthetic
+   scenario generated inside `sim`.
 2. `sim::datasets` converts CSV rows into timestamped IMU/GNSS samples.
 3. `sim::eval::replay` merges IMU and GNSS events in a consistent time order.
-4. `sensor_fusion` runs Align plus the configured Reduced or Full EKF.
-5. `sim::visualizer` compares Reduced and Full through separate replay passes and displays traces, map data, mount states, diagnostics, and summary statistics.
+4. `sensor_fusion` runs mount alignment and the EKF.
+5. `sim::visualizer` displays traces, map data, mount states, diagnostics, and
+   summary statistics.
 
-The runtime Rust filter code consumes generated matrix/Jacobian snippets under `sensor_fusion/src/reduced/generated/` and `sensor_fusion/src/full/generated/`. The symbolic sources live in Python so model derivation stays reviewable while generated Rust stays fast and dependency-light.
+Generated Rust matrix/Jacobian snippets live under the EKF implementation
+modules. Symbolic sources are Python/SymPy files so model derivation stays
+reviewable while generated Rust stays fast and dependency-light.
 
-Plots, controls, modules, binaries, and generated-code paths consistently use
-**Reduced** for the reduced-state local-NED EKF and **Full** for the full-state
-ECEF EKF.
+Reference data included with hosted or generic replay datasets is used for
+plots, summaries, and tests. It is not a normal runtime input unless manual
+mount mode explicitly uses a reference mount.
 
-Reference data included with hosted/generic replay datasets is used for rough
-accuracy comparison in plots, summaries, and tests. It is not an input to the
-runtime filters unless the user explicitly selects manual mount mode; otherwise
-it only provides an external yardstick for current filter performance.
+## Coordinate And API Conventions
 
-## 🧭 Coordinate And API Conventions
-
-The filters use active rotations. `C_ab` maps coordinates from frame `b` to
+The runtime uses active rotations. `C_ab` maps coordinates from frame `b` to
 frame `a`:
 
 ```text
@@ -167,14 +133,11 @@ Quaternions are scalar-first `[w, x, y, z]`.
 | Symbol | Meaning |
 | --- | --- |
 | `b` | Raw IMU body/sensor frame. Public `ImuSample` gyro and accel are expressed here. |
-| `v` | Vehicle frame, forward-right-down. Vehicle speed and non-holonomic constraints are expressed here. |
-| `n` | Local NED navigation frame used by Reduced and GNSS velocities. |
-| `e` | ECEF frame used internally by Full. |
+| `v` | Vehicle frame, forward-right-down. Vehicle speed and nonholonomic constraints are expressed here. |
+| `n` | Local NED navigation frame used by GNSS velocities and local attitude conventions. |
+| `e` | ECEF frame used for WGS84 conversion and global position math. |
 
-The current implementation follows the mount-in-propagation convention. The
-public mount quaternion returned by Align and stored in the `q_bv0..q_bv3` fields
-of both filters is the physical vehicle-to-body mount `q_bv`, whose rotation
-matrix is `C_bv = R(q_bv)`:
+The public mount quaternion is `q_bv`, the physical vehicle-to-body mount:
 
 ```text
 x_b = C_bv x_v
@@ -182,20 +145,15 @@ C_vb = C_bv^T
 x_v = C_vb x_b
 ```
 
-Raw IMU samples are not pre-rotated by callers. Reduced and Full rotate them
-into the vehicle frame inside propagation. Reduced attitude `q0..q3` is `q_nv`,
-the NED/navigation-frame attitude with respect to the vehicle frame; its DCM
-maps vehicle coordinates into NED coordinates: `x_n = C_nv x_v`. Full attitude
-`q0..q3` is `q_ev`, the ECEF-frame attitude with respect to the vehicle frame;
-its DCM maps vehicle coordinates into ECEF coordinates: `x_e = C_ev x_v`. NHC
-velocity is `C_nv^T v_n` for Reduced and `C_ev^T v_e` for Full.
+Raw IMU samples are not pre-rotated by callers. The EKF rotates body-frame IMU
+samples into the vehicle frame internally.
 
 Expected `sensor_fusion` inputs:
 
 | Input | Required convention |
 | --- | --- |
 | `ImuSample::gyro_radps` | Raw body-frame angular rate `[x_b, y_b, z_b]`, rad/s. |
-| `ImuSample::accel_mps2` | Raw body-frame specific force `[x_b, y_b, z_b]`, m/s². |
+| `ImuSample::accel_mps2` | Raw body-frame specific force `[x_b, y_b, z_b]`, m/s^2. |
 | `GnssSample::lat/lon/height` | WGS84 latitude/longitude degrees and ellipsoidal height meters. |
 | `GnssSample::vel_ned_mps` | Local `[north, east, down]` velocity, m/s. |
 | `GnssSample::pos_std_m` | One-sigma local NED position standard deviations, meters. |
@@ -203,19 +161,17 @@ Expected `sensor_fusion` inputs:
 | `GnssSample::heading_rad` | Optional vehicle heading in NED, radians clockwise from north toward east. |
 | `VehicleSpeedSample` | Nonnegative speed magnitude along vehicle `+X`; direction selects forward/reverse. |
 
-Minimal `sensor_fusion` API example:
+Minimal API example:
 
 ```rust
 use sensor_fusion::{
-    Config, Filter, GnssSample, ImuSample, MountMode, SensorFusion,
+    Config, GnssSample, ImuSample, MountMode, SensorFusion,
     VehicleSpeedDirection, VehicleSpeedSample,
 };
 
 let mount_q = [1.0, 0.0, 0.0, 0.0]; // q_bv: x_b = R(q_bv) x_v
 let mut fusion = SensorFusion::with_config(Config {
-    filter: Filter::Reduced,
     mount_mode: MountMode::Manual(mount_q),
-    ..Config::default()
 });
 
 fusion.process_imu(ImuSample {
@@ -241,105 +197,37 @@ fusion.process_vehicle_speed(VehicleSpeedSample {
     direction: VehicleSpeedDirection::Forward,
 });
 
-if let Some(reduced) = fusion.reduced() {
-    let vn = reduced.nominal.vn;
-    let mount_q = [
-        reduced.nominal.q_bv0,
-        reduced.nominal.q_bv1,
-        reduced.nominal.q_bv2,
-        reduced.nominal.q_bv3,
-    ];
-    let _ = (vn, mount_q);
+if let Some(q_bv) = fusion.mount_q_bv() {
+    let _ = q_bv;
 }
 ```
 
-## 📈 Embedded Benchmark
+## Embedded Benchmark
 
-Reduced and full filter timing was measured on an ESP32-S3 at 240 MHz using the
-`rustcam/apps/fusion_bench` harness and this workspace's current
-`sensor_fusion` crate. The benchmark uses 200 warmup iterations, then measures
-2000 predict-only iterations and 1000 measurement-update iterations. The budget
-model assumes 100 Hz IMU and 2 Hz GNSS, or 98 IMU+NHC steps/s plus 2
-IMU+GNSS+NHC steps/s.
+Current embedded budget notes should be regenerated after runtime changes. The
+benchmark harness measures predict-only and update-heavy schedules on an
+ESP32-S3-class target and reports linked flash contribution, state-object size,
+and CPU budget at the assumed IMU/GNSS rates.
 
-Release build settings:
+Treat those numbers as budget-level embedded timings rather than
+cycle-accurate microbenchmarks, because the timing source on the target reports
+at millisecond granularity.
 
-| Setting | Value |
-|---|---|
-| Rust profile | `release` |
-| Optimization | `opt-level = "z"` |
-| LTO | `fat` |
-| Codegen units | `1` |
-| Panic strategy | `abort` |
-| Symbols / debug | stripped symbols, debug disabled |
-| Checks | overflow checks and debug assertions disabled |
-
-Runtime speed:
-
-| Operation | Reduced | Full |
-|---|---:|---:|
-| Predict only | 595 us | 895 us |
-| IMU + NHC step | 1500 us | 1720 us |
-| IMU + GNSS + NHC step | 2320 us | 3740 us |
-| 100 Hz IMU / 2 Hz GNSS budget | 151.640 ms/s | 176.040 ms/s |
-| CPU budget at 240 MHz | 15.164% | 17.604% |
-| Average per 10 ms IMU tick | 1516.4 us | 1760.4 us |
-
-The CPU budget is computed from the steady-state sensor schedule:
-
-```text
-Reduced = 98 * 1500 us + 2 * 2320 us = 151.640 ms/s
-Full    = 98 * 1720 us + 2 * 3740 us = 176.040 ms/s
-```
-
-The linked `sensor_fusion` footprint was decoded from the benchmark firmware
-using `rust-nm -S --demangle` and the linker map. This counts symbols and
-allocated sections belonging to the `sensor_fusion` object, not the operating
-system, benchmark harness, standard library, or logging code.
-
-| Footprint item | Size |
-|---|---:|
-| Decoded function symbols | 36.7 kB |
-| Allocated text + Xtensa literal pools | 38.6 kB |
-| Read-only data/constants | 3.0 kB |
-| Total linked flash contribution | 41.6 kB |
-| Static `.data` / `.bss` RAM | 0.0 kB |
-
-The main linked-code split is approximately 17.0 kB for reduced, 19.7 kB for
-full, and 1.8 kB for shared math/navigation/covariance helpers, with the
-remaining bytes in read-only constants and compiler-generated helpers. The
-benchmark image links both reduced and full; applications that link only one
-filter can be smaller after LTO and section garbage collection.
-
-Runtime state is owned by the caller, so it is not represented as static RAM in
-the symbol table. Current compiler type layout for the persistent state objects:
-
-| Runtime object | Size |
-|---|---:|
-| `reduced::Filter` | 3.8 kB |
-| `full::Filter` | 3.5 kB |
-| `align::Align` | 0.4 kB |
-| `SensorFusion` facade, owning align + reduced + full | 8.8 kB |
-
-The timing source on this NuttX setup reports at millisecond granularity, so
-these numbers should be treated as budget-level embedded timings rather than
-cycle-accurate microbenchmarks.
-
-## 🎛️ Filter And Replay Modes
+## Filter And Replay Modes
 
 The public `sensor_fusion::MountMode` and visualizer `--misalignment` option
 use the same two mount behaviors:
 
 | Mode | Behavior |
 | --- | --- |
-| `auto` | Align seeds the mount angle; Reduced/Full then estimate the physical mount states internally. |
-| `manual` | Uses a supplied/reference `q_bv` vehicle-to-body mount and freezes mount states in Reduced/Full. |
+| `auto` | Align seeds the mount angle; the EKF estimates residual mount states internally. |
+| `manual` | Uses a supplied/reference `q_bv` vehicle-to-body mount and freezes mount states. |
 
 See [sim/README.md](sim/README.md) for the current tool map.
 
-## 📦 Data Formats
+## Data Formats
 
-The common hardware-agnostic replay directory contains two required CSV files:
+The common hardware-agnostic replay directory contains two required CSV files.
 
 `imu.csv`
 
@@ -359,7 +247,8 @@ velocity and standard-deviation columns are local NED. `heading_rad` may be
 `export_synthetic_replay_generic`; hardware-specific converters should live
 outside this repository and emit this schema.
 
-Replay directories can also include optional reference traces used only for evaluation and visualization:
+Replay directories can include optional reference traces used only for
+evaluation and visualization:
 
 ```text
 reference_attitude.csv
@@ -375,17 +264,7 @@ references use
 `t_s,lat_deg,lon_deg,height_m,vn_mps,ve_mps,vd_mps,heading_rad`. Motion
 references use
 `t_s,wx_radps,wy_radps,wz_radps,ax_mps2,ay_mps2,az_mps2`, with vehicle-frame
-angular velocity and gravity-compensated linear acceleration. They are
-intentionally generic: a converter may derive them from any trusted reference
-system, but this repository does not depend on the reference device protocol.
-
-Example conversions:
-
-```bash
-cargo run --release -p sim --bin export_synthetic_replay_generic -- \
-  /path/to/synthetic-export/output /tmp/replay \
-  --signal-source meas
-```
+angular velocity and gravity-compensated linear acceleration.
 
 Package generic replay data for static hosting:
 
@@ -393,39 +272,19 @@ Package generic replay data for static hosting:
 python3 scripts/package_dataset.py /path/to/replay-dir /tmp/hosted-drive
 ```
 
-The hosted dataset layout is:
+## Generated-Code Workflow
 
-```text
-manifest.json
-imu.csv.gz
-gnss.csv.gz
-reference_position.csv.gz  # optional
-reference_attitude.csv.gz  # optional
-reference_mount.csv.gz     # optional
-reference_motion.csv.gz    # optional
-```
-
-`scripts/package_dataset.py` can stage an existing generic replay directory or call `export_synthetic_replay_generic` for synthetic-export output. Raw `.bin` logs are intentionally not supported in this repository because device-specific parsing belongs outside the hardware-agnostic replay boundary.
-
-## ⚙️ Generated-Code Workflow
-
-Generated Rust files are checked in and included by the generated wrappers in `sensor_fusion/src/reduced/generated.rs` and `sensor_fusion/src/full/generated.rs`.
-
-Regenerate Reduced EKF model code after changing `sensor_fusion/src/reduced/formulation.py`:
+Generated Rust files are checked in. Regenerate EKF model code after changing
+the symbolic formulation sources:
 
 ```bash
-python sensor_fusion/src/reduced/formulation.py --emit-rust
+python sensor_fusion/src/ekf/formulation.py --emit-rust
 ```
 
-Regenerate Full EKF model code after changing `sensor_fusion/src/full/formulation.py`:
+After regeneration, review the generated diffs and run targeted tests from
+[docs/testing.md](docs/testing.md).
 
-```bash
-python sensor_fusion/src/full/formulation.py --emit-rust
-```
-
-After regeneration, review the generated diffs and run targeted tests from [docs/testing.md](docs/testing.md).
-
-## ✅ Tests
+## Tests
 
 Common local checks:
 
@@ -435,13 +294,14 @@ cargo test -p sim --locked
 cargo test --workspace --locked
 ```
 
-See [docs/testing.md](docs/testing.md) for focused test groups, fixtures, and expensive/local-data notes.
+See [docs/testing.md](docs/testing.md) for focused test groups, fixtures, and
+expensive/local-data notes.
 
-## 📄 License
+## License
 
 MIT. See [LICENSE](LICENSE).
 
-## 🙏 References
+## References
 
 - [`gnss-ins-sim`](https://github.com/Aceinna/gnss-ins-sim): referenced for synthetic IMU/GNSS data generation concepts.
-- [`open-aided-navigation`](https://github.com/fedorbaklanov/open-aided-navigation): referenced for loosely coupled Full EKF formulation concepts.
+- [`open-aided-navigation`](https://github.com/fedorbaklanov/open-aided-navigation): referenced for loosely coupled EKF formulation concepts.

@@ -11,12 +11,11 @@ use crate::synthetic::gnss_ins_path::{
 use crate::visualizer::math::{ecef_to_ned, lla_to_ecef, quat_rpy_deg};
 use crate::visualizer::model::{PlotData, Trace, VisualizerMountMode};
 use crate::visualizer::pipeline::generic::{
-    GenericReplayInput, GenericReplayProgress,
-    build_generic_replay_plot_data_with_progress_and_reduced_mount_seed,
-    build_generic_replay_plot_data_with_reduced_mount_seed, q_bv_to_reference_mount_rpy,
+    GenericReplayInput, GenericReplayProgress, build_generic_replay_plot_data_with_ekf_mount_seed,
+    build_generic_replay_plot_data_with_progress_and_ekf_mount_seed, q_bv_to_reference_mount_rpy,
     reference_mount_rpy_to_q_bv,
 };
-use crate::visualizer::pipeline::{FilterCompareConfig, GnssOutageConfig};
+use crate::visualizer::pipeline::{FusionTuningConfig, GnssOutageConfig};
 
 const STANDARD_GRAVITY_MPS2: f64 = 9.80665;
 
@@ -59,7 +58,7 @@ pub struct SyntheticVisualizerConfig {
 pub fn build_synthetic_plot_data(
     synth_cfg: &SyntheticVisualizerConfig,
     mount_mode: VisualizerMountMode,
-    filter_cfg: FilterCompareConfig,
+    filter_cfg: FusionTuningConfig,
     gnss_outages: GnssOutageConfig,
 ) -> Result<PlotData> {
     build_synthetic_plot_data_impl(synth_cfg, mount_mode, filter_cfg, gnss_outages, None)
@@ -194,7 +193,7 @@ pub fn build_synthetic_replay_input(
 pub fn build_synthetic_plot_data_with_progress(
     synth_cfg: &SyntheticVisualizerConfig,
     mount_mode: VisualizerMountMode,
-    filter_cfg: FilterCompareConfig,
+    filter_cfg: FusionTuningConfig,
     gnss_outages: GnssOutageConfig,
     progress: &mut dyn FnMut(GenericReplayProgress),
 ) -> Result<PlotData> {
@@ -210,7 +209,7 @@ pub fn build_synthetic_plot_data_with_progress(
 fn build_synthetic_plot_data_impl(
     synth_cfg: &SyntheticVisualizerConfig,
     mount_mode: VisualizerMountMode,
-    filter_cfg: FilterCompareConfig,
+    filter_cfg: FusionTuningConfig,
     gnss_outages: GnssOutageConfig,
     progress: Option<&mut dyn FnMut(GenericReplayProgress)>,
 ) -> Result<PlotData> {
@@ -372,27 +371,27 @@ fn build_synthetic_plot_data_impl(
         reference_position: Vec::new(),
         reference_motion: synthetic_reference_motion(&measured.reference, 1.0 / synth_cfg.imu_hz),
     };
-    let reduced_mount_seed = mount_mode.uses_ref_mount().then_some([
+    let ekf_mount_seed = mount_mode.uses_ref_mount().then_some([
         q_truth_mount[0] as f32,
         q_truth_mount[1] as f32,
         q_truth_mount[2] as f32,
         q_truth_mount[3] as f32,
     ]);
     let mut data = match progress {
-        Some(progress) => build_generic_replay_plot_data_with_progress_and_reduced_mount_seed(
+        Some(progress) => build_generic_replay_plot_data_with_progress_and_ekf_mount_seed(
             &replay,
             mount_mode,
             filter_cfg,
             gnss_outages,
             progress,
-            reduced_mount_seed,
+            ekf_mount_seed,
         ),
-        None => build_generic_replay_plot_data_with_reduced_mount_seed(
+        None => build_generic_replay_plot_data_with_ekf_mount_seed(
             &replay,
             mount_mode,
             filter_cfg,
             gnss_outages,
-            reduced_mount_seed,
+            ekf_mount_seed,
         ),
     };
     add_synthetic_overlays(
@@ -449,33 +448,17 @@ fn add_synthetic_overlays(data: &mut PlotData, traces: SyntheticOverlayTraces) {
     ];
     rename_trace_prefix(&mut data.imu_raw_gyro, "Raw IMU", "Synthetic raw IMU");
     rename_trace_prefix(&mut data.imu_raw_accel, "Raw IMU", "Synthetic raw IMU");
+    rename_trace(&mut data.ekf_cmp_vel, "EKF velN [m/s]", "EKF vN [m/s]");
+    rename_trace(&mut data.ekf_cmp_vel, "EKF velE [m/s]", "EKF vE [m/s]");
+    rename_trace(&mut data.ekf_cmp_vel, "EKF velD [m/s]", "EKF vD [m/s]");
+    rename_trace(&mut data.ekf_cmp_att, "ekf initialized", "EKF initialized");
     rename_trace(
-        &mut data.reduced_cmp_vel,
-        "Reduced velN [m/s]",
-        "Reduced vN [m/s]",
-    );
-    rename_trace(
-        &mut data.reduced_cmp_vel,
-        "Reduced velE [m/s]",
-        "Reduced vE [m/s]",
-    );
-    rename_trace(
-        &mut data.reduced_cmp_vel,
-        "Reduced velD [m/s]",
-        "Reduced vD [m/s]",
-    );
-    rename_trace(
-        &mut data.reduced_cmp_att,
-        "reduced initialized",
-        "Reduced initialized",
-    );
-    rename_trace(
-        &mut data.reduced_map,
+        &mut data.ekf_map,
         "GNSS-only path (lon,lat)",
         "Synthetic GNSS path (lon,lat)",
     );
     replace_trace_points(
-        &mut data.reduced_map,
+        &mut data.ekf_map,
         "Synthetic GNSS path (lon,lat)",
         traces.gnss_map,
     );
@@ -495,88 +478,84 @@ fn add_synthetic_overlays(data: &mut PlotData, traces: SyntheticOverlayTraces) {
         },
     ];
     insert_after_trace(
-        &mut data.reduced_cmp_pos,
-        "Reduced posN [m]",
+        &mut data.ekf_cmp_pos,
+        "EKF posN [m]",
         Trace {
             name: "Synthetic truth posN [m]".to_string(),
             points: traces.truth_pos_n,
         },
     );
     insert_after_trace(
-        &mut data.reduced_cmp_pos,
-        "Reduced posE [m]",
+        &mut data.ekf_cmp_pos,
+        "EKF posE [m]",
         Trace {
             name: "Synthetic truth posE [m]".to_string(),
             points: traces.truth_pos_e,
         },
     );
     insert_after_trace(
-        &mut data.reduced_cmp_pos,
-        "Reduced posD [m]",
+        &mut data.ekf_cmp_pos,
+        "EKF posD [m]",
         Trace {
             name: "Synthetic truth posD [m]".to_string(),
             points: traces.truth_pos_d,
         },
     );
     insert_after_trace(
-        &mut data.reduced_cmp_vel,
-        "Reduced vN [m/s]",
+        &mut data.ekf_cmp_vel,
+        "EKF vN [m/s]",
         Trace {
             name: "Synthetic truth vN [m/s]".to_string(),
             points: traces.truth_vel_n,
         },
     );
     insert_after_trace(
-        &mut data.reduced_cmp_vel,
-        "Reduced vE [m/s]",
+        &mut data.ekf_cmp_vel,
+        "EKF vE [m/s]",
         Trace {
             name: "Synthetic truth vE [m/s]".to_string(),
             points: traces.truth_vel_e,
         },
     );
     insert_after_trace(
-        &mut data.reduced_cmp_vel,
-        "Reduced vD [m/s]",
+        &mut data.ekf_cmp_vel,
+        "EKF vD [m/s]",
         Trace {
             name: "Synthetic truth vD [m/s]".to_string(),
             points: traces.truth_vel_d,
         },
     );
     insert_after_trace(
-        &mut data.reduced_cmp_att,
-        "Reduced roll [deg]",
+        &mut data.ekf_cmp_att,
+        "EKF roll [deg]",
         Trace {
             name: "Synthetic truth roll [deg]".to_string(),
             points: traces.truth_roll,
         },
     );
     insert_after_trace(
-        &mut data.reduced_cmp_att,
-        "Reduced pitch [deg]",
+        &mut data.ekf_cmp_att,
+        "EKF pitch [deg]",
         Trace {
             name: "Synthetic truth pitch [deg]".to_string(),
             points: traces.truth_pitch,
         },
     );
     insert_after_trace(
-        &mut data.reduced_cmp_att,
-        "Reduced yaw [deg]",
+        &mut data.ekf_cmp_att,
+        "EKF yaw [deg]",
         Trace {
             name: "Synthetic truth yaw [deg]".to_string(),
             points: traces.truth_yaw,
         },
     );
-    data.reduced_misalignment.push(Trace {
-        name: "Reduced mount quaternion error [deg]".to_string(),
-        points: mount_error_points(&data.reduced_misalignment, "Reduced", traces.q_truth_mount),
+    data.ekf_misalignment.push(Trace {
+        name: "EKF mount quaternion error [deg]".to_string(),
+        points: mount_error_points(&data.ekf_misalignment, "EKF", traces.q_truth_mount),
     });
-    data.reduced_misalignment
+    data.ekf_misalignment
         .extend(synthetic_mount_traces(traces.q_truth_mount, traces.end_t_s));
-    data.full_misalignment.push(Trace {
-        name: "Full mount quaternion error [deg]".to_string(),
-        points: mount_error_points(&data.full_misalignment, "Full", traces.q_truth_mount),
-    });
-    data.reduced_map.insert(
+    data.ekf_map.insert(
         0,
         Trace {
             name: "Synthetic truth path (lon,lat)".to_string(),

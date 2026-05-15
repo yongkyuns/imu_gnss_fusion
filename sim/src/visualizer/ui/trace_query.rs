@@ -93,30 +93,18 @@ pub(super) fn mount_estimate_reference_traces<'a>(
     axis: &str,
 ) -> Option<(&'a Trace, &'a Trace)> {
     let estimate = match filter {
-        "Reduced" => find_trace_exact(
-            &data.reduced_misalignment,
-            &format!("Reduced mount {axis} [deg]"),
-        ),
-        "Full" => find_trace_exact(&data.full_misalignment, &format!("Full mount {axis} [deg]")),
+        "EKF" => find_trace_exact(&data.ekf_misalignment, &format!("EKF mount {axis} [deg]")),
         _ => None,
     }?;
     let reference_name = format!("Reference mount {axis} [deg]");
-    let reference = find_trace_exact(&data.reduced_misalignment, &reference_name)
-        .or_else(|| find_trace_exact(&data.full_misalignment, &reference_name))
+    let reference = find_trace_exact(&data.ekf_misalignment, &reference_name)
         .or_else(|| find_trace_exact(&data.align_cmp_att, &reference_name))?;
     Some((estimate, reference))
 }
 
 pub(super) fn vehicle_body_velocity_traces(data: &PlotData) -> Vec<Trace> {
-    let velocity_groups = [
-        data.reduced_cmp_vel.as_slice(),
-        data.full_cmp_vel.as_slice(),
-    ];
-    let attitude_groups = [
-        data.reduced_cmp_att.as_slice(),
-        data.full_cmp_att.as_slice(),
-        data.orientation.as_slice(),
-    ];
+    let velocity_groups = [data.ekf_cmp_vel.as_slice()];
+    let attitude_groups = [data.ekf_cmp_att.as_slice(), data.orientation.as_slice()];
     [
         BodyVelocityTraceSpec {
             label: "Reference",
@@ -128,22 +116,13 @@ pub(super) fn vehicle_body_velocity_traces(data: &PlotData) -> Vec<Trace> {
             yaw_names: &["Reference yaw [deg]", "Synthetic truth yaw [deg]"],
         },
         BodyVelocityTraceSpec {
-            label: "Reduced",
-            vel_n_names: &["Reduced velN [m/s]", "Reduced vN [m/s]"],
-            vel_e_names: &["Reduced velE [m/s]", "Reduced vE [m/s]"],
-            vel_d_names: &["Reduced velD [m/s]", "Reduced vD [m/s]"],
-            roll_names: &["Reduced roll [deg]"],
-            pitch_names: &["Reduced pitch [deg]"],
-            yaw_names: &["Reduced yaw [deg]"],
-        },
-        BodyVelocityTraceSpec {
-            label: "Full",
-            vel_n_names: &["Full velN [m/s]"],
-            vel_e_names: &["Full velE [m/s]"],
-            vel_d_names: &["Full velD [m/s]"],
-            roll_names: &["Full roll [deg]"],
-            pitch_names: &["Full pitch [deg]"],
-            yaw_names: &["Full yaw [deg]"],
+            label: "EKF",
+            vel_n_names: &["EKF velN [m/s]", "EKF vN [m/s]"],
+            vel_e_names: &["EKF velE [m/s]", "EKF vE [m/s]"],
+            vel_d_names: &["EKF velD [m/s]", "EKF vD [m/s]"],
+            roll_names: &["EKF roll [deg]"],
+            pitch_names: &["EKF pitch [deg]"],
+            yaw_names: &["EKF yaw [deg]"],
         },
     ]
     .into_iter()
@@ -261,16 +240,10 @@ pub(super) fn attitude_error_traces(data: &PlotData, axis: &str) -> Vec<Trace> {
     let Some(reference) = reference_attitude_trace(data, axis) else {
         return Vec::new();
     };
-    [
-        (
-            "Reduced",
-            find_trace_exact(&data.reduced_cmp_att, &format!("Reduced {axis} [deg]")),
-        ),
-        (
-            "Full",
-            find_trace_exact(&data.full_cmp_att, &format!("Full {axis} [deg]")),
-        ),
-    ]
+    [(
+        "EKF",
+        find_trace_exact(&data.ekf_cmp_att, &format!("EKF {axis} [deg]")),
+    )]
     .into_iter()
     .filter_map(|(system, estimate)| {
         estimate.and_then(|estimate| attitude_error_trace(system, axis, estimate, reference))
@@ -281,16 +254,12 @@ pub(super) fn attitude_error_traces(data: &PlotData, axis: &str) -> Vec<Trace> {
 fn reference_attitude_trace<'a>(data: &'a PlotData, axis: &str) -> Option<&'a Trace> {
     let reference_name = format!("Reference {axis} [deg]");
     let synthetic_name = format!("Synthetic truth {axis} [deg]");
-    [
-        data.reduced_cmp_att.as_slice(),
-        data.full_cmp_att.as_slice(),
-        data.orientation.as_slice(),
-    ]
-    .into_iter()
-    .find_map(|group| {
-        find_trace_exact(group, &reference_name)
-            .or_else(|| find_trace_exact(group, &synthetic_name))
-    })
+    [data.ekf_cmp_att.as_slice(), data.orientation.as_slice()]
+        .into_iter()
+        .find_map(|group| {
+            find_trace_exact(group, &reference_name)
+                .or_else(|| find_trace_exact(group, &synthetic_name))
+        })
 }
 
 fn attitude_error_trace(

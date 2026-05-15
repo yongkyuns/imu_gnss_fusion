@@ -6,10 +6,7 @@ This crate contains the hardware-agnostic replay, evaluation, synthetic-data, an
 
 - `visualizer`: interactive viewer for generic CSV replay directories and synthetic scenarios.
 - `export_synthetic_replay_generic`: exporter from synthetic-export outputs into the generic replay schema.
-- `run_full_nsr`: seeded Full EKF replay from prepared reference-state inputs.
-- `seeded_full_stress_mc`: fast Rust Monte Carlo replay for seeded Full EKF stress.
-- `compare_filter_runtime`: runtime benchmark harness.
-- `diag_full_accel_z_bias`: controlled Full EKF Z-accelerometer-bias diagnostic.
+- `diag_mount_observability`: synthetic roll/pitch mount observability diagnostic.
 - `synthetic_bad_basin_sweep`: synthetic early-convergence stress sweep.
 
 ## Visualizer Inputs
@@ -35,7 +32,7 @@ The same generic CSV parser is used by the native visualizer and the browser vis
 
 The visualizer uses a single `--misalignment` option:
 
-- `auto`: Align provides the initial mount seed, then Reduced and Full estimate mount states internally.
+- `auto`: Align provides the initial mount seed, then the EKF estimates mount states internally.
 - `manual`: Reference mount angles are used when a synthetic or converted dataset provides them; mount states are frozen.
 
 The visualizer, covariance diagnostics, and replay helpers use the same names:
@@ -85,7 +82,6 @@ Prefer these shared modules instead of duplicating replay logic in new tools:
 
 - `src/datasets/generic_replay.rs`: hardware-agnostic IMU/GNSS replay schema.
 - `src/datasets/synthetic_replay.rs`: synthetic-export CSV parsing and sample loading.
-- `src/datasets/seeded_full.rs`: semicolon-delimited seeded Full EKF dataset parsing.
 - `src/eval/replay.rs`: canonical IMU/GNSS merge order for feeding `SensorFusion`.
 - `src/eval/state_summary.rs`: convergence, fluctuation, and final-error summaries.
 - `src/visualizer/pipeline/generic.rs`: generic replay pipeline used by native and browser visualization.
@@ -101,7 +97,6 @@ instead of adding one-off CSV parsers or filter replay loops.
 | --- | --- |
 | `src/datasets/generic_replay.rs` | Reads/writes hardware-agnostic `imu.csv`, `gnss.csv`, and optional reference CSVs. This is the boundary format for real and hosted data. |
 | `src/datasets/synthetic_replay.rs` | Loads generated synthetic truth, IMU, and GNSS sample files. |
-| `src/datasets/seeded_full.rs` | Loads prepared seeded Full EKF fixtures used by diagnostic binaries and tests. |
 | `src/eval/replay.rs` | Defines the canonical timestamp merge order for IMU/GNSS events. |
 | `src/eval/gnss_ins.rs` | Quaternion, rotation, signal-source, and GNSS/INS conversion helpers. |
 | `src/eval/state_summary.rs` | Computes final, tail, convergence, and fluctuation summaries from traces. |
@@ -109,7 +104,7 @@ instead of adding one-off CSV parsers or filter replay loops.
 | `src/synthetic/motion_dsl.rs` | Parses high-level synthetic scenario files such as `city_blocks_15min.scenario`. |
 | `src/synthetic/gnss_ins_path.rs` | Generates synthetic trajectories, truth samples, noisy IMU/GNSS measurements, and preset noise levels. |
 | `src/visualizer/model.rs` | Shared plot, map, page, heading, contribution, and inspector structs. |
-| `src/visualizer/pipeline/config.rs` | Serializable Align/Reduced/Full tuning configuration used by native and web replays. |
+| `src/visualizer/pipeline/config.rs` | Serializable align/EKF tuning configuration used by native and web replays. |
 | `src/visualizer/pipeline/generic.rs` | Generic replay pipeline used by both native and web visualizers; feeds only the public `SensorFusion` API. |
 | `src/visualizer/pipeline/synthetic.rs` | Synthetic pipeline that generates data, converts it into the generic replay path, and overlays truth traces. |
 | `src/visualizer/replay_job.rs` | Native background replay jobs and web replay transport shaping. |
@@ -124,7 +119,7 @@ instead of adding one-off CSV parsers or filter replay loops.
 | `ui/plots.rs` | Reusable egui plot sections, shared cursors, decimation, log axes, and hover behavior. |
 | `ui/maps.rs` | Map tile source selection, map overlays, markers, arrows, and synthetic local trajectory drawing. |
 | `ui/inspector.rs` | Update allocation and covariance/residual inspector aggregation/rendering. |
-| `ui/tuning.rs` | Align, Reduced, and Full filter tuning panels. |
+| `ui/tuning.rs` | Align and EKF tuning panels. |
 | `ui/web.rs` | Browser-only dataset manifest loading, gzip/CSV loading, worker orchestration, and synthetic web inputs. |
 | `ui/runtime.rs` | App construction, startup state, replay refresh, and egui frame lifecycle. |
 | `ui/state.rs` | Data-origin state, tuning-window state, trace labels, and visibility classification. |
@@ -132,18 +127,3 @@ instead of adding one-off CSV parsers or filter replay loops.
 | `ui/colors.rs` | Shared color rules for plots, maps, markers, and tooltips. |
 | `ui/orthogonal.rs` | Vehicle and sensor angle popups for attitude and mount hover views. |
 | `ui/windows.rs` | Floating tuning and update-inspector windows. |
-
-## Full EKF Diagnostics
-
-Full EKF accel and gyro diagnostic plots use the same raw body-frame IMU stream
-that is fed through the public `sensor_fusion` API. Reduced and Full mount plots
-use the current `q_bv` mount quaternion directly, where `q_bv` stores the physical
-vehicle-to-body mount `q_bv`.
-
-The Full EKF accel-bias states are additive correction states:
-
-```text
-corrected_accel = accel_scale * raw_accel + accel_bias
-```
-
-So a physical sensor bias has the opposite sign of the plotted Full EKF bias state. The Full EKF Z-bias investigation showed that vertical accel bias is observable through GNSS vertical position/velocity, but estimating accel scale and accel bias together makes the Z channel underdetermined because the vehicle Z axis is dominated by gravity. The visualizer Full path therefore keeps accel scale fixed by default and lets accel bias absorb the remaining correction.

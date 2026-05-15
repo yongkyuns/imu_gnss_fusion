@@ -30,7 +30,7 @@ use sim::visualizer::pipeline::synthetic::{
     SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_plot_data,
 };
 #[cfg(not(target_arch = "wasm32"))]
-use sim::visualizer::pipeline::{FilterCompareConfig, GnssOutageConfig};
+use sim::visualizer::pipeline::{FusionTuningConfig, GnssOutageConfig};
 #[cfg(not(target_arch = "wasm32"))]
 use sim::visualizer::replay_job::{GenericReplayJobConfig, run_generic_replay_job};
 #[cfg(not(target_arch = "wasm32"))]
@@ -94,8 +94,6 @@ struct Args {
     misalignment: VisualizerMountMode,
     #[arg(long)]
     dump_align_axis_time_s: Option<f64>,
-    #[arg(long)]
-    dump_full_time_s: Option<f64>,
     #[arg(long, default_value_t = 3.0)]
     dump_window_s: f64,
     #[arg(long, default_value_t = 0)]
@@ -105,9 +103,9 @@ struct Args {
     #[arg(long, default_value_t = 1)]
     gnss_outage_seed: u64,
     #[arg(long, default_value_t = 1)]
-    reduced_predict_imu_decimation: usize,
+    ekf_predict_imu_decimation: usize,
     #[arg(long)]
-    reduced_predict_imu_lpf_cutoff_hz: Option<f64>,
+    ekf_predict_imu_lpf_cutoff_hz: Option<f64>,
     #[arg(long)]
     r_body_vel: Option<f32>,
     #[arg(long)]
@@ -169,63 +167,63 @@ impl From<SyntheticNoiseArg> for SyntheticNoiseMode {
 fn main() -> Result<()> {
     let args = Args::parse();
     let t0 = Instant::now();
-    let filter_cfg = FilterCompareConfig {
+    let filter_cfg = FusionTuningConfig {
         r_body_vel: args
             .r_body_vel
-            .unwrap_or(FilterCompareConfig::default().r_body_vel),
+            .unwrap_or(FusionTuningConfig::default().r_body_vel),
         r_body_vel_z: args
             .r_body_vel_z
-            .unwrap_or(FilterCompareConfig::default().r_body_vel_z),
+            .unwrap_or(FusionTuningConfig::default().r_body_vel_z),
         attitude_roll_pitch_init_sigma_deg: args
             .attitude_roll_pitch_init_sigma_deg
-            .unwrap_or(FilterCompareConfig::default().attitude_roll_pitch_init_sigma_deg),
+            .unwrap_or(FusionTuningConfig::default().attitude_roll_pitch_init_sigma_deg),
         yaw_init_sigma_deg: args
             .yaw_init_sigma_deg
-            .unwrap_or(FilterCompareConfig::default().yaw_init_sigma_deg),
+            .unwrap_or(FusionTuningConfig::default().yaw_init_sigma_deg),
         gyro_bias_init_sigma_dps: args
             .gyro_bias_init_sigma_dps
-            .unwrap_or(FilterCompareConfig::default().gyro_bias_init_sigma_dps),
+            .unwrap_or(FusionTuningConfig::default().gyro_bias_init_sigma_dps),
         accel_bias_init_sigma_mps2: args
             .accel_bias_init_sigma_mps2
-            .unwrap_or(FilterCompareConfig::default().accel_bias_init_sigma_mps2),
+            .unwrap_or(FusionTuningConfig::default().accel_bias_init_sigma_mps2),
         mount_roll_pitch_init_sigma_deg: args
             .mount_roll_pitch_init_sigma_deg
-            .unwrap_or(FilterCompareConfig::default().mount_roll_pitch_init_sigma_deg),
+            .unwrap_or(FusionTuningConfig::default().mount_roll_pitch_init_sigma_deg),
         mount_roll_init_sigma_deg: args
             .mount_roll_pitch_init_sigma_deg
-            .unwrap_or(FilterCompareConfig::default().mount_roll_init_sigma_deg),
+            .unwrap_or(FusionTuningConfig::default().mount_roll_init_sigma_deg),
         mount_pitch_init_sigma_deg: args
             .mount_roll_pitch_init_sigma_deg
-            .unwrap_or(FilterCompareConfig::default().mount_pitch_init_sigma_deg),
+            .unwrap_or(FusionTuningConfig::default().mount_pitch_init_sigma_deg),
         mount_init_sigma_deg: args
             .mount_init_sigma_deg
-            .unwrap_or(FilterCompareConfig::default().mount_init_sigma_deg),
+            .unwrap_or(FusionTuningConfig::default().mount_init_sigma_deg),
         r_vehicle_speed: args
             .r_vehicle_speed
-            .unwrap_or(FilterCompareConfig::default().r_vehicle_speed),
+            .unwrap_or(FusionTuningConfig::default().r_vehicle_speed),
         r_zero_vel: args
             .r_zero_vel
-            .unwrap_or(FilterCompareConfig::default().r_zero_vel),
+            .unwrap_or(FusionTuningConfig::default().r_zero_vel),
         r_stationary_accel: args
             .r_stationary_accel
-            .unwrap_or(FilterCompareConfig::default().r_stationary_accel),
+            .unwrap_or(FusionTuningConfig::default().r_stationary_accel),
         mount_align_rw_var: args
             .mount_align_rw_var
-            .unwrap_or(FilterCompareConfig::default().mount_align_rw_var),
+            .unwrap_or(FusionTuningConfig::default().mount_align_rw_var),
         align_handoff_delay_s: args
             .align_handoff_delay_s
-            .unwrap_or(FilterCompareConfig::default().align_handoff_delay_s),
+            .unwrap_or(FusionTuningConfig::default().align_handoff_delay_s),
         freeze_misalignment_states: args.freeze_misalignment_states,
         mount_settle_time_s: args
             .mount_settle_time_s
-            .unwrap_or(FilterCompareConfig::default().mount_settle_time_s),
+            .unwrap_or(FusionTuningConfig::default().mount_settle_time_s),
         mount_settle_release_sigma_deg: args
             .mount_settle_release_sigma_deg
-            .unwrap_or(FilterCompareConfig::default().mount_settle_release_sigma_deg),
+            .unwrap_or(FusionTuningConfig::default().mount_settle_release_sigma_deg),
         mount_settle_zero_cross_covariance: args.mount_settle_zero_cross_covariance,
-        predict_imu_decimation: args.reduced_predict_imu_decimation.max(1),
-        predict_imu_lpf_cutoff_hz: args.reduced_predict_imu_lpf_cutoff_hz,
-        ..FilterCompareConfig::default()
+        predict_imu_decimation: args.ekf_predict_imu_decimation.max(1),
+        predict_imu_lpf_cutoff_hz: args.ekf_predict_imu_lpf_cutoff_hz,
+        ..FusionTuningConfig::default()
     };
 
     let gnss_outages = GnssOutageConfig {
@@ -261,7 +259,7 @@ fn main() -> Result<()> {
         };
         let data = run_generic_replay_job(
             &replay,
-            GenericReplayJobConfig::full(args.misalignment, filter_cfg, gnss_outages),
+            GenericReplayJobConfig::complete(args.misalignment, filter_cfg, gnss_outages),
         );
         (
             data,
@@ -376,42 +374,26 @@ fn main() -> Result<()> {
         group_stats("imu_cal_accel", &data.imu_cal_accel),
         group_stats("orientation", &data.orientation),
         group_stats("other", &data.other),
-        group_stats("reduced_cmp_pos", &data.reduced_cmp_pos),
-        group_stats("reduced_cmp_vel", &data.reduced_cmp_vel),
-        group_stats("reduced_cmp_att", &data.reduced_cmp_att),
-        group_stats("reduced_meas_gyro", &data.reduced_meas_gyro),
-        group_stats("reduced_meas_accel", &data.reduced_meas_accel),
-        group_stats("reduced_bias_gyro", &data.reduced_bias_gyro),
-        group_stats("reduced_bias_accel", &data.reduced_bias_accel),
-        group_stats("reduced_cov_bias", &data.reduced_cov_bias),
-        group_stats("reduced_cov_nonbias", &data.reduced_cov_nonbias),
-        group_stats("reduced_mount_sigma", &data.reduced_mount_sigma),
-        group_stats("reduced_mount_dx", &data.reduced_mount_dx),
-        group_stats("reduced_nhc_mount_dx", &data.reduced_nhc_mount_dx),
-        group_stats("reduced_nhc_innovation", &data.reduced_nhc_innovation),
-        group_stats("reduced_nhc_nis", &data.reduced_nhc_nis),
-        group_stats("reduced_nhc_h_mount_norm", &data.reduced_nhc_h_mount_norm),
-        group_stats("reduced_misalignment", &data.reduced_misalignment),
-        group_stats("reduced_stationary_diag", &data.reduced_stationary_diag),
-        group_stats("reduced_bump_pitch_speed", &data.reduced_bump_pitch_speed),
-        group_stats("reduced_bump_diag", &data.reduced_bump_diag),
-        group_stats("reduced_map", &data.reduced_map),
-        group_stats("full_cmp_pos", &data.full_cmp_pos),
-        group_stats("full_cmp_vel", &data.full_cmp_vel),
-        group_stats("full_cmp_att", &data.full_cmp_att),
-        group_stats("full_meas_gyro", &data.full_meas_gyro),
-        group_stats("full_meas_accel", &data.full_meas_accel),
-        group_stats("full_bias_gyro", &data.full_bias_gyro),
-        group_stats("full_bias_accel", &data.full_bias_accel),
-        group_stats("full_scale_gyro", &data.full_scale_gyro),
-        group_stats("full_scale_accel", &data.full_scale_accel),
-        group_stats("full_cov_bias", &data.full_cov_bias),
-        group_stats("full_cov_nonbias", &data.full_cov_nonbias),
-        group_stats("full_mount_sigma", &data.full_mount_sigma),
-        group_stats("full_mount_dx", &data.full_mount_dx),
-        group_stats("full_nhc_innovation", &data.full_nhc_innovation),
-        group_stats("full_gnss_pos_gate", &data.full_gnss_pos_gate),
-        group_stats("full_map", &data.full_map),
+        group_stats("ekf_cmp_pos", &data.ekf_cmp_pos),
+        group_stats("ekf_cmp_vel", &data.ekf_cmp_vel),
+        group_stats("ekf_cmp_att", &data.ekf_cmp_att),
+        group_stats("ekf_meas_gyro", &data.ekf_meas_gyro),
+        group_stats("ekf_meas_accel", &data.ekf_meas_accel),
+        group_stats("ekf_bias_gyro", &data.ekf_bias_gyro),
+        group_stats("ekf_bias_accel", &data.ekf_bias_accel),
+        group_stats("ekf_cov_bias", &data.ekf_cov_bias),
+        group_stats("ekf_cov_nonbias", &data.ekf_cov_nonbias),
+        group_stats("ekf_mount_sigma", &data.ekf_mount_sigma),
+        group_stats("ekf_mount_dx", &data.ekf_mount_dx),
+        group_stats("ekf_nhc_mount_dx", &data.ekf_nhc_mount_dx),
+        group_stats("ekf_nhc_innovation", &data.ekf_nhc_innovation),
+        group_stats("ekf_nhc_nis", &data.ekf_nhc_nis),
+        group_stats("ekf_nhc_h_mount_norm", &data.ekf_nhc_h_mount_norm),
+        group_stats("ekf_misalignment", &data.ekf_misalignment),
+        group_stats("ekf_stationary_diag", &data.ekf_stationary_diag),
+        group_stats("ekf_bump_pitch_speed", &data.ekf_bump_pitch_speed),
+        group_stats("ekf_bump_diag", &data.ekf_bump_diag),
+        group_stats("ekf_map", &data.ekf_map),
         group_stats("align_cmp_att", &data.align_cmp_att),
         group_stats("align_res_vel", &data.align_res_vel),
         group_stats("align_axis_err", &data.align_axis_err),
@@ -439,16 +421,11 @@ fn main() -> Result<()> {
         ("align_res_vel", &data.align_res_vel),
         ("align_axis_err", &data.align_axis_err),
         ("align_motion", &data.align_motion),
-        ("reduced_meas_gyro", &data.reduced_meas_gyro),
-        ("reduced_meas_accel", &data.reduced_meas_accel),
-        ("reduced_misalignment", &data.reduced_misalignment),
-        ("reduced_bump_pitch_speed", &data.reduced_bump_pitch_speed),
-        ("reduced_bump_diag", &data.reduced_bump_diag),
-        ("full_meas_gyro", &data.full_meas_gyro),
-        ("full_meas_accel", &data.full_meas_accel),
-        ("full_scale_gyro", &data.full_scale_gyro),
-        ("full_scale_accel", &data.full_scale_accel),
-        ("full_gnss_pos_gate", &data.full_gnss_pos_gate),
+        ("ekf_meas_gyro", &data.ekf_meas_gyro),
+        ("ekf_meas_accel", &data.ekf_meas_accel),
+        ("ekf_misalignment", &data.ekf_misalignment),
+        ("ekf_bump_pitch_speed", &data.ekf_bump_pitch_speed),
+        ("ekf_bump_diag", &data.ekf_bump_diag),
         ("align_roll_contrib", &data.align_roll_contrib),
         ("align_pitch_contrib", &data.align_pitch_contrib),
         ("align_yaw_contrib", &data.align_yaw_contrib),
@@ -470,12 +447,8 @@ fn main() -> Result<()> {
             eprintln!("[profile] max_step_abs group={} value={:.6}", group, step);
         }
     }
-    print_map_bounds("reduced_map", &data.reduced_map);
-    print_map_bounds("full_map", &data.full_map);
-    print_reduced_nhc_window_summaries(&data, tmin);
-    print_full_nhc_window_summaries(&data, tmin);
-    print_full_gnss_gate_window_summaries(&data, tmin);
-    print_full_mount_window_summaries(&data, tmin);
+    print_map_bounds("ekf_map", &data.ekf_map);
+    print_ekf_nhc_window_summaries(&data, tmin);
     print_mount_allocation_summaries(&data, tmin, tmax);
     if let Some(t_s) = args.dump_align_axis_time_s {
         dump_traces_near_time(
@@ -487,34 +460,6 @@ fn main() -> Result<()> {
         dump_traces_near_time(
             "align_axis_err",
             &data.align_axis_err,
-            t_s,
-            args.dump_window_s,
-        );
-    }
-    if let Some(t_s) = args.dump_full_time_s {
-        dump_traces_near_time("full_cmp_vel", &data.full_cmp_vel, t_s, args.dump_window_s);
-        dump_traces_near_time("full_cmp_att", &data.full_cmp_att, t_s, args.dump_window_s);
-        dump_traces_near_time(
-            "full_misalignment",
-            &data.full_misalignment,
-            t_s,
-            args.dump_window_s,
-        );
-        dump_traces_near_time(
-            "reduced_misalignment",
-            &data.reduced_misalignment,
-            t_s,
-            args.dump_window_s,
-        );
-        dump_traces_near_time(
-            "reduced_stationary_diag",
-            &data.reduced_stationary_diag,
-            t_s,
-            args.dump_window_s,
-        );
-        dump_traces_near_time(
-            "full_bias_accel",
-            &data.full_bias_accel,
             t_s,
             args.dump_window_s,
         );
@@ -688,7 +633,7 @@ struct WebReplayJobRequest {
     #[serde(default)]
     misalignment: Option<String>,
     #[serde(default, alias = "ekfCfg")]
-    filter_cfg: Option<sim::visualizer::pipeline::FilterCompareConfig>,
+    filter_cfg: Option<sim::visualizer::pipeline::FusionTuningConfig>,
     #[serde(default)]
     gnss_outages: Option<sim::visualizer::pipeline::GnssOutageConfig>,
     label: Option<String>,
@@ -797,7 +742,7 @@ fn web_request_gnss_outages(
 #[cfg(target_arch = "wasm32")]
 fn web_request_filter_cfg(
     request: &WebReplayJobRequest,
-) -> sim::visualizer::pipeline::FilterCompareConfig {
+) -> sim::visualizer::pipeline::FusionTuningConfig {
     request.filter_cfg.unwrap_or_default()
 }
 
@@ -1253,210 +1198,110 @@ fn print_reference_error_summaries(data: &PlotData) {
     for (group, system, state, trace_name, reference_name, mode) in [
         (
             "pos",
-            "Reduced",
+            "EKF",
             "N",
-            "Reduced posN [m]",
+            "EKF posN [m]",
             "GNSS posN [m]",
             SummaryMode::Linear,
         ),
         (
             "pos",
-            "Reduced",
+            "EKF",
             "E",
-            "Reduced posE [m]",
+            "EKF posE [m]",
             "GNSS posE [m]",
             SummaryMode::Linear,
         ),
         (
             "pos",
-            "Reduced",
+            "EKF",
             "D",
-            "Reduced posD [m]",
-            "GNSS posD [m]",
-            SummaryMode::Linear,
-        ),
-        (
-            "pos",
-            "Full",
-            "N",
-            "Full posN [m]",
-            "GNSS posN [m]",
-            SummaryMode::Linear,
-        ),
-        (
-            "pos",
-            "Full",
-            "E",
-            "Full posE [m]",
-            "GNSS posE [m]",
-            SummaryMode::Linear,
-        ),
-        (
-            "pos",
-            "Full",
-            "D",
-            "Full posD [m]",
+            "EKF posD [m]",
             "GNSS posD [m]",
             SummaryMode::Linear,
         ),
         (
             "vel",
-            "Reduced",
+            "EKF",
             "N",
-            "Reduced velN [m/s]",
+            "EKF velN [m/s]",
             "GNSS velN [m/s]",
             SummaryMode::Linear,
         ),
         (
             "vel",
-            "Reduced",
+            "EKF",
             "E",
-            "Reduced velE [m/s]",
+            "EKF velE [m/s]",
             "GNSS velE [m/s]",
             SummaryMode::Linear,
         ),
         (
             "vel",
-            "Reduced",
+            "EKF",
             "D",
-            "Reduced velD [m/s]",
-            "GNSS velD [m/s]",
-            SummaryMode::Linear,
-        ),
-        (
-            "vel",
-            "Full",
-            "N",
-            "Full velN [m/s]",
-            "GNSS velN [m/s]",
-            SummaryMode::Linear,
-        ),
-        (
-            "vel",
-            "Full",
-            "E",
-            "Full velE [m/s]",
-            "GNSS velE [m/s]",
-            SummaryMode::Linear,
-        ),
-        (
-            "vel",
-            "Full",
-            "D",
-            "Full velD [m/s]",
+            "EKF velD [m/s]",
             "GNSS velD [m/s]",
             SummaryMode::Linear,
         ),
         (
             "att",
-            "Reduced",
+            "EKF",
             "roll",
-            "Reduced roll [deg]",
+            "EKF roll [deg]",
             "Reference roll [deg]",
             SummaryMode::AngleDeg,
         ),
         (
             "att",
-            "Reduced",
+            "EKF",
             "pitch",
-            "Reduced pitch [deg]",
+            "EKF pitch [deg]",
             "Reference pitch [deg]",
             SummaryMode::AngleDeg,
         ),
         (
             "att",
-            "Reduced",
+            "EKF",
             "yaw",
-            "Reduced yaw [deg]",
-            "Reference yaw [deg]",
-            SummaryMode::AngleDeg,
-        ),
-        (
-            "att",
-            "Full",
-            "roll",
-            "Full roll [deg]",
-            "Reference roll [deg]",
-            SummaryMode::AngleDeg,
-        ),
-        (
-            "att",
-            "Full",
-            "pitch",
-            "Full pitch [deg]",
-            "Reference pitch [deg]",
-            SummaryMode::AngleDeg,
-        ),
-        (
-            "att",
-            "Full",
-            "yaw",
-            "Full yaw [deg]",
+            "EKF yaw [deg]",
             "Reference yaw [deg]",
             SummaryMode::AngleDeg,
         ),
         (
             "mount",
-            "Reduced",
+            "EKF",
             "roll",
-            "Reduced mount roll [deg]",
+            "EKF mount roll [deg]",
             "Reference mount roll [deg]",
             SummaryMode::AngleDeg,
         ),
         (
             "mount",
-            "Reduced",
+            "EKF",
             "pitch",
-            "Reduced mount pitch [deg]",
+            "EKF mount pitch [deg]",
             "Reference mount pitch [deg]",
             SummaryMode::AngleDeg,
         ),
         (
             "mount",
-            "Reduced",
+            "EKF",
             "yaw",
-            "Reduced mount yaw [deg]",
-            "Reference mount yaw [deg]",
-            SummaryMode::AngleDeg,
-        ),
-        (
-            "mount",
-            "Full",
-            "roll",
-            "Full mount roll [deg]",
-            "Reference mount roll [deg]",
-            SummaryMode::AngleDeg,
-        ),
-        (
-            "mount",
-            "Full",
-            "pitch",
-            "Full mount pitch [deg]",
-            "Reference mount pitch [deg]",
-            SummaryMode::AngleDeg,
-        ),
-        (
-            "mount",
-            "Full",
-            "yaw",
-            "Full mount yaw [deg]",
+            "EKF mount yaw [deg]",
             "Reference mount yaw [deg]",
             SummaryMode::AngleDeg,
         ),
     ] {
         let traces = match (group, system) {
-            ("pos", "Reduced") | ("vel", "Reduced") => data.reduced_cmp_pos_or_vel(group),
-            ("pos", "Full") => data.full_cmp_pos.as_slice(),
-            ("vel", "Full") => data.full_cmp_vel.as_slice(),
-            ("att", "Reduced") => data.reduced_cmp_att.as_slice(),
-            ("att", "Full") => data.full_cmp_att.as_slice(),
-            ("mount", "Reduced") => data.reduced_misalignment.as_slice(),
-            ("mount", "Full") => data.full_misalignment.as_slice(),
+            ("pos", "EKF") | ("vel", "EKF") => data.ekf_cmp_pos_or_vel(group),
+            ("att", "EKF") => data.ekf_cmp_att.as_slice(),
+            ("mount", "EKF") => data.ekf_misalignment.as_slice(),
             _ => &[],
         };
         let reference_traces = match group {
-            "pos" => data.reduced_cmp_pos.as_slice(),
-            "vel" => data.reduced_cmp_vel.as_slice(),
+            "pos" => data.ekf_cmp_pos.as_slice(),
+            "vel" => data.ekf_cmp_vel.as_slice(),
             _ => traces,
         };
         let Some(trace) = find_profile_trace(traces, group, system, state, trace_name) else {
@@ -1489,14 +1334,9 @@ fn print_reference_error_summaries(data: &PlotData) {
     }
     for (system, traces, trace_name) in [
         (
-            "Reduced",
-            data.reduced_misalignment.as_slice(),
-            "Reduced mount quaternion error [deg]",
-        ),
-        (
-            "Full",
-            data.full_misalignment.as_slice(),
-            "Full mount quaternion error [deg]",
+            "EKF",
+            data.ekf_misalignment.as_slice(),
+            "EKF mount quaternion error [deg]",
         ),
         (
             "Align",
@@ -1557,9 +1397,9 @@ fn find_profile_reference_trace<'a>(
 #[cfg(not(target_arch = "wasm32"))]
 fn profile_trace_alias(group: &str, system: &str, state: &str) -> Option<&'static str> {
     match (group, system, state) {
-        ("vel", "Reduced", "N") => Some("Reduced vN [m/s]"),
-        ("vel", "Reduced", "E") => Some("Reduced vE [m/s]"),
-        ("vel", "Reduced", "D") => Some("Reduced vD [m/s]"),
+        ("vel", "EKF", "N") => Some("EKF vN [m/s]"),
+        ("vel", "EKF", "E") => Some("EKF vE [m/s]"),
+        ("vel", "EKF", "D") => Some("EKF vD [m/s]"),
         _ => None,
     }
 }
@@ -1578,7 +1418,7 @@ fn profile_reference_alias(group: &str, state: &str) -> Option<&'static str> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn print_reduced_nhc_window_summaries(data: &PlotData, t0: f64) {
+fn print_ekf_nhc_window_summaries(data: &PlotData, t0: f64) {
     if !t0.is_finite() {
         return;
     }
@@ -1587,19 +1427,19 @@ fn print_reduced_nhc_window_summaries(data: &PlotData, t0: f64) {
         let end = t0 + end_rel;
         for channel in ["Y", "Z"] {
             let innovation = find_trace(
-                &data.reduced_nhc_innovation,
-                &format!("Reduced NHC {channel} innovation [m/s]"),
+                &data.ekf_nhc_innovation,
+                &format!("EKF NHC {channel} innovation [m/s]"),
             );
-            let nis = find_trace(&data.reduced_nhc_nis, &format!("Reduced NHC {channel} NIS"));
+            let nis = find_trace(&data.ekf_nhc_nis, &format!("EKF NHC {channel} NIS"));
             let h_mount = find_trace(
-                &data.reduced_nhc_h_mount_norm,
-                &format!("Reduced NHC {channel} mount H norm"),
+                &data.ekf_nhc_h_mount_norm,
+                &format!("EKF NHC {channel} mount H norm"),
             );
             let innovation_stats = innovation.map(|trace| window_stats(trace, start, end));
             let nis_stats = nis.map(|trace| window_stats(trace, start, end));
             let h_stats = h_mount.map(|trace| window_stats(trace, start, end));
             eprintln!(
-                "[profile] reduced_nhc_window channel={} window=[{:.1},{:.1}]s updates={} innov_mean={:.6} innov_rms={:.6} innov_abs_sum={:.6} nis_mean={:.6} nis_max={:.6} h_mount_mean={:.6}",
+                "[profile] ekf_nhc_window channel={} window=[{:.1},{:.1}]s updates={} innov_mean={:.6} innov_rms={:.6} innov_abs_sum={:.6} nis_mean={:.6} nis_max={:.6} h_mount_mean={:.6}",
                 channel,
                 start_rel,
                 end_rel,
@@ -1613,12 +1453,12 @@ fn print_reduced_nhc_window_summaries(data: &PlotData, t0: f64) {
             );
             for axis in ["roll", "pitch", "yaw"] {
                 let correction = find_trace(
-                    &data.reduced_nhc_mount_dx,
-                    &format!("Reduced NHC {channel} mount {axis} correction [deg/update]"),
+                    &data.ekf_nhc_mount_dx,
+                    &format!("EKF NHC {channel} mount {axis} correction [deg/update]"),
                 );
                 let correction_stats = correction.map(|trace| window_stats(trace, start, end));
                 eprintln!(
-                    "[profile] reduced_nhc_mount_window channel={} axis={} window=[{:.1},{:.1}]s updates={} dx_sum_deg={:.9} dx_abs_sum_deg={:.9} dx_mean_deg={:.9}",
+                    "[profile] ekf_nhc_mount_window channel={} axis={} window=[{:.1},{:.1}]s updates={} dx_sum_deg={:.9} dx_abs_sum_deg={:.9} dx_mean_deg={:.9}",
                     channel,
                     axis,
                     start_rel,
@@ -1631,141 +1471,16 @@ fn print_reduced_nhc_window_summaries(data: &PlotData, t0: f64) {
             }
         }
         for axis in ["roll", "pitch", "yaw"] {
-            let name = format!("Reduced mount {axis} [deg]");
-            let drift = find_trace(&data.reduced_misalignment, &name)
+            let name = format!("EKF mount {axis} [deg]");
+            let drift = find_trace(&data.ekf_misalignment, &name)
                 .and_then(|trace| window_first_last_delta(trace, start, end));
             if let Some((first, last, delta)) = drift {
                 eprintln!(
-                    "[profile] reduced_mount_state_window axis={} window=[{:.1},{:.1}]s first_deg={:.9} last_deg={:.9} delta_deg={:.9}",
+                    "[profile] ekf_mount_state_window axis={} window=[{:.1},{:.1}]s first_deg={:.9} last_deg={:.9} delta_deg={:.9}",
                     axis, start_rel, end_rel, first, last, delta
                 );
             }
         }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn print_full_mount_window_summaries(data: &PlotData, t0: f64) {
-    if !t0.is_finite() {
-        return;
-    }
-    for (start_rel, end_rel) in [(0.0, 60.0), (60.0, 120.0), (120.0, 240.0), (240.0, 600.0)] {
-        let start = t0 + start_rel;
-        let end = t0 + end_rel;
-        for axis in ["roll", "pitch", "yaw"] {
-            let correction = find_trace(
-                &data.full_mount_dx,
-                &format!("Full mount {axis} correction [deg/update]"),
-            );
-            let correction_stats = correction.map(|trace| window_stats(trace, start, end));
-            eprintln!(
-                "[profile] full_mount_update_window axis={} window=[{:.1},{:.1}]s updates={} dx_sum_deg={:.9} dx_abs_sum_deg={:.9} dx_mean_deg={:.9}",
-                axis,
-                start_rel,
-                end_rel,
-                correction_stats.map_or(0, |s| s.count),
-                correction_stats.map_or(f64::NAN, |s| s.sum),
-                correction_stats.map_or(f64::NAN, |s| s.sum_abs),
-                correction_stats.map_or(f64::NAN, |s| s.mean),
-            );
-            let name = format!("Full mount {axis} [deg]");
-            let drift = find_trace(&data.full_misalignment, &name)
-                .and_then(|trace| window_first_last_delta(trace, start, end));
-            if let Some((first, last, delta)) = drift {
-                eprintln!(
-                    "[profile] full_mount_state_window axis={} window=[{:.1},{:.1}]s first_deg={:.9} last_deg={:.9} delta_deg={:.9}",
-                    axis, start_rel, end_rel, first, last, delta
-                );
-            }
-        }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn print_full_nhc_window_summaries(data: &PlotData, t0: f64) {
-    if !t0.is_finite() {
-        return;
-    }
-    for (start_rel, end_rel) in [(0.0, 60.0), (60.0, 120.0), (120.0, 240.0), (240.0, 600.0)] {
-        let start = t0 + start_rel;
-        let end = t0 + end_rel;
-        for channel in ["Y", "Z"] {
-            let innovation = find_trace(
-                &data.full_nhc_innovation,
-                &format!("Full NHC {channel} innovation [m/s]"),
-            );
-            let innovation_stats = innovation.map(|trace| window_stats(trace, start, end));
-            eprintln!(
-                "[profile] full_nhc_window channel={} window=[{:.1},{:.1}]s updates={} innov_mean={:.6} innov_rms={:.6} innov_abs_sum={:.6}",
-                channel,
-                start_rel,
-                end_rel,
-                innovation_stats.map_or(0, |s| s.count),
-                innovation_stats.map_or(f64::NAN, |s| s.mean),
-                innovation_stats.map_or(f64::NAN, |s| s.rms),
-                innovation_stats.map_or(f64::NAN, |s| s.sum_abs),
-            );
-        }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn print_full_gnss_gate_window_summaries(data: &PlotData, t0: f64) {
-    for (start_rel, end_rel) in [
-        (0.0, 60.0),
-        (60.0, 120.0),
-        (120.0, 240.0),
-        (240.0, 600.0),
-        (600.0, 1200.0),
-        (1200.0, 1740.0),
-    ] {
-        let start = t0 + start_rel;
-        let end = t0 + end_rel;
-        let accepted = find_trace(&data.full_gnss_pos_gate, "Full GNSS position accepted");
-        let accepted_stats = accepted.map(|trace| {
-            let mut attempts = 0usize;
-            let mut accepts = 0usize;
-            for point in &trace.points {
-                if point[0] >= start && point[0] < end && point[1].is_finite() {
-                    attempts += 1;
-                    if point[1] > 0.5 {
-                        accepts += 1;
-                    }
-                }
-            }
-            (attempts, accepts)
-        });
-        let max_norm = ["row 0", "row 1", "row 2"].map(|row| {
-            let name = format!("Full GNSS position gate normalized residual {row}");
-            find_trace(&data.full_gnss_pos_gate, &name)
-                .map(|trace| {
-                    trace
-                        .points
-                        .iter()
-                        .filter(|point| point[0] >= start && point[0] < end && point[1].is_finite())
-                        .map(|point| point[1].abs())
-                        .fold(0.0_f64, f64::max)
-                })
-                .unwrap_or(f64::NAN)
-        });
-        let (attempts, accepts) = accepted_stats.unwrap_or((0, 0));
-        let rejects = attempts.saturating_sub(accepts);
-        eprintln!(
-            "[profile] full_gnss_pos_gate_window window=[{:.1},{:.1}]s attempts={} accepts={} rejects={} accept_rate={:.3} max_abs_norm=[{:.3},{:.3},{:.3}]",
-            start_rel,
-            end_rel,
-            attempts,
-            accepts,
-            rejects,
-            if attempts > 0 {
-                accepts as f64 / attempts as f64
-            } else {
-                f64::NAN
-            },
-            max_norm[0],
-            max_norm[1],
-            max_norm[2],
-        );
     }
 }
 
@@ -1788,13 +1503,10 @@ fn print_mount_allocation_summaries(data: &PlotData, t0: f64, tmax: f64) {
         }
         for axis in ["roll", "pitch", "yaw"] {
             print_align_allocation_window(data, axis, start_rel, end_rel, start, end);
-            print_filter_allocation_window(data, "Reduced", axis, start_rel, end_rel, start, end);
-            print_filter_allocation_window(data, "Full", axis, start_rel, end_rel, start, end);
+            print_filter_allocation_window(data, "EKF", axis, start_rel, end_rel, start, end);
         }
-        print_accel_bias_allocation_window(data, "Reduced", start_rel, end_rel, start, end);
-        print_accel_bias_allocation_window(data, "Full", start_rel, end_rel, start, end);
-        print_gyro_bias_allocation_window(data, "Reduced", start_rel, end_rel, start, end);
-        print_gyro_bias_allocation_window(data, "Full", start_rel, end_rel, start, end);
+        print_accel_bias_allocation_window(data, "EKF", start_rel, end_rel, start, end);
+        print_gyro_bias_allocation_window(data, "EKF", start_rel, end_rel, start, end);
     }
 }
 
@@ -1841,21 +1553,13 @@ fn print_filter_allocation_window(
     end: f64,
 ) {
     let (mount_group, mount_name, att_group, att_name, sigma_group, sigma_name) = match system {
-        "Reduced" => (
-            data.reduced_misalignment.as_slice(),
-            format!("Reduced mount {axis} [deg]"),
-            data.reduced_cmp_att.as_slice(),
-            format!("Reduced {axis} [deg]"),
-            data.reduced_mount_sigma.as_slice(),
-            format!("Reduced mount {axis} sigma [deg]"),
-        ),
-        "Full" => (
-            data.full_misalignment.as_slice(),
-            format!("Full mount {axis} [deg]"),
-            data.full_cmp_att.as_slice(),
-            format!("Full {axis} [deg]"),
-            data.full_mount_sigma.as_slice(),
-            format!("Full mount {axis} sigma [deg]"),
+        "EKF" => (
+            data.ekf_misalignment.as_slice(),
+            format!("EKF mount {axis} [deg]"),
+            data.ekf_cmp_att.as_slice(),
+            format!("EKF {axis} [deg]"),
+            data.ekf_mount_sigma.as_slice(),
+            format!("EKF mount {axis} sigma [deg]"),
         ),
         _ => return,
     };
@@ -1918,8 +1622,7 @@ fn print_accel_bias_allocation_window(
     end: f64,
 ) {
     let (traces, prefix) = match system {
-        "Reduced" => (data.reduced_bias_accel.as_slice(), "Reduced accel bias"),
-        "Full" => (data.full_bias_accel.as_slice(), "Full accel sensor bias"),
+        "EKF" => (data.ekf_bias_accel.as_slice(), "EKF accel bias"),
         _ => return,
     };
     let stats = ["X", "Y", "Z"].map(|axis| {
@@ -1956,8 +1659,7 @@ fn print_gyro_bias_allocation_window(
     end: f64,
 ) {
     let (traces, prefix) = match system {
-        "Reduced" => (data.reduced_bias_gyro.as_slice(), "Reduced gyro bias"),
-        "Full" => (data.full_bias_gyro.as_slice(), "Full gyro sensor bias"),
+        "EKF" => (data.ekf_bias_gyro.as_slice(), "EKF gyro bias"),
         _ => return,
     };
     let stats = ["X", "Y", "Z"].map(|axis| {
@@ -2151,15 +1853,15 @@ fn window_first_last_delta(trace: &Trace, start: f64, end: f64) -> Option<(f64, 
 
 #[cfg(not(target_arch = "wasm32"))]
 trait PlotDataProfileExt {
-    fn reduced_cmp_pos_or_vel(&self, group: &str) -> &[Trace];
+    fn ekf_cmp_pos_or_vel(&self, group: &str) -> &[Trace];
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl PlotDataProfileExt for PlotData {
-    fn reduced_cmp_pos_or_vel(&self, group: &str) -> &[Trace] {
+    fn ekf_cmp_pos_or_vel(&self, group: &str) -> &[Trace] {
         match group {
-            "pos" => &self.reduced_cmp_pos,
-            "vel" => &self.reduced_cmp_vel,
+            "pos" => &self.ekf_cmp_pos,
+            "vel" => &self.ekf_cmp_vel,
             _ => &[],
         }
     }

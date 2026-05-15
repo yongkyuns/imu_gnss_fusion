@@ -5,7 +5,7 @@ use walkers::{HttpTiles, MapMemory};
 
 use super::model::{Page, PlotData, VisualizerMountMode};
 use super::pipeline::synthetic::SyntheticVisualizerConfig;
-use super::pipeline::{FilterCompareConfig, GnssOutageConfig};
+use super::pipeline::{FusionTuningConfig, GnssOutageConfig};
 use super::theme::UiTheme;
 
 mod colors;
@@ -51,12 +51,11 @@ pub struct App {
     show_align: bool,
     show_heading: bool,
     show_gnss_map: bool,
-    show_reduced: bool,
-    show_full: bool,
+    show_ekf: bool,
     shared_cursor_t_s: Option<f64>,
     update_inspector_cursor_t_s: Option<f64>,
     show_update_inspector: bool,
-    tuning_cfg: FilterCompareConfig,
+    tuning_cfg: FusionTuningConfig,
     tuning_gnss_outages: GnssOutageConfig,
     tuning_misalignment: VisualizerMountMode,
     tuning_panel: Option<TuningPanel>,
@@ -108,7 +107,7 @@ pub struct ReplayState {
     pub synthetic: Option<SyntheticVisualizerConfig>,
     pub max_records: Option<usize>,
     pub misalignment: VisualizerMountMode,
-    pub filter_cfg: FilterCompareConfig,
+    pub filter_cfg: FusionTuningConfig,
     pub gnss_outages: GnssOutageConfig,
 }
 

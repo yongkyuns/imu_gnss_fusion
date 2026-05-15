@@ -3,12 +3,12 @@
 use eframe::egui;
 
 use crate::visualizer::model::VisualizerMountMode;
-use crate::visualizer::pipeline::{FilterCompareConfig, GnssOutageConfig};
+use crate::visualizer::pipeline::{FusionTuningConfig, GnssOutageConfig};
 
 use super::App;
 use super::inspector::{render_update_inspector_contents, update_inspector_view_model};
 use super::state::TuningPanel;
-use super::tuning::{draw_align_tuning, draw_full_tuning, draw_reduced_tuning};
+use super::tuning::{draw_align_tuning, draw_ekf_tuning};
 #[cfg(target_arch = "wasm32")]
 use super::web::web_remember_mapbox_token;
 
@@ -20,9 +20,8 @@ impl App {
         let mut open = true;
         let mut apply_replay = false;
         let title = match panel {
-            TuningPanel::Reduced => "Reduced Tuning",
+            TuningPanel::EKF => "EKF Tuning",
             TuningPanel::Align => "Align Tuning",
-            TuningPanel::Full => "Full Tuning",
         };
         egui::Window::new(title)
             .open(&mut open)
@@ -30,18 +29,17 @@ impl App {
             .default_width(620.0)
             .show(ctx, |ui| {
                 match panel {
-                    TuningPanel::Reduced => {
-                        draw_reduced_tuning(ui, &mut self.tuning_misalignment, &mut self.tuning_cfg)
+                    TuningPanel::EKF => {
+                        draw_ekf_tuning(ui, &mut self.tuning_misalignment, &mut self.tuning_cfg)
                     }
                     TuningPanel::Align => draw_align_tuning(ui, &mut self.tuning_cfg),
-                    TuningPanel::Full => draw_full_tuning(ui, &mut self.tuning_cfg),
                 }
                 ui.separator();
                 ui.horizontal_wrapped(|ui| {
                     if ui.button("Reset section defaults").clicked() {
-                        let defaults = FilterCompareConfig::default();
+                        let defaults = FusionTuningConfig::default();
                         match panel {
-                            TuningPanel::Reduced => {
+                            TuningPanel::EKF => {
                                 self.tuning_misalignment = VisualizerMountMode::Auto;
                                 self.tuning_gnss_outages = GnssOutageConfig::default();
                                 self.tuning_cfg.r_body_vel = defaults.r_body_vel;
@@ -81,14 +79,10 @@ impl App {
                                 self.tuning_cfg.predict_imu_decimation =
                                     defaults.predict_imu_decimation;
                                 self.tuning_cfg.yaw_init_speed_mps = defaults.yaw_init_speed_mps;
-                                self.tuning_cfg.noise.reduced = defaults.noise.reduced;
+                                self.tuning_cfg.noise.ekf = defaults.noise.ekf;
                             }
                             TuningPanel::Align => {
                                 self.tuning_cfg.align = defaults.align;
-                            }
-                            TuningPanel::Full => {
-                                self.tuning_cfg.noise.full = defaults.noise.full;
-                                self.tuning_cfg.full_init = defaults.full_init;
                             }
                         }
                     }

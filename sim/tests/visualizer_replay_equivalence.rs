@@ -14,7 +14,7 @@ use sim::visualizer::pipeline::generic::{GenericReplayInput, reference_mount_rpy
 use sim::visualizer::pipeline::synthetic::{
     SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_plot_data,
 };
-use sim::visualizer::pipeline::{FilterCompareConfig, GnssOutageConfig};
+use sim::visualizer::pipeline::{FusionTuningConfig, GnssOutageConfig};
 use sim::visualizer::replay_job::{
     GenericReplayCsvJob, GenericReplayJobConfig, run_generic_csv_replay_job, run_generic_replay_job,
 };
@@ -87,7 +87,7 @@ fn synthetic_generic_input_and_csv_replay_share_auxiliary_trace_outputs() -> Res
             early_fault_window_s: None,
         },
         VisualizerMountMode::Auto,
-        FilterCompareConfig::default(),
+        FusionTuningConfig::default(),
         GnssOutageConfig::default(),
     )?;
 
@@ -188,9 +188,9 @@ fn generated_generic_replay() -> Result<GenericReplayInput> {
 }
 
 fn replay_config() -> GenericReplayJobConfig {
-    GenericReplayJobConfig::full(
+    GenericReplayJobConfig::complete(
         VisualizerMountMode::Auto,
-        FilterCompareConfig::default(),
+        FusionTuningConfig::default(),
         GnssOutageConfig::default(),
     )
 }
@@ -271,164 +271,66 @@ fn assert_plot_data_close(
         ("imu_cal_accel", &left.imu_cal_accel, &right.imu_cal_accel),
         ("orientation", &left.orientation, &right.orientation),
         ("other", &left.other, &right.other),
+        ("ekf_cmp_pos", &left.ekf_cmp_pos, &right.ekf_cmp_pos),
+        ("ekf_cmp_vel", &left.ekf_cmp_vel, &right.ekf_cmp_vel),
+        ("ekf_cmp_att", &left.ekf_cmp_att, &right.ekf_cmp_att),
+        ("ekf_meas_gyro", &left.ekf_meas_gyro, &right.ekf_meas_gyro),
         (
-            "reduced_cmp_pos",
-            &left.reduced_cmp_pos,
-            &right.reduced_cmp_pos,
+            "ekf_meas_accel",
+            &left.ekf_meas_accel,
+            &right.ekf_meas_accel,
+        ),
+        ("ekf_bias_gyro", &left.ekf_bias_gyro, &right.ekf_bias_gyro),
+        (
+            "ekf_bias_accel",
+            &left.ekf_bias_accel,
+            &right.ekf_bias_accel,
+        ),
+        ("ekf_cov_bias", &left.ekf_cov_bias, &right.ekf_cov_bias),
+        (
+            "ekf_cov_nonbias",
+            &left.ekf_cov_nonbias,
+            &right.ekf_cov_nonbias,
         ),
         (
-            "reduced_cmp_vel",
-            &left.reduced_cmp_vel,
-            &right.reduced_cmp_vel,
+            "ekf_mount_sigma",
+            &left.ekf_mount_sigma,
+            &right.ekf_mount_sigma,
+        ),
+        ("ekf_mount_dx", &left.ekf_mount_dx, &right.ekf_mount_dx),
+        (
+            "ekf_nhc_mount_dx",
+            &left.ekf_nhc_mount_dx,
+            &right.ekf_nhc_mount_dx,
         ),
         (
-            "reduced_cmp_att",
-            &left.reduced_cmp_att,
-            &right.reduced_cmp_att,
+            "ekf_nhc_innovation",
+            &left.ekf_nhc_innovation,
+            &right.ekf_nhc_innovation,
+        ),
+        ("ekf_nhc_nis", &left.ekf_nhc_nis, &right.ekf_nhc_nis),
+        (
+            "ekf_nhc_h_mount_norm",
+            &left.ekf_nhc_h_mount_norm,
+            &right.ekf_nhc_h_mount_norm,
         ),
         (
-            "reduced_meas_gyro",
-            &left.reduced_meas_gyro,
-            &right.reduced_meas_gyro,
+            "ekf_misalignment",
+            &left.ekf_misalignment,
+            &right.ekf_misalignment,
         ),
         (
-            "reduced_meas_accel",
-            &left.reduced_meas_accel,
-            &right.reduced_meas_accel,
+            "ekf_stationary_diag",
+            &left.ekf_stationary_diag,
+            &right.ekf_stationary_diag,
         ),
         (
-            "reduced_bias_gyro",
-            &left.reduced_bias_gyro,
-            &right.reduced_bias_gyro,
+            "ekf_bump_pitch_speed",
+            &left.ekf_bump_pitch_speed,
+            &right.ekf_bump_pitch_speed,
         ),
-        (
-            "reduced_bias_accel",
-            &left.reduced_bias_accel,
-            &right.reduced_bias_accel,
-        ),
-        (
-            "reduced_cov_bias",
-            &left.reduced_cov_bias,
-            &right.reduced_cov_bias,
-        ),
-        (
-            "reduced_cov_nonbias",
-            &left.reduced_cov_nonbias,
-            &right.reduced_cov_nonbias,
-        ),
-        (
-            "reduced_mount_sigma",
-            &left.reduced_mount_sigma,
-            &right.reduced_mount_sigma,
-        ),
-        (
-            "reduced_mount_dx",
-            &left.reduced_mount_dx,
-            &right.reduced_mount_dx,
-        ),
-        (
-            "reduced_nhc_mount_dx",
-            &left.reduced_nhc_mount_dx,
-            &right.reduced_nhc_mount_dx,
-        ),
-        (
-            "reduced_nhc_innovation",
-            &left.reduced_nhc_innovation,
-            &right.reduced_nhc_innovation,
-        ),
-        (
-            "reduced_nhc_nis",
-            &left.reduced_nhc_nis,
-            &right.reduced_nhc_nis,
-        ),
-        (
-            "reduced_nhc_h_mount_norm",
-            &left.reduced_nhc_h_mount_norm,
-            &right.reduced_nhc_h_mount_norm,
-        ),
-        (
-            "reduced_misalignment",
-            &left.reduced_misalignment,
-            &right.reduced_misalignment,
-        ),
-        (
-            "reduced_stationary_diag",
-            &left.reduced_stationary_diag,
-            &right.reduced_stationary_diag,
-        ),
-        (
-            "reduced_bump_pitch_speed",
-            &left.reduced_bump_pitch_speed,
-            &right.reduced_bump_pitch_speed,
-        ),
-        (
-            "reduced_bump_diag",
-            &left.reduced_bump_diag,
-            &right.reduced_bump_diag,
-        ),
-        ("reduced_map", &left.reduced_map, &right.reduced_map),
-        ("full_cmp_pos", &left.full_cmp_pos, &right.full_cmp_pos),
-        ("full_cmp_vel", &left.full_cmp_vel, &right.full_cmp_vel),
-        ("full_cmp_att", &left.full_cmp_att, &right.full_cmp_att),
-        (
-            "full_nominal_att",
-            &left.full_nominal_att,
-            &right.full_nominal_att,
-        ),
-        ("full_mount", &left.full_mount, &right.full_mount),
-        (
-            "full_misalignment",
-            &left.full_misalignment,
-            &right.full_misalignment,
-        ),
-        (
-            "full_meas_gyro",
-            &left.full_meas_gyro,
-            &right.full_meas_gyro,
-        ),
-        (
-            "full_meas_accel",
-            &left.full_meas_accel,
-            &right.full_meas_accel,
-        ),
-        (
-            "full_bias_gyro",
-            &left.full_bias_gyro,
-            &right.full_bias_gyro,
-        ),
-        (
-            "full_bias_accel",
-            &left.full_bias_accel,
-            &right.full_bias_accel,
-        ),
-        (
-            "full_scale_gyro",
-            &left.full_scale_gyro,
-            &right.full_scale_gyro,
-        ),
-        (
-            "full_scale_accel",
-            &left.full_scale_accel,
-            &right.full_scale_accel,
-        ),
-        ("full_cov_bias", &left.full_cov_bias, &right.full_cov_bias),
-        (
-            "full_cov_nonbias",
-            &left.full_cov_nonbias,
-            &right.full_cov_nonbias,
-        ),
-        (
-            "full_mount_sigma",
-            &left.full_mount_sigma,
-            &right.full_mount_sigma,
-        ),
-        ("full_mount_dx", &left.full_mount_dx, &right.full_mount_dx),
-        (
-            "full_gnss_pos_gate",
-            &left.full_gnss_pos_gate,
-            &right.full_gnss_pos_gate,
-        ),
-        ("full_map", &left.full_map, &right.full_map),
+        ("ekf_bump_diag", &left.ekf_bump_diag, &right.ekf_bump_diag),
+        ("ekf_map", &left.ekf_map, &right.ekf_map),
         ("align_cmp_att", &left.align_cmp_att, &right.align_cmp_att),
         ("align_res_vel", &left.align_res_vel, &right.align_res_vel),
         (
@@ -461,16 +363,9 @@ fn assert_plot_data_close(
     assert_heading_samples_close(
         left_label,
         right_label,
-        "reduced_map_heading",
-        &left.reduced_map_heading,
-        &right.reduced_map_heading,
-    )?;
-    assert_heading_samples_close(
-        left_label,
-        right_label,
-        "full_map_heading",
-        &left.full_map_heading,
-        &right.full_map_heading,
+        "ekf_map_heading",
+        &left.ekf_map_heading,
+        &right.ekf_map_heading,
     )?;
     Ok(())
 }
@@ -568,99 +463,6 @@ fn assert_shared_auxiliary_groups_close(
                 "Align yaw sigma [deg]",
             ],
         ),
-        (
-            "full_cmp_pos",
-            &left.full_cmp_pos,
-            &right.full_cmp_pos,
-            &["Full posN [m]", "Full posE [m]", "Full posD [m]"],
-        ),
-        (
-            "full_cmp_vel",
-            &left.full_cmp_vel,
-            &right.full_cmp_vel,
-            &["Full velN [m/s]", "Full velE [m/s]", "Full velD [m/s]"],
-        ),
-        (
-            "full_cmp_att",
-            &left.full_cmp_att,
-            &right.full_cmp_att,
-            &[
-                "Full roll [deg]",
-                "Full pitch [deg]",
-                "Full yaw [deg]",
-                "Reference roll [deg]",
-                "Reference pitch [deg]",
-                "Reference yaw [deg]",
-            ],
-        ),
-        (
-            "full_misalignment",
-            &left.full_misalignment,
-            &right.full_misalignment,
-            &[
-                "Full mount roll [deg]",
-                "Full mount pitch [deg]",
-                "Full mount yaw [deg]",
-            ],
-        ),
-        (
-            "full_meas_gyro",
-            &left.full_meas_gyro,
-            &right.full_meas_gyro,
-            &[
-                "Full gyro x [deg/s]",
-                "Full gyro y [deg/s]",
-                "Full gyro z [deg/s]",
-            ],
-        ),
-        (
-            "full_meas_accel",
-            &left.full_meas_accel,
-            &right.full_meas_accel,
-            &[
-                "Full accel x [m/s^2]",
-                "Full accel y [m/s^2]",
-                "Full accel z [m/s^2]",
-            ],
-        ),
-        (
-            "full_bias_gyro",
-            &left.full_bias_gyro,
-            &right.full_bias_gyro,
-            &[
-                "Full gyro sensor bias X [deg/s]",
-                "Full gyro sensor bias Y [deg/s]",
-                "Full gyro sensor bias Z [deg/s]",
-            ],
-        ),
-        (
-            "full_bias_accel",
-            &left.full_bias_accel,
-            &right.full_bias_accel,
-            &[
-                "Full accel sensor bias X [m/s^2]",
-                "Full accel sensor bias Y [m/s^2]",
-                "Full accel sensor bias Z [m/s^2]",
-            ],
-        ),
-        (
-            "full_scale_gyro",
-            &left.full_scale_gyro,
-            &right.full_scale_gyro,
-            &["Full sgx", "Full sgy", "Full sgz"],
-        ),
-        (
-            "full_scale_accel",
-            &left.full_scale_accel,
-            &right.full_scale_accel,
-            &["Full sax", "Full say", "Full saz"],
-        ),
-        (
-            "full_map",
-            &left.full_map,
-            &right.full_map,
-            &["Full path (lon,lat)"],
-        ),
     ];
 
     for (group, left_traces, right_traces, names) in groups {
@@ -673,119 +475,56 @@ fn assert_shared_auxiliary_groups_close(
             names,
         )?;
     }
-    assert_numbered_named_traces_close(
-        left_label,
-        right_label,
-        "full_cov_bias",
-        &left.full_cov_bias,
-        &right.full_cov_bias,
-        "Full sigma bias/scale ",
-    )?;
-    assert_numbered_named_traces_close(
-        left_label,
-        right_label,
-        "full_cov_nonbias",
-        &left.full_cov_nonbias,
-        &right.full_cov_nonbias,
-        "Full sigma state ",
-    )?;
     assert_named_traces_close(
         left_label,
         right_label,
-        "reduced_mount_dx",
-        &left.reduced_mount_dx,
-        &right.reduced_mount_dx,
+        "ekf_mount_dx",
+        &left.ekf_mount_dx,
+        &right.ekf_mount_dx,
         &[
-            "Reduced mount roll correction [deg/update]",
-            "Reduced mount pitch correction [deg/update]",
-            "Reduced mount yaw correction [deg/update]",
+            "EKF mount roll correction [deg/update]",
+            "EKF mount pitch correction [deg/update]",
+            "EKF mount yaw correction [deg/update]",
         ],
     )?;
     assert_named_traces_close(
         left_label,
         right_label,
-        "reduced_nhc_mount_dx",
-        &left.reduced_nhc_mount_dx,
-        &right.reduced_nhc_mount_dx,
+        "ekf_nhc_mount_dx",
+        &left.ekf_nhc_mount_dx,
+        &right.ekf_nhc_mount_dx,
         &[
-            "Reduced NHC Y mount roll correction [deg/update]",
-            "Reduced NHC Y mount pitch correction [deg/update]",
-            "Reduced NHC Y mount yaw correction [deg/update]",
-            "Reduced NHC Z mount roll correction [deg/update]",
-            "Reduced NHC Z mount pitch correction [deg/update]",
-            "Reduced NHC Z mount yaw correction [deg/update]",
+            "EKF NHC Y mount roll correction [deg/update]",
+            "EKF NHC Y mount pitch correction [deg/update]",
+            "EKF NHC Y mount yaw correction [deg/update]",
+            "EKF NHC Z mount roll correction [deg/update]",
+            "EKF NHC Z mount pitch correction [deg/update]",
+            "EKF NHC Z mount yaw correction [deg/update]",
         ],
     )?;
     assert_named_traces_close(
         left_label,
         right_label,
-        "reduced_nhc_innovation",
-        &left.reduced_nhc_innovation,
-        &right.reduced_nhc_innovation,
-        &[
-            "Reduced NHC Y innovation [m/s]",
-            "Reduced NHC Z innovation [m/s]",
-        ],
+        "ekf_nhc_innovation",
+        &left.ekf_nhc_innovation,
+        &right.ekf_nhc_innovation,
+        &["EKF NHC Y innovation [m/s]", "EKF NHC Z innovation [m/s]"],
     )?;
     assert_named_traces_close(
         left_label,
         right_label,
-        "reduced_nhc_nis",
-        &left.reduced_nhc_nis,
-        &right.reduced_nhc_nis,
-        &["Reduced NHC Y NIS", "Reduced NHC Z NIS"],
+        "ekf_nhc_nis",
+        &left.ekf_nhc_nis,
+        &right.ekf_nhc_nis,
+        &["EKF NHC Y NIS", "EKF NHC Z NIS"],
     )?;
     assert_named_traces_close(
         left_label,
         right_label,
-        "reduced_nhc_h_mount_norm",
-        &left.reduced_nhc_h_mount_norm,
-        &right.reduced_nhc_h_mount_norm,
-        &["Reduced NHC Y mount H norm", "Reduced NHC Z mount H norm"],
-    )?;
-    assert_named_traces_close(
-        left_label,
-        right_label,
-        "full_mount_sigma",
-        &left.full_mount_sigma,
-        &right.full_mount_sigma,
-        &[
-            "Full mount roll sigma [deg]",
-            "Full mount pitch sigma [deg]",
-            "Full mount yaw sigma [deg]",
-        ],
-    )?;
-    assert_named_traces_close(
-        left_label,
-        right_label,
-        "full_mount_dx",
-        &left.full_mount_dx,
-        &right.full_mount_dx,
-        &[
-            "Full mount roll correction [deg/update]",
-            "Full mount pitch correction [deg/update]",
-            "Full mount yaw correction [deg/update]",
-        ],
-    )?;
-    assert_named_traces_close(
-        left_label,
-        right_label,
-        "full_gnss_pos_gate",
-        &left.full_gnss_pos_gate,
-        &right.full_gnss_pos_gate,
-        &[
-            "Full GNSS position gate normalized residual row 0",
-            "Full GNSS position gate normalized residual row 1",
-            "Full GNSS position gate normalized residual row 2",
-            "Full GNSS position accepted",
-        ],
-    )?;
-    assert_heading_samples_close(
-        left_label,
-        right_label,
-        "full_map_heading",
-        &left.full_map_heading,
-        &right.full_map_heading,
+        "ekf_nhc_h_mount_norm",
+        &left.ekf_nhc_h_mount_norm,
+        &right.ekf_nhc_h_mount_norm,
+        &["EKF NHC Y mount H norm", "EKF NHC Z mount H norm"],
     )?;
     Ok(())
 }
@@ -833,24 +572,6 @@ fn assert_named_traces_close(
         assert_trace_points_close(left_label, right_label, group, left_trace, right_trace)?;
     }
     Ok(())
-}
-
-fn assert_numbered_named_traces_close(
-    left_label: &str,
-    right_label: &str,
-    group: &str,
-    left: &[Trace],
-    right: &[Trace],
-    prefix: &str,
-) -> Result<()> {
-    let names = left
-        .iter()
-        .filter_map(|trace| trace.name.strip_prefix(prefix).map(|_| trace.name.as_str()))
-        .collect::<Vec<_>>();
-    if names.is_empty() {
-        bail!("{group}: {left_label} produced no traces with prefix '{prefix}'");
-    }
-    assert_named_traces_close(left_label, right_label, group, left, right, &names)
 }
 
 fn assert_trace_points_close(

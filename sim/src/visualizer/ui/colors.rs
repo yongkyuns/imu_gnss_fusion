@@ -13,23 +13,17 @@ pub(super) fn map_trace_color(name: &str, visuals: &egui::Visuals) -> egui::Colo
         } else {
             egui::Color32::from_rgb(0, 118, 152)
         }
-    } else if name == "Reduced path (lon,lat)" {
+    } else if name == "EKF path (lon,lat)" {
         if visuals.dark_mode {
             egui::Color32::from_rgb(120, 170, 255)
         } else {
             egui::Color32::from_rgb(35, 105, 200)
         }
-    } else if name == "Reduced path during GNSS outage (lon,lat)" {
+    } else if name == "EKF path during GNSS outage (lon,lat)" {
         if visuals.dark_mode {
             egui::Color32::from_rgb(255, 140, 220)
         } else {
             egui::Color32::from_rgb(184, 55, 144)
-        }
-    } else if name == "Full path (lon,lat)" {
-        if visuals.dark_mode {
-            egui::Color32::from_rgb(120, 255, 170)
-        } else {
-            egui::Color32::from_rgb(26, 138, 78)
         }
     } else {
         visuals.text_color()
@@ -96,8 +90,7 @@ pub(super) fn shared_cursor_color(visuals: &egui::Visuals) -> egui::Color32 {
 #[derive(Clone, Copy)]
 pub(super) enum SeriesColor {
     Reference,
-    Reduced,
-    Full,
+    EKF,
     Align,
 }
 
@@ -107,10 +100,8 @@ impl SeriesColor {
         match self {
             Self::Reference if dark => egui::Color32::from_rgb(235, 238, 244),
             Self::Reference => egui::Color32::from_rgb(34, 43, 55),
-            Self::Reduced if dark => egui::Color32::from_rgb(120, 170, 255),
-            Self::Reduced => egui::Color32::from_rgb(35, 105, 200),
-            Self::Full if dark => egui::Color32::from_rgb(120, 255, 170),
-            Self::Full => egui::Color32::from_rgb(26, 138, 78),
+            Self::EKF if dark => egui::Color32::from_rgb(120, 170, 255),
+            Self::EKF => egui::Color32::from_rgb(35, 105, 200),
             Self::Align if dark => egui::Color32::from_rgb(244, 190, 96),
             Self::Align => egui::Color32::from_rgb(168, 93, 22),
         }

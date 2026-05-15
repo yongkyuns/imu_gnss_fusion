@@ -11,10 +11,10 @@ use super::pipeline::generic::{
     GenericReplayInput, GenericReplayProgress, build_generic_replay_plot_data,
     build_generic_replay_plot_data_with_progress, parse_generic_replay_csvs_with_optional_motion,
 };
-use super::pipeline::{FilterCompareConfig, GnssOutageConfig};
+use super::pipeline::{FusionTuningConfig, GnssOutageConfig};
 
 pub const WEB_TRANSPORT_MAX_POINTS_PER_TRACE: usize = 6000;
-const WEB_TRANSPORT_COMPARE_POINTS_PER_TRACE: usize = 30000;
+const WEB_TRANSPORT_DETAIL_POINTS_PER_TRACE: usize = 30000;
 
 #[derive(Clone, Debug)]
 pub struct GenericReplayCsvInputs {
@@ -79,7 +79,7 @@ impl Default for GenericReplayLabels {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ReplayOutputPolicy {
     #[default]
-    Full,
+    Complete,
     WebTransport {
         max_points_per_trace: usize,
     },
@@ -94,7 +94,7 @@ impl ReplayOutputPolicy {
 
     fn apply(self, data: &mut PlotData) {
         match self {
-            Self::Full => {}
+            Self::Complete => {}
             Self::WebTransport {
                 max_points_per_trace,
             } => decimate_for_transport(data, max_points_per_trace),
@@ -107,7 +107,7 @@ pub struct GenericReplayJobRequest {
     pub inputs: GenericReplayCsvInputs,
     pub labels: GenericReplayLabels,
     pub mount_mode: VisualizerMountMode,
-    pub filter_cfg: FilterCompareConfig,
+    pub filter_cfg: FusionTuningConfig,
     pub gnss_outages: GnssOutageConfig,
     pub output_policy: ReplayOutputPolicy,
 }
@@ -115,29 +115,29 @@ pub struct GenericReplayJobRequest {
 #[derive(Clone, Copy, Debug)]
 pub struct GenericReplayJobConfig {
     pub misalignment: VisualizerMountMode,
-    pub filter_cfg: FilterCompareConfig,
+    pub filter_cfg: FusionTuningConfig,
     pub gnss_outages: GnssOutageConfig,
     pub output_policy: ReplayOutputPolicy,
 }
 
 impl GenericReplayJobConfig {
-    pub fn full(
+    pub fn complete(
         misalignment: VisualizerMountMode,
-        filter_cfg: FilterCompareConfig,
+        filter_cfg: FusionTuningConfig,
         gnss_outages: GnssOutageConfig,
     ) -> Self {
         Self {
             misalignment,
             filter_cfg,
             gnss_outages,
-            output_policy: ReplayOutputPolicy::Full,
+            output_policy: ReplayOutputPolicy::Complete,
         }
     }
 
     pub fn web_transport() -> Self {
         Self {
             misalignment: VisualizerMountMode::Auto,
-            filter_cfg: FilterCompareConfig::default(),
+            filter_cfg: FusionTuningConfig::default(),
             gnss_outages: GnssOutageConfig::default(),
             output_policy: ReplayOutputPolicy::web_transport(),
         }
@@ -160,9 +160,9 @@ impl GenericReplayJobRequest {
             inputs,
             labels: GenericReplayLabels::default(),
             mount_mode: VisualizerMountMode::Auto,
-            filter_cfg: FilterCompareConfig::default(),
+            filter_cfg: FusionTuningConfig::default(),
             gnss_outages: GnssOutageConfig::default(),
-            output_policy: ReplayOutputPolicy::Full,
+            output_policy: ReplayOutputPolicy::Complete,
         }
     }
 }
@@ -296,7 +296,7 @@ impl GenericReplayThread {
 pub fn parse_and_build_generic_replay_plot_data(
     inputs: &GenericReplayCsvInputs,
     mount_mode: VisualizerMountMode,
-    filter_cfg: FilterCompareConfig,
+    filter_cfg: FusionTuningConfig,
     gnss_outages: GnssOutageConfig,
     output_policy: ReplayOutputPolicy,
 ) -> Result<PlotData> {
@@ -320,7 +320,7 @@ pub fn parse_and_build_generic_replay_plot_data(
 pub fn build_generic_replay_plot_data_from_input(
     replay: &GenericReplayInput,
     mount_mode: VisualizerMountMode,
-    filter_cfg: FilterCompareConfig,
+    filter_cfg: FusionTuningConfig,
     gnss_outages: GnssOutageConfig,
     output_policy: ReplayOutputPolicy,
 ) -> PlotData {
@@ -345,44 +345,27 @@ pub fn decimate_for_transport(data: &mut PlotData, max_points_per_trace: usize) 
     decimate_group(&mut data.imu_cal_accel, max_points_per_trace);
     decimate_group(&mut data.orientation, max_points_per_trace);
     decimate_group(&mut data.other, max_points_per_trace);
-    let compare_max_points = max_points_per_trace.max(WEB_TRANSPORT_COMPARE_POINTS_PER_TRACE);
+    let detail_max_points = max_points_per_trace.max(WEB_TRANSPORT_DETAIL_POINTS_PER_TRACE);
 
-    decimate_group(&mut data.reduced_cmp_pos, compare_max_points);
-    decimate_group(&mut data.reduced_cmp_vel, compare_max_points);
-    decimate_group(&mut data.reduced_cmp_att, compare_max_points);
-    decimate_group(&mut data.reduced_meas_gyro, max_points_per_trace);
-    decimate_group(&mut data.reduced_meas_accel, max_points_per_trace);
-    decimate_group(&mut data.reduced_bias_gyro, max_points_per_trace);
-    decimate_group(&mut data.reduced_bias_accel, max_points_per_trace);
-    decimate_group(&mut data.reduced_cov_bias, max_points_per_trace);
-    decimate_group(&mut data.reduced_cov_nonbias, max_points_per_trace);
-    decimate_group(&mut data.reduced_mount_sigma, max_points_per_trace);
-    decimate_group(&mut data.reduced_mount_dx, max_points_per_trace);
-    decimate_group(&mut data.reduced_nhc_mount_dx, max_points_per_trace);
-    decimate_group(&mut data.reduced_nhc_innovation, max_points_per_trace);
-    decimate_group(&mut data.reduced_nhc_nis, max_points_per_trace);
-    decimate_group(&mut data.reduced_nhc_h_mount_norm, max_points_per_trace);
-    decimate_group(&mut data.reduced_misalignment, compare_max_points);
-    decimate_group(&mut data.reduced_stationary_diag, max_points_per_trace);
-    decimate_group(&mut data.reduced_bump_pitch_speed, max_points_per_trace);
-    decimate_group(&mut data.reduced_bump_diag, max_points_per_trace);
-    decimate_group(&mut data.full_cmp_pos, compare_max_points);
-    decimate_group(&mut data.full_cmp_vel, compare_max_points);
-    decimate_group(&mut data.full_cmp_att, compare_max_points);
-    decimate_group(&mut data.full_nominal_att, max_points_per_trace);
-    decimate_group(&mut data.full_mount, max_points_per_trace);
-    decimate_group(&mut data.full_misalignment, compare_max_points);
-    decimate_group(&mut data.full_meas_gyro, max_points_per_trace);
-    decimate_group(&mut data.full_meas_accel, max_points_per_trace);
-    decimate_group(&mut data.full_bias_gyro, max_points_per_trace);
-    decimate_group(&mut data.full_bias_accel, max_points_per_trace);
-    decimate_group(&mut data.full_scale_gyro, max_points_per_trace);
-    decimate_group(&mut data.full_scale_accel, max_points_per_trace);
-    decimate_group(&mut data.full_cov_bias, max_points_per_trace);
-    decimate_group(&mut data.full_cov_nonbias, max_points_per_trace);
-    decimate_group(&mut data.full_mount_sigma, max_points_per_trace);
-    decimate_group(&mut data.full_mount_dx, max_points_per_trace);
-    decimate_group(&mut data.full_gnss_pos_gate, max_points_per_trace);
+    decimate_group(&mut data.ekf_cmp_pos, detail_max_points);
+    decimate_group(&mut data.ekf_cmp_vel, detail_max_points);
+    decimate_group(&mut data.ekf_cmp_att, detail_max_points);
+    decimate_group(&mut data.ekf_meas_gyro, max_points_per_trace);
+    decimate_group(&mut data.ekf_meas_accel, max_points_per_trace);
+    decimate_group(&mut data.ekf_bias_gyro, max_points_per_trace);
+    decimate_group(&mut data.ekf_bias_accel, max_points_per_trace);
+    decimate_group(&mut data.ekf_cov_bias, max_points_per_trace);
+    decimate_group(&mut data.ekf_cov_nonbias, max_points_per_trace);
+    decimate_group(&mut data.ekf_mount_sigma, max_points_per_trace);
+    decimate_group(&mut data.ekf_mount_dx, max_points_per_trace);
+    decimate_group(&mut data.ekf_nhc_mount_dx, max_points_per_trace);
+    decimate_group(&mut data.ekf_nhc_innovation, max_points_per_trace);
+    decimate_group(&mut data.ekf_nhc_nis, max_points_per_trace);
+    decimate_group(&mut data.ekf_nhc_h_mount_norm, max_points_per_trace);
+    decimate_group(&mut data.ekf_misalignment, detail_max_points);
+    decimate_group(&mut data.ekf_stationary_diag, max_points_per_trace);
+    decimate_group(&mut data.ekf_bump_pitch_speed, max_points_per_trace);
+    decimate_group(&mut data.ekf_bump_diag, max_points_per_trace);
     decimate_group(&mut data.align_cmp_att, max_points_per_trace);
     decimate_group(&mut data.align_res_vel, max_points_per_trace);
     decimate_group(&mut data.align_axis_err, max_points_per_trace);
@@ -684,19 +667,16 @@ mod tests {
                 .collect(),
         };
         let mut data = PlotData {
-            full_cmp_att: vec![dense_trace()],
-            reduced_cmp_att: vec![dense_trace()],
-            full_meas_gyro: vec![dense_trace()],
+            ekf_cmp_att: vec![dense_trace()],
+            ekf_meas_gyro: vec![dense_trace()],
             ..PlotData::default()
         };
 
         decimate_for_transport(&mut data, WEB_TRANSPORT_MAX_POINTS_PER_TRACE);
 
-        assert!(data.full_cmp_att[0].points.len() > WEB_TRANSPORT_MAX_POINTS_PER_TRACE);
-        assert!(data.reduced_cmp_att[0].points.len() > WEB_TRANSPORT_MAX_POINTS_PER_TRACE);
-        assert!(data.full_cmp_att[0].points.len() <= WEB_TRANSPORT_COMPARE_POINTS_PER_TRACE);
-        assert!(data.reduced_cmp_att[0].points.len() <= WEB_TRANSPORT_COMPARE_POINTS_PER_TRACE);
-        assert!(data.full_meas_gyro[0].points.len() <= WEB_TRANSPORT_MAX_POINTS_PER_TRACE);
+        assert!(data.ekf_cmp_att[0].points.len() > WEB_TRANSPORT_MAX_POINTS_PER_TRACE);
+        assert!(data.ekf_cmp_att[0].points.len() <= WEB_TRANSPORT_DETAIL_POINTS_PER_TRACE);
+        assert!(data.ekf_meas_gyro[0].points.len() <= WEB_TRANSPORT_MAX_POINTS_PER_TRACE);
     }
 }
 

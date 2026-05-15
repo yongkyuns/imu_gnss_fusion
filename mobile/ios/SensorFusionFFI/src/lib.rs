@@ -2,7 +2,7 @@
 
 use core::ptr;
 
-use sensor_fusion::{Filter, GnssSample, ImuSample, SensorFusion, Update};
+use sensor_fusion::{GnssSample, ImuSample, SensorFusion, Update};
 
 /// Opaque fusion handle owned by Rust and passed across the C ABI as a pointer.
 pub struct SensorFusionFfi {
@@ -15,8 +15,8 @@ pub struct SensorFusionFfi {
 pub struct SensorFusionFfiUpdate {
     pub mount_ready: bool,
     pub mount_ready_changed: bool,
-    pub reduced_initialized: bool,
-    pub reduced_initialized_now: bool,
+    pub ekf_initialized: bool,
+    pub ekf_initialized_now: bool,
     pub filter_initialized: bool,
     pub filter_initialized_now: bool,
     pub mount_q_bv_valid: bool,
@@ -28,8 +28,8 @@ impl Default for SensorFusionFfiUpdate {
         Self {
             mount_ready: false,
             mount_ready_changed: false,
-            reduced_initialized: false,
-            reduced_initialized_now: false,
+            ekf_initialized: false,
+            ekf_initialized_now: false,
             filter_initialized: false,
             filter_initialized_now: false,
             mount_q_bv_valid: false,
@@ -43,10 +43,10 @@ impl From<Update> for SensorFusionFfiUpdate {
         Self {
             mount_ready: update.mount_ready,
             mount_ready_changed: update.mount_ready_changed,
-            reduced_initialized: update.reduced_initialized,
-            reduced_initialized_now: update.reduced_initialized_now,
-            filter_initialized: update.filter_initialized,
-            filter_initialized_now: update.filter_initialized_now,
+            ekf_initialized: update.ekf_initialized,
+            ekf_initialized_now: update.ekf_initialized_now,
+            filter_initialized: update.ekf_initialized,
+            filter_initialized_now: update.ekf_initialized_now,
             mount_q_bv_valid: update.mount_q_bv.is_some(),
             mount_q_bv: update.mount_q_bv.unwrap_or([1.0, 0.0, 0.0, 0.0]),
         }
@@ -55,15 +55,12 @@ impl From<Update> for SensorFusionFfiUpdate {
 
 impl SensorFusionFfiUpdate {
     fn from_fusion_state(fusion: &SensorFusion) -> Self {
-        let filter_initialized = match fusion.filter() {
-            Filter::Reduced => fusion.reduced().is_some(),
-            Filter::Full => fusion.full().is_some(),
-        };
+        let filter_initialized = fusion.ekf().is_some();
         let mount_q_bv = fusion.mount_q_bv();
 
         Self {
             mount_ready: fusion.mount_ready(),
-            reduced_initialized: fusion.reduced().is_some(),
+            ekf_initialized: fusion.ekf().is_some(),
             filter_initialized,
             mount_q_bv_valid: mount_q_bv.is_some(),
             mount_q_bv: mount_q_bv.unwrap_or([1.0, 0.0, 0.0, 0.0]),
@@ -74,7 +71,7 @@ impl SensorFusionFfiUpdate {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct SensorFusionFfiReducedSnapshot {
+pub struct SensorFusionFfiEkfSnapshot {
     pub mount_ready: bool,
     pub initialized: bool,
     pub q0: f32,
@@ -103,7 +100,7 @@ pub struct SensorFusionFfiReducedSnapshot {
     pub height_m: f64,
 }
 
-impl Default for SensorFusionFfiReducedSnapshot {
+impl Default for SensorFusionFfiEkfSnapshot {
     fn default() -> Self {
         Self {
             mount_ready: false,
@@ -145,7 +142,7 @@ impl SensorFusionFfi {
     fn status(&self) -> SensorFusionFfiUpdate {
         let mut status = SensorFusionFfiUpdate::from_fusion_state(&self.inner);
         status.mount_ready_changed = self.last_update.mount_ready_changed;
-        status.reduced_initialized_now = self.last_update.reduced_initialized_now;
+        status.ekf_initialized_now = self.last_update.ekf_initialized_now;
         status.filter_initialized_now = self.last_update.filter_initialized_now;
         status
     }
@@ -162,12 +159,12 @@ impl SensorFusionFfi {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn sensor_fusion_create_reduced_auto() -> *mut SensorFusionFfi {
+pub extern "C" fn sensor_fusion_create_ekf_auto() -> *mut SensorFusionFfi {
     Box::into_raw(Box::new(SensorFusionFfi::new(SensorFusion::new())))
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn sensor_fusion_create_reduced_manual(
+pub extern "C" fn sensor_fusion_create_ekf_manual(
     qw: f32,
     qx: f32,
     qy: f32,
@@ -198,7 +195,7 @@ pub unsafe extern "C" fn sensor_fusion_destroy(handle: *mut SensorFusionFfi) {
 ///
 /// `handle` must be either null or a valid pointer returned by this crate's
 /// create functions.
-pub unsafe extern "C" fn sensor_fusion_reset_reduced_auto(handle: *mut SensorFusionFfi) {
+pub unsafe extern "C" fn sensor_fusion_reset_ekf_auto(handle: *mut SensorFusionFfi) {
     let Some(fusion) = fusion_mut(handle) else {
         return;
     };
@@ -210,7 +207,7 @@ pub unsafe extern "C" fn sensor_fusion_reset_reduced_auto(handle: *mut SensorFus
 ///
 /// `handle` must be either null or a valid pointer returned by this crate's
 /// create functions.
-pub unsafe extern "C" fn sensor_fusion_reset_reduced_manual(
+pub unsafe extern "C" fn sensor_fusion_reset_ekf_manual(
     handle: *mut SensorFusionFfi,
     qw: f32,
     qx: f32,
@@ -310,16 +307,16 @@ pub unsafe extern "C" fn sensor_fusion_process_gnss(
 ///
 /// `handle` must be either null or a valid pointer returned by this crate's
 /// create functions. When non-null, `out` must point to writable memory for one
-/// `SensorFusionFfiReducedSnapshot`.
-pub unsafe extern "C" fn sensor_fusion_snapshot_reduced(
+/// `SensorFusionFfiEkfSnapshot`.
+pub unsafe extern "C" fn sensor_fusion_snapshot_ekf(
     handle: *const SensorFusionFfi,
-    out: *mut SensorFusionFfiReducedSnapshot,
+    out: *mut SensorFusionFfiEkfSnapshot,
 ) -> bool {
     if out.is_null() {
         return false;
     }
 
-    let snapshot = reduced_snapshot(handle);
+    let snapshot = ekf_snapshot(handle);
     unsafe {
         ptr::write(out, snapshot);
     }
@@ -342,21 +339,21 @@ fn fusion_ref(handle: *const SensorFusionFfi) -> Option<&'static SensorFusionFfi
     }
 }
 
-fn reduced_snapshot(handle: *const SensorFusionFfi) -> SensorFusionFfiReducedSnapshot {
+fn ekf_snapshot(handle: *const SensorFusionFfi) -> SensorFusionFfiEkfSnapshot {
     let Some(fusion) = fusion_ref(handle) else {
-        return SensorFusionFfiReducedSnapshot::default();
+        return SensorFusionFfiEkfSnapshot::default();
     };
 
-    let mut snapshot = SensorFusionFfiReducedSnapshot {
+    let mut snapshot = SensorFusionFfiEkfSnapshot {
         mount_ready: fusion.inner.mount_ready(),
-        ..SensorFusionFfiReducedSnapshot::default()
+        ..SensorFusionFfiEkfSnapshot::default()
     };
 
-    let Some(reduced) = fusion.inner.reduced() else {
+    let Some(ekf) = fusion.inner.ekf() else {
         return snapshot;
     };
 
-    let nominal = &reduced.nominal;
+    let nominal = &ekf.nominal;
     snapshot.initialized = true;
     snapshot.q0 = nominal.q0;
     snapshot.q1 = nominal.q1;
@@ -400,29 +397,29 @@ mod tests {
 
         let status = unsafe { sensor_fusion_snapshot_status(ptr::null()) };
         assert!(!status.mount_ready);
-        assert!(!status.reduced_initialized);
+        assert!(!status.ekf_initialized);
         assert!(!status.filter_initialized);
         assert!(!status.mount_q_bv_valid);
         assert_eq!(status.mount_q_bv, [1.0, 0.0, 0.0, 0.0]);
 
-        let mut snapshot = SensorFusionFfiReducedSnapshot {
+        let mut snapshot = SensorFusionFfiEkfSnapshot {
             lat_deg: 42.0,
-            ..SensorFusionFfiReducedSnapshot::default()
+            ..SensorFusionFfiEkfSnapshot::default()
         };
-        assert!(!unsafe { sensor_fusion_snapshot_reduced(ptr::null(), &mut snapshot) });
+        assert!(!unsafe { sensor_fusion_snapshot_ekf(ptr::null(), &mut snapshot) });
         assert_eq!(snapshot.lat_deg, 0.0);
     }
 
     #[test]
     fn status_reports_pre_initialization_manual_mount_and_resets_edges() {
-        let handle = sensor_fusion_create_reduced_manual(0.5, 0.5, 0.5, 0.5);
+        let handle = sensor_fusion_create_ekf_manual(0.5, 0.5, 0.5, 0.5);
         assert!(!handle.is_null());
 
         let status = unsafe { sensor_fusion_snapshot_status(handle) };
         assert!(status.mount_ready);
         assert!(!status.mount_ready_changed);
-        assert!(!status.reduced_initialized);
-        assert!(!status.reduced_initialized_now);
+        assert!(!status.ekf_initialized);
+        assert!(!status.ekf_initialized_now);
         assert!(!status.filter_initialized);
         assert!(!status.filter_initialized_now);
         assert!(status.mount_q_bv_valid);
@@ -434,37 +431,37 @@ mod tests {
                 0.0, true,
             )
         };
-        assert!(update.reduced_initialized_now);
+        assert!(update.ekf_initialized_now);
 
         let status = unsafe { sensor_fusion_snapshot_status(handle) };
         assert!(status.mount_ready);
-        assert!(status.reduced_initialized);
-        assert!(status.reduced_initialized_now);
+        assert!(status.ekf_initialized);
+        assert!(status.ekf_initialized_now);
         assert!(status.filter_initialized);
         assert!(status.filter_initialized_now);
         assert_eq!(status.mount_q_bv, [0.5, 0.5, 0.5, 0.5]);
 
         unsafe {
-            sensor_fusion_reset_reduced_auto(handle);
+            sensor_fusion_reset_ekf_auto(handle);
         }
         let status = unsafe { sensor_fusion_snapshot_status(handle) };
         assert!(!status.mount_ready);
         assert!(!status.mount_ready_changed);
-        assert!(!status.reduced_initialized);
-        assert!(!status.reduced_initialized_now);
+        assert!(!status.ekf_initialized);
+        assert!(!status.ekf_initialized_now);
         assert!(!status.filter_initialized);
         assert!(!status.filter_initialized_now);
         assert!(!status.mount_q_bv_valid);
         assert_eq!(status.mount_q_bv, [1.0, 0.0, 0.0, 0.0]);
 
         unsafe {
-            sensor_fusion_reset_reduced_manual(handle, 1.0, 0.0, 0.0, 0.0);
+            sensor_fusion_reset_ekf_manual(handle, 1.0, 0.0, 0.0, 0.0);
         }
         let status = unsafe { sensor_fusion_snapshot_status(handle) };
         assert!(status.mount_ready);
         assert!(!status.mount_ready_changed);
-        assert!(!status.reduced_initialized);
-        assert!(!status.reduced_initialized_now);
+        assert!(!status.ekf_initialized);
+        assert!(!status.ekf_initialized_now);
         assert!(!status.filter_initialized);
         assert!(!status.filter_initialized_now);
         assert!(status.mount_q_bv_valid);
@@ -476,8 +473,8 @@ mod tests {
     }
 
     #[test]
-    fn manual_gnss_initializes_and_snapshots_reduced_state() {
-        let handle = sensor_fusion_create_reduced_manual(1.0, 0.0, 0.0, 0.0);
+    fn manual_gnss_initializes_and_snapshots_ekf_state() {
+        let handle = sensor_fusion_create_ekf_manual(1.0, 0.0, 0.0, 0.0);
         assert!(!handle.is_null());
 
         let update = unsafe {
@@ -487,11 +484,11 @@ mod tests {
             )
         };
         assert!(update.mount_ready);
-        assert!(update.reduced_initialized);
-        assert!(update.reduced_initialized_now);
+        assert!(update.ekf_initialized);
+        assert!(update.ekf_initialized_now);
 
-        let mut snapshot = SensorFusionFfiReducedSnapshot::default();
-        assert!(unsafe { sensor_fusion_snapshot_reduced(handle, &mut snapshot) });
+        let mut snapshot = SensorFusionFfiEkfSnapshot::default();
+        assert!(unsafe { sensor_fusion_snapshot_ekf(handle, &mut snapshot) });
         assert!(snapshot.mount_ready);
         assert!(snapshot.initialized);
         assert_eq!(

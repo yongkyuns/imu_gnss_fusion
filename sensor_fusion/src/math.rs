@@ -51,10 +51,6 @@ pub(crate) fn atan2_f64(y: f64, x: f64) -> f64 {
     libm::atan2(y, x)
 }
 
-pub(crate) fn sq_f64(x: f64) -> f64 {
-    x * x
-}
-
 pub(crate) fn normalize_quat_f32(q: &mut [f32; 4]) {
     let n2 = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
     if n2 <= 1.0e-12 {
@@ -220,6 +216,7 @@ pub(crate) fn cross3_f32(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     ]
 }
 
+#[cfg(test)]
 pub(crate) fn euler_to_quat_f32(roll: f32, pitch: f32, yaw: f32) -> [f32; 4] {
     let cr = libm::cosf(0.5 * roll);
     let sr = libm::sinf(0.5 * roll);
@@ -232,57 +229,5 @@ pub(crate) fn euler_to_quat_f32(roll: f32, pitch: f32, yaw: f32) -> [f32; 4] {
         sr * cp * cy - cr * sp * sy,
         cr * sp * cy + sr * cp * sy,
         cr * cp * sy - sr * sp * cy,
-    ]
-}
-
-pub(crate) fn dcm_to_quat_f64(c: [[f64; 3]; 3]) -> [f64; 4] {
-    let trace = c[0][0] + c[1][1] + c[2][2];
-    let q = if trace > 0.0 {
-        let s = sqrt_f64(trace + 1.0) * 2.0;
-        [
-            0.25 * s,
-            (c[2][1] - c[1][2]) / s,
-            (c[0][2] - c[2][0]) / s,
-            (c[1][0] - c[0][1]) / s,
-        ]
-    } else if c[0][0] > c[1][1] && c[0][0] > c[2][2] {
-        let s = sqrt_f64(1.0 + c[0][0] - c[1][1] - c[2][2]) * 2.0;
-        [
-            (c[2][1] - c[1][2]) / s,
-            0.25 * s,
-            (c[0][1] + c[1][0]) / s,
-            (c[0][2] + c[2][0]) / s,
-        ]
-    } else if c[1][1] > c[2][2] {
-        let s = sqrt_f64(1.0 + c[1][1] - c[0][0] - c[2][2]) * 2.0;
-        [
-            (c[0][2] - c[2][0]) / s,
-            (c[0][1] + c[1][0]) / s,
-            0.25 * s,
-            (c[1][2] + c[2][1]) / s,
-        ]
-    } else {
-        let s = sqrt_f64(1.0 + c[2][2] - c[0][0] - c[1][1]) * 2.0;
-        [
-            (c[1][0] - c[0][1]) / s,
-            (c[0][2] + c[2][0]) / s,
-            (c[1][2] + c[2][1]) / s,
-            0.25 * s,
-        ]
-    };
-    let n = sqrt_f64(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
-    [q[0] / n, q[1] / n, q[2] / n, q[3] / n]
-}
-
-pub(crate) fn quat_conj_f64(q: [f64; 4]) -> [f64; 4] {
-    [q[0], -q[1], -q[2], -q[3]]
-}
-
-pub(crate) fn quat_mul_f64(p: [f64; 4], q: [f64; 4]) -> [f64; 4] {
-    [
-        p[0] * q[0] - p[1] * q[1] - p[2] * q[2] - p[3] * q[3],
-        p[0] * q[1] + p[1] * q[0] + p[2] * q[3] - p[3] * q[2],
-        p[0] * q[2] - p[1] * q[3] + p[2] * q[0] + p[3] * q[1],
-        p[0] * q[3] + p[1] * q[2] - p[2] * q[1] + p[3] * q[0],
     ]
 }

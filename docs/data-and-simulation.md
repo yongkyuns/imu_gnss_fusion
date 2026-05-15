@@ -161,7 +161,7 @@ t_s,wx_radps,wy_radps,wz_radps,ax_mps2,ay_mps2,az_mps2
 | `wx_radps`, `wy_radps`, `wz_radps` | rad/s | Reference vehicle-frame angular velocity. |
 | `ax_mps2`, `ay_mps2`, `az_mps2` | m/s^2 | Reference vehicle-frame gravity-compensated linear acceleration. |
 
-This file feeds the Motion tab comparison traces. It is intentionally generic:
+This file feeds the Motion tab reference traces. It is intentionally generic:
 an external converter may derive it from any trusted reference system.
 
 ## Generic Replay Code Paths
@@ -176,9 +176,9 @@ values.
 native and browser visualization. It accepts the generic replay structs, merges
 IMU/GNSS samples by timestamp, applies optional synthetic/replay GNSS outages,
 and feeds only the public `SensorFusion` API. Reference files are used for
-plots, map overlays, summary comparisons, and manual mount seeding.
+plots, map overlays, summaries, and manual mount seeding.
 
-`sim/src/datasets/synthetic_replay.rs` loads older synthetic-export directories:
+`sim/src/datasets/synthetic_replay.rs` loads synthetic-export directories:
 
 ```text
 time.csv                 # one timestamp column for IMU-rate files
@@ -197,19 +197,6 @@ ref_att_quat.csv         # truth quaternion, 4 columns
 The synthetic-export loader skips the first row as a header. Gyro files are
 interpreted as rad/s unless the header contains `deg/s`, in which case they are
 converted to rad/s.
-
-`sim/src/datasets/seeded_full.rs` is a diagnostic fixture loader for prepared
-seeded Full EKF investigations. It is not the public generic replay boundary.
-It reads semicolon-delimited files and extracts these fields:
-
-| Loader | Rows skipped | Fields used |
-| --- | ---: | --- |
-| `import_gyro_data` | 3 | timestamp from column 0 divided by 1000 and floored to microseconds; angular rate from columns 1-3, rad/s. |
-| `import_accel_data` | 3 | timestamp from column 0 divided by 1000 and floored to microseconds; acceleration from columns 1-3, m/s^2. |
-| `import_gnss_data` | 1 | timestamp from column 0 divided by 1000 and floored; latitude column 2, longitude 3, height 4, speed 5, heading deg 6, horizontal accuracy 7, vertical accuracy 8, speed accuracy 9. |
-| `import_gnss_velocity_map` | 1 | timestamp column 0; NED velocity columns 1-3; NED velocity accuracy columns 4-6. |
-| `import_truth_nav` | 1 | timestamp column 0; `pitch_car_deg` from column 11. |
-| `import_truth_misalignment` | n/a | row whose first field is `misalignment_deg`; mount RPY from columns 1-3. |
 
 ## Synthetic Motion DSL
 
@@ -259,7 +246,7 @@ High-level commands:
 it to remove GNSS samples. Use replay GNSS-outage options when the current
 visualizer needs generated outage intervals.
 
-Legacy command syntax can set `type` or `command_type`:
+Command syntax can set `type` or `command_type`:
 
 ```text
 command type=3 yaw=0 pitch=3 roll=0 ax=0 ay=0 az=0 for=10s gps=on
@@ -270,7 +257,7 @@ Command types are interpreted by `parse_motion_command` and the path generator:
 | Type | Attitude command | Body-motion command |
 | ---: | --- | --- |
 | `1` | Angular-rate command in deg/s. | Body acceleration command in m/s^2. |
-| `2` | Absolute target yaw/pitch/roll in deg. | Absolute target body velocity components, using the `ax/ay/az` fields as legacy names. |
+| `2` | Absolute target yaw/pitch/roll in deg. | Absolute target body velocity components, using the `ax/ay/az` fields. |
 | `3` | Relative target yaw/pitch/roll offset in deg. | Relative target body velocity offset. |
 | `4` | Absolute target yaw/pitch/roll in deg. | Relative target body velocity offset. |
 | `5` | Relative target yaw/pitch/roll offset in deg. | Absolute target body velocity components. |

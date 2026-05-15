@@ -13,15 +13,15 @@ typedef struct SensorFusionFfi SensorFusionFfi;
 typedef struct SensorFusionFfiUpdate {
     bool mount_ready;
     bool mount_ready_changed;
-    bool reduced_initialized;
-    bool reduced_initialized_now;
+    bool ekf_initialized;
+    bool ekf_initialized_now;
     bool filter_initialized;
     bool filter_initialized_now;
     bool mount_q_bv_valid;
     float mount_q_bv[4];
 } SensorFusionFfiUpdate;
 
-typedef struct SensorFusionFfiReducedSnapshot {
+typedef struct SensorFusionFfiEkfSnapshot {
     bool mount_ready;
     bool initialized;
     float q0;
@@ -48,15 +48,15 @@ typedef struct SensorFusionFfiReducedSnapshot {
     double lat_deg;
     double lon_deg;
     double height_m;
-} SensorFusionFfiReducedSnapshot;
+} SensorFusionFfiEkfSnapshot;
 
-SensorFusionFfi *sensor_fusion_create_reduced_auto(void);
-SensorFusionFfi *sensor_fusion_create_reduced_manual(float qw, float qx, float qy, float qz);
+SensorFusionFfi *sensor_fusion_create_ekf_auto(void);
+SensorFusionFfi *sensor_fusion_create_ekf_manual(float qw, float qx, float qy, float qz);
 
 void sensor_fusion_destroy(SensorFusionFfi *handle);
 
-void sensor_fusion_reset_reduced_auto(SensorFusionFfi *handle);
-void sensor_fusion_reset_reduced_manual(SensorFusionFfi *handle, float qw, float qx, float qy, float qz);
+void sensor_fusion_reset_ekf_auto(SensorFusionFfi *handle);
+void sensor_fusion_reset_ekf_manual(SensorFusionFfi *handle, float qw, float qx, float qy, float qz);
 
 SensorFusionFfiUpdate sensor_fusion_snapshot_status(const SensorFusionFfi *handle);
 
@@ -90,9 +90,9 @@ SensorFusionFfiUpdate sensor_fusion_process_gnss(
     bool is_heading_valid
 );
 
-bool sensor_fusion_snapshot_reduced(
+bool sensor_fusion_snapshot_ekf(
     const SensorFusionFfi *handle,
-    SensorFusionFfiReducedSnapshot *out
+    SensorFusionFfiEkfSnapshot *out
 );
 
 #ifdef __cplusplus

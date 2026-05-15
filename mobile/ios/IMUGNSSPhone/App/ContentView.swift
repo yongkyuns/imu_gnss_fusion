@@ -1251,7 +1251,7 @@ private struct SettingsView: View {
                 }
 
                 Section("Fusion") {
-                    valueRow("Mode", "Reduced Auto Mount")
+                    valueRow("Mode", "Ekf Auto Mount")
                     valueRow("Map Layer", "GNSS + Fused")
                 }
 
@@ -2039,14 +2039,14 @@ private struct TraceChartPanel: View {
     private var scalarSamples: [ScalarSample] {
         let windowed = samples.filter { $0.tSec >= xDomain.lowerBound && $0.tSec <= xDomain.upperBound }
         let maxPoints = 180
-        let reduced: [SensorStore.TimedVec3Sample]
+        let ekf: [SensorStore.TimedVec3Sample]
         if windowed.count > maxPoints {
             let strideN = max(1, windowed.count / maxPoints)
-            reduced = stride(from: 0, to: windowed.count, by: strideN).map { windowed[$0] }
+            ekf = stride(from: 0, to: windowed.count, by: strideN).map { windowed[$0] }
         } else {
-            reduced = windowed
+            ekf = windowed
         }
-        return reduced.compactMap { sample in
+        return ekf.compactMap { sample in
             guard let v = sample[keyPath: component] else { return nil }
             return ScalarSample(tSec: sample.tSec, value: v)
         }

@@ -1,10 +1,9 @@
 use sensor_fusion::align::AlignConfig;
-use sensor_fusion::full;
 use sensor_fusion::{ProcessNoise, SensorFusion};
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FilterCompareConfig {
+pub struct FusionTuningConfig {
     pub align: AlignConfig,
     #[serde(default = "default_r_body_vel_y")]
     pub r_body_vel: f32,
@@ -44,10 +43,9 @@ pub struct FilterCompareConfig {
     pub yaw_init_speed_mps: f64,
     #[serde(default)]
     pub noise: NoiseConfig,
-    pub full_init: full::InitConfig,
 }
 
-impl Default for FilterCompareConfig {
+impl Default for FusionTuningConfig {
     fn default() -> Self {
         Self {
             align: AlignConfig::default(),
@@ -76,7 +74,6 @@ impl Default for FilterCompareConfig {
             predict_imu_decimation: 1,
             yaw_init_speed_mps: 0.0 / 3.6,
             noise: NoiseConfig::default(),
-            full_init: full::InitConfig::default(),
         }
     }
 }
@@ -112,48 +109,35 @@ pub struct GnssOutageConfig {
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NoiseConfig {
-    #[serde(default = "default_reduced_noise_option")]
-    pub reduced: Option<ProcessNoise>,
-    #[serde(default = "default_full_noise_option")]
-    pub full: Option<ProcessNoise>,
+    #[serde(default = "default_ekf_noise_option")]
+    pub ekf: Option<ProcessNoise>,
 }
 
 impl Default for NoiseConfig {
     fn default() -> Self {
         Self {
-            reduced: Some(default_reduced_noise()),
-            full: Some(default_full_noise()),
+            ekf: Some(default_ekf_noise()),
         }
     }
 }
 
-pub const fn default_reduced_noise() -> ProcessNoise {
+pub const fn default_ekf_noise() -> ProcessNoise {
     ProcessNoise {
         gyro_var: 2.287_311_3e-7 * 10.0_f32,
         accel_var: 2.450_421_4e-5 * 15.0_f32,
         gyro_bias_rw_var: 0.0002e-9,
         accel_bias_rw_var: 0.002e-9,
-        gyro_scale_rw_var: 0.0,
-        accel_scale_rw_var: 0.0,
         mount_align_rw_var: 0.0,
         mount_align_rw_var_axes: [0.0; 3],
         mount_align_rw_var_axes_enabled: false,
     }
 }
 
-pub const fn default_full_noise() -> ProcessNoise {
-    ProcessNoise::lsm6dso_104hz()
-}
-
-pub fn apply_filter_compare_config(fusion: &mut SensorFusion, cfg: FilterCompareConfig) {
+pub fn apply_fusion_tuning_config(fusion: &mut SensorFusion, cfg: FusionTuningConfig) {
     fusion.set_align_config(cfg.align);
-    if let Some(noise) = cfg.noise.reduced {
-        fusion.set_reduced_noise(noise);
+    if let Some(noise) = cfg.noise.ekf {
+        fusion.set_ekf_noise(noise);
     }
-    if let Some(noise) = cfg.noise.full {
-        fusion.set_full_noise(noise);
-    }
-    fusion.set_full_init_config(cfg.full_init);
     fusion.set_r_body_vel_yz(cfg.r_body_vel, cfg.r_body_vel_z);
     fusion.set_nhc_update_period_s(cfg.nhc_update_period_s);
     fusion.set_attitude_roll_pitch_init_sigma_rad(
@@ -177,12 +161,8 @@ pub fn apply_filter_compare_config(fusion: &mut SensorFusion, cfg: FilterCompare
     fusion.set_mount_settle_zero_cross_covariance(cfg.mount_settle_zero_cross_covariance);
 }
 
-fn default_reduced_noise_option() -> Option<ProcessNoise> {
-    Some(default_reduced_noise())
-}
-
-fn default_full_noise_option() -> Option<ProcessNoise> {
-    Some(default_full_noise())
+fn default_ekf_noise_option() -> Option<ProcessNoise> {
+    Some(default_ekf_noise())
 }
 
 #[cfg(test)]
@@ -191,7 +171,7 @@ mod tests {
 
     #[test]
     fn replay_configs_round_trip_through_canonical_json() {
-        let mut cfg = FilterCompareConfig {
+        let mut cfg = FusionTuningConfig {
             r_body_vel: 0.42,
             r_body_vel_z: 0.24,
             predict_imu_lpf_cutoff_hz: Some(120.0),
@@ -202,12 +182,10 @@ mod tests {
         cfg.align.refine_after_coarse_ready = true;
         cfg.align.refine_process_noise_scale = 0.2;
         cfg.align.refine_observation_std_scale = 3.0;
-        cfg.full_init.mount_sigma_deg = 4.0;
-        cfg.full_init.mount_yaw_sigma_deg = 8.0;
-        cfg.noise.full.as_mut().unwrap().mount_align_rw_var = 2.0e-8;
+        cfg.noise.ekf.as_mut().unwrap().mount_align_rw_var = 2.0e-8;
 
         let json = serde_json::to_string(&cfg).unwrap();
-        let decoded: FilterCompareConfig = serde_json::from_str(&json).unwrap();
+        let decoded: FusionTuningConfig = serde_json::from_str(&json).unwrap();
 
         assert_eq!(decoded.r_body_vel, cfg.r_body_vel);
         assert_eq!(decoded.r_body_vel_z, cfg.r_body_vel_z);
@@ -234,16 +212,8 @@ mod tests {
             cfg.align.refine_observation_std_scale
         );
         assert_eq!(
-            decoded.full_init.mount_sigma_deg,
-            cfg.full_init.mount_sigma_deg
-        );
-        assert_eq!(
-            decoded.full_init.mount_yaw_sigma_deg,
-            cfg.full_init.mount_yaw_sigma_deg
-        );
-        assert_eq!(
-            decoded.noise.full.unwrap().mount_align_rw_var,
-            cfg.noise.full.unwrap().mount_align_rw_var
+            decoded.noise.ekf.unwrap().mount_align_rw_var,
+            cfg.noise.ekf.unwrap().mount_align_rw_var
         );
 
         let outages = GnssOutageConfig {
@@ -280,25 +250,11 @@ mod tests {
             "vehicleMeasLpfCutoffHz": 35.0,
             "predictImuDecimation": 1,
             "yawInitSpeedMps": 0.0,
-            "fullInit": {
-                "posMinSigmaM": 0.5,
-                "velMinSigmaMps": 0.2,
-                "attitudeSigmaDeg": 2.0,
-                "gyroBiasSigmaDps": 0.125,
-                "accelBiasSigmaMps2": 0.075,
-                "gyroScaleSigma": 0.02,
-                "accelScaleSigma": 0.0,
-                "mountSigmaDeg": 2.0
-            },
         });
 
-        let decoded: FilterCompareConfig = serde_json::from_value(json).unwrap();
+        let decoded: FusionTuningConfig = serde_json::from_value(json).unwrap();
 
         assert_eq!(decoded.predict_imu_lpf_cutoff_hz, None);
-        assert_eq!(
-            decoded.full_init.mount_yaw_sigma_deg,
-            full::InitConfig::default().mount_yaw_sigma_deg
-        );
         assert_eq!(decoded.r_body_vel_z, default_r_body_vel_z());
         assert_eq!(
             decoded.mount_roll_pitch_init_sigma_deg,
@@ -312,7 +268,6 @@ mod tests {
             decoded.mount_pitch_init_sigma_deg,
             default_mount_roll_pitch_init_sigma_deg()
         );
-        assert!(decoded.noise.reduced.is_some());
-        assert!(decoded.noise.full.is_some());
+        assert!(decoded.noise.ekf.is_some());
     }
 }

@@ -77,10 +77,7 @@ impl App {
                                     plot_spec(
                                         "North Velocity",
                                         concat_trace_refs_matching(
-                                            [
-                                                self.data.reduced_cmp_vel.as_slice(),
-                                                self.data.full_cmp_vel.as_slice(),
-                                            ],
+                                            [self.data.ekf_cmp_vel.as_slice()],
                                             &["velN", "vN "],
                                         ),
                                         true,
@@ -88,10 +85,7 @@ impl App {
                                     plot_spec(
                                         "East Velocity",
                                         concat_trace_refs_matching(
-                                            [
-                                                self.data.reduced_cmp_vel.as_slice(),
-                                                self.data.full_cmp_vel.as_slice(),
-                                            ],
+                                            [self.data.ekf_cmp_vel.as_slice()],
                                             &["velE", "vE "],
                                         ),
                                         true,
@@ -99,10 +93,7 @@ impl App {
                                     plot_spec(
                                         "Down Velocity",
                                         concat_trace_refs_matching(
-                                            [
-                                                self.data.reduced_cmp_vel.as_slice(),
-                                                self.data.full_cmp_vel.as_slice(),
-                                            ],
+                                            [self.data.ekf_cmp_vel.as_slice()],
                                             &["velD", "vD "],
                                         ),
                                         true,
@@ -130,8 +121,7 @@ impl App {
                                         "Roll",
                                         concat_trace_refs_matching(
                                             [
-                                                self.data.reduced_cmp_att.as_slice(),
-                                                self.data.full_cmp_att.as_slice(),
+                                                self.data.ekf_cmp_att.as_slice(),
                                                 self.data.orientation.as_slice(),
                                             ],
                                             &["roll"],
@@ -142,8 +132,7 @@ impl App {
                                         "Pitch",
                                         concat_trace_refs_matching(
                                             [
-                                                self.data.reduced_cmp_att.as_slice(),
-                                                self.data.full_cmp_att.as_slice(),
+                                                self.data.ekf_cmp_att.as_slice(),
                                                 self.data.orientation.as_slice(),
                                             ],
                                             &["pitch"],
@@ -154,8 +143,7 @@ impl App {
                                         "Yaw",
                                         concat_trace_refs_matching(
                                             [
-                                                self.data.reduced_cmp_att.as_slice(),
-                                                self.data.full_cmp_att.as_slice(),
+                                                self.data.ekf_cmp_att.as_slice(),
                                                 self.data.orientation.as_slice(),
                                             ],
                                             &["yaw"],
@@ -191,8 +179,7 @@ impl App {
                                         "Mount Roll",
                                         concat_trace_refs_matching(
                                             [
-                                                self.data.reduced_misalignment.as_slice(),
-                                                self.data.full_misalignment.as_slice(),
+                                                self.data.ekf_misalignment.as_slice(),
                                                 self.data.align_cmp_att.as_slice(),
                                             ],
                                             &["mount roll", "Align roll", "Reference mount roll"],
@@ -203,8 +190,7 @@ impl App {
                                         "Mount Pitch",
                                         concat_trace_refs_matching(
                                             [
-                                                self.data.reduced_misalignment.as_slice(),
-                                                self.data.full_misalignment.as_slice(),
+                                                self.data.ekf_misalignment.as_slice(),
                                                 self.data.align_cmp_att.as_slice(),
                                             ],
                                             &[
@@ -219,8 +205,7 @@ impl App {
                                         "Mount Yaw",
                                         concat_trace_refs_matching(
                                             [
-                                                self.data.reduced_misalignment.as_slice(),
-                                                self.data.full_misalignment.as_slice(),
+                                                self.data.ekf_misalignment.as_slice(),
                                                 self.data.align_cmp_att.as_slice(),
                                             ],
                                             &["mount yaw", "Align yaw", "Reference mount yaw"],
@@ -231,8 +216,7 @@ impl App {
                                         "Mount Quaternion Error [deg]",
                                         concat_trace_refs_matching(
                                             [
-                                                self.data.reduced_misalignment.as_slice(),
-                                                self.data.full_misalignment.as_slice(),
+                                                self.data.ekf_misalignment.as_slice(),
                                                 self.data.align_cmp_att.as_slice(),
                                             ],
                                             &["quaternion error"],
@@ -270,18 +254,12 @@ impl App {
                 }
             }
             Page::Calibration => {
-                let scale: Vec<&Trace> = self
-                    .data
-                    .full_scale_gyro
-                    .iter()
-                    .chain(self.data.full_scale_accel.iter())
-                    .collect();
                 let mut hovered_t_s = None;
                 egui::CentralPanel::default().show(ctx, |ui| {
                     hovered_t_s = draw_analysis_sections_page(
                         ui,
                         "Calibration",
-                        "Biases, scale factors, and covariance diagonals.",
+                        "Biases and covariance diagonals.",
                         vec![
                             plot_section(
                                 "Calibration States",
@@ -289,31 +267,23 @@ impl App {
                                 vec![
                                     plot_spec(
                                         "Gyro Bias",
-                                        concat_trace_refs([
-                                            self.data.reduced_bias_gyro.as_slice(),
-                                            self.data.full_bias_gyro.as_slice(),
-                                        ]),
+                                        concat_trace_refs([self.data.ekf_bias_gyro.as_slice()]),
                                         true,
                                     ),
                                     plot_spec(
                                         "Accel Bias",
-                                        concat_trace_refs([
-                                            self.data.reduced_bias_accel.as_slice(),
-                                            self.data.full_bias_accel.as_slice(),
-                                        ]),
+                                        concat_trace_refs([self.data.ekf_bias_accel.as_slice()]),
                                         true,
                                     ),
                                     plot_spec(
                                         "Mount Uncertainty [deg]",
                                         concat_trace_refs([
-                                            self.data.reduced_mount_sigma.as_slice(),
-                                            self.data.full_mount_sigma.as_slice(),
+                                            self.data.ekf_mount_sigma.as_slice(),
                                             self.data.align_cov.as_slice(),
                                         ]),
                                         true,
                                     )
                                     .with_log_y(LOG_Y_FLOOR, Some("deg")),
-                                    plot_spec("Full Scale Factors", scale, true),
                                 ],
                             ),
                             plot_section(
@@ -322,19 +292,13 @@ impl App {
                                 vec![
                                     plot_spec(
                                         "Bias Sigma",
-                                        concat_trace_refs([
-                                            self.data.reduced_cov_bias.as_slice(),
-                                            self.data.full_cov_bias.as_slice(),
-                                        ]),
+                                        concat_trace_refs([self.data.ekf_cov_bias.as_slice()]),
                                         true,
                                     )
                                     .with_log_y(LOG_Y_FLOOR, None),
                                     plot_spec(
                                         "Non-bias Sigma",
-                                        concat_trace_refs([
-                                            self.data.reduced_cov_nonbias.as_slice(),
-                                            self.data.full_cov_nonbias.as_slice(),
-                                        ]),
+                                        concat_trace_refs([self.data.ekf_cov_nonbias.as_slice()]),
                                         false,
                                     )
                                     .with_log_y(LOG_Y_FLOOR, None),
@@ -387,23 +351,13 @@ impl App {
                                 false,
                                 vec![
                                     plot_spec(
-                                        "Reduced Raw IMU Gyro Input",
-                                        trace_refs(&self.data.reduced_meas_gyro),
+                                        "EKF Raw IMU Gyro Input",
+                                        trace_refs(&self.data.ekf_meas_gyro),
                                         true,
                                     ),
                                     plot_spec(
-                                        "Reduced Raw IMU Accel Input",
-                                        trace_refs(&self.data.reduced_meas_accel),
-                                        true,
-                                    ),
-                                    plot_spec(
-                                        "Full Vehicle-frame Gyro Input",
-                                        trace_refs(&self.data.full_meas_gyro),
-                                        true,
-                                    ),
-                                    plot_spec(
-                                        "Full Vehicle-frame Accel Input",
-                                        trace_refs(&self.data.full_meas_accel),
+                                        "EKF Raw IMU Accel Input",
+                                        trace_refs(&self.data.ekf_meas_accel),
                                         true,
                                     ),
                                     plot_spec("Other Signals", trace_refs(&self.data.other), true),
@@ -423,25 +377,25 @@ impl App {
             Page::Diagnostics => {
                 let bump_pitch: Vec<&Trace> = self
                     .data
-                    .reduced_bump_pitch_speed
+                    .ekf_bump_pitch_speed
                     .iter()
                     .filter(|t| t.name.contains("pitch"))
                     .collect();
                 let bump_speed: Vec<&Trace> = self
                     .data
-                    .reduced_bump_pitch_speed
+                    .ekf_bump_pitch_speed
                     .iter()
                     .filter(|t| t.name.contains("speed"))
                     .collect();
                 let bump_time: Vec<&Trace> = self
                     .data
-                    .reduced_bump_diag
+                    .ekf_bump_diag
                     .iter()
                     .filter(|t| !t.name.contains("FFT dom"))
                     .collect();
                 let bump_fft: Vec<&Trace> = self
                     .data
-                    .reduced_bump_diag
+                    .ekf_bump_diag
                     .iter()
                     .filter(|t| t.name.contains("FFT dom"))
                     .collect();
@@ -486,39 +440,23 @@ impl App {
                             plot_section(
                                 "Filter Update Diagnostics",
                                 true,
-                                vec![
-                                    plot_spec(
-                                        "Full Mount Correction",
-                                        trace_refs(&self.data.full_mount_dx),
-                                        true,
-                                    ),
-                                    plot_spec(
-                                        "Full GNSS Position Gate",
-                                        trace_refs(&self.data.full_gnss_pos_gate),
-                                        true,
-                                    ),
-                                    plot_spec(
-                                        "Reduced Mount Correction",
-                                        trace_refs(&self.data.reduced_mount_dx),
-                                        true,
-                                    ),
-                                ],
+                                vec![plot_spec(
+                                    "EKF Mount Correction",
+                                    trace_refs(&self.data.ekf_mount_dx),
+                                    true,
+                                )],
                             ),
                             plot_section(
-                                "Reduced Detectors",
+                                "EKF Detectors",
                                 false,
                                 vec![
-                                    plot_spec("Reduced Bump Pitch", bump_pitch, true),
-                                    plot_spec("Reduced Bump Speed", bump_speed, true),
+                                    plot_spec("EKF Bump Pitch", bump_pitch, true),
+                                    plot_spec("EKF Bump Speed", bump_speed, true),
+                                    plot_spec("EKF Bump Time-domain Diagnostics", bump_time, true),
+                                    plot_spec("EKF Bump FFT Diagnostics", bump_fft, true),
                                     plot_spec(
-                                        "Reduced Bump Time-domain Diagnostics",
-                                        bump_time,
-                                        true,
-                                    ),
-                                    plot_spec("Reduced Bump FFT Diagnostics", bump_fft, true),
-                                    plot_spec(
-                                        "Reduced Stationary Diagnostics",
-                                        trace_refs(&self.data.reduced_stationary_diag),
+                                        "EKF Stationary Diagnostics",
+                                        trace_refs(&self.data.ekf_stationary_diag),
                                         true,
                                     ),
                                 ],
@@ -543,7 +481,7 @@ impl App {
             return;
         }
 
-        let mut map_traces: Vec<&Trace> = self.data.reduced_map.iter().collect();
+        let mut map_traces: Vec<&Trace> = self.data.ekf_map.iter().collect();
         if !self.show_gnss_map {
             map_traces.retain(|t| {
                 !t.name.contains("GNSS")
@@ -556,20 +494,14 @@ impl App {
         if !self.show_reference {
             map_traces.retain(|t| !is_reference_trace_name(t.name.as_str()));
         }
-        if !self.show_reduced {
-            map_traces.retain(|t| !t.name.contains("Reduced"));
+        if !self.show_ekf {
+            map_traces.retain(|t| !t.name.contains("EKF"));
         }
-        if self.show_full {
-            map_traces.extend(self.data.full_map.iter());
-        }
-        let mut headings: Vec<&HeadingSample> = if self.show_reduced {
-            self.data.reduced_map_heading.iter().collect()
+        let headings: Vec<&HeadingSample> = if self.show_ekf {
+            self.data.ekf_map_heading.iter().collect()
         } else {
             Vec::new()
         };
-        if self.show_full {
-            headings.extend(self.data.full_map_heading.iter());
-        }
         let cursor_samples: Vec<&MapCursorSample> = self
             .data
             .map_cursor
@@ -629,8 +561,7 @@ impl App {
             ui.visuals(),
             self.show_reference,
             self.show_gnss_map,
-            self.show_reduced,
-            self.show_full,
+            self.show_ekf,
         );
         if traces.is_empty() {
             ui.allocate_ui(size, |ui| {
@@ -646,8 +577,7 @@ impl App {
                 &self.data,
                 ui.visuals(),
                 self.show_reference,
-                self.show_reduced,
-                self.show_full,
+                self.show_ekf,
                 t_s,
             )
         });
@@ -705,8 +635,7 @@ impl App {
                     .collect();
                 let mount: Vec<Trace> = concat_trace_refs_matching(
                     [
-                        self.data.reduced_misalignment.as_slice(),
-                        self.data.full_misalignment.as_slice(),
+                        self.data.ekf_misalignment.as_slice(),
                         self.data.align_cmp_att.as_slice(),
                     ],
                     &[
@@ -727,8 +656,7 @@ impl App {
                 .collect();
                 let attitude: Vec<Trace> = concat_trace_refs_matching(
                     [
-                        self.data.reduced_cmp_att.as_slice(),
-                        self.data.full_cmp_att.as_slice(),
+                        self.data.ekf_cmp_att.as_slice(),
                         self.data.orientation.as_slice(),
                     ],
                     &["roll", "pitch", "yaw"],
@@ -738,10 +666,8 @@ impl App {
                 .cloned()
                 .collect();
                 let biases: Vec<Trace> = concat_trace_refs([
-                    self.data.reduced_bias_gyro.as_slice(),
-                    self.data.full_bias_gyro.as_slice(),
-                    self.data.reduced_bias_accel.as_slice(),
-                    self.data.full_bias_accel.as_slice(),
+                    self.data.ekf_bias_gyro.as_slice(),
+                    self.data.ekf_bias_accel.as_slice(),
                 ])
                 .into_iter()
                 .filter(|trace| visibility.allows(trace))

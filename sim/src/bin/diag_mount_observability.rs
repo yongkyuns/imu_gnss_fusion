@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use sensor_fusion::ProcessNoise;
-use sensor_fusion::reduced::{self, Filter, GnssSample, ImuDelta};
+use sensor_fusion::ekf::{self, Filter, GnssSample, ImuDelta};
 use sim::datasets::generic_replay::{GenericGnssSample, GenericImuSample};
 use sim::eval::gnss_ins::quat_angle_deg;
 use sim::eval::replay::{ReplayEvent, for_each_event};
@@ -48,8 +48,8 @@ struct Scenario {
 
 #[derive(Clone, Copy, Default)]
 struct Observability {
-    roll_full_marginal: f64,
-    pitch_full_marginal: f64,
+    roll_joint_marginal: f64,
+    pitch_joint_marginal: f64,
     ay_rms: f64,
     ax_rms: f64,
 }
@@ -77,8 +77,8 @@ fn main() -> Result<()> {
         "ayRMS",
         "Iroll|all",
         "Ipitch|all",
-        "qerr_mnt_loose",
-        "qerr_att_loose",
+        "qerr_mount_flex",
+        "qerr_att_flex",
         "seed_qerr"
     );
     for scenario in scenarios {
@@ -101,10 +101,10 @@ fn main() -> Result<()> {
             .with_context(|| format!("failed to generate {}", scenario.name))?;
         let truth_mount_q = q64(truth_mount_q_f32);
         let obs = compute_observability(&replay, &args);
-        let mount_loose = run_reduced_bad_seed(&replay, truth_mount_q, &args, 2.0, 6.0)
-            .with_context(|| format!("failed to run Reduced for {}", scenario.name))?;
-        let attitude_loose = run_reduced_bad_seed(&replay, truth_mount_q, &args, 6.0, 2.0)
-            .with_context(|| format!("failed to run Reduced for {}", scenario.name))?;
+        let mount_flex = run_ekf_bad_seed(&replay, truth_mount_q, &args, 2.0, 6.0)
+            .with_context(|| format!("failed to run EKF for {}", scenario.name))?;
+        let attitude_flex = run_ekf_bad_seed(&replay, truth_mount_q, &args, 6.0, 2.0)
+            .with_context(|| format!("failed to run EKF for {}", scenario.name))?;
         let seed_q =
             reference_mount_rpy_to_q_bv([args.seed_roll_error_deg, args.seed_pitch_error_deg, 0.0]);
         println!(
@@ -112,10 +112,10 @@ fn main() -> Result<()> {
             scenario.name,
             obs.ax_rms,
             obs.ay_rms,
-            obs.roll_full_marginal,
-            obs.pitch_full_marginal,
-            mount_loose.mount_quat_error_deg,
-            attitude_loose.mount_quat_error_deg,
+            obs.roll_joint_marginal,
+            obs.pitch_joint_marginal,
+            mount_flex.mount_quat_error_deg,
+            attitude_flex.mount_quat_error_deg,
             quat_angle_deg(seed_q, truth_mount_q),
         );
     }
@@ -124,7 +124,7 @@ fn main() -> Result<()> {
         "Interpretation: Iroll|all and Ipitch|all are Schur-complement information proxies after marginalizing vehicle attitude, accel bias, and velocity nuisance states."
     );
     println!(
-        "qerr_mnt_loose uses tight attitude covariance and loose mount covariance; qerr_att_loose swaps those priors."
+        "qerr_mount_flex uses tight attitude covariance and loose mount covariance; qerr_att_flex swaps those priors."
     );
     println!(
         "If a maneuver is weakly observable, the final mount error should depend strongly on that covariance split. Strong unique excitation should reduce that dependence."
@@ -230,14 +230,14 @@ fn compute_observability(replay: &GenericReplayInput, args: &Args) -> Observabil
     }
 
     Observability {
-        roll_full_marginal: roll.marginal_mount_info(&[0, 2, 3, 4, 5]),
-        pitch_full_marginal: pitch.marginal_mount_info(&[0, 2, 3, 4, 5]),
+        roll_joint_marginal: roll.marginal_mount_info(&[0, 2, 3, 4, 5]),
+        pitch_joint_marginal: pitch.marginal_mount_info(&[0, 2, 3, 4, 5]),
         ay_rms: (ay2_sum / f64::max(accel_count, 1.0)).sqrt(),
         ax_rms: (ax2_sum / f64::max(accel_count, 1.0)).sqrt(),
     }
 }
 
-fn run_reduced_bad_seed(
+fn run_ekf_bad_seed(
     replay: &GenericReplayInput,
     truth_mount_q: [f64; 4],
     args: &Args,
@@ -247,7 +247,7 @@ fn run_reduced_bad_seed(
     let first_gnss = replay.gnss.first().context("missing GNSS")?;
     let ref_ecef = lla_to_ecef(first_gnss.lat_deg, first_gnss.lon_deg, first_gnss.height_m);
     let mut filter = Filter::new(ProcessNoise::default());
-    let init = reduced_gnss(first_gnss, ref_ecef, first_gnss);
+    let init = ekf_gnss(first_gnss, ref_ecef, first_gnss);
     let yaw = first_gnss.vel_ned_mps[1].atan2(first_gnss.vel_ned_mps[0]);
     filter.init_nominal_from_gnss(quat_from_yaw(yaw), init);
     let seed_q =
@@ -308,7 +308,7 @@ fn run_reduced_bad_seed(
             }
             let dt = (sample.t_s - last_gnss_t.unwrap_or(sample.t_s)).clamp(1.0e-3, 1.0);
             last_gnss_t = Some(sample.t_s);
-            let mut gnss = reduced_gnss(sample, ref_ecef, first_gnss);
+            let mut gnss = ekf_gnss(sample, ref_ecef, first_gnss);
             gnss.pos_std_m = [1.0e6, 1.0e6, 1.0e6];
             let std_scale = (1.0 / dt).sqrt() as f32;
             for std in &mut gnss.pos_std_m {
@@ -328,7 +328,7 @@ fn q64(q: [f32; 4]) -> [f64; 4] {
     [q[0] as f64, q[1] as f64, q[2] as f64, q[3] as f64]
 }
 
-fn reduced_gnss(
+fn ekf_gnss(
     sample: &GenericGnssSample,
     ref_ecef: [f64; 3],
     ref_sample: &GenericGnssSample,
@@ -357,7 +357,7 @@ fn reduced_gnss(
     }
 }
 
-fn final_mount_q(state: &reduced::State) -> [f64; 4] {
+fn final_mount_q(state: &ekf::State) -> [f64; 4] {
     [
         state.nominal.q_bv0 as f64,
         state.nominal.q_bv1 as f64,

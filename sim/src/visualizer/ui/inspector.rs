@@ -215,7 +215,7 @@ struct MountUpdatePushRow {
 
 fn mount_error_rows(data: &PlotData, start_t_s: f64, end_t_s: f64) -> Vec<MountErrorLedgerRow> {
     let mut rows = Vec::new();
-    for filter in ["Reduced", "Full"] {
+    for filter in ["EKF"] {
         for axis in ["roll", "pitch", "yaw"] {
             let Some((estimate, reference)) = mount_estimate_reference_traces(data, filter, axis)
             else {

@@ -136,7 +136,7 @@ struct SweepResult {
     bias_e: f64,
     bias_d: f64,
     mount_ready_t_s: Option<f64>,
-    reduced_init_t_s: Option<f64>,
+    ekf_init_t_s: Option<f64>,
     early_mount_qerr_max_deg: f64,
     early_mount_qerr_mean_deg: f64,
     early_att_qerr_mean_deg: f64,
@@ -451,7 +451,7 @@ fn run_eval_matrix(args: &Args) -> Result<()> {
         variants.len()
     );
     println!(
-        "matrix_case,variant,scenario,fault,shift_ms,bias_e_mps,mount_ready_t_s,reduced_init_t_s,handoff_yaw_err_deg,handoff_vel_err_mps,early_mount_qerr_mean_deg,final_mount_qerr_deg,final_att_qerr_deg,final_yaw_err_deg,final_vel_err_mps,final_pos_err_m,tail_mount_qerr_mean_deg,body_vel_y_mount_yaw_dx_abs_deg,gps_vel_nis_mean,gps_vel_nis_max,body_vel_y_nis_mean,body_vel_y_nis_max,body_vel_y_h_mount_norm_mean,body_vel_y_k_mount_norm_mean,body_vel_y_yaw_mount_corr_abs_mean"
+        "matrix_case,variant,scenario,fault,shift_ms,bias_e_mps,mount_ready_t_s,ekf_init_t_s,handoff_yaw_err_deg,handoff_vel_err_mps,early_mount_qerr_mean_deg,final_mount_qerr_deg,final_att_qerr_deg,final_yaw_err_deg,final_vel_err_mps,final_pos_err_m,tail_mount_qerr_mean_deg,body_vel_y_mount_yaw_dx_abs_deg,gps_vel_nis_mean,gps_vel_nis_max,body_vel_y_nis_mean,body_vel_y_nis_max,body_vel_y_h_mount_norm_mean,body_vel_y_k_mount_norm_mean,body_vel_y_yaw_mount_corr_abs_mean"
     );
 
     let mut rows = Vec::new();
@@ -495,7 +495,7 @@ fn run_eval_matrix(args: &Args) -> Result<()> {
                     result.shift_ms,
                     result.bias_e,
                     fmt_opt(result.mount_ready_t_s),
-                    fmt_opt(result.reduced_init_t_s),
+                    fmt_opt(result.ekf_init_t_s),
                     result.handoff_yaw_err_deg,
                     result.handoff_vel_err_mps,
                     result.early_mount_qerr_mean_deg,
@@ -698,7 +698,7 @@ fn run_case(
     let ref_ecef = lla_to_ecef(truth[0].lat_deg, truth[0].lon_deg, truth[0].height_m);
     let mut snapshots = Vec::<Snapshot>::new();
     let mut mount_ready_t_s = None;
-    let mut reduced_init_t_s = None;
+    let mut ekf_init_t_s = None;
     let mut timeline_events_s = args.timeline_events_s.clone();
     timeline_events_s.retain(|t| t.is_finite());
     timeline_events_s.sort_by(|a, b| a.total_cmp(b));
@@ -710,12 +710,7 @@ fn run_case(
     for_each_event(imu, gnss, |event| match event {
         ReplayEvent::Imu(idx, sample) => {
             let update = fusion.process_imu(fusion_imu_sample(*sample));
-            capture_update_times(
-                sample.t_s,
-                update,
-                &mut mount_ready_t_s,
-                &mut reduced_init_t_s,
-            );
+            capture_update_times(sample.t_s, update, &mut mount_ready_t_s, &mut ekf_init_t_s);
             if let Some(snapshot) = snapshot_state(
                 &fusion,
                 sample.t_s,
@@ -741,12 +736,7 @@ fn run_case(
         ReplayEvent::Gnss(_, sample) => {
             last_gnss = Some(*sample);
             let update = fusion.process_gnss(fusion_gnss_sample(*sample));
-            capture_update_times(
-                sample.t_s,
-                update,
-                &mut mount_ready_t_s,
-                &mut reduced_init_t_s,
-            );
+            capture_update_times(sample.t_s, update, &mut mount_ready_t_s, &mut ekf_init_t_s);
         }
     });
 
@@ -763,7 +753,7 @@ fn run_case(
     }
 
     let Some(final_snapshot) = snapshots.last().copied() else {
-        bail!("Reduced produced no snapshots");
+        bail!("EKF produced no snapshots");
     };
     let early = snapshots
         .iter()
@@ -776,12 +766,12 @@ fn run_case(
         .copied()
         .filter(|s| s.t_s >= tail_start)
         .collect::<Vec<_>>();
-    let handoff_snapshot = reduced_init_t_s
+    let handoff_snapshot = ekf_init_t_s
         .and_then(|t_s| snapshot_at_or_after(&snapshots, t_s))
         .unwrap_or_else(Snapshot::nan);
     let early_end_snapshot =
         snapshot_at_or_after(&snapshots, args.early_window_end_s).unwrap_or_else(Snapshot::nan);
-    let update_diag = fusion.reduced().map(|reduced| reduced.update_diag);
+    let update_diag = fusion.ekf().map(|ekf| ekf.update_diag);
     let body_vel_y_innov_abs = update_diag
         .map(|diag| diag.sum_abs_innovation[DIAG_BODY_VEL_Y] as f64)
         .unwrap_or(f64::NAN);
@@ -831,7 +821,7 @@ fn run_case(
         bias_e: early_vel_bias_ned_mps[1],
         bias_d: early_vel_bias_ned_mps[2],
         mount_ready_t_s,
-        reduced_init_t_s,
+        ekf_init_t_s,
         early_mount_qerr_max_deg: max_or_nan(early.iter().map(|s| s.mount_qerr_deg)),
         early_mount_qerr_mean_deg: mean_or_nan(early.iter().map(|s| s.mount_qerr_deg)),
         early_att_qerr_mean_deg: mean_or_nan(early.iter().map(|s| s.att_qerr_deg)),
@@ -882,13 +872,13 @@ fn capture_update_times(
     t_s: f64,
     update: sensor_fusion::Update,
     mount_ready_t_s: &mut Option<f64>,
-    reduced_init_t_s: &mut Option<f64>,
+    ekf_init_t_s: &mut Option<f64>,
 ) {
     if update.mount_ready_changed && update.mount_ready && mount_ready_t_s.is_none() {
         *mount_ready_t_s = Some(t_s);
     }
-    if update.reduced_initialized_now && reduced_init_t_s.is_none() {
-        *reduced_init_t_s = Some(t_s);
+    if update.ekf_initialized_now && ekf_init_t_s.is_none() {
+        *ekf_init_t_s = Some(t_s);
     }
 }
 
@@ -903,19 +893,19 @@ fn snapshot_state(
     q_truth_mount: [f64; 4],
     last_gnss: Option<GenericGnssSample>,
 ) -> Option<Snapshot> {
-    let reduced = fusion.reduced()?;
+    let ekf = fusion.ekf()?;
     let truth = truth?;
     let q_bv = as_q64([
-        reduced.nominal.q_bv0,
-        reduced.nominal.q_bv1,
-        reduced.nominal.q_bv2,
-        reduced.nominal.q_bv3,
+        ekf.nominal.q_bv0,
+        ekf.nominal.q_bv1,
+        ekf.nominal.q_bv2,
+        ekf.nominal.q_bv3,
     ]);
     let q_vehicle = as_q64([
-        reduced.nominal.q0,
-        reduced.nominal.q1,
-        reduced.nominal.q2,
-        reduced.nominal.q3,
+        ekf.nominal.q0,
+        ekf.nominal.q1,
+        ekf.nominal.q2,
+        ekf.nominal.q3,
     ]);
     let (ref_ecef, ref_lat_deg, ref_lon_deg) = fusion
         .anchor_lla_debug()
@@ -949,25 +939,25 @@ fn snapshot_state(
         .map(|sample| sample.vel_ned_mps)
         .unwrap_or(truth.vel_ned_mps);
     let gnss_course_deg = course_deg(gnss_vel[0], gnss_vel[1]);
-    let nominal_course_deg = course_deg(reduced.nominal.vn as f64, reduced.nominal.ve as f64);
+    let nominal_course_deg = course_deg(ekf.nominal.vn as f64, ekf.nominal.ve as f64);
     let c_n_b = quat_to_rotmat(as_q64([
-        reduced.nominal.q0,
-        reduced.nominal.q1,
-        reduced.nominal.q2,
-        reduced.nominal.q3,
+        ekf.nominal.q0,
+        ekf.nominal.q1,
+        ekf.nominal.q2,
+        ekf.nominal.q3,
     ]));
     let c_c_s = quat_to_rotmat(as_q64([
-        reduced.nominal.q_bv0,
-        reduced.nominal.q_bv1,
-        reduced.nominal.q_bv2,
-        reduced.nominal.q_bv3,
+        ekf.nominal.q_bv0,
+        ekf.nominal.q_bv1,
+        ekf.nominal.q_bv2,
+        ekf.nominal.q_bv3,
     ]));
     let vel_seed = mat_vec(
         transpose3(c_n_b),
         [
-            reduced.nominal.vn as f64,
-            reduced.nominal.ve as f64,
-            reduced.nominal.vd as f64,
+            ekf.nominal.vn as f64,
+            ekf.nominal.ve as f64,
+            ekf.nominal.vd as f64,
         ],
     );
     let vel_vehicle = mat_vec(c_c_s, vel_seed);
@@ -982,46 +972,40 @@ fn snapshot_state(
         att_qerr_deg: quat_angle_deg(q_vehicle, truth.q_bn),
         yaw_err_deg: wrap_deg180(yaw - truth_yaw),
         vel_err_mps: norm3([
-            reduced.nominal.vn as f64 - truth.vel_ned_mps[0],
-            reduced.nominal.ve as f64 - truth.vel_ned_mps[1],
-            reduced.nominal.vd as f64 - truth.vel_ned_mps[2],
+            ekf.nominal.vn as f64 - truth.vel_ned_mps[0],
+            ekf.nominal.ve as f64 - truth.vel_ned_mps[1],
+            ekf.nominal.vd as f64 - truth.vel_ned_mps[2],
         ]),
         pos_err_m: norm3([
-            reduced.nominal.pn as f64 - truth_pos_ned[0],
-            reduced.nominal.pe as f64 - truth_pos_ned[1],
-            reduced.nominal.pd as f64 - truth_pos_ned[2],
+            ekf.nominal.pn as f64 - truth_pos_ned[0],
+            ekf.nominal.pe as f64 - truth_pos_ned[1],
+            ekf.nominal.pd as f64 - truth_pos_ned[2],
         ]),
-        bgz_dps: reduced.nominal.bgz as f64 * RADPS_TO_DPS,
-        theta_z_var: reduced.p[2][2] as f64,
-        mount_z_var: reduced.p[17][17] as f64,
-        yaw_sigma_deg: sigma_from_var(reduced.p[2][2] as f64) * RAD_TO_DEG,
-        bgz_sigma_dps: sigma_from_var(reduced.p[11][11] as f64) * RADPS_TO_DPS,
-        mount_yaw_sigma_deg: sigma_from_var(reduced.p[17][17] as f64) * RAD_TO_DEG,
-        type_counts: reduced.update_diag.type_counts,
-        sum_dx_yaw_deg: std::array::from_fn(|i| {
-            reduced.update_diag.sum_dx_yaw[i] as f64 * RAD_TO_DEG
-        }),
+        bgz_dps: ekf.nominal.bgz as f64 * RADPS_TO_DPS,
+        theta_z_var: ekf.p[2][2] as f64,
+        mount_z_var: ekf.p[17][17] as f64,
+        yaw_sigma_deg: sigma_from_var(ekf.p[2][2] as f64) * RAD_TO_DEG,
+        bgz_sigma_dps: sigma_from_var(ekf.p[11][11] as f64) * RADPS_TO_DPS,
+        mount_yaw_sigma_deg: sigma_from_var(ekf.p[17][17] as f64) * RAD_TO_DEG,
+        type_counts: ekf.update_diag.type_counts,
+        sum_dx_yaw_deg: std::array::from_fn(|i| ekf.update_diag.sum_dx_yaw[i] as f64 * RAD_TO_DEG),
         sum_abs_dx_yaw_deg: std::array::from_fn(|i| {
-            reduced.update_diag.sum_abs_dx_yaw[i] as f64 * RAD_TO_DEG
+            ekf.update_diag.sum_abs_dx_yaw[i] as f64 * RAD_TO_DEG
         }),
-        sum_abs_dx_vel_h_mps: std::array::from_fn(|i| {
-            reduced.update_diag.sum_abs_dx_vel_h[i] as f64
-        }),
+        sum_abs_dx_vel_h_mps: std::array::from_fn(|i| ekf.update_diag.sum_abs_dx_vel_h[i] as f64),
         sum_dx_gyro_bias_z_dps: std::array::from_fn(|i| {
-            reduced.update_diag.sum_dx_gyro_bias_z[i] as f64 * RADPS_TO_DPS
+            ekf.update_diag.sum_dx_gyro_bias_z[i] as f64 * RADPS_TO_DPS
         }),
         sum_abs_dx_gyro_bias_z_dps: std::array::from_fn(|i| {
-            reduced.update_diag.sum_abs_dx_gyro_bias_z[i] as f64 * RADPS_TO_DPS
+            ekf.update_diag.sum_abs_dx_gyro_bias_z[i] as f64 * RADPS_TO_DPS
         }),
         sum_dx_mount_yaw_deg: std::array::from_fn(|i| {
-            reduced.update_diag.sum_dx_mount_yaw[i] as f64 * RAD_TO_DEG
+            ekf.update_diag.sum_dx_mount_yaw[i] as f64 * RAD_TO_DEG
         }),
-        sum_abs_innovation: std::array::from_fn(|i| {
-            reduced.update_diag.sum_abs_innovation[i] as f64
-        }),
-        sum_nis: std::array::from_fn(|i| reduced.update_diag.sum_nis[i] as f64),
+        sum_abs_innovation: std::array::from_fn(|i| ekf.update_diag.sum_abs_innovation[i] as f64),
+        sum_nis: std::array::from_fn(|i| ekf.update_diag.sum_nis[i] as f64),
         sum_abs_dx_mount_yaw_deg: std::array::from_fn(|i| {
-            reduced.update_diag.sum_abs_dx_mount_yaw[i] as f64 * RAD_TO_DEG
+            ekf.update_diag.sum_abs_dx_mount_yaw[i] as f64 * RAD_TO_DEG
         }),
     })
 }
@@ -1044,7 +1028,7 @@ fn apply_fusion_config(fusion: &mut SensorFusion, args: &Args) {
 
 fn print_sweep_header() {
     println!(
-        "shift_ms,bias_n_mps,bias_e_mps,bias_d_mps,mount_ready_t_s,reduced_init_t_s,early_mount_qerr_max_deg,early_mount_qerr_mean_deg,early_att_qerr_mean_deg,early_yaw_err_mean_deg,handoff_mount_qerr_deg,handoff_yaw_err_deg,handoff_vel_err_mps,handoff_yaw_sigma_deg,handoff_bgz_sigma_dps,handoff_mount_yaw_sigma_deg,early_end_mount_qerr_deg,early_end_yaw_err_deg,early_end_vel_err_mps,early_end_yaw_sigma_deg,early_end_bgz_sigma_dps,early_end_mount_yaw_sigma_deg,final_mount_qerr_deg,final_att_qerr_deg,final_yaw_err_deg,final_vel_err_mps,final_pos_err_m,final_yaw_sigma_deg,final_bgz_sigma_dps,final_mount_yaw_sigma_deg,tail_mount_qerr_mean_deg,tail_att_qerr_mean_deg,body_vel_y_innov_abs,gps_vel_yaw_dx_abs_deg,gps_vel_bgz_dx_abs_dps,gps_vel_mount_yaw_dx_abs_deg,gps_vel_nis_mean,gps_vel_nis_max,gps_vel_h_mount_norm_mean,gps_vel_k_mount_norm_mean,gps_vel_yaw_mount_corr_abs_mean,body_vel_y_yaw_dx_abs_deg,body_vel_y_bgz_dx_abs_dps,body_vel_y_mount_yaw_dx_abs_deg,body_vel_y_nis_mean,body_vel_y_nis_max,body_vel_y_h_mount_norm_mean,body_vel_y_k_mount_norm_mean,body_vel_y_yaw_mount_corr_abs_mean"
+        "shift_ms,bias_n_mps,bias_e_mps,bias_d_mps,mount_ready_t_s,ekf_init_t_s,early_mount_qerr_max_deg,early_mount_qerr_mean_deg,early_att_qerr_mean_deg,early_yaw_err_mean_deg,handoff_mount_qerr_deg,handoff_yaw_err_deg,handoff_vel_err_mps,handoff_yaw_sigma_deg,handoff_bgz_sigma_dps,handoff_mount_yaw_sigma_deg,early_end_mount_qerr_deg,early_end_yaw_err_deg,early_end_vel_err_mps,early_end_yaw_sigma_deg,early_end_bgz_sigma_dps,early_end_mount_yaw_sigma_deg,final_mount_qerr_deg,final_att_qerr_deg,final_yaw_err_deg,final_vel_err_mps,final_pos_err_m,final_yaw_sigma_deg,final_bgz_sigma_dps,final_mount_yaw_sigma_deg,tail_mount_qerr_mean_deg,tail_att_qerr_mean_deg,body_vel_y_innov_abs,gps_vel_yaw_dx_abs_deg,gps_vel_bgz_dx_abs_dps,gps_vel_mount_yaw_dx_abs_deg,gps_vel_nis_mean,gps_vel_nis_max,gps_vel_h_mount_norm_mean,gps_vel_k_mount_norm_mean,gps_vel_yaw_mount_corr_abs_mean,body_vel_y_yaw_dx_abs_deg,body_vel_y_bgz_dx_abs_dps,body_vel_y_mount_yaw_dx_abs_deg,body_vel_y_nis_mean,body_vel_y_nis_max,body_vel_y_h_mount_norm_mean,body_vel_y_k_mount_norm_mean,body_vel_y_yaw_mount_corr_abs_mean"
     );
 }
 
@@ -1087,7 +1071,7 @@ fn print_result(result: &SweepResult) {
         result.bias_e,
         result.bias_d,
         fmt_opt(result.mount_ready_t_s),
-        fmt_opt(result.reduced_init_t_s),
+        fmt_opt(result.ekf_init_t_s),
         result.early_mount_qerr_max_deg,
         result.early_mount_qerr_mean_deg,
         result.early_att_qerr_mean_deg,
@@ -1254,25 +1238,25 @@ fn snapshot_at_or_after(snapshots: &[Snapshot], t_s: f64) -> Option<Snapshot> {
 }
 
 fn diag_abs_rad_to_deg(
-    diag: Option<sensor_fusion::reduced::UpdateDiag>,
-    value: impl FnOnce(sensor_fusion::reduced::UpdateDiag) -> f32,
+    diag: Option<sensor_fusion::ekf::UpdateDiag>,
+    value: impl FnOnce(sensor_fusion::ekf::UpdateDiag) -> f32,
 ) -> f64 {
     diag.map(|diag| value(diag) as f64 * RAD_TO_DEG)
         .unwrap_or(f64::NAN)
 }
 
 fn diag_abs_rad_to_dps(
-    diag: Option<sensor_fusion::reduced::UpdateDiag>,
-    value: impl FnOnce(sensor_fusion::reduced::UpdateDiag) -> f32,
+    diag: Option<sensor_fusion::ekf::UpdateDiag>,
+    value: impl FnOnce(sensor_fusion::ekf::UpdateDiag) -> f32,
 ) -> f64 {
     diag.map(|diag| value(diag) as f64 * RADPS_TO_DPS)
         .unwrap_or(f64::NAN)
 }
 
 fn diag_mean(
-    diag: Option<sensor_fusion::reduced::UpdateDiag>,
+    diag: Option<sensor_fusion::ekf::UpdateDiag>,
     diag_type: usize,
-    value: impl FnOnce(sensor_fusion::reduced::UpdateDiag) -> f32,
+    value: impl FnOnce(sensor_fusion::ekf::UpdateDiag) -> f32,
 ) -> f64 {
     let Some(diag) = diag else {
         return f64::NAN;
@@ -1286,8 +1270,8 @@ fn diag_mean(
 }
 
 fn diag_value(
-    diag: Option<sensor_fusion::reduced::UpdateDiag>,
-    value: impl FnOnce(sensor_fusion::reduced::UpdateDiag) -> f32,
+    diag: Option<sensor_fusion::ekf::UpdateDiag>,
+    value: impl FnOnce(sensor_fusion::ekf::UpdateDiag) -> f32,
 ) -> f64 {
     diag.map(|diag| value(diag) as f64).unwrap_or(f64::NAN)
 }

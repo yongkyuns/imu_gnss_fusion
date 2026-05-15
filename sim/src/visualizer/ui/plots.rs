@@ -702,18 +702,14 @@ where
                         if t.points.is_empty() {
                             continue;
                         }
-                        let reduced =
-                            visible_decimated(&t.points, xmin, xmax, max_points_per_trace);
-                        let reduced = transform_points_for_axis(reduced, y_axis);
-                        if reduced.is_empty() {
+                        let ekf = visible_decimated(&t.points, xmin, xmax, max_points_per_trace);
+                        let ekf = transform_points_for_axis(ekf, y_axis);
+                        if ekf.is_empty() {
                             continue;
                         }
                         if let Some(pointer_pos) = pointer_pos {
                             let name = display_filter_trace_name(&t.name);
-                            for p in reduced
-                                .iter()
-                                .filter(|p| p[0].is_finite() && p[1].is_finite())
-                            {
+                            for p in ekf.iter().filter(|p| p[0].is_finite() && p[1].is_finite()) {
                                 let plot_point = PlotPoint::new(p[0], p[1]);
                                 let screen_pos = plot_ui.screen_from_plot(plot_point);
                                 let dist_sq = screen_pos.distance_sq(pointer_pos);
@@ -727,12 +723,12 @@ where
                             }
                         }
                         if t.name == "yaw initialized" {
-                            let points: PlotPoints<'_> = reduced.into();
+                            let points: PlotPoints<'_> = ekf.into();
                             plot_ui.points(
                                 Points::new(display_filter_trace_name(&t.name), points).radius(4.0),
                             );
                         } else {
-                            for segment in finite_line_segments(reduced) {
+                            for segment in finite_line_segments(ekf) {
                                 let points: PlotPoints<'_> = segment.into();
                                 plot_ui.line(Line::new(display_filter_trace_name(&t.name), points));
                             }

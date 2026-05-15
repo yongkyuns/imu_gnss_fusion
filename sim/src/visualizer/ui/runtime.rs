@@ -53,7 +53,7 @@ pub(super) fn create_app(
     has_itow: bool,
     replay: Option<ReplayState>,
 ) -> App {
-    let map_center = map_center_from_traces(&data.reduced_map);
+    let map_center = map_center_from_traces(&data.ekf_map);
     #[cfg(not(target_arch = "wasm32"))]
     let mapbox_access_token = std::env::var(MAPBOX_ACCESS_TOKEN_ENV).unwrap_or_default();
     #[cfg(target_arch = "wasm32")]
@@ -107,8 +107,7 @@ pub(super) fn create_app(
         show_align: true,
         show_heading: false,
         show_gnss_map: true,
-        show_reduced: true,
-        show_full: true,
+        show_ekf: true,
         shared_cursor_t_s: None,
         update_inspector_cursor_t_s: None,
         show_update_inspector: false,
@@ -185,8 +184,7 @@ impl App {
         TraceVisibility {
             show_reference: self.show_reference,
             show_align: self.show_align,
-            show_reduced: self.show_reduced,
-            show_full: self.show_full,
+            show_ekf: self.show_ekf,
         }
     }
 
@@ -220,7 +218,7 @@ impl App {
             match build_synthetic_plot_data(synthetic, misalignment, filter_cfg, gnss_outages) {
                 Ok(data) => {
                     self.data = data;
-                    self.map_center = map_center_from_traces(&self.data.reduced_map);
+                    self.map_center = map_center_from_traces(&self.data.ekf_map);
                     self.has_itow = false;
                     self.data_origin = DataOrigin::Synthetic;
                     self.replay_status = Some("Synthetic replay refreshed".to_string());

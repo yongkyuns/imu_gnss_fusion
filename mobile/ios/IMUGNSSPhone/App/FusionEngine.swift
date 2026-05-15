@@ -3,8 +3,8 @@ import Foundation
 struct FusionStatus {
     let mountReady: Bool
     let mountReadyChanged: Bool
-    let reducedInitialized: Bool
-    let reducedInitializedNow: Bool
+    let ekfInitialized: Bool
+    let ekfInitializedNow: Bool
     let filterInitialized: Bool
     let filterInitializedNow: Bool
     let mountQBV: Quaternion?
@@ -32,7 +32,7 @@ final class FusionEngine {
     private var streamEpoch: Date?
 
     init() {
-        handle = sensor_fusion_create_reduced_auto()
+        handle = sensor_fusion_create_ekf_auto()
     }
 
     deinit {
@@ -41,21 +41,21 @@ final class FusionEngine {
         }
     }
 
-    func resetReducedManualIdentity() {
+    func resetEkfManualIdentity() {
         streamEpoch = nil
         if let handle {
-            sensor_fusion_reset_reduced_manual(handle, 1.0, 0.0, 0.0, 0.0)
+            sensor_fusion_reset_ekf_manual(handle, 1.0, 0.0, 0.0, 0.0)
         } else {
-            handle = sensor_fusion_create_reduced_manual(1.0, 0.0, 0.0, 0.0)
+            handle = sensor_fusion_create_ekf_manual(1.0, 0.0, 0.0, 0.0)
         }
     }
 
-    func resetReducedAuto() {
+    func resetEkfAuto() {
         streamEpoch = nil
         if let handle {
-            sensor_fusion_reset_reduced_auto(handle)
+            sensor_fusion_reset_ekf_auto(handle)
         } else {
-            handle = sensor_fusion_create_reduced_auto()
+            handle = sensor_fusion_create_ekf_auto()
         }
     }
 
@@ -117,8 +117,8 @@ final class FusionEngine {
 
     func snapshot() -> FusionSnapshot? {
         guard let handle else { return nil }
-        var raw = SensorFusionFfiReducedSnapshot()
-        guard sensor_fusion_snapshot_reduced(handle, &raw) else { return nil }
+        var raw = SensorFusionFfiEkfSnapshot()
+        guard sensor_fusion_snapshot_ekf(handle, &raw) else { return nil }
         let attitudeQNV = Quaternion(w: Double(raw.q0), x: Double(raw.q1), y: Double(raw.q2), z: Double(raw.q3))
         let eulerRad = Self.eulerRad(q0: raw.q0, q1: raw.q1, q2: raw.q2, q3: raw.q3)
         return FusionSnapshot(
@@ -176,8 +176,8 @@ final class FusionEngine {
         return FusionStatus(
             mountReady: raw.mount_ready,
             mountReadyChanged: raw.mount_ready_changed,
-            reducedInitialized: raw.reduced_initialized,
-            reducedInitializedNow: raw.reduced_initialized_now,
+            ekfInitialized: raw.ekf_initialized,
+            ekfInitializedNow: raw.ekf_initialized_now,
             filterInitialized: raw.filter_initialized,
             filterInitializedNow: raw.filter_initialized_now,
             mountQBV: mountQBV
