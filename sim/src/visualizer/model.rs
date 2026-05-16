@@ -38,6 +38,7 @@ pub struct PlotData {
     pub ekf_bump_pitch_speed: Vec<Trace>,
     pub ekf_bump_diag: Vec<Trace>,
     pub road_events: Vec<RoadEventSample>,
+    pub road_segments: Vec<RoadSegmentSample>,
     pub ekf_map: Vec<Trace>,
     pub map_cursor: Vec<MapCursorSample>,
     pub ekf_map_heading: Vec<HeadingSample>,
@@ -205,6 +206,23 @@ pub struct RoadEventSample {
     pub lat_deg: f64,
     pub confidence: f64,
     pub speed_mps: f64,
+}
+
+#[cfg_attr(target_arch = "wasm32", derive(serde::Deserialize, serde::Serialize))]
+#[derive(Clone, Default)]
+pub struct RoadSegmentSample {
+    pub kind: String,
+    pub start_t_s: f64,
+    pub end_t_s: f64,
+    pub duration_s: f64,
+    pub mean_pitch_deg: f64,
+    pub peak_abs_pitch_deg: f64,
+    pub mean_speed_mps: f64,
+    pub peak_speed_mps: f64,
+    pub delta_speed_mps: f64,
+    pub mean_accel_mps2: f64,
+    pub peak_accel_mps2: f64,
+    pub trigger_traces: Vec<Trace>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

@@ -419,6 +419,23 @@ fn main() -> Result<()> {
             event.kind, event.t_s, event.confidence, event.lat_deg, event.lon_deg
         );
     }
+    eprintln!("[profile] road_segments count={}", data.road_segments.len());
+    for event in &data.road_segments {
+        eprintln!(
+            "[profile] road_segment kind={} start_t_s={:.3} end_t_s={:.3} duration_s={:.3} mean_pitch_deg={:.3} peak_abs_pitch_deg={:.3} mean_speed_mps={:.3} peak_speed_mps={:.3} delta_speed_mps={:.3} mean_accel_mps2={:.3} peak_accel_mps2={:.3}",
+            event.kind,
+            event.start_t_s,
+            event.end_t_s,
+            event.duration_s,
+            event.mean_pitch_deg,
+            event.peak_abs_pitch_deg,
+            event.mean_speed_mps,
+            event.peak_speed_mps,
+            event.delta_speed_mps,
+            event.mean_accel_mps2,
+            event.peak_accel_mps2
+        );
+    }
     for (group, traces) in [
         ("imu_raw_gyro", &data.imu_raw_gyro),
         ("imu_raw_accel", &data.imu_raw_accel),

@@ -1,11 +1,14 @@
 //! Map tile providers and trajectory overlay rendering for real and synthetic runs.
 
 use eframe::egui;
+use egui_plot::{GridInput, GridMark, Line, Plot, PlotPoints, VLine, uniform_grid_spacer};
 use walkers::sources::{Attribution, Mapbox, MapboxStyle, TileSource};
 use walkers::{HttpTiles, MapMemory, Plugin, TileId, lon_lat};
 
 use crate::visualizer::math::{ecef_to_ned, heading_endpoint, lla_to_ecef};
-use crate::visualizer::model::{HeadingSample, MapCursorSample, PlotData, RoadEventSample, Trace};
+use crate::visualizer::model::{
+    HeadingSample, MapCursorSample, PlotData, RoadEventSample, RoadSegmentSample, Trace,
+};
 use crate::visualizer::theme::UiTheme;
 
 use super::colors::{
@@ -120,6 +123,7 @@ pub(super) struct TrackOverlay<'a> {
     pub(super) headings: Vec<&'a HeadingSample>,
     pub(super) cursor_samples: Vec<&'a MapCursorSample>,
     pub(super) road_events: Vec<&'a RoadEventSample>,
+    pub(super) road_segments: Vec<&'a RoadSegmentSample>,
     pub(super) show_heading: bool,
     pub(super) cursor_t_s: Option<f64>,
 }
@@ -134,7 +138,7 @@ impl Plugin for TrackOverlay<'_> {
     ) {
         let map_rect = response.rect.intersect(ui.clip_rect());
         let painter = ui.painter().with_clip_rect(map_rect);
-        let visuals = ui.visuals();
+        let visuals = ui.visuals().clone();
         let view = map_view_bounds(projector, map_rect, 0.15);
         let point_stride = map_trace_point_stride(map_memory.zoom());
         let min_step = map_trace_min_pixel_step(map_memory.zoom());
@@ -143,7 +147,7 @@ impl Plugin for TrackOverlay<'_> {
             if tr.points.len() < 2 {
                 continue;
             }
-            let color = map_trace_color(tr.name.as_str(), visuals);
+            let color = map_trace_color(tr.name.as_str(), &visuals);
             let mut segment = Vec::<egui::Pos2>::with_capacity(tr.points.len().min(8192));
             let mut last_drawn: Option<egui::Pos2> = None;
             let mut pending: Option<egui::Pos2> = None;
@@ -209,7 +213,7 @@ impl Plugin for TrackOverlay<'_> {
                 let to = projector.project(lon_lat(tip_lon, tip_lat));
                 painter.line_segment(
                     [egui::pos2(from.x, from.y), egui::pos2(to.x, to.y)],
-                    egui::Stroke::new(1.8, map_heading_color(visuals)),
+                    egui::Stroke::new(1.8, map_heading_color(&visuals)),
                 );
             }
         }
@@ -222,11 +226,20 @@ impl Plugin for TrackOverlay<'_> {
                 &self.traces,
                 &self.cursor_samples,
                 t_s,
-                visuals,
+                &visuals,
             );
         }
 
-        draw_road_event_markers(&painter, projector, view, &self.road_events, visuals);
+        draw_road_segment_overlays(
+            ui,
+            &painter,
+            projector,
+            view,
+            &self.cursor_samples,
+            &self.road_segments,
+            &visuals,
+        );
+        draw_road_event_markers(&painter, projector, view, &self.road_events, &visuals);
 
         if self.show_heading
             && let Some(mouse_pos) = ui.input(|i| i.pointer.hover_pos())
@@ -246,17 +259,17 @@ impl Plugin for TrackOverlay<'_> {
             if let Some((d2, h, p)) = best
                 && d2 <= 12.0_f32 * 12.0_f32
             {
-                painter.circle_filled(p, 3.0, cursor_marker_color(visuals));
+                painter.circle_filled(p, 3.0, cursor_marker_color(&visuals));
                 let label = format!("t={:.2}s", h.t_s);
                 let bg_min = p + egui::vec2(8.0, -24.0);
                 let bg_rect = egui::Rect::from_min_size(bg_min, egui::vec2(78.0, 18.0));
-                painter.rect_filled(bg_rect, 4.0, tooltip_fill(visuals));
+                painter.rect_filled(bg_rect, 4.0, tooltip_fill(&visuals));
                 painter.text(
                     bg_min + egui::vec2(6.0, 2.0),
                     egui::Align2::LEFT_TOP,
                     label,
                     egui::FontId::monospace(12.0),
-                    tooltip_text_color(visuals),
+                    tooltip_text_color(&visuals),
                 );
             }
         }
@@ -307,6 +320,387 @@ fn draw_road_event_markers(
             egui::FontId::monospace(12.0),
             tooltip_text_color(visuals),
         );
+    }
+}
+
+fn draw_road_segment_overlays(
+    ui: &mut egui::Ui,
+    painter: &egui::Painter,
+    projector: &walkers::Projector,
+    view: MapViewBounds,
+    cursor_samples: &[&MapCursorSample],
+    segments: &[&RoadSegmentSample],
+    visuals: &egui::Visuals,
+) {
+    let hover_pos = painter.ctx().input(|input| input.pointer.hover_pos());
+    for segment in segments {
+        let color = road_segment_color(segment.kind.as_str(), visuals);
+        let mut previous = None;
+        for sample in cursor_samples.iter().copied().filter(|sample| {
+            sample.trace_name == "EKF path (lon,lat)"
+                && sample.t_s >= segment.start_t_s
+                && sample.t_s <= segment.end_t_s
+        }) {
+            if !view.contains(sample.lon_deg, sample.lat_deg) {
+                previous = None;
+                continue;
+            }
+            let projected = projector.project(lon_lat(sample.lon_deg, sample.lat_deg));
+            let current = egui::pos2(projected.x, projected.y);
+            if let Some(previous) = previous {
+                painter.line_segment(
+                    [previous, current],
+                    egui::Stroke::new(5.0, color.linear_multiply(0.72)),
+                );
+            }
+            previous = Some(current);
+        }
+
+        let start = sample_map_cursor_at(cursor_samples, "EKF path (lon,lat)", segment.start_t_s);
+        let end = sample_map_cursor_at(cursor_samples, "EKF path (lon,lat)", segment.end_t_s);
+        let start_pos = start
+            .filter(|sample| view.contains(sample.lon_deg, sample.lat_deg))
+            .map(|sample| {
+                let projected = projector.project(lon_lat(sample.lon_deg, sample.lat_deg));
+                egui::pos2(projected.x, projected.y)
+            });
+        let end_pos = end
+            .filter(|sample| view.contains(sample.lon_deg, sample.lat_deg))
+            .map(|sample| {
+                let projected = projector.project(lon_lat(sample.lon_deg, sample.lat_deg));
+                egui::pos2(projected.x, projected.y)
+            });
+
+        if let Some(pos) = start_pos {
+            painter.circle_filled(pos, 5.5, color);
+            painter.circle_stroke(
+                pos,
+                5.5,
+                egui::Stroke::new(1.2, marker_outline_color(visuals)),
+            );
+        }
+        if let Some(pos) = end_pos {
+            painter.rect_filled(
+                egui::Rect::from_center_size(pos, egui::vec2(10.0, 10.0)),
+                2.0,
+                color,
+            );
+            painter.rect_stroke(
+                egui::Rect::from_center_size(pos, egui::vec2(10.0, 10.0)),
+                2.0,
+                egui::Stroke::new(1.2, marker_outline_color(visuals)),
+                egui::StrokeKind::Outside,
+            );
+        }
+
+        let Some(hover_pos) = hover_pos else {
+            continue;
+        };
+        let hover_anchor = [start_pos, end_pos]
+            .into_iter()
+            .flatten()
+            .find(|pos| pos.distance_sq(hover_pos) <= 13.0_f32 * 13.0_f32);
+        if let Some(pos) = hover_anchor {
+            let label = road_segment_tooltip_lines(segment);
+            let bg_min = pos + egui::vec2(8.0, -34.0);
+            show_road_segment_tooltip(ui, bg_min, &label, segment, color, visuals);
+        }
+    }
+}
+
+fn road_segment_tooltip_lines(segment: &RoadSegmentSample) -> Vec<String> {
+    match segment.kind.as_str() {
+        "reverse" => {
+            return vec![
+                segment.kind.clone(),
+                format!("Duration: {:.1} s", segment.duration_s),
+                format!(
+                    "Start/end: {:.1} - {:.1} s",
+                    segment.start_t_s, segment.end_t_s
+                ),
+                format!("Avg speed: {:.1} km/h", 3.6 * segment.mean_speed_mps),
+                format!("Peak speed: {:.1} km/h", 3.6 * segment.peak_speed_mps),
+            ];
+        }
+        "harsh acceleration" => {
+            return vec![
+                segment.kind.clone(),
+                format!("Duration: {:.1} s", segment.duration_s),
+                format!(
+                    "Start/end: {:.1} - {:.1} s",
+                    segment.start_t_s, segment.end_t_s
+                ),
+                format!("Avg accel: {:.1} m/s^2", segment.mean_accel_mps2),
+                format!("Peak accel: {:.1} m/s^2", segment.peak_accel_mps2),
+                format!("Delta speed: {:+.1} km/h", 3.6 * segment.delta_speed_mps),
+            ];
+        }
+        "harsh braking" => {
+            return vec![
+                segment.kind.clone(),
+                format!("Duration: {:.1} s", segment.duration_s),
+                format!(
+                    "Start/end: {:.1} - {:.1} s",
+                    segment.start_t_s, segment.end_t_s
+                ),
+                format!("Avg decel: {:.1} m/s^2", segment.mean_accel_mps2),
+                format!("Peak decel: {:.1} m/s^2", segment.peak_accel_mps2),
+                format!("Delta speed: {:+.1} km/h", 3.6 * segment.delta_speed_mps),
+            ];
+        }
+        "harsh cornering" => {
+            return vec![
+                segment.kind.clone(),
+                format!("Duration: {:.1} s", segment.duration_s),
+                format!(
+                    "Start/end: {:.1} - {:.1} s",
+                    segment.start_t_s, segment.end_t_s
+                ),
+                format!("Avg lateral: {:.1} m/s^2", segment.mean_accel_mps2),
+                format!("Peak lateral: {:.1} m/s^2", segment.peak_accel_mps2),
+                format!("Speed: {:.1} km/h", 3.6 * segment.mean_speed_mps),
+            ];
+        }
+        _ => {}
+    }
+    vec![
+        segment.kind.clone(),
+        format!("Duration: {:.1} s", segment.duration_s),
+        format!(
+            "Start/end: {:.1} - {:.1} s",
+            segment.start_t_s, segment.end_t_s
+        ),
+        format!("Avg inclination: {:+.1} deg", segment.mean_pitch_deg),
+        format!("Peak: {:.1} deg", segment.peak_abs_pitch_deg),
+        format!("Speed: {:.1} km/h", 3.6 * segment.mean_speed_mps),
+    ]
+}
+
+fn show_road_segment_tooltip(
+    ui: &mut egui::Ui,
+    pos: egui::Pos2,
+    lines: &[String],
+    segment: &RoadSegmentSample,
+    segment_color: egui::Color32,
+    visuals: &egui::Visuals,
+) {
+    let id = egui::Id::new((
+        "road_segment_tooltip",
+        segment.kind.as_str(),
+        (segment.start_t_s * 100.0).round() as i64,
+        (segment.end_t_s * 100.0).round() as i64,
+    ));
+    egui::Area::new(id)
+        .order(egui::Order::Tooltip)
+        .fixed_pos(pos)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style())
+                .fill(tooltip_fill(visuals))
+                .inner_margin(egui::Margin::same(6))
+                .corner_radius(egui::CornerRadius::same(4))
+                .show(ui, |ui| {
+                    ui.set_width(312.0);
+                    for line in lines {
+                        ui.label(
+                            egui::RichText::new(line)
+                                .monospace()
+                                .color(tooltip_text_color(visuals)),
+                        );
+                    }
+                    if segment
+                        .trigger_traces
+                        .iter()
+                        .any(|trace| trace.points.iter().any(|point| point[1].is_finite()))
+                    {
+                        ui.add_space(4.0);
+                        show_segment_trigger_plot(ui, segment, segment_color, visuals);
+                    }
+                });
+        });
+}
+
+fn show_segment_trigger_plot(
+    ui: &mut egui::Ui,
+    segment: &RoadSegmentSample,
+    segment_color: egui::Color32,
+    visuals: &egui::Visuals,
+) {
+    let id = format!(
+        "road_segment_trigger_plot_{}_{}",
+        segment.kind,
+        (segment.start_t_s * 100.0).round() as i64
+    );
+    let mut plot = Plot::new(id)
+        .height(132.0)
+        .show_x(false)
+        .show_y(true)
+        .grid_spacing(egui::emath::Rangef::new(10.0, 1400.0))
+        .x_grid_spacer(popup_plot_grid_marks)
+        .y_grid_spacer(popup_plot_grid_marks)
+        .allow_drag(false)
+        .allow_zoom(false)
+        .allow_scroll(false);
+    if let Some((x_min, x_max)) = trigger_plot_x_range(segment) {
+        plot = plot.include_x(x_min).include_x(x_max);
+    }
+    if let Some((y_min, y_max)) = trigger_plot_y_range(segment) {
+        plot = plot.include_y(y_min).include_y(y_max);
+    }
+    plot.show(ui, |plot_ui| {
+        for (index, trace) in segment.trigger_traces.iter().enumerate() {
+            let points: Vec<[f64; 2]> = trace
+                .points
+                .iter()
+                .copied()
+                .filter(|point| point[0].is_finite() && point[1].is_finite())
+                .collect();
+            if points.len() < 2 {
+                continue;
+            }
+            let points: PlotPoints<'_> = points.into();
+            plot_ui.line(
+                Line::new(trace.name.clone(), points).color(mini_plot_trace_color(index, visuals)),
+            );
+        }
+        plot_ui.vline(
+            VLine::new("event start", segment.start_t_s)
+                .name("")
+                .allow_hover(false)
+                .color(segment_color),
+        );
+        plot_ui.vline(
+            VLine::new("event end", segment.end_t_s)
+                .name("")
+                .allow_hover(false)
+                .color(segment_color),
+        );
+    });
+    show_segment_trigger_legend(ui, segment, visuals);
+}
+
+fn popup_plot_grid_marks(input: GridInput) -> Vec<GridMark> {
+    let range = (input.bounds.1 - input.bounds.0).abs();
+    if !range.is_finite() || range <= f64::EPSILON {
+        return Vec::new();
+    }
+    let major_step = nice_grid_step((range / 4.0).max(input.base_step_size));
+    uniform_grid_spacer(move |_| [major_step, major_step * 0.5, major_step * 0.25])(input)
+}
+
+fn nice_grid_step(raw_step: f64) -> f64 {
+    if !raw_step.is_finite() || raw_step <= f64::EPSILON {
+        return 1.0;
+    }
+    let exponent = raw_step.log10().floor();
+    let scale = 10.0_f64.powf(exponent);
+    let normalized = raw_step / scale;
+    let nice = if normalized <= 1.0 {
+        1.0
+    } else if normalized <= 2.0 {
+        2.0
+    } else if normalized <= 5.0 {
+        5.0
+    } else {
+        10.0
+    };
+    nice * scale
+}
+
+fn show_segment_trigger_legend(
+    ui: &mut egui::Ui,
+    segment: &RoadSegmentSample,
+    visuals: &egui::Visuals,
+) {
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 2.0);
+        for (index, trace) in segment.trigger_traces.iter().enumerate() {
+            if !trace.points.iter().any(|point| point[1].is_finite()) {
+                continue;
+            }
+            let color = mini_plot_trace_color(index, visuals);
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 10.0), egui::Sense::hover());
+            ui.painter().line_segment(
+                [
+                    egui::pos2(rect.left(), rect.center().y),
+                    egui::pos2(rect.right(), rect.center().y),
+                ],
+                egui::Stroke::new(2.0, color),
+            );
+            ui.label(
+                egui::RichText::new(trace.name.as_str())
+                    .small()
+                    .color(tooltip_text_color(visuals)),
+            );
+        }
+    });
+}
+
+fn trigger_plot_x_range(segment: &RoadSegmentSample) -> Option<(f64, f64)> {
+    let mut min_x = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    for trace in &segment.trigger_traces {
+        for point in &trace.points {
+            if point[0].is_finite() && point[1].is_finite() {
+                min_x = min_x.min(point[0]);
+                max_x = max_x.max(point[0]);
+            }
+        }
+    }
+    min_x
+        .is_finite()
+        .then_some(expand_degenerate_range(min_x, max_x))
+}
+
+fn trigger_plot_y_range(segment: &RoadSegmentSample) -> Option<(f64, f64)> {
+    let mut min_y = f64::INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    for trace in &segment.trigger_traces {
+        for point in &trace.points {
+            if point[1].is_finite() {
+                min_y = min_y.min(point[1]);
+                max_y = max_y.max(point[1]);
+            }
+        }
+    }
+    min_y
+        .is_finite()
+        .then_some(expand_degenerate_range(min_y, max_y))
+}
+
+fn expand_degenerate_range(min: f64, max: f64) -> (f64, f64) {
+    if (max - min).abs() < 1.0e-6 {
+        let pad = max.abs().max(1.0) * 0.05;
+        (min - pad, max + pad)
+    } else {
+        let pad = (max - min) * 0.08;
+        (min - pad, max + pad)
+    }
+}
+
+fn mini_plot_trace_color(index: usize, visuals: &egui::Visuals) -> egui::Color32 {
+    match index {
+        0 => SeriesColor::Ekf.resolve(visuals),
+        1 => SeriesColor::Align.resolve(visuals),
+        2 => SeriesColor::Reference.resolve(visuals),
+        _ => map_marker_color("event", visuals),
+    }
+}
+
+fn road_segment_color(kind: &str, visuals: &egui::Visuals) -> egui::Color32 {
+    match kind {
+        "uphill" if visuals.dark_mode => egui::Color32::from_rgb(255, 154, 68),
+        "uphill" => egui::Color32::from_rgb(214, 97, 0),
+        "downhill" if visuals.dark_mode => egui::Color32::from_rgb(86, 190, 255),
+        "downhill" => egui::Color32::from_rgb(0, 126, 182),
+        "reverse" if visuals.dark_mode => egui::Color32::from_rgb(196, 146, 255),
+        "reverse" => egui::Color32::from_rgb(133, 76, 214),
+        "harsh acceleration" if visuals.dark_mode => egui::Color32::from_rgb(92, 230, 128),
+        "harsh acceleration" => egui::Color32::from_rgb(0, 150, 78),
+        "harsh braking" if visuals.dark_mode => egui::Color32::from_rgb(255, 92, 92),
+        "harsh braking" => egui::Color32::from_rgb(206, 45, 45),
+        "harsh cornering" if visuals.dark_mode => egui::Color32::from_rgb(255, 116, 218),
+        "harsh cornering" => egui::Color32::from_rgb(190, 54, 165),
+        _ => map_marker_color(kind, visuals),
     }
 }
 

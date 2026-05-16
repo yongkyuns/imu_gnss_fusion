@@ -1,5 +1,10 @@
 use anyhow::{Context, Result, bail};
-use road_events::{SpeedBumpConfig, SpeedBumpDetector, SpeedBumpSample};
+use road_events::{
+    HarshAccelConfig, HarshAccelDetector, HarshBrakeConfig, HarshBrakeDetector, HarshCornerConfig,
+    HarshCornerDetector, HarshCornerSample, HarshLongitudinalSample, HillConfig, HillDetector,
+    HillKind, HillSample, ReverseConfig, ReverseDetector, ReverseSample, SpeedBumpConfig,
+    SpeedBumpDetector, SpeedBumpSample,
+};
 use sensor_fusion::SensorFusion;
 use sensor_fusion::ekf::UPDATE_DIAG_TYPES;
 
@@ -12,8 +17,8 @@ use crate::eval::gnss_ins::{as_q64, quat_angle_deg, quat_conj, quat_rotate};
 use crate::eval::replay::{ReplayEvent, for_each_event};
 use crate::visualizer::math::{ecef_to_ned, lla_to_ecef, quat_rpy_deg};
 use crate::visualizer::model::{
-    HeadingSample, MapCursorSample, PlotData, RoadEventSample, StateContribution, StateCorrelation,
-    Trace, UpdateInspectorSample, VisualizerMountMode,
+    HeadingSample, MapCursorSample, PlotData, RoadEventSample, RoadSegmentSample,
+    StateContribution, StateCorrelation, Trace, UpdateInspectorSample, VisualizerMountMode,
 };
 use crate::visualizer::pipeline::reference::{
     final_reference_mount_rpy, reference_mount_seed_q_bv, reference_rpy_at, rpy_series_from_samples,
@@ -28,9 +33,70 @@ const DIAG_BODY_VEL_Y: usize = 4;
 const DIAG_BODY_VEL_Z: usize = 5;
 const NHC_DIAG_TYPES: [(usize, &str); 2] = [(DIAG_BODY_VEL_Y, "NHC Y"), (DIAG_BODY_VEL_Z, "NHC Z")];
 const STANDARD_GRAVITY_MPS2: f64 = 9.80665;
+const ROAD_EVENT_MINI_PLOT_PAD_S: f64 = 3.0;
+const ROAD_EVENT_MINI_PLOT_MAX_POINTS: usize = 180;
 #[cfg(target_arch = "wasm32")]
 const WEB_BUILD_MAX_POINTS_PER_TRACE: usize =
     crate::visualizer::replay_job::WEB_TRANSPORT_MAX_POINTS_PER_TRACE;
+
+#[derive(Default)]
+struct RoadEventMotionTraces {
+    pitch_deg: Vec<[f64; 2]>,
+    forward_velocity_mps: Vec<[f64; 2]>,
+    longitudinal_accel_mps2: Vec<[f64; 2]>,
+    yaw_rate_dps: Vec<[f64; 2]>,
+    speed_mps: Vec<[f64; 2]>,
+    lateral_accel_mps2: Vec<[f64; 2]>,
+}
+
+struct VisualLongitudinalAccelEma {
+    last_t_s: Option<f64>,
+    last_forward_velocity_mps: f64,
+    accel_ema_mps2: f64,
+    initialized: bool,
+    tau_s: f64,
+    max_raw_accel_mps2: f64,
+}
+
+impl VisualLongitudinalAccelEma {
+    fn new(cfg: HarshAccelConfig) -> Self {
+        Self {
+            last_t_s: None,
+            last_forward_velocity_mps: 0.0,
+            accel_ema_mps2: 0.0,
+            initialized: false,
+            tau_s: cfg.accel_tau_s as f64,
+            max_raw_accel_mps2: cfg.max_raw_accel_mps2 as f64,
+        }
+    }
+
+    fn update(&mut self, sample: HarshLongitudinalSample) -> Option<f64> {
+        let t_s = sample.t_s as f64;
+        let velocity_mps = sample.forward_velocity_mps as f64;
+        let Some(last_t_s) = self.last_t_s else {
+            self.last_t_s = Some(t_s);
+            self.last_forward_velocity_mps = velocity_mps;
+            return None;
+        };
+        let dt = (t_s - last_t_s).clamp(0.0, 0.2);
+        self.last_t_s = Some(t_s);
+        if dt <= 1.0e-4 {
+            self.last_forward_velocity_mps = velocity_mps;
+            return None;
+        }
+        let raw_accel_mps2 = ((velocity_mps - self.last_forward_velocity_mps) / dt)
+            .clamp(-self.max_raw_accel_mps2, self.max_raw_accel_mps2);
+        self.last_forward_velocity_mps = velocity_mps;
+        self.accel_ema_mps2 = if self.initialized {
+            let alpha = dt / (self.tau_s.max(dt) + dt);
+            (1.0 - alpha) * self.accel_ema_mps2 + alpha * raw_accel_mps2
+        } else {
+            self.initialized = true;
+            raw_accel_mps2
+        };
+        Some(self.accel_ema_mps2)
+    }
+}
 
 pub struct GenericReplayInput {
     pub imu: Vec<GenericImuSample>,
@@ -466,6 +532,14 @@ fn build_generic_replay_plot_data_impl(
     let mut bump_vertical_accel_hpf = Vec::new();
     let mut bump_vertical_accel_noise = Vec::new();
     let mut road_events = Vec::new();
+    let mut hill_detector = HillDetector::new(HillConfig::default());
+    let mut reverse_detector = ReverseDetector::new(ReverseConfig::default());
+    let mut harsh_accel_detector = HarshAccelDetector::new(HarshAccelConfig::default());
+    let mut harsh_brake_detector = HarshBrakeDetector::new(HarshBrakeConfig::default());
+    let mut harsh_corner_detector = HarshCornerDetector::new(HarshCornerConfig::default());
+    let mut visual_long_accel = VisualLongitudinalAccelEma::new(HarshAccelConfig::default());
+    let mut road_event_motion = RoadEventMotionTraces::default();
+    let mut road_segments = Vec::new();
 
     for_each_event(&replay.imu, &replay.gnss, |event| match event {
         ReplayEvent::Imu(index, sample) => {
@@ -481,6 +555,9 @@ fn build_generic_replay_plot_data_impl(
                     .push([diag.t_s as f64, diag.vertical_accel_hpf_mps2 as f64]);
                 bump_vertical_accel_noise
                     .push([diag.t_s as f64, diag.vertical_accel_noise_mps2 as f64]);
+                road_event_motion
+                    .pitch_deg
+                    .push([detector_sample.t_s as f64, detector_sample.pitch_deg as f64]);
                 if let Some(event) = event
                     && let Some([lat, lon, _]) = fusion.position_lla_f64()
                 {
@@ -492,6 +569,55 @@ fn build_generic_replay_plot_data_impl(
                         confidence: event.confidence as f64,
                         speed_mps: detector_sample.speed_mps as f64,
                     });
+                }
+                if let Some(event) = hill_detector.update(HillSample {
+                    t_s: detector_sample.t_s,
+                    speed_mps: detector_sample.speed_mps,
+                    pitch_deg: detector_sample.pitch_deg,
+                }) {
+                    road_segments.push(road_segment_sample(event));
+                }
+                if let Some(reverse_sample) = reverse_detector_sample(sample.t_s, &fusion)
+                    && let Some(event) = reverse_detector.update(reverse_sample)
+                {
+                    road_segments.push(reverse_segment_sample(event));
+                }
+                if let Some(longitudinal_sample) = harsh_longitudinal_sample(sample.t_s, &fusion) {
+                    road_event_motion.forward_velocity_mps.push([
+                        longitudinal_sample.t_s as f64,
+                        longitudinal_sample.forward_velocity_mps as f64,
+                    ]);
+                    if let Some(accel_mps2) = visual_long_accel.update(longitudinal_sample) {
+                        road_event_motion
+                            .longitudinal_accel_mps2
+                            .push([longitudinal_sample.t_s as f64, accel_mps2]);
+                    }
+                    if let Some(event) = harsh_accel_detector.update(longitudinal_sample) {
+                        road_segments.push(harsh_longitudinal_segment_sample(
+                            "harsh acceleration",
+                            event,
+                        ));
+                    }
+                    if let Some(event) = harsh_brake_detector.update(longitudinal_sample) {
+                        road_segments
+                            .push(harsh_longitudinal_segment_sample("harsh braking", event));
+                    }
+                }
+                if let Some(corner_sample) = harsh_corner_sample(sample.t_s, sample, &fusion) {
+                    road_event_motion
+                        .speed_mps
+                        .push([corner_sample.t_s as f64, corner_sample.speed_mps as f64]);
+                    road_event_motion.yaw_rate_dps.push([
+                        corner_sample.t_s as f64,
+                        (corner_sample.yaw_rate_radps as f64).to_degrees(),
+                    ]);
+                    road_event_motion.lateral_accel_mps2.push([
+                        corner_sample.t_s as f64,
+                        (corner_sample.yaw_rate_radps * corner_sample.speed_mps).abs() as f64,
+                    ]);
+                    if let Some(event) = harsh_corner_detector.update(corner_sample) {
+                        road_segments.push(harsh_corner_segment_sample(event));
+                    }
                 }
             }
             if !output_sampling.keep_imu(index, imu_total) {
@@ -562,6 +688,26 @@ fn build_generic_replay_plot_data_impl(
             }
         }
     });
+
+    if let Some(event) = hill_detector.finish() {
+        road_segments.push(road_segment_sample(event));
+    }
+    if let Some(event) = reverse_detector.finish() {
+        road_segments.push(reverse_segment_sample(event));
+    }
+    if let Some(event) = harsh_accel_detector.finish() {
+        road_segments.push(harsh_longitudinal_segment_sample(
+            "harsh acceleration",
+            event,
+        ));
+    }
+    if let Some(event) = harsh_brake_detector.finish() {
+        road_segments.push(harsh_longitudinal_segment_sample("harsh braking", event));
+    }
+    if let Some(event) = harsh_corner_detector.finish() {
+        road_segments.push(harsh_corner_segment_sample(event));
+    }
+    attach_road_segment_trigger_traces(&mut road_segments, &road_event_motion);
 
     let mut data = PlotData {
         speed: vec![Trace {
@@ -852,6 +998,7 @@ fn build_generic_replay_plot_data_impl(
             },
         ],
         road_events,
+        road_segments,
         map_cursor,
         ekf_map_heading: ekf_heading,
         update_inspector,
@@ -1458,6 +1605,193 @@ fn speed_bump_detector_sample(
         pitch_deg: pitch_deg as f32,
         vertical_accel_mps2: accel_vehicle[2] as f32,
     })
+}
+
+fn reverse_detector_sample(t_s: f64, fusion: &SensorFusion) -> Option<ReverseSample> {
+    let ekf = fusion.ekf()?;
+    let velocity_vehicle = ekf_vehicle_velocity(ekf);
+    Some(ReverseSample {
+        t_s: t_s as f32,
+        forward_velocity_mps: velocity_vehicle[0] as f32,
+    })
+}
+
+fn harsh_longitudinal_sample(t_s: f64, fusion: &SensorFusion) -> Option<HarshLongitudinalSample> {
+    let ekf = fusion.ekf()?;
+    let velocity_vehicle = ekf_vehicle_velocity(ekf);
+    Some(HarshLongitudinalSample {
+        t_s: t_s as f32,
+        forward_velocity_mps: velocity_vehicle[0] as f32,
+    })
+}
+
+fn harsh_corner_sample(
+    t_s: f64,
+    sample: &GenericImuSample,
+    fusion: &SensorFusion,
+) -> Option<HarshCornerSample> {
+    let ekf = fusion.ekf()?;
+    let velocity_vehicle = ekf_vehicle_velocity(ekf);
+    let (gyro_vehicle, _) = ekf_vehicle_motion(sample, ekf);
+    Some(HarshCornerSample {
+        t_s: t_s as f32,
+        speed_mps: velocity_vehicle[0].hypot(velocity_vehicle[1]) as f32,
+        yaw_rate_radps: gyro_vehicle[2] as f32,
+    })
+}
+
+fn road_segment_sample(event: road_events::HillEvent) -> RoadSegmentSample {
+    RoadSegmentSample {
+        kind: match event.kind {
+            HillKind::Uphill => "uphill",
+            HillKind::Downhill => "downhill",
+        }
+        .to_string(),
+        start_t_s: event.start_t_s as f64,
+        end_t_s: event.end_t_s as f64,
+        duration_s: event.duration_s as f64,
+        mean_pitch_deg: event.mean_pitch_deg as f64,
+        peak_abs_pitch_deg: event.peak_abs_pitch_deg as f64,
+        mean_speed_mps: event.mean_speed_mps as f64,
+        peak_speed_mps: event.mean_speed_mps as f64,
+        delta_speed_mps: 0.0,
+        mean_accel_mps2: 0.0,
+        peak_accel_mps2: 0.0,
+        trigger_traces: Vec::new(),
+    }
+}
+
+fn reverse_segment_sample(event: road_events::ReverseEvent) -> RoadSegmentSample {
+    RoadSegmentSample {
+        kind: "reverse".to_string(),
+        start_t_s: event.start_t_s as f64,
+        end_t_s: event.end_t_s as f64,
+        duration_s: event.duration_s as f64,
+        mean_pitch_deg: 0.0,
+        peak_abs_pitch_deg: 0.0,
+        mean_speed_mps: event.mean_reverse_speed_mps as f64,
+        peak_speed_mps: event.peak_reverse_speed_mps as f64,
+        delta_speed_mps: 0.0,
+        mean_accel_mps2: 0.0,
+        peak_accel_mps2: 0.0,
+        trigger_traces: Vec::new(),
+    }
+}
+
+fn harsh_longitudinal_segment_sample(
+    kind: &str,
+    event: road_events::HarshLongitudinalEvent,
+) -> RoadSegmentSample {
+    RoadSegmentSample {
+        kind: kind.to_string(),
+        start_t_s: event.start_t_s as f64,
+        end_t_s: event.end_t_s as f64,
+        duration_s: event.duration_s as f64,
+        mean_pitch_deg: 0.0,
+        peak_abs_pitch_deg: 0.0,
+        mean_speed_mps: event.mean_speed_mps as f64,
+        peak_speed_mps: event.peak_speed_mps as f64,
+        delta_speed_mps: event.delta_velocity_mps as f64,
+        mean_accel_mps2: event.mean_accel_mps2 as f64,
+        peak_accel_mps2: event.peak_accel_mps2 as f64,
+        trigger_traces: Vec::new(),
+    }
+}
+
+fn harsh_corner_segment_sample(event: road_events::HarshCornerEvent) -> RoadSegmentSample {
+    RoadSegmentSample {
+        kind: "harsh cornering".to_string(),
+        start_t_s: event.start_t_s as f64,
+        end_t_s: event.end_t_s as f64,
+        duration_s: event.duration_s as f64,
+        mean_pitch_deg: 0.0,
+        peak_abs_pitch_deg: 0.0,
+        mean_speed_mps: event.mean_speed_mps as f64,
+        peak_speed_mps: event.peak_speed_mps as f64,
+        delta_speed_mps: 0.0,
+        mean_accel_mps2: event.mean_lateral_accel_mps2 as f64,
+        peak_accel_mps2: event.peak_lateral_accel_mps2 as f64,
+        trigger_traces: Vec::new(),
+    }
+}
+
+fn attach_road_segment_trigger_traces(
+    segments: &mut [RoadSegmentSample],
+    motion: &RoadEventMotionTraces,
+) {
+    for segment in segments {
+        let start_t_s = segment.start_t_s - ROAD_EVENT_MINI_PLOT_PAD_S;
+        let end_t_s = segment.end_t_s + ROAD_EVENT_MINI_PLOT_PAD_S;
+        segment.trigger_traces = match segment.kind.as_str() {
+            "uphill" | "downhill" => vec![windowed_mini_trace(
+                "Pitch [deg]",
+                &motion.pitch_deg,
+                start_t_s,
+                end_t_s,
+            )],
+            "reverse" => vec![windowed_mini_trace(
+                "Forward velocity [m/s]",
+                &motion.forward_velocity_mps,
+                start_t_s,
+                end_t_s,
+            )],
+            "harsh acceleration" | "harsh braking" => vec![windowed_mini_trace(
+                "Long accel EMA [m/s^2]",
+                &motion.longitudinal_accel_mps2,
+                start_t_s,
+                end_t_s,
+            )],
+            "harsh cornering" => vec![
+                windowed_mini_trace("Yaw rate [deg/s]", &motion.yaw_rate_dps, start_t_s, end_t_s),
+                windowed_mini_trace("Speed [m/s]", &motion.speed_mps, start_t_s, end_t_s),
+                windowed_mini_trace(
+                    "Lat accel [m/s^2]",
+                    &motion.lateral_accel_mps2,
+                    start_t_s,
+                    end_t_s,
+                ),
+            ],
+            _ => Vec::new(),
+        }
+        .into_iter()
+        .filter(|trace| !trace.points.is_empty())
+        .collect();
+    }
+}
+
+fn windowed_mini_trace(name: &str, source: &[[f64; 2]], start_t_s: f64, end_t_s: f64) -> Trace {
+    let mut points: Vec<[f64; 2]> = source
+        .iter()
+        .copied()
+        .filter(|point| point[0] >= start_t_s && point[0] <= end_t_s && point[1].is_finite())
+        .collect();
+    if points.len() > ROAD_EVENT_MINI_PLOT_MAX_POINTS {
+        let stride = points
+            .len()
+            .div_ceil(ROAD_EVENT_MINI_PLOT_MAX_POINTS)
+            .max(1);
+        let mut decimated: Vec<[f64; 2]> = points.iter().copied().step_by(stride).collect();
+        if let Some(last) = points.last().copied()
+            && decimated.last().copied() != Some(last)
+        {
+            decimated.push(last);
+        }
+        points = decimated;
+    }
+    Trace {
+        name: name.to_string(),
+        points,
+    }
+}
+
+fn ekf_vehicle_velocity(ekf: &sensor_fusion::ekf::State) -> [f64; 3] {
+    let q_vehicle_to_ned = ekf_vehicle_attitude_q(ekf);
+    let velocity_ned = [
+        ekf.nominal.vn as f64,
+        ekf.nominal.ve as f64,
+        ekf.nominal.vd as f64,
+    ];
+    quat_rotate(quat_conj(q_vehicle_to_ned), velocity_ned)
 }
 
 fn rotate_body_to_vehicle(q_bv: [f64; 4], value_body: [f64; 3]) -> [f64; 3] {

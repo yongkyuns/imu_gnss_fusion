@@ -523,11 +523,13 @@ impl App {
             })
             .collect();
         let road_events: Vec<_> = self.data.road_events.iter().collect();
+        let road_segments: Vec<_> = self.data.road_segments.iter().collect();
         let track = TrackOverlay {
             traces: map_traces,
             headings,
             cursor_samples,
             road_events,
+            road_segments,
             show_heading: self.show_heading,
             cursor_t_s,
         };
