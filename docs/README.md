@@ -84,6 +84,7 @@ formulation source, regenerate, then review the Rust diff.
 - [Align/NHC formulation PDF](align.pdf) and [TEX](align.tex).
 - [EKF formulation PDF](ekf.pdf) and [TEX](ekf.tex).
 - [Roll observability PDF](roll-observability.pdf) and [TEX](roll-observability.tex).
+- [Road event detector PDF](events.pdf) and [TEX](events.tex).
 
 ## Documentation Conventions
 

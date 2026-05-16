@@ -77,6 +77,7 @@ python3 -m http.server --directory web 8080
 - [docs/testing.md](docs/testing.md): testing workflow.
 - [docs/math/frames.md](docs/math/frames.md): frame and quaternion conventions.
 - [docs/math/ekf.md](docs/math/ekf.md): EKF math note index.
+- [docs/events.pdf](docs/events.pdf): road event detector math and algorithms.
 - [docs/filter-algorithms.md](docs/filter-algorithms.md): EKF runtime behavior.
 - [docs/data-and-simulation.md](docs/data-and-simulation.md): replay data and synthetic simulation.
 - [docs/visualizer-tools-testing.md](docs/visualizer-tools-testing.md): visualizer, tools, and test workflow.

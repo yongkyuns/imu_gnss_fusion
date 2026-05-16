@@ -1,0 +1,443 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc,shapes.geometric}
+
+\title{Road Event Detector Formulations}
+\author{road\_events documentation}
+\date{\today}
+
+\newcommand{\dt}{\Delta t}
+\newcommand{\abs}[1]{\left|#1\right|}
+\newcommand{\sgn}{\operatorname{sgn}}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+\section{Scope}
+
+This document records the math and streaming algorithms implemented by the
+\path{road_events} crate. The crate detects road events from vehicle-frame
+motion signals produced by the simulation and visualization pipeline. The
+detectors are intentionally small-state and embedded-friendly: they process one
+sample at a time, use bounded memory, and avoid FFTs, dynamic allocation, and
+offline window buffering.
+
+The detectors are not part of the EKF state estimator. They consume already
+estimated or referenced motion channels such as vehicle speed, vehicle pitch,
+gravity-compensated vertical acceleration, and yaw rate. The current event set
+is:
+\begin{itemize}[nosep]
+  \item speed bumps,
+  \item sustained uphill and downhill intervals,
+  \item reverse-driving intervals,
+  \item harsh acceleration,
+  \item harsh braking,
+  \item harsh cornering.
+\end{itemize}
+
+\section{Signals and Units}
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.22\linewidth} >{\raggedright\arraybackslash}p{0.20\linewidth} >{\raggedright\arraybackslash}p{0.48\linewidth}}
+\toprule
+\textbf{Symbol} & \textbf{Unit} & \textbf{Meaning} \\
+\midrule
+\(t_k\) & s & Sample timestamp. \\
+\(v_x\) & m/s & Vehicle-frame forward velocity. Positive is forward; negative is reverse. \\
+\(s=\abs{v_x}\) & m/s & Speed magnitude used by threshold logic. \\
+\(\theta\) & deg & Vehicle pitch angle. Positive pitch is uphill in the current detector convention. \\
+\(a_z\) & m/s\(^2\) & Gravity-compensated vehicle-frame vertical acceleration. \\
+\(\omega_z\) & rad/s & Vehicle yaw rate. \\
+\bottomrule
+\end{longtable}
+
+The speed-bump detector uses pitch and vertical acceleration. Hill detection
+uses pitch and speed. Reverse and harsh longitudinal detection use forward
+velocity. Harsh cornering uses speed and yaw rate.
+
+\begin{figure}[h]
+\centering
+\vspace{0.4cm}
+\begin{tikzpicture}[
+  node distance=0.85cm and 1.0cm,
+  src/.style={draw,rounded corners,fill=blue!8,align=center,minimum width=2.9cm,minimum height=0.75cm},
+  det/.style={draw,rounded corners,fill=green!8,align=center,minimum width=3.0cm,minimum height=0.75cm},
+  eventnode/.style={draw,rounded corners,fill=orange!10,align=center,minimum width=2.5cm,minimum height=0.75cm},
+  arr/.style={-{Latex[length=2mm]},thick}
+]
+  \node[src] (motion) {vehicle-frame\\motion signals};
+  \node[det,right=of motion] (detectors) {streaming\\event detectors};
+  \node[eventnode,right=of detectors] (events) {map/trace\\event intervals};
+  \draw[arr] (motion) -- node[above=7mm,fill=white,inner sep=1pt]{one sample} (detectors);
+  \draw[arr] (detectors) -- node[above=7mm,fill=white,inner sep=1pt]{optional event} (events);
+\end{tikzpicture}
+\caption{All event detectors run as streaming post-processors over vehicle
+motion signals.}
+\end{figure}
+
+\section{Shared Streaming Primitives}
+
+\subsection{Timestamp Handling}
+
+The implementation clamps per-sample time deltas to keep bad or repeated
+timestamps from creating unbounded filter updates:
+\begin{equation}
+  \dt_k = \operatorname{clamp}(t_k-t_{k-1}, 0, 0.2).
+\end{equation}
+For high-pass and derivative paths that require a strictly positive time step,
+the lower bound is \(10^{-3}\) or \(10^{-4}\) seconds depending on the path.
+
+\subsection{First-Order High-Pass Filter}
+
+The speed-bump detector removes road grade and slow body motion with the
+standard discrete first-order high-pass filter:
+\begin{align}
+  \tau &= \frac{1}{2\pi f_c},\\
+  \alpha_k &= \frac{\tau}{\tau+\dt_k},\\
+  y_k &= \alpha_k(y_{k-1}+u_k-u_{k-1}).
+\end{align}
+This is applied independently to vehicle pitch and gravity-compensated vertical
+acceleration.
+
+\subsection{Exponential Moving Average}
+
+The crate uses an exponential moving average (EMA) for adaptive noise floors
+and smoothed velocity derivatives:
+\begin{align}
+  \alpha_k &= \frac{\dt_k}{\max(\tau,\dt_k)+\dt_k},\\
+  \bar{x}_k &= (1-\alpha_k)\bar{x}_{k-1}+\alpha_k x_k .
+\end{align}
+For noise floors, the input is the absolute high-pass value:
+\begin{equation}
+  \sigma_k = \operatorname{EMA}(\sigma_{k-1}, \abs{y_k}, \tau, \dt_k).
+\end{equation}
+The EMA is a low-memory substitute for a sliding RMS window. It provides slow
+adaptation to background vibration without storing historical samples.
+
+\subsection{Interval Accumulation}
+
+Most detectors convert an instantaneous metric \(m_k\) into an event interval
+using enter and exit thresholds:
+\begin{align}
+  \text{enter if}\quad &m_k \ge m_{\mathrm{enter}},\\
+  \text{stay active while}\quad &m_k \ge m_{\mathrm{exit}},
+  \qquad m_{\mathrm{exit}} < m_{\mathrm{enter}}.
+\end{align}
+During an active interval the detector accumulates:
+\begin{align}
+  T &= \sum_k \dt_k,\\
+  \bar{m} &= \frac{1}{T}\sum_k m_k\dt_k,\\
+  m_{\max} &= \max_k m_k,\\
+  \bar{s} &= \frac{1}{T}\sum_k s_k\dt_k.
+\end{align}
+The interval is emitted only if \(T\ge T_{\min}\). A refractory time suppresses
+duplicate events immediately after a valid event.
+
+\section{Speed-Bump Detector}
+
+\subsection{Physical Signature}
+
+A road speed bump creates a short vertical impulse sequence as the front axle
+and rear axle traverse the bump. In gravity-compensated vehicle-frame vertical
+acceleration, the idealized pattern is an alternating sequence of three extrema:
+\begin{equation}
+  a_{z,\mathrm{hp}}(t_1),\quad a_{z,\mathrm{hp}}(t_2),\quad a_{z,\mathrm{hp}}(t_3),
+  \qquad
+  \sgn(a_1)=\sgn(a_3)\ne\sgn(a_2).
+\end{equation}
+Pitch motion is used as corroboration rather than as the primary trigger,
+because pitch angle alone can also respond to braking, turning on uneven roads,
+or grade changes.
+
+\subsection{Filtered Signals}
+
+The detector computes:
+\begin{align}
+  \theta_{\mathrm{hp},k} &= \operatorname{HPF}(\theta_k; f_c=0.45~\mathrm{Hz}),\\
+  a_{\mathrm{hp},k} &= \operatorname{HPF}(a_{z,k}; f_c=0.70~\mathrm{Hz}).
+\end{align}
+Adaptive noise floors are:
+\begin{align}
+  \sigma_{\theta,k} &= \operatorname{EMA}(\abs{\theta_{\mathrm{hp},k}};\tau=6~\mathrm{s}),\\
+  \sigma_{a,k} &= \operatorname{EMA}(\abs{a_{\mathrm{hp},k}};\tau=6~\mathrm{s}).
+\end{align}
+The peak thresholds are:
+\begin{align}
+  A_{\mathrm{thr}} &= \max(3.5\,\sigma_a,\;1.5~\mathrm{m/s^2}),\\
+  \Theta_{\mathrm{thr}} &= \max(3.0\,\sigma_\theta,\;0.25^\circ).
+\end{align}
+
+\subsection{Extremum Extraction}
+
+The vertical acceleration slope is
+\begin{equation}
+  \dot{a}_{\mathrm{hp},k}
+  = \frac{a_{\mathrm{hp},k}-a_{\mathrm{hp},k-1}}{\dt_k}.
+\end{equation}
+A local maximum is detected when \(\dot{a}_{k-1}>0\) and \(\dot{a}_{k}\le 0\);
+a local minimum is detected when \(\dot{a}_{k-1}<0\) and \(\dot{a}_{k}\ge 0\).
+An extremum is kept only when its absolute vertical acceleration exceeds the
+physical floor \(1.5~\mathrm{m/s^2}\). The detector stores only the latest four
+extrema, so memory use remains constant.
+
+For each extremum interval, the detector also stores the maximum pitch
+high-pass magnitude since the previous extremum:
+\begin{equation}
+  \Theta_i = \max_{t\in(t_{i-1},t_i]}\abs{\theta_{\mathrm{hp}}(t)}.
+\end{equation}
+
+\subsection{Candidate Timing}
+
+Each latest-three-extrema group is scored only if the polarities alternate. Let
+\begin{equation}
+  D = t_3-t_1,\qquad
+  \bar{s}=\frac{s_1+s_2+s_3}{3}.
+\end{equation}
+The candidate must pass both absolute and speed-adaptive duration bounds:
+\begin{align}
+  D_{\min} &=
+  \max\left(0.18,\;0.35\frac{L_{\min}}{\bar{s}}\right),\\
+  D_{\max} &=
+  \min\left(1.8,\;2.5\frac{L_{\max}}{\bar{s}}\right),
+\end{align}
+where \(L_{\min}=1.8~\mathrm{m}\) and \(L_{\max}=3.6~\mathrm{m}\) are plausible
+front/rear axle spacing bounds. The speed must also satisfy
+\(\bar{s}\ge1.5~\mathrm{m/s}\).
+
+The detector tracks the total time within the pattern for which
+\(\abs{a_{\mathrm{hp}}}\ge1.5~\mathrm{m/s^2}\). It requires:
+\begin{align}
+  T_{\mathrm{active}} &\ge 0.25~\mathrm{s},\\
+  \frac{T_{\mathrm{active}}}{D} &\ge 0.25.
+\end{align}
+
+\subsection{Score and Confidence}
+
+For extrema magnitudes \(A_i=\abs{a_i}\), pitch peaks \(\Theta_i\), and
+candidate duration \(D\), the component scores are:
+\begin{align}
+  A_{\max} &= \max_i A_i,\\
+  \Theta_{\max} &= \max_i \Theta_i,\\
+  S_a &= \operatorname{clamp}\left(\frac{A_{\max}}{A_{\mathrm{thr}}}-1,\;0,\;1\right),\\
+  S_\theta &= \operatorname{clamp}\left(\frac{\Theta_{\max}}{\Theta_{\mathrm{thr}}}-1,\;0,\;1\right),\\
+  S_b &= \frac{\min(A_1,A_3)}{\max(A_1,A_3,10^{-3})}.
+\end{align}
+The spacing score favors the center of the admissible duration interval:
+\begin{align}
+  D_c &= \frac{D_{\min}+D_{\max}}{2},&
+  W &= \frac{\max(D_{\max}-D_{\min},10^{-3})}{2},\\
+  S_D &= \operatorname{clamp}\left(1-\frac{\abs{D-D_c}}{W},\;0,\;1\right).
+\end{align}
+The final pattern score is:
+\begin{equation}
+  S =
+  \operatorname{clamp}\left(
+    (0.45S_a+0.25S_D+0.15S_b+0.15S_\theta)S_\theta,\;0,\;1
+  \right).
+\end{equation}
+The pitch score multiplies the weighted score, so vertical acceleration alone
+does not emit an event.
+
+An event is emitted when \(S\ge0.12\) and at least four seconds have elapsed
+since the last bump event. The UI-facing confidence is not a calibrated
+probability; it is normalized only after the trigger threshold is cleared:
+\begin{equation}
+  c_{\mathrm{display}} =
+  0.90 + 0.08\,
+  \operatorname{clamp}\left(\frac{S-0.12}{1-0.12},0,1\right).
+\end{equation}
+
+\section{Hill Detector}
+
+The hill detector identifies sustained grade from vehicle pitch. It is a
+piecewise-constant interval detector with sign:
+\begin{equation}
+  \mathrm{kind}(\theta)=
+  \begin{cases}
+    \mathrm{uphill}, & \theta \ge 4^\circ,\\
+    \mathrm{downhill}, & \theta \le -4^\circ,\\
+    \varnothing, & \text{otherwise.}
+  \end{cases}
+\end{equation}
+An interval is emitted when the same signed condition remains active for at
+least three seconds. During the interval, the detector reports:
+\begin{align}
+  T &= t_{\mathrm{end}}-t_{\mathrm{start}},\\
+  \bar{\theta} &= \frac{1}{T}\int_{t_{\mathrm{start}}}^{t_{\mathrm{end}}}\theta(t)\,dt,\\
+  \theta_{\max} &= \max_t \abs{\theta(t)},\\
+  \bar{s} &= \frac{1}{T}\int_{t_{\mathrm{start}}}^{t_{\mathrm{end}}} \max(s(t),0)\,dt.
+\end{align}
+The implementation emits the event when pitch exits the threshold band or when
+the detector is explicitly finished at the end of a replay.
+
+\section{Reverse Detector}
+
+Reverse detection uses vehicle-frame forward velocity directly. The detector
+starts a candidate when:
+\begin{equation}
+  v_x < -0.5~\mathrm{m/s}.
+\end{equation}
+The candidate is confirmed only after this condition persists for
+\(0.5~\mathrm{s}\). Once confirmed, the interval remains active while:
+\begin{equation}
+  v_x < -0.2~\mathrm{m/s}.
+\end{equation}
+This hysteresis prevents repeated short events around zero speed. The event is
+closed after \(0.5~\mathrm{s}\) above the exit threshold and emitted if its
+duration is at least one second.
+
+Reported reverse speed uses positive magnitude:
+\begin{equation}
+  s_{\mathrm{rev}}=\max(-v_x,0).
+\end{equation}
+Mean and peak reverse speeds are accumulated over the confirmed interval.
+
+\section{Harsh Acceleration and Braking}
+
+\subsection{Velocity-Derivative Metric}
+
+Harsh longitudinal events are based on changes in forward velocity rather than
+raw accelerometer samples. This makes the detector less sensitive to road
+vibration and IMU mounting artifacts. The raw derivative is:
+\begin{equation}
+  a_{x,\mathrm{raw},k} =
+  \operatorname{clamp}\left(
+    \frac{v_{x,k}-v_{x,k-1}}{\dt_k},\;-15,\;15
+  \right)~\mathrm{m/s^2}.
+\end{equation}
+The metric used by the interval detector is an EMA-smoothed derivative:
+\begin{equation}
+  \hat{a}_{x,k} = \operatorname{EMA}(\hat{a}_{x,k-1},a_{x,\mathrm{raw},k},\tau=0.6~\mathrm{s},\dt_k).
+\end{equation}
+The speed gate uses:
+\begin{equation}
+  s_k=\max(\abs{v_{x,k}},\abs{v_{x,k-1}}).
+\end{equation}
+
+\subsection{Harsh Acceleration}
+
+If \(s_k<1~\mathrm{m/s}\), the metric is forced to zero. Otherwise:
+\begin{equation}
+  m_{\mathrm{accel},k}=\max(\hat{a}_{x,k},0).
+\end{equation}
+The interval thresholds are:
+\begin{align}
+  m_{\mathrm{enter}} &= 2.5~\mathrm{m/s^2},\\
+  m_{\mathrm{exit}} &= 2.0~\mathrm{m/s^2},\\
+  T_{\min} &= 0.4~\mathrm{s},\\
+  T_{\mathrm{refractory}} &= 2.0~\mathrm{s}.
+\end{align}
+The emitted event reports duration, mean and peak acceleration metric, mean and
+peak speed, and net velocity change:
+\begin{equation}
+  \Delta v_x = v_{x,\mathrm{end}}-v_{x,\mathrm{start}}.
+\end{equation}
+
+\subsection{Harsh Braking}
+
+Braking uses the same smoothed derivative but flips the sign:
+\begin{equation}
+  m_{\mathrm{brake},k}=\max(-\hat{a}_{x,k},0).
+\end{equation}
+The default thresholds are:
+\begin{align}
+  m_{\mathrm{enter}} &= 3.0~\mathrm{m/s^2},\\
+  m_{\mathrm{exit}} &= 2.4~\mathrm{m/s^2},\\
+  T_{\min} &= 0.4~\mathrm{s},\\
+  T_{\mathrm{refractory}} &= 2.0~\mathrm{s}.
+\end{align}
+The reported \(\Delta v_x\) is signed, so braking events normally have
+\(\Delta v_x<0\).
+
+\section{Harsh Cornering}
+
+Harsh cornering uses the steady-turn kinematic relation:
+\begin{equation}
+  a_y \approx v\omega_z .
+\end{equation}
+The detector metric is:
+\begin{equation}
+  m_{\mathrm{corner},k} =
+  \begin{cases}
+    \abs{s_k\omega_{z,k}}, & s_k\ge3~\mathrm{m/s},\\
+    0, & s_k<3~\mathrm{m/s}.
+  \end{cases}
+\end{equation}
+The default interval thresholds are:
+\begin{align}
+  m_{\mathrm{enter}} &= 3.0~\mathrm{m/s^2},\\
+  m_{\mathrm{exit}} &= 2.4~\mathrm{m/s^2},\\
+  T_{\min} &= 0.5~\mathrm{s},\\
+  T_{\mathrm{refractory}} &= 2.0~\mathrm{s}.
+\end{align}
+The steady-turn approximation is deliberately simple. It is robust for
+embedded event detection because it only needs speed and yaw rate, and it does
+not depend on lateral accelerometer calibration or road bank compensation.
+
+\section{Default Configuration Summary}
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.30\linewidth} >{\raggedright\arraybackslash}p{0.24\linewidth} >{\raggedright\arraybackslash}p{0.36\linewidth}}
+\toprule
+\textbf{Detector} & \textbf{Default} & \textbf{Purpose} \\
+\midrule
+Speed bump pitch HPF & \(0.45~\mathrm{Hz}\) & Reject grade and slow pitch. \\
+Speed bump vertical accel HPF & \(0.70~\mathrm{Hz}\) & Reject slow body motion. \\
+Speed bump noise EMA & \(6.0~\mathrm{s}\) & Adaptive vibration floor. \\
+Speed bump minimum speed & \(1.5~\mathrm{m/s}\) & Avoid static/creep false positives. \\
+Speed bump duration & \(0.18\)--\(1.8~\mathrm{s}\) & Absolute event timing. \\
+Speed bump wheelbase bounds & \(1.8\)--\(3.6~\mathrm{m}\) & Speed-adaptive timing. \\
+Hill pitch threshold & \(4^\circ\) & Sustained uphill/downhill grade. \\
+Hill minimum duration & \(3.0~\mathrm{s}\) & Suppress short pitch transients. \\
+Reverse enter/exit & \(-0.5/-0.2~\mathrm{m/s}\) & Hysteresis around zero speed. \\
+Reverse minimum duration & \(1.0~\mathrm{s}\) & Suppress brief backing corrections. \\
+Harsh accel enter/exit & \(2.5/2.0~\mathrm{m/s^2}\) & Longitudinal acceleration hysteresis. \\
+Harsh brake enter/exit & \(3.0/2.4~\mathrm{m/s^2}\) & Longitudinal deceleration hysteresis. \\
+Harsh corner enter/exit & \(3.0/2.4~\mathrm{m/s^2}\) & Lateral acceleration hysteresis. \\
+\bottomrule
+\end{longtable}
+
+\section{Visualizer Interpretation}
+
+The map markers and hover mini-plots are visualization aids. They do not feed
+back into the detectors. For each event, the visualizer draws a short local
+window around the detected interval, currently with five seconds of padding on
+both sides when data is available:
+\begin{equation}
+  [t_{\mathrm{start}}-5,\;t_{\mathrm{end}}+5].
+\end{equation}
+The mini-plot shows the signal that caused the detector to trigger, for example
+vertical acceleration and pitch for speed bumps, longitudinal acceleration for
+harsh acceleration/braking, and yaw-rate-derived lateral acceleration for harsh
+cornering.
+
+\section{Design Rationale}
+
+The event crate favors deterministic low-memory logic over more expressive
+offline methods. Windowed FFTs, matched filters, and machine-learning
+classifiers can be useful for richer offline analysis, but they introduce
+larger buffers, more tuning surface, and more deployment complexity. The current
+detectors instead use physically interpretable metrics:
+\begin{itemize}[nosep]
+  \item speed bumps: alternating high-pass vertical acceleration extrema
+    corroborated by pitch motion,
+  \item hills: sustained pitch sign and magnitude,
+  \item reverse: signed vehicle-frame forward velocity with hysteresis,
+  \item harsh acceleration/braking: smoothed velocity derivative,
+  \item harsh cornering: steady-turn lateral acceleration \(v\omega_z\).
+\end{itemize}
+
+This keeps the algorithms easy to port to small embedded targets and easy to
+debug from the visualizer.
+
+\end{document}
