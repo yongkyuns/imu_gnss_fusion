@@ -569,7 +569,10 @@ fn synthetic_inputs_populate_visualizer_ekf_traces() -> Result<()> {
     require_trace_schema(
         "ekf_bump_diag",
         &data.ekf_bump_diag,
-        &["EKF pitch HPF [deg]", "EKF pitch RMS EMA [deg]"],
+        &[
+            "Speed bump pitch HPF [deg]",
+            "Speed bump pitch noise floor [deg]",
+        ],
     )?;
     require_trace_schema(
         "align_cmp_att",
