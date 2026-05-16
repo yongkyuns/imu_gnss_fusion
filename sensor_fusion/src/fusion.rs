@@ -63,8 +63,6 @@ pub struct SensorFusion {
     mount_q_bv: Option<[f32; 4]>,
     ekf_mount_q_bv: Option<[f32; 4]>,
     align_ready_since_t_s: Option<f32>,
-    ekf_mount_handoff_t_s: Option<f32>,
-    mount_settle_released: bool,
     last_imu_t_s: Option<f32>,
     last_imu_sample: Option<ImuSample>,
     last_gnss: Option<crate::ekf::GnssSample>,
@@ -124,8 +122,6 @@ impl SensorFusion {
             mount_q_bv: None,
             ekf_mount_q_bv: None,
             align_ready_since_t_s: None,
-            ekf_mount_handoff_t_s: None,
-            mount_settle_released: false,
             last_imu_t_s: None,
             last_imu_sample: None,
             last_gnss: None,
@@ -165,8 +161,6 @@ impl SensorFusion {
         self.mount_q_bv = Some(q_bv);
         self.ekf_mount_q_bv = Some(q_bv);
         self.align_ready_since_t_s = None;
-        self.ekf_mount_handoff_t_s = None;
-        self.mount_settle_released = false;
         self.last_ekf_gnss_fuse_t_s = None;
         self.last_ekf_nhc_t_s = None;
         let n = &mut self.ekf.raw_mut().nominal;
@@ -325,33 +319,6 @@ impl SensorFusion {
         }
     }
 
-    /// Enables or disables mount-state freezing in the EKF.
-    pub fn set_freeze_misalignment_states(&mut self, freeze: bool) {
-        self.cfg.freeze_misalignment_states = freeze;
-        self.ekf
-            .set_freeze_misalignment_states(self.effective_freeze_misalignment_states());
-    }
-
-    /// Sets a post-initialization delay before mount states are released, in seconds.
-    pub fn set_mount_settle_time_s(&mut self, mount_settle_time_s: f32) {
-        if mount_settle_time_s.is_finite() && mount_settle_time_s >= 0.0 {
-            self.cfg.mount_settle_time_s = mount_settle_time_s;
-            self.mount_settle_released = false;
-        }
-    }
-
-    /// Sets the mount uncertainty threshold for releasing mount-settle freezing.
-    pub fn set_mount_settle_release_sigma_rad(&mut self, sigma_rad: f32) {
-        if sigma_rad.is_finite() && sigma_rad >= 0.0 {
-            self.cfg.mount_settle_release_sigma_rad = sigma_rad;
-        }
-    }
-
-    /// Sets whether mount-settle release clears mount cross-covariance terms.
-    pub fn set_mount_settle_zero_cross_covariance(&mut self, zero_cross: bool) {
-        self.cfg.mount_settle_zero_cross_covariance = zero_cross;
-    }
-
     /// Sets the vehicle-speed observation variance.
     pub fn set_r_vehicle_speed(&mut self, r_vehicle_speed: f32) {
         if r_vehicle_speed.is_finite() && r_vehicle_speed >= 0.0 {
@@ -396,7 +363,6 @@ impl SensorFusion {
         if !self.ekf_initialized || !self.mount_ready {
             return self.update(false, false);
         }
-        self.refresh_mount_settle_state(sample.t_s);
         if !(0.001..=0.05).contains(&dt) {
             return self.update(false, false);
         }
@@ -484,12 +450,8 @@ impl SensorFusion {
             self.ekf_mount_q_bv = self.mount_q_bv;
             self.initialize_ekf_from_gnss(local);
             self.ekf_initialized = true;
-            self.ekf_mount_handoff_t_s = Some(local.t_s);
-            self.mount_settle_released = false;
-            self.refresh_mount_settle_state(local.t_s);
             true
         } else {
-            self.refresh_mount_settle_state(local.t_s);
             self.pending_ekf_gnss = Some(local);
             false
         };
@@ -502,7 +464,6 @@ impl SensorFusion {
         if !self.ekf_initialized || !self.mount_ready {
             return self.update(false, false);
         }
-        self.refresh_mount_settle_state(speed.t_s);
         if speed.speed_mps < 0.0 || !speed.speed_mps.is_finite() {
             return self.update(false, false);
         }
@@ -649,7 +610,7 @@ impl SensorFusion {
             }
             self.ekf.raw_mut().p[i][i] = var;
         }
-        if self.effective_freeze_misalignment_states() {
+        if self.manual_mount_mode() {
             self.ekf.set_freeze_misalignment_states(true);
         }
     }
@@ -676,7 +637,7 @@ impl SensorFusion {
         ];
         let raw = self.ekf.raw_mut();
         set_covariance_axis_block(&mut raw.p, 15, variances, zero_cross);
-        if self.effective_freeze_misalignment_states() {
+        if self.manual_mount_mode() {
             self.ekf.set_freeze_misalignment_states(true);
         }
     }
@@ -704,10 +665,6 @@ impl SensorFusion {
         self.ekf.analysis_set_gnss_velocity_mount_gain_scale(scale);
     }
 
-    fn effective_freeze_misalignment_states(&self) -> bool {
-        self.cfg.freeze_misalignment_states || self.manual_mount_mode()
-    }
-
     fn manual_mount_mode(&self) -> bool {
         !self.internal_align_enabled
     }
@@ -730,7 +687,7 @@ impl SensorFusion {
             self.ekf.set_gravity_mss(self.anchor.gravity_mss);
         }
         self.ekf
-            .set_freeze_misalignment_states(self.effective_freeze_misalignment_states());
+            .set_freeze_misalignment_states(self.manual_mount_mode());
         let speed_h = sqrt_f32(
             gnss.vel_ned_mps[0] * gnss.vel_ned_mps[0] + gnss.vel_ned_mps[1] * gnss.vel_ned_mps[1],
         );
@@ -763,7 +720,7 @@ impl SensorFusion {
         raw.p[15][15] = sq_f32(self.cfg.mount_roll_init_sigma_rad);
         raw.p[16][16] = sq_f32(self.cfg.mount_pitch_init_sigma_rad);
         raw.p[17][17] = mount_var;
-        if self.effective_freeze_misalignment_states() {
+        if self.manual_mount_mode() {
             self.ekf.set_freeze_misalignment_states(true);
         }
         self.last_ekf_gnss_fuse_t_s = Some(gnss.t_s);
@@ -777,49 +734,6 @@ impl SensorFusion {
         }
         let ready_since = *self.align_ready_since_t_s.get_or_insert(t_s);
         t_s - ready_since >= self.cfg.align_handoff_delay_s
-    }
-
-    fn refresh_mount_settle_state(&mut self, t_s: f32) {
-        if self.effective_freeze_misalignment_states() {
-            self.ekf.set_freeze_misalignment_states(true);
-            return;
-        }
-        if self.cfg.mount_settle_time_s <= 0.0 {
-            self.ekf.set_freeze_misalignment_states(false);
-            return;
-        }
-        let Some(handoff_t_s) = self.ekf_mount_handoff_t_s else {
-            return;
-        };
-        if t_s - handoff_t_s < self.cfg.mount_settle_time_s {
-            self.ekf.set_freeze_misalignment_states(true);
-            return;
-        }
-        if !self.mount_settle_released {
-            self.ekf.set_freeze_misalignment_states(false);
-            self.reset_mount_covariance_after_settle();
-            self.mount_settle_released = true;
-        } else {
-            self.ekf.set_freeze_misalignment_states(false);
-        }
-    }
-
-    fn reset_mount_covariance_after_settle(&mut self) {
-        let sigma = self.cfg.mount_settle_release_sigma_rad;
-        if !sigma.is_finite() || sigma < 0.0 {
-            return;
-        }
-        let var = sigma * sigma;
-        let raw = self.ekf.raw_mut();
-        for i in 15..18 {
-            if self.cfg.mount_settle_zero_cross_covariance {
-                for j in 0..18 {
-                    raw.p[i][j] = 0.0;
-                    raw.p[j][i] = 0.0;
-                }
-            }
-            raw.p[i][i] = var;
-        }
     }
 
     fn fuse_signed_body_speed(&mut self, signed_speed_mps: f32) {

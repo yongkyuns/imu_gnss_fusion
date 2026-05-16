@@ -132,14 +132,6 @@ struct Args {
     mount_align_rw_var: Option<f32>,
     #[arg(long)]
     align_handoff_delay_s: Option<f32>,
-    #[arg(long)]
-    freeze_misalignment_states: bool,
-    #[arg(long)]
-    mount_settle_time_s: Option<f32>,
-    #[arg(long)]
-    mount_settle_release_sigma_deg: Option<f32>,
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-    mount_settle_zero_cross_covariance: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -213,14 +205,6 @@ fn main() -> Result<()> {
         align_handoff_delay_s: args
             .align_handoff_delay_s
             .unwrap_or(FusionTuningConfig::default().align_handoff_delay_s),
-        freeze_misalignment_states: args.freeze_misalignment_states,
-        mount_settle_time_s: args
-            .mount_settle_time_s
-            .unwrap_or(FusionTuningConfig::default().mount_settle_time_s),
-        mount_settle_release_sigma_deg: args
-            .mount_settle_release_sigma_deg
-            .unwrap_or(FusionTuningConfig::default().mount_settle_release_sigma_deg),
-        mount_settle_zero_cross_covariance: args.mount_settle_zero_cross_covariance,
         predict_imu_decimation: args.ekf_predict_imu_decimation.max(1),
         predict_imu_lpf_cutoff_hz: args.ekf_predict_imu_lpf_cutoff_hz,
         ..FusionTuningConfig::default()
@@ -339,7 +323,7 @@ fn main() -> Result<()> {
         tmax
     );
     eprintln!(
-        "[profile] ekf-only misalignment={:?} predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} r_body_vel_y={:.3} r_body_vel_z={:.3} attitude_roll_pitch_init_sigma_deg={:.3} yaw_init_sigma_deg={:.3} gyro_bias_init_sigma_dps={:.3} mount_roll_pitch_init_sigma_deg={:.3} mount_yaw_init_sigma_deg={:.3} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} align_handoff_delay_s={:.3} freeze_misalignment_states={} mount_settle_time_s={:.3} mount_settle_release_sigma_deg={:.3} mount_settle_zero_cross_covariance={}",
+        "[profile] ekf-only misalignment={:?} predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} r_body_vel_y={:.3} r_body_vel_z={:.3} attitude_roll_pitch_init_sigma_deg={:.3} yaw_init_sigma_deg={:.3} gyro_bias_init_sigma_dps={:.3} mount_roll_pitch_init_sigma_deg={:.3} mount_yaw_init_sigma_deg={:.3} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} align_handoff_delay_s={:.3}",
         args.misalignment,
         filter_cfg.predict_imu_decimation,
         filter_cfg
@@ -358,10 +342,6 @@ fn main() -> Result<()> {
         filter_cfg.r_stationary_accel,
         filter_cfg.mount_align_rw_var,
         filter_cfg.align_handoff_delay_s,
-        filter_cfg.freeze_misalignment_states,
-        filter_cfg.mount_settle_time_s,
-        filter_cfg.mount_settle_release_sigma_deg,
-        filter_cfg.mount_settle_zero_cross_covariance,
     );
     for (name, nt, np) in [
         group_stats("speed", &data.speed),

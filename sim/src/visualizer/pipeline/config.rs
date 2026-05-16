@@ -30,10 +30,6 @@ pub struct FusionTuningConfig {
     pub r_vehicle_speed: f32,
     pub mount_align_rw_var: f32,
     pub align_handoff_delay_s: f32,
-    pub freeze_misalignment_states: bool,
-    pub mount_settle_time_s: f32,
-    pub mount_settle_release_sigma_deg: f32,
-    pub mount_settle_zero_cross_covariance: bool,
     pub r_zero_vel: f32,
     pub r_stationary_accel: f32,
     pub vehicle_meas_lpf_cutoff_hz: f64,
@@ -63,10 +59,6 @@ impl Default for FusionTuningConfig {
             r_vehicle_speed: 0.04,
             mount_align_rw_var: 0.0,
             align_handoff_delay_s: 0.0,
-            freeze_misalignment_states: false,
-            mount_settle_time_s: 0.0,
-            mount_settle_release_sigma_deg: 7.5,
-            mount_settle_zero_cross_covariance: true,
             r_zero_vel: 0.0,
             r_stationary_accel: 0.0,
             vehicle_meas_lpf_cutoff_hz: 35.0,
@@ -155,10 +147,6 @@ pub fn apply_fusion_tuning_config(fusion: &mut SensorFusion, cfg: FusionTuningCo
     fusion.set_r_stationary_accel(cfg.r_stationary_accel);
     fusion.set_mount_align_rw_var(cfg.mount_align_rw_var);
     fusion.set_align_handoff_delay_s(cfg.align_handoff_delay_s);
-    fusion.set_freeze_misalignment_states(cfg.freeze_misalignment_states);
-    fusion.set_mount_settle_time_s(cfg.mount_settle_time_s);
-    fusion.set_mount_settle_release_sigma_rad(cfg.mount_settle_release_sigma_deg.to_radians());
-    fusion.set_mount_settle_zero_cross_covariance(cfg.mount_settle_zero_cross_covariance);
 }
 
 fn default_ekf_noise_option() -> Option<ProcessNoise> {
@@ -241,10 +229,6 @@ mod tests {
             "mountAlignRwVar": 1.0e-7,
             "mountUpdateYawRateGateDps": 10.0,
             "alignHandoffDelayS": 0.0,
-            "freezeMisalignmentStates": false,
-            "mountSettleTimeS": 0.0,
-            "mountSettleReleaseSigmaDeg": 7.5,
-            "mountSettleZeroCrossCovariance": true,
             "rZeroVel": 0.0,
             "rStationaryAccel": 0.0,
             "vehicleMeasLpfCutoffHz": 35.0,

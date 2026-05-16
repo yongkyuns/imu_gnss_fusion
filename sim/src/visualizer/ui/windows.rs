@@ -63,13 +63,6 @@ impl App {
                                 self.tuning_cfg.mount_align_rw_var = defaults.mount_align_rw_var;
                                 self.tuning_cfg.align_handoff_delay_s =
                                     defaults.align_handoff_delay_s;
-                                self.tuning_cfg.freeze_misalignment_states =
-                                    defaults.freeze_misalignment_states;
-                                self.tuning_cfg.mount_settle_time_s = defaults.mount_settle_time_s;
-                                self.tuning_cfg.mount_settle_release_sigma_deg =
-                                    defaults.mount_settle_release_sigma_deg;
-                                self.tuning_cfg.mount_settle_zero_cross_covariance =
-                                    defaults.mount_settle_zero_cross_covariance;
                                 self.tuning_cfg.r_zero_vel = defaults.r_zero_vel;
                                 self.tuning_cfg.r_stationary_accel = defaults.r_stationary_accel;
                                 self.tuning_cfg.vehicle_meas_lpf_cutoff_hz =

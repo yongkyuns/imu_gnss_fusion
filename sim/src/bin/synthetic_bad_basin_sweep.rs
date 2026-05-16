@@ -86,14 +86,6 @@ struct Args {
     r_stationary_accel: f32,
     #[arg(long, default_value_t = 0.0)]
     mount_align_rw_var: f32,
-    #[arg(long, default_value_t = false)]
-    freeze_misalignment_states: bool,
-    #[arg(long, default_value_t = 0.0)]
-    mount_settle_time_s: f32,
-    #[arg(long, default_value_t = 7.5)]
-    mount_settle_release_sigma_deg: f32,
-    #[arg(long, default_value_t = true)]
-    mount_settle_zero_cross_covariance: bool,
     #[arg(long, default_value_t = 0.0)]
     early_window_start_s: f64,
     #[arg(long, default_value_t = 220.0)]
@@ -235,8 +227,6 @@ struct MatrixFault {
 #[derive(Clone, Copy, Debug)]
 struct MatrixVariant {
     name: &'static str,
-    mount_settle_time_s: f32,
-    mount_settle_release_sigma_deg: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -431,18 +421,7 @@ fn run_eval_matrix(args: &Args) -> Result<()> {
             bias_ned_mps: [0.0, 1.5, 0.0],
         },
     ];
-    let variants = [
-        MatrixVariant {
-            name: "baseline",
-            mount_settle_time_s: 0.0,
-            mount_settle_release_sigma_deg: args.mount_settle_release_sigma_deg,
-        },
-        MatrixVariant {
-            name: "mount_settle_100s",
-            mount_settle_time_s: 100.0,
-            mount_settle_release_sigma_deg: 5.0,
-        },
-    ];
+    let variants = [MatrixVariant { name: "baseline" }];
 
     println!(
         "matrix_scenarios={} faults={} variants={}",
@@ -461,8 +440,6 @@ fn run_eval_matrix(args: &Args) -> Result<()> {
         for variant in variants {
             let mut variant_args = args.clone();
             variant_args.scenario = scenario.clone();
-            variant_args.mount_settle_time_s = variant.mount_settle_time_s;
-            variant_args.mount_settle_release_sigma_deg = variant.mount_settle_release_sigma_deg;
             for fault in faults {
                 let gnss = perturb_gnss(
                     &prepared.gnss_base,
@@ -1020,10 +997,6 @@ fn apply_fusion_config(fusion: &mut SensorFusion, args: &Args) {
     fusion.set_r_zero_vel(args.r_zero_vel);
     fusion.set_r_stationary_accel(args.r_stationary_accel);
     fusion.set_mount_align_rw_var(args.mount_align_rw_var);
-    fusion.set_freeze_misalignment_states(args.freeze_misalignment_states);
-    fusion.set_mount_settle_time_s(args.mount_settle_time_s);
-    fusion.set_mount_settle_release_sigma_rad(args.mount_settle_release_sigma_deg.to_radians());
-    fusion.set_mount_settle_zero_cross_covariance(args.mount_settle_zero_cross_covariance);
 }
 
 fn print_sweep_header() {

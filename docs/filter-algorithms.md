@@ -158,7 +158,6 @@ Primary runtime tuning controls:
 | `set_r_body_vel_yz` | NHC lateral and vertical velocity variances. |
 | `set_nhc_update_period_s` | NHC cadence. |
 | Initialization covariance setters | Initial attitude, yaw, bias, and mount uncertainty. |
-| `set_freeze_misalignment_states` | Freeze or release mount correction states. |
 | `set_align_config` | Stationary, acceleration, turn-rate, and handoff behavior for mount alignment. |
 
 Tune from physical sensor specifications first, then use replay diagnostics to
