@@ -522,8 +522,16 @@ impl App {
                     .any(|trace| trace.name == sample.trace_name)
             })
             .collect();
-        let road_events: Vec<_> = self.data.road_events.iter().collect();
-        let road_segments: Vec<_> = self.data.road_segments.iter().collect();
+        let road_events: Vec<_> = if self.show_events {
+            self.data.road_events.iter().collect()
+        } else {
+            Vec::new()
+        };
+        let road_segments: Vec<_> = if self.show_events {
+            self.data.road_segments.iter().collect()
+        } else {
+            Vec::new()
+        };
         let track = TrackOverlay {
             traces: map_traces,
             headings,

@@ -222,6 +222,8 @@ pub struct RoadSegmentSample {
     pub delta_speed_mps: f64,
     pub mean_accel_mps2: f64,
     pub peak_accel_mps2: f64,
+    pub trigger_window_start_t_s: f64,
+    pub trigger_window_end_t_s: f64,
     pub trigger_traces: Vec<Trace>,
 }
 

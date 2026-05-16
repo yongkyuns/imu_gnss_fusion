@@ -75,10 +75,11 @@ impl App {
                 help_label(
                     ui,
                     "Map",
-                    "Control map overlays. GNSS toggles GNSS/reference trajectory traces, Heading toggles directional arrows, and the optional Mapbox token is set from the map corner button.",
+                    "Control map overlays. GNSS toggles GNSS/reference trajectory traces, Heading toggles directional arrows, Events toggles detected road-event markers/segments, and the optional Mapbox token is set from the map corner button.",
                 );
                 ui.checkbox(&mut self.show_gnss_map, "GNSS");
                 ui.checkbox(&mut self.show_heading, "Heading");
+                ui.checkbox(&mut self.show_events, "Events");
                 ui.separator();
                 help_label(
                     ui,

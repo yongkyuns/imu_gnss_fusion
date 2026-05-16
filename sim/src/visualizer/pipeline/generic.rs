@@ -33,7 +33,7 @@ const DIAG_BODY_VEL_Y: usize = 4;
 const DIAG_BODY_VEL_Z: usize = 5;
 const NHC_DIAG_TYPES: [(usize, &str); 2] = [(DIAG_BODY_VEL_Y, "NHC Y"), (DIAG_BODY_VEL_Z, "NHC Z")];
 const STANDARD_GRAVITY_MPS2: f64 = 9.80665;
-const ROAD_EVENT_MINI_PLOT_PAD_S: f64 = 3.0;
+const ROAD_EVENT_MINI_PLOT_PAD_S: f64 = 5.0;
 const ROAD_EVENT_MINI_PLOT_MAX_POINTS: usize = 180;
 #[cfg(target_arch = "wasm32")]
 const WEB_BUILD_MAX_POINTS_PER_TRACE: usize =
@@ -1657,6 +1657,8 @@ fn road_segment_sample(event: road_events::HillEvent) -> RoadSegmentSample {
         delta_speed_mps: 0.0,
         mean_accel_mps2: 0.0,
         peak_accel_mps2: 0.0,
+        trigger_window_start_t_s: 0.0,
+        trigger_window_end_t_s: 0.0,
         trigger_traces: Vec::new(),
     }
 }
@@ -1674,6 +1676,8 @@ fn reverse_segment_sample(event: road_events::ReverseEvent) -> RoadSegmentSample
         delta_speed_mps: 0.0,
         mean_accel_mps2: 0.0,
         peak_accel_mps2: 0.0,
+        trigger_window_start_t_s: 0.0,
+        trigger_window_end_t_s: 0.0,
         trigger_traces: Vec::new(),
     }
 }
@@ -1694,6 +1698,8 @@ fn harsh_longitudinal_segment_sample(
         delta_speed_mps: event.delta_velocity_mps as f64,
         mean_accel_mps2: event.mean_accel_mps2 as f64,
         peak_accel_mps2: event.peak_accel_mps2 as f64,
+        trigger_window_start_t_s: 0.0,
+        trigger_window_end_t_s: 0.0,
         trigger_traces: Vec::new(),
     }
 }
@@ -1711,6 +1717,8 @@ fn harsh_corner_segment_sample(event: road_events::HarshCornerEvent) -> RoadSegm
         delta_speed_mps: 0.0,
         mean_accel_mps2: event.mean_lateral_accel_mps2 as f64,
         peak_accel_mps2: event.peak_lateral_accel_mps2 as f64,
+        trigger_window_start_t_s: 0.0,
+        trigger_window_end_t_s: 0.0,
         trigger_traces: Vec::new(),
     }
 }
@@ -1722,6 +1730,8 @@ fn attach_road_segment_trigger_traces(
     for segment in segments {
         let start_t_s = segment.start_t_s - ROAD_EVENT_MINI_PLOT_PAD_S;
         let end_t_s = segment.end_t_s + ROAD_EVENT_MINI_PLOT_PAD_S;
+        segment.trigger_window_start_t_s = start_t_s;
+        segment.trigger_window_end_t_s = end_t_s;
         segment.trigger_traces = match segment.kind.as_str() {
             "uphill" | "downhill" => vec![windowed_mini_trace(
                 "Pitch [deg]",

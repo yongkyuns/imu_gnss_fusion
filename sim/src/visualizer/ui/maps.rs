@@ -139,7 +139,8 @@ impl Plugin for TrackOverlay<'_> {
         let map_rect = response.rect.intersect(ui.clip_rect());
         let painter = ui.painter().with_clip_rect(map_rect);
         let visuals = ui.visuals().clone();
-        let view = map_view_bounds(projector, map_rect, 0.15);
+        let projection_offset = map_rect.center() - response.rect.center();
+        let projection = MapOverlayProjection::new(projector, map_rect, projection_offset);
         let point_stride = map_trace_point_stride(map_memory.zoom());
         let min_step = map_trace_min_pixel_step(map_memory.zoom());
         let min_step_sq = min_step * min_step;
@@ -154,7 +155,7 @@ impl Plugin for TrackOverlay<'_> {
             for p in tr.points.iter().step_by(point_stride) {
                 let lon = p[0];
                 let lat = p[1];
-                if !lon.is_finite() || !lat.is_finite() || !view.contains(lon, lat) {
+                if !lon.is_finite() || !lat.is_finite() || !projection.contains(lon, lat) {
                     if segment.len() >= 2 {
                         painter.add(egui::epaint::PathShape::line(
                             segment,
@@ -166,8 +167,7 @@ impl Plugin for TrackOverlay<'_> {
                     pending = None;
                     continue;
                 }
-                let v = projector.project(lon_lat(lon, lat));
-                let pos = egui::pos2(v.x, v.y);
+                let pos = projection.project(lon, lat);
                 match last_drawn {
                     None => {
                         segment.push(pos);
@@ -208,11 +208,11 @@ impl Plugin for TrackOverlay<'_> {
                     continue;
                 }
                 last_tick_t = h.t_s;
-                let from = projector.project(lon_lat(h.lon_deg, h.lat_deg));
+                let from = projection.project(h.lon_deg, h.lat_deg);
                 let (tip_lat, tip_lon) = heading_endpoint(h.lat_deg, h.lon_deg, h.yaw_deg, 6.0);
-                let to = projector.project(lon_lat(tip_lon, tip_lat));
+                let to = projection.project(tip_lon, tip_lat);
                 painter.line_segment(
-                    [egui::pos2(from.x, from.y), egui::pos2(to.x, to.y)],
+                    [from, to],
                     egui::Stroke::new(1.8, map_heading_color(&visuals)),
                 );
             }
@@ -221,8 +221,7 @@ impl Plugin for TrackOverlay<'_> {
         if let Some(t_s) = self.cursor_t_s {
             draw_map_cursor_markers(
                 &painter,
-                projector,
-                view,
+                projection,
                 &self.traces,
                 &self.cursor_samples,
                 t_s,
@@ -233,13 +232,12 @@ impl Plugin for TrackOverlay<'_> {
         draw_road_segment_overlays(
             ui,
             &painter,
-            projector,
-            view,
+            projection,
             &self.cursor_samples,
             &self.road_segments,
             &visuals,
         );
-        draw_road_event_markers(&painter, projector, view, &self.road_events, &visuals);
+        draw_road_event_markers(&painter, projection, &self.road_events, &visuals);
 
         if self.show_heading
             && let Some(mouse_pos) = ui.input(|i| i.pointer.hover_pos())
@@ -248,8 +246,7 @@ impl Plugin for TrackOverlay<'_> {
             let mut best: Option<(f32, &HeadingSample, egui::Pos2)> = None;
             let step = (self.headings.len() / 200).max(1);
             for h in self.headings.iter().step_by(step) {
-                let v = projector.project(lon_lat(h.lon_deg, h.lat_deg));
-                let p = egui::pos2(v.x, v.y);
+                let p = projection.project(h.lon_deg, h.lat_deg);
                 let d2 = p.distance_sq(mouse_pos);
                 match best {
                     Some((bd2, _, _)) if d2 >= bd2 => {}
@@ -278,8 +275,7 @@ impl Plugin for TrackOverlay<'_> {
 
 fn draw_road_event_markers(
     painter: &egui::Painter,
-    projector: &walkers::Projector,
-    view: MapViewBounds,
+    projection: MapOverlayProjection<'_>,
     events: &[&RoadEventSample],
     visuals: &egui::Visuals,
 ) {
@@ -291,11 +287,10 @@ fn draw_road_event_markers(
     let stroke = egui::Stroke::new(1.4, marker_outline_color(visuals));
     let hover_pos = painter.ctx().input(|input| input.pointer.hover_pos());
     for event in events {
-        if !view.contains(event.lon_deg, event.lat_deg) {
+        if !projection.contains(event.lon_deg, event.lat_deg) {
             continue;
         }
-        let projected = projector.project(lon_lat(event.lon_deg, event.lat_deg));
-        let pos = egui::pos2(projected.x, projected.y);
+        let pos = projection.project(event.lon_deg, event.lat_deg);
         painter.circle_filled(pos, 6.5, color);
         painter.circle_stroke(pos, 6.5, stroke);
         let Some(hover_pos) = hover_pos else {
@@ -326,8 +321,7 @@ fn draw_road_event_markers(
 fn draw_road_segment_overlays(
     ui: &mut egui::Ui,
     painter: &egui::Painter,
-    projector: &walkers::Projector,
-    view: MapViewBounds,
+    projection: MapOverlayProjection<'_>,
     cursor_samples: &[&MapCursorSample],
     segments: &[&RoadSegmentSample],
     visuals: &egui::Visuals,
@@ -341,12 +335,11 @@ fn draw_road_segment_overlays(
                 && sample.t_s >= segment.start_t_s
                 && sample.t_s <= segment.end_t_s
         }) {
-            if !view.contains(sample.lon_deg, sample.lat_deg) {
+            if !projection.contains(sample.lon_deg, sample.lat_deg) {
                 previous = None;
                 continue;
             }
-            let projected = projector.project(lon_lat(sample.lon_deg, sample.lat_deg));
-            let current = egui::pos2(projected.x, projected.y);
+            let current = projection.project(sample.lon_deg, sample.lat_deg);
             if let Some(previous) = previous {
                 painter.line_segment(
                     [previous, current],
@@ -359,17 +352,11 @@ fn draw_road_segment_overlays(
         let start = sample_map_cursor_at(cursor_samples, "EKF path (lon,lat)", segment.start_t_s);
         let end = sample_map_cursor_at(cursor_samples, "EKF path (lon,lat)", segment.end_t_s);
         let start_pos = start
-            .filter(|sample| view.contains(sample.lon_deg, sample.lat_deg))
-            .map(|sample| {
-                let projected = projector.project(lon_lat(sample.lon_deg, sample.lat_deg));
-                egui::pos2(projected.x, projected.y)
-            });
+            .filter(|sample| projection.contains(sample.lon_deg, sample.lat_deg))
+            .map(|sample| projection.project(sample.lon_deg, sample.lat_deg));
         let end_pos = end
-            .filter(|sample| view.contains(sample.lon_deg, sample.lat_deg))
-            .map(|sample| {
-                let projected = projector.project(lon_lat(sample.lon_deg, sample.lat_deg));
-                egui::pos2(projected.x, projected.y)
-            });
+            .filter(|sample| projection.contains(sample.lon_deg, sample.lat_deg))
+            .map(|sample| projection.project(sample.lon_deg, sample.lat_deg));
 
         if let Some(pos) = start_pos {
             painter.circle_filled(pos, 5.5, color);
@@ -636,6 +623,15 @@ fn show_segment_trigger_legend(
 }
 
 fn trigger_plot_x_range(segment: &RoadSegmentSample) -> Option<(f64, f64)> {
+    if segment.trigger_window_start_t_s.is_finite()
+        && segment.trigger_window_end_t_s.is_finite()
+        && segment.trigger_window_end_t_s > segment.trigger_window_start_t_s
+    {
+        return Some((
+            segment.trigger_window_start_t_s,
+            segment.trigger_window_end_t_s,
+        ));
+    }
     let mut min_x = f64::INFINITY;
     let mut max_x = f64::NEG_INFINITY;
     for trace in &segment.trigger_traces {
@@ -818,8 +814,7 @@ pub(super) fn synthetic_cursor_markers(
 
 fn draw_map_cursor_markers(
     painter: &egui::Painter,
-    projector: &walkers::Projector,
-    view: MapViewBounds,
+    projection: MapOverlayProjection<'_>,
     traces: &[&Trace],
     samples: &[&MapCursorSample],
     t_s: f64,
@@ -830,11 +825,10 @@ fn draw_map_cursor_markers(
         let Some(sample) = sample_map_cursor_at(samples, trace.name.as_str(), t_s) else {
             continue;
         };
-        if !view.contains(sample.lon_deg, sample.lat_deg) {
+        if !projection.contains(sample.lon_deg, sample.lat_deg) {
             continue;
         }
-        let projected = projector.project(lon_lat(sample.lon_deg, sample.lat_deg));
-        let origin = egui::pos2(projected.x, projected.y);
+        let origin = projection.project(sample.lon_deg, sample.lat_deg);
         let color = map_marker_color(trace.name.as_str(), visuals);
         let stroke = egui::Stroke::new(1.2, marker_outline_color(visuals));
         painter.circle_filled(origin, 5.0, color);
@@ -919,6 +913,36 @@ fn map_trace_point_stride(zoom: f64) -> usize {
 }
 
 #[derive(Clone, Copy)]
+struct MapOverlayProjection<'a> {
+    projector: &'a walkers::Projector,
+    view: MapViewBounds,
+    offset: egui::Vec2,
+}
+
+impl<'a> MapOverlayProjection<'a> {
+    fn new(
+        projector: &'a walkers::Projector,
+        visible_rect: egui::Rect,
+        offset: egui::Vec2,
+    ) -> Self {
+        Self {
+            projector,
+            view: map_view_bounds(projector, visible_rect, offset, 0.15),
+            offset,
+        }
+    }
+
+    fn contains(self, lon_deg: f64, lat_deg: f64) -> bool {
+        self.view.contains(lon_deg, lat_deg)
+    }
+
+    fn project(self, lon_deg: f64, lat_deg: f64) -> egui::Pos2 {
+        let projected = self.projector.project(lon_lat(lon_deg, lat_deg)) + self.offset;
+        egui::pos2(projected.x, projected.y)
+    }
+}
+
+#[derive(Clone, Copy)]
 struct MapViewBounds {
     lon_min: f64,
     lon_max: f64,
@@ -935,6 +959,7 @@ impl MapViewBounds {
 fn map_view_bounds(
     projector: &walkers::Projector,
     rect: egui::Rect,
+    projection_offset: egui::Vec2,
     margin_fraction: f32,
 ) -> MapViewBounds {
     let margin = egui::vec2(
@@ -953,7 +978,7 @@ fn map_view_bounds(
     let mut lat_min = f64::INFINITY;
     let mut lat_max = f64::NEG_INFINITY;
     for corner in corners {
-        let pos = projector.unproject(corner.to_vec2());
+        let pos = projector.unproject((corner - projection_offset).to_vec2());
         lon_min = lon_min.min(pos.x());
         lon_max = lon_max.max(pos.x());
         lat_min = lat_min.min(pos.y());

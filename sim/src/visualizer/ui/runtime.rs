@@ -116,6 +116,7 @@ pub(super) fn create_app(
         show_heading: false,
         show_gnss_map: true,
         show_ekf: true,
+        show_events: true,
         shared_cursor_t_s: None,
         update_inspector_cursor_t_s: None,
         show_update_inspector: false,
