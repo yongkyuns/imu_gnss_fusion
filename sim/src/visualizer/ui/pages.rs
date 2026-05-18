@@ -259,6 +259,15 @@ impl App {
                                         trace_refs(&self.data.align_motion),
                                         true,
                                     ),
+                                    plot_spec(
+                                        "Mount Uncertainty [deg]",
+                                        concat_trace_refs([
+                                            self.data.ekf_mount_sigma.as_slice(),
+                                            self.data.align_cov.as_slice(),
+                                        ]),
+                                        true,
+                                    )
+                                    .with_log_y(LOG_Y_FLOOR, Some("deg")),
                                 ],
                             ),
                         ],
@@ -295,15 +304,6 @@ impl App {
                                         concat_trace_refs([self.data.ekf_bias_accel.as_slice()]),
                                         true,
                                     ),
-                                    plot_spec(
-                                        "Mount Uncertainty [deg]",
-                                        concat_trace_refs([
-                                            self.data.ekf_mount_sigma.as_slice(),
-                                            self.data.align_cov.as_slice(),
-                                        ]),
-                                        true,
-                                    )
-                                    .with_log_y(LOG_Y_FLOOR, Some("deg")),
                                 ],
                             ),
                             plot_section(

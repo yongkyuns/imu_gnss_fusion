@@ -24,6 +24,13 @@ use crate::math::{asin_f32, atan2_f32, ceil_f32, cos_f32, sin_f32, sq_f32, sqrt_
 pub const ALIGN_N_STATES: usize = 3;
 /// Standard gravity used by alignment measurements, in meters per second squared.
 pub const GRAVITY_MPS2: f32 = 9.80665;
+const COARSE_READY_SIGMA_DEG: [f32; ALIGN_N_STATES] = [5.0, 5.0, 8.0];
+const STATIONARY_INIT_SIGMA_DEG: [f32; ALIGN_N_STATES] = [10.0, 10.0, 60.0];
+const R_GRAVITY_STD_MPS2: f32 = 4.0;
+const R_HORIZ_HEADING_STD_RAD: f32 = 1.0_f32.to_radians();
+const R_TURN_HEADING_STD_RAD: f32 = 0.1_f32.to_radians();
+const R_TURN_GYRO_STD_RADPS: f32 = 2.0_f32.to_radians();
+const TILT_JAC_EPS_RAD: f32 = 1.0e-4;
 
 /// Configuration for the standalone mount-alignment filter.
 ///
@@ -48,8 +55,6 @@ pub struct AlignConfig {
     pub r_horiz_heading_std_rad: f32,
     /// Gyro-based turn observation standard deviation, in radians per second.
     pub r_turn_gyro_std_radps: f32,
-    /// Scale applied to yaw updates from turn-gyro observations.
-    pub turn_gyro_yaw_scale: f32,
     /// GNSS turn-heading observation standard deviation, in radians.
     pub r_turn_heading_std_rad: f32,
     /// Low-pass filter coefficient for stationary gravity samples.
@@ -91,11 +96,10 @@ impl Default for AlignConfig {
             refine_after_coarse_ready: false,
             refine_process_noise_scale: 1.0,
             refine_observation_std_scale: 1.0,
-            r_gravity_std_mps2: 0.56,
-            r_horiz_heading_std_rad: 2.0_f32.to_radians(),
-            r_turn_heading_std_rad: 0.2_f32.to_radians(),
-            r_turn_gyro_std_radps: 0.02_f32.to_radians(),
-            turn_gyro_yaw_scale: 0.0,
+            r_gravity_std_mps2: R_GRAVITY_STD_MPS2,
+            r_horiz_heading_std_rad: R_HORIZ_HEADING_STD_RAD,
+            r_turn_heading_std_rad: R_TURN_HEADING_STD_RAD,
+            r_turn_gyro_std_radps: R_TURN_GYRO_STD_RADPS,
             gravity_lpf_alpha: 0.04,
             min_speed_mps: 3.0 / 3.6,
             min_turn_rate_radps: 2.0_f32.to_radians(),
@@ -126,6 +130,12 @@ pub struct AlignWindowSummary {
     pub gnss_vel_prev_n: [f32; 3],
     /// Current GNSS velocity in NED coordinates, in meters per second.
     pub gnss_vel_curr_n: [f32; 3],
+    /// Previous GNSS velocity one-sigma standard deviation in NED coordinates.
+    pub gnss_vel_prev_std_mps: [f32; 3],
+    /// Current GNSS velocity one-sigma standard deviation in NED coordinates.
+    pub gnss_vel_curr_std_mps: [f32; 3],
+    /// Number of IMU samples averaged into this window.
+    pub imu_sample_count: u32,
 }
 
 /// Diagnostic trace for a single [`Align::update_window_with_trace`] call.
@@ -188,6 +198,18 @@ struct TurnConsistencySample {
     a_lat_mps2: f32,
 }
 
+#[derive(Clone, Copy)]
+struct HorizontalHeadingVarianceInput {
+    q_bv: [f32; 4],
+    p: [[f32; 3]; 3],
+    accel_b: [f32; 3],
+    imu_sample_count: u32,
+    imu_accel_std_mps2: f32,
+    gnss_xy: [f32; 2],
+    gnss_cov_xy: [[f32; 2]; 2],
+    model_var_rad2: f32,
+}
+
 /// Standalone mount-alignment filter state.
 #[derive(Debug, Clone)]
 pub struct Align {
@@ -242,9 +264,9 @@ impl Align {
             stationary_mount_rotmat(mean, yaw_seed_rad).ok_or("stationary bootstrap failed")?;
         self.q_bv = rotmat_to_quat(c_bv);
         self.P = diag3([
-            sq_f32(0.2_f32.to_radians()),
-            sq_f32(0.2_f32.to_radians()),
-            sq_f32(60.0_f32.to_radians()),
+            sq_f32(STATIONARY_INIT_SIGMA_DEG[0].to_radians()),
+            sq_f32(STATIONARY_INIT_SIGMA_DEG[1].to_radians()),
+            sq_f32(STATIONARY_INIT_SIGMA_DEG[2].to_radians()),
         ]);
         self.gravity_lp_b = mean;
         self.turn_consistency_reset();
@@ -303,10 +325,18 @@ impl Align {
         let v_mid_h = [0.5 * (v_prev[0] + v_curr[0]), 0.5 * (v_prev[1] + v_curr[1])];
         let mut a_long = 0.0;
         let mut a_lat = 0.0;
+        let mut gnss_accel_cov_v = [[0.0; 2]; 2];
         if let Some(t_hat) = vec2_normalize(v_mid_h) {
             let lat_hat = [-t_hat[1], t_hat[0]];
             a_long = t_hat[0] * a_n[0] + t_hat[1] * a_n[1];
             a_lat = lat_hat[0] * a_n[0] + lat_hat[1] * a_n[1];
+            gnss_accel_cov_v = projected_gnss_accel_covariance(
+                t_hat,
+                lat_hat,
+                window.gnss_vel_prev_std_mps,
+                window.gnss_vel_curr_std_mps,
+                dt,
+            );
         }
 
         let gyro_norm = vec3_norm(window.mean_gyro_b);
@@ -408,29 +438,28 @@ impl Align {
             };
             let effective_std = observation_scale * base_effective_std;
 
-            let cross = horiz_obs[3] * a_lat - horiz_obs[4] * a_long;
-            let dot = horiz_obs[3] * a_long + horiz_obs[4] * a_lat;
-            let angle_err = atan2_f32(cross, dot);
+            let angle_err =
+                horizontal_accel_angle_error(self.q_bv, window.mean_accel_b, [a_long, a_lat]);
+            let effective_var = horizontal_heading_variance(HorizontalHeadingVarianceInput {
+                q_bv: self.q_bv,
+                p: self.P,
+                accel_b: window.mean_accel_b,
+                imu_sample_count: window.imu_sample_count,
+                imu_accel_std_mps2: self.cfg.r_gravity_std_mps2,
+                gnss_xy: [a_long, a_lat],
+                gnss_cov_xy: gnss_accel_cov_v,
+                model_var_rad2: effective_std * effective_std,
+            });
             trace.horiz_angle_err_rad = Some(angle_err);
-            trace.horiz_effective_std_rad = Some(effective_std);
-            score += apply_vehicle_yaw_angle(
-                &mut self.q_bv,
-                &mut self.P,
-                angle_err,
-                effective_std * effective_std,
-            );
+            trace.horiz_effective_std_rad = Some(sqrt_f32(effective_var));
+            score += apply_vehicle_yaw_angle(&mut self.q_bv, &mut self.P, angle_err, effective_var);
             self.yaw_observed = true;
             trace.after_horiz_accel = Some(self.q_bv);
         }
 
         if turn_valid && self.cfg.use_turn_gyro {
-            let turn_gyro_yaw_scale = if turn_heading_valid {
-                self.cfg.turn_gyro_yaw_scale
-            } else {
-                0.0
-            };
-            let state_mask = [true, true, turn_gyro_yaw_scale > 0.0];
-            let state_scale = [1.0, 1.0, turn_gyro_yaw_scale];
+            let state_mask = [true, true, false];
+            let state_scale = [1.0, 1.0, 0.0];
             let turn_gyro_std = self.cfg.r_turn_gyro_std_radps * observation_scale;
             let r_turn_gyro = turn_gyro_std * turn_gyro_std;
             score += apply_update2_scaled_masked(
@@ -444,9 +473,6 @@ impl Align {
                 state_mask,
                 state_scale,
             );
-            if state_mask[2] {
-                self.yaw_observed = true;
-            }
             trace.after_turn_gyro = Some(self.q_bv);
         }
 
@@ -482,9 +508,9 @@ impl Align {
 
     fn compute_coarse_alignment_ready(&self) -> bool {
         self.yaw_observed
-            && sqrt_f32(self.P[0][0].max(0.0)).to_degrees() <= 0.15
-            && sqrt_f32(self.P[1][1].max(0.0)).to_degrees() <= 0.15
-            && sqrt_f32(self.P[2][2].max(0.0)).to_degrees() <= 0.15
+            && sqrt_f32(self.P[0][0].max(0.0)).to_degrees() <= COARSE_READY_SIGMA_DEG[0]
+            && sqrt_f32(self.P[1][1].max(0.0)).to_degrees() <= COARSE_READY_SIGMA_DEG[1]
+            && sqrt_f32(self.P[2][2].max(0.0)).to_degrees() <= COARSE_READY_SIGMA_DEG[2]
     }
 
     fn refinement_active(&self) -> bool {
@@ -814,6 +840,117 @@ fn align_obs_jacobian(q_bv: [f32; 4], gyro_b: [f32; 3], accel_b: [f32; 3]) -> [[
     ]
 }
 
+fn horizontal_accel_xy_for_q(q_bv: [f32; 4], accel_b: [f32; 3]) -> [f32; 2] {
+    let horiz_accel_b = remove_gravity_axis(q_bv, accel_b);
+    let obs = align_obs(q_bv, [0.0; 3], horiz_accel_b);
+    [obs[3], obs[4]]
+}
+
+fn horizontal_accel_angle_error(q_bv: [f32; 4], accel_b: [f32; 3], gnss_xy: [f32; 2]) -> f32 {
+    let imu_xy = horizontal_accel_xy_for_q(q_bv, accel_b);
+    let cross = imu_xy[0] * gnss_xy[1] - imu_xy[1] * gnss_xy[0];
+    let dot = imu_xy[0] * gnss_xy[0] + imu_xy[1] * gnss_xy[1];
+    atan2_f32(cross, dot)
+}
+
+fn projected_gnss_accel_covariance(
+    tangent_hat_n: [f32; 2],
+    lateral_hat_n: [f32; 2],
+    vel_prev_std_mps: [f32; 3],
+    vel_curr_std_mps: [f32; 3],
+    dt_s: f32,
+) -> [[f32; 2]; 2] {
+    let dt2_inv = 1.0 / (dt_s * dt_s).max(1.0e-9);
+    let cov_ne = [
+        sq_f32(vel_prev_std_mps[0]) + sq_f32(vel_curr_std_mps[0]),
+        sq_f32(vel_prev_std_mps[1]) + sq_f32(vel_curr_std_mps[1]),
+    ];
+    let cov_ne = [cov_ne[0] * dt2_inv, cov_ne[1] * dt2_inv];
+    [
+        [
+            tangent_hat_n[0] * tangent_hat_n[0] * cov_ne[0]
+                + tangent_hat_n[1] * tangent_hat_n[1] * cov_ne[1],
+            tangent_hat_n[0] * lateral_hat_n[0] * cov_ne[0]
+                + tangent_hat_n[1] * lateral_hat_n[1] * cov_ne[1],
+        ],
+        [
+            lateral_hat_n[0] * tangent_hat_n[0] * cov_ne[0]
+                + lateral_hat_n[1] * tangent_hat_n[1] * cov_ne[1],
+            lateral_hat_n[0] * lateral_hat_n[0] * cov_ne[0]
+                + lateral_hat_n[1] * lateral_hat_n[1] * cov_ne[1],
+        ],
+    ]
+}
+
+fn horizontal_heading_variance(input: HorizontalHeadingVarianceInput) -> f32 {
+    let imu_xy = horizontal_accel_xy_for_q(input.q_bv, input.accel_b);
+    let mut imu_cov_xy = [[0.0; 2]; 2];
+    let imu_count = (input.imu_sample_count.max(1)) as f32;
+    let imu_mean_var = sq_f32(input.imu_accel_std_mps2) / imu_count;
+    imu_cov_xy[0][0] = imu_mean_var;
+    imu_cov_xy[1][1] = imu_mean_var;
+
+    let tilt_j = horizontal_accel_tilt_jacobian(input.q_bv, input.accel_b);
+    let p_tilt = [
+        [input.p[0][0], input.p[0][1]],
+        [input.p[1][0], input.p[1][1]],
+    ];
+    let jp = mat2_mul(tilt_j, p_tilt);
+    let tilt_cov = mat2_mul(jp, transpose2(tilt_j));
+    for i in 0..2 {
+        for j in 0..2 {
+            imu_cov_xy[i][j] += tilt_cov[i][j];
+        }
+    }
+
+    input.model_var_rad2.max(0.0)
+        + angle_variance_from_vector(imu_xy, imu_cov_xy)
+        + angle_variance_from_vector(input.gnss_xy, input.gnss_cov_xy)
+}
+
+fn horizontal_accel_tilt_jacobian(q_bv: [f32; 4], accel_b: [f32; 3]) -> [[f32; 2]; 2] {
+    let base = horizontal_accel_xy_for_q(q_bv, accel_b);
+    let mut j = [[0.0; 2]; 2];
+    for axis in 0..2 {
+        let mut dq = [0.0; 3];
+        dq[axis] = TILT_JAC_EPS_RAD;
+        let mut q_pert = q_bv;
+        inject_small_angle(&mut q_pert, dq);
+        let pert = horizontal_accel_xy_for_q(q_pert, accel_b);
+        j[0][axis] = (pert[0] - base[0]) / TILT_JAC_EPS_RAD;
+        j[1][axis] = (pert[1] - base[1]) / TILT_JAC_EPS_RAD;
+    }
+    j
+}
+
+fn angle_variance_from_vector(v: [f32; 2], cov: [[f32; 2]; 2]) -> f32 {
+    let n2 = v[0] * v[0] + v[1] * v[1];
+    if n2 <= 1.0e-9 {
+        return sq_f32(core::f32::consts::PI);
+    }
+    let grad = [-v[1] / n2, v[0] / n2];
+    (grad[0] * (cov[0][0] * grad[0] + cov[0][1] * grad[1])
+        + grad[1] * (cov[1][0] * grad[0] + cov[1][1] * grad[1]))
+        .max(0.0)
+}
+
+fn mat2_mul(a: [[f32; 2]; 2], b: [[f32; 2]; 2]) -> [[f32; 2]; 2] {
+    [
+        [
+            a[0][0] * b[0][0] + a[0][1] * b[1][0],
+            a[0][0] * b[0][1] + a[0][1] * b[1][1],
+        ],
+        [
+            a[1][0] * b[0][0] + a[1][1] * b[1][0],
+            a[1][0] * b[0][1] + a[1][1] * b[1][1],
+        ],
+    ]
+}
+
+fn transpose2(a: [[f32; 2]; 2]) -> [[f32; 2]; 2] {
+    [[a[0][0], a[1][0]], [a[0][1], a[1][1]]]
+}
+
 fn inject_small_angle(q_bv: &mut [f32; 4], dtheta: [f32; 3]) {
     *q_bv = quat_mul(quat_from_small_angle(dtheta), *q_bv);
     quat_normalize(q_bv);
@@ -1012,6 +1149,13 @@ fn wrap_pi_mod(rad: f32) -> f32 {
 mod tests {
     use super::*;
 
+    fn assert_close(actual: f32, expected: f32, tol: f32) {
+        assert!(
+            (actual - expected).abs() <= tol,
+            "expected {expected}, got {actual}, tolerance {tol}"
+        );
+    }
+
     #[test]
     fn post_coarse_refinement_scales_prediction_noise() {
         let cfg = AlignConfig {
@@ -1071,5 +1215,164 @@ mod tests {
         assert!(!align.refinement_active());
         assert_eq!(align.refinement_process_noise_scale(), 1.0);
         assert_eq!(align.refinement_observation_std_scale(), 1.0);
+    }
+
+    #[test]
+    fn default_observation_noise_is_conservative() {
+        let cfg = AlignConfig::default();
+        assert_close(cfg.r_gravity_std_mps2, 4.0, 1.0e-6);
+        assert_close(cfg.r_horiz_heading_std_rad.to_degrees(), 1.0, 1.0e-6);
+        assert_close(cfg.r_turn_heading_std_rad.to_degrees(), 0.1, 1.0e-6);
+        assert_close(cfg.r_turn_gyro_std_radps.to_degrees(), 2.0, 1.0e-6);
+    }
+
+    #[test]
+    fn stationary_bootstrap_uses_conservative_tilt_sigma() {
+        let samples = [[0.0, 0.0, -GRAVITY_MPS2]; 16];
+        let mut align = Align::new(AlignConfig::default());
+        align.initialize_from_stationary(&samples, 0.0).unwrap();
+        assert_close(align.sigma_deg()[0], 10.0, 1.0e-3);
+        assert_close(align.sigma_deg()[1], 10.0, 1.0e-3);
+        assert_close(align.sigma_deg()[2], 60.0, 1.0e-3);
+    }
+
+    #[test]
+    fn scalar_horizontal_update_reduces_yaw_residual() {
+        let mut q_bv = [1.0, 0.0, 0.0, 0.0];
+        inject_small_angle(&mut q_bv, [0.12, -0.08, 0.55]);
+        let accel_b = [1.1, -0.35, -9.72];
+        let gnss_xy = [0.4, 1.0];
+        let mut p = diag3([
+            sq_f32(15.0_f32.to_radians()),
+            sq_f32(15.0_f32.to_radians()),
+            sq_f32(45.0_f32.to_radians()),
+        ]);
+        let angle_err = horizontal_accel_angle_error(q_bv, accel_b, gnss_xy);
+        let before = angle_err.abs();
+
+        apply_vehicle_yaw_angle(&mut q_bv, &mut p, angle_err, sq_f32(5.0_f32.to_radians()));
+
+        let after = horizontal_accel_angle_error(q_bv, accel_b, gnss_xy).abs();
+        assert!(
+            after < before,
+            "expected residual reduction, before={before}, after={after}"
+        );
+    }
+
+    #[test]
+    fn scalar_horizontal_update_keeps_yaw_covariance_separate() {
+        let mut q_bv = [1.0, 0.0, 0.0, 0.0];
+        inject_small_angle(&mut q_bv, [0.1, -0.2, 0.4]);
+        let mut p = [[0.10, 0.01, 0.03], [0.01, 0.20, -0.04], [0.03, -0.04, 0.30]];
+
+        apply_vehicle_yaw_angle(
+            &mut q_bv,
+            &mut p,
+            20.0_f32.to_radians(),
+            sq_f32(2.0_f32.to_radians()),
+        );
+
+        assert_eq!(p[0][2], 0.0);
+        assert_eq!(p[2][0], 0.0);
+        assert_eq!(p[1][2], 0.0);
+        assert_eq!(p[2][1], 0.0);
+        assert_eq!(p[0][0], 0.10);
+        assert_eq!(p[1][1], 0.20);
+    }
+
+    #[test]
+    fn turn_gyro_update_does_not_reduce_yaw_covariance() {
+        let window = AlignWindowSummary {
+            dt: 0.5,
+            mean_gyro_b: [0.02, -0.01, 0.20],
+            mean_accel_b: [0.0, 0.0, -GRAVITY_MPS2],
+            gnss_vel_prev_n: [5.0, 0.0, 0.0],
+            gnss_vel_curr_n: [4.975, 0.499, 0.0],
+            gnss_vel_prev_std_mps: [0.05; 3],
+            gnss_vel_curr_std_mps: [0.05; 3],
+            imu_sample_count: 50,
+        };
+        let cfg = AlignConfig {
+            use_gravity: false,
+            min_speed_mps: 0.1,
+            min_turn_rate_radps: 0.01,
+            min_lat_acc_mps2: 0.01,
+            turn_consistency_min_windows: 1,
+            turn_consistency_min_fraction: 1.0,
+            turn_consistency_max_abs_lat_err_mps2: 2.0,
+            turn_consistency_max_rel_lat_err: 2.0,
+            q_mount_std_rad: [0.0; ALIGN_N_STATES],
+            ..AlignConfig::default()
+        };
+        let mut align = Align::new(cfg);
+        align.P[2][2] = sq_f32(30.0_f32.to_radians());
+        let pzz_before = align.P[2][2];
+
+        align.update_window(&window);
+
+        assert!(
+            (align.P[2][2] - pzz_before).abs() < 1.0e-9,
+            "turn gyro should not reduce yaw covariance"
+        );
+        assert_eq!(align.P[0][2], 0.0);
+        assert_eq!(align.P[1][2], 0.0);
+    }
+
+    #[test]
+    fn coarse_ready_uses_conservative_axis_sigmas() {
+        let mut align = Align::new(AlignConfig::default());
+        align.yaw_observed = true;
+        align.P = diag3([
+            sq_f32(4.0_f32.to_radians()),
+            sq_f32(4.0_f32.to_radians()),
+            sq_f32(7.0_f32.to_radians()),
+        ]);
+        assert!(align.compute_coarse_alignment_ready());
+
+        align.P[0][0] = sq_f32(6.0_f32.to_radians());
+        assert!(!align.compute_coarse_alignment_ready());
+        align.P[0][0] = sq_f32(4.0_f32.to_radians());
+        align.P[1][1] = sq_f32(6.0_f32.to_radians());
+        assert!(!align.compute_coarse_alignment_ready());
+        align.P[1][1] = sq_f32(4.0_f32.to_radians());
+        align.P[2][2] = sq_f32(9.0_f32.to_radians());
+        assert!(!align.compute_coarse_alignment_ready());
+    }
+
+    #[test]
+    fn derived_horizontal_heading_variance_increases_with_gnss_velocity_noise() {
+        let q_bv = [1.0, 0.0, 0.0, 0.0];
+        let p = diag3([
+            sq_f32(0.2_f32.to_radians()),
+            sq_f32(0.2_f32.to_radians()),
+            sq_f32(60.0_f32.to_radians()),
+        ]);
+        let accel_b = [1.0, 0.0, -GRAVITY_MPS2];
+        let gnss_xy = [1.0, 0.0];
+        let low_gnss_cov = [[0.01, 0.0], [0.0, 0.01]];
+        let high_gnss_cov = [[1.0, 0.0], [0.0, 1.0]];
+
+        let low = horizontal_heading_variance(HorizontalHeadingVarianceInput {
+            q_bv,
+            p,
+            accel_b,
+            imu_sample_count: 50,
+            imu_accel_std_mps2: 0.1,
+            gnss_xy,
+            gnss_cov_xy: low_gnss_cov,
+            model_var_rad2: sq_f32(0.1_f32.to_radians()),
+        });
+        let high = horizontal_heading_variance(HorizontalHeadingVarianceInput {
+            q_bv,
+            p,
+            accel_b,
+            imu_sample_count: 50,
+            imu_accel_std_mps2: 0.1,
+            gnss_xy,
+            gnss_cov_xy: high_gnss_cov,
+            model_var_rad2: sq_f32(0.1_f32.to_radians()),
+        });
+
+        assert!(high > low, "high={high}, low={low}");
     }
 }

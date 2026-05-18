@@ -113,6 +113,11 @@ pub(super) fn draw_ekf_tuning(
             &mut cfg.mount_init_sigma_deg,
             0.0..=30.0,
         );
+        let response = ui.checkbox(
+            &mut cfg.use_align_mount_covariance_on_seed,
+            "Use align mount covariance",
+        );
+        help_response(response, "Use align mount covariance");
         cfg.mount_roll_pitch_init_sigma_deg = cfg
             .mount_roll_init_sigma_deg
             .max(cfg.mount_pitch_init_sigma_deg);
@@ -218,13 +223,6 @@ pub(super) fn draw_align_tuning(ui: &mut egui::Ui, cfg: &mut FusionTuningConfig)
         align.r_horiz_heading_std_rad = horiz.to_radians();
         align.r_turn_heading_std_rad = turn_heading.to_radians();
         align.r_turn_gyro_std_radps = turn_gyro.to_radians();
-        drag_f32(
-            ui,
-            "Turn gyro yaw scale",
-            &mut align.turn_gyro_yaw_scale,
-            0.01,
-            0.0..=1.0,
-        );
     });
     ui.collapsing("Post-coarse refinement", |ui| {
         help_response(
@@ -631,6 +629,9 @@ fn tuning_help(label: &str) -> Option<&'static str> {
         "Mount yaw sigma deg" => Some(
             "Initial residual mount-yaw uncertainty after align seed.\nHigher: lets turns correct mount yaw more.\nLower: trusts align yaw more and slows recovery from yaw seed error.",
         ),
+        "Use align mount covariance" => Some(
+            "Seed EKF residual-mount covariance from align's roll/pitch/yaw covariance at handoff.\nOff: use the hard-coded EKF mount sigma controls above.\nOn: preserve align's estimated uncertainty, including roll/pitch/yaw coupling.",
+        ),
         "Mount RW noise deg/sqrt(hr)" => Some(
             "Runtime mount random-walk density for the facade-level EKF config.\nHigher: mount can keep adapting after initialization.\nLower: mount becomes stable after convergence but may stop short of the true angle.",
         ),
@@ -695,10 +696,7 @@ fn tuning_help(label: &str) -> Option<&'static str> {
             "Align turn-derived heading observation standard deviation.\nHigher: turn heading is trusted less.\nLower: turn heading is trusted more and can create sharper corrections.",
         ),
         "Turn gyro std deg/s" => Some(
-            "Align turn gyro observation standard deviation.\nHigher: yaw-rate consistency is trusted less.\nLower: turn gyro consistency pushes yaw/mount harder.",
-        ),
-        "Turn gyro yaw scale" => Some(
-            "Scale applied to align yaw correction from turn gyro evidence.\nHigher: turn gyro contributes more to yaw.\nLower: yaw relies more on other observations.",
+            "Align turn gyro observation standard deviation.\nHigher: yaw-rate consistency is trusted less.\nLower: turn gyro consistency pushes roll/pitch harder.",
         ),
         "Smooth after coarse ready" => Some(
             "Continue refining align after coarse readiness.\nOn: align keeps adapting after initial seed.\nOff: align behaves closer to coarse-only handoff.",

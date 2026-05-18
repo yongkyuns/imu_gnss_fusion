@@ -9,7 +9,7 @@ use std::time::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 use anyhow::Result;
 #[cfg(not(target_arch = "wasm32"))]
-use clap::{Parser, ValueEnum};
+use clap::{ArgAction, Parser, ValueEnum};
 #[cfg(not(target_arch = "wasm32"))]
 use sim::datasets::generic_replay::{
     load_gnss_samples, load_imu_samples, load_reference_attitude_samples,
@@ -122,6 +122,8 @@ struct Args {
     mount_roll_pitch_init_sigma_deg: Option<f32>,
     #[arg(long)]
     mount_init_sigma_deg: Option<f32>,
+    #[arg(long, default_value_t = true, action = ArgAction::Set)]
+    use_align_mount_covariance_on_seed: bool,
     #[arg(long)]
     r_vehicle_speed: Option<f32>,
     #[arg(long)]
@@ -190,6 +192,7 @@ fn main() -> Result<()> {
         mount_init_sigma_deg: args
             .mount_init_sigma_deg
             .unwrap_or(FusionTuningConfig::default().mount_init_sigma_deg),
+        use_align_mount_covariance_on_seed: args.use_align_mount_covariance_on_seed,
         r_vehicle_speed: args
             .r_vehicle_speed
             .unwrap_or(FusionTuningConfig::default().r_vehicle_speed),
@@ -209,7 +212,6 @@ fn main() -> Result<()> {
         predict_imu_lpf_cutoff_hz: args.ekf_predict_imu_lpf_cutoff_hz,
         ..FusionTuningConfig::default()
     };
-
     let gnss_outages = GnssOutageConfig {
         count: args.gnss_outage_count,
         duration_s: args.gnss_outage_duration_s,
@@ -323,7 +325,7 @@ fn main() -> Result<()> {
         tmax
     );
     eprintln!(
-        "[profile] ekf-only misalignment={:?} predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} r_body_vel_y={:.3} r_body_vel_z={:.3} attitude_roll_pitch_init_sigma_deg={:.3} yaw_init_sigma_deg={:.3} gyro_bias_init_sigma_dps={:.3} mount_roll_pitch_init_sigma_deg={:.3} mount_yaw_init_sigma_deg={:.3} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} align_handoff_delay_s={:.3}",
+        "[profile] ekf-only misalignment={:?} predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} r_body_vel_y={:.3} r_body_vel_z={:.3} attitude_roll_pitch_init_sigma_deg={:.3} yaw_init_sigma_deg={:.3} gyro_bias_init_sigma_dps={:.3} mount_roll_pitch_init_sigma_deg={:.3} mount_yaw_init_sigma_deg={:.3} use_align_mount_covariance_on_seed={} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} align_handoff_delay_s={:.3}",
         args.misalignment,
         filter_cfg.predict_imu_decimation,
         filter_cfg
@@ -337,6 +339,7 @@ fn main() -> Result<()> {
         filter_cfg.gyro_bias_init_sigma_dps,
         filter_cfg.mount_roll_pitch_init_sigma_deg,
         filter_cfg.mount_init_sigma_deg,
+        filter_cfg.use_align_mount_covariance_on_seed,
         filter_cfg.r_vehicle_speed,
         filter_cfg.r_zero_vel,
         filter_cfg.r_stationary_accel,

@@ -48,7 +48,7 @@ impl ProcessNoise {
         }
     }
 
-    /// Legacy broad covariance profile used by standalone EKF tests.
+    /// Broad covariance profile used by standalone EKF tests.
     pub const fn ekf_debug_default() -> Self {
         Self {
             gyro_var: 0.0001,

@@ -1,4 +1,4 @@
-# Scenario motion profile migrated from the legacy tabular fixture.
+# Scenario motion profile for synthetic replay.
 # Keep commands explicit so command type semantics are preserved.
 
 initial lat=32 lon=120 alt=0 vx=0 vy=0 vz=0 yaw=0 pitch=0 roll=0

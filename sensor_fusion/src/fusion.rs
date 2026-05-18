@@ -295,6 +295,16 @@ impl SensorFusion {
         }
     }
 
+    /// Selects whether automatic EKF initialization copies the align mount covariance.
+    ///
+    /// When enabled in automatic mount mode, the EKF residual-mount covariance
+    /// block is seeded from the align filter's local roll/pitch/yaw covariance
+    /// at handoff. When disabled, EKF mount covariance uses the configured
+    /// per-axis initial sigmas.
+    pub fn set_use_align_mount_covariance_on_seed(&mut self, enabled: bool) {
+        self.cfg.use_align_mount_covariance_on_seed = enabled;
+    }
+
     /// Sets accelerometer-bias random-walk process variance.
     pub fn set_accel_bias_rw_var(&mut self, accel_bias_rw_var: f32) {
         if accel_bias_rw_var.is_finite() && accel_bias_rw_var >= 0.0 {
@@ -720,6 +730,9 @@ impl SensorFusion {
         raw.p[15][15] = sq_f32(self.cfg.mount_roll_init_sigma_rad);
         raw.p[16][16] = sq_f32(self.cfg.mount_pitch_init_sigma_rad);
         raw.p[17][17] = mount_var;
+        if self.cfg.use_align_mount_covariance_on_seed && self.internal_align_enabled {
+            copy_mount_covariance_block(&mut raw.p, self.align.P);
+        }
         if self.manual_mount_mode() {
             self.ekf.set_freeze_misalignment_states(true);
         }
@@ -956,6 +969,9 @@ impl SensorFusion {
             ],
             gnss_vel_prev_n: prev_gnss.vel_ned_mps,
             gnss_vel_curr_n: curr_gnss.vel_ned_mps,
+            gnss_vel_prev_std_mps: prev_gnss.vel_std_mps,
+            gnss_vel_curr_std_mps: curr_gnss.vel_std_mps,
+            imu_sample_count: self.interval_imu_count,
         };
         self.reset_interval_summary();
         Some(summary)
@@ -1286,6 +1302,14 @@ fn set_covariance_axis_block<const N: usize>(
     }
 }
 
+fn copy_mount_covariance_block<const N: usize>(p: &mut [[f32; N]; N], align_p: [[f32; 3]; 3]) {
+    for i in 0..3 {
+        for j in 0..3 {
+            p[15 + i][15 + j] = align_p[i][j];
+        }
+    }
+}
+
 fn wrap_pi(mut rad: f32) -> f32 {
     while rad <= -core::f32::consts::PI {
         rad += 2.0 * core::f32::consts::PI;
@@ -1294,4 +1318,61 @@ fn wrap_pi(mut rad: f32) -> f32 {
         rad -= 2.0 * core::f32::consts::PI;
     }
     rad
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ekf_gnss_sample() -> crate::ekf::GnssSample {
+        crate::ekf::GnssSample {
+            t_s: 1.0,
+            pos_ned_m: [0.0, 0.0, 0.0],
+            vel_ned_mps: [5.0, 0.0, 0.0],
+            pos_std_m: [1.0, 1.0, 1.5],
+            vel_std_mps: [0.2, 0.2, 0.2],
+            heading_rad: Some(0.0),
+        }
+    }
+
+    #[test]
+    fn ekf_seed_can_copy_align_mount_covariance() {
+        let mut fusion = SensorFusion::new();
+        fusion.set_use_align_mount_covariance_on_seed(true);
+        fusion.align.P = [
+            [0.11, 0.012, -0.013],
+            [0.012, 0.22, 0.023],
+            [-0.013, 0.023, 0.33],
+        ];
+
+        fusion.initialize_ekf_from_gnss(ekf_gnss_sample());
+
+        let p = &fusion.ekf.raw().p;
+        for i in 0..3 {
+            for j in 0..3 {
+                assert_eq!(p[15 + i][15 + j], fusion.align.P[i][j]);
+            }
+        }
+    }
+
+    #[test]
+    fn ekf_seed_uses_configured_mount_covariance_when_align_covariance_handoff_is_disabled() {
+        let mut fusion = SensorFusion::new();
+        fusion.set_use_align_mount_covariance_on_seed(false);
+        fusion.align.P = [
+            [0.11, 0.012, -0.013],
+            [0.012, 0.22, 0.023],
+            [-0.013, 0.023, 0.33],
+        ];
+
+        fusion.initialize_ekf_from_gnss(ekf_gnss_sample());
+
+        let p = &fusion.ekf.raw().p;
+        assert_eq!(p[15][15], sq_f32(fusion.cfg.mount_roll_init_sigma_rad));
+        assert_eq!(p[16][16], sq_f32(fusion.cfg.mount_pitch_init_sigma_rad));
+        assert_eq!(p[17][17], sq_f32(fusion.cfg.mount_init_sigma_rad));
+        assert_eq!(p[15][16], 0.0);
+        assert_eq!(p[15][17], 0.0);
+        assert_eq!(p[16][17], 0.0);
+    }
 }

@@ -346,7 +346,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reference_motion_all_zero_legacy_rows_are_missing_samples() {
+    fn reference_motion_all_zero_rows_are_missing_samples() {
         let samples = parse_reference_motion_csv_text(
             "t_s,wx_radps,wy_radps,wz_radps,ax_mps2,ay_mps2,az_mps2\n\
              0.0,0,0,0,0,0,0\n\

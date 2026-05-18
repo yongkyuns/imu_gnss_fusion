@@ -27,6 +27,8 @@ pub struct FusionTuningConfig {
     pub mount_pitch_init_sigma_deg: f32,
     /// Initial mount yaw sigma, in degrees.
     pub mount_init_sigma_deg: f32,
+    #[serde(default = "default_use_align_mount_covariance_on_seed")]
+    pub use_align_mount_covariance_on_seed: bool,
     pub r_vehicle_speed: f32,
     pub mount_align_rw_var: f32,
     pub align_handoff_delay_s: f32,
@@ -56,6 +58,7 @@ impl Default for FusionTuningConfig {
             mount_roll_init_sigma_deg: default_mount_roll_init_sigma_deg(),
             mount_pitch_init_sigma_deg: default_mount_roll_pitch_init_sigma_deg(),
             mount_init_sigma_deg: 6.0,
+            use_align_mount_covariance_on_seed: default_use_align_mount_covariance_on_seed(),
             r_vehicle_speed: 0.04,
             mount_align_rw_var: 0.0,
             align_handoff_delay_s: 0.0,
@@ -88,6 +91,10 @@ fn default_mount_roll_init_sigma_deg() -> f32 {
 
 fn default_attitude_roll_pitch_init_sigma_deg() -> f32 {
     2.0
+}
+
+fn default_use_align_mount_covariance_on_seed() -> bool {
+    true
 }
 
 #[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -142,6 +149,7 @@ pub fn apply_fusion_tuning_config(fusion: &mut SensorFusion, cfg: FusionTuningCo
     fusion.set_mount_roll_init_sigma_rad(cfg.mount_roll_init_sigma_deg.to_radians());
     fusion.set_mount_pitch_init_sigma_rad(cfg.mount_pitch_init_sigma_deg.to_radians());
     fusion.set_mount_init_sigma_rad(cfg.mount_init_sigma_deg.to_radians());
+    fusion.set_use_align_mount_covariance_on_seed(cfg.use_align_mount_covariance_on_seed);
     fusion.set_r_vehicle_speed(cfg.r_vehicle_speed);
     fusion.set_r_zero_vel(cfg.r_zero_vel);
     fusion.set_r_stationary_accel(cfg.r_stationary_accel);
@@ -162,6 +170,7 @@ mod tests {
         let mut cfg = FusionTuningConfig {
             r_body_vel: 0.42,
             r_body_vel_z: 0.24,
+            use_align_mount_covariance_on_seed: true,
             predict_imu_lpf_cutoff_hz: Some(120.0),
             ..Default::default()
         };
@@ -180,6 +189,10 @@ mod tests {
         assert_eq!(
             decoded.mount_roll_pitch_init_sigma_deg,
             cfg.mount_roll_pitch_init_sigma_deg
+        );
+        assert_eq!(
+            decoded.use_align_mount_covariance_on_seed,
+            cfg.use_align_mount_covariance_on_seed
         );
         assert_eq!(
             decoded.predict_imu_lpf_cutoff_hz,
@@ -252,6 +265,7 @@ mod tests {
             decoded.mount_pitch_init_sigma_deg,
             default_mount_roll_pitch_init_sigma_deg()
         );
+        assert!(decoded.use_align_mount_covariance_on_seed);
         assert!(decoded.noise.ekf.is_some());
     }
 }

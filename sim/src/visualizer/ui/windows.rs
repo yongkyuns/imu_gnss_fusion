@@ -59,6 +59,8 @@ impl App {
                                     defaults.mount_pitch_init_sigma_deg;
                                 self.tuning_cfg.mount_init_sigma_deg =
                                     defaults.mount_init_sigma_deg;
+                                self.tuning_cfg.use_align_mount_covariance_on_seed =
+                                    defaults.use_align_mount_covariance_on_seed;
                                 self.tuning_cfg.r_vehicle_speed = defaults.r_vehicle_speed;
                                 self.tuning_cfg.mount_align_rw_var = defaults.mount_align_rw_var;
                                 self.tuning_cfg.align_handoff_delay_s =

@@ -26,6 +26,9 @@ fn align_stationary_bootstrap_and_update_are_stable() {
         mean_accel_b: [1.2, 0.0, -9.80665],
         gnss_vel_prev_n: [5.0, 0.0, 0.0],
         gnss_vel_curr_n: [5.12, 0.0, 0.0],
+        gnss_vel_prev_std_mps: [0.05; 3],
+        gnss_vel_curr_std_mps: [0.05; 3],
+        imu_sample_count: 10,
     };
     let yaw_var_before = align.P[2][2];
     let (_score, trace) = align.update_window_with_trace(&window);

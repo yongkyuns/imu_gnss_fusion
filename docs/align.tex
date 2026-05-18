@@ -139,8 +139,14 @@ A supplied yaw seed is then applied as a vehicle-frame yaw delta:
 \begin{equation}
   C_{bv,0}=C_{bv}^{\mathrm{tilt}} C_z(\psi_{\mathrm{seed}}-\psi_{\mathrm{tilt}}).
 \end{equation}
-After initialization the covariance is reset to tight roll/pitch uncertainty
-and wide yaw uncertainty.
+After initialization the covariance is reset to conservative roll, pitch, and
+yaw uncertainty:
+\begin{equation}
+  \sigma_{\phi,\theta,\psi,0} =
+  \begin{bmatrix}10^\circ & 10^\circ & 60^\circ\end{bmatrix}.
+\end{equation}
+This keeps the stationary gravity seed useful without treating the initial
+tilt estimate as calibrated mount accuracy.
 
 \section{Prediction}
 
@@ -264,6 +270,20 @@ The yaw correction is right-injected as \(q_{bv}^{+}=q_{bv}^{-}\otimes
 q_z(\delta\psi_v)\). Roll/yaw and pitch/yaw cross-covariances are zeroed after
 this scalar yaw update.
 
+The yaw observation variance is not only a fixed tuning value. The
+implementation combines:
+\begin{itemize}[leftmargin=1.5em]
+\item configured model noise for unmodeled road and suspension effects,
+\item GNSS acceleration covariance propagated from previous/current GNSS
+velocity one-sigma values,
+\item IMU mean-acceleration covariance scaled by the number of IMU samples in
+the window,
+\item current tilt covariance propagated through the horizontal acceleration
+projection Jacobian.
+\end{itemize}
+This keeps the yaw update as a one-dimensional observable-subspace correction
+while making the confidence respond to source uncertainty.
+
 \section{Turn Consistency and Planar-Gyro Observation}
 
 Turn windows require minimum speed, course rate, and lateral acceleration.
@@ -283,14 +303,24 @@ The planar-motion constraint is
   \omega_{v,x}\approx 0,\qquad \omega_{v,y}\approx 0.
 \end{equation}
 By default this update affects roll and pitch. It may update yaw only if the
-configured turn-gyro yaw scale is positive and turn-heading consistency has
-passed.
+Yaw is intentionally not updated by this path; yaw information is supplied by
+the horizontal heading observation above.
 
 \section{Readiness and Known Limitations}
 
 The align filter reports coarse alignment ready after yaw has been observed and
-the one-sigma roll, pitch, and yaw covariances are all below the configured
-ready gates. Important limitations of the current model are:
+the one-sigma roll, pitch, and yaw covariances are below
+\begin{equation}
+  \sigma_{\mathrm{ready}} =
+  \begin{bmatrix}5^\circ & 5^\circ & 8^\circ\end{bmatrix}.
+\end{equation}
+When automatic mount mode initializes the EKF, the default runtime behavior is
+to copy align's \(3\times3\) local mount covariance into the EKF residual mount
+state covariance. The visualizer exposes this as the \emph{Use align mount
+covariance} option so the handoff can be compared against fixed EKF mount
+sigma settings.
+
+Important limitations of the current model are:
 \begin{itemize}[leftmargin=1.5em]
 \item Gravity observes roll and pitch only during stationary windows.
 \item Horizontal acceleration is projected into a heading/yaw residual; it does not

@@ -5,7 +5,7 @@ LLM-wiki structure at:
 
 - `/Users/ykshin/Documents/Obsidian Vault/Agent/imu_gnss_fusion/index.md`
 
-Before starting project-history or behavior work, read the wiki index and the
+Before starting project behavior work, read the wiki index and the
 relevant linked pages. When a finding should carry across future work:
 
 - update the relevant maintained wiki page under
@@ -16,9 +16,9 @@ relevant linked pages. When a finding should carry across future work:
   metrics, and artifact paths
 - mark uncertain items as hypotheses rather than facts
 
-The old note remains available as raw legacy history:
+An archived raw note remains available:
 
 - `/Users/ykshin/Documents/Obsidian Vault/Agent/imu_gnss_fusion.md`
 
 Prefer promoting durable synthesis into the wiki instead of continuing to append
-large unstructured sections to the legacy note.
+large unstructured sections to the archived note.
