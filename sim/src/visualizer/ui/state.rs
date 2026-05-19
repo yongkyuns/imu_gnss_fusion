@@ -124,7 +124,7 @@ mod tests {
         };
         assert!(!ekf_off.allows(&trace("EKF mount roll [deg]")));
         assert!(!ekf_off.allows(&trace("EKF accel bias sigma X [m/s^2]")));
-        assert!(!ekf_off.allows(&trace("EKF state_0")));
+        assert!(!ekf_off.allows(&trace("EKF attitude roll sigma [deg]")));
         assert!(!ekf_off.allows(&trace("EKF pitch HPF [deg]")));
         assert!(!ekf_off.allows(&trace("EKF vehicle speed [m/s]")));
         assert!(ekf_off.allows(&trace("Reference mount roll [deg]")));

@@ -206,6 +206,9 @@ pub struct RoadEventSample {
     pub lat_deg: f64,
     pub confidence: f64,
     pub speed_mps: f64,
+    pub trigger_window_start_t_s: f64,
+    pub trigger_window_end_t_s: f64,
+    pub trigger_traces: Vec<Trace>,
 }
 
 #[cfg_attr(target_arch = "wasm32", derive(serde::Deserialize, serde::Serialize))]
@@ -240,7 +243,7 @@ pub enum Page {
 
 #[cfg(test)]
 mod tests {
-    use super::{PlotData, Trace};
+    use super::{PlotData, RoadEventSample, Trace};
 
     #[test]
     fn trace_by_name_ignores_empty_traces_and_finds_populated_trace() {
@@ -265,5 +268,29 @@ mod tests {
             Some(&[[1.0, 2.0]][..])
         );
         assert!(data.has_trace_points());
+    }
+
+    #[test]
+    fn road_event_samples_can_carry_hover_trigger_traces() {
+        let event = RoadEventSample {
+            kind: "speed bump".to_string(),
+            t_s: 10.0,
+            lon_deg: 1.0,
+            lat_deg: 2.0,
+            confidence: 0.9,
+            speed_mps: 5.0,
+            trigger_window_start_t_s: 5.0,
+            trigger_window_end_t_s: 15.0,
+            trigger_traces: vec![Trace {
+                name: "Vertical accel raw [m/s^2]".to_string(),
+                points: vec![[9.0, 1.0], [10.0, -1.0]],
+            }],
+        };
+
+        assert_eq!(event.trigger_traces.len(), 1);
+        assert_eq!(
+            event.trigger_window_end_t_s - event.trigger_window_start_t_s,
+            10.0
+        );
     }
 }

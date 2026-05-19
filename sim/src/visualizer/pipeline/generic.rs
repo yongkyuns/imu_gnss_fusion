@@ -42,7 +42,12 @@ const WEB_BUILD_MAX_POINTS_PER_TRACE: usize =
 #[derive(Default)]
 struct RoadEventMotionTraces {
     pitch_deg: Vec<[f64; 2]>,
+    bump_pitch_hpf_deg: Vec<[f64; 2]>,
+    bump_vertical_accel_mps2: Vec<[f64; 2]>,
+    bump_vertical_accel_hpf_mps2: Vec<[f64; 2]>,
+    bump_vertical_accel_noise_mps2: Vec<[f64; 2]>,
     forward_velocity_mps: Vec<[f64; 2]>,
+    longitudinal_accel_raw_mps2: Vec<[f64; 2]>,
     longitudinal_accel_mps2: Vec<[f64; 2]>,
     yaw_rate_dps: Vec<[f64; 2]>,
     speed_mps: Vec<[f64; 2]>,
@@ -70,7 +75,7 @@ impl VisualLongitudinalAccelEma {
         }
     }
 
-    fn update(&mut self, sample: HarshLongitudinalSample) -> Option<f64> {
+    fn update(&mut self, sample: HarshLongitudinalSample) -> Option<(f64, f64)> {
         let t_s = sample.t_s as f64;
         let velocity_mps = sample.forward_velocity_mps as f64;
         let Some(last_t_s) = self.last_t_s else {
@@ -94,7 +99,7 @@ impl VisualLongitudinalAccelEma {
             self.initialized = true;
             raw_accel_mps2
         };
-        Some(self.accel_ema_mps2)
+        Some((raw_accel_mps2, self.accel_ema_mps2))
     }
 }
 
@@ -558,6 +563,21 @@ fn build_generic_replay_plot_data_impl(
                 road_event_motion
                     .pitch_deg
                     .push([detector_sample.t_s as f64, detector_sample.pitch_deg as f64]);
+                road_event_motion
+                    .bump_pitch_hpf_deg
+                    .push([detector_sample.t_s as f64, diag.pitch_hpf_deg as f64]);
+                road_event_motion.bump_vertical_accel_mps2.push([
+                    detector_sample.t_s as f64,
+                    detector_sample.vertical_accel_mps2 as f64,
+                ]);
+                road_event_motion.bump_vertical_accel_hpf_mps2.push([
+                    detector_sample.t_s as f64,
+                    diag.vertical_accel_hpf_mps2 as f64,
+                ]);
+                road_event_motion.bump_vertical_accel_noise_mps2.push([
+                    detector_sample.t_s as f64,
+                    diag.vertical_accel_noise_mps2 as f64,
+                ]);
                 if let Some(event) = event
                     && let Some([lat, lon, _]) = fusion.position_lla_f64()
                 {
@@ -568,6 +588,9 @@ fn build_generic_replay_plot_data_impl(
                         lat_deg: lat,
                         confidence: event.confidence as f64,
                         speed_mps: detector_sample.speed_mps as f64,
+                        trigger_window_start_t_s: 0.0,
+                        trigger_window_end_t_s: 0.0,
+                        trigger_traces: Vec::new(),
                     });
                 }
                 if let Some(event) = hill_detector.update(HillSample {
@@ -587,7 +610,12 @@ fn build_generic_replay_plot_data_impl(
                         longitudinal_sample.t_s as f64,
                         longitudinal_sample.forward_velocity_mps as f64,
                     ]);
-                    if let Some(accel_mps2) = visual_long_accel.update(longitudinal_sample) {
+                    if let Some((raw_accel_mps2, accel_mps2)) =
+                        visual_long_accel.update(longitudinal_sample)
+                    {
+                        road_event_motion
+                            .longitudinal_accel_raw_mps2
+                            .push([longitudinal_sample.t_s as f64, raw_accel_mps2]);
                         road_event_motion
                             .longitudinal_accel_mps2
                             .push([longitudinal_sample.t_s as f64, accel_mps2]);
@@ -707,6 +735,7 @@ fn build_generic_replay_plot_data_impl(
     if let Some(event) = harsh_corner_detector.finish() {
         road_segments.push(harsh_corner_segment_sample(event));
     }
+    attach_road_event_trigger_traces(&mut road_events, &road_event_motion);
     attach_road_segment_trigger_traces(&mut road_segments, &road_event_motion);
 
     let mut data = PlotData {
@@ -912,12 +941,7 @@ fn build_generic_replay_plot_data_impl(
                 points: ekf_cov[11].clone(),
             },
         ],
-        ekf_cov_nonbias: (0..9)
-            .map(|i| Trace {
-                name: format!("EKF state_{i}"),
-                points: ekf_cov[i].clone(),
-            })
-            .collect(),
+        ekf_cov_nonbias: ekf_nonbias_sigma_traces(&ekf_cov),
         ekf_mount_sigma: vec![
             Trace {
                 name: "EKF mount roll sigma [deg]".to_string(),
@@ -1723,6 +1747,50 @@ fn harsh_corner_segment_sample(event: road_events::HarshCornerEvent) -> RoadSegm
     }
 }
 
+fn attach_road_event_trigger_traces(
+    events: &mut [RoadEventSample],
+    motion: &RoadEventMotionTraces,
+) {
+    for event in events {
+        let start_t_s = event.t_s - ROAD_EVENT_MINI_PLOT_PAD_S;
+        let end_t_s = event.t_s + ROAD_EVENT_MINI_PLOT_PAD_S;
+        event.trigger_window_start_t_s = start_t_s;
+        event.trigger_window_end_t_s = end_t_s;
+        event.trigger_traces = match event.kind.as_str() {
+            "speed bump" => vec![
+                windowed_mini_trace(
+                    "Vertical accel raw [m/s^2]",
+                    &motion.bump_vertical_accel_mps2,
+                    start_t_s,
+                    end_t_s,
+                ),
+                windowed_mini_trace(
+                    "Vertical accel HPF [m/s^2]",
+                    &motion.bump_vertical_accel_hpf_mps2,
+                    start_t_s,
+                    end_t_s,
+                ),
+                windowed_mini_trace(
+                    "Accel noise floor [m/s^2]",
+                    &motion.bump_vertical_accel_noise_mps2,
+                    start_t_s,
+                    end_t_s,
+                ),
+                windowed_mini_trace(
+                    "Pitch HPF [deg]",
+                    &motion.bump_pitch_hpf_deg,
+                    start_t_s,
+                    end_t_s,
+                ),
+            ],
+            _ => Vec::new(),
+        }
+        .into_iter()
+        .filter(|trace| !trace.points.is_empty())
+        .collect();
+    }
+}
+
 fn attach_road_segment_trigger_traces(
     segments: &mut [RoadSegmentSample],
     motion: &RoadEventMotionTraces,
@@ -1745,12 +1813,20 @@ fn attach_road_segment_trigger_traces(
                 start_t_s,
                 end_t_s,
             )],
-            "harsh acceleration" | "harsh braking" => vec![windowed_mini_trace(
-                "Long accel EMA [m/s^2]",
-                &motion.longitudinal_accel_mps2,
-                start_t_s,
-                end_t_s,
-            )],
+            "harsh acceleration" | "harsh braking" => vec![
+                windowed_mini_trace(
+                    "Long accel raw [m/s^2]",
+                    &motion.longitudinal_accel_raw_mps2,
+                    start_t_s,
+                    end_t_s,
+                ),
+                windowed_mini_trace(
+                    "Long accel EMA [m/s^2]",
+                    &motion.longitudinal_accel_mps2,
+                    start_t_s,
+                    end_t_s,
+                ),
+            ],
             "harsh cornering" => vec![
                 windowed_mini_trace("Yaw rate [deg/s]", &motion.yaw_rate_dps, start_t_s, end_t_s),
                 windowed_mini_trace("Speed [m/s]", &motion.speed_mps, start_t_s, end_t_s),
@@ -2169,6 +2245,47 @@ fn sigma_rad_points_to_deg(points: &[[f64; 2]]) -> Vec<[f64; 2]> {
     points.iter().map(|p| [p[0], p[1].to_degrees()]).collect()
 }
 
+fn ekf_nonbias_sigma_traces(ekf_cov: &[Vec<[f64; 2]>; 18]) -> Vec<Trace> {
+    vec![
+        Trace {
+            name: "EKF attitude roll sigma [deg]".to_string(),
+            points: sigma_rad_points_to_deg(&ekf_cov[0]),
+        },
+        Trace {
+            name: "EKF attitude pitch sigma [deg]".to_string(),
+            points: sigma_rad_points_to_deg(&ekf_cov[1]),
+        },
+        Trace {
+            name: "EKF attitude yaw sigma [deg]".to_string(),
+            points: sigma_rad_points_to_deg(&ekf_cov[2]),
+        },
+        Trace {
+            name: "EKF velocity N sigma [m/s]".to_string(),
+            points: ekf_cov[3].clone(),
+        },
+        Trace {
+            name: "EKF velocity E sigma [m/s]".to_string(),
+            points: ekf_cov[4].clone(),
+        },
+        Trace {
+            name: "EKF velocity D sigma [m/s]".to_string(),
+            points: ekf_cov[5].clone(),
+        },
+        Trace {
+            name: "EKF position N sigma [m]".to_string(),
+            points: ekf_cov[6].clone(),
+        },
+        Trace {
+            name: "EKF position E sigma [m]".to_string(),
+            points: ekf_cov[7].clone(),
+        },
+        Trace {
+            name: "EKF position D sigma [m]".to_string(),
+            points: ekf_cov[8].clone(),
+        },
+    ]
+}
+
 fn push_update_contrib(
     t: f64,
     q_start: [f32; 4],
@@ -2494,6 +2611,24 @@ mod tests {
         );
         assert!(ref_ctx.reference_mount_seed_q_bv().is_some());
         assert!(internal_ctx.reference_mount_seed_q_bv().is_none());
+    }
+
+    #[test]
+    fn ekf_nonbias_sigma_traces_use_named_states_and_physical_units() {
+        let mut ekf_cov: [Vec<[f64; 2]>; 18] = std::array::from_fn(|_| Vec::new());
+        ekf_cov[0] = vec![[1.0, std::f64::consts::PI / 180.0]];
+        ekf_cov[3] = vec![[1.0, 2.5]];
+        ekf_cov[6] = vec![[1.0, 12.0]];
+
+        let traces = ekf_nonbias_sigma_traces(&ekf_cov);
+
+        assert_eq!(traces.len(), 9);
+        assert_eq!(traces[0].name, "EKF attitude roll sigma [deg]");
+        assert_eq!(traces[3].name, "EKF velocity N sigma [m/s]");
+        assert_eq!(traces[6].name, "EKF position N sigma [m]");
+        assert!((traces[0].points[0][1] - 1.0).abs() < 1.0e-12);
+        assert_eq!(traces[3].points[0][1], 2.5);
+        assert_eq!(traces[6].points[0][1], 12.0);
     }
 
     #[test]

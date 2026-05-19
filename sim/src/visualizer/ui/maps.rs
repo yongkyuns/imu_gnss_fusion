@@ -237,7 +237,7 @@ impl Plugin for TrackOverlay<'_> {
             &self.road_segments,
             &visuals,
         );
-        draw_road_event_markers(&painter, projection, &self.road_events, &visuals);
+        draw_road_event_markers(ui, &painter, projection, &self.road_events, &visuals);
 
         if self.show_heading
             && let Some(mouse_pos) = ui.input(|i| i.pointer.hover_pos())
@@ -274,6 +274,7 @@ impl Plugin for TrackOverlay<'_> {
 }
 
 fn draw_road_event_markers(
+    ui: &mut egui::Ui,
     painter: &egui::Painter,
     projection: MapOverlayProjection<'_>,
     events: &[&RoadEventSample],
@@ -299,23 +300,62 @@ fn draw_road_event_markers(
         if pos.distance_sq(hover_pos) > 12.0_f32 * 12.0_f32 {
             continue;
         }
-        let label = format!(
-            "bump {:.0}%\nt={:.2}s\n{:.1} km/h",
-            100.0 * event.confidence.clamp(0.0, 1.0),
-            event.t_s,
-            3.6 * event.speed_mps
-        );
         let bg_min = pos + egui::vec2(8.0, -26.0);
-        let bg_rect = egui::Rect::from_min_size(bg_min, egui::vec2(88.0, 54.0));
-        painter.rect_filled(bg_rect, 4.0, tooltip_fill(visuals));
-        painter.text(
-            bg_min + egui::vec2(6.0, 2.0),
-            egui::Align2::LEFT_TOP,
-            label,
-            egui::FontId::monospace(12.0),
-            tooltip_text_color(visuals),
-        );
+        show_road_event_tooltip(ui, bg_min, event, color, visuals);
     }
+}
+
+fn show_road_event_tooltip(
+    ui: &mut egui::Ui,
+    pos: egui::Pos2,
+    event: &RoadEventSample,
+    event_color: egui::Color32,
+    visuals: &egui::Visuals,
+) {
+    let id = egui::Id::new((
+        "road_event_tooltip",
+        event.kind.as_str(),
+        (event.t_s * 100.0).round() as i64,
+    ));
+    egui::Area::new(id)
+        .order(egui::Order::Tooltip)
+        .fixed_pos(pos)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style())
+                .fill(tooltip_fill(visuals))
+                .inner_margin(egui::Margin::same(6))
+                .corner_radius(egui::CornerRadius::same(4))
+                .show(ui, |ui| {
+                    ui.set_width(312.0);
+                    for line in road_event_tooltip_lines(event) {
+                        ui.label(
+                            egui::RichText::new(line)
+                                .monospace()
+                                .color(tooltip_text_color(visuals)),
+                        );
+                    }
+                    if event
+                        .trigger_traces
+                        .iter()
+                        .any(|trace| trace.points.iter().any(|point| point[1].is_finite()))
+                    {
+                        ui.add_space(4.0);
+                        show_event_trigger_plot(ui, event, event_color, visuals);
+                    }
+                });
+        });
+}
+
+fn road_event_tooltip_lines(event: &RoadEventSample) -> [String; 4] {
+    [
+        event.kind.clone(),
+        format!(
+            "Confidence: {:.0}%",
+            100.0 * event.confidence.clamp(0.0, 1.0)
+        ),
+        format!("Time: {:.2} s", event.t_s),
+        format!("Speed: {:.1} km/h", 3.6 * event.speed_mps),
+    ]
 }
 
 fn draw_road_segment_overlays(
@@ -565,6 +605,64 @@ fn show_segment_trigger_plot(
     show_segment_trigger_legend(ui, segment, visuals);
 }
 
+fn show_event_trigger_plot(
+    ui: &mut egui::Ui,
+    event: &RoadEventSample,
+    event_color: egui::Color32,
+    visuals: &egui::Visuals,
+) {
+    let id = format!(
+        "road_event_trigger_plot_{}_{}",
+        event.kind,
+        (event.t_s * 100.0).round() as i64
+    );
+    let mut plot = Plot::new(id)
+        .height(132.0)
+        .show_x(false)
+        .show_y(true)
+        .grid_spacing(egui::emath::Rangef::new(10.0, 1400.0))
+        .x_grid_spacer(popup_plot_grid_marks)
+        .y_grid_spacer(popup_plot_grid_marks)
+        .allow_drag(false)
+        .allow_zoom(false)
+        .allow_scroll(false);
+    if event.trigger_window_start_t_s.is_finite()
+        && event.trigger_window_end_t_s.is_finite()
+        && event.trigger_window_end_t_s > event.trigger_window_start_t_s
+    {
+        plot = plot
+            .include_x(event.trigger_window_start_t_s)
+            .include_x(event.trigger_window_end_t_s);
+    }
+    if let Some((y_min, y_max)) = trigger_trace_y_range(&event.trigger_traces) {
+        plot = plot.include_y(y_min).include_y(y_max);
+    }
+    plot.show(ui, |plot_ui| {
+        for (index, trace) in event.trigger_traces.iter().enumerate() {
+            let points: Vec<[f64; 2]> = trace
+                .points
+                .iter()
+                .copied()
+                .filter(|point| point[0].is_finite() && point[1].is_finite())
+                .collect();
+            if points.len() < 2 {
+                continue;
+            }
+            let points: PlotPoints<'_> = points.into();
+            plot_ui.line(
+                Line::new(trace.name.clone(), points).color(mini_plot_trace_color(index, visuals)),
+            );
+        }
+        plot_ui.vline(
+            VLine::new("event", event.t_s)
+                .name("")
+                .allow_hover(false)
+                .color(event_color),
+        );
+    });
+    show_trigger_legend(ui, &event.trigger_traces, visuals);
+}
+
 fn popup_plot_grid_marks(input: GridInput) -> Vec<GridMark> {
     let range = (input.bounds.1 - input.bounds.0).abs();
     if !range.is_finite() || range <= f64::EPSILON {
@@ -598,9 +696,13 @@ fn show_segment_trigger_legend(
     segment: &RoadSegmentSample,
     visuals: &egui::Visuals,
 ) {
+    show_trigger_legend(ui, &segment.trigger_traces, visuals);
+}
+
+fn show_trigger_legend(ui: &mut egui::Ui, traces: &[Trace], visuals: &egui::Visuals) {
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(8.0, 2.0);
-        for (index, trace) in segment.trigger_traces.iter().enumerate() {
+        for (index, trace) in traces.iter().enumerate() {
             if !trace.points.iter().any(|point| point[1].is_finite()) {
                 continue;
             }
@@ -648,9 +750,13 @@ fn trigger_plot_x_range(segment: &RoadSegmentSample) -> Option<(f64, f64)> {
 }
 
 fn trigger_plot_y_range(segment: &RoadSegmentSample) -> Option<(f64, f64)> {
+    trigger_trace_y_range(&segment.trigger_traces)
+}
+
+fn trigger_trace_y_range(traces: &[Trace]) -> Option<(f64, f64)> {
     let mut min_y = f64::INFINITY;
     let mut max_y = f64::NEG_INFINITY;
-    for trace in &segment.trigger_traces {
+    for trace in traces {
         for point in &trace.points {
             if point[1].is_finite() {
                 min_y = min_y.min(point[1]);

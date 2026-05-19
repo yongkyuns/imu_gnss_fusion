@@ -319,7 +319,7 @@ impl App {
                                     plot_spec(
                                         "Non-bias Sigma",
                                         concat_trace_refs([self.data.ekf_cov_nonbias.as_slice()]),
-                                        false,
+                                        true,
                                     )
                                     .with_log_y(LOG_Y_FLOOR, None),
                                 ],
