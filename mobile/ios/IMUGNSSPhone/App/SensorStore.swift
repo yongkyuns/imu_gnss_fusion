@@ -72,11 +72,15 @@ final class SensorStore: NSObject, ObservableObject {
     @Published var recordedSessions: [RawSessionSummary] = []
     @Published var activeSessionName: String?
     @Published var replayProgress: Double = 0.0
+    @Published var playbackSpeedMultiplier: Double = PlaybackSpeedPolicy.defaultMultiplier
     @Published var streamHealth: StreamHealth = .starting
 #if DEBUG
     @Published var iosAttitudeEulerDeg: TimedVec3Sample?
 #endif
 
+    let settingsControls = SettingsControlModel()
+
+    private var isLiveSensorStreamRunning = false
     private let locationManager = CLLocationManager()
     private let motionManager = CMMotionManager()
     private let altimeter = CMAltimeter()
@@ -105,8 +109,11 @@ final class SensorStore: NSObject, ObservableObject {
     private var activeRawLog: RawSessionLog?
     private var activeRawEvents: [RawSensorEventEnvelope] = []
     private var pendingRecordedSessions: [RawSessionSummary] = []
+    private var recordedSessionStatusMessages: [UUID: String] = [:]
+    private var recordedSessionDetailMessages: [UUID: String] = [:]
     private var playbackTask: Task<Void, Never>?
     private var streamHealthTask: Task<Void, Never>?
+    private var rawImuSynchronizer = RawImuSynchronizer()
     private var lastRecordingCheckpointEventCount = 0
     private var lastRecordingCheckpointUptimeSec: TimeInterval = 0.0
     private var streamGeneration = 0
@@ -149,6 +156,8 @@ final class SensorStore: NSObject, ObservableObject {
         recordingQueue.qualityOfService = .utility
         recordingQueue.maxConcurrentOperationCount = 1
 
+        settingsControls.bind(sensorStore: self)
+        publishSettingsState()
         loadRecordedSessions()
     }
 
@@ -162,7 +171,9 @@ final class SensorStore: NSObject, ObservableObject {
         playbackTask?.cancel()
         playbackTask = nil
         fusionQueue.cancelAllOperations()
+        stopLiveMotionUpdates()
         streamMode = .live
+        isLiveSensorStreamRunning = true
         activeSessionName = nil
         replayProgress = 0.0
         startStreamHealthMonitor(generation: generation)
@@ -185,6 +196,7 @@ final class SensorStore: NSObject, ObservableObject {
         lastLocationErrorMessage = nil
         lastRecordingErrorMessage = nil
         streamHealth = .starting
+        rawImuSynchronizer.reset()
         gnssRouteHistory.removeAll(keepingCapacity: true)
         fusedRouteHistory.removeAll(keepingCapacity: true)
         nedPositionHistory.removeAll(keepingCapacity: true)
@@ -226,84 +238,55 @@ final class SensorStore: NSObject, ObservableObject {
             locationManager.startUpdatingLocation()
             locationManager.startUpdatingHeading()
         }
+        publishSettingsState()
 
-        if motionManager.isDeviceMotionAvailable {
-            motionManager.deviceMotionUpdateInterval = 1.0 / 100.0
-            motionManager.startDeviceMotionUpdates(to: motionQueue) { [weak self] data, error in
+        if motionManager.isAccelerometerAvailable && motionManager.isGyroAvailable {
+            motionManager.accelerometerUpdateInterval = 1.0 / 100.0
+            motionManager.gyroUpdateInterval = 1.0 / 100.0
+            motionManager.startAccelerometerUpdates(to: motionQueue) { [weak self] data, error in
                 guard let self, self.isCurrentGeneration(generation) else { return }
                 if let error {
                     self.publishStreamError(channel: .motion, error: error)
                     return
                 }
                 guard let data else {
-                    self.publishStreamError(channel: .motion, message: "Device motion sample was unavailable.")
+                    self.publishStreamError(channel: .motion, message: "Raw accelerometer sample was unavailable.")
                     return
                 }
-                let timestampSec = data.timestamp
-                let sampleDate = self.dateFromMotionTimestamp(timestampSec)
-                let accel = self.bodySpecificForceMps2(from: data)
-                let ax = accel.x
-                let ay = accel.y
-                let az = accel.z
-                let gx = data.rotationRate.x
-                let gy = data.rotationRate.y
-                let gz = data.rotationRate.z
-#if DEBUG
-                let attitude = data.attitude
-                let attitudeRollRad: Double? = attitude.roll
-                let attitudePitchRad: Double? = attitude.pitch
-                let attitudeYawRad: Double? = attitude.yaw
-#else
-                let attitudeRollRad: Double? = nil
-                let attitudePitchRad: Double? = nil
-                let attitudeYawRad: Double? = nil
-#endif
-
-                self.recordImuSample(
-                    sampleDate: sampleDate,
-                    sourceUptimeSec: timestampSec,
-                    ax: ax,
-                    ay: ay,
-                    az: az,
-                    gx: gx,
-                    gy: gy,
-                    gz: gz,
-                    attitudeRollRad: attitudeRollRad,
-                    attitudePitchRad: attitudePitchRad,
-                    attitudeYawRad: attitudeYawRad
+                let appleRawAccel = RawImuSynchronizer.VectorSample(
+                    timestampSec: data.timestamp,
+                    x: data.acceleration.x * g0Mps2,
+                    y: data.acceleration.y * g0Mps2,
+                    z: data.acceleration.z * g0Mps2
                 )
-
-                self.enqueueFusion(generation: generation, dropsWhenBacklogged: true) { store in
-                    store.runEkfPredict(
-                        sampleDate: sampleDate,
-                        ax: ax,
-                        ay: ay,
-                        az: az,
-                        gx: gx,
-                        gy: gy,
-                        gz: gz
-                    )
+                let accel = CoreMotionImuConvention.specificForceFromAppleRawAcceleration(appleRawAccel)
+                if let sample = self.rawImuSynchronizer.pushAccel(accel) {
+                    self.handleRawImuSample(sample, generation: generation)
                 }
+            }
 
-                if let last = self.lastMotionPublishTS, (data.timestamp - last) < self.motionPublishMinDtSec {
+            motionManager.startGyroUpdates(to: motionQueue) { [weak self] data, error in
+                guard let self, self.isCurrentGeneration(generation) else { return }
+                if let error {
+                    self.publishStreamError(channel: .motion, error: error)
                     return
                 }
-                self.lastMotionPublishTS = data.timestamp
-                Task { @MainActor in
-                    guard self.isCurrentGeneration(generation) else { return }
-                    self.publishImuSample(ax: ax, ay: ay, az: az, gx: gx, gy: gy, gz: gz, sampleDate: sampleDate)
-#if DEBUG
-                    self.publishIosAttitude(
-                        rollRad: attitude.roll,
-                        pitchRad: attitude.pitch,
-                        yawRad: attitude.yaw,
-                        sampleDate: sampleDate
-                    )
-#endif
+                guard let data else {
+                    self.publishStreamError(channel: .motion, message: "Raw gyroscope sample was unavailable.")
+                    return
+                }
+                let gyro = RawImuSynchronizer.VectorSample(
+                    timestampSec: data.timestamp,
+                    x: data.rotationRate.x,
+                    y: data.rotationRate.y,
+                    z: data.rotationRate.z
+                )
+                if let sample = self.rawImuSynchronizer.pushGyro(gyro) {
+                    self.handleRawImuSample(sample, generation: generation)
                 }
             }
         } else {
-            lastMotionErrorMessage = "Device motion is unavailable on this device."
+            lastMotionErrorMessage = "Raw accelerometer or gyroscope data is unavailable on this device."
             updateStreamHealth(now: Date(), force: true)
         }
 
@@ -366,7 +349,7 @@ final class SensorStore: NSObject, ObservableObject {
         fusionQueue.cancelAllOperations()
         locationManager.stopUpdatingLocation()
         locationManager.stopUpdatingHeading()
-        motionManager.stopDeviceMotionUpdates()
+        stopLiveMotionUpdates()
         altimeter.stopRelativeAltitudeUpdates()
         nedReference = nil
         lastBarometerSample = nil
@@ -378,9 +361,11 @@ final class SensorStore: NSObject, ObservableObject {
         lastStreamHealthPublishTS = nil
         lastImuUiSampleDate = nil
         streamMode = .live
+        isLiveSensorStreamRunning = false
         activeSessionName = nil
         replayProgress = 0.0
         updateStreamHealth(now: Date(), force: true)
+        publishSettingsState()
     }
 
     func startRecording() {
@@ -397,7 +382,11 @@ final class SensorStore: NSObject, ObservableObject {
         rawLogLock.unlock()
         isRecording = true
         activeSessionName = log.name
+        recordedSessionStatusMessages.removeValue(forKey: log.id)
+        recordedSessionDetailMessages.removeValue(forKey: log.id)
+        upsertPendingRecordedSession(for: log, durationSec: 0.0)
         updateStreamHealth(now: Date(), force: true)
+        publishSettingsState()
     }
 
     func stopRecording() {
@@ -427,6 +416,13 @@ final class SensorStore: NSObject, ObservableObject {
         recordingQueue.waitUntilAllOperationsAreFinished()
     }
 
+    private func stopLiveMotionUpdates() {
+        motionManager.stopDeviceMotionUpdates()
+        motionManager.stopAccelerometerUpdates()
+        motionManager.stopGyroUpdates()
+        rawImuSynchronizer.reset()
+    }
+
     func loadRecordedSessions() {
         recordingQueue.addOperation { [weak self] in
             guard let self else { return }
@@ -434,17 +430,27 @@ final class SensorStore: NSObject, ObservableObject {
                 let summaries = try self.rawSessionStore.summaries()
                 Task { @MainActor in
                     self.recordedSessions = self.mergedRecordedSessions(with: summaries)
+                    self.publishSettingsState()
                 }
             } catch {
                 print("Failed to load raw sessions: \(error)")
                 Task { @MainActor in
                     self.recordedSessions = self.pendingRecordedSessions
+                    self.publishSettingsState()
                 }
             }
         }
     }
 
     func deleteSession(_ summary: RawSessionSummary) {
+        guard summary.fileURL != nil else {
+            pendingRecordedSessions.removeAll { $0.id == summary.id }
+            recordedSessionStatusMessages.removeValue(forKey: summary.id)
+            recordedSessionDetailMessages.removeValue(forKey: summary.id)
+            recordedSessions = mergedRecordedSessions(with: recordedSessions.filter { !$0.isPendingSave })
+            publishSettingsState()
+            return
+        }
         recordingQueue.addOperation { [weak self] in
             guard let self else { return }
             do {
@@ -452,7 +458,10 @@ final class SensorStore: NSObject, ObservableObject {
                 let summaries = try self.rawSessionStore.summaries()
                 Task { @MainActor in
                     self.pendingRecordedSessions.removeAll { $0.id == summary.id }
+                    self.recordedSessionStatusMessages.removeValue(forKey: summary.id)
+                    self.recordedSessionDetailMessages.removeValue(forKey: summary.id)
                     self.recordedSessions = self.mergedRecordedSessions(with: summaries)
+                    self.publishSettingsState()
                 }
             } catch {
                 print("Failed to delete raw session: \(error)")
@@ -460,23 +469,47 @@ final class SensorStore: NSObject, ObservableObject {
         }
     }
 
-    func replaySession(_ summary: RawSessionSummary, speedMultiplier: Double = 10.0) {
+    func recordedSessionStatusLabel(for summary: RawSessionSummary) -> String? {
+        if let message = recordedSessionStatusMessages[summary.id] {
+            return message
+        }
+        guard summary.isPendingSave else { return nil }
+        if isRecording && activeSessionName == summary.name {
+            return "Recording"
+        }
+        return "Saving"
+    }
+
+    func recordedSessionDetailMessage(for summary: RawSessionSummary) -> String? {
+        recordedSessionDetailMessages[summary.id]
+    }
+
+    func setPlaybackSpeedMultiplier(_ speedMultiplier: Double) {
+        playbackSpeedMultiplier = PlaybackSpeedPolicy.normalized(speedMultiplier)
+        publishSettingsState()
+    }
+
+    func replaySession(_ summary: RawSessionSummary, speedMultiplier: Double? = nil) {
         guard let fileURL = summary.fileURL else { return }
+        if let speedMultiplier {
+            setPlaybackSpeedMultiplier(speedMultiplier)
+        }
         let generation = advanceStreamGeneration()
         finishRecordingIfNeeded()
         locationManager.stopUpdatingLocation()
         locationManager.stopUpdatingHeading()
-        motionManager.stopDeviceMotionUpdates()
+        stopLiveMotionUpdates()
         altimeter.stopRelativeAltitudeUpdates()
         playbackTask?.cancel()
         streamHealthTask?.cancel()
         fusionQueue.cancelAllOperations()
 
-        let speed = max(speedMultiplier, 0.1)
         streamMode = .playback
+        isLiveSensorStreamRunning = false
         activeSessionName = summary.name
         replayProgress = 0.0
         resetRuntimeState()
+        publishSettingsState()
 
         playbackTask = Task { [weak self] in
             guard let self else { return }
@@ -489,6 +522,9 @@ final class SensorStore: NSObject, ObservableObject {
 
                 for event in events {
                     if Task.isCancelled { return }
+                    let speed = await MainActor.run {
+                        PlaybackSpeedPolicy.normalized(self.playbackSpeedMultiplier)
+                    }
                     let delay = max(0.0, event.elapsedSec - previousElapsed) / speed
                     if delay > 0.0 {
                         try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000.0))
@@ -501,20 +537,24 @@ final class SensorStore: NSObject, ObservableObject {
                         await MainActor.run {
                             guard self.isCurrentGeneration(generation) else { return }
                             self.replayProgress = min(max(event.elapsedSec / duration, 0.0), 1.0)
+                            self.publishSettingsState()
                         }
                     }
                 }
                 await MainActor.run {
                     guard self.isCurrentGeneration(generation) else { return }
                     self.replayProgress = 1.0
+                    self.publishSettingsState()
                 }
             } catch {
                 print("Replay failed: \(error)")
                 await MainActor.run {
                     guard self.isCurrentGeneration(generation) else { return }
                     self.streamMode = .live
+                    self.isLiveSensorStreamRunning = false
                     self.activeSessionName = nil
                     self.replayProgress = 0.0
+                    self.publishSettingsState()
                 }
             }
         }
@@ -526,8 +566,10 @@ final class SensorStore: NSObject, ObservableObject {
         playbackTask = nil
         fusionQueue.cancelAllOperations()
         streamMode = .live
+        isLiveSensorStreamRunning = false
         activeSessionName = nil
         replayProgress = 0.0
+        publishSettingsState()
         start()
     }
 
@@ -588,6 +630,52 @@ final class SensorStore: NSObject, ObservableObject {
         }
     }
 
+    private func handleRawImuSample(_ sample: RawImuSynchronizer.FusedSample, generation: Int) {
+        let timestampSec = sample.timestampSec
+        let sampleDate = dateFromMotionTimestamp(timestampSec)
+        let ax = sample.accel.x
+        let ay = sample.accel.y
+        let az = sample.accel.z
+        let gx = sample.gyro.x
+        let gy = sample.gyro.y
+        let gz = sample.gyro.z
+
+        recordImuSample(
+            sampleDate: sampleDate,
+            sourceUptimeSec: timestampSec,
+            ax: ax,
+            ay: ay,
+            az: az,
+            gx: gx,
+            gy: gy,
+            gz: gz,
+            attitudeRollRad: nil,
+            attitudePitchRad: nil,
+            attitudeYawRad: nil
+        )
+
+        enqueueFusion(generation: generation, dropsWhenBacklogged: true) { store in
+            store.runEkfPredict(
+                sampleDate: sampleDate,
+                ax: ax,
+                ay: ay,
+                az: az,
+                gx: gx,
+                gy: gy,
+                gz: gz
+            )
+        }
+
+        if let last = lastMotionPublishTS, (timestampSec - last) < motionPublishMinDtSec {
+            return
+        }
+        lastMotionPublishTS = timestampSec
+        Task { @MainActor in
+            guard self.isCurrentGeneration(generation) else { return }
+            self.publishImuSample(ax: ax, ay: ay, az: az, gx: gx, gy: gy, gz: gz, sampleDate: sampleDate)
+        }
+    }
+
     private func recordImuSample(
         sampleDate: Date,
         sourceUptimeSec: Double,
@@ -611,7 +699,7 @@ final class SensorStore: NSObject, ObservableObject {
                 gyroXRadps: gx,
                 gyroYRadps: gy,
                 gyroZRadps: gz,
-                attitudeReferenceFrame: "default",
+                attitudeReferenceFrame: CoreMotionImuConvention.sensorFusionSpecificForceFrame,
                 attitudeRollRad: attitudeRollRad,
                 attitudePitchRad: attitudePitchRad,
                 attitudeYawRad: attitudeYawRad
@@ -718,12 +806,24 @@ final class SensorStore: NSObject, ObservableObject {
 
         switch event {
         case .imu(_, let sample):
+            guard let accel = CoreMotionImuConvention.specificForceComponents(
+                accelXMps2: sample.accelXMps2,
+                accelYMps2: sample.accelYMps2,
+                accelZMps2: sample.accelZMps2,
+                attitudeReferenceFrame: sample.attitudeReferenceFrame
+            ) else {
+                publishStreamError(
+                    channel: .motion,
+                    message: "Recorded IMU sample uses unsupported acceleration convention: \(sample.attitudeReferenceFrame ?? "unknown")."
+                )
+                return
+            }
             enqueueFusion(generation: generation) { store in
                 store.runEkfPredict(
                     sampleDate: sampleDate,
-                    ax: sample.accelXMps2,
-                    ay: sample.accelYMps2,
-                    az: sample.accelZMps2,
+                    ax: accel.x,
+                    ay: accel.y,
+                    az: accel.z,
                     gx: sample.gyroXRadps,
                     gy: sample.gyroYRadps,
                     gz: sample.gyroZRadps
@@ -732,9 +832,9 @@ final class SensorStore: NSObject, ObservableObject {
             Task { @MainActor in
                 guard self.isCurrentGeneration(generation) else { return }
                 self.publishImuSample(
-                    ax: sample.accelXMps2,
-                    ay: sample.accelYMps2,
-                    az: sample.accelZMps2,
+                    ax: accel.x,
+                    ay: accel.y,
+                    az: accel.z,
                     gx: sample.gyroXRadps,
                     gy: sample.gyroYRadps,
                     gz: sample.gyroZRadps,
@@ -788,7 +888,8 @@ final class SensorStore: NSObject, ObservableObject {
                     hAcc: hAcc,
                     vAcc: vAcc,
                     courseDeg: sample.courseDeg,
-                    speedAccuracyMps: sample.speedAccuracyMps
+                    speedAccuracyMps: sample.speedAccuracyMps,
+                    courseAccuracyDeg: sample.courseAccuracyDeg
                 )
             }
             Task { @MainActor in
@@ -864,24 +965,31 @@ final class SensorStore: NSObject, ObservableObject {
             if streamMode == .live {
                 activeSessionName = nil
             }
+            publishSettingsState()
             return
         }
         guard !log.events.isEmpty else {
+            upsertPendingRecordedSession(for: log, durationSec: max(0.0, Date().timeIntervalSince(log.startTime)))
+            recordedSessionStatusMessages[log.id] = "No Data"
+            recordedSessionDetailMessages[log.id] = "Recording stopped before any IMU, GNSS, or barometer sample was captured."
+            recordedSessions = mergedRecordedSessions(with: recordedSessions.filter { !$0.isPendingSave })
+            lastRecordingErrorMessage = "Recording stopped before any sensor samples were captured."
+            updateStreamHealth(now: Date(), force: true)
             isRecording = false
             if streamMode == .live {
                 activeSessionName = nil
             }
+            publishSettingsState()
             return
         }
-        let pendingSummary = log.summary(fileURL: nil)
-        pendingRecordedSessions.removeAll { $0.id == pendingSummary.id }
-        pendingRecordedSessions.insert(pendingSummary, at: 0)
-        recordedSessions = mergedRecordedSessions(with: recordedSessions.filter { !$0.isPendingSave })
+        upsertPendingRecordedSession(for: log, durationSec: max(0.0, Date().timeIntervalSince(log.startTime)))
+        recordingQueue.cancelAllOperations()
         saveRecording(log, reason: "save raw session", refreshSummaries: true)
         isRecording = false
         if streamMode == .live {
             activeSessionName = nil
         }
+        publishSettingsState()
     }
 
     func checkpointRecording() {
@@ -909,28 +1017,76 @@ final class SensorStore: NSObject, ObservableObject {
                 _ = try self.rawSessionStore.save(log)
                 Task { @MainActor in
                     self.lastRecordingErrorMessage = nil
+                    self.recordedSessionDetailMessages.removeValue(forKey: log.id)
                     self.updateStreamHealth(now: Date(), force: true)
+                    self.publishSettingsState()
                 }
                 if refreshSummaries {
                     Task { @MainActor in
                         self.pendingRecordedSessions.removeAll { $0.id == log.id }
+                        self.recordedSessionStatusMessages.removeValue(forKey: log.id)
+                        self.recordedSessionDetailMessages.removeValue(forKey: log.id)
                         self.loadRecordedSessions()
                     }
                 }
             } catch {
-                print("Failed to \(reason): \(error)")
+                let errorMessage = Self.recordingErrorMessage(error)
+                print("Failed to \(reason): \(errorMessage)")
+                self.rawSessionStore.writeSaveFailureDiagnostic(log: log, reason: reason, error: error)
                 Task { @MainActor in
-                    self.lastRecordingErrorMessage = error.localizedDescription
+                    self.lastRecordingErrorMessage = errorMessage
                     if refreshSummaries {
-                        self.pendingRecordedSessions.removeAll { $0.id == log.id }
+                        self.recordedSessionStatusMessages[log.id] = "Save Failed"
+                        self.recordedSessionDetailMessages[log.id] = errorMessage
                         self.recordedSessions = self.mergedRecordedSessions(
                             with: self.recordedSessions.filter { !$0.isPendingSave }
                         )
                     }
                     self.updateStreamHealth(now: Date(), force: true)
+                    self.publishSettingsState()
                 }
             }
         }
+    }
+
+    private static func recordingErrorMessage(_ error: Error) -> String {
+        let localized = error.localizedDescription
+        let reflected = String(reflecting: error)
+        if reflected.isEmpty || reflected == localized {
+            return localized
+        }
+        return "\(localized) (\(reflected))"
+    }
+
+    private func upsertPendingRecordedSession(for log: RawSessionLog, durationSec: Double) {
+        let pendingSummary = RawSessionSummary(
+            id: log.id,
+            name: log.name,
+            startTime: log.startTime,
+            durationSec: durationSec,
+            imuCount: log.imuCount,
+            gnssCount: log.gnssCount,
+            barometerCount: log.barometerCount,
+            fileURL: nil
+        )
+        pendingRecordedSessions.removeAll { $0.id == pendingSummary.id }
+        pendingRecordedSessions.insert(pendingSummary, at: 0)
+        recordedSessions = mergedRecordedSessions(with: recordedSessions.filter { !$0.isPendingSave })
+    }
+
+    private func publishSettingsState() {
+        settingsControls.update(
+            SettingsControlState(
+                authorization: authorization,
+                streamMode: streamMode,
+                isLiveSensorStreamRunning: isLiveSensorStreamRunning,
+                activeSessionName: activeSessionName,
+                replayProgress: replayProgress,
+                playbackSpeedMultiplier: playbackSpeedMultiplier,
+                isRecording: isRecording,
+                savedSessionCount: recordedSessions.count
+            )
+        )
     }
 
     private func mergedRecordedSessions(with savedSummaries: [RawSessionSummary]) -> [RawSessionSummary] {
@@ -1056,6 +1212,7 @@ extension SensorStore: CLLocationManagerDelegate {
                 manager.startUpdatingLocation()
                 manager.startUpdatingHeading()
             }
+            self.publishSettingsState()
         }
     }
 
@@ -1118,7 +1275,8 @@ extension SensorStore: CLLocationManagerDelegate {
                 hAcc: hAcc,
                 vAcc: vAcc,
                 courseDeg: courseDeg,
-                speedAccuracyMps: speedAccuracyMps
+                speedAccuracyMps: speedAccuracyMps,
+                courseAccuracyDeg: courseAccuracyDeg
             )
         }
 
@@ -1223,7 +1381,8 @@ extension SensorStore: CLLocationManagerDelegate {
         hAcc: Double,
         vAcc: Double,
         courseDeg: Double?,
-        speedAccuracyMps: Double?
+        speedAccuracyMps: Double?,
+        courseAccuracyDeg: Double?
     ) {
         _ = posN
         _ = posE
@@ -1244,7 +1403,8 @@ extension SensorStore: CLLocationManagerDelegate {
             hAcc: hAcc,
             vAcc: vAcc,
             courseDeg: courseDeg,
-            speedAccuracyMps: speedAccuracyMps
+            speedAccuracyMps: speedAccuracyMps,
+            courseAccuracyDeg: courseAccuracyDeg
         ) else {
             return
         }
@@ -1584,15 +1744,6 @@ extension SensorStore: CLLocationManagerDelegate {
     private func dateFromMotionTimestamp(_ timestampSec: TimeInterval) -> Date {
         let uptimeDelta = timestampSec - ProcessInfo.processInfo.systemUptime
         return Date(timeIntervalSinceNow: uptimeDelta)
-    }
-
-    private func bodySpecificForceMps2(from data: CMDeviceMotion) -> (x: Double, y: Double, z: Double) {
-        // Treated as raw body-frame specific force for now; validate axes/signs on-device before trusting EKF traces.
-        (
-            x: (data.userAcceleration.x + data.gravity.x) * g0Mps2,
-            y: (data.userAcceleration.y + data.gravity.y) * g0Mps2,
-            z: (data.userAcceleration.z + data.gravity.z) * g0Mps2
-        )
     }
 
     private func relativeTimeSeconds(for date: Date) -> Double {

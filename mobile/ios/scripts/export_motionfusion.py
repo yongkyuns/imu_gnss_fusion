@@ -44,10 +44,12 @@ GNSS_HEADER = [
 DEFAULT_HORIZONTAL_ACCURACY_M = 10.0
 DEFAULT_VERTICAL_ACCURACY_M = 15.0
 DEFAULT_SPEED_ACCURACY_MPS = 2.0
+MAX_COURSE_ACCURACY_FOR_HEADING_DEG = 45.0
 STREAM_END_WARN_S = 1.0
 IMU_LARGE_GAP_MIN_S = 1.0
 GNSS_LARGE_GAP_MIN_S = 5.0
 STATIONARY_SPEED_THRESHOLD_MPS = 0.25
+SENSOR_FUSION_SPECIFIC_FORCE_FRAME = "rawAccelerometerGyroSpecificForce"
 
 
 @dataclass(frozen=True)
@@ -259,6 +261,17 @@ def validate_event_envelope(event: dict[str, Any], index: int) -> None:
 
 
 def parse_imu_row(t_s: float, payload: dict[str, Any], label: str) -> ImuRow:
+    frame = payload.get("attitudeReferenceFrame")
+    if frame != SENSOR_FUSION_SPECIFIC_FORCE_FRAME:
+        raise ValueError(
+            f"{label}.attitudeReferenceFrame must be {SENSOR_FUSION_SPECIFIC_FORCE_FRAME}; "
+            f"got {frame!r}"
+        )
+    accel = (
+        required_float(payload, "accelXMps2", label),
+        required_float(payload, "accelYMps2", label),
+        required_float(payload, "accelZMps2", label),
+    )
     return ImuRow(
         t_s=t_s,
         gyro=(
@@ -266,11 +279,7 @@ def parse_imu_row(t_s: float, payload: dict[str, Any], label: str) -> ImuRow:
             required_float(payload, "gyroYRadps", label),
             required_float(payload, "gyroZRadps", label),
         ),
-        accel=(
-            required_float(payload, "accelXMps2", label),
-            required_float(payload, "accelYMps2", label),
-            required_float(payload, "accelZMps2", label),
-        ),
+        accel=accel,
     )
 
 
@@ -278,6 +287,9 @@ def parse_gnss_row(t_s: float, payload: dict[str, Any], label: str) -> GnssRow |
     horizontal_accuracy = positive_optional_float(payload, "horizontalAccuracyM", label)
     vertical_accuracy = positive_optional_float(payload, "verticalAccuracyM", label)
     speed_accuracy = positive_optional_float(payload, "speedAccuracyMps", label)
+    course_accuracy = nonnegative_optional_float(payload, "courseAccuracyDeg", label)
+    course_deg = optional_float(payload, "courseDeg", label)
+    speed_mps = optional_float(payload, "speedMps", label)
     pos_std_n = horizontal_accuracy or DEFAULT_HORIZONTAL_ACCURACY_M
     pos_std_e = horizontal_accuracy or DEFAULT_HORIZONTAL_ACCURACY_M
     pos_std_d = vertical_accuracy or DEFAULT_VERTICAL_ACCURACY_M
@@ -290,13 +302,34 @@ def parse_gnss_row(t_s: float, payload: dict[str, Any], label: str) -> GnssRow |
     derived_velocity = False
     if explicit_velocity is not None:
         velocity = explicit_velocity
-        vel_std = (speed_accuracy or DEFAULT_SPEED_ACCURACY_MPS,) * 3
+        speed_for_std = (
+            speed_mps
+            if speed_mps is not None and speed_mps >= 0.0
+            else math.hypot(explicit_velocity[0], explicit_velocity[1])
+        )
+        horizontal_vel_std = horizontal_velocity_std_mps(
+            speed_for_std,
+            speed_accuracy,
+            course_accuracy,
+        )
+        vel_std = (
+            horizontal_vel_std,
+            horizontal_vel_std,
+            speed_accuracy or DEFAULT_SPEED_ACCURACY_MPS,
+        )
     else:
-        course_deg = optional_float(payload, "courseDeg", label)
-        speed_mps = optional_float(payload, "speedMps", label)
         if speed_mps is not None and 0.0 <= speed_mps <= STATIONARY_SPEED_THRESHOLD_MPS:
             velocity = (0.0, 0.0, 0.0)
-            vel_std = (speed_accuracy or DEFAULT_SPEED_ACCURACY_MPS,) * 3
+            horizontal_vel_std = horizontal_velocity_std_mps(
+                speed_mps,
+                speed_accuracy,
+                course_accuracy,
+            )
+            vel_std = (
+                horizontal_vel_std,
+                horizontal_vel_std,
+                speed_accuracy or DEFAULT_SPEED_ACCURACY_MPS,
+            )
             derived_velocity = True
         elif course_deg is not None and speed_mps is not None and speed_mps >= 0.0:
             heading_rad = math.radians(course_deg)
@@ -305,14 +338,22 @@ def parse_gnss_row(t_s: float, payload: dict[str, Any], label: str) -> GnssRow |
                 speed_mps * math.sin(heading_rad),
                 0.0,
             )
-            vel_std = (speed_accuracy or DEFAULT_SPEED_ACCURACY_MPS,) * 3
+            horizontal_vel_std = horizontal_velocity_std_mps(
+                speed_mps,
+                speed_accuracy,
+                course_accuracy,
+            )
+            vel_std = (
+                horizontal_vel_std,
+                horizontal_vel_std,
+                speed_accuracy or DEFAULT_SPEED_ACCURACY_MPS,
+            )
             derived_velocity = True
         else:
             return None
 
     heading_rad = math.nan
-    course_deg = optional_float(payload, "courseDeg", label)
-    if course_deg is not None:
+    if course_deg is not None and heading_course_accuracy_is_usable(course_accuracy):
         heading_rad = math.radians(course_deg)
 
     return GnssRow(
@@ -326,6 +367,25 @@ def parse_gnss_row(t_s: float, payload: dict[str, Any], label: str) -> GnssRow |
         heading_rad=heading_rad,
         had_explicit_velocity=explicit_velocity is not None,
         derived_velocity=derived_velocity,
+    )
+
+
+def horizontal_velocity_std_mps(
+    speed_mps: float,
+    speed_accuracy_mps: float | None,
+    course_accuracy_deg: float | None,
+) -> float:
+    speed_std = speed_accuracy_mps or DEFAULT_SPEED_ACCURACY_MPS
+    if course_accuracy_deg is None:
+        return speed_std
+    direction_std = max(0.0, speed_mps) * math.radians(course_accuracy_deg)
+    return math.hypot(speed_std, direction_std)
+
+
+def heading_course_accuracy_is_usable(course_accuracy_deg: float | None) -> bool:
+    return (
+        course_accuracy_deg is None
+        or course_accuracy_deg <= MAX_COURSE_ACCURACY_FOR_HEADING_DEG
     )
 
 
@@ -595,6 +655,13 @@ def optional_float(parent: dict[str, Any], key: str, label: str) -> float | None
 def positive_optional_float(parent: dict[str, Any], key: str, label: str) -> float | None:
     value = optional_float(parent, key, label)
     if value is None or value <= 0.0:
+        return None
+    return value
+
+
+def nonnegative_optional_float(parent: dict[str, Any], key: str, label: str) -> float | None:
+    value = optional_float(parent, key, label)
+    if value is None or value < 0.0:
         return None
     return value
 

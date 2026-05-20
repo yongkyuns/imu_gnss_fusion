@@ -73,6 +73,47 @@ final class RawSessionLogTests: XCTestCase {
         XCTAssertEqual(decoded.summary().barometerCount, 1)
     }
 
+    func testRawSessionLogRoundTripsNonFiniteSensorValues() throws {
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let log = RawSessionLog(
+            name: "Non-finite Fixture",
+            startTime: start,
+            events: [
+                .gnss(
+                    RawGnssSample(
+                        latitudeDeg: 37.0,
+                        longitudeDeg: -122.0,
+                        altitudeM: 8.0,
+                        horizontalAccuracyM: .infinity,
+                        verticalAccuracyM: nil,
+                        speedMps: .nan,
+                        courseDeg: 90.0,
+                        speedAccuracyMps: nil,
+                        courseAccuracyDeg: -.infinity,
+                        positionNorthM: nil,
+                        positionEastM: nil,
+                        positionDownM: nil,
+                        velocityNorthMps: nil,
+                        velocityEastMps: nil,
+                        velocityDownMps: nil
+                    ),
+                    elapsedSec: 0.5,
+                    wallTime: start.addingTimeInterval(0.5)
+                )
+            ]
+        )
+
+        let data = try RawSessionJSON.makeEncoder().encode(log)
+        let decoded = try RawSessionJSON.makeDecoder().decode(RawSessionLog.self, from: data)
+
+        guard let sample = decoded.events.first?.gnss else {
+            return XCTFail("Expected GNSS event")
+        }
+        XCTAssertTrue(sample.horizontalAccuracyM?.isInfinite == true)
+        XCTAssertTrue(sample.speedMps?.isNaN == true)
+        XCTAssertEqual(sample.courseAccuracyDeg, -.infinity)
+    }
+
     func testSummaryWithoutFileURLRepresentsPendingSave() {
         let pending = RawSessionSummary(
             id: UUID(uuidString: "61F52895-D66D-478C-9B54-149DA8AD5A6C")!,
@@ -216,6 +257,96 @@ final class RawSessionLogTests: XCTestCase {
 
         try store.delete(summaries[0])
         XCTAssertEqual(try store.summaries(), [])
+    }
+
+    func testFileStoreReadsSummarySidecarWithoutDecodingFullLog() throws {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RawSessionSidecarTests-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: rootURL)
+        }
+        let store = RawSessionFileStore(rootURL: rootURL)
+        let log = RawSessionLog(
+            name: "Sidecar Fixture",
+            startTime: Date(timeIntervalSince1970: 42),
+            events: [
+                .barometer(
+                    RawBarometerSample(
+                        sourceUptimeSec: 1.0,
+                        relativeAltitudeM: 2.0,
+                        pressureKPa: 100.0,
+                        derivedVerticalVelocityDownMps: 0.0
+                    ),
+                    elapsedSec: 2.5,
+                    wallTime: nil
+                )
+            ]
+        )
+
+        let url = try store.save(log)
+        try Data("not valid json".utf8).write(to: url, options: .atomic)
+
+        let summaries = try store.summaries()
+
+        XCTAssertEqual(summaries.count, 1)
+        XCTAssertEqual(summaries[0].name, "Sidecar Fixture")
+        XCTAssertEqual(summaries[0].durationSec, 2.5, accuracy: 1e-12)
+        XCTAssertEqual(summaries[0].fileURL, url)
+    }
+
+    func testFileStoreReadsLegacyRootSummaries() throws {
+        let primaryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RawSessionPrimaryTests-\(UUID().uuidString)", isDirectory: true)
+        let legacyURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RawSessionLegacyTests-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: primaryURL)
+            try? FileManager.default.removeItem(at: legacyURL)
+        }
+
+        let primaryStore = RawSessionFileStore(rootURL: primaryURL, legacyRootURLs: [legacyURL])
+        let legacyStore = RawSessionFileStore(rootURL: legacyURL)
+        let legacyLog = RawSessionLog(
+            name: "Legacy Fixture",
+            startTime: Date(timeIntervalSince1970: 42),
+            events: [
+                .barometer(
+                    RawBarometerSample(
+                        sourceUptimeSec: 1.0,
+                        relativeAltitudeM: 2.0,
+                        pressureKPa: 100.0,
+                        derivedVerticalVelocityDownMps: 0.0
+                    ),
+                    elapsedSec: 2.5,
+                    wallTime: nil
+                )
+            ]
+        )
+        let primaryLog = RawSessionLog(
+            name: "Primary Fixture",
+            startTime: Date(timeIntervalSince1970: 84),
+            events: [
+                .barometer(
+                    RawBarometerSample(
+                        sourceUptimeSec: 2.0,
+                        relativeAltitudeM: 3.0,
+                        pressureKPa: 101.0,
+                        derivedVerticalVelocityDownMps: 0.1
+                    ),
+                    elapsedSec: 1.0,
+                    wallTime: nil
+                )
+            ]
+        )
+
+        _ = try legacyStore.save(legacyLog)
+        _ = try primaryStore.save(primaryLog)
+
+        let summaries = try primaryStore.summaries()
+
+        XCTAssertEqual(summaries.map(\.name), ["Primary Fixture", "Legacy Fixture"])
+        XCTAssertTrue(summaries[0].fileURL?.path.hasPrefix(primaryURL.path) == true)
+        XCTAssertTrue(summaries[1].fileURL?.path.hasPrefix(legacyURL.path) == true)
     }
 
     func testFileStoreOverwritesSameSessionForCheckpoints() throws {

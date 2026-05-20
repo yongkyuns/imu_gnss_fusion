@@ -99,7 +99,6 @@ private extension RouteLayerSelection {
 }
 
 struct ContentView: View {
-    @EnvironmentObject private var store: SensorStore
 #if DEBUG
     @AppStorage("developerToolsEnabled") private var developerToolsEnabled = false
 #endif
@@ -107,13 +106,11 @@ struct ContentView: View {
     var body: some View {
         TabView {
             DriveView()
-                .environmentObject(store)
                 .tabItem {
                     Label("Drive", systemImage: "map")
                 }
 
             ReviewView()
-                .environmentObject(store)
                 .tabItem {
                     Label("Review", systemImage: "clock.arrow.circlepath")
                 }
@@ -121,7 +118,6 @@ struct ContentView: View {
 #if DEBUG
             if developerToolsEnabled {
                 DiagnosticsView()
-                    .environmentObject(store)
                     .tabItem {
                         Label("Diagnostics", systemImage: "waveform.path.ecg")
                     }
@@ -129,7 +125,6 @@ struct ContentView: View {
 #endif
 
             SettingsView()
-                .environmentObject(store)
                 .tabItem {
                     Label("Settings", systemImage: "gearshape")
                 }
@@ -143,6 +138,7 @@ private struct DriveView: View {
     @State private var routeLayer: RouteLayerSelection = .both
     @State private var showsAccuracyOverlay = false
     @State private var viewportRefreshToken = 0
+    @State private var followsCurrentMarker = true
 
     private var rawRouteCoordinates: [CLLocationCoordinate2D] {
         guard routeLayer.showsGnssRoute else { return [] }
@@ -180,6 +176,16 @@ private struct DriveView: View {
         return CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
     }
 
+    private var currentMapHeadingDeg: Double? {
+        if showsFusedOutput,
+           let yawDeg = store.ekfEulerHistory.last?.z,
+           yawDeg.isFinite {
+            return MapFollowPolicy.normalizedHeadingDeg(yawDeg)
+        }
+        guard let courseDeg = store.courseDeg, courseDeg.isFinite else { return nil }
+        return MapFollowPolicy.normalizedHeadingDeg(courseDeg)
+    }
+
     private var showsFusedOutput: Bool {
         FusedMapVisibilityPolicy.shouldShowFusedOutput(
             initialized: store.ekfInitialized,
@@ -199,9 +205,10 @@ private struct DriveView: View {
                     fusedCoordinates: fusedRouteCoordinates,
                     currentCoordinate: currentCoordinate,
                     fusedCurrentCoordinate: fusedCurrentCoordinate,
-                    currentCourseDeg: store.courseDeg,
+                    currentHeadingDeg: currentMapHeadingDeg,
                     horizontalAccuracyM: store.horizontalAccuracyM,
                     showAccuracyOverlay: showsAccuracyOverlay,
+                    followsCurrentMarker: followsCurrentMarker,
                     viewportRefreshToken: viewportRefreshToken
                 )
                 .ignoresSafeArea(edges: .top)
@@ -230,7 +237,8 @@ private struct DriveView: View {
                     DriveMapControlStack(
                         routeLayer: $routeLayer,
                         showsAccuracyOverlay: $showsAccuracyOverlay,
-                        onRecenter: {
+                        followsCurrentMarker: $followsCurrentMarker,
+                        onViewportRefresh: {
                             viewportRefreshToken += 1
                         }
                     )
@@ -346,7 +354,8 @@ private struct CompactStatusDot: View {
 private struct DriveMapControlStack: View {
     @Binding var routeLayer: RouteLayerSelection
     @Binding var showsAccuracyOverlay: Bool
-    let onRecenter: () -> Void
+    @Binding var followsCurrentMarker: Bool
+    let onViewportRefresh: () -> Void
 
     var body: some View {
         VStack(spacing: 8) {
@@ -375,12 +384,19 @@ private struct DriveMapControlStack: View {
             .accessibilityLabel(showsAccuracyOverlay ? "Hide accuracy overlay" : "Show accuracy overlay")
 
             Button {
-                onRecenter()
+                followsCurrentMarker.toggle()
+                if followsCurrentMarker {
+                    onViewportRefresh()
+                }
             } label: {
-                MapControlButtonLabel(systemImage: "location.viewfinder", title: "Recenter")
+                MapControlButtonLabel(
+                    systemImage: followsCurrentMarker ? "location.fill.viewfinder" : "location.viewfinder",
+                    title: followsCurrentMarker ? "Following" : "Follow"
+                )
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Recenter map")
+            .foregroundStyle(followsCurrentMarker ? Color.accentColor : Color.primary)
+            .accessibilityLabel(followsCurrentMarker ? "Stop following marker" : "Follow marker")
         }
     }
 }
@@ -934,6 +950,9 @@ private struct RawSessionRow: View {
     let summary: RawSessionSummary
 
     var body: some View {
+        let statusLabel = store.recordedSessionStatusLabel(for: summary)
+        let detailMessage = store.recordedSessionDetailMessage(for: summary)
+        let isInFlight = statusLabel == "Recording" || statusLabel == "Saving"
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "waveform.path.ecg.rectangle")
@@ -946,8 +965,8 @@ private struct RawSessionRow: View {
                         Text(summary.name)
                             .font(.subheadline.weight(.semibold))
                             .lineLimit(2)
-                        if summary.isPendingSave {
-                            Text("Saving")
+                        if let statusLabel {
+                            Text(statusLabel)
                                 .font(.caption2.weight(.semibold))
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 6)
@@ -959,14 +978,28 @@ private struct RawSessionRow: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                    if let detailMessage {
+                        Text(detailMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(4)
+                            .textSelection(.enabled)
+                    }
                 }
 
                 Spacer(minLength: 8)
 
                 if summary.isPendingSave {
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(width: 44, height: 32)
+                    if isInFlight {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(width: 44, height: 32)
+                    } else {
+                        Image(systemName: "exclamationmark.circle")
+                            .font(.title3)
+                            .foregroundStyle(.orange)
+                            .frame(width: 44, height: 32)
+                    }
                 } else {
                     Button {
                         store.replaySession(summary)
@@ -987,7 +1020,7 @@ private struct RawSessionRow: View {
             }
         }
         .swipeActions(edge: .trailing) {
-            if !summary.isPendingSave {
+            if !isInFlight {
                 Button(role: .destructive) {
                     store.deleteSession(summary)
                 } label: {
@@ -1186,65 +1219,94 @@ private struct DeveloperComparisonSection: View {
 #endif
 
 private struct SettingsView: View {
-    @EnvironmentObject private var store: SensorStore
+    @EnvironmentObject private var controls: SettingsControlModel
 #if DEBUG
     @AppStorage("developerToolsEnabled") private var developerToolsEnabled = false
 #endif
 
     var body: some View {
+        let state = controls.state
         NavigationStack {
             List {
                 Section("Permissions") {
-                    valueRow("Location", authText(store.authorization))
+                    valueRow("Location", authText(state.authorization))
                     valueRow("Motion", "Required")
                 }
 
                 Section("Stream") {
-                    valueRow("Mode", store.streamMode.rawValue)
-                    if let activeSessionName = store.activeSessionName {
+                    valueRow("Mode", state.streamStatusTitle)
+                    Picker("Playback Speed", selection: Binding(
+                        get: { controls.state.playbackSpeedMultiplier },
+                        set: { controls.setPlaybackSpeedMultiplier($0) }
+                    )) {
+                        ForEach(PlaybackSpeedPolicy.options, id: \.self) { speed in
+                            Text(PlaybackSpeedPolicy.title(for: speed)).tag(speed)
+                        }
+                    }
+                    if let activeSessionName = state.activeSessionName {
                         valueRow("Session", activeSessionName)
                     }
-                    if store.streamMode == .playback {
-                        ProgressView(value: store.replayProgress)
+                    if state.streamMode == .playback {
+                        ProgressView(value: state.replayProgress)
                     }
-                    Button {
-                        store.start()
-                    } label: {
-                        Label("Restart Sensors", systemImage: "arrow.clockwise")
-                    }
-                    Button(role: .destructive) {
-                        store.stop()
-                    } label: {
-                        Label("Stop Sensors", systemImage: "stop.circle")
-                    }
-                    if store.streamMode == .playback {
+                    if state.streamMode == .playback {
                         Button {
-                            store.stopPlayback()
+                            controls.stopPlayback()
                         } label: {
-                            Label("Stop Playback", systemImage: "pause.circle")
+                            SettingsActionButtonLabel(
+                                title: "Stop Playback",
+                                systemImage: "pause.circle",
+                                tint: .orange
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    if state.streamMode == .live {
+                        if state.isLiveSensorStreamRunning {
+                            Button(role: .destructive) {
+                                controls.stopSensors()
+                            } label: {
+                                SettingsActionButtonLabel(
+                                    title: "Stop Sensors",
+                                    systemImage: "stop.circle",
+                                    tint: .red
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        } else {
+                            Button {
+                                controls.startSensors()
+                            } label: {
+                                SettingsActionButtonLabel(
+                                    title: "Start Sensors",
+                                    systemImage: "play.circle",
+                                    tint: .accentColor
+                                )
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                 }
 
                 Section("Raw Logging") {
-                    valueRow("Saved Sessions", "\(store.recordedSessions.count)")
-                    if store.isRecording {
+                    valueRow("Saved Sessions", "\(state.savedSessionCount)")
+                    if state.isRecording {
                         Button {
-                            store.stopRecording()
+                            controls.stopRecording()
                         } label: {
                             Label("Stop Recording", systemImage: "stop.fill")
                         }
                         .tint(.red)
                     } else {
                         Button {
-                            store.startRecording()
+                            controls.startRecording()
                         } label: {
                             Label("Start Recording", systemImage: "record.circle")
                         }
-                        .disabled(store.streamMode != .live)
+                        .disabled(state.streamMode != .live || !state.isLiveSensorStreamRunning)
                     }
                     Button {
-                        store.loadRecordedSessions()
+                        controls.refreshSessions()
                     } label: {
                         Label("Refresh Sessions", systemImage: "arrow.clockwise")
                     }
@@ -1266,6 +1328,20 @@ private struct SettingsView: View {
             }
             .navigationTitle("Settings")
         }
+    }
+}
+
+private struct SettingsActionButtonLabel: View {
+    let title: String
+    let systemImage: String
+    let tint: Color
+
+    var body: some View {
+        Label(title, systemImage: systemImage)
+            .font(.body.weight(.semibold))
+            .foregroundStyle(tint)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
     }
 }
 
@@ -1517,10 +1593,17 @@ private struct RawGNSSRoute {
             return CLLocationCoordinate2DIsValid(coordinate) ? coordinate : nil
         }
 
-        if coordinates.isEmpty {
-            return [CLLocationCoordinate2D(latitude: currentLatitude, longitude: currentLongitude)]
+        let currentCoordinate = CLLocationCoordinate2D(latitude: currentLatitude, longitude: currentLongitude)
+        guard !coordinates.isEmpty else {
+            return [currentCoordinate]
         }
-        return coordinates
+
+        if let last = coordinates.last,
+           abs(last.latitude - currentLatitude) < 1.0e-8,
+           abs(last.longitude - currentLongitude) < 1.0e-8 {
+            return coordinates
+        }
+        return coordinates + [currentCoordinate]
     }
 
     private static func metersPerDegree(latitudeDeg: Double) -> (latitude: Double, longitude: Double) {
@@ -1541,9 +1624,10 @@ private struct RawGNSSMapView: UIViewRepresentable {
     let fusedCoordinates: [CLLocationCoordinate2D]
     let currentCoordinate: CLLocationCoordinate2D?
     let fusedCurrentCoordinate: CLLocationCoordinate2D?
-    let currentCourseDeg: Double?
+    let currentHeadingDeg: Double?
     let horizontalAccuracyM: Double?
     let showAccuracyOverlay: Bool
+    let followsCurrentMarker: Bool
     let viewportRefreshToken: Int
 
     func makeCoordinator() -> Coordinator {
@@ -1570,7 +1654,8 @@ private struct RawGNSSMapView: UIViewRepresentable {
     }
 
     func updateUIView(_ mapView: MKMapView, context: Context) {
-        context.coordinator.currentCourseDeg = currentCourseDeg
+        context.coordinator.currentHeadingDeg = currentHeadingDeg
+        context.coordinator.isHeadingUp = followsCurrentMarker && currentHeadingDeg != nil
 
         let routeKey = RouteKey(
             gnssCoordinates: gnssCoordinates,
@@ -1612,6 +1697,17 @@ private struct RawGNSSMapView: UIViewRepresentable {
             context.coordinator.lastViewportRefreshToken = viewportRefreshToken
             context.coordinator.lastCameraViewportKey = routeKey.viewportKey
             setVisibleRoute(on: mapView, animated: shouldForceRefit)
+        }
+        if followsCurrentMarker,
+           let followCoordinate = MapFollowPolicy.targetCoordinate(
+            fusedCoordinate: fusedCurrentCoordinate,
+            gnssCoordinate: currentCoordinate
+           ) {
+            context.coordinator.updateFollowCamera(
+                on: mapView,
+                coordinate: followCoordinate,
+                headingDeg: currentHeadingDeg
+            )
         }
     }
 
@@ -1659,7 +1755,8 @@ private struct RawGNSSMapView: UIViewRepresentable {
             case fused
         }
 
-        var currentCourseDeg: Double?
+        var currentHeadingDeg: Double?
+        var isHeadingUp = false
         var lastRouteOverlayKey: RouteKey?
         var lastCameraViewportKey: String?
         var lastViewportRefreshToken: Int?
@@ -1669,10 +1766,23 @@ private struct RawGNSSMapView: UIViewRepresentable {
         private var accuracyOverlay: MKCircle?
         private var accuracyOverlayCoordinate: CLLocationCoordinate2D?
         private var accuracyOverlayRadiusM: Double?
-        private var gnssRouteOverlay: MKPolyline?
-        private var fusedRouteOverlay: MKPolyline?
+        private let routeOverlayLayer = MapRouteOverlayLayer()
         private let gnssAnnotationLayer = MapAnnotationLayer()
         private let fusedAnnotationLayer = MapAnnotationLayer()
+
+        func updateFollowCamera(
+            on mapView: MKMapView,
+            coordinate: CLLocationCoordinate2D,
+            headingDeg: Double?
+        ) {
+            guard CLLocationCoordinate2DIsValid(coordinate) else { return }
+            let camera = mapView.camera
+            camera.centerCoordinate = coordinate
+            if let headingDeg {
+                camera.heading = headingDeg
+            }
+            mapView.setCamera(camera, animated: false)
+        }
 
         func updateAccuracyOverlay(
             on mapView: MKMapView,
@@ -1735,28 +1845,11 @@ private struct RawGNSSMapView: UIViewRepresentable {
             lastGnssRoutePointCount = gnssCoordinates.count
             lastFusedRoutePointCount = fusedCoordinates.count
 
-            if let gnssRouteOverlay {
-                mapView.removeOverlay(gnssRouteOverlay)
-                self.gnssRouteOverlay = nil
-            }
-            if let fusedRouteOverlay {
-                mapView.removeOverlay(fusedRouteOverlay)
-                self.fusedRouteOverlay = nil
-            }
-
-            if gnssCoordinates.count >= 2 {
-                let polyline = MKPolyline(coordinates: gnssCoordinates, count: gnssCoordinates.count)
-                polyline.title = "gnss"
-                gnssRouteOverlay = polyline
-                mapView.addOverlay(polyline)
-            }
-
-            if fusedCoordinates.count >= 2 {
-                let polyline = MKPolyline(coordinates: fusedCoordinates, count: fusedCoordinates.count)
-                polyline.title = "fused"
-                fusedRouteOverlay = polyline
-                mapView.addOverlay(polyline)
-            }
+            routeOverlayLayer.update(
+                on: mapView,
+                gnssCoordinates: gnssCoordinates,
+                fusedCoordinates: fusedCoordinates
+            )
         }
 
         func updateMarker(
@@ -1786,12 +1879,10 @@ private struct RawGNSSMapView: UIViewRepresentable {
             guard let annotation = annotationLayer(for: slot).annotation,
                   let view = mapView.view(for: annotation)
             else { return }
-            if let markerView = view as? MKMarkerAnnotationView {
-                markerView.markerTintColor = slot == .fused ? UIColor.systemBlue : UIColor.systemOrange
-                markerView.glyphImage = UIImage(systemName: "location.north.fill")
-            }
-            if let currentCourseDeg {
-                view.transform = CGAffineTransform(rotationAngle: CGFloat(currentCourseDeg * .pi / 180.0))
+            guard let markerView = view as? PositionMarkerAnnotationView else { return }
+            markerView.configure(slot: slot)
+            if slot == .fused, !isHeadingUp, let currentHeadingDeg {
+                view.transform = CGAffineTransform(rotationAngle: CGFloat(currentHeadingDeg * .pi / 180.0))
             } else {
                 view.transform = .identity
             }
@@ -1823,19 +1914,69 @@ private struct RawGNSSMapView: UIViewRepresentable {
 
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
             guard !(annotation is MKUserLocation) else { return nil }
-            let reuseID = "current-position"
-            let view = mapView.dequeueReusableAnnotationView(withIdentifier: reuseID) as? MKMarkerAnnotationView
-                ?? MKMarkerAnnotationView(annotation: annotation, reuseIdentifier: reuseID)
+            let slot: MarkerSlot = annotation.title == "Fused" ? .fused : .gnss
+            let reuseID = slot == .fused ? "fused-position" : "gnss-position"
+            let view = mapView.dequeueReusableAnnotationView(withIdentifier: reuseID) as? PositionMarkerAnnotationView
+                ?? PositionMarkerAnnotationView(annotation: annotation, reuseIdentifier: reuseID)
             view.annotation = annotation
-            view.markerTintColor = annotation.title == "Fused" ? UIColor.systemBlue : UIColor.systemOrange
-            view.glyphImage = UIImage(systemName: "location.north.fill")
+            view.configure(slot: slot)
             view.displayPriority = .required
-            if let currentCourseDeg {
-                view.transform = CGAffineTransform(rotationAngle: CGFloat(currentCourseDeg * .pi / 180.0))
+            view.collisionMode = .circle
+            view.zPriority = slot == .fused ? .max : .defaultUnselected
+            if slot == .fused, !isHeadingUp, let currentHeadingDeg {
+                view.transform = CGAffineTransform(rotationAngle: CGFloat(currentHeadingDeg * .pi / 180.0))
             } else {
                 view.transform = .identity
             }
             return view
+        }
+    }
+
+    final class PositionMarkerAnnotationView: MKAnnotationView {
+        private var renderedSlot: Coordinator.MarkerSlot?
+
+        func configure(slot: Coordinator.MarkerSlot) {
+            guard renderedSlot != slot else { return }
+            renderedSlot = slot
+            image = Self.markerImage(for: slot)
+            centerOffset = .zero
+            canShowCallout = false
+            bounds = CGRect(origin: .zero, size: image?.size ?? CGSize(width: 24, height: 24))
+        }
+
+        private static func markerImage(for slot: Coordinator.MarkerSlot) -> UIImage {
+            let size = slot == .fused ? CGSize(width: 22, height: 22) : CGSize(width: 28, height: 28)
+            let renderer = UIGraphicsImageRenderer(size: size)
+            return renderer.image { context in
+                let rect = CGRect(origin: .zero, size: size).insetBy(dx: 3, dy: 3)
+                let cg = context.cgContext
+                cg.setShadow(offset: CGSize(width: 0, height: 1), blur: 3, color: UIColor.black.withAlphaComponent(0.22).cgColor)
+
+                switch slot {
+                case .gnss:
+                    UIColor.white.withAlphaComponent(0.92).setFill()
+                    cg.fillEllipse(in: rect)
+                    UIColor.systemOrange.setStroke()
+                    cg.setLineWidth(3)
+                    cg.strokeEllipse(in: rect)
+                case .fused:
+                    UIColor.systemBlue.setFill()
+                    cg.fillEllipse(in: rect)
+                    UIColor.white.setStroke()
+                    cg.setLineWidth(2)
+                    cg.strokeEllipse(in: rect)
+
+                    let arrow = UIBezierPath()
+                    let center = CGPoint(x: size.width * 0.5, y: size.height * 0.5)
+                    arrow.move(to: CGPoint(x: center.x, y: center.y - 5.0))
+                    arrow.addLine(to: CGPoint(x: center.x + 4.0, y: center.y + 4.5))
+                    arrow.addLine(to: CGPoint(x: center.x, y: center.y + 2.2))
+                    arrow.addLine(to: CGPoint(x: center.x - 4.0, y: center.y + 4.5))
+                    arrow.close()
+                    UIColor.white.setFill()
+                    arrow.fill()
+                }
+            }
         }
     }
 
@@ -2206,6 +2347,8 @@ private func authText(_ status: CLAuthorizationStatus) -> String {
 }
 
 #Preview {
+    let store = SensorStore()
     ContentView()
-        .environmentObject(SensorStore())
+        .environmentObject(store)
+        .environmentObject(store.settingsControls)
 }

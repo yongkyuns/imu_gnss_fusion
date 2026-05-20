@@ -1,6 +1,6 @@
 import Foundation
 
-struct RawSessionSummary: Identifiable, Equatable, Sendable {
+struct RawSessionSummary: Codable, Identifiable, Equatable, Sendable {
     let id: UUID
     let name: String
     let startTime: Date
@@ -8,7 +8,7 @@ struct RawSessionSummary: Identifiable, Equatable, Sendable {
     let imuCount: Int
     let gnssCount: Int
     let barometerCount: Int
-    let fileURL: URL?
+    var fileURL: URL?
 
     var isPendingSave: Bool {
         fileURL == nil
@@ -59,7 +59,22 @@ struct RawSessionLog: Codable, Equatable, Sendable {
     }
 
     func summary(fileURL: URL? = nil) -> RawSessionSummary {
-        RawSessionSummary(
+        var durationSec = 0.0
+        var imuCount = 0
+        var gnssCount = 0
+        var barometerCount = 0
+        for event in events {
+            durationSec = max(durationSec, event.elapsedSec)
+            switch event.kind {
+            case .imu:
+                imuCount += 1
+            case .gnss:
+                gnssCount += 1
+            case .barometer:
+                barometerCount += 1
+            }
+        }
+        return RawSessionSummary(
             id: id,
             name: name,
             startTime: startTime,

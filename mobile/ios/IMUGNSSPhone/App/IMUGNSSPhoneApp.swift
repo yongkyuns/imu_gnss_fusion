@@ -10,6 +10,7 @@ struct IMUGNSSPhoneApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(store)
+                .environmentObject(store.settingsControls)
                 .onAppear {
                     UIApplication.shared.isIdleTimerDisabled = true
                     store.start()

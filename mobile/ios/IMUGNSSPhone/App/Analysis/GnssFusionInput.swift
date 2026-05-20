@@ -16,7 +16,8 @@ struct GnssFusionInput: Equatable, Sendable {
         hAcc: Double,
         vAcc: Double,
         courseDeg: Double?,
-        speedAccuracyMps: Double?
+        speedAccuracyMps: Double?,
+        courseAccuracyDeg: Double?
     ) -> GnssFusionInput? {
         guard latitudeDeg.isFinite,
               longitudeDeg.isFinite,
@@ -33,12 +34,17 @@ struct GnssFusionInput: Equatable, Sendable {
 
         let horizontalStdM = hAcc.isFinite && hAcc > 0.0 ? hAcc : 25.0
         let verticalStdM = vAcc.isFinite && vAcc > 0.0 ? vAcc : 50.0
-        let speedStdMps = speedAccuracyMps.map { $0.isFinite && $0 > 0.0 ? $0 : 5.0 } ?? 5.0
+        let horizontalSpeedMps = hypot(velN, velE)
+        let horizontalVelocityStdMps = GnssVelocityResolver.horizontalVelocityStdMps(
+            speedMps: horizontalSpeedMps,
+            speedAccuracyMps: speedAccuracyMps,
+            courseAccuracyDeg: courseAccuracyDeg
+        )
         let velDValue = velD.map { $0.isFinite ? $0 : 0.0 } ?? 0.0
-        let headingRad = courseDeg.flatMap { course -> Double? in
-            guard course.isFinite, course >= 0.0 else { return nil }
-            return course * .pi / 180.0
-        }
+        let headingRad = GnssVelocityResolver.headingRad(
+            courseDeg: courseDeg,
+            courseAccuracyDeg: courseAccuracyDeg
+        )
 
         return GnssFusionInput(
             positionStdM: NavigationVectorNED(
@@ -52,8 +58,8 @@ struct GnssFusionInput: Equatable, Sendable {
                 down: velDValue
             ),
             velocityStdMps: NavigationVectorNED(
-                north: speedStdMps,
-                east: speedStdMps,
+                north: horizontalVelocityStdMps,
+                east: horizontalVelocityStdMps,
                 down: 2.5
             ),
             headingRad: headingRad

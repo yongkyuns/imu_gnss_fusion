@@ -38,7 +38,7 @@ class ExportMotionFusionTests(unittest.TestCase):
                         "gyroXRadps": 0.1,
                         "gyroYRadps": 0.0,
                         "gyroZRadps": 0.0,
-                        "attitudeReferenceFrame": "xArbitraryCorrectedZVertical",
+                        "attitudeReferenceFrame": export_motionfusion.SENSOR_FUSION_SPECIFIC_FORCE_FRAME,
                     },
                     "gnss": None,
                     "barometer": None,
@@ -81,7 +81,7 @@ class ExportMotionFusionTests(unittest.TestCase):
                         "gyroXRadps": 0.0,
                         "gyroYRadps": 0.2,
                         "gyroZRadps": 0.0,
-                        "attitudeReferenceFrame": "xArbitraryCorrectedZVertical",
+                        "attitudeReferenceFrame": export_motionfusion.SENSOR_FUSION_SPECIFIC_FORCE_FRAME,
                     },
                     "gnss": None,
                     "barometer": None,
@@ -131,6 +131,12 @@ class ExportMotionFusionTests(unittest.TestCase):
                 imu_rows = list(csv.reader(file))
             self.assertEqual(imu_rows[0], export_motionfusion.IMU_HEADER)
             self.assertEqual(len(imu_rows), 3)
+            self.assertAlmostEqual(float(imu_rows[1][4]), 0.0, places=12)
+            self.assertAlmostEqual(float(imu_rows[1][5]), 0.0, places=12)
+            self.assertAlmostEqual(float(imu_rows[1][6]), 9.81, places=12)
+            self.assertAlmostEqual(float(imu_rows[2][4]), 1.0, places=12)
+            self.assertAlmostEqual(float(imu_rows[2][5]), 2.0, places=12)
+            self.assertAlmostEqual(float(imu_rows[2][6]), 3.0, places=12)
 
             with result.gnss_csv.open(newline="", encoding="utf-8") as file:
                 gnss_rows = list(csv.reader(file))
@@ -243,6 +249,39 @@ class ExportMotionFusionTests(unittest.TestCase):
             summary = result.summary_txt.read_text(encoding="utf-8")
             self.assertIn("missing_gnss_velocity_rows: 2 (derived_velocity=2, skipped=1 WARN)", summary)
 
+    def test_specific_force_recordings_are_not_sign_flipped(self) -> None:
+        row = export_motionfusion.parse_imu_row(
+            0.0,
+            {
+                "accelXMps2": -1.0,
+                "accelYMps2": 2.0,
+                "accelZMps2": -9.81,
+                "gyroXRadps": 0.1,
+                "gyroYRadps": 0.2,
+                "gyroZRadps": 0.3,
+                "attitudeReferenceFrame": export_motionfusion.SENSOR_FUSION_SPECIFIC_FORCE_FRAME,
+            },
+            "unit",
+        )
+
+        self.assertEqual(row.accel, (-1.0, 2.0, -9.81))
+
+    def test_unsupported_imu_frame_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "attitudeReferenceFrame"):
+            export_motionfusion.parse_imu_row(
+                0.0,
+                {
+                    "accelXMps2": 1.0,
+                    "accelYMps2": 2.0,
+                    "accelZMps2": 3.0,
+                    "gyroXRadps": 0.1,
+                    "gyroYRadps": 0.2,
+                    "gyroZRadps": 0.3,
+                    "attitudeReferenceFrame": "rawAccelerometerGyro",
+                },
+                "unit",
+            )
+
 
 def imu_event(t_s: float) -> dict[str, object]:
     return {
@@ -258,7 +297,7 @@ def imu_event(t_s: float) -> dict[str, object]:
             "gyroXRadps": 0.0,
             "gyroYRadps": 0.0,
             "gyroZRadps": 0.0,
-            "attitudeReferenceFrame": "xArbitraryCorrectedZVertical",
+            "attitudeReferenceFrame": export_motionfusion.SENSOR_FUSION_SPECIFIC_FORCE_FRAME,
         },
         "gnss": None,
         "barometer": None,
