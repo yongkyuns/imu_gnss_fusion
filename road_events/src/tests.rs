@@ -503,11 +503,10 @@ fn roughness_keeps_discrete_bumps_out_of_rough_level() {
             t_s: t,
             speed_mps: 10.0,
             vertical_accel_mps2: accel,
-        }) {
-            if estimate.roughness_rms_mps2 > peak_rms {
-                peak_rms = estimate.roughness_rms_mps2;
-                peak_level = estimate.level;
-            }
+        }) && estimate.roughness_rms_mps2 > peak_rms
+        {
+            peak_rms = estimate.roughness_rms_mps2;
+            peak_level = estimate.level;
         }
     }
 
