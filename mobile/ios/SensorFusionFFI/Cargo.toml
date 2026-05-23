@@ -14,3 +14,4 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 sensor_fusion = { path = "../../../sensor_fusion" }
+road_events = { path = "../../../road_events" }

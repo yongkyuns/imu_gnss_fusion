@@ -12,6 +12,11 @@ final class SensorStore: NSObject, ObservableObject {
         let z: Double?
     }
 
+    struct TimedCoordinateSample {
+        let tSec: Double
+        let coordinate: GeographicCoordinate
+    }
+
     struct MotionSample {
         var ax: Double = .zero
         var ay: Double = .zero
@@ -54,6 +59,8 @@ final class SensorStore: NSObject, ObservableObject {
     @Published var ekfGyroBiasHistory: [TimedVec3Sample] = []
     @Published var ekfAccelBiasHistory: [TimedVec3Sample] = []
     @Published var fusedPositionHistory: [TimedVec3Sample] = []
+    @Published var fusedRouteCoordinateHistory: [TimedCoordinateSample] = []
+    @Published var vehicleMotionHistory: [TimedVec3Sample] = []
     @Published var ekfInitialized: Bool = false
     @Published var ekfMountReady: Bool = false
     @Published var fusedLatitude: Double?
@@ -66,13 +73,20 @@ final class SensorStore: NSObject, ObservableObject {
     @Published var vehicleRightMps: Double?
     @Published var vehicleDownMps: Double?
     @Published var fusionConfidence: Double = 0.0
+    @Published var alignProgress: AlignProgressSnapshot = .unavailable
     @Published var vehicleSegment: VehicleMotionDisplay.Segment?
+    @Published var motionEvents: [MotionEvent] = []
+    @Published var latestMotionEvent: MotionEvent?
+    @Published var tripStatsSummary: TripStatsSummary = .empty
     @Published var streamMode: StreamMode = .live
     @Published var isRecording: Bool = false
     @Published var recordedSessions: [RawSessionSummary] = []
     @Published var activeSessionName: String?
+    @Published var activeSessionID: UUID?
     @Published var replayProgress: Double = 0.0
     @Published var playbackSpeedMultiplier: Double = PlaybackSpeedPolicy.defaultMultiplier
+    @Published var eventAudioSettings: EventAudioSettings = EventAudioSettingsDefaults.load()
+    @Published var mountMemorySettings: MountMemorySettings = MountMemoryDefaults.load()
     @Published var streamHealth: StreamHealth = .starting
 #if DEBUG
     @Published var iosAttitudeEulerDeg: TimedVec3Sample?
@@ -102,6 +116,7 @@ final class SensorStore: NSObject, ObservableObject {
     private var lastFusionSampleDate: Date?
     private var lastFusionImuSampleDate: Date?
     private var lastStreamHealthPublishTS: TimeInterval?
+    private var lastTripStatsPublishTS: TimeInterval?
     private var lastImuUiSampleDate: Date?
     private var lastMotionErrorMessage: String?
     private var lastLocationErrorMessage: String?
@@ -117,13 +132,30 @@ final class SensorStore: NSObject, ObservableObject {
     private var lastRecordingCheckpointEventCount = 0
     private var lastRecordingCheckpointUptimeSec: TimeInterval = 0.0
     private var streamGeneration = 0
+    private var roadEventStreamStartTime: Date?
+    private var isForegroundForEventAudio = true
+    private var latestMountQBV: Quaternion?
+    private var motionEventDetector = MotionEventDetector()
+    private let eventAudioNotifier = EventAudioNotifier()
+
+    private struct RawMotionInput {
+        let ax: Double
+        let ay: Double
+        let az: Double
+        let gx: Double
+        let gy: Double
+        let gz: Double
+    }
+
     private let motionPublishMinDtSec = 1.0 / 10.0
     private let baroPublishMinDtSec = 1.0 / 10.0
     private let fusionUiPublishMinDtSec = 1.0 / 10.0
     private let streamHealthPublishMinDtSec = 0.5
     private let replayProgressPublishMinDtSec = 1.0 / 15.0
+    private let tripStatsPublishMinDtSec = 1.0
     private let chartHistoryMaxCount = 240
     private let routeHistoryMaxCount = 21_600
+    private let motionEventHistoryMaxCount = 80
     private let routeSampleMinDtSec = 1.0
     private let recordingCheckpointEventInterval = 5_000
     private let recordingCheckpointMinIntervalSec: TimeInterval = 30.0
@@ -175,16 +207,19 @@ final class SensorStore: NSObject, ObservableObject {
         streamMode = .live
         isLiveSensorStreamRunning = true
         activeSessionName = nil
+        activeSessionID = nil
         replayProgress = 0.0
         startStreamHealthMonitor(generation: generation)
         nedReference = nil
         lastBarometerSample = nil
         filteredVerticalUpMps = nil
         streamStartTime = nil
+        roadEventStreamStartTime = nil
         lastMotionPublishTS = nil
         lastBaroPublishTS = nil
         lastFusionUiPublishTS = nil
         lastStreamHealthPublishTS = nil
+        lastTripStatsPublishTS = nil
         lastImuUiSampleDate = nil
         lastMotionErrorMessage = nil
         lastLocationErrorMessage = nil
@@ -208,6 +243,8 @@ final class SensorStore: NSObject, ObservableObject {
         ekfGyroBiasHistory.removeAll(keepingCapacity: true)
         ekfAccelBiasHistory.removeAll(keepingCapacity: true)
         fusedPositionHistory.removeAll(keepingCapacity: true)
+        fusedRouteCoordinateHistory.removeAll(keepingCapacity: true)
+        vehicleMotionHistory.removeAll(keepingCapacity: true)
         ekfInitialized = false
         ekfMountReady = false
         fusedLatitude = nil
@@ -220,13 +257,21 @@ final class SensorStore: NSObject, ObservableObject {
         vehicleRightMps = nil
         vehicleDownMps = nil
         fusionConfidence = 0.0
+        alignProgress = .unavailable
         vehicleSegment = nil
+        motionEvents.removeAll(keepingCapacity: true)
+        latestMotionEvent = nil
+        tripStatsSummary = .empty
+        latestMountQBV = nil
+        motionEventDetector.reset()
+        eventAudioNotifier.reset()
 #if DEBUG
         iosAttitudeEulerDeg = nil
 #endif
+        let mountSettings = mountMemorySettings
         fusionQueue.addOperation { [weak self] in
             guard let self, self.isCurrentGeneration(generation) else { return }
-            self.resetFusionEngineState()
+            self.resetFusionEngineState(using: mountSettings)
         }
 
         if authorization == .notDetermined {
@@ -355,14 +400,17 @@ final class SensorStore: NSObject, ObservableObject {
         lastBarometerSample = nil
         filteredVerticalUpMps = nil
         streamStartTime = nil
+        roadEventStreamStartTime = nil
         lastMotionPublishTS = nil
         lastBaroPublishTS = nil
         lastFusionUiPublishTS = nil
         lastStreamHealthPublishTS = nil
+        lastTripStatsPublishTS = nil
         lastImuUiSampleDate = nil
         streamMode = .live
         isLiveSensorStreamRunning = false
         activeSessionName = nil
+        activeSessionID = nil
         replayProgress = 0.0
         updateStreamHealth(now: Date(), force: true)
         publishSettingsState()
@@ -382,6 +430,7 @@ final class SensorStore: NSObject, ObservableObject {
         rawLogLock.unlock()
         isRecording = true
         activeSessionName = log.name
+        activeSessionID = log.id
         recordedSessionStatusMessages.removeValue(forKey: log.id)
         recordedSessionDetailMessages.removeValue(forKey: log.id)
         upsertPendingRecordedSession(for: log, durationSec: 0.0)
@@ -394,6 +443,7 @@ final class SensorStore: NSObject, ObservableObject {
     }
 
     func prepareForForegroundTracking() {
+        isForegroundForEventAudio = true
         locationManager.allowsBackgroundLocationUpdates = true
         locationManager.showsBackgroundLocationIndicator = false
         if authorization == .authorizedWhenInUse {
@@ -402,6 +452,7 @@ final class SensorStore: NSObject, ObservableObject {
     }
 
     func prepareForBackgroundTracking() {
+        isForegroundForEventAudio = false
         checkpointRecording()
         locationManager.allowsBackgroundLocationUpdates = true
         locationManager.showsBackgroundLocationIndicator = true
@@ -412,6 +463,7 @@ final class SensorStore: NSObject, ObservableObject {
     }
 
     func applicationWillTerminate() {
+        isForegroundForEventAudio = false
         checkpointRecording()
         recordingQueue.waitUntilAllOperationsAreFinished()
     }
@@ -474,7 +526,7 @@ final class SensorStore: NSObject, ObservableObject {
             return message
         }
         guard summary.isPendingSave else { return nil }
-        if isRecording && activeSessionName == summary.name {
+        if isRecording && activeSessionID == summary.id {
             return "Recording"
         }
         return "Saving"
@@ -486,6 +538,48 @@ final class SensorStore: NSObject, ObservableObject {
 
     func setPlaybackSpeedMultiplier(_ speedMultiplier: Double) {
         playbackSpeedMultiplier = PlaybackSpeedPolicy.normalized(speedMultiplier)
+        publishSettingsState()
+    }
+
+    func setEventAudibleAlertMode(_ mode: EventAudibleAlertMode) {
+        guard eventAudioSettings.mode != mode else { return }
+        eventAudioSettings.mode = mode
+        EventAudioSettingsDefaults.save(eventAudioSettings)
+        publishSettingsState()
+    }
+
+    func setEventAlertsPlayInSilentMode(_ isEnabled: Bool) {
+        guard eventAudioSettings.playDrivingAlertsInSilentMode != isEnabled else { return }
+        eventAudioSettings.playDrivingAlertsInSilentMode = isEnabled
+        EventAudioSettingsDefaults.save(eventAudioSettings)
+        publishSettingsState()
+    }
+
+    func playTestEventAudioAlert() {
+        let now = Date()
+        let event = MotionEvent(
+            kind: .harshBraking,
+            timestamp: now,
+            tSec: now.timeIntervalSinceReferenceDate
+        )
+        Task { @MainActor [eventAudioNotifier, eventAudioSettings] in
+            eventAudioNotifier.notify(event, settings: eventAudioSettings)
+        }
+    }
+
+    func setMountMemoryEnabled(_ isEnabled: Bool) {
+        guard mountMemorySettings.isEnabled != isEnabled else { return }
+        mountMemorySettings.isEnabled = isEnabled
+        MountMemoryDefaults.saveEnabled(isEnabled)
+        if isEnabled, let latestMountQBV {
+            storeRememberedMountIfNeeded(latestMountQBV, force: true)
+        }
+        publishSettingsState()
+    }
+
+    func clearRememberedMount() {
+        MountMemoryDefaults.clearCalibration()
+        mountMemorySettings.savedCalibration = nil
         publishSettingsState()
     }
 
@@ -507,6 +601,7 @@ final class SensorStore: NSObject, ObservableObject {
         streamMode = .playback
         isLiveSensorStreamRunning = false
         activeSessionName = summary.name
+        activeSessionID = summary.id
         replayProgress = 0.0
         resetRuntimeState()
         publishSettingsState()
@@ -517,28 +612,50 @@ final class SensorStore: NSObject, ObservableObject {
                 let log = try self.rawSessionStore.load(from: fileURL)
                 let events = try RawSessionTimeline.events(for: log)
                 let duration = max(log.durationSec, 0.001)
-                var previousElapsed = 0.0
+                var eventIndex = 0
+                var replayElapsed = 0.0
+                var lastTickUptime = ProcessInfo.processInfo.systemUptime
                 var lastProgressPublish = ProcessInfo.processInfo.systemUptime
 
-                for event in events {
+                while eventIndex < events.count {
                     if Task.isCancelled { return }
                     let speed = await MainActor.run {
                         PlaybackSpeedPolicy.normalized(self.playbackSpeedMultiplier)
                     }
-                    let delay = max(0.0, event.elapsedSec - previousElapsed) / speed
-                    if delay > 0.0 {
-                        try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000.0))
-                    }
-                    previousElapsed = event.elapsedSec
-                    self.applyReplayEvent(event, sessionStart: log.startTime, generation: generation)
                     let now = ProcessInfo.processInfo.systemUptime
+                    replayElapsed = ReplayBatchPolicy.advancedElapsedSec(
+                        previousElapsedSec: replayElapsed,
+                        wallDeltaSec: now - lastTickUptime,
+                        speedMultiplier: speed,
+                        durationSec: duration
+                    )
+                    lastTickUptime = now
+
+                    var processedEventCount = 0
+                    while eventIndex < events.count,
+                          events[eventIndex].elapsedSec <= replayElapsed,
+                          processedEventCount < ReplayBatchPolicy.maximumEventsPerBatch {
+                        self.applyReplayEvent(events[eventIndex], sessionStart: log.startTime, generation: generation)
+                        eventIndex += 1
+                        processedEventCount += 1
+                    }
+
                     if now - lastProgressPublish >= self.replayProgressPublishMinDtSec {
                         lastProgressPublish = now
+                        let progress = min(max(replayElapsed / duration, 0.0), 1.0)
                         await MainActor.run {
                             guard self.isCurrentGeneration(generation) else { return }
-                            self.replayProgress = min(max(event.elapsedSec / duration, 0.0), 1.0)
+                            self.replayProgress = progress
                             self.publishSettingsState()
                         }
+                    }
+
+                    if ReplayBatchPolicy.shouldSleepAfterBatch(processedEventCount: processedEventCount) {
+                        try await Task.sleep(
+                            nanoseconds: UInt64(ReplayBatchPolicy.defaultTickIntervalSec * 1_000_000_000.0)
+                        )
+                    } else {
+                        await Task.yield()
                     }
                 }
                 await MainActor.run {
@@ -553,6 +670,7 @@ final class SensorStore: NSObject, ObservableObject {
                     self.streamMode = .live
                     self.isLiveSensorStreamRunning = false
                     self.activeSessionName = nil
+                    self.activeSessionID = nil
                     self.replayProgress = 0.0
                     self.publishSettingsState()
                 }
@@ -568,6 +686,7 @@ final class SensorStore: NSObject, ObservableObject {
         streamMode = .live
         isLiveSensorStreamRunning = false
         activeSessionName = nil
+        activeSessionID = nil
         replayProgress = 0.0
         publishSettingsState()
         start()
@@ -578,6 +697,7 @@ final class SensorStore: NSObject, ObservableObject {
         lastBarometerSample = nil
         filteredVerticalUpMps = nil
         streamStartTime = nil
+        roadEventStreamStartTime = nil
         lastMotionPublishTS = nil
         lastBaroPublishTS = nil
         lastFusionUiPublishTS = nil
@@ -592,6 +712,8 @@ final class SensorStore: NSObject, ObservableObject {
         ekfGyroBiasHistory.removeAll(keepingCapacity: true)
         ekfAccelBiasHistory.removeAll(keepingCapacity: true)
         fusedPositionHistory.removeAll(keepingCapacity: true)
+        fusedRouteCoordinateHistory.removeAll(keepingCapacity: true)
+        vehicleMotionHistory.removeAll(keepingCapacity: true)
         ekfInitialized = false
         ekfMountReady = false
         latitude = nil
@@ -618,15 +740,23 @@ final class SensorStore: NSObject, ObservableObject {
         vehicleRightMps = nil
         vehicleDownMps = nil
         fusionConfidence = 0.0
+        alignProgress = .unavailable
         vehicleSegment = nil
+        motionEvents.removeAll(keepingCapacity: true)
+        latestMotionEvent = nil
+        tripStatsSummary = .empty
+        latestMountQBV = nil
+        motionEventDetector.reset()
+        eventAudioNotifier.reset()
 #if DEBUG
         iosAttitudeEulerDeg = nil
 #endif
         fusionQueue.cancelAllOperations()
         let generation = currentStreamGeneration()
+        let mountSettings = mountMemorySettings
         fusionQueue.addOperation { [weak self] in
             guard let self, self.isCurrentGeneration(generation) else { return }
-            self.resetFusionEngineState()
+            self.resetFusionEngineState(using: mountSettings)
         }
     }
 
@@ -662,7 +792,8 @@ final class SensorStore: NSObject, ObservableObject {
                 az: az,
                 gx: gx,
                 gy: gy,
-                gz: gz
+                gz: gz,
+                generation: generation
             )
         }
 
@@ -826,32 +957,43 @@ final class SensorStore: NSObject, ObservableObject {
                     az: accel.z,
                     gx: sample.gyroXRadps,
                     gy: sample.gyroYRadps,
-                    gz: sample.gyroZRadps
+                    gz: sample.gyroZRadps,
+                    generation: generation
                 )
             }
-            Task { @MainActor in
-                guard self.isCurrentGeneration(generation) else { return }
-                self.publishImuSample(
-                    ax: accel.x,
-                    ay: accel.y,
-                    az: accel.z,
-                    gx: sample.gyroXRadps,
-                    gy: sample.gyroYRadps,
-                    gz: sample.gyroZRadps,
-                    sampleDate: sampleDate
-                )
-#if DEBUG
-                if let rollRad = sample.attitudeRollRad,
-                   let pitchRad = sample.attitudePitchRad,
-                   let yawRad = sample.attitudeYawRad {
-                    self.publishIosAttitude(
-                        rollRad: rollRad,
-                        pitchRad: pitchRad,
-                        yawRad: yawRad,
+            let shouldPublishMotionUi: Bool
+            let now = ProcessInfo.processInfo.systemUptime
+            if let last = lastMotionPublishTS, now - last < motionPublishMinDtSec {
+                shouldPublishMotionUi = false
+            } else {
+                lastMotionPublishTS = now
+                shouldPublishMotionUi = true
+            }
+            if shouldPublishMotionUi {
+                Task { @MainActor in
+                    guard self.isCurrentGeneration(generation) else { return }
+                    self.publishImuSample(
+                        ax: accel.x,
+                        ay: accel.y,
+                        az: accel.z,
+                        gx: sample.gyroXRadps,
+                        gy: sample.gyroYRadps,
+                        gz: sample.gyroZRadps,
                         sampleDate: sampleDate
                     )
-                }
+#if DEBUG
+                    if let rollRad = sample.attitudeRollRad,
+                       let pitchRad = sample.attitudePitchRad,
+                       let yawRad = sample.attitudeYawRad {
+                        self.publishIosAttitude(
+                            rollRad: rollRad,
+                            pitchRad: pitchRad,
+                            yawRad: yawRad,
+                            sampleDate: sampleDate
+                        )
+                    }
 #endif
+                }
             }
 
         case .gnss(_, let sample):
@@ -863,7 +1005,11 @@ final class SensorStore: NSObject, ObservableObject {
                 verticalAccuracyM: sample.verticalAccuracyM,
                 sampleDate: sampleDate
             )
-            let fallbackVelocity = fallbackNedVelocity(speedMps: sample.speedMps, courseDeg: sample.courseDeg)
+            let fallbackVelocity = fallbackNedVelocity(
+                speedMps: sample.speedMps,
+                courseDeg: sample.courseDeg,
+                courseAccuracyDeg: sample.courseAccuracyDeg
+            )
             let posN = sample.positionNorthM ?? fallbackPosition.n
             let posE = sample.positionEastM ?? fallbackPosition.e
             let posD = sample.positionDownM ?? fallbackPosition.d
@@ -941,10 +1087,15 @@ final class SensorStore: NSObject, ObservableObject {
         return computeNEDPositionFromGnss(current: location)
     }
 
-    private func fallbackNedVelocity(speedMps: Double?, courseDeg: Double?) -> (n: Double?, e: Double?) {
+    private func fallbackNedVelocity(
+        speedMps: Double?,
+        courseDeg: Double?,
+        courseAccuracyDeg: Double?
+    ) -> (n: Double?, e: Double?) {
         guard let velocity = GnssVelocityResolver.horizontalVelocity(
             speedMps: speedMps,
-            courseDeg: courseDeg
+            courseDeg: courseDeg,
+            courseAccuracyDeg: courseAccuracyDeg
         ) else { return (nil, nil) }
         return (velocity.northMps, velocity.eastMps)
     }
@@ -964,6 +1115,7 @@ final class SensorStore: NSObject, ObservableObject {
             isRecording = false
             if streamMode == .live {
                 activeSessionName = nil
+                activeSessionID = nil
             }
             publishSettingsState()
             return
@@ -978,6 +1130,7 @@ final class SensorStore: NSObject, ObservableObject {
             isRecording = false
             if streamMode == .live {
                 activeSessionName = nil
+                activeSessionID = nil
             }
             publishSettingsState()
             return
@@ -988,6 +1141,7 @@ final class SensorStore: NSObject, ObservableObject {
         isRecording = false
         if streamMode == .live {
             activeSessionName = nil
+            activeSessionID = nil
         }
         publishSettingsState()
     }
@@ -1083,6 +1237,8 @@ final class SensorStore: NSObject, ObservableObject {
                 activeSessionName: activeSessionName,
                 replayProgress: replayProgress,
                 playbackSpeedMultiplier: playbackSpeedMultiplier,
+                eventAudioSettings: eventAudioSettings,
+                mountMemorySettings: mountMemorySettings,
                 isRecording: isRecording,
                 savedSessionCount: recordedSessions.count
             )
@@ -1309,7 +1465,8 @@ extension SensorStore: CLLocationManagerDelegate {
     private func computeNEDVelocityFromGnss(current: CLLocation) -> (n: Double?, e: Double?, d: Double?) {
         guard let velocity = GnssVelocityResolver.horizontalVelocity(
             speedMps: current.speed,
-            courseDeg: current.course
+            courseDeg: current.course,
+            courseAccuracyDeg: current.courseAccuracy >= 0 ? current.courseAccuracy : nil
         ) else { return (nil, nil, nil) }
         // Vertical velocity is provided by barometer updates in this app.
         return (velocity.northMps, velocity.eastMps, nil)
@@ -1351,7 +1508,8 @@ extension SensorStore: CLLocationManagerDelegate {
         az: Double,
         gx: Double,
         gy: Double,
-        gz: Double
+        gz: Double,
+        generation: Int
     ) {
         let processingDate = FusionTimingPolicy.processingDate(
             for: sampleDate,
@@ -1364,7 +1522,24 @@ extension SensorStore: CLLocationManagerDelegate {
         )
         lastFusionSampleDate = processingDate
         lastFusionImuSampleDate = sampleDate
-        publishFusionResult(result, sampleDate: sampleDate)
+        if let snapshot = result?.snapshot {
+            publishRoadEventsFromFusionSnapshot(
+                snapshot,
+                sampleDate: sampleDate,
+                ax: ax,
+                ay: ay,
+                az: az,
+                gx: gx,
+                gy: gy,
+                gz: gz,
+                generation: generation
+            )
+        }
+        publishFusionResult(
+            result,
+            sampleDate: sampleDate,
+            imuSample: RawMotionInput(ax: ax, ay: ay, az: az, gx: gx, gy: gy, gz: gz)
+        )
     }
 
     private func runEkfFuseGps(
@@ -1438,20 +1613,28 @@ extension SensorStore: CLLocationManagerDelegate {
         publishFusionResult(result, sampleDate: sampleDate)
     }
 
-    private func resetFusionEngineState() {
+    private func resetFusionEngineState(using mountSettings: MountMemorySettings) {
         lastFusionSampleDate = nil
         lastFusionImuSampleDate = nil
-        fusionEngine.resetEkfAuto()
+        if let savedMount = mountSettings.savedCalibration, mountSettings.isEnabled {
+            fusionEngine.resetEkfManual(qBV: savedMount.qBV)
+        } else {
+            fusionEngine.resetEkfAuto()
+        }
     }
 
-    private func publishFusionResult(_ result: FusionResult?, sampleDate: Date) {
+    private func publishFusionResult(
+        _ result: FusionResult?,
+        sampleDate: Date,
+        imuSample: RawMotionInput? = nil
+    ) {
         guard let result else { return }
         guard shouldPublishFusionUi(status: result.status) else { return }
         Task { @MainActor in
             let tSec = self.relativeTimeSeconds(for: sampleDate)
-            self.applyFusionStatus(result.status)
+            self.applyFusionStatus(result.status, alignProgressStatus: result.alignProgress)
             if let snapshot = result.snapshot {
-                self.appendEkfSamplesFromState(snapshot, tSec: tSec)
+                self.appendEkfSamplesFromState(snapshot, tSec: tSec, sampleDate: sampleDate, imuSample: imuSample)
             }
         }
     }
@@ -1477,9 +1660,22 @@ extension SensorStore: CLLocationManagerDelegate {
     }
 
     @MainActor
-    private func applyFusionStatus(_ status: FusionStatus) {
+    private func applyFusionStatus(_ status: FusionStatus, alignProgressStatus: AlignProgressStatus) {
         ekfInitialized = status.filterInitialized
         ekfMountReady = status.mountReady
+        if let mountQBV = status.mountQBV {
+            latestMountQBV = mountQBV
+            if status.mountReady, mountMemorySettings.isEnabled {
+                storeRememberedMountIfNeeded(mountQBV)
+            }
+        }
+        alignProgress = AlignProgressSnapshot(
+            isValid: alignProgressStatus.isValid,
+            coarseReady: alignProgressStatus.coarseReady,
+            rollSigmaDeg: alignProgressStatus.rollSigmaDeg,
+            pitchSigmaDeg: alignProgressStatus.pitchSigmaDeg,
+            yawSigmaDeg: alignProgressStatus.yawSigmaDeg
+        )
         let health = FusionHealth.evaluate(
             mountReady: status.mountReady,
             initialized: status.filterInitialized,
@@ -1492,8 +1688,24 @@ extension SensorStore: CLLocationManagerDelegate {
         fusionConfidence = health.fusedConfidence
     }
 
+    private func storeRememberedMountIfNeeded(_ qBV: Quaternion, force: Bool = false) {
+        guard mountMemorySettings.isEnabled else { return }
+        guard force || MountMemoryPolicy.shouldStore(previous: mountMemorySettings.savedCalibration, next: qBV) else {
+            return
+        }
+        guard let calibration = SavedMountCalibration(qBV: qBV, savedAt: Date()) else { return }
+        mountMemorySettings.savedCalibration = calibration
+        MountMemoryDefaults.saveCalibration(calibration)
+        publishSettingsState()
+    }
+
     @MainActor
-    private func appendEkfSamplesFromState(_ snapshot: FusionSnapshot, tSec: Double) {
+    private func appendEkfSamplesFromState(
+        _ snapshot: FusionSnapshot,
+        tSec: Double,
+        sampleDate: Date,
+        imuSample: RawMotionInput?
+    ) {
         ekfInitialized = snapshot.initialized
         ekfMountReady = snapshot.mountReady
         fusedPosNorthM = snapshot.positionNedM.north
@@ -1519,12 +1731,24 @@ extension SensorStore: CLLocationManagerDelegate {
             ),
             streamHealth: streamHealth
         )
+        let vehicleGyro = imuSample.map {
+            MotionKinematics.vehicleFRDGyro(
+                qBV: snapshot.mountQBV,
+                bodyGyroRadps: (x: $0.gx, y: $0.gy, z: $0.gz)
+            )
+        }
+        let vehicleAccel = imuSample.map {
+            MotionKinematics.vehicleFRDAcceleration(
+                qBV: snapshot.mountQBV,
+                bodyAccelMps2: (x: $0.ax, y: $0.ay, z: $0.az)
+            )
+        }
         let motionDisplay = VehicleMotionDisplay.make(
             nedVelocityMps: nedVelocity,
             attitudeQNV: snapshot.attitudeQNV,
-            yawRateRadps: motion.gz,
-            longitudinalAccelerationMps2: motion.ax,
-            verticalAccelerationMps2: motion.az,
+            yawRateRadps: vehicleGyro?.down ?? motion.gz,
+            longitudinalAccelerationMps2: vehicleAccel?.forward ?? motion.ax,
+            verticalAccelerationMps2: vehicleAccel?.down ?? motion.az,
             health: health
         )
         vehicleForwardMps = motionDisplay.vehicleVelocityFRDMps.forward
@@ -1532,6 +1756,18 @@ extension SensorStore: CLLocationManagerDelegate {
         vehicleDownMps = motionDisplay.vehicleVelocityFRDMps.down
         vehicleSegment = motionDisplay.segment
         fusionConfidence = health.fusedConfidence
+        let eventCoordinate = snapshot.coordinate ?? currentGnssCoordinate()
+        let detectedEvents = motionEventDetector.updateSystemEvents(
+            MotionEventSample(
+                tSec: tSec,
+                timestamp: sampleDate,
+                coordinate: eventCoordinate,
+                health: health,
+                initialized: snapshot.initialized,
+                mountReady: snapshot.mountReady
+            )
+        )
+        appendDetectedMotionEvents(detectedEvents)
 
         appendSample(
             to: &fusedPositionHistory,
@@ -1553,6 +1789,13 @@ extension SensorStore: CLLocationManagerDelegate {
             ),
             minIntervalSec: routeSampleMinDtSec
         )
+        if let coordinate = snapshot.coordinate, coordinate.isValidLatitudeLongitude {
+            appendCoordinateRouteSample(
+                to: &fusedRouteCoordinateHistory,
+                sample: TimedCoordinateSample(tSec: tSec, coordinate: coordinate),
+                minIntervalSec: routeSampleMinDtSec
+            )
+        }
         appendSample(
             to: &ekfVelocityHistory,
             sample: TimedVec3Sample(
@@ -1593,6 +1836,20 @@ extension SensorStore: CLLocationManagerDelegate {
             ),
             maxCount: chartHistoryMaxCount
         )
+        if snapshot.initialized,
+           let vehicleAccel,
+           let vehicleGyro {
+            appendSample(
+                to: &vehicleMotionHistory,
+                sample: TimedVec3Sample(
+                    tSec: tSec,
+                    x: vehicleAccel.forward,
+                    y: vehicleGyro.down * 180.0 / .pi,
+                    z: nil
+                ),
+                maxCount: chartHistoryMaxCount
+            )
+        }
     }
 
     @MainActor
@@ -1777,4 +2034,121 @@ extension SensorStore: CLLocationManagerDelegate {
         }
         appendSample(to: &buffer, sample: sample, maxCount: routeHistoryMaxCount)
     }
+
+    private func appendCoordinateRouteSample(
+        to buffer: inout [TimedCoordinateSample],
+        sample: TimedCoordinateSample,
+        minIntervalSec: Double? = nil
+    ) {
+        if let minIntervalSec,
+           let previous = buffer.last,
+           sample.tSec - previous.tSec < minIntervalSec {
+            return
+        }
+        buffer.append(sample)
+        if buffer.count > routeHistoryMaxCount {
+            buffer.removeFirst(buffer.count - routeHistoryMaxCount)
+        }
+    }
+
+    private func publishRoadEventsFromFusionSnapshot(
+        _ snapshot: FusionSnapshot,
+        sampleDate: Date,
+        ax: Double,
+        ay: Double,
+        az: Double,
+        gx: Double,
+        gy: Double,
+        gz: Double,
+        generation: Int
+    ) {
+        guard snapshot.initialized else { return }
+        let tSec = roadEventRelativeTimeSeconds(for: sampleDate)
+        let nedVelocity = NavigationVectorNED(
+            north: snapshot.velocityNedMps.n,
+            east: snapshot.velocityNedMps.e,
+            down: snapshot.velocityNedMps.d
+        )
+        let vehicleVelocity = MotionKinematics.vehicleFRDVelocity(
+            qNV: snapshot.attitudeQNV,
+            nedVelocityMps: nedVelocity
+        )
+        let vehicleGyro = MotionKinematics.vehicleFRDGyro(
+            qBV: snapshot.mountQBV,
+            bodyGyroRadps: (x: gx, y: gy, z: gz)
+        )
+        let vehicleAccel = MotionKinematics.vehicleFRDAcceleration(
+            qBV: snapshot.mountQBV,
+            bodyAccelMps2: (x: ax, y: ay, z: az)
+        )
+        let events = fusionEngine.processRoadEventMotion(
+            tSec: tSec,
+            forwardVelocityMps: vehicleVelocity.forward,
+            groundSpeedMps: MotionKinematics.groundSpeed(nedVelocity),
+            longitudinalAccelMps2: vehicleAccel.forward,
+            yawRateRadps: vehicleGyro.down,
+            pitchDeg: snapshot.eulerRad.pitch * 180.0 / .pi,
+            lateralAccelMps2: vehicleAccel.right,
+            verticalAccelerationMps2: vehicleAccel.down
+        ).map { detection in
+            MotionEvent(
+                roadEvent: detection,
+                sampleTimestamp: sampleDate,
+                currentTSec: tSec,
+                coordinate: snapshot.coordinate
+            )
+        }
+        let summary = shouldPublishTripStats() ? fusionEngine.tripSummary() : nil
+        guard !events.isEmpty || summary != nil else { return }
+        Task { @MainActor in
+            guard self.isCurrentGeneration(generation) else { return }
+            if let summary {
+                self.tripStatsSummary = summary
+            }
+            if !events.isEmpty {
+                self.appendDetectedMotionEvents(events)
+            }
+        }
+    }
+
+    private func shouldPublishTripStats() -> Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard let lastTripStatsPublishTS else {
+            self.lastTripStatsPublishTS = now
+            return true
+        }
+        guard now - lastTripStatsPublishTS >= tripStatsPublishMinDtSec else {
+            return false
+        }
+        self.lastTripStatsPublishTS = now
+        return true
+    }
+
+    private func roadEventRelativeTimeSeconds(for date: Date) -> Double {
+        if roadEventStreamStartTime == nil {
+            roadEventStreamStartTime = date
+        }
+        guard let roadEventStreamStartTime else { return 0.0 }
+        return max(0.0, date.timeIntervalSince(roadEventStreamStartTime))
+    }
+
+    @MainActor
+    private func appendDetectedMotionEvents(_ events: [MotionEvent]) {
+        guard !events.isEmpty else { return }
+        motionEvents.append(contentsOf: events)
+        if motionEvents.count > motionEventHistoryMaxCount {
+            motionEvents.removeFirst(motionEvents.count - motionEventHistoryMaxCount)
+        }
+        latestMotionEvent = events.last
+        if isForegroundForEventAudio {
+            events.forEach { eventAudioNotifier.notify($0, settings: eventAudioSettings) }
+        }
+    }
+
+    @MainActor
+    private func currentGnssCoordinate() -> GeographicCoordinate? {
+        guard let latitude, let longitude else { return nil }
+        return GeographicCoordinate(latitudeDeg: latitude, longitudeDeg: longitude, altitudeM: altitudeM)
+    }
+
 }

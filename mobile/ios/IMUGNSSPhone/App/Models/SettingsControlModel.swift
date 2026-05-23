@@ -9,6 +9,8 @@ struct SettingsControlState: Equatable {
     var activeSessionName: String?
     var replayProgress: Double = 0.0
     var playbackSpeedMultiplier: Double = PlaybackSpeedPolicy.defaultMultiplier
+    var eventAudioSettings: EventAudioSettings = EventAudioSettings()
+    var mountMemorySettings: MountMemorySettings = MountMemorySettings()
     var isRecording: Bool = false
     var savedSessionCount: Int = 0
 
@@ -23,6 +25,14 @@ struct SettingsControlState: Equatable {
 
     var playbackSpeedTitle: String {
         PlaybackSpeedPolicy.title(for: playbackSpeedMultiplier)
+    }
+
+    var mountModeTitle: String {
+        MountMemoryPolicy.activeModeTitle(mountMemorySettings)
+    }
+
+    var savedMountTitle: String {
+        MountMemoryPolicy.savedMountTitle(mountMemorySettings)
     }
 }
 
@@ -74,6 +84,26 @@ final class SettingsControlModel: ObservableObject {
 
     func setPlaybackSpeedMultiplier(_ multiplier: Double) {
         sensorStore?.setPlaybackSpeedMultiplier(multiplier)
+    }
+
+    func setEventAudibleAlertMode(_ mode: EventAudibleAlertMode) {
+        sensorStore?.setEventAudibleAlertMode(mode)
+    }
+
+    func setEventAlertsPlayInSilentMode(_ isEnabled: Bool) {
+        sensorStore?.setEventAlertsPlayInSilentMode(isEnabled)
+    }
+
+    func playTestEventAudioAlert() {
+        sensorStore?.playTestEventAudioAlert()
+    }
+
+    func setMountMemoryEnabled(_ isEnabled: Bool) {
+        sensorStore?.setMountMemoryEnabled(isEnabled)
+    }
+
+    func clearRememberedMount() {
+        sensorStore?.clearRememberedMount()
     }
 
     func startRecording() {

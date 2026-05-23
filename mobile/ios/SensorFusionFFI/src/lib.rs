@@ -2,12 +2,27 @@
 
 use core::ptr;
 
+use road_events::{
+    HarshAccelConfig, HarshAccelDetector, HarshBrakeConfig, HarshBrakeDetector, HarshCornerConfig,
+    HarshCornerDetector, HarshCornerSample, HarshLongitudinalSample, HillConfig, HillDetector,
+    HillKind, HillSample, ReverseConfig, ReverseDetector, ReverseSample, SpeedBumpConfig,
+    SpeedBumpDetector, SpeedBumpSample, TripEventKind, TripSample, TripStats,
+};
 use sensor_fusion::{GnssSample, ImuSample, SensorFusion, Update};
+
+const ROAD_EVENT_HARSH_ACCELERATION: u32 = 1;
+const ROAD_EVENT_HARSH_BRAKING: u32 = 2;
+const ROAD_EVENT_HARSH_CORNERING: u32 = 3;
+const ROAD_EVENT_REVERSE: u32 = 4;
+const ROAD_EVENT_SPEED_BUMP: u32 = 5;
+const ROAD_EVENT_UPHILL: u32 = 6;
+const ROAD_EVENT_DOWNHILL: u32 = 7;
 
 /// Opaque fusion handle owned by Rust and passed across the C ABI as a pointer.
 pub struct SensorFusionFfi {
     inner: SensorFusion,
     last_update: SensorFusionFfiUpdate,
+    road_events: RoadEventDetectors,
 }
 
 #[repr(C)]
@@ -133,10 +148,104 @@ impl Default for SensorFusionFfiEkfSnapshot {
     }
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SensorFusionFfiAlignProgress {
+    pub valid: bool,
+    pub coarse_ready: bool,
+    pub roll_sigma_deg: f32,
+    pub pitch_sigma_deg: f32,
+    pub yaw_sigma_deg: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SensorFusionFfiRoadEvent {
+    pub kind: u32,
+    pub t_s: f32,
+    pub start_t_s: f32,
+    pub end_t_s: f32,
+    pub duration_s: f32,
+    pub value: f32,
+    pub confidence: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SensorFusionFfiTripSummary {
+    pub sample_count: u32,
+    pub invalid_sample_count: u32,
+    pub data_gap_count: u32,
+    pub max_sample_gap_s: f32,
+    pub total_gap_duration_s: f32,
+    pub duration_s: f32,
+    pub moving_duration_s: f32,
+    pub stationary_duration_s: f32,
+    pub distance_m: f32,
+    pub reverse_duration_s: f32,
+    pub reverse_distance_m: f32,
+    pub uphill_distance_m: f32,
+    pub downhill_distance_m: f32,
+    pub elevation_gain_m: f32,
+    pub elevation_loss_m: f32,
+    pub mean_speed_mps: f32,
+    pub moving_mean_speed_mps: f32,
+    pub peak_speed_mps: f32,
+    pub peak_accel_mps2: f32,
+    pub peak_decel_mps2: f32,
+    pub peak_lateral_accel_mps2: f32,
+    pub rolling_speed_mps: f32,
+    pub rolling_abs_longitudinal_accel_mps2: f32,
+    pub rolling_abs_lateral_accel_mps2: f32,
+    pub speed_bumps: u32,
+    pub uphill_events: u32,
+    pub downhill_events: u32,
+    pub reverse_events: u32,
+    pub harsh_acceleration_events: u32,
+    pub harsh_braking_events: u32,
+    pub harsh_cornering_events: u32,
+    pub speed_bumps_per_km: f32,
+    pub harsh_events_per_km: f32,
+    pub reverse_seconds_per_km: f32,
+}
+
+#[derive(Clone, Debug)]
+struct RoadEventDetectors {
+    speed_bump: SpeedBumpDetector,
+    hill: HillDetector,
+    reverse: ReverseDetector,
+    harsh_accel: HarshAccelDetector,
+    harsh_brake: HarshBrakeDetector,
+    harsh_corner: HarshCornerDetector,
+    trip_stats: TripStats,
+}
+
+impl RoadEventDetectors {
+    fn new() -> Self {
+        Self {
+            speed_bump: SpeedBumpDetector::new(SpeedBumpConfig::default()),
+            hill: HillDetector::new(HillConfig::default()),
+            reverse: ReverseDetector::new(ReverseConfig::default()),
+            harsh_accel: HarshAccelDetector::new(HarshAccelConfig::default()),
+            harsh_brake: HarshBrakeDetector::new(HarshBrakeConfig::default()),
+            harsh_corner: HarshCornerDetector::new(HarshCornerConfig::default()),
+            trip_stats: TripStats::default(),
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::new();
+    }
+}
+
 impl SensorFusionFfi {
     fn new(inner: SensorFusion) -> Self {
         let last_update = SensorFusionFfiUpdate::from_fusion_state(&inner);
-        Self { inner, last_update }
+        Self {
+            inner,
+            last_update,
+            road_events: RoadEventDetectors::new(),
+        }
     }
 
     fn status(&self) -> SensorFusionFfiUpdate {
@@ -150,11 +259,276 @@ impl SensorFusionFfi {
     fn reset(&mut self, inner: SensorFusion) {
         self.inner = inner;
         self.last_update = SensorFusionFfiUpdate::from_fusion_state(&self.inner);
+        self.road_events.reset();
     }
 
     fn store_update(&mut self, update: Update) -> SensorFusionFfiUpdate {
         self.last_update = update.into();
         self.status()
+    }
+}
+
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+/// # Safety
+///
+/// `handle` must be either null or a valid pointer returned by this crate's
+/// create functions. When `out` is non-null, it must point to writable memory
+/// for at least `max_events` `SensorFusionFfiRoadEvent` values.
+pub unsafe extern "C" fn sensor_fusion_process_road_event_motion(
+    handle: *mut SensorFusionFfi,
+    t_s: f32,
+    forward_velocity_mps: f32,
+    ground_speed_mps: f32,
+    longitudinal_accel_mps2: f32,
+    longitudinal_accel_valid: bool,
+    yaw_rate_radps: f32,
+    yaw_rate_valid: bool,
+    pitch_deg: f32,
+    pitch_valid: bool,
+    lateral_accel_mps2: f32,
+    lateral_accel_valid: bool,
+    vertical_accel_mps2: f32,
+    vertical_accel_valid: bool,
+    out: *mut SensorFusionFfiRoadEvent,
+    max_events: usize,
+) -> usize {
+    let Some(fusion) = fusion_mut(handle) else {
+        return 0;
+    };
+    if out.is_null() || max_events == 0 || !t_s.is_finite() {
+        return 0;
+    }
+
+    let mut writer = RoadEventWriter {
+        out,
+        max_events,
+        len: 0,
+    };
+
+    fusion.road_events.trip_stats.update_motion(TripSample {
+        t_s,
+        speed_mps: ground_speed_mps.max(0.0),
+        forward_velocity_mps,
+        height_m: None,
+        height_frame_id: 0,
+        longitudinal_accel_mps2: if longitudinal_accel_valid {
+            longitudinal_accel_mps2
+        } else {
+            0.0
+        },
+        lateral_accel_mps2: if lateral_accel_valid {
+            lateral_accel_mps2
+        } else if yaw_rate_valid {
+            ground_speed_mps.max(0.0) * yaw_rate_radps
+        } else {
+            0.0
+        },
+    });
+
+    let longitudinal = HarshLongitudinalSample {
+        t_s,
+        forward_velocity_mps,
+    };
+    if let Some(event) = fusion.road_events.harsh_accel.update(longitudinal) {
+        fusion
+            .road_events
+            .trip_stats
+            .record_event(TripEventKind::HarshAcceleration);
+        writer.push(SensorFusionFfiRoadEvent {
+            kind: ROAD_EVENT_HARSH_ACCELERATION,
+            t_s: event.end_t_s,
+            start_t_s: event.start_t_s,
+            end_t_s: event.end_t_s,
+            duration_s: event.duration_s,
+            value: event.peak_accel_mps2,
+            confidence: 0.9,
+        });
+    }
+    if let Some(event) = fusion.road_events.harsh_brake.update(longitudinal) {
+        fusion
+            .road_events
+            .trip_stats
+            .record_event(TripEventKind::HarshBraking);
+        writer.push(SensorFusionFfiRoadEvent {
+            kind: ROAD_EVENT_HARSH_BRAKING,
+            t_s: event.end_t_s,
+            start_t_s: event.start_t_s,
+            end_t_s: event.end_t_s,
+            duration_s: event.duration_s,
+            value: event.peak_accel_mps2,
+            confidence: 0.9,
+        });
+    }
+    if let Some(event) = fusion.road_events.reverse.update(ReverseSample {
+        t_s,
+        forward_velocity_mps,
+    }) {
+        fusion
+            .road_events
+            .trip_stats
+            .record_event(TripEventKind::Reverse);
+        writer.push(SensorFusionFfiRoadEvent {
+            kind: ROAD_EVENT_REVERSE,
+            t_s: event.end_t_s,
+            start_t_s: event.start_t_s,
+            end_t_s: event.end_t_s,
+            duration_s: event.duration_s,
+            value: event.peak_reverse_speed_mps,
+            confidence: 0.9,
+        });
+    }
+    if yaw_rate_valid {
+        if let Some(event) = fusion.road_events.harsh_corner.update(HarshCornerSample {
+            t_s,
+            speed_mps: ground_speed_mps,
+            yaw_rate_radps,
+        }) {
+            fusion
+                .road_events
+                .trip_stats
+                .record_event(TripEventKind::HarshCornering);
+            writer.push(SensorFusionFfiRoadEvent {
+                kind: ROAD_EVENT_HARSH_CORNERING,
+                t_s: event.end_t_s,
+                start_t_s: event.start_t_s,
+                end_t_s: event.end_t_s,
+                duration_s: event.duration_s,
+                value: event.peak_lateral_accel_mps2,
+                confidence: 0.9,
+            });
+        }
+    }
+    if pitch_valid {
+        if let Some(event) = fusion.road_events.hill.update(HillSample {
+            t_s,
+            speed_mps: ground_speed_mps,
+            pitch_deg,
+        }) {
+            fusion
+                .road_events
+                .trip_stats
+                .record_event(match event.kind {
+                    HillKind::Uphill => TripEventKind::Uphill,
+                    HillKind::Downhill => TripEventKind::Downhill,
+                });
+            writer.push(SensorFusionFfiRoadEvent {
+                kind: match event.kind {
+                    HillKind::Uphill => ROAD_EVENT_UPHILL,
+                    HillKind::Downhill => ROAD_EVENT_DOWNHILL,
+                },
+                t_s: event.end_t_s,
+                start_t_s: event.start_t_s,
+                end_t_s: event.end_t_s,
+                duration_s: event.duration_s,
+                value: event.mean_pitch_deg,
+                confidence: 0.9,
+            });
+        }
+    }
+    if pitch_valid && vertical_accel_valid {
+        let (_, event) = fusion.road_events.speed_bump.update(SpeedBumpSample {
+            t_s,
+            speed_mps: ground_speed_mps,
+            pitch_deg,
+            vertical_accel_mps2,
+        });
+        if let Some(event) = event {
+            fusion
+                .road_events
+                .trip_stats
+                .record_event(TripEventKind::SpeedBump);
+            writer.push(SensorFusionFfiRoadEvent {
+                kind: ROAD_EVENT_SPEED_BUMP,
+                t_s: event.t_s,
+                start_t_s: event.t_s - event.duration_s * 0.5,
+                end_t_s: event.t_s + event.duration_s * 0.5,
+                duration_s: event.duration_s,
+                value: event.peak_abs_pitch_deg,
+                confidence: event.confidence,
+            });
+        }
+    }
+
+    writer.len
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// `handle` must be either null or a valid pointer returned by this crate's
+/// create functions. `out` must be either null or point to writable memory for
+/// one `SensorFusionFfiTripSummary`.
+pub unsafe extern "C" fn sensor_fusion_snapshot_trip_summary(
+    handle: *const SensorFusionFfi,
+    out: *mut SensorFusionFfiTripSummary,
+) -> bool {
+    let Some(fusion) = fusion_ref(handle) else {
+        return false;
+    };
+    if out.is_null() {
+        return false;
+    }
+    let summary = fusion.road_events.trip_stats.summary();
+    unsafe {
+        ptr::write(
+            out,
+            SensorFusionFfiTripSummary {
+                sample_count: summary.sample_count,
+                invalid_sample_count: summary.invalid_sample_count,
+                data_gap_count: summary.data_gap_count,
+                max_sample_gap_s: summary.max_sample_gap_s,
+                total_gap_duration_s: summary.total_gap_duration_s,
+                duration_s: summary.duration_s,
+                moving_duration_s: summary.moving_duration_s,
+                stationary_duration_s: summary.stationary_duration_s,
+                distance_m: summary.distance_m,
+                reverse_duration_s: summary.reverse_duration_s,
+                reverse_distance_m: summary.reverse_distance_m,
+                uphill_distance_m: 0.0,
+                downhill_distance_m: 0.0,
+                elevation_gain_m: summary.elevation_gain_m,
+                elevation_loss_m: summary.elevation_loss_m,
+                mean_speed_mps: summary.mean_speed_mps,
+                moving_mean_speed_mps: summary.moving_mean_speed_mps,
+                peak_speed_mps: summary.peak_speed_mps,
+                peak_accel_mps2: summary.peak_accel_mps2,
+                peak_decel_mps2: summary.peak_decel_mps2,
+                peak_lateral_accel_mps2: summary.peak_lateral_accel_mps2,
+                rolling_speed_mps: summary.rolling_speed_mps,
+                rolling_abs_longitudinal_accel_mps2: summary.rolling_abs_longitudinal_accel_mps2,
+                rolling_abs_lateral_accel_mps2: summary.rolling_abs_lateral_accel_mps2,
+                speed_bumps: summary.events.speed_bumps,
+                uphill_events: summary.events.uphill,
+                downhill_events: summary.events.downhill,
+                reverse_events: summary.events.reverse,
+                harsh_acceleration_events: summary.events.harsh_acceleration,
+                harsh_braking_events: summary.events.harsh_braking,
+                harsh_cornering_events: summary.events.harsh_cornering,
+                speed_bumps_per_km: summary.speed_bumps_per_km,
+                harsh_events_per_km: summary.harsh_events_per_km,
+                reverse_seconds_per_km: summary.reverse_seconds_per_km,
+            },
+        );
+    }
+    true
+}
+
+struct RoadEventWriter {
+    out: *mut SensorFusionFfiRoadEvent,
+    max_events: usize,
+    len: usize,
+}
+
+impl RoadEventWriter {
+    fn push(&mut self, event: SensorFusionFfiRoadEvent) {
+        if self.len >= self.max_events {
+            return;
+        }
+        unsafe {
+            ptr::write(self.out.add(self.len), event);
+        }
+        self.len += 1;
     }
 }
 
@@ -323,6 +697,47 @@ pub unsafe extern "C" fn sensor_fusion_snapshot_ekf(
     snapshot.initialized
 }
 
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// `handle` must be either null or a valid pointer returned by this crate's
+/// create functions. When non-null, `out` must point to writable memory for one
+/// `SensorFusionFfiAlignProgress`.
+pub unsafe extern "C" fn sensor_fusion_snapshot_align_progress(
+    handle: *const SensorFusionFfi,
+    out: *mut SensorFusionFfiAlignProgress,
+) -> bool {
+    if out.is_null() {
+        return false;
+    }
+    let Some(fusion) = fusion_ref(handle) else {
+        unsafe {
+            ptr::write(out, SensorFusionFfiAlignProgress::default());
+        }
+        return false;
+    };
+    let Some(align) = fusion.inner.align() else {
+        unsafe {
+            ptr::write(out, SensorFusionFfiAlignProgress::default());
+        }
+        return false;
+    };
+    let sigma_deg = align.sigma_deg();
+    unsafe {
+        ptr::write(
+            out,
+            SensorFusionFfiAlignProgress {
+                valid: true,
+                coarse_ready: align.coarse_alignment_ready(),
+                roll_sigma_deg: sigma_deg[0],
+                pitch_sigma_deg: sigma_deg[1],
+                yaw_sigma_deg: sigma_deg[2],
+            },
+        );
+    }
+    true
+}
+
 fn fusion_mut(handle: *mut SensorFusionFfi) -> Option<&'static mut SensorFusionFfi> {
     if handle.is_null() {
         None
@@ -408,6 +823,15 @@ mod tests {
         };
         assert!(!unsafe { sensor_fusion_snapshot_ekf(ptr::null(), &mut snapshot) });
         assert_eq!(snapshot.lat_deg, 0.0);
+
+        let mut align = SensorFusionFfiAlignProgress {
+            valid: true,
+            roll_sigma_deg: 42.0,
+            ..SensorFusionFfiAlignProgress::default()
+        };
+        assert!(!unsafe { sensor_fusion_snapshot_align_progress(ptr::null(), &mut align) });
+        assert!(!align.valid);
+        assert_eq!(align.roll_sigma_deg, 0.0);
     }
 
     #[test]
@@ -424,6 +848,10 @@ mod tests {
         assert!(!status.filter_initialized_now);
         assert!(status.mount_q_bv_valid);
         assert_eq!(status.mount_q_bv, [0.5, 0.5, 0.5, 0.5]);
+
+        let mut align = SensorFusionFfiAlignProgress::default();
+        assert!(!unsafe { sensor_fusion_snapshot_align_progress(handle, &mut align) });
+        assert!(!align.valid);
 
         let update = unsafe {
             sensor_fusion_process_gnss(
@@ -506,6 +934,76 @@ mod tests {
         assert!(snapshot.position_lla_valid);
         assert!((snapshot.lat_deg - 37.3318).abs() < 1.0e-6);
         assert!((snapshot.lon_deg + 122.0312).abs() < 1.0e-6);
+
+        unsafe {
+            sensor_fusion_destroy(handle);
+        }
+    }
+
+    #[test]
+    fn road_event_motion_ffi_emits_reverse_from_road_events_crate() {
+        let handle = sensor_fusion_create_ekf_auto();
+        assert!(!handle.is_null());
+
+        let mut out = [SensorFusionFfiRoadEvent::default(); 4];
+        let mut total = 0;
+        for i in 0..25 {
+            let count = unsafe {
+                sensor_fusion_process_road_event_motion(
+                    handle,
+                    i as f32 * 0.1,
+                    -0.8,
+                    0.8,
+                    0.0,
+                    true,
+                    0.0,
+                    false,
+                    0.0,
+                    false,
+                    0.0,
+                    false,
+                    0.0,
+                    false,
+                    out.as_mut_ptr(),
+                    out.len(),
+                )
+            };
+            total += count;
+        }
+        for i in 25..35 {
+            let count = unsafe {
+                sensor_fusion_process_road_event_motion(
+                    handle,
+                    i as f32 * 0.1,
+                    0.0,
+                    0.0,
+                    0.0,
+                    true,
+                    0.0,
+                    false,
+                    0.0,
+                    false,
+                    0.0,
+                    false,
+                    0.0,
+                    false,
+                    out.as_mut_ptr(),
+                    out.len(),
+                )
+            };
+            total += count;
+        }
+
+        assert!(total > 0);
+        assert_eq!(out[0].kind, ROAD_EVENT_REVERSE);
+        assert!(out[0].duration_s >= 1.0);
+
+        let mut trip = SensorFusionFfiTripSummary::default();
+        assert!(unsafe { sensor_fusion_snapshot_trip_summary(handle, &mut trip) });
+        assert!(trip.sample_count > 0);
+        assert!(trip.distance_m > 0.0);
+        assert!(trip.reverse_distance_m > 0.0);
+        assert!(trip.reverse_events > 0);
 
         unsafe {
             sensor_fusion_destroy(handle);

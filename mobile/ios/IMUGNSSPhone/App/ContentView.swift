@@ -74,6 +74,21 @@ private enum DrivePanelDetent: CaseIterable {
         case .expanded: return .collapsed
         }
     }
+
+    var followCameraVerticalOffset: CGFloat {
+        switch self {
+        case .collapsed: return 0.0
+        case .medium: return 96.0
+        case .expanded: return 168.0
+        }
+    }
+}
+
+private enum DriveTelemetryTab: String, CaseIterable, Identifiable {
+    case metrics = "Metrics"
+    case streams = "Streams"
+
+    var id: String { rawValue }
 }
 
 private extension RouteLayerSelection {
@@ -139,6 +154,7 @@ private struct DriveView: View {
     @State private var showsAccuracyOverlay = false
     @State private var viewportRefreshToken = 0
     @State private var followsCurrentMarker = true
+    @State private var headsUpMotionEvent: MotionEvent?
 
     private var rawRouteCoordinates: [CLLocationCoordinate2D] {
         guard routeLayer.showsGnssRoute else { return [] }
@@ -154,12 +170,9 @@ private struct DriveView: View {
     private var fusedRouteCoordinates: [CLLocationCoordinate2D] {
         guard routeLayer.showsFusedRoute else { return [] }
         guard showsFusedOutput else { return [] }
-        return RawGNSSRoute.coordinates(
-            currentLatitude: store.fusedLatitude,
-            currentLongitude: store.fusedLongitude,
-            currentNorthM: store.fusedPosNorthM,
-            currentEastM: store.fusedPosEastM,
-            positionHistory: store.fusedRouteHistory
+        return MapGeographicRoutePolicy.coordinates(
+            history: store.fusedRouteCoordinateHistory.map(\.coordinate),
+            current: currentFusedGeographicCoordinate
         )
     }
 
@@ -174,6 +187,19 @@ private struct DriveView: View {
         guard showsFusedOutput else { return nil }
         guard let latitude = store.fusedLatitude, let longitude = store.fusedLongitude else { return nil }
         return CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+
+    private var currentFusedGeographicCoordinate: GeographicCoordinate? {
+        guard let latitude = store.fusedLatitude, let longitude = store.fusedLongitude else { return nil }
+        return GeographicCoordinate(
+            latitudeDeg: latitude,
+            longitudeDeg: longitude,
+            altitudeM: store.fusedAltitudeM
+        )
+    }
+
+    private var mapEvents: [MotionEvent] {
+        Array(store.motionEvents.suffix(60))
     }
 
     private var currentMapHeadingDeg: Double? {
@@ -205,10 +231,12 @@ private struct DriveView: View {
                     fusedCoordinates: fusedRouteCoordinates,
                     currentCoordinate: currentCoordinate,
                     fusedCurrentCoordinate: fusedCurrentCoordinate,
+                    eventAnnotations: mapEvents,
                     currentHeadingDeg: currentMapHeadingDeg,
                     horizontalAccuracyM: store.horizontalAccuracyM,
                     showAccuracyOverlay: showsAccuracyOverlay,
                     followsCurrentMarker: followsCurrentMarker,
+                    followCameraVerticalOffset: panelDetent.followCameraVerticalOffset,
                     viewportRefreshToken: viewportRefreshToken
                 )
                 .ignoresSafeArea(edges: .top)
@@ -219,7 +247,19 @@ private struct DriveView: View {
                         .padding(.top, 8)
                         .padding(.horizontal, 12)
 
+                    if let event = headsUpMotionEvent {
+                        MotionEventHeadsUp(event: event)
+                            .padding(.top, 8)
+                            .padding(.horizontal, 12)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+
                     Spacer()
+
+                    PlaybackMapControlPanel()
+                        .environmentObject(store)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, store.streamMode == .playback ? 8 : 0)
 
                     DriveTelemetryDrawer(
                         detent: $panelDetent,
@@ -250,6 +290,34 @@ private struct DriveView: View {
                 .frame(maxHeight: .infinity, alignment: .topTrailing)
             }
             .toolbar(.hidden, for: .navigationBar)
+            .onChange(of: store.latestMotionEvent?.id) { _ in
+                presentLatestMotionEventIfNeeded()
+            }
+            .task(id: headsUpMotionEvent?.id) {
+                guard headsUpMotionEvent != nil else { return }
+                let delayNanoseconds = UInt64(MotionEventHeadsUpPolicy.displayDurationSec * 1_000_000_000)
+                do {
+                    try await Task.sleep(nanoseconds: delayNanoseconds)
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        headsUpMotionEvent = nil
+                    }
+                }
+            }
+        }
+    }
+
+    private func presentLatestMotionEventIfNeeded() {
+        guard MotionEventHeadsUpPolicy.shouldPresent(
+            latestID: store.latestMotionEvent?.id,
+            displayedID: headsUpMotionEvent?.id
+        ) else { return }
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
+            headsUpMotionEvent = store.latestMotionEvent
         }
     }
 }
@@ -261,20 +329,9 @@ private struct TopMapStatusBar: View {
     var body: some View {
         HStack(spacing: 8) {
             BrandMark(size: 30)
-            Text("Motion Fusion")
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
             Spacer(minLength: 4)
             CompactStatusDot(tint: streamTint)
             Text(store.streamMode.rawValue)
-                .font(.caption.weight(.semibold))
-                .lineLimit(1)
-            Divider()
-                .frame(height: 18)
-            Image(systemName: streamHealthImage)
-                .imageScale(.small)
-                .foregroundStyle(streamHealthTint)
-            Text(store.streamHealth.shortTitle)
                 .font(.caption.weight(.semibold))
                 .lineLimit(1)
             Divider()
@@ -311,28 +368,6 @@ private struct TopMapStatusBar: View {
             return .purple
         }
         return .green
-    }
-
-    private var streamHealthTint: Color {
-        switch store.streamHealth.severity {
-        case .nominal:
-            return .green
-        case .warning:
-            return .orange
-        case .critical:
-            return .red
-        }
-    }
-
-    private var streamHealthImage: String {
-        switch store.streamHealth.severity {
-        case .nominal:
-            return "waveform"
-        case .warning:
-            return "exclamationmark.triangle.fill"
-        case .critical:
-            return "xmark.octagon.fill"
-        }
     }
 }
 
@@ -425,6 +460,7 @@ private struct DriveTelemetryDrawer: View {
     let gnssQuality: GNSSQuality
     @Binding var routeLayer: RouteLayerSelection
     let showsAccuracyOverlay: Bool
+    @State private var selectedTab: DriveTelemetryTab = .metrics
 
     private var fusedSpeedMps: Double? {
         guard let latest = store.ekfVelocityHistory.last,
@@ -449,6 +485,35 @@ private struct DriveTelemetryDrawer: View {
         )
     }
 
+    private var statusProgress: Double {
+        switch health.status {
+        case .aligning, .alignmentIncomplete:
+            return AlignProgressPolicy.progress(store.alignProgress, mountReady: store.ekfMountReady)
+        case .ready, .poorGNSS, .needsMotion:
+            return health.fusedConfidence
+        }
+    }
+
+    private var statusProgressLabel: String {
+        switch health.status {
+        case .aligning, .alignmentIncomplete:
+            return "Alignment progress"
+        case .ready, .poorGNSS, .needsMotion:
+            return "Fusion confidence"
+        }
+    }
+
+    private var statusProgressTint: Color {
+        switch health.status {
+        case .aligning, .alignmentIncomplete:
+            return .orange
+        case .ready, .poorGNSS, .needsMotion:
+            if health.fusedConfidence >= 0.75 { return .accentColor }
+            if health.fusedConfidence >= 0.45 { return .orange }
+            return .red
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
@@ -471,23 +536,40 @@ private struct DriveTelemetryDrawer: View {
             }
 
             CollapsedDriveReadout(
-                speedMps: fusedSpeedMps ?? store.speedMps,
+                speedKmhText: DisplayUnitPolicy.speedKmhText(
+                    fromMetersPerSecond: fusedSpeedMps ?? store.speedMps,
+                    decimals: 1
+                ),
                 statusTitle: primaryDriveState,
                 accuracyM: store.horizontalAccuracyM,
-                confidence: health.fusedConfidence
+                progress: statusProgress,
+                progressLabel: statusProgressLabel,
+                tint: statusProgressTint
             )
 
             if detent != .collapsed {
-                DriveMetricGrid()
-                    .environmentObject(store)
-                PlaybackProgressStrip()
-                    .environmentObject(store)
+                Picker("Telemetry", selection: $selectedTab) {
+                    ForEach(DriveTelemetryTab.allCases) { tab in
+                        Text(tab.rawValue).tag(tab)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                switch selectedTab {
+                case .metrics:
+                    DriveMetricGrid()
+                        .environmentObject(store)
+                case .streams:
+                    VehicleMotionStreamPanel(
+                        samples: store.vehicleMotionHistory,
+                        isInitialized: store.ekfInitialized
+                    )
+                }
             }
 
             if detent == .expanded {
                 RouteLegend(routeLayer: $routeLayer, showsAccuracyOverlay: showsAccuracyOverlay)
-                ExpandedMotionRows()
-                    .environmentObject(store)
+                RecentMotionEventsRow(events: Array(store.motionEvents.suffix(4)))
             }
         }
         .padding(12)
@@ -516,20 +598,22 @@ private struct DriveTelemetryDrawer: View {
 }
 
 private struct CollapsedDriveReadout: View {
-    let speedMps: Double?
+    let speedKmhText: String
     let statusTitle: String
     let accuracyM: Double?
-    let confidence: Double
+    let progress: Double
+    let progressLabel: String
+    let tint: Color
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(format(speedMps, decimals: 1))
+                Text(speedKmhText)
                     .font(.system(size: 28, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
-                Text("m/s")
+                Text("km/h")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
@@ -543,40 +627,48 @@ private struct CollapsedDriveReadout: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
-            FusionConfidenceRing(confidence: confidence)
+            StatusProgressRing(progress: progress, label: progressLabel, tint: tint)
         }
     }
 }
 
-private struct FusionConfidenceRing: View {
-    let confidence: Double
+private struct StatusProgressRing: View {
+    let progress: Double
+    let label: String
+    let tint: Color
+
+    private var normalizedProgress: Double {
+        min(max(progress, 0.0), 1.0)
+    }
+
+    private var percent: Int {
+        Int((normalizedProgress * 100.0).rounded())
+    }
 
     var body: some View {
         ZStack {
             Circle()
                 .stroke(.secondary.opacity(0.18), lineWidth: 4)
             Circle()
-                .trim(from: 0.0, to: min(max(confidence, 0.0), 1.0))
-                .stroke(color, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                .trim(from: 0.0, to: normalizedProgress)
+                .stroke(tint, style: StrokeStyle(lineWidth: 4, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-            Text("\(Int(confidence * 100.0))")
+            Text("\(percent)")
                 .font(.caption2.weight(.semibold))
                 .monospacedDigit()
         }
         .frame(width: 38, height: 38)
-        .accessibilityLabel("Fusion confidence")
-        .accessibilityValue("\(Int(confidence * 100.0)) percent")
-    }
-
-    private var color: Color {
-        if confidence >= 0.75 { return .accentColor }
-        if confidence >= 0.45 { return .orange }
-        return .red
+        .accessibilityLabel(label)
+        .accessibilityValue("\(percent) percent")
     }
 }
 
 private struct DriveMetricGrid: View {
     @EnvironmentObject private var store: SensorStore
+
+    private var hasTripStats: Bool {
+        store.tripStatsSummary.sampleCount > 0
+    }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -587,44 +679,361 @@ private struct DriveMetricGrid: View {
             }
 
             HStack(spacing: 8) {
-                MetricTile(title: "Forward", value: format(store.vehicleForwardMps, decimals: 1), unit: "m/s")
-                MetricTile(title: "Lateral", value: format(store.vehicleRightMps, decimals: 1), unit: "m/s")
-                MetricTile(title: "Vertical", value: format(store.vehicleDownMps, decimals: 1), unit: "m/s")
+                MetricTile(title: "Forward", value: DisplayUnitPolicy.velocityKmhText(fromMetersPerSecond: store.vehicleForwardMps, decimals: 1), unit: "km/h")
+                MetricTile(title: "Lateral", value: DisplayUnitPolicy.velocityKmhText(fromMetersPerSecond: store.vehicleRightMps, decimals: 1), unit: "km/h")
+                MetricTile(title: "Vertical", value: DisplayUnitPolicy.velocityKmhText(fromMetersPerSecond: store.vehicleDownMps, decimals: 1), unit: "km/h")
+            }
+
+            HStack(spacing: 8) {
+                MetricTile(title: "Distance", value: tripDistanceText, unit: tripDistanceUnit)
+                MetricTile(title: "Moving", value: tripMovingTimeText, unit: tripMovingTimeUnit)
+                MetricTile(title: "Events", value: hasTripStats ? "\(store.tripStatsSummary.events.harshTotal)" : "-", unit: "harsh")
             }
         }
     }
+
+    private var tripDistanceText: String {
+        guard hasTripStats else { return "-" }
+        return format(store.tripStatsSummary.distanceM / 1000.0, decimals: 2)
+    }
+
+    private var tripDistanceUnit: String {
+        "km"
+    }
+
+    private var tripMovingTimeText: String {
+        guard hasTripStats else { return "-" }
+        return format(store.tripStatsSummary.movingDurationSec / 60.0, decimals: 1)
+    }
+
+    private var tripMovingTimeUnit: String {
+        "min"
+    }
 }
 
-private struct PlaybackProgressStrip: View {
+private struct PlaybackMapControlPanel: View {
     @EnvironmentObject private var store: SensorStore
 
     var body: some View {
         if store.streamMode == .playback {
-            HStack(spacing: 8) {
-                Image(systemName: "play.circle.fill")
-                    .foregroundStyle(.purple)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 10) {
+                    Button {
+                        store.stopPlayback()
+                    } label: {
+                        Image(systemName: "stop.fill")
+                            .font(.caption.weight(.bold))
+                            .frame(width: 32, height: 32)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.orange)
+                    .accessibilityLabel("Stop playback")
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(store.activeSessionName ?? "Playback")
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                        Text(playbackStatusText)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+
+                    Spacer(minLength: 8)
+
+                    Menu {
+                        Picker("Playback Speed", selection: Binding(
+                            get: { store.playbackSpeedMultiplier },
+                            set: { store.setPlaybackSpeedMultiplier($0) }
+                        )) {
+                            ForEach(PlaybackSpeedPolicy.options, id: \.self) { speed in
+                                Text(PlaybackSpeedPolicy.title(for: speed)).tag(speed)
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "speedometer")
+                                .imageScale(.small)
+                            Text(PlaybackSpeedPolicy.title(for: store.playbackSpeedMultiplier))
+                                .monospacedDigit()
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.caption2.weight(.semibold))
+                        }
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 9)
+                        .frame(height: 32)
+                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                    .accessibilityLabel("Playback speed")
+                }
+
                 ProgressView(value: store.replayProgress)
-                Text("\(Int(store.replayProgress * 100.0))%")
-                    .font(.caption)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .frame(width: 38, alignment: .trailing)
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(.white.opacity(0.24), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
+            .accessibilityElement(children: .contain)
+        }
+    }
+
+    private var playbackStatusText: String {
+        let percent = Int((clampedReplayProgress * 100.0).rounded())
+        guard let durationSec = activeSessionDurationSec else {
+            return "\(percent)% complete"
+        }
+        let elapsedSec = clampedReplayProgress * durationSec
+        return "\(formatPlaybackTime(elapsedSec)) / \(formatPlaybackTime(durationSec)) · \(percent)%"
+    }
+
+    private var clampedReplayProgress: Double {
+        min(max(store.replayProgress, 0.0), 1.0)
+    }
+
+    private var activeSessionDurationSec: Double? {
+        guard let activeSessionID = store.activeSessionID,
+              let summary = store.recordedSessions.first(where: { $0.id == activeSessionID }),
+              summary.durationSec.isFinite,
+              summary.durationSec > 0.0
+        else {
+            return nil
+        }
+        return summary.durationSec
+    }
+
+    private func formatPlaybackTime(_ seconds: Double) -> String {
+        let totalSeconds = max(0, Int(seconds.rounded(.down)))
+        let hours = totalSeconds / 3_600
+        let minutes = (totalSeconds % 3_600) / 60
+        let secs = totalSeconds % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, secs)
+        }
+        return String(format: "%d:%02d", minutes, secs)
+    }
+}
+
+private struct VehicleMotionStreamPanel: View {
+    let samples: [SensorStore.TimedVec3Sample]
+    let isInitialized: Bool
+
+    private enum Trace: String, CaseIterable {
+        case longitudinalAccel = "Longitudinal Accel"
+        case yawRate = "Yaw Rate"
+
+        var unit: String {
+            switch self {
+            case .longitudinalAccel: return "m/s²"
+            case .yawRate: return "deg/s"
+            }
+        }
+
+        var color: Color {
+            switch self {
+            case .longitudinalAccel: return .blue
+            case .yawRate: return .purple
+            }
+        }
+
+        var component: KeyPath<SensorStore.TimedVec3Sample, Double?> {
+            switch self {
+            case .longitudinalAccel: return \.x
+            case .yawRate: return \.y
+            }
+        }
+
+        var scale: Double {
+            switch self {
+            case .longitudinalAccel: return 3.0
+            case .yawRate: return 45.0
+            }
+        }
+    }
+
+    private struct PlotSample: Identifiable {
+        let id: String
+        let trace: Trace
+        let tSec: Double
+        let normalizedValue: Double
+    }
+
+    private var windowSec: Double { 15.0 }
+    private var tMax: Double { samples.last?.tSec ?? windowSec }
+    private var xDomain: ClosedRange<Double> {
+        (tMax - windowSec) ... tMax
+    }
+
+    private var plotSamples: [PlotSample] {
+        let values = samples.filter { $0.tSec >= xDomain.lowerBound && $0.tSec <= xDomain.upperBound }
+        let traces = Trace.allCases.flatMap { trace in
+            values.enumerated().compactMap { index, sample -> PlotSample? in
+                guard let value = sample[keyPath: trace.component], value.isFinite else { return nil }
+                return PlotSample(
+                    id: "\(trace.rawValue)-\(index)",
+                    trace: trace,
+                    tSec: sample.tSec,
+                    normalizedValue: max(-1.0, min(1.0, value / trace.scale))
+                )
+            }
+        }
+
+        guard !traces.isEmpty else {
+            return Trace.allCases.flatMap { trace in
+                [
+                    PlotSample(id: "\(trace.rawValue)-start", trace: trace, tSec: xDomain.lowerBound, normalizedValue: 0.0),
+                    PlotSample(id: "\(trace.rawValue)-end", trace: trace, tSec: xDomain.upperBound, normalizedValue: 0.0)
+                ]
+            }
+        }
+
+        return traces
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 10) {
+                ForEach(Trace.allCases, id: \.rawValue) { trace in
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(trace.color)
+                            .frame(width: 7, height: 7)
+                        Text(trace.rawValue)
+                            .lineLimit(1)
+                        Text("\(format(latestValue(for: trace), decimals: 1)) \(trace.unit)")
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    .font(.caption2.weight(.semibold))
+                }
+                Spacer(minLength: 0)
+            }
+
+            Chart {
+                RuleMark(y: .value("Zero", 0.0))
+                    .foregroundStyle(.secondary.opacity(0.28))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                ForEach(plotSamples) { sample in
+                    LineMark(
+                        x: .value("Time", sample.tSec),
+                        y: .value("Normalized", sample.normalizedValue),
+                        series: .value("Trace", sample.trace.rawValue)
+                    )
+                    .foregroundStyle(sample.trace.color)
+                    .interpolationMethod(.catmullRom)
+                    .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                }
+            }
+            .chartXScale(domain: xDomain)
+            .chartYScale(domain: -1.0 ... 1.0)
+            .chartXAxis(.hidden)
+            .chartYAxis(.hidden)
+            .chartPlotStyle { plotArea in
+                plotArea
+                    .background(Color(.secondarySystemBackground).opacity(0.55))
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            }
+            .frame(height: 84)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(.white.opacity(0.20), lineWidth: 1)
+        )
+        .opacity(isInitialized ? 1.0 : 0.55)
+        .accessibilityLabel(isInitialized ? "Vehicle motion stream plot" : "Vehicle motion stream plot waiting for EKF initialization")
+    }
+
+    private func latestValue(for trace: Trace) -> Double? {
+        samples.reversed().compactMap { sample in
+            let value = sample[keyPath: trace.component]
+            return value?.isFinite == true ? value : nil
+        }.first
+    }
+}
+
+private struct MotionEventHeadsUp: View {
+    let event: MotionEvent
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: event.kind.systemImage)
+                .font(.caption.weight(.bold))
+                .frame(width: 24, height: 24)
+                .foregroundStyle(.white)
+                .background(event.kind.color, in: Circle())
+            VStack(alignment: .leading, spacing: 1) {
+                Text(event.kind.displayTitle)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                Text(event.detailTitle)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            Text(formatEventTime(event.tSec))
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(event.kind.color.opacity(0.35), lineWidth: 1)
+        )
+    }
+}
+
+private struct RecentMotionEventsRow: View {
+    let events: [MotionEvent]
+
+    var body: some View {
+        if !events.isEmpty {
+            VStack(alignment: .leading, spacing: 7) {
+                Text("Events")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 7) {
+                    ForEach(events.reversed()) { event in
+                        MotionEventChip(event: event)
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(.white.opacity(0.20), lineWidth: 1)
+            )
         }
     }
 }
 
-private struct ExpandedMotionRows: View {
-    @EnvironmentObject private var store: SensorStore
+private struct MotionEventChip: View {
+    let event: MotionEvent
 
     var body: some View {
-        VStack(spacing: 8) {
-            valueRow("Fused Pn / Pe", "\(format(store.fusedPosNorthM, decimals: 1)) / \(format(store.fusedPosEastM, decimals: 1)) m")
-            valueRow("Velocity Vn / Ve / Vd", "\(format(store.velNorthMps, decimals: 1)) / \(format(store.velEastMps, decimals: 1)) / \(format(store.velDownMps, decimals: 1)) m/s")
-            valueRow("Route Samples", "\(store.gnssRouteHistory.count) GNSS, \(store.fusedRouteHistory.count) fused")
+        HStack(spacing: 5) {
+            Image(systemName: event.kind.systemImage)
+                .imageScale(.small)
+            Text(event.kind.displayTitle)
+                .lineLimit(1)
         }
-        .font(.caption)
-        .padding(.top, 2)
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(event.kind.color)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(event.kind.color.opacity(0.12), in: Capsule())
     }
 }
 
@@ -843,22 +1252,22 @@ private struct DriveMetricSheet: View {
 
             PrimaryMotionReadout(
                 title: store.vehicleSegment?.displayTitle ?? "Vehicle",
-                value: format(fusedSpeedMps ?? store.speedMps, decimals: 1),
-                unit: "m/s",
+                value: DisplayUnitPolicy.speedKmhText(fromMetersPerSecond: fusedSpeedMps ?? store.speedMps, decimals: 1),
+                unit: "km/h",
                 caption: "fused ground speed",
                 confidence: health.fusedConfidence
             )
 
             HStack(spacing: 10) {
-                MetricTile(title: "GNSS Speed", value: format(store.speedMps, decimals: 1), unit: "m/s")
+                MetricTile(title: "GNSS Speed", value: DisplayUnitPolicy.speedKmhText(fromMetersPerSecond: store.speedMps, decimals: 1), unit: "km/h")
                 MetricTile(title: "Accuracy", value: format(store.horizontalAccuracyM, decimals: 1), unit: "m")
                 MetricTile(title: "Age", value: formatAge(store.locationTimestamp), unit: "s")
             }
 
             HStack(spacing: 10) {
-                MetricTile(title: "Forward", value: format(store.vehicleForwardMps, decimals: 1), unit: "m/s")
-                MetricTile(title: "Lateral", value: format(store.vehicleRightMps, decimals: 1), unit: "m/s")
-                MetricTile(title: "Vertical", value: format(store.vehicleDownMps, decimals: 1), unit: "m/s")
+                MetricTile(title: "Forward", value: DisplayUnitPolicy.velocityKmhText(fromMetersPerSecond: store.vehicleForwardMps, decimals: 1), unit: "km/h")
+                MetricTile(title: "Lateral", value: DisplayUnitPolicy.velocityKmhText(fromMetersPerSecond: store.vehicleRightMps, decimals: 1), unit: "km/h")
+                MetricTile(title: "Vertical", value: DisplayUnitPolicy.velocityKmhText(fromMetersPerSecond: store.vehicleDownMps, decimals: 1), unit: "km/h")
             }
         }
         .padding(14)
@@ -953,6 +1362,7 @@ private struct RawSessionRow: View {
         let statusLabel = store.recordedSessionStatusLabel(for: summary)
         let detailMessage = store.recordedSessionDetailMessage(for: summary)
         let isInFlight = statusLabel == "Recording" || statusLabel == "Saving"
+        let isActivePlayback = store.streamMode == .playback && store.activeSessionID == summary.id
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "waveform.path.ecg.rectangle")
@@ -1000,6 +1410,15 @@ private struct RawSessionRow: View {
                             .foregroundStyle(.orange)
                             .frame(width: 44, height: 32)
                     }
+                } else if isActivePlayback {
+                    Button {
+                        store.stopPlayback()
+                    } label: {
+                        Image(systemName: "stop.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.orange)
+                    .accessibilityLabel("Stop playback")
                 } else {
                     Button {
                         store.replaySession(summary)
@@ -1007,9 +1426,21 @@ private struct RawSessionRow: View {
                         Image(systemName: "play.fill")
                     }
                     .buttonStyle(.bordered)
-                    .disabled(summary.fileURL == nil || store.isRecording)
+                    .disabled(summary.fileURL == nil || store.isRecording || store.streamMode == .playback)
                     .accessibilityLabel("Replay session")
                 }
+            }
+
+            if isActivePlayback {
+                HStack(spacing: 8) {
+                    ProgressView(value: store.replayProgress)
+                    Text(PlaybackSpeedPolicy.title(for: store.playbackSpeedMultiplier))
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                .accessibilityLabel("Playback progress")
+                .accessibilityValue("\(Int((store.replayProgress * 100.0).rounded())) percent")
             }
 
             HStack(spacing: 8) {
@@ -1249,18 +1680,6 @@ private struct SettingsView: View {
                     if state.streamMode == .playback {
                         ProgressView(value: state.replayProgress)
                     }
-                    if state.streamMode == .playback {
-                        Button {
-                            controls.stopPlayback()
-                        } label: {
-                            SettingsActionButtonLabel(
-                                title: "Stop Playback",
-                                systemImage: "pause.circle",
-                                tint: .orange
-                            )
-                        }
-                        .buttonStyle(.plain)
-                    }
                     if state.streamMode == .live {
                         if state.isLiveSensorStreamRunning {
                             Button(role: .destructive) {
@@ -1288,6 +1707,38 @@ private struct SettingsView: View {
                     }
                 }
 
+                Section("Event Audio") {
+                    Picker("Audible Alerts", selection: Binding(
+                        get: { controls.state.eventAudioSettings.mode },
+                        set: { controls.setEventAudibleAlertMode($0) }
+                    )) {
+                        ForEach(EventAudibleAlertMode.allCases) { mode in
+                            Text(mode.displayTitle).tag(mode)
+                        }
+                    }
+                    Toggle(isOn: Binding(
+                        get: { controls.state.eventAudioSettings.playDrivingAlertsInSilentMode },
+                        set: { controls.setEventAlertsPlayInSilentMode($0) }
+                    )) {
+                        Text("Play Driving Alerts Anyway")
+                    }
+                    .disabled(state.eventAudioSettings.mode == .off)
+                    Button {
+                        controls.playTestEventAudioAlert()
+                    } label: {
+                        SettingsActionButtonLabel(
+                            title: "Test Alert",
+                            systemImage: "speaker.wave.2.circle",
+                            tint: .accentColor
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(state.eventAudioSettings.mode == .off)
+                    Text("Uses synthesized speech or chimes for driving events while the app is open. Playback mode can sound even when the phone is set to silent.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section("Raw Logging") {
                     valueRow("Saved Sessions", "\(state.savedSessionCount)")
                     if state.isRecording {
@@ -1313,7 +1764,23 @@ private struct SettingsView: View {
                 }
 
                 Section("Fusion") {
-                    valueRow("Mode", "Ekf Auto Mount")
+                    valueRow("Mode", state.mountModeTitle)
+                    Toggle(isOn: Binding(
+                        get: { state.mountMemorySettings.isEnabled },
+                        set: { controls.setMountMemoryEnabled($0) }
+                    )) {
+                        Text("Remember Mount")
+                    }
+                    valueRow("Saved Mount", state.savedMountTitle)
+                    Button {
+                        controls.clearRememberedMount()
+                    } label: {
+                        Label("Clear Remembered Mount", systemImage: "trash")
+                    }
+                    .disabled(state.mountMemorySettings.savedCalibration == nil)
+                    Text("When enabled, the app saves the aligned phone-to-vehicle mount and uses it on the next live or playback start. Auto alignment remains the fallback until a mount has been saved.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     valueRow("Map Layer", "GNSS + Fused")
                 }
 
@@ -1624,10 +2091,12 @@ private struct RawGNSSMapView: UIViewRepresentable {
     let fusedCoordinates: [CLLocationCoordinate2D]
     let currentCoordinate: CLLocationCoordinate2D?
     let fusedCurrentCoordinate: CLLocationCoordinate2D?
+    let eventAnnotations: [MotionEvent]
     let currentHeadingDeg: Double?
     let horizontalAccuracyM: Double?
     let showAccuracyOverlay: Bool
     let followsCurrentMarker: Bool
+    let followCameraVerticalOffset: CGFloat
     let viewportRefreshToken: Int
 
     func makeCoordinator() -> Coordinator {
@@ -1656,6 +2125,7 @@ private struct RawGNSSMapView: UIViewRepresentable {
     func updateUIView(_ mapView: MKMapView, context: Context) {
         context.coordinator.currentHeadingDeg = currentHeadingDeg
         context.coordinator.isHeadingUp = followsCurrentMarker && currentHeadingDeg != nil
+        context.coordinator.handleFollowModeChange(followsCurrentMarker: followsCurrentMarker)
 
         let routeKey = RouteKey(
             gnssCoordinates: gnssCoordinates,
@@ -1687,6 +2157,7 @@ private struct RawGNSSMapView: UIViewRepresentable {
             coordinate: fusedCurrentCoordinate,
             title: "Fused"
         )
+        context.coordinator.updateEventAnnotations(on: mapView, events: eventAnnotations)
 
         let shouldForceRefit = context.coordinator.lastViewportRefreshToken != viewportRefreshToken
         if MapCameraPolicy.shouldRefit(
@@ -1698,7 +2169,12 @@ private struct RawGNSSMapView: UIViewRepresentable {
             context.coordinator.lastCameraViewportKey = routeKey.viewportKey
             setVisibleRoute(on: mapView, animated: shouldForceRefit)
         }
-        if followsCurrentMarker,
+        if MapFollowPolicy.shouldApplyFollowCamera(
+            followsCurrentMarker: followsCurrentMarker,
+            isUserInteracting: context.coordinator.isUserInteracting(with: mapView),
+            suspendedUntil: context.coordinator.followSuspendedUntil,
+            now: Date()
+        ),
            let followCoordinate = MapFollowPolicy.targetCoordinate(
             fusedCoordinate: fusedCurrentCoordinate,
             gnssCoordinate: currentCoordinate
@@ -1706,7 +2182,8 @@ private struct RawGNSSMapView: UIViewRepresentable {
             context.coordinator.updateFollowCamera(
                 on: mapView,
                 coordinate: followCoordinate,
-                headingDeg: currentHeadingDeg
+                headingDeg: currentHeadingDeg,
+                verticalScreenOffset: followCameraVerticalOffset
             )
         }
     }
@@ -1760,6 +2237,9 @@ private struct RawGNSSMapView: UIViewRepresentable {
         var lastRouteOverlayKey: RouteKey?
         var lastCameraViewportKey: String?
         var lastViewportRefreshToken: Int?
+        var followSuspendedUntil: Date?
+        private var lastFollowsCurrentMarker = false
+        private var isApplyingProgrammaticCamera = false
         private var lastRouteOverlayUpdateDate: Date?
         private var lastGnssRoutePointCount: Int?
         private var lastFusedRoutePointCount: Int?
@@ -1769,11 +2249,30 @@ private struct RawGNSSMapView: UIViewRepresentable {
         private let routeOverlayLayer = MapRouteOverlayLayer()
         private let gnssAnnotationLayer = MapAnnotationLayer()
         private let fusedAnnotationLayer = MapAnnotationLayer()
+        private var eventAnnotationByID: [String: MotionEventMapAnnotation] = [:]
+
+        func handleFollowModeChange(followsCurrentMarker: Bool) {
+            if followsCurrentMarker && !lastFollowsCurrentMarker {
+                followSuspendedUntil = nil
+            }
+            lastFollowsCurrentMarker = followsCurrentMarker
+        }
+
+        func isUserInteracting(with mapView: MKMapView) -> Bool {
+            for subview in mapView.subviews {
+                guard let recognizers = subview.gestureRecognizers else { continue }
+                for recognizer in recognizers where recognizer.state == .began || recognizer.state == .changed {
+                    return true
+                }
+            }
+            return false
+        }
 
         func updateFollowCamera(
             on mapView: MKMapView,
             coordinate: CLLocationCoordinate2D,
-            headingDeg: Double?
+            headingDeg: Double?,
+            verticalScreenOffset: CGFloat
         ) {
             guard CLLocationCoordinate2DIsValid(coordinate) else { return }
             let camera = mapView.camera
@@ -1781,6 +2280,19 @@ private struct RawGNSSMapView: UIViewRepresentable {
             if let headingDeg {
                 camera.heading = headingDeg
             }
+            isApplyingProgrammaticCamera = true
+            defer { isApplyingProgrammaticCamera = false }
+            mapView.setCamera(camera, animated: false)
+            guard verticalScreenOffset > 0.0, mapView.bounds.width > 1.0, mapView.bounds.height > 1.0 else {
+                return
+            }
+            let desiredCenterPoint = CGPoint(
+                x: mapView.bounds.midX,
+                y: min(mapView.bounds.maxY, mapView.bounds.midY + verticalScreenOffset)
+            )
+            let adjustedCenter = mapView.convert(desiredCenterPoint, toCoordinateFrom: mapView)
+            guard CLLocationCoordinate2DIsValid(adjustedCenter) else { return }
+            camera.centerCoordinate = adjustedCenter
             mapView.setCamera(camera, animated: false)
         }
 
@@ -1888,6 +2400,30 @@ private struct RawGNSSMapView: UIViewRepresentable {
             }
         }
 
+        func updateEventAnnotations(on mapView: MKMapView, events: [MotionEvent]) {
+            let displayable = events.compactMap { event -> (MotionEvent, CLLocationCoordinate2D)? in
+                guard let coordinate = event.coordinate?.mapCoordinate else { return nil }
+                return (event, coordinate)
+            }
+            let nextIDs = Set(displayable.map { $0.0.id })
+            let staleIDs = Set(eventAnnotationByID.keys).subtracting(nextIDs)
+            for id in staleIDs {
+                if let annotation = eventAnnotationByID.removeValue(forKey: id) {
+                    mapView.removeAnnotation(annotation)
+                }
+            }
+
+            for (event, coordinate) in displayable {
+                if let annotation = eventAnnotationByID[event.id] {
+                    annotation.coordinate = coordinate
+                } else {
+                    let annotation = MotionEventMapAnnotation(event: event, coordinate: coordinate)
+                    eventAnnotationByID[event.id] = annotation
+                    mapView.addAnnotation(annotation)
+                }
+            }
+        }
+
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let circle = overlay as? MKCircle {
                 let renderer = MKCircleRenderer(circle: circle)
@@ -1896,24 +2432,30 @@ private struct RawGNSSMapView: UIViewRepresentable {
                 renderer.lineWidth = 1
                 return renderer
             }
-            if let polyline = overlay as? MKPolyline {
-                let renderer = MKPolylineRenderer(polyline: polyline)
-                if polyline.title == "fused" {
-                    renderer.strokeColor = UIColor.systemBlue.withAlphaComponent(0.90)
-                    renderer.lineWidth = 5
-                } else {
-                    renderer.strokeColor = UIColor.systemOrange.withAlphaComponent(0.82)
-                    renderer.lineWidth = 3
-                }
-                renderer.lineCap = .round
-                renderer.lineJoin = .round
-                return renderer
+            if let routeOverlay = overlay as? MapRouteOverlay {
+                return MapRouteOverlayRenderer(routeOverlay: routeOverlay)
             }
             return MKOverlayRenderer(overlay: overlay)
         }
 
+        func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
+            guard !isApplyingProgrammaticCamera, isUserInteracting(with: mapView) else { return }
+            followSuspendedUntil = MapFollowPolicy.followSuspendedUntil(afterUserInteractionAt: Date())
+        }
+
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
             guard !(annotation is MKUserLocation) else { return nil }
+            if let eventAnnotation = annotation as? MotionEventMapAnnotation {
+                let reuseID = "motion-event"
+                let view = mapView.dequeueReusableAnnotationView(withIdentifier: reuseID) as? MotionEventAnnotationView
+                    ?? MotionEventAnnotationView(annotation: annotation, reuseIdentifier: reuseID)
+                view.annotation = annotation
+                view.configure(kind: eventAnnotation.kind)
+                view.displayPriority = .defaultHigh
+                view.collisionMode = .circle
+                view.zPriority = .defaultSelected
+                return view
+            }
             let slot: MarkerSlot = annotation.title == "Fused" ? .fused : .gnss
             let reuseID = slot == .fused ? "fused-position" : "gnss-position"
             let view = mapView.dequeueReusableAnnotationView(withIdentifier: reuseID) as? PositionMarkerAnnotationView
@@ -1929,6 +2471,61 @@ private struct RawGNSSMapView: UIViewRepresentable {
                 view.transform = .identity
             }
             return view
+        }
+    }
+
+    final class MotionEventMapAnnotation: NSObject, MKAnnotation {
+        let eventID: String
+        let kind: MotionEvent.Kind
+        let title: String?
+        let subtitle: String?
+        dynamic var coordinate: CLLocationCoordinate2D
+
+        init(event: MotionEvent, coordinate: CLLocationCoordinate2D) {
+            eventID = event.id
+            kind = event.kind
+            title = event.kind.displayTitle
+            subtitle = event.detailTitle
+            self.coordinate = coordinate
+            super.init()
+        }
+    }
+
+    final class MotionEventAnnotationView: MKAnnotationView {
+        private let markerView = UIView()
+        private let imageView = UIImageView()
+        private var renderedKind: MotionEvent.Kind?
+
+        override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
+            super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
+            isOpaque = false
+            canShowCallout = true
+            bounds = CGRect(origin: .zero, size: CGSize(width: 30, height: 30))
+            centerOffset = CGPoint(x: 0, y: -15)
+            layer.shadowColor = UIColor.black.cgColor
+            layer.shadowOpacity = 0.20
+            layer.shadowRadius = 4
+            layer.shadowOffset = CGSize(width: 0, height: 2)
+            markerView.frame = bounds.insetBy(dx: 3, dy: 3)
+            markerView.layer.cornerRadius = 12
+            markerView.layer.borderColor = UIColor.white.withAlphaComponent(0.92).cgColor
+            markerView.layer.borderWidth = 2
+            addSubview(markerView)
+            imageView.frame = markerView.frame.insetBy(dx: 5, dy: 5)
+            imageView.contentMode = .scaleAspectFit
+            imageView.tintColor = .white
+            addSubview(imageView)
+        }
+
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        func configure(kind: MotionEvent.Kind) {
+            guard renderedKind != kind else { return }
+            renderedKind = kind
+            markerView.backgroundColor = kind.uiColor
+            imageView.image = UIImage(systemName: kind.systemImage)
         }
     }
 
@@ -2331,8 +2928,61 @@ private func formatAge(_ date: Date?) -> String {
     return String(format: "%.1f", max(0.0, Date().timeIntervalSince(date)))
 }
 
+private func formatEventTime(_ tSec: Double) -> String {
+    guard tSec.isFinite else { return "--:--" }
+    let total = max(0, Int(tSec.rounded()))
+    return String(format: "%d:%02d", total / 60, total % 60)
+}
+
 private func yesNo(_ value: Bool) -> String {
     value ? "yes" : "no"
+}
+
+private extension GeographicCoordinate {
+    var mapCoordinate: CLLocationCoordinate2D? {
+        guard isValidLatitudeLongitude else { return nil }
+        let coordinate = CLLocationCoordinate2D(latitude: latitudeDeg, longitude: longitudeDeg)
+        return CLLocationCoordinate2DIsValid(coordinate) ? coordinate : nil
+    }
+}
+
+private extension MotionEvent {
+    var detailTitle: String {
+        switch kind {
+        case .reverse:
+            return "peak \(DisplayUnitPolicy.speedKmhText(fromMetersPerSecond: value, decimals: 1)) km/h"
+        case .harshAcceleration:
+            return "\(format(value, decimals: 1)) m/s²"
+        case .harshBraking:
+            return "\(format(value, decimals: 1)) m/s²"
+        case .harshCornering:
+            return "\(format(value, decimals: 1)) m/s² lateral"
+        case .speedBump:
+            return "\(format(value, decimals: 1))° peak pitch"
+        case .downhill, .uphill:
+            return "\(format(value, decimals: 1))° pitch"
+        case .gnssDegraded:
+            return "location quality dropped"
+        case .mountReady:
+            return "automatic mount aligned"
+        case .fusionReady:
+            return "filter initialized"
+        }
+    }
+}
+
+private extension MotionEvent.Kind {
+    var systemImage: String {
+        MotionEventVisualPolicy.systemImage(for: self)
+    }
+
+    var color: Color {
+        Color(uiColor)
+    }
+
+    var uiColor: UIColor {
+        MotionEventVisualPolicy.uiColor(for: self)
+    }
 }
 
 private func authText(_ status: CLAuthorizationStatus) -> String {

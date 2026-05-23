@@ -41,6 +41,42 @@ final class MotionAnalysisTests: XCTestCase {
         XCTAssertEqual(vehicleVelocity.down, 0.0, accuracy: 1e-12)
     }
 
+    func testVehicleGyroUsesInverseMountRotation() {
+        let yaw90QBV = Quaternion(
+            w: cos(.pi / 4.0),
+            x: 0.0,
+            y: 0.0,
+            z: sin(.pi / 4.0)
+        )
+
+        let vehicleGyro = MotionKinematics.vehicleFRDGyro(
+            qBV: yaw90QBV,
+            bodyGyroRadps: (x: 0.0, y: 1.0, z: 0.0)
+        )
+
+        XCTAssertEqual(vehicleGyro.forward, 1.0, accuracy: 1e-12)
+        XCTAssertEqual(vehicleGyro.right, 0.0, accuracy: 1e-12)
+        XCTAssertEqual(vehicleGyro.down, 0.0, accuracy: 1e-12)
+    }
+
+    func testVehicleAccelerationUsesInverseMountRotation() {
+        let yaw90QBV = Quaternion(
+            w: cos(.pi / 4.0),
+            x: 0.0,
+            y: 0.0,
+            z: sin(.pi / 4.0)
+        )
+
+        let vehicleAccel = MotionKinematics.vehicleFRDAcceleration(
+            qBV: yaw90QBV,
+            bodyAccelMps2: (x: 0.0, y: 1.0, z: 2.0)
+        )
+
+        XCTAssertEqual(vehicleAccel.forward, 1.0, accuracy: 1e-12)
+        XCTAssertEqual(vehicleAccel.right, 0.0, accuracy: 1e-12)
+        XCTAssertEqual(vehicleAccel.down, 2.0, accuracy: 1e-12)
+    }
+
     func testVehicleMotionDisplayDerivesCurvatureSideslipAndSegment() {
         let health = FusionHealth.evaluate(
             mountReady: true,

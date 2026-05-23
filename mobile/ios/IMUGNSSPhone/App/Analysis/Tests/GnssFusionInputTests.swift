@@ -75,8 +75,8 @@ final class GnssFusionInputTests: XCTestCase {
         ))
     }
 
-    func testCourseAccuracyInflatesHorizontalVelocityStdAndSuppressesHeading() {
-        let input = GnssFusionInput.make(
+    func testPoorCourseAccuracySuppressesMovingFusionInput() {
+        XCTAssertNil(GnssFusionInput.make(
             latitudeDeg: 37.0,
             longitudeDeg: -122.0,
             altitudeM: 8.0,
@@ -88,12 +88,26 @@ final class GnssFusionInputTests: XCTestCase {
             courseDeg: 303.0,
             speedAccuracyMps: 0.31,
             courseAccuracyDeg: 180.0
+        ))
+    }
+
+    func testCourseAccuracyDoesNotInflateHorizontalVelocityStdWhenUsable() {
+        let input = GnssFusionInput.make(
+            latitudeDeg: 37.0,
+            longitudeDeg: -122.0,
+            altitudeM: 8.0,
+            velN: 1.0,
+            velE: -1.0,
+            velD: nil,
+            hAcc: 4.0,
+            vAcc: 8.0,
+            courseDeg: 303.0,
+            speedAccuracyMps: 0.31,
+            courseAccuracyDeg: 30.0
         )
 
-        let speed = sqrt(2.0)
-        let expectedStd = hypot(0.31, speed * .pi)
-        XCTAssertEqual(input?.velocityStdMps.north ?? .nan, expectedStd, accuracy: 1e-12)
-        XCTAssertEqual(input?.velocityStdMps.east ?? .nan, expectedStd, accuracy: 1e-12)
-        XCTAssertNil(input?.headingRad)
+        XCTAssertEqual(input?.velocityStdMps.north ?? .nan, 0.31, accuracy: 1e-12)
+        XCTAssertEqual(input?.velocityStdMps.east ?? .nan, 0.31, accuracy: 1e-12)
+        XCTAssertNotNil(input?.headingRad)
     }
 }

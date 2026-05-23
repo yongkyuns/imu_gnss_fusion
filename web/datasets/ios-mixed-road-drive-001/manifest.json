@@ -1,0 +1,65 @@
+{
+  "created_utc": "2026-05-21T03:19:09Z",
+  "dataset_id": "ios-mixed-road-drive-001",
+  "files": {
+    "gnss": {
+      "bytes": 65960,
+      "columns": [
+        "t_s",
+        "lat_deg",
+        "lon_deg",
+        "height_m",
+        "vn_mps",
+        "ve_mps",
+        "vd_mps",
+        "pos_std_n_m",
+        "pos_std_e_m",
+        "pos_std_d_m",
+        "vel_std_n_mps",
+        "vel_std_e_mps",
+        "vel_std_d_mps",
+        "heading_rad"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 1.2377020120620728,
+      "last_t_s": 672.6122560501099,
+      "media_type": "text/csv",
+      "path": "gnss.csv.gz",
+      "rows": 673,
+      "sha256": "d042b5e38271519c5b6c75030ef0afec118a4be3273a9870faf3aa60ed8161f4"
+    },
+    "imu": {
+      "bytes": 4179854,
+      "columns": [
+        "t_s",
+        "gx_radps",
+        "gy_radps",
+        "gz_radps",
+        "ax_mps2",
+        "ay_mps2",
+        "az_mps2"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.0,
+      "last_t_s": 673.0427106618881,
+      "media_type": "text/csv",
+      "path": "imu.csv.gz",
+      "rows": 67101,
+      "sha256": "168e260ba2180b73b2a7f7df88871e26e2c0133e12426aa8b964d749559213d5"
+    }
+  },
+  "manifest_version": 1,
+  "samples": {
+    "gnss": 673,
+    "imu": 67101
+  },
+  "schema": "generic-replay-v1",
+  "source": {
+    "format": "generic"
+  },
+  "time_span_s": {
+    "end": 673.0427106618881,
+    "start": 0.0
+  },
+  "title": "iOS mixed-road drive 001"
+}

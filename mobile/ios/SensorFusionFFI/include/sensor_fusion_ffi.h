@@ -50,6 +50,61 @@ typedef struct SensorFusionFfiEkfSnapshot {
     double height_m;
 } SensorFusionFfiEkfSnapshot;
 
+typedef struct SensorFusionFfiAlignProgress {
+    bool valid;
+    bool coarse_ready;
+    float roll_sigma_deg;
+    float pitch_sigma_deg;
+    float yaw_sigma_deg;
+} SensorFusionFfiAlignProgress;
+
+typedef struct SensorFusionFfiRoadEvent {
+    uint32_t kind;
+    float t_s;
+    float start_t_s;
+    float end_t_s;
+    float duration_s;
+    float value;
+    float confidence;
+} SensorFusionFfiRoadEvent;
+
+typedef struct SensorFusionFfiTripSummary {
+    uint32_t sample_count;
+    uint32_t invalid_sample_count;
+    uint32_t data_gap_count;
+    float max_sample_gap_s;
+    float total_gap_duration_s;
+    float duration_s;
+    float moving_duration_s;
+    float stationary_duration_s;
+    float distance_m;
+    float reverse_duration_s;
+    float reverse_distance_m;
+    float uphill_distance_m;
+    float downhill_distance_m;
+    float elevation_gain_m;
+    float elevation_loss_m;
+    float mean_speed_mps;
+    float moving_mean_speed_mps;
+    float peak_speed_mps;
+    float peak_accel_mps2;
+    float peak_decel_mps2;
+    float peak_lateral_accel_mps2;
+    float rolling_speed_mps;
+    float rolling_abs_longitudinal_accel_mps2;
+    float rolling_abs_lateral_accel_mps2;
+    uint32_t speed_bumps;
+    uint32_t uphill_events;
+    uint32_t downhill_events;
+    uint32_t reverse_events;
+    uint32_t harsh_acceleration_events;
+    uint32_t harsh_braking_events;
+    uint32_t harsh_cornering_events;
+    float speed_bumps_per_km;
+    float harsh_events_per_km;
+    float reverse_seconds_per_km;
+} SensorFusionFfiTripSummary;
+
 SensorFusionFfi *sensor_fusion_create_ekf_auto(void);
 SensorFusionFfi *sensor_fusion_create_ekf_manual(float qw, float qx, float qy, float qz);
 
@@ -93,6 +148,35 @@ SensorFusionFfiUpdate sensor_fusion_process_gnss(
 bool sensor_fusion_snapshot_ekf(
     const SensorFusionFfi *handle,
     SensorFusionFfiEkfSnapshot *out
+);
+
+bool sensor_fusion_snapshot_align_progress(
+    const SensorFusionFfi *handle,
+    SensorFusionFfiAlignProgress *out
+);
+
+uintptr_t sensor_fusion_process_road_event_motion(
+    SensorFusionFfi *handle,
+    float t_s,
+    float forward_velocity_mps,
+    float ground_speed_mps,
+    float longitudinal_accel_mps2,
+    bool longitudinal_accel_valid,
+    float yaw_rate_radps,
+    bool yaw_rate_valid,
+    float pitch_deg,
+    bool pitch_valid,
+    float lateral_accel_mps2,
+    bool lateral_accel_valid,
+    float vertical_accel_mps2,
+    bool vertical_accel_valid,
+    SensorFusionFfiRoadEvent *out,
+    uintptr_t max_events
+);
+
+bool sensor_fusion_snapshot_trip_summary(
+    const SensorFusionFfi *handle,
+    SensorFusionFfiTripSummary *out
 );
 
 #ifdef __cplusplus

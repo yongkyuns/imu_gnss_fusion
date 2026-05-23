@@ -43,6 +43,35 @@ struct GeographicCoordinate: Equatable, Sendable {
     }
 }
 
+struct AlignProgressSnapshot: Equatable, Sendable {
+    var isValid: Bool
+    var coarseReady: Bool
+    var rollSigmaDeg: Double?
+    var pitchSigmaDeg: Double?
+    var yawSigmaDeg: Double?
+
+    init(
+        isValid: Bool = false,
+        coarseReady: Bool = false,
+        rollSigmaDeg: Double? = nil,
+        pitchSigmaDeg: Double? = nil,
+        yawSigmaDeg: Double? = nil
+    ) {
+        self.isValid = isValid
+        self.coarseReady = coarseReady
+        self.rollSigmaDeg = Self.validSigma(rollSigmaDeg)
+        self.pitchSigmaDeg = Self.validSigma(pitchSigmaDeg)
+        self.yawSigmaDeg = Self.validSigma(yawSigmaDeg)
+    }
+
+    static let unavailable = AlignProgressSnapshot()
+
+    private static func validSigma(_ value: Double?) -> Double? {
+        guard let value, value.isFinite, value >= 0.0 else { return nil }
+        return value
+    }
+}
+
 struct RoutePoint: Equatable, Identifiable, Sendable {
     enum Source: String, Equatable, Sendable {
         case gnss

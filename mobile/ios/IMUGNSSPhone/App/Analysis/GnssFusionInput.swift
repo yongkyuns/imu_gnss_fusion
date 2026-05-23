@@ -35,10 +35,15 @@ struct GnssFusionInput: Equatable, Sendable {
         let horizontalStdM = hAcc.isFinite && hAcc > 0.0 ? hAcc : 25.0
         let verticalStdM = vAcc.isFinite && vAcc > 0.0 ? vAcc : 50.0
         let horizontalSpeedMps = hypot(velN, velE)
+        if horizontalSpeedMps > GnssVelocityResolver.stationarySpeedThresholdMps,
+           !GnssVelocityResolver.isCourseUsable(
+               courseDeg: courseDeg,
+               courseAccuracyDeg: courseAccuracyDeg
+           ) {
+            return nil
+        }
         let horizontalVelocityStdMps = GnssVelocityResolver.horizontalVelocityStdMps(
-            speedMps: horizontalSpeedMps,
-            speedAccuracyMps: speedAccuracyMps,
-            courseAccuracyDeg: courseAccuracyDeg
+            speedAccuracyMps: speedAccuracyMps
         )
         let velDValue = velD.map { $0.isFinite ? $0 : 0.0 } ?? 0.0
         let headingRad = GnssVelocityResolver.headingRad(

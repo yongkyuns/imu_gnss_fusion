@@ -1,0 +1,65 @@
+{
+  "created_utc": "2026-05-21T03:19:04Z",
+  "dataset_id": "ios-stationary-smoke-002",
+  "files": {
+    "gnss": {
+      "bytes": 797,
+      "columns": [
+        "t_s",
+        "lat_deg",
+        "lon_deg",
+        "height_m",
+        "vn_mps",
+        "ve_mps",
+        "vd_mps",
+        "pos_std_n_m",
+        "pos_std_e_m",
+        "pos_std_d_m",
+        "vel_std_n_mps",
+        "vel_std_e_mps",
+        "vel_std_d_mps",
+        "heading_rad"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 12.805921077728271,
+      "last_t_s": 25.02764928340912,
+      "media_type": "text/csv",
+      "path": "gnss.csv.gz",
+      "rows": 13,
+      "sha256": "af4b656efff2a809d95447884b1475dcb894ac7efa4c3b750eb14fcfd3d82c60"
+    },
+    "imu": {
+      "bytes": 133943,
+      "columns": [
+        "t_s",
+        "gx_radps",
+        "gy_radps",
+        "gz_radps",
+        "ax_mps2",
+        "ay_mps2",
+        "az_mps2"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.0,
+      "last_t_s": 25.288395524024963,
+      "media_type": "text/csv",
+      "path": "imu.csv.gz",
+      "rows": 2523,
+      "sha256": "cf4831ce9b90e9c80afcc02372200a6c333fd3a3daab65bf1b131c3ac0b72b10"
+    }
+  },
+  "manifest_version": 1,
+  "samples": {
+    "gnss": 13,
+    "imu": 2523
+  },
+  "schema": "generic-replay-v1",
+  "source": {
+    "format": "generic"
+  },
+  "time_span_s": {
+    "end": 25.288395524024963,
+    "start": 0.0
+  },
+  "title": "iOS stationary smoke 002"
+}

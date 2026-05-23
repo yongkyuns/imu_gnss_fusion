@@ -218,6 +218,31 @@ enum RawSessionTimeline {
     }
 }
 
+enum ReplayBatchPolicy {
+    static let defaultTickIntervalSec = 1.0 / 30.0
+    static let maximumEventsPerBatch = 500
+
+    static func advancedElapsedSec(
+        previousElapsedSec: Double,
+        wallDeltaSec: Double,
+        speedMultiplier: Double,
+        durationSec: Double
+    ) -> Double {
+        let speed = PlaybackSpeedPolicy.normalized(speedMultiplier)
+        let boundedDelta = max(0.0, wallDeltaSec.isFinite ? wallDeltaSec : 0.0)
+        let boundedDuration = max(0.0, durationSec.isFinite ? durationSec : 0.0)
+        let next = previousElapsedSec + boundedDelta * speed
+        return min(max(next, 0.0), boundedDuration)
+    }
+
+    static func shouldSleepAfterBatch(
+        processedEventCount: Int,
+        maxEventCount: Int = maximumEventsPerBatch
+    ) -> Bool {
+        processedEventCount < maxEventCount
+    }
+}
+
 enum RawSessionValidationError: Error, Equatable {
     case unsupportedSchema(Int)
     case invalidElapsedTime(Double)

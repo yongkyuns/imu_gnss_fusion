@@ -222,6 +222,46 @@ final class RawSessionLogTests: XCTestCase {
         }
     }
 
+    func testReplayBatchPolicyAdvancesVirtualElapsedTimeBySelectedSpeed() {
+        let elapsed = ReplayBatchPolicy.advancedElapsedSec(
+            previousElapsedSec: 12.0,
+            wallDeltaSec: 0.5,
+            speedMultiplier: 10.0,
+            durationSec: 30.0
+        )
+
+        XCTAssertEqual(elapsed, 17.0, accuracy: 1.0e-12)
+    }
+
+    func testReplayBatchPolicyClampsToDurationAndIgnoresInvalidWallDelta() {
+        XCTAssertEqual(
+            ReplayBatchPolicy.advancedElapsedSec(
+                previousElapsedSec: 29.0,
+                wallDeltaSec: 1.0,
+                speedMultiplier: 10.0,
+                durationSec: 30.0
+            ),
+            30.0,
+            accuracy: 1.0e-12
+        )
+        XCTAssertEqual(
+            ReplayBatchPolicy.advancedElapsedSec(
+                previousElapsedSec: 5.0,
+                wallDeltaSec: .nan,
+                speedMultiplier: 10.0,
+                durationSec: 30.0
+            ),
+            5.0,
+            accuracy: 1.0e-12
+        )
+    }
+
+    func testReplayBatchPolicyOnlySleepsWhenBatchDidNotHitLimit() {
+        XCTAssertTrue(ReplayBatchPolicy.shouldSleepAfterBatch(processedEventCount: 12, maxEventCount: 20))
+        XCTAssertFalse(ReplayBatchPolicy.shouldSleepAfterBatch(processedEventCount: 20, maxEventCount: 20))
+        XCTAssertFalse(ReplayBatchPolicy.shouldSleepAfterBatch(processedEventCount: 21, maxEventCount: 20))
+    }
+
     func testFileStoreSavesLoadsSummariesAndDeletesSessions() throws {
         let rootURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("RawSessionLogTests-\(UUID().uuidString)", isDirectory: true)

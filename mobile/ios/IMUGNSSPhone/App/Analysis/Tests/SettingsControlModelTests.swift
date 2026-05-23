@@ -49,4 +49,28 @@ final class SettingsControlModelTests: XCTestCase {
         let state = SettingsControlState(playbackSpeedMultiplier: 2.0)
         XCTAssertEqual(state.playbackSpeedTitle, "2x")
     }
+
+    func testSettingsStateCarriesEventAudioSettings() {
+        let settings = EventAudioSettings(mode: .chimeAndVoice, playDrivingAlertsInSilentMode: true)
+        let state = SettingsControlState(eventAudioSettings: settings)
+
+        XCTAssertEqual(state.eventAudioSettings, settings)
+    }
+
+    func testSettingsStateExposesMountMemoryTitles() {
+        let saved = SavedMountCalibration(qBV: .identity, savedAt: Date())!
+        let state = SettingsControlState(
+            mountMemorySettings: MountMemorySettings(isEnabled: true, savedCalibration: saved)
+        )
+
+        XCTAssertEqual(state.mountModeTitle, "Remembered Mount")
+        XCTAssertNotEqual(state.savedMountTitle, "None")
+    }
+
+    func testEventAudioModeTitlesAreStable() {
+        XCTAssertEqual(EventAudibleAlertMode.off.displayTitle, "Off")
+        XCTAssertEqual(EventAudibleAlertMode.chime.displayTitle, "Chime")
+        XCTAssertEqual(EventAudibleAlertMode.voice.displayTitle, "Voice")
+        XCTAssertEqual(EventAudibleAlertMode.chimeAndVoice.displayTitle, "Chime + Voice")
+    }
 }

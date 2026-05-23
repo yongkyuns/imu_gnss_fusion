@@ -44,6 +44,13 @@ struct Quaternion: Equatable, Sendable {
         let rotated = q.multiplied(by: v).multiplied(by: q.conjugated)
         return NavigationVectorNED(north: rotated.x, east: rotated.y, down: rotated.z)
     }
+
+    func rotated(x: Double, y: Double, z: Double) -> (x: Double, y: Double, z: Double) {
+        let q = normalized
+        let v = Quaternion(w: 0.0, x: x, y: y, z: z)
+        let rotated = q.multiplied(by: v).multiplied(by: q.conjugated)
+        return (rotated.x, rotated.y, rotated.z)
+    }
 }
 
 enum MotionKinematics {
@@ -74,6 +81,43 @@ enum MotionKinematics {
             forward: vehicle.north,
             right: vehicle.east,
             down: vehicle.down
+        )
+    }
+
+    /// Converts body-frame angular rate into vehicle-frame FRD angular rate.
+    ///
+    /// `qBV` rotates vehicle-frame vectors into body frame. The inverse
+    /// rotation maps body-frame gyroscope readings into vehicle axes.
+    static func vehicleFRDGyro(
+        qBV: Quaternion,
+        bodyGyroRadps: (x: Double, y: Double, z: Double)
+    ) -> VehicleVectorFRD {
+        let vehicle = qBV.normalized.conjugated.rotated(
+            x: bodyGyroRadps.x,
+            y: bodyGyroRadps.y,
+            z: bodyGyroRadps.z
+        )
+        return VehicleVectorFRD(
+            forward: vehicle.x,
+            right: vehicle.y,
+            down: vehicle.z
+        )
+    }
+
+    /// Converts body-frame specific force into vehicle-frame FRD axes.
+    static func vehicleFRDAcceleration(
+        qBV: Quaternion,
+        bodyAccelMps2: (x: Double, y: Double, z: Double)
+    ) -> VehicleVectorFRD {
+        let vehicle = qBV.normalized.conjugated.rotated(
+            x: bodyAccelMps2.x,
+            y: bodyAccelMps2.y,
+            z: bodyAccelMps2.z
+        )
+        return VehicleVectorFRD(
+            forward: vehicle.x,
+            right: vehicle.y,
+            down: vehicle.z
         )
     }
 

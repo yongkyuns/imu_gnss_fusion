@@ -215,6 +215,110 @@
       "reference_mount_gz": "reference_mount.csv.gz",
       "reference_position_gz": "reference_position.csv.gz",
       "reference_motion_gz": "reference_motion.csv.gz"
+    },
+    {
+      "id": "ios-mixed-drive-reverse-parking-001",
+      "label": "iOS mixed drive, reverse parking 001",
+      "description": "iOS MotionFusion mixed-road drive with a low-speed reverse-parking maneuver; exported with course-accuracy velocity covariance.",
+      "base_url": "ios-mixed-drive-reverse-parking-001",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz"
+    },
+    {
+      "id": "ios-stationary-smoke-001",
+      "label": "iOS stationary smoke 001",
+      "description": "Short stationary iOS MotionFusion smoke recording with raw IMU and GNSS samples.",
+      "base_url": "ios-stationary-smoke-001",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz"
+    },
+    {
+      "id": "ios-stationary-smoke-002",
+      "label": "iOS stationary smoke 002",
+      "description": "Stationary iOS MotionFusion smoke recording with raw IMU and GNSS samples.",
+      "base_url": "ios-stationary-smoke-002",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz"
+    },
+    {
+      "id": "ios-mixed-road-drive-001",
+      "label": "iOS mixed-road drive 001",
+      "description": "iOS MotionFusion mixed-road point-to-point drive with raw IMU and 1 Hz CoreLocation GNSS.",
+      "base_url": "ios-mixed-road-drive-001",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz"
+    },
+    {
+      "id": "ios-mixed-road-drive-002",
+      "label": "iOS mixed-road drive 002",
+      "description": "iOS MotionFusion mixed-road drive with raw IMU and 1 Hz CoreLocation GNSS.",
+      "base_url": "ios-mixed-road-drive-002",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz"
+    },
+    {
+      "id": "ios-mixed-road-loop-001",
+      "label": "iOS mixed-road loop 001",
+      "description": "iOS MotionFusion mixed-road loop drive with raw IMU and 1 Hz CoreLocation GNSS.",
+      "base_url": "ios-mixed-road-loop-001",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz"
+    },
+    {
+      "id": "ios-evening-mixed-road-drive-001",
+      "label": "iOS evening mixed-road drive 001",
+      "description": "Evening iOS MotionFusion mixed-road drive with raw IMU and 1 Hz CoreLocation GNSS.",
+      "base_url": "ios-evening-mixed-road-drive-001",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz"
+    },
+    {
+      "id": "ios-evening-mixed-road-drive-002",
+      "label": "iOS evening mixed-road drive 002",
+      "description": "Evening iOS MotionFusion mixed-road drive with raw IMU and 1 Hz CoreLocation GNSS.",
+      "base_url": "ios-evening-mixed-road-drive-002",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz"
+    },
+    {
+      "id": "ios-drive-20260521-121635",
+      "label": "iOS drive 2026-05-21 12:16Z",
+      "description": "iOS MotionFusion drive recorded on 2026-05-21 at 12:16:35Z; exported to generic IMU/GNSS replay format.",
+      "base_url": "ios-drive-20260521-121635",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz"
+    },
+    {
+      "id": "ios-drive-20260521-130835",
+      "label": "iOS drive 2026-05-21 13:08Z",
+      "description": "iOS MotionFusion drive recorded on 2026-05-21 at 13:08:35Z; exported to generic IMU/GNSS replay format.",
+      "base_url": "ios-drive-20260521-130835",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz"
+    },
+    {
+      "id": "ios-drive-20260521-131420",
+      "label": "iOS drive 2026-05-21 13:14Z",
+      "description": "iOS MotionFusion drive recorded on 2026-05-21 at 13:14:20Z; exported to generic IMU/GNSS replay format.",
+      "base_url": "ios-drive-20260521-131420",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz"
+    },
+    {
+      "id": "ios-drive-20260521-164415",
+      "label": "iOS drive 2026-05-21 16:44Z",
+      "description": "iOS MotionFusion drive recorded on 2026-05-21 at 16:44:15Z; exported to generic IMU/GNSS replay format.",
+      "base_url": "ios-drive-20260521-164415",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz"
+    },
+    {
+      "id": "ios-drive-20260521-180601",
+      "label": "iOS drive 2026-05-21 18:06Z",
+      "description": "iOS MotionFusion drive recorded on 2026-05-21 at 18:06:01Z; exported to generic IMU/GNSS replay format.",
+      "base_url": "ios-drive-20260521-180601",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz"
     }
   ]
 }

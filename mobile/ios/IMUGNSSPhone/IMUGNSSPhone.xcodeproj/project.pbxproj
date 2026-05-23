@@ -9,7 +9,9 @@
 /* Begin PBXBuildFile section */
 		0A8E314C7F0E699F782F481E /* RawSessionLogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CA04E4149EBCF37E8B70112 /* RawSessionLogTests.swift */; };
 		1350542115AE72857E3CF9E7 /* IMUGNSSPhoneApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71F862D1F149E3C83E1B4EBB /* IMUGNSSPhoneApp.swift */; };
+		2DD033597A9BCEDA8B2D2EF1 /* MotionEventDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C361B38B6D297EBE08C5EB26 /* MotionEventDetectorTests.swift */; };
 		34101B548D55B84338CE8F40 /* DeveloperComparisonTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F545E9978287177F167E63CB /* DeveloperComparisonTests.swift */; };
+		383217F964186654C2CFDB2F /* MotionEventDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C2E110773FAAC8E0692F710 /* MotionEventDetector.swift */; };
 		3FA0DF4A6D846B8C96B03F56 /* MotionKinematics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F4792405B22C6897CC10911 /* MotionKinematics.swift */; };
 		448303428B7AFD898578DDE6 /* RawSessionFileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E80DDC2ABBEF69B940B47203 /* RawSessionFileStore.swift */; };
 		482E5665EA18D0EE961A75FB /* GnssVelocityResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ADA9A17CB9984000D5F6EBE /* GnssVelocityResolver.swift */; };
@@ -21,6 +23,7 @@
 		6588F26F47350EE6FA5810BE /* NavigationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67E25FBA2D389509C370DACC /* NavigationModels.swift */; };
 		6E27FF2B30066F26B0510954 /* GnssVelocityResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F58B536FB1DF8A26345B349 /* GnssVelocityResolverTests.swift */; };
 		777D1C24A829166100527584 /* SettingsControlModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51505C65CCFC50A81985CAAB /* SettingsControlModel.swift */; };
+		7E821BA33F1A98E4F31600E3 /* MountMemorySettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB684FD05E5E5D280AB89437 /* MountMemorySettings.swift */; };
 		821FA366DB0ABF60821F3EA1 /* MapRenderPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11AB526DD8B6E81BBE8B00C4 /* MapRenderPolicy.swift */; };
 		84332A57789EC41FC852989B /* RawImuSynchronizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2048C2C554F71F4AAFCA90B6 /* RawImuSynchronizerTests.swift */; };
 		8859B3425B5BFC7CD30D64B1 /* VehicleMotionDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 094B6ED23826D37CA19877C9 /* VehicleMotionDisplay.swift */; };
@@ -28,15 +31,20 @@
 		96D57BEB8ADB83CB924822EA /* StreamHealthTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9573E30F277A6F2DC717EBFA /* StreamHealthTests.swift */; };
 		9780EB0C5AEB63EE042B5BF2 /* FusionTimingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49F24324DC070AD1AAD3F487 /* FusionTimingPolicy.swift */; };
 		9B262FEBCD96AC0FBB39D809 /* MapRenderPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A140A6622AD524F605DCA5EF /* MapRenderPolicyTests.swift */; };
+		A0464887A87883AB7CC0FE03 /* EventAudioSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7B80C95E550957501BECF95 /* EventAudioSettingsTests.swift */; };
 		A28D05F0835892528688A77F /* FusionEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58BC795608E08C7BC4688153 /* FusionEngine.swift */; };
 		A76A1793EABCA14894B12AC8 /* GnssFusionInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFCB25446DA7D3D6A2DC4368 /* GnssFusionInput.swift */; };
 		AA0D38BCB55D8D41E5145937 /* SensorFusionFFI.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 216E95E609CC9EE1DAD187AB /* SensorFusionFFI.xcframework */; };
+		B2AA087521D7C5C6A0557730 /* MountMemorySettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B899AED6C504C5AA11C189E /* MountMemorySettingsTests.swift */; };
 		B3F545C868B847362CA2FF83 /* MotionAnalysisTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CFADB04713B1B5BBC861ED3 /* MotionAnalysisTests.swift */; };
 		B913FAB3C199614F82632398 /* FusionHealth.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD37CB158BB37D599B43EF50 /* FusionHealth.swift */; };
 		BBCB9BEE6962CF14A29237C9 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 064866943C3B066A4F4483B6 /* ContentView.swift */; };
 		CFD5752864F9342A7084C273 /* StreamHealth.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB1827800952B687FFF88E94 /* StreamHealth.swift */; };
+		DD39A80F1844E07CD6C34924 /* MotionEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = D64D651FC6A45816FEE96508 /* MotionEvent.swift */; };
 		F1E43DD3900D9FC461587AC7 /* FusionTimingPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04080336EC82C34573366F80 /* FusionTimingPolicyTests.swift */; };
 		F3FEC82933575AAAD7EF4874 /* GnssFusionInputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8B34295A214912826BC4E69 /* GnssFusionInputTests.swift */; };
+		F617A6B9651A0E9C1CBEEB83 /* EventAudioSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB210D6A2D12D40F3D9F25F6 /* EventAudioSettings.swift */; };
+		FFC32E04A1AD29BB9AAE956D /* EventAudioNotifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66DA9CC2FB45180EFAB05EA9 /* EventAudioNotifier.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -57,12 +65,15 @@
 		1F58B536FB1DF8A26345B349 /* GnssVelocityResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GnssVelocityResolverTests.swift; sourceTree = "<group>"; };
 		2048C2C554F71F4AAFCA90B6 /* RawImuSynchronizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawImuSynchronizerTests.swift; sourceTree = "<group>"; };
 		216E95E609CC9EE1DAD187AB /* SensorFusionFFI.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = SensorFusionFFI.xcframework; path = ../build/SensorFusionFFI.xcframework; sourceTree = "<group>"; };
+		2C2E110773FAAC8E0692F710 /* MotionEventDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionEventDetector.swift; sourceTree = "<group>"; };
 		41CE6DB2282095B66DEC3E6C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		49F24324DC070AD1AAD3F487 /* FusionTimingPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FusionTimingPolicy.swift; sourceTree = "<group>"; };
 		51505C65CCFC50A81985CAAB /* SettingsControlModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsControlModel.swift; sourceTree = "<group>"; };
 		58BC795608E08C7BC4688153 /* FusionEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FusionEngine.swift; sourceTree = "<group>"; };
 		5ADA9A17CB9984000D5F6EBE /* GnssVelocityResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GnssVelocityResolver.swift; sourceTree = "<group>"; };
+		5B899AED6C504C5AA11C189E /* MountMemorySettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MountMemorySettingsTests.swift; sourceTree = "<group>"; };
 		5FE4D5872E0CCD8175DC5BA5 /* RawSessionLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawSessionLog.swift; sourceTree = "<group>"; };
+		66DA9CC2FB45180EFAB05EA9 /* EventAudioNotifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventAudioNotifier.swift; sourceTree = "<group>"; };
 		67E25FBA2D389509C370DACC /* NavigationModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationModels.swift; sourceTree = "<group>"; };
 		69016EA42814D5CD9B35E7B6 /* SensorStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensorStore.swift; sourceTree = "<group>"; };
 		6CFADB04713B1B5BBC861ED3 /* MotionAnalysisTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionAnalysisTests.swift; sourceTree = "<group>"; };
@@ -74,15 +85,20 @@
 		9DB13586A10D13A7A4E5BCF3 /* IMUGNSSPhoneTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = IMUGNSSPhoneTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A140A6622AD524F605DCA5EF /* MapRenderPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapRenderPolicyTests.swift; sourceTree = "<group>"; };
 		A509E6299C597B39FA74E9B6 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		C361B38B6D297EBE08C5EB26 /* MotionEventDetectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionEventDetectorTests.swift; sourceTree = "<group>"; };
+		D64D651FC6A45816FEE96508 /* MotionEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionEvent.swift; sourceTree = "<group>"; };
+		DB210D6A2D12D40F3D9F25F6 /* EventAudioSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventAudioSettings.swift; sourceTree = "<group>"; };
 		DD37CB158BB37D599B43EF50 /* FusionHealth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FusionHealth.swift; sourceTree = "<group>"; };
 		DE9DC1A63C10EC9303F84AFE /* RawImuSynchronizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawImuSynchronizer.swift; sourceTree = "<group>"; };
 		E163BF2388E305DAC124FD0D /* SettingsControlModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsControlModelTests.swift; sourceTree = "<group>"; };
 		E6386F87275B56D1FB856B99 /* IMUGNSSPhone-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "IMUGNSSPhone-Bridging-Header.h"; sourceTree = "<group>"; };
 		E69330CEE244184E9EC347F0 /* IMUGNSSPhone.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = IMUGNSSPhone.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E7B80C95E550957501BECF95 /* EventAudioSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventAudioSettingsTests.swift; sourceTree = "<group>"; };
 		E80DDC2ABBEF69B940B47203 /* RawSessionFileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawSessionFileStore.swift; sourceTree = "<group>"; };
 		E8B34295A214912826BC4E69 /* GnssFusionInputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GnssFusionInputTests.swift; sourceTree = "<group>"; };
 		EB1827800952B687FFF88E94 /* StreamHealth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamHealth.swift; sourceTree = "<group>"; };
 		F545E9978287177F167E63CB /* DeveloperComparisonTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeveloperComparisonTests.swift; sourceTree = "<group>"; };
+		FB684FD05E5E5D280AB89437 /* MountMemorySettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MountMemorySettings.swift; sourceTree = "<group>"; };
 		FFCB25446DA7D3D6A2DC4368 /* GnssFusionInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GnssFusionInput.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -109,6 +125,7 @@
 				A509E6299C597B39FA74E9B6 /* Info.plist */,
 				69016EA42814D5CD9B35E7B6 /* SensorStore.swift */,
 				EAD103761C636E088713EDCA /* Analysis */,
+				CB317DBD27199C2F675DEC8F /* Audio */,
 				3DAA79CC27080430F3704BA0 /* Models */,
 				4937FDA704BE154C552E8023 /* Replay */,
 			);
@@ -118,9 +135,12 @@
 		3DAA79CC27080430F3704BA0 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				DB210D6A2D12D40F3D9F25F6 /* EventAudioSettings.swift */,
 				DD37CB158BB37D599B43EF50 /* FusionHealth.swift */,
 				49F24324DC070AD1AAD3F487 /* FusionTimingPolicy.swift */,
 				11AB526DD8B6E81BBE8B00C4 /* MapRenderPolicy.swift */,
+				D64D651FC6A45816FEE96508 /* MotionEvent.swift */,
+				FB684FD05E5E5D280AB89437 /* MountMemorySettings.swift */,
 				67E25FBA2D389509C370DACC /* NavigationModels.swift */,
 				51505C65CCFC50A81985CAAB /* SettingsControlModel.swift */,
 				EB1827800952B687FFF88E94 /* StreamHealth.swift */,
@@ -151,11 +171,14 @@
 			isa = PBXGroup;
 			children = (
 				F545E9978287177F167E63CB /* DeveloperComparisonTests.swift */,
+				E7B80C95E550957501BECF95 /* EventAudioSettingsTests.swift */,
 				04080336EC82C34573366F80 /* FusionTimingPolicyTests.swift */,
 				E8B34295A214912826BC4E69 /* GnssFusionInputTests.swift */,
 				1F58B536FB1DF8A26345B349 /* GnssVelocityResolverTests.swift */,
 				A140A6622AD524F605DCA5EF /* MapRenderPolicyTests.swift */,
 				6CFADB04713B1B5BBC861ED3 /* MotionAnalysisTests.swift */,
+				C361B38B6D297EBE08C5EB26 /* MotionEventDetectorTests.swift */,
+				5B899AED6C504C5AA11C189E /* MountMemorySettingsTests.swift */,
 				2048C2C554F71F4AAFCA90B6 /* RawImuSynchronizerTests.swift */,
 				8CA04E4149EBCF37E8B70112 /* RawSessionLogTests.swift */,
 				E163BF2388E305DAC124FD0D /* SettingsControlModelTests.swift */,
@@ -183,19 +206,28 @@
 			);
 			sourceTree = "<group>";
 		};
+		CB317DBD27199C2F675DEC8F /* Audio */ = {
+			isa = PBXGroup;
+			children = (
+				66DA9CC2FB45180EFAB05EA9 /* EventAudioNotifier.swift */,
+			);
+			path = Audio;
+			sourceTree = "<group>";
+		};
 		EAD103761C636E088713EDCA /* Analysis */ = {
 			isa = PBXGroup;
 			children = (
 				8220177DC5F925633A3234CF /* DeveloperComparison.swift */,
 				FFCB25446DA7D3D6A2DC4368 /* GnssFusionInput.swift */,
 				5ADA9A17CB9984000D5F6EBE /* GnssVelocityResolver.swift */,
+				2C2E110773FAAC8E0692F710 /* MotionEventDetector.swift */,
 				7F4792405B22C6897CC10911 /* MotionKinematics.swift */,
 				DE9DC1A63C10EC9303F84AFE /* RawImuSynchronizer.swift */,
 			);
 			path = Analysis;
 			sourceTree = "<group>";
 		};
-		"TEMP_050EB284-BBD3-4009-B547-304F7EE396CE" /* EKF */ = {
+		"TEMP_AEAFD6EA-2CF3-4AAB-A2B3-2BBA5986BDF7" /* EKF */ = {
 			isa = PBXGroup;
 			children = (
 			);
@@ -288,11 +320,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				34101B548D55B84338CE8F40 /* DeveloperComparisonTests.swift in Sources */,
+				A0464887A87883AB7CC0FE03 /* EventAudioSettingsTests.swift in Sources */,
 				F1E43DD3900D9FC461587AC7 /* FusionTimingPolicyTests.swift in Sources */,
 				F3FEC82933575AAAD7EF4874 /* GnssFusionInputTests.swift in Sources */,
 				6E27FF2B30066F26B0510954 /* GnssVelocityResolverTests.swift in Sources */,
 				9B262FEBCD96AC0FBB39D809 /* MapRenderPolicyTests.swift in Sources */,
 				B3F545C868B847362CA2FF83 /* MotionAnalysisTests.swift in Sources */,
+				2DD033597A9BCEDA8B2D2EF1 /* MotionEventDetectorTests.swift in Sources */,
+				B2AA087521D7C5C6A0557730 /* MountMemorySettingsTests.swift in Sources */,
 				84332A57789EC41FC852989B /* RawImuSynchronizerTests.swift in Sources */,
 				0A8E314C7F0E699F782F481E /* RawSessionLogTests.swift in Sources */,
 				504F742166131D5173688ED1 /* SettingsControlModelTests.swift in Sources */,
@@ -306,6 +341,8 @@
 			files = (
 				BBCB9BEE6962CF14A29237C9 /* ContentView.swift in Sources */,
 				540AD335D46E6C9BA62C65C5 /* DeveloperComparison.swift in Sources */,
+				FFC32E04A1AD29BB9AAE956D /* EventAudioNotifier.swift in Sources */,
+				F617A6B9651A0E9C1CBEEB83 /* EventAudioSettings.swift in Sources */,
 				A28D05F0835892528688A77F /* FusionEngine.swift in Sources */,
 				B913FAB3C199614F82632398 /* FusionHealth.swift in Sources */,
 				9780EB0C5AEB63EE042B5BF2 /* FusionTimingPolicy.swift in Sources */,
@@ -313,7 +350,10 @@
 				482E5665EA18D0EE961A75FB /* GnssVelocityResolver.swift in Sources */,
 				1350542115AE72857E3CF9E7 /* IMUGNSSPhoneApp.swift in Sources */,
 				821FA366DB0ABF60821F3EA1 /* MapRenderPolicy.swift in Sources */,
+				DD39A80F1844E07CD6C34924 /* MotionEvent.swift in Sources */,
+				383217F964186654C2CFDB2F /* MotionEventDetector.swift in Sources */,
 				3FA0DF4A6D846B8C96B03F56 /* MotionKinematics.swift in Sources */,
+				7E821BA33F1A98E4F31600E3 /* MountMemorySettings.swift in Sources */,
 				6588F26F47350EE6FA5810BE /* NavigationModels.swift in Sources */,
 				48B4F46001EF42958D86FDAB /* RawImuSynchronizer.swift in Sources */,
 				448303428B7AFD898578DDE6 /* RawSessionFileStore.swift in Sources */,

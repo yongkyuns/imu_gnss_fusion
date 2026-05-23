@@ -7,7 +7,8 @@ enum GnssVelocityResolver {
 
     static func horizontalVelocity(
         speedMps: Double?,
-        courseDeg: Double?
+        courseDeg: Double?,
+        courseAccuracyDeg: Double?
     ) -> (northMps: Double, eastMps: Double)? {
         guard let speedMps, speedMps >= 0.0, speedMps.isFinite else {
             return nil
@@ -15,7 +16,9 @@ enum GnssVelocityResolver {
         if speedMps <= stationarySpeedThresholdMps {
             return (0.0, 0.0)
         }
-        guard let courseDeg, courseDeg >= 0.0, courseDeg.isFinite else {
+        guard isCourseUsable(courseDeg: courseDeg, courseAccuracyDeg: courseAccuracyDeg),
+              let courseDeg
+        else {
             return nil
         }
         let headingRad = courseDeg * .pi / 180.0
@@ -26,25 +29,24 @@ enum GnssVelocityResolver {
     }
 
     static func horizontalVelocityStdMps(
-        speedMps: Double,
-        speedAccuracyMps: Double?,
-        courseAccuracyDeg: Double?
+        speedAccuracyMps: Double?
     ) -> Double {
-        let speedStdMps = validPositive(speedAccuracyMps) ?? defaultSpeedAccuracyMps
-        guard let courseAccuracyDeg = validNonNegative(courseAccuracyDeg) else {
-            return speedStdMps
-        }
-        let directionStdMps = max(0.0, speedMps) * courseAccuracyDeg * .pi / 180.0
-        return hypot(speedStdMps, directionStdMps)
+        validPositive(speedAccuracyMps) ?? defaultSpeedAccuracyMps
     }
 
     static func headingRad(courseDeg: Double?, courseAccuracyDeg: Double?) -> Double? {
-        guard let courseDeg, courseDeg >= 0.0, courseDeg.isFinite else { return nil }
-        if let courseAccuracyDeg = validNonNegative(courseAccuracyDeg),
-           courseAccuracyDeg > maxCourseAccuracyForHeadingDeg {
+        guard isCourseUsable(courseDeg: courseDeg, courseAccuracyDeg: courseAccuracyDeg),
+              let courseDeg
+        else {
             return nil
         }
         return courseDeg * .pi / 180.0
+    }
+
+    static func isCourseUsable(courseDeg: Double?, courseAccuracyDeg: Double?) -> Bool {
+        guard let courseDeg, courseDeg >= 0.0, courseDeg.isFinite else { return false }
+        guard let courseAccuracyDeg = validNonNegative(courseAccuracyDeg) else { return true }
+        return courseAccuracyDeg <= maxCourseAccuracyForHeadingDeg
     }
 
     private static func validPositive(_ value: Double?) -> Double? {
