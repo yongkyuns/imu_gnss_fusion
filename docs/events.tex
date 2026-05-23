@@ -44,7 +44,10 @@ is:
   \item reverse-driving intervals,
   \item harsh acceleration,
   \item harsh braking,
-  \item harsh cornering.
+  \item harsh cornering,
+  \item road-surface roughness,
+  \item streaming trip statistics such as distance, duration, speed extrema,
+    elevation gain/loss, and event rates.
 \end{itemize}
 
 \section{Signals and Units}
@@ -58,13 +61,16 @@ is:
 \(s=\abs{v_x}\) & m/s & Speed magnitude used by threshold logic. \\
 \(\theta\) & deg & Vehicle pitch angle. Positive pitch is uphill in the current detector convention. \\
 \(a_z\) & m/s\(^2\) & Gravity-compensated vehicle-frame vertical acceleration. \\
+\(a_{z,\mathrm{bp}}\) & m/s\(^2\) & Band-passed vertical acceleration used for road roughness. \\
 \(\omega_z\) & rad/s & Vehicle yaw rate. \\
 \bottomrule
 \end{longtable}
 
-The speed-bump detector uses pitch and vertical acceleration. Hill detection
-uses pitch and speed. Reverse and harsh longitudinal detection use forward
-velocity. Harsh cornering uses speed and yaw rate.
+The speed-bump detector uses pitch and vertical acceleration. Road roughness
+uses gravity-compensated vertical acceleration and speed. Hill detection uses
+pitch and speed. Reverse and harsh longitudinal detection use forward velocity.
+Harsh cornering uses speed and yaw rate. Trip statistics consume the same
+vehicle-motion stream and update running totals without storing history.
 
 \begin{figure}[h]
 \centering
@@ -125,6 +131,25 @@ For noise floors, the input is the absolute high-pass value:
 The EMA is a low-memory substitute for a sliding RMS window. It provides slow
 adaptation to background vibration without storing historical samples.
 
+\subsection{Distance-Domain EMA}
+
+Road roughness should compare road surface quality over distance rather than
+over wall-clock time. For a distance increment
+\begin{equation}
+  \Delta s_k = s_k\Delta t_k,
+\end{equation}
+the crate uses a first-order distance-domain EMA:
+\begin{equation}
+  \alpha_k = \frac{\Delta s_k}{L+\Delta s_k},
+  \qquad
+  E_k = (1-\alpha_k)E_{k-1}+\alpha_k e_k .
+\end{equation}
+This is the same small-state first-order update as the time-domain EMA, but the
+independent variable is traveled distance. \(L\) is the effective road interval
+length. The default \(L=10~\mathrm{m}\) makes the estimate close to continuous:
+roughness rises over locally rough pavement and dissipates quickly after the
+vehicle returns to clean road, without requiring a rolling buffer.
+
 \subsection{Interval Accumulation}
 
 Most detectors convert an instantaneous metric \(m_k\) into an event interval
@@ -143,6 +168,69 @@ During an active interval the detector accumulates:
 \end{align}
 The interval is emitted only if \(T\ge T_{\min}\). A refractory time suppresses
 duplicate events immediately after a valid event.
+
+\section{Road Roughness Analyzer}
+
+\subsection{Metric}
+
+\path{RoadRoughnessAnalyzer} estimates continuous road-surface roughness rather
+than a discrete event. The input is vehicle-frame, gravity-compensated vertical
+acceleration. The implementation first rejects grade, body attitude drift, and
+high-frequency sensor/structure noise:
+\begin{align}
+  a_{z,\mathrm{hp},k} &=
+    \operatorname{HPF}(a_{z,k}; f_c=0.7~\mathrm{Hz}),\\
+  a_{z,\mathrm{bp},k} &=
+    \operatorname{LPF}(a_{z,\mathrm{hp},k}; f_c=10~\mathrm{Hz}).
+\end{align}
+Large isolated defects are limited before they enter the roughness energy:
+\begin{equation}
+  \tilde{a}_{z,k}
+  = \operatorname{clamp}(a_{z,\mathrm{bp},k}, -1.5, 1.5).
+\end{equation}
+The roughness energy sample is
+\begin{equation}
+  e_k = \tilde{a}_{z,k}^2 .
+\end{equation}
+When \(s_k\ge2.0~\mathrm{m/s}\), the analyzer updates the distance-domain
+energy estimate with \(L=10~\mathrm{m}\):
+\begin{equation}
+  E_k = (1-\alpha_k)E_{k-1}+\alpha_k e_k,
+  \qquad
+  \alpha_k=\frac{s_k\Delta t_k}{10+s_k\Delta t_k}.
+\end{equation}
+When speed is below the gate, filter state is kept current but roughness energy
+and valid roughness distance are held. This prevents stationary vibration and
+parking-lot maneuvering from being interpreted as road texture.
+
+The reported roughness is
+\begin{equation}
+  R_k = \sqrt{E_k}.
+\end{equation}
+Initial qualitative bands are:
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Class & Condition & Interpretation \\
+\midrule
+Very smooth & \(R<0.15~\mathrm{m/s^2}\) & Minimal vertical vibration. \\
+Smooth & \(0.15\le R<0.25~\mathrm{m/s^2}\) & Low vertical vibration. \\
+Light texture & \(0.25\le R<0.40~\mathrm{m/s^2}\) & Mild road texture. \\
+Moderate & \(0.40\le R<0.60~\mathrm{m/s^2}\) & Noticeable sustained texture. \\
+Rough & \(0.60\le R<0.90~\mathrm{m/s^2}\) & Sustained rough pavement. \\
+Very rough & \(0.90\le R<1.20~\mathrm{m/s^2}\) & Strong sustained vibration. \\
+Severe & \(R\ge1.20~\mathrm{m/s^2}\) & Extreme sustained vibration. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Why Not Peak Acceleration}
+
+Peak vertical acceleration is already used by speed-bump detection. Roughness is
+intended to describe a road interval, so a single bump or pothole should not
+dominate the estimate. The band-pass, clipping, speed gate, and 10 m
+distance-domain EMA make the metric local and streaming while keeping memory
+use constant.
 
 \section{Speed-Bump Detector}
 
@@ -406,6 +494,50 @@ Harsh brake enter/exit & \(3.0/2.4~\mathrm{m/s^2}\) & Longitudinal deceleration 
 Harsh corner enter/exit & \(3.0/2.4~\mathrm{m/s^2}\) & Lateral acceleration hysteresis. \\
 \bottomrule
 \end{longtable}
+
+\section{Trip Statistics}
+
+\path{TripStats} is a constant-memory accumulator that runs beside the event
+detectors. It is not an offline reducer: each call processes one
+\path{TripSample}, updates a fixed set of sums and extrema, and returns no
+allocation-backed history. The main integrated quantities are:
+\begin{align}
+  D &= \sum_k \bar{s}_k\dt_k,\\
+  T_{\mathrm{moving}} &= \sum_k \mathbb{1}(\bar{s}_k \ge s_{\mathrm{move}})\dt_k,\\
+  D_{\mathrm{rev}} &= \sum_k \max(-\bar{v}_{x,k},0)\dt_k.
+\end{align}
+Here \(\bar{s}_k\) and \(\bar{v}_{x,k}\) are one-sample trapezoidal averages
+over the current interval. The trapezoid uses only the previous sample, so it
+remains embedded-friendly while avoiding the step-change bias from assigning a
+whole interval to the newest sample.
+
+When a caller supplies a vertical position \(h_k\) in the sample stream, the
+accumulator computes elevation gain and loss:
+\begin{equation}
+  \Delta h_k = h_k - h_{k-1}.
+\end{equation}
+Positive \(\Delta h_k\) contributes to elevation gain and negative \(\Delta h_k\)
+contributes to elevation loss. In the simulator, \(h_k=-D_{\mathrm{GNSS}}\),
+where \(D_{\mathrm{GNSS}}\) is the GNSS down coordinate in the fixed first-GNSS
+NED frame. The trip accumulator ignores height deltas across different
+\path{height_frame_id} values, so callers that use a local reanchored frame can
+avoid false elevation jumps by changing the frame identifier whenever the
+anchor changes.
+
+Rolling quantities use the same EMA primitive as the detectors:
+\begin{align}
+  \bar{s}^{\mathrm{roll}}_k
+    &= \operatorname{EMA}(\bar{s}^{\mathrm{roll}}_{k-1}, s_k,\tau,\dt_k),\\
+  \bar{a}^{\mathrm{roll}}_k
+    &= \operatorname{EMA}(\bar{a}^{\mathrm{roll}}_{k-1}, \abs{a_k},\tau,\dt_k).
+\end{align}
+These are approximate recent-behavior summaries, not exact last-\(N\)-second
+windows. Exact windows would require a ring buffer; the trip accumulator
+intentionally avoids that memory cost.
+
+The accumulator also records detector event counts by category. Normalized
+rates such as bumps per kilometer, harsh events per kilometer, and reverse
+seconds per kilometer are computed from the running counters and distance.
 
 \section{Visualizer Interpretation}
 

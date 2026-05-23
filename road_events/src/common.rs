@@ -10,6 +10,12 @@ pub(crate) fn high_pass(
     alpha * (last_output + current - last_input)
 }
 
+pub(crate) fn low_pass(previous: f32, current: f32, cutoff_hz: f32, dt: f32) -> f32 {
+    let rc = 1.0 / (core::f32::consts::TAU * cutoff_hz.max(1.0e-3));
+    let alpha = dt / (rc + dt);
+    (1.0 - alpha) * previous + alpha * current
+}
+
 pub(crate) fn elapsed_since_last(last_t_s: &mut Option<f32>, t_s: f32) -> f32 {
     let dt = last_t_s
         .map(|last_t_s| (t_s - last_t_s).clamp(0.0, 0.2))
@@ -25,4 +31,15 @@ pub(crate) fn update_ema(previous: f32, value: f32, tau_s: f32, dt: f32) -> f32 
 
 pub(crate) fn update_abs_ema(previous: f32, value: f32, tau_s: f32, dt: f32) -> f32 {
     update_ema(previous, value.abs(), tau_s, dt)
+}
+
+pub(crate) fn sqrt_f32(x: f32) -> f32 {
+    if x <= 0.0 {
+        return 0.0;
+    }
+    let mut y = x.max(1.0);
+    for _ in 0..16 {
+        y = 0.5 * (y + x / y);
+    }
+    y
 }

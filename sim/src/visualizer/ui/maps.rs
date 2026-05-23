@@ -12,11 +12,167 @@ use crate::visualizer::model::{
 use crate::visualizer::theme::UiTheme;
 
 use super::colors::{
-    SeriesColor, cursor_marker_color, map_heading_color, map_marker_color, map_trace_color,
-    marker_outline_color, tooltip_fill, tooltip_text_color,
+    SeriesColor, cursor_marker_color, event_marker_color, map_heading_color, map_marker_color,
+    map_trace_color, marker_outline_color, tooltip_fill, tooltip_text_color,
 };
 use super::state::EKF_FILTER_LABEL;
 use super::trace_query::sample_trace_at;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum MapColorSource {
+    None,
+    Speed,
+    LongitudinalAccel,
+    LateralAccel,
+    RoadRoughness,
+    VehiclePitch,
+}
+
+impl MapColorSource {
+    pub(super) const ALL: [Self; 6] = [
+        Self::None,
+        Self::Speed,
+        Self::LongitudinalAccel,
+        Self::LateralAccel,
+        Self::RoadRoughness,
+        Self::VehiclePitch,
+    ];
+
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::None => "Trace color",
+            Self::Speed => "Speed",
+            Self::LongitudinalAccel => "Long accel",
+            Self::LateralAccel => "Lat accel",
+            Self::RoadRoughness => "Road roughness",
+            Self::VehiclePitch => "Vehicle pitch",
+        }
+    }
+
+    fn unit(self) -> &'static str {
+        match self {
+            Self::None => "",
+            Self::Speed => "m/s",
+            Self::LongitudinalAccel | Self::LateralAccel | Self::RoadRoughness => "m/s^2",
+            Self::VehiclePitch => "deg",
+        }
+    }
+
+    fn diverging(self) -> bool {
+        matches!(
+            self,
+            Self::LongitudinalAccel | Self::LateralAccel | Self::VehiclePitch
+        )
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct MapColorScale {
+    source: MapColorSource,
+    min: f64,
+    max: f64,
+}
+
+pub(super) struct MapColorSeries {
+    scale: MapColorScale,
+    points: Vec<[f64; 2]>,
+}
+
+pub(super) fn map_color_series(data: &PlotData, source: MapColorSource) -> Option<MapColorSeries> {
+    if source == MapColorSource::None {
+        return None;
+    }
+    let points = map_color_points(data, source)?;
+    let (min, max) = map_color_range(&points, source)?;
+    Some(MapColorSeries {
+        scale: MapColorScale { source, min, max },
+        points,
+    })
+}
+
+fn map_color_points(data: &PlotData, source: MapColorSource) -> Option<Vec<[f64; 2]>> {
+    match source {
+        MapColorSource::None => None,
+        MapColorSource::Speed => ekf_horizontal_speed_points(data),
+        MapColorSource::LongitudinalAccel => data
+            .vehicle_motion_accel
+            .iter()
+            .find(|trace| trace.name == "EKF linear acceleration X [m/s^2]")
+            .or_else(|| {
+                data.vehicle_motion_accel
+                    .iter()
+                    .find(|trace| trace.name.contains("linear acceleration X"))
+            })
+            .map(|trace| trace.points.clone()),
+        MapColorSource::LateralAccel => data
+            .vehicle_motion_accel
+            .iter()
+            .find(|trace| trace.name == "EKF linear acceleration Y [m/s^2]")
+            .or_else(|| {
+                data.vehicle_motion_accel
+                    .iter()
+                    .find(|trace| trace.name.contains("linear acceleration Y"))
+            })
+            .map(|trace| trace.points.clone()),
+        MapColorSource::RoadRoughness => data
+            .ekf_road_roughness
+            .iter()
+            .find(|trace| trace.name == "Road roughness RMS [m/s^2]")
+            .map(|trace| trace.points.clone()),
+        MapColorSource::VehiclePitch => data
+            .ekf_cmp_att
+            .iter()
+            .find(|trace| trace.name == "EKF pitch [deg]")
+            .or_else(|| data.ekf_bump_pitch_speed.first())
+            .map(|trace| trace.points.clone()),
+    }
+}
+
+fn ekf_horizontal_speed_points(data: &PlotData) -> Option<Vec<[f64; 2]>> {
+    let vel_n = data
+        .ekf_cmp_vel
+        .iter()
+        .find(|trace| trace.name == "EKF velN [m/s]" || trace.name == "EKF vN [m/s]")?;
+    let vel_e = data
+        .ekf_cmp_vel
+        .iter()
+        .find(|trace| trace.name == "EKF velE [m/s]" || trace.name == "EKF vE [m/s]")?;
+    let points = vel_n
+        .points
+        .iter()
+        .filter_map(|point| {
+            let t_s = point[0];
+            let vn = point[1];
+            let ve = sample_trace_at(vel_e, t_s)?;
+            (vn.is_finite() && ve.is_finite()).then_some([t_s, vn.hypot(ve)])
+        })
+        .collect::<Vec<_>>();
+    (!points.is_empty()).then_some(points)
+}
+
+fn map_color_range(points: &[[f64; 2]], source: MapColorSource) -> Option<(f64, f64)> {
+    let mut min = f64::INFINITY;
+    let mut max = f64::NEG_INFINITY;
+    for point in points {
+        let value = point[1];
+        if value.is_finite() {
+            min = min.min(value);
+            max = max.max(value);
+        }
+    }
+    if !min.is_finite() {
+        return None;
+    }
+    if source.diverging() {
+        let limit = min.abs().max(max.abs()).max(1.0e-6);
+        Some((-limit, limit))
+    } else if (max - min).abs() < 1.0e-9 {
+        let pad = max.abs().max(1.0) * 0.05;
+        Some((min - pad, max + pad))
+    } else {
+        Some((min, max))
+    }
+}
 
 #[derive(Clone, Copy)]
 enum CartoRasterStyle {
@@ -124,6 +280,7 @@ pub(super) struct TrackOverlay<'a> {
     pub(super) cursor_samples: Vec<&'a MapCursorSample>,
     pub(super) road_events: Vec<&'a RoadEventSample>,
     pub(super) road_segments: Vec<&'a RoadSegmentSample>,
+    pub(super) map_color: Option<MapColorSeries>,
     pub(super) show_heading: bool,
     pub(super) cursor_t_s: Option<f64>,
 }
@@ -146,6 +303,19 @@ impl Plugin for TrackOverlay<'_> {
         let min_step_sq = min_step * min_step;
         for tr in &self.traces {
             if tr.points.len() < 2 {
+                continue;
+            }
+            if let Some(color_scale) = self.map_color.as_ref()
+                && draw_colorized_map_trace(
+                    &painter,
+                    projection,
+                    tr,
+                    &self.cursor_samples,
+                    &color_scale,
+                    point_stride,
+                    min_step_sq,
+                )
+            {
                 continue;
             }
             let color = map_trace_color(tr.name.as_str(), &visuals);
@@ -200,6 +370,32 @@ impl Plugin for TrackOverlay<'_> {
                 ));
             }
         }
+        if let Some(color_scale) = self.map_color.as_ref() {
+            draw_map_color_legend(&painter, map_rect, color_scale.scale, &visuals);
+        }
+        let hover_pos = ui.input(|input| input.pointer.hover_pos());
+        if let Some(color_series) = self.map_color.as_ref()
+            && let Some(mouse_pos) = hover_pos
+            && map_rect.contains(mouse_pos)
+            && !map_event_hover_plot_visible(
+                projection,
+                &self.cursor_samples,
+                &self.road_events,
+                &self.road_segments,
+                mouse_pos,
+            )
+        {
+            draw_map_color_hover_tooltip(
+                ui,
+                &painter,
+                projection,
+                &self.cursor_samples,
+                color_series,
+                mouse_pos,
+                point_stride,
+                &visuals,
+            );
+        }
 
         if self.show_heading {
             let mut last_tick_t = f64::NEG_INFINITY;
@@ -218,6 +414,16 @@ impl Plugin for TrackOverlay<'_> {
             }
         }
 
+        draw_road_segment_overlays(
+            ui,
+            &painter,
+            projection,
+            &self.cursor_samples,
+            &self.road_segments,
+            &visuals,
+        );
+        draw_road_event_markers(ui, &painter, projection, &self.road_events, &visuals);
+
         if let Some(t_s) = self.cursor_t_s {
             draw_map_cursor_markers(
                 &painter,
@@ -228,16 +434,6 @@ impl Plugin for TrackOverlay<'_> {
                 &visuals,
             );
         }
-
-        draw_road_segment_overlays(
-            ui,
-            &painter,
-            projection,
-            &self.cursor_samples,
-            &self.road_segments,
-            &visuals,
-        );
-        draw_road_event_markers(ui, &painter, projection, &self.road_events, &visuals);
 
         if self.show_heading
             && let Some(mouse_pos) = ui.input(|i| i.pointer.hover_pos())
@@ -273,6 +469,529 @@ impl Plugin for TrackOverlay<'_> {
     }
 }
 
+fn draw_colorized_map_trace(
+    painter: &egui::Painter,
+    projection: MapOverlayProjection<'_>,
+    trace: &Trace,
+    cursor_samples: &[&MapCursorSample],
+    color_series: &MapColorSeries,
+    point_stride: usize,
+    min_step_sq: f32,
+) -> bool {
+    if !is_ekf_map_trace(trace.name.as_str()) {
+        return false;
+    }
+    let mut drew_any = false;
+    let mut previous: Option<(egui::Pos2, f64)> = None;
+    let mut last_drawn: Option<egui::Pos2> = None;
+    let mut pending: Option<(egui::Pos2, f64)> = None;
+
+    for sample in cursor_samples
+        .iter()
+        .copied()
+        .filter(|sample| sample.trace_name == trace.name)
+        .step_by(point_stride)
+    {
+        if !sample.t_s.is_finite()
+            || !sample.lon_deg.is_finite()
+            || !sample.lat_deg.is_finite()
+            || !projection.contains(sample.lon_deg, sample.lat_deg)
+        {
+            previous = None;
+            last_drawn = None;
+            pending = None;
+            continue;
+        }
+        let pos = projection.project(sample.lon_deg, sample.lat_deg);
+        let accepted = match last_drawn {
+            None => true,
+            Some(last) if last.distance_sq(pos) >= min_step_sq => true,
+            Some(_) => {
+                pending = Some((pos, sample.t_s));
+                false
+            }
+        };
+        if !accepted {
+            continue;
+        }
+        if let Some((pending_pos, pending_t_s)) = pending.take()
+            && let Some(last) = last_drawn
+            && last.distance_sq(pending_pos) >= min_step_sq
+            && pending_pos.distance_sq(pos) >= min_step_sq
+        {
+            draw_colorized_segment(
+                painter,
+                &mut previous,
+                pending_pos,
+                pending_t_s,
+                color_series,
+            );
+        }
+        draw_colorized_segment(painter, &mut previous, pos, sample.t_s, color_series);
+        last_drawn = Some(pos);
+        drew_any = true;
+    }
+
+    if let Some((pending_pos, pending_t_s)) = pending
+        && last_drawn
+            .map(|last| last.distance_sq(pending_pos) > 0.0)
+            .unwrap_or(false)
+    {
+        draw_colorized_segment(
+            painter,
+            &mut previous,
+            pending_pos,
+            pending_t_s,
+            color_series,
+        );
+        drew_any = true;
+    }
+    drew_any
+}
+
+fn is_ekf_map_trace(name: &str) -> bool {
+    name == "EKF path (lon,lat)" || name == "EKF path during GNSS outage (lon,lat)"
+}
+
+fn draw_colorized_segment(
+    painter: &egui::Painter,
+    previous: &mut Option<(egui::Pos2, f64)>,
+    current_pos: egui::Pos2,
+    current_t_s: f64,
+    color_series: &MapColorSeries,
+) {
+    if let Some((previous_pos, previous_t_s)) = *previous {
+        let color_t_s = 0.5 * (previous_t_s + current_t_s);
+        let color = map_color_at(color_series, color_t_s);
+        painter.line_segment([previous_pos, current_pos], egui::Stroke::new(2.6, color));
+    }
+    *previous = Some((current_pos, current_t_s));
+}
+
+fn map_color_at(color_series: &MapColorSeries, t_s: f64) -> egui::Color32 {
+    let value = sample_points_at(&color_series.points, t_s).unwrap_or(color_series.scale.min);
+    map_scalar_color(
+        normalize_map_color(value, color_series.scale.min, color_series.scale.max),
+        color_series.scale.source.diverging(),
+    )
+}
+
+fn sample_points_at(points: &[[f64; 2]], t_s: f64) -> Option<f64> {
+    let idx = points.partition_point(|point| point[0] < t_s);
+    let point = match (idx.checked_sub(1), points.get(idx)) {
+        (Some(prev_idx), Some(next)) => {
+            let prev = points[prev_idx];
+            if (t_s - prev[0]).abs() <= (next[0] - t_s).abs() {
+                prev
+            } else {
+                *next
+            }
+        }
+        (Some(prev_idx), None) => points[prev_idx],
+        (None, Some(next)) => *next,
+        (None, None) => return None,
+    };
+    point[1].is_finite().then_some(point[1])
+}
+
+fn normalize_map_color(value: f64, min: f64, max: f64) -> f32 {
+    if !value.is_finite() || !min.is_finite() || !max.is_finite() || max <= min {
+        return 0.0;
+    }
+    ((value - min) / (max - min)).clamp(0.0, 1.0) as f32
+}
+
+fn map_scalar_color(t: f32, diverging: bool) -> egui::Color32 {
+    if diverging {
+        if t < 0.5 {
+            lerp_color(
+                egui::Color32::from_rgb(0, 42, 190),
+                egui::Color32::from_rgb(242, 244, 238),
+                t * 2.0,
+            )
+        } else {
+            lerp_color(
+                egui::Color32::from_rgb(242, 244, 238),
+                egui::Color32::from_rgb(205, 0, 0),
+                (t - 0.5) * 2.0,
+            )
+        }
+    } else {
+        let stops = [
+            egui::Color32::from_rgb(48, 18, 59),
+            egui::Color32::from_rgb(50, 101, 189),
+            egui::Color32::from_rgb(37, 190, 232),
+            egui::Color32::from_rgb(123, 220, 84),
+            egui::Color32::from_rgb(254, 211, 45),
+            egui::Color32::from_rgb(245, 97, 24),
+            egui::Color32::from_rgb(122, 4, 3),
+        ];
+        let scaled = t.clamp(0.0, 1.0) * (stops.len() - 1) as f32;
+        let i = scaled.floor() as usize;
+        let j = (i + 1).min(stops.len() - 1);
+        lerp_color(stops[i], stops[j], scaled - i as f32)
+    }
+}
+
+fn lerp_color(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32 {
+    let t = t.clamp(0.0, 1.0);
+    let lerp = |x: u8, y: u8| -> u8 { (x as f32 + (y as f32 - x as f32) * t).round() as u8 };
+    egui::Color32::from_rgba_unmultiplied(
+        lerp(a.r(), b.r()),
+        lerp(a.g(), b.g()),
+        lerp(a.b(), b.b()),
+        lerp(a.a(), b.a()),
+    )
+}
+
+fn draw_map_color_legend(
+    painter: &egui::Painter,
+    map_rect: egui::Rect,
+    color_scale: MapColorScale,
+    visuals: &egui::Visuals,
+) {
+    let width = 172.0;
+    let height = 40.0;
+    let rect = egui::Rect::from_min_size(
+        map_rect.left_bottom() + egui::vec2(10.0, -height - 10.0),
+        egui::vec2(width, height),
+    );
+    painter.rect_filled(rect, 5.0, tooltip_fill(visuals));
+    let gradient_rect = egui::Rect::from_min_size(
+        rect.left_top() + egui::vec2(8.0, 8.0),
+        egui::vec2(width - 16.0, 8.0),
+    );
+    let steps = 40;
+    for i in 0..steps {
+        let t0 = i as f32 / steps as f32;
+        let t1 = (i + 1) as f32 / steps as f32;
+        let x0 = egui::lerp(gradient_rect.x_range(), t0);
+        let x1 = egui::lerp(gradient_rect.x_range(), t1);
+        let step_rect = egui::Rect::from_min_max(
+            egui::pos2(x0, gradient_rect.top()),
+            egui::pos2(x1 + 0.5, gradient_rect.bottom()),
+        );
+        painter.rect_filled(
+            step_rect,
+            0.0,
+            map_scalar_color((t0 + t1) * 0.5, color_scale.source.diverging()),
+        );
+    }
+    let label = format!(
+        "{} [{:.2}, {:.2}] {}",
+        color_scale.source.label(),
+        color_scale.min,
+        color_scale.max,
+        color_scale.source.unit()
+    );
+    painter.text(
+        rect.left_top() + egui::vec2(8.0, 20.0),
+        egui::Align2::LEFT_TOP,
+        label,
+        egui::FontId::monospace(11.0),
+        tooltip_text_color(visuals),
+    );
+}
+
+fn draw_map_color_hover_tooltip(
+    ui: &mut egui::Ui,
+    painter: &egui::Painter,
+    projection: MapOverlayProjection<'_>,
+    cursor_samples: &[&MapCursorSample],
+    color_series: &MapColorSeries,
+    mouse_pos: egui::Pos2,
+    point_stride: usize,
+    visuals: &egui::Visuals,
+) {
+    let Some((pos, t_s)) =
+        nearest_colorized_map_sample(projection, cursor_samples, mouse_pos, point_stride)
+    else {
+        return;
+    };
+    let Some(value) = sample_points_at(&color_series.points, t_s) else {
+        return;
+    };
+    let color = map_color_at(color_series, t_s);
+    painter.circle_filled(pos, 4.0, color);
+    painter.circle_stroke(
+        pos,
+        4.0,
+        egui::Stroke::new(1.2, marker_outline_color(visuals)),
+    );
+    draw_map_color_window_markers(
+        painter,
+        projection,
+        cursor_samples,
+        t_s,
+        10.0,
+        color,
+        visuals,
+    );
+    let bg_min = pos + egui::vec2(10.0, -42.0);
+    show_map_color_tooltip(ui, bg_min, color_series, t_s, value, color, visuals);
+}
+
+fn map_event_hover_plot_visible(
+    projection: MapOverlayProjection<'_>,
+    cursor_samples: &[&MapCursorSample],
+    events: &[&RoadEventSample],
+    segments: &[&RoadSegmentSample],
+    mouse_pos: egui::Pos2,
+) -> bool {
+    events.iter().any(|event| {
+        event_has_trigger_plot(&event.trigger_traces)
+            && projection.contains(event.lon_deg, event.lat_deg)
+            && projection
+                .project(event.lon_deg, event.lat_deg)
+                .distance_sq(mouse_pos)
+                <= 12.0_f32 * 12.0_f32
+    }) || segments.iter().any(|segment| {
+        event_has_trigger_plot(&segment.trigger_traces)
+            && road_segment_hovered(projection, cursor_samples, segment, mouse_pos)
+    })
+}
+
+fn event_has_trigger_plot(traces: &[Trace]) -> bool {
+    traces
+        .iter()
+        .any(|trace| trace.points.iter().any(|point| point[1].is_finite()))
+}
+
+fn road_segment_hovered(
+    projection: MapOverlayProjection<'_>,
+    cursor_samples: &[&MapCursorSample],
+    segment: &RoadSegmentSample,
+    mouse_pos: egui::Pos2,
+) -> bool {
+    let start = sample_map_cursor_at(cursor_samples, "EKF path (lon,lat)", segment.start_t_s);
+    let end = sample_map_cursor_at(cursor_samples, "EKF path (lon,lat)", segment.end_t_s);
+    [start, end]
+        .into_iter()
+        .flatten()
+        .filter(|sample| projection.contains(sample.lon_deg, sample.lat_deg))
+        .map(|sample| projection.project(sample.lon_deg, sample.lat_deg))
+        .any(|pos| pos.distance_sq(mouse_pos) <= 13.0_f32 * 13.0_f32)
+}
+
+fn draw_map_color_window_markers(
+    painter: &egui::Painter,
+    projection: MapOverlayProjection<'_>,
+    cursor_samples: &[&MapCursorSample],
+    center_t_s: f64,
+    half_window_s: f64,
+    color: egui::Color32,
+    visuals: &egui::Visuals,
+) {
+    let stroke = egui::Stroke::new(1.4, color);
+    let outline = egui::Stroke::new(1.2, marker_outline_color(visuals));
+    for t_s in [center_t_s - half_window_s, center_t_s + half_window_s] {
+        let Some(sample) = sample_colorized_map_cursor_at(cursor_samples, t_s, 2.0) else {
+            continue;
+        };
+        if !projection.contains(sample.lon_deg, sample.lat_deg) {
+            continue;
+        }
+        let pos = projection.project(sample.lon_deg, sample.lat_deg);
+        painter.circle_stroke(pos, 4.5, outline);
+        painter.circle_stroke(pos, 3.2, stroke);
+    }
+}
+
+fn nearest_colorized_map_sample(
+    projection: MapOverlayProjection<'_>,
+    cursor_samples: &[&MapCursorSample],
+    mouse_pos: egui::Pos2,
+    point_stride: usize,
+) -> Option<(egui::Pos2, f64)> {
+    let mut best: Option<(f32, egui::Pos2, f64)> = None;
+    let mut previous: Option<(egui::Pos2, f64)> = None;
+    let stride = point_stride.max(1);
+    for sample in cursor_samples
+        .iter()
+        .copied()
+        .filter(|sample| is_ekf_map_trace(sample.trace_name.as_str()))
+        .step_by(stride)
+    {
+        if !sample.t_s.is_finite()
+            || !sample.lon_deg.is_finite()
+            || !sample.lat_deg.is_finite()
+            || !projection.contains(sample.lon_deg, sample.lat_deg)
+        {
+            previous = None;
+            continue;
+        }
+        let pos = projection.project(sample.lon_deg, sample.lat_deg);
+        if let Some((prev_pos, prev_t_s)) = previous {
+            let (closest_pos, segment_fraction, dist_sq) =
+                closest_point_on_segment(prev_pos, pos, mouse_pos);
+            let t_s = prev_t_s + (sample.t_s - prev_t_s) * segment_fraction as f64;
+            match best {
+                Some((best_dist_sq, _, _)) if dist_sq >= best_dist_sq => {}
+                _ => best = Some((dist_sq, closest_pos, t_s)),
+            }
+        }
+        previous = Some((pos, sample.t_s));
+    }
+    best.and_then(|(dist_sq, pos, t_s)| (dist_sq <= 10.0_f32 * 10.0_f32).then_some((pos, t_s)))
+}
+
+fn closest_point_on_segment(
+    start: egui::Pos2,
+    end: egui::Pos2,
+    point: egui::Pos2,
+) -> (egui::Pos2, f32, f32) {
+    let segment = end - start;
+    let segment_len_sq = segment.length_sq();
+    let fraction = if segment_len_sq > f32::EPSILON {
+        ((point - start).dot(segment) / segment_len_sq).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let closest = start + segment * fraction;
+    (closest, fraction, closest.distance_sq(point))
+}
+
+fn sample_colorized_map_cursor_at(
+    samples: &[&MapCursorSample],
+    t_s: f64,
+    max_dt_s: f64,
+) -> Option<MapCursorSample> {
+    if !t_s.is_finite() {
+        return None;
+    }
+    samples
+        .iter()
+        .filter(|sample| is_ekf_map_trace(sample.trace_name.as_str()))
+        .min_by(|a, b| {
+            let da = (a.t_s - t_s).abs();
+            let db = (b.t_s - t_s).abs();
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .filter(|sample| (sample.t_s - t_s).abs() <= max_dt_s)
+        .map(|sample| (**sample).clone())
+}
+
+fn show_map_color_tooltip(
+    ui: &mut egui::Ui,
+    pos: egui::Pos2,
+    color_series: &MapColorSeries,
+    t_s: f64,
+    value: f64,
+    color: egui::Color32,
+    visuals: &egui::Visuals,
+) {
+    let id = egui::Id::new(("map_color_tooltip", color_series.scale.source.label()));
+    egui::Area::new(id)
+        .order(egui::Order::Tooltip)
+        .interactable(false)
+        .fixed_pos(pos)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style())
+                .fill(tooltip_fill(visuals))
+                .inner_margin(egui::Margin::same(6))
+                .corner_radius(egui::CornerRadius::same(4))
+                .show(ui, |ui| {
+                    ui.set_width(312.0);
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}: {:+.3} {}",
+                            color_series.scale.source.label(),
+                            value,
+                            color_series.scale.source.unit()
+                        ))
+                        .monospace()
+                        .color(tooltip_text_color(visuals)),
+                    );
+                    ui.label(
+                        egui::RichText::new(format!("Time: {:.2} s", t_s))
+                            .monospace()
+                            .color(tooltip_text_color(visuals)),
+                    );
+                    ui.add_space(4.0);
+                    show_map_color_hover_plot(ui, color_series, t_s, color, visuals);
+                });
+        });
+}
+
+fn show_map_color_hover_plot(
+    ui: &mut egui::Ui,
+    color_series: &MapColorSeries,
+    t_s: f64,
+    color: egui::Color32,
+    visuals: &egui::Visuals,
+) {
+    let window = map_color_window_points(&color_series.points, t_s, 10.0);
+    if window.len() < 2 {
+        return;
+    }
+    let y_range =
+        points_y_range(&window).unwrap_or((color_series.scale.min, color_series.scale.max));
+    let id = format!("map_color_hover_plot_{}", color_series.scale.source.label());
+    let plot = Plot::new(id)
+        .height(132.0)
+        .show_x(false)
+        .show_y(true)
+        .grid_spacing(egui::emath::Rangef::new(10.0, 1400.0))
+        .x_grid_spacer(popup_plot_grid_marks)
+        .y_grid_spacer(popup_plot_grid_marks)
+        .allow_drag(false)
+        .allow_zoom(false)
+        .allow_scroll(false)
+        .include_x(t_s - 10.0)
+        .include_x(t_s + 10.0)
+        .include_y(y_range.0)
+        .include_y(y_range.1);
+    plot.show(ui, |plot_ui| {
+        plot_ui.line(
+            Line::new(color_series.scale.source.label(), PlotPoints::from(window))
+                .color(SeriesColor::Ekf.resolve(visuals)),
+        );
+        plot_ui.vline(
+            VLine::new("cursor", t_s)
+                .name("")
+                .allow_hover(false)
+                .color(color),
+        );
+    });
+}
+
+fn map_color_window_points(
+    points: &[[f64; 2]],
+    center_t_s: f64,
+    half_window_s: f64,
+) -> Vec<[f64; 2]> {
+    let start_t_s = center_t_s - half_window_s;
+    let end_t_s = center_t_s + half_window_s;
+    points
+        .iter()
+        .copied()
+        .filter(|point| {
+            point[0].is_finite()
+                && point[1].is_finite()
+                && point[0] >= start_t_s
+                && point[0] <= end_t_s
+        })
+        .collect()
+}
+
+fn points_y_range(points: &[[f64; 2]]) -> Option<(f64, f64)> {
+    finite_points_y_range(points.iter())
+}
+
+fn finite_points_y_range<'a>(points: impl Iterator<Item = &'a [f64; 2]>) -> Option<(f64, f64)> {
+    let mut min_y = f64::INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    for point in points {
+        if point[1].is_finite() {
+            min_y = min_y.min(point[1]);
+            max_y = max_y.max(point[1]);
+        }
+    }
+    min_y
+        .is_finite()
+        .then_some(expand_degenerate_range(min_y, max_y))
+}
+
 fn draw_road_event_markers(
     ui: &mut egui::Ui,
     painter: &egui::Painter,
@@ -280,17 +999,13 @@ fn draw_road_event_markers(
     events: &[&RoadEventSample],
     visuals: &egui::Visuals,
 ) {
-    let color = if visuals.dark_mode {
-        egui::Color32::from_rgb(255, 212, 92)
-    } else {
-        egui::Color32::from_rgb(190, 109, 0)
-    };
     let stroke = egui::Stroke::new(1.4, marker_outline_color(visuals));
     let hover_pos = painter.ctx().input(|input| input.pointer.hover_pos());
     for event in events {
         if !projection.contains(event.lon_deg, event.lat_deg) {
             continue;
         }
+        let color = event_marker_color(event.kind.as_str(), visuals);
         let pos = projection.project(event.lon_deg, event.lat_deg);
         painter.circle_filled(pos, 6.5, color);
         painter.circle_stroke(pos, 6.5, stroke);
@@ -754,19 +1469,7 @@ fn trigger_plot_y_range(segment: &RoadSegmentSample) -> Option<(f64, f64)> {
 }
 
 fn trigger_trace_y_range(traces: &[Trace]) -> Option<(f64, f64)> {
-    let mut min_y = f64::INFINITY;
-    let mut max_y = f64::NEG_INFINITY;
-    for trace in traces {
-        for point in &trace.points {
-            if point[1].is_finite() {
-                min_y = min_y.min(point[1]);
-                max_y = max_y.max(point[1]);
-            }
-        }
-    }
-    min_y
-        .is_finite()
-        .then_some(expand_degenerate_range(min_y, max_y))
+    finite_points_y_range(traces.iter().flat_map(|trace| trace.points.iter()))
 }
 
 fn expand_degenerate_range(min: f64, max: f64) -> (f64, f64) {
@@ -789,21 +1492,7 @@ fn mini_plot_trace_color(index: usize, visuals: &egui::Visuals) -> egui::Color32
 }
 
 fn road_segment_color(kind: &str, visuals: &egui::Visuals) -> egui::Color32 {
-    match kind {
-        "uphill" if visuals.dark_mode => egui::Color32::from_rgb(255, 154, 68),
-        "uphill" => egui::Color32::from_rgb(214, 97, 0),
-        "downhill" if visuals.dark_mode => egui::Color32::from_rgb(86, 190, 255),
-        "downhill" => egui::Color32::from_rgb(0, 126, 182),
-        "reverse" if visuals.dark_mode => egui::Color32::from_rgb(196, 146, 255),
-        "reverse" => egui::Color32::from_rgb(133, 76, 214),
-        "harsh acceleration" if visuals.dark_mode => egui::Color32::from_rgb(92, 230, 128),
-        "harsh acceleration" => egui::Color32::from_rgb(0, 150, 78),
-        "harsh braking" if visuals.dark_mode => egui::Color32::from_rgb(255, 92, 92),
-        "harsh braking" => egui::Color32::from_rgb(206, 45, 45),
-        "harsh cornering" if visuals.dark_mode => egui::Color32::from_rgb(255, 116, 218),
-        "harsh cornering" => egui::Color32::from_rgb(190, 54, 165),
-        _ => map_marker_color(kind, visuals),
-    }
+    event_marker_color(kind, visuals)
 }
 
 pub(super) struct SyntheticTrajectoryTrace {
@@ -1183,4 +1872,106 @@ fn lonlat_trace_to_local_en(trace: &Trace, reference_lonlat: [f64; 2]) -> Option
         })
         .collect();
     (points.len() >= 2).then_some(points)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn trace(name: &str, points: Vec<[f64; 2]>) -> Trace {
+        Trace {
+            name: name.to_string(),
+            points,
+        }
+    }
+
+    #[test]
+    fn map_color_range_is_symmetric_for_diverging_sources() {
+        let tr = trace(
+            "EKF linear acceleration X [m/s^2]",
+            vec![[0.0, -2.0], [1.0, 3.0]],
+        );
+        let (min, max) = map_color_range(&tr.points, MapColorSource::LongitudinalAccel).unwrap();
+        assert_eq!(min, -3.0);
+        assert_eq!(max, 3.0);
+    }
+
+    #[test]
+    fn map_color_series_uses_ekf_derived_requested_series() {
+        let data = PlotData {
+            speed: vec![trace("GNSS speed [m/s]", vec![[0.0, 1.0], [1.0, 2.0]])],
+            ekf_cmp_vel: vec![
+                trace("EKF velN [m/s]", vec![[0.0, 3.0], [1.0, 0.0]]),
+                trace("EKF velE [m/s]", vec![[0.0, 4.0], [1.0, 12.0]]),
+            ],
+            vehicle_motion_accel: vec![trace(
+                "EKF linear acceleration Y [m/s^2]",
+                vec![[0.0, -1.0], [1.0, 1.0]],
+            )],
+            ekf_road_roughness: vec![trace(
+                "Road roughness RMS [m/s^2]",
+                vec![[0.0, 0.2], [1.0, 0.4]],
+            )],
+            ekf_cmp_att: vec![trace("EKF pitch [deg]", vec![[0.0, -4.0], [1.0, 2.0]])],
+            ..PlotData::default()
+        };
+
+        let speed = map_color_series(&data, MapColorSource::Speed).unwrap();
+        assert_eq!(speed.points, vec![[0.0, 5.0], [1.0, 12.0]]);
+        assert_eq!(speed.scale.min, 5.0);
+        assert_eq!(speed.scale.max, 12.0);
+
+        let pitch = map_color_series(&data, MapColorSource::VehiclePitch).unwrap();
+        assert_eq!(pitch.points, vec![[0.0, -4.0], [1.0, 2.0]]);
+        assert_eq!(pitch.scale.min, -4.0);
+        assert_eq!(pitch.scale.max, 4.0);
+    }
+
+    #[test]
+    fn map_color_hover_window_keeps_only_finite_points_within_time_range() {
+        let points = vec![
+            [-2.0, 1.0],
+            [0.0, 2.0],
+            [5.0, f64::NAN],
+            [10.0, 3.0],
+            [20.1, 4.0],
+        ];
+
+        let window = map_color_window_points(&points, 10.0, 10.0);
+
+        assert_eq!(window, vec![[0.0, 2.0], [10.0, 3.0]]);
+    }
+
+    #[test]
+    fn map_color_window_marker_sampling_uses_ekf_trace_and_time_tolerance() {
+        let samples = [
+            MapCursorSample {
+                trace_name: "GNSS path (lon,lat)".to_string(),
+                t_s: 10.0,
+                lon_deg: -1.0,
+                lat_deg: -1.0,
+                yaw_deg: None,
+            },
+            MapCursorSample {
+                trace_name: "EKF path (lon,lat)".to_string(),
+                t_s: 10.1,
+                lon_deg: 1.0,
+                lat_deg: 2.0,
+                yaw_deg: None,
+            },
+            MapCursorSample {
+                trace_name: "EKF path (lon,lat)".to_string(),
+                t_s: 30.0,
+                lon_deg: 3.0,
+                lat_deg: 4.0,
+                yaw_deg: None,
+            },
+        ];
+        let refs = samples.iter().collect::<Vec<_>>();
+
+        let sample = sample_colorized_map_cursor_at(&refs, 10.0, 0.2).unwrap();
+        assert_eq!(sample.trace_name, "EKF path (lon,lat)");
+        assert_eq!(sample.lon_deg, 1.0);
+        assert!(sample_colorized_map_cursor_at(&refs, 20.0, 0.2).is_none());
+    }
 }

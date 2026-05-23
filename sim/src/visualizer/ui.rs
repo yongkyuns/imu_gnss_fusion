@@ -57,6 +57,8 @@ pub struct App {
     show_gnss_map: bool,
     show_ekf: bool,
     show_events: bool,
+    map_color_source: maps::MapColorSource,
+    event_visibility: state::EventVisibility,
     shared_cursor_t_s: Option<f64>,
     update_inspector_cursor_t_s: Option<f64>,
     show_update_inspector: bool,

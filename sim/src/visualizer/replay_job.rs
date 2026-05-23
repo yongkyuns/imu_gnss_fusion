@@ -366,6 +366,7 @@ pub fn decimate_for_transport(data: &mut PlotData, max_points_per_trace: usize) 
     decimate_group(&mut data.ekf_stationary_diag, max_points_per_trace);
     decimate_group(&mut data.ekf_bump_pitch_speed, max_points_per_trace);
     decimate_group(&mut data.ekf_bump_diag, max_points_per_trace);
+    decimate_group(&mut data.ekf_road_roughness, max_points_per_trace);
     decimate_group(&mut data.align_cmp_att, max_points_per_trace);
     decimate_group(&mut data.align_res_vel, max_points_per_trace);
     decimate_group(&mut data.align_axis_err, max_points_per_trace);

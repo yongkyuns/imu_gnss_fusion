@@ -7,13 +7,14 @@ use walkers::Map;
 use crate::visualizer::model::{HeadingSample, MapCursorSample, Page, Trace};
 
 use super::maps::{
-    TrackOverlay, decimate_trajectory_points, draw_collapsible_map_tile, synthetic_cursor_markers,
-    synthetic_trajectory_traces,
+    MapColorSource, TrackOverlay, decimate_trajectory_points, draw_collapsible_map_tile,
+    map_color_series, synthetic_cursor_markers, synthetic_trajectory_traces,
 };
 use super::orthogonal::OrthogonalViewKind;
 use super::plots::{
-    PlotInteraction, draw_analysis_sections_page, draw_overview_plot_spec, overview_tile_height,
-    page_header, plot_section, plot_spec, subdued_plot_grid_marks, subtle_plot_grid_spacing,
+    PlotEventMarker, PlotEventMarkerEdge, PlotInteraction, draw_analysis_sections_page,
+    draw_overview_plot_spec, overview_tile_height, page_header, plot_section, plot_spec,
+    subdued_plot_grid_marks, subtle_plot_grid_spacing,
 };
 use super::state::{DataOrigin, is_reference_trace_name};
 use super::trace_query::{
@@ -64,6 +65,7 @@ impl App {
                     .unwrap_or_default();
                 let mut hovered_t_s = None;
                 egui::CentralPanel::default().show(ctx, |ui| {
+                    let event_markers = self.timeseries_event_markers();
                     hovered_t_s = draw_analysis_sections_page(
                         ui,
                         "Motion",
@@ -170,11 +172,42 @@ impl App {
                                     ),
                                 ],
                             ),
+                            plot_section(
+                                "NED Position",
+                                false,
+                                vec![
+                                    plot_spec(
+                                        "North Position",
+                                        concat_trace_refs_matching(
+                                            [self.data.ekf_cmp_pos.as_slice()],
+                                            &["posN"],
+                                        ),
+                                        true,
+                                    ),
+                                    plot_spec(
+                                        "East Position",
+                                        concat_trace_refs_matching(
+                                            [self.data.ekf_cmp_pos.as_slice()],
+                                            &["posE"],
+                                        ),
+                                        true,
+                                    ),
+                                    plot_spec(
+                                        "Down Position",
+                                        concat_trace_refs_matching(
+                                            [self.data.ekf_cmp_pos.as_slice()],
+                                            &["posD"],
+                                        ),
+                                        true,
+                                    ),
+                                ],
+                            ),
                         ],
                         self.max_points_per_trace,
                         self.trace_visibility(),
                         self.shared_cursor_t_s,
                         self.ghost_data.as_ref(),
+                        &event_markers,
                     );
                 });
                 self.shared_cursor_t_s = hovered_t_s;
@@ -185,6 +218,7 @@ impl App {
             Page::Mount => {
                 let mut hovered_t_s = None;
                 egui::CentralPanel::default().show(ctx, |ui| {
+                    let event_markers = self.timeseries_event_markers();
                     hovered_t_s = draw_analysis_sections_page(
                         ui,
                         "Mount",
@@ -275,6 +309,7 @@ impl App {
                         self.trace_visibility(),
                         self.shared_cursor_t_s,
                         self.ghost_data.as_ref(),
+                        &event_markers,
                     );
                 });
                 self.shared_cursor_t_s = hovered_t_s;
@@ -285,6 +320,7 @@ impl App {
             Page::Calibration => {
                 let mut hovered_t_s = None;
                 egui::CentralPanel::default().show(ctx, |ui| {
+                    let event_markers = self.timeseries_event_markers();
                     hovered_t_s = draw_analysis_sections_page(
                         ui,
                         "Calibration",
@@ -329,6 +365,7 @@ impl App {
                         self.trace_visibility(),
                         self.shared_cursor_t_s,
                         self.ghost_data.as_ref(),
+                        &event_markers,
                     );
                 });
                 self.shared_cursor_t_s = hovered_t_s;
@@ -339,6 +376,7 @@ impl App {
             Page::Sensors => {
                 let mut hovered_t_s = None;
                 egui::CentralPanel::default().show(ctx, |ui| {
+                    let event_markers = self.timeseries_event_markers();
                     hovered_t_s = draw_analysis_sections_page(
                         ui,
                         "Sensors",
@@ -370,6 +408,7 @@ impl App {
                         self.trace_visibility(),
                         self.shared_cursor_t_s,
                         self.ghost_data.as_ref(),
+                        &event_markers,
                     );
                 });
                 self.shared_cursor_t_s = hovered_t_s;
@@ -380,6 +419,7 @@ impl App {
             Page::Diagnostics => {
                 let mut hovered_t_s = None;
                 egui::CentralPanel::default().show(ctx, |ui| {
+                    let event_markers = self.timeseries_event_markers();
                     hovered_t_s = draw_analysis_sections_page(
                         ui,
                         "Diagnostics",
@@ -430,6 +470,7 @@ impl App {
                         self.trace_visibility(),
                         self.shared_cursor_t_s,
                         self.ghost_data.as_ref(),
+                        &event_markers,
                     );
                 });
                 self.shared_cursor_t_s = hovered_t_s;
@@ -438,6 +479,7 @@ impl App {
                 }
             }
             Page::Events => {
+                self.draw_trip_summary_panel(ctx);
                 let bump_pitch: Vec<&Trace> = self
                     .data
                     .ekf_bump_pitch_speed
@@ -451,8 +493,10 @@ impl App {
                     .filter(|t| t.name.contains("speed"))
                     .collect();
                 let bump_time: Vec<&Trace> = self.data.ekf_bump_diag.iter().collect();
+                let roughness: Vec<&Trace> = self.data.ekf_road_roughness.iter().collect();
                 let mut hovered_t_s = None;
                 egui::CentralPanel::default().show(ctx, |ui| {
+                    let event_markers = self.timeseries_event_markers();
                     hovered_t_s = draw_analysis_sections_page(
                         ui,
                         "Events",
@@ -464,6 +508,7 @@ impl App {
                                 plot_spec("EKF Bump Pitch", bump_pitch, true),
                                 plot_spec("EKF Bump Speed", bump_speed, true),
                                 plot_spec("Speed Bump Detector", bump_time, true),
+                                plot_spec("Road Roughness", roughness, true),
                                 plot_spec(
                                     "EKF Stationary Diagnostics",
                                     trace_refs(&self.data.ekf_stationary_diag),
@@ -475,6 +520,7 @@ impl App {
                         self.trace_visibility(),
                         self.shared_cursor_t_s,
                         self.ghost_data.as_ref(),
+                        &event_markers,
                     );
                 });
                 self.shared_cursor_t_s = hovered_t_s;
@@ -483,6 +529,128 @@ impl App {
                 }
             }
         }
+    }
+
+    fn draw_trip_summary_panel(&self, ctx: &egui::Context) {
+        let summary = &self.data.trip_summary;
+        if summary.sample_count == 0 {
+            return;
+        }
+        egui::TopBottomPanel::top("events_trip_summary_panel")
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.strong("Trip");
+                    trip_stat_label(
+                        ui,
+                        "Distance",
+                        format!("{:.2} km", summary.distance_m / 1000.0),
+                    );
+                    trip_stat_label(ui, "Duration", format_duration(summary.duration_s));
+                    trip_stat_label(ui, "Moving", format_duration(summary.moving_duration_s));
+                    trip_stat_label(
+                        ui,
+                        "Mean speed",
+                        format!("{:.1} km/h", 3.6 * summary.mean_speed_mps),
+                    );
+                    trip_stat_label(
+                        ui,
+                        "Peak speed",
+                        format!("{:.1} km/h", 3.6 * summary.peak_speed_mps),
+                    );
+                    trip_stat_label(
+                        ui,
+                        "Reverse",
+                        format!(
+                            "{:.0} m / {}",
+                            summary.reverse_distance_m,
+                            format_duration(summary.reverse_duration_s)
+                        ),
+                    );
+                    trip_stat_label(
+                        ui,
+                        "Elevation",
+                        if summary.elevation_valid {
+                            format!(
+                                "GNSS z +{:.0} / -{:.0} m",
+                                summary.elevation_gain_m, summary.elevation_loss_m
+                            )
+                        } else {
+                            "GNSS z n/a".to_string()
+                        },
+                    );
+                    trip_stat_label(
+                        ui,
+                        "Events",
+                        format!(
+                            "{} bump, {} hill, {} reverse, {} harsh",
+                            summary.events.speed_bumps,
+                            summary.events.uphill + summary.events.downhill,
+                            summary.events.reverse,
+                            summary.events.harsh_acceleration
+                                + summary.events.harsh_braking
+                                + summary.events.harsh_cornering
+                        ),
+                    );
+                    trip_stat_label(
+                        ui,
+                        "Rates",
+                        format!(
+                            "{:.1} bump/km, {:.1} harsh/km",
+                            summary.speed_bumps_per_km, summary.harsh_events_per_km
+                        ),
+                    );
+                    trip_stat_label(
+                        ui,
+                        "Roughness",
+                        format!(
+                            "{:.2} m/s^2 {}",
+                            summary.road_roughness_rms_mps2,
+                            roughness_level_label(summary.road_roughness_level)
+                        ),
+                    );
+                });
+                ui.add_space(6.0);
+            });
+    }
+
+    fn timeseries_event_markers(&self) -> Vec<PlotEventMarker> {
+        if !self.show_events {
+            return Vec::new();
+        }
+
+        let point_markers = self.data.road_events.iter().filter_map(|event| {
+            (event.t_s.is_finite() && self.event_visibility.allows_kind(event.kind.as_str())).then(
+                || PlotEventMarker {
+                    kind: event.kind.clone(),
+                    t_s: event.t_s,
+                    edge: PlotEventMarkerEdge::Point,
+                },
+            )
+        });
+        let segment_markers = self
+            .data
+            .road_segments
+            .iter()
+            .filter(|segment| self.event_visibility.allows_kind(segment.kind.as_str()))
+            .flat_map(|segment| {
+                [
+                    PlotEventMarker {
+                        kind: segment.kind.clone(),
+                        t_s: segment.start_t_s,
+                        edge: PlotEventMarkerEdge::SegmentStart,
+                    },
+                    PlotEventMarker {
+                        kind: segment.kind.clone(),
+                        t_s: segment.end_t_s,
+                        edge: PlotEventMarkerEdge::SegmentEnd,
+                    },
+                ]
+            })
+            .filter(|marker| marker.t_s.is_finite());
+
+        point_markers.chain(segment_markers).collect()
     }
 
     fn draw_map_body(&mut self, ui: &mut egui::Ui, size: egui::Vec2, cursor_t_s: Option<f64>) {
@@ -523,21 +691,34 @@ impl App {
             })
             .collect();
         let road_events: Vec<_> = if self.show_events {
-            self.data.road_events.iter().collect()
+            self.data
+                .road_events
+                .iter()
+                .filter(|event| self.event_visibility.allows_kind(event.kind.as_str()))
+                .collect()
         } else {
             Vec::new()
         };
         let road_segments: Vec<_> = if self.show_events {
-            self.data.road_segments.iter().collect()
+            self.data
+                .road_segments
+                .iter()
+                .filter(|segment| self.event_visibility.allows_kind(segment.kind.as_str()))
+                .collect()
         } else {
             Vec::new()
         };
+        let map_color = self
+            .show_ekf
+            .then(|| map_color_series(&self.data, self.map_color_source))
+            .flatten();
         let track = TrackOverlay {
             traces: map_traces,
             headings,
             cursor_samples,
             road_events,
             road_segments,
+            map_color,
             show_heading: self.show_heading,
             cursor_t_s,
         };
@@ -553,6 +734,7 @@ impl App {
         );
         #[cfg(target_arch = "wasm32")]
         self.draw_mapbox_token_button(ui, _map_response.rect);
+        self.draw_map_color_source_control(ui, _map_response.rect);
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -570,6 +752,39 @@ impl App {
         {
             self.show_mapbox_token_window = true;
         }
+    }
+
+    fn draw_map_color_source_control(&mut self, ui: &mut egui::Ui, map_rect: egui::Rect) {
+        let control_size = egui::vec2(132.0, 28.0);
+        if map_rect.width() < control_size.x + 16.0 || map_rect.height() < control_size.y + 16.0 {
+            return;
+        }
+        let top_offset = if cfg!(target_arch = "wasm32") {
+            44.0
+        } else {
+            8.0
+        };
+        let control_rect = egui::Rect::from_min_size(
+            map_rect.right_top() + egui::vec2(-control_size.x - 8.0, top_offset),
+            control_size,
+        );
+        ui.scope_builder(egui::UiBuilder::new().max_rect(control_rect), |ui| {
+            ui.set_min_width(control_size.x);
+            ui.add_enabled_ui(self.show_ekf, |ui| {
+                egui::ComboBox::from_id_salt("map_color_source_overlay")
+                    .width(control_size.x)
+                    .selected_text(if self.show_ekf {
+                        self.map_color_source.label()
+                    } else {
+                        "EKF hidden"
+                    })
+                    .show_ui(ui, |ui| {
+                        for source in MapColorSource::ALL {
+                            ui.selectable_value(&mut self.map_color_source, source, source.label());
+                        }
+                    });
+            });
+        });
     }
 
     fn draw_synthetic_trajectory_body(
@@ -719,6 +934,7 @@ impl App {
 
                 let tile_height = overview_tile_height(ui.available_width());
                 let cursor_t_s = self.shared_cursor_t_s;
+                let event_markers = self.timeseries_event_markers();
                 let mut hovered_t_s = None;
                 if ui.available_width() < 900.0 {
                     if let Some(t_s) = draw_overview_plot_spec(
@@ -727,6 +943,7 @@ impl App {
                         self.max_points_per_trace,
                         cursor_t_s,
                         self.ghost_data.as_ref(),
+                        &event_markers,
                     ) {
                         hovered_t_s = Some(t_s);
                     }
@@ -736,6 +953,7 @@ impl App {
                         self.max_points_per_trace,
                         hovered_t_s.or(cursor_t_s),
                         self.ghost_data.as_ref(),
+                        &event_markers,
                     ) {
                         hovered_t_s = Some(t_s);
                     }
@@ -745,6 +963,7 @@ impl App {
                         self.max_points_per_trace,
                         hovered_t_s.or(cursor_t_s),
                         self.ghost_data.as_ref(),
+                        &event_markers,
                     ) {
                         hovered_t_s = Some(t_s);
                     }
@@ -754,6 +973,7 @@ impl App {
                         self.max_points_per_trace,
                         hovered_t_s.or(cursor_t_s),
                         self.ghost_data.as_ref(),
+                        &event_markers,
                     ) {
                         hovered_t_s = Some(t_s);
                     }
@@ -768,6 +988,7 @@ impl App {
                             self.max_points_per_trace,
                             cursor_t_s,
                             self.ghost_data.as_ref(),
+                            &event_markers,
                         ) {
                             hovered_t_s = Some(t_s);
                         }
@@ -777,6 +998,7 @@ impl App {
                             self.max_points_per_trace,
                             hovered_t_s.or(cursor_t_s),
                             self.ghost_data.as_ref(),
+                            &event_markers,
                         ) {
                             hovered_t_s = Some(t_s);
                         }
@@ -786,6 +1008,7 @@ impl App {
                             self.max_points_per_trace,
                             hovered_t_s.or(cursor_t_s),
                             self.ghost_data.as_ref(),
+                            &event_markers,
                         ) {
                             hovered_t_s = Some(t_s);
                         }
@@ -795,6 +1018,7 @@ impl App {
                             self.max_points_per_trace,
                             hovered_t_s.or(cursor_t_s),
                             self.ghost_data.as_ref(),
+                            &event_markers,
                         ) {
                             hovered_t_s = Some(t_s);
                         }
@@ -812,5 +1036,33 @@ impl App {
                     self.update_inspector_cursor_t_s = Some(t_s);
                 }
             });
+    }
+}
+
+fn trip_stat_label(ui: &mut egui::Ui, label: &str, value: String) {
+    ui.separator();
+    ui.label(egui::RichText::new(label).weak());
+    ui.label(value);
+}
+
+fn roughness_level_label(level: u8) -> &'static str {
+    match level {
+        0 => "very smooth",
+        1 => "smooth",
+        2 => "light texture",
+        3 => "moderate",
+        4 => "rough",
+        5 => "very rough",
+        _ => "severe",
+    }
+}
+
+fn format_duration(seconds: f64) -> String {
+    if seconds >= 3600.0 {
+        format!("{:.1} h", seconds / 3600.0)
+    } else if seconds >= 60.0 {
+        format!("{:.1} min", seconds / 60.0)
+    } else {
+        format!("{:.1} s", seconds)
     }
 }

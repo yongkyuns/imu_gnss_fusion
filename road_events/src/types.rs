@@ -29,6 +29,45 @@ pub struct SpeedBumpSample {
     pub vertical_accel_mps2: f32,
 }
 
+/// Vehicle-motion sample consumed by [`crate::RoadRoughnessAnalyzer`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RoadRoughnessSample {
+    pub t_s: f32,
+    /// Nonnegative vehicle speed used to convert time into traveled distance.
+    pub speed_mps: f32,
+    /// Gravity-compensated vehicle-frame vertical acceleration.
+    pub vertical_accel_mps2: f32,
+}
+
+/// Qualitative road-surface class derived from roughness RMS.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoadRoughnessLevel {
+    VerySmooth,
+    Smooth,
+    LightTexture,
+    Moderate,
+    Rough,
+    VeryRough,
+    Severe,
+}
+
+/// Streaming road-roughness estimate for the current effective distance window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RoadRoughnessEstimate {
+    pub t_s: f32,
+    /// Distance-domain RMS of clipped, band-passed vertical acceleration.
+    pub roughness_rms_mps2: f32,
+    pub level: RoadRoughnessLevel,
+    /// Band-passed vertical acceleration before clipping.
+    pub vertical_accel_bandpass_mps2: f32,
+    /// Band-passed vertical acceleration after event-limiting clipping.
+    pub vertical_accel_clipped_mps2: f32,
+    /// Integrated valid moving distance since analyzer reset.
+    pub distance_m: f32,
+    /// Whether this sample updated the distance-domain energy estimate.
+    pub updated: bool,
+}
+
 /// One detected uphill or downhill interval.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HillEvent {
@@ -112,6 +151,134 @@ pub struct HarshCornerSample {
     pub t_s: f32,
     pub speed_mps: f32,
     pub yaw_rate_radps: f32,
+}
+
+/// Vehicle-motion sample consumed by [`crate::TripStats`].
+///
+/// All fields are expressed in the vehicle frame or scalar vehicle-motion
+/// quantities. The accumulator is streaming and does not retain sample history.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TripSample {
+    pub t_s: f32,
+    /// Nonnegative vehicle speed magnitude used for total distance.
+    pub speed_mps: f32,
+    /// Signed vehicle-frame longitudinal velocity. Negative means reverse.
+    pub forward_velocity_mps: f32,
+    /// Optional vertical position, positive up, used for elevation gain/loss.
+    ///
+    /// If this value comes from a local-NED down coordinate, callers should
+    /// supply `-down` and change `height_frame_id` whenever the local anchor is
+    /// reset. Deltas across different frame IDs are ignored.
+    pub height_m: Option<f32>,
+    /// Monotonic identifier for the vertical-position reference frame.
+    pub height_frame_id: u32,
+    /// Gravity-compensated vehicle-frame longitudinal acceleration.
+    pub longitudinal_accel_mps2: f32,
+    /// Vehicle-frame lateral acceleration magnitude or signed lateral acceleration.
+    pub lateral_accel_mps2: f32,
+}
+
+/// Event category used by [`crate::TripStats`] counters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TripEventKind {
+    SpeedBump,
+    Uphill,
+    Downhill,
+    Reverse,
+    HarshAcceleration,
+    HarshBraking,
+    HarshCornering,
+}
+
+/// Constant-memory event counters accumulated over a trip.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TripEventCounts {
+    pub speed_bumps: u32,
+    pub uphill: u32,
+    pub downhill: u32,
+    pub reverse: u32,
+    pub harsh_acceleration: u32,
+    pub harsh_braking: u32,
+    pub harsh_cornering: u32,
+}
+
+/// Configuration for streaming trip statistics.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TripConfig {
+    /// Speed above which the vehicle is counted as moving.
+    pub moving_speed_threshold_mps: f32,
+    /// Reverse speed magnitude above which reverse duration is accumulated.
+    pub reverse_speed_threshold_mps: f32,
+    /// Time constant for EMA-style rolling statistics.
+    pub rolling_tau_s: f32,
+    /// Maximum sample interval integrated into totals. Larger gaps are counted
+    /// as data gaps and clipped to this value for distance/mean integration.
+    pub max_integrated_dt_s: f32,
+}
+
+/// Snapshot of accumulated trip statistics.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TripSummary {
+    pub sample_count: u32,
+    pub invalid_sample_count: u32,
+    pub data_gap_count: u32,
+    pub max_sample_gap_s: f32,
+    pub total_gap_duration_s: f32,
+    pub duration_s: f32,
+    pub moving_duration_s: f32,
+    pub stationary_duration_s: f32,
+    pub distance_m: f32,
+    pub reverse_duration_s: f32,
+    pub reverse_distance_m: f32,
+    /// Position-derived ascent estimate from optional height samples.
+    pub elevation_gain_m: f32,
+    /// Position-derived descent estimate from optional height samples.
+    pub elevation_loss_m: f32,
+    /// Whether vertical-position samples contributed to the elevation fields.
+    pub elevation_valid: bool,
+    pub mean_speed_mps: f32,
+    pub moving_mean_speed_mps: f32,
+    pub peak_speed_mps: f32,
+    pub peak_accel_mps2: f32,
+    pub peak_decel_mps2: f32,
+    pub peak_lateral_accel_mps2: f32,
+    pub rolling_speed_mps: f32,
+    pub rolling_abs_longitudinal_accel_mps2: f32,
+    pub rolling_abs_lateral_accel_mps2: f32,
+    pub events: TripEventCounts,
+    pub speed_bumps_per_km: f32,
+    pub harsh_events_per_km: f32,
+    pub reverse_seconds_per_km: f32,
+}
+
+/// Configuration for streaming road-roughness analysis.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RoadRoughnessConfig {
+    /// High-pass cutoff for rejecting grade, body attitude drift, and slow suspension settling.
+    pub high_pass_cutoff_hz: f32,
+    /// Low-pass cutoff for rejecting high-frequency IMU/structure noise.
+    pub low_pass_cutoff_hz: f32,
+    /// Distance-domain EMA time constant. Smaller values make the roughness estimate react
+    /// and dissipate over a shorter traveled distance without a rolling sample buffer.
+    pub distance_tau_m: f32,
+    /// Minimum speed required to update roughness energy.
+    pub min_speed_mps: f32,
+    /// Symmetric clipping limit for band-passed acceleration to limit isolated bump/pothole impact.
+    pub clip_mps2: f32,
+    /// Maximum sample interval used for filter and distance updates.
+    pub max_dt_s: f32,
+    /// Upper bound for VerySmooth roughness.
+    pub very_smooth_threshold_mps2: f32,
+    /// Upper bound for Smooth roughness.
+    pub smooth_threshold_mps2: f32,
+    /// Upper bound for LightTexture roughness.
+    pub light_texture_threshold_mps2: f32,
+    /// Upper bound for Moderate roughness.
+    pub moderate_threshold_mps2: f32,
+    /// Upper bound for Rough roughness.
+    pub rough_threshold_mps2: f32,
+    /// Upper bound for VeryRough roughness. Larger values are Severe.
+    pub very_rough_threshold_mps2: f32,
 }
 
 /// Configuration for the small-state speed-bump detector.
@@ -287,6 +454,25 @@ impl Default for HarshCornerConfig {
     }
 }
 
+impl Default for RoadRoughnessConfig {
+    fn default() -> Self {
+        Self {
+            high_pass_cutoff_hz: 0.7,
+            low_pass_cutoff_hz: 10.0,
+            distance_tau_m: 10.0,
+            min_speed_mps: 2.0,
+            clip_mps2: 1.5,
+            max_dt_s: 0.2,
+            very_smooth_threshold_mps2: 0.15,
+            smooth_threshold_mps2: 0.25,
+            light_texture_threshold_mps2: 0.40,
+            moderate_threshold_mps2: 0.60,
+            rough_threshold_mps2: 0.90,
+            very_rough_threshold_mps2: 1.20,
+        }
+    }
+}
+
 impl Default for SpeedBumpConfig {
     fn default() -> Self {
         Self {
@@ -305,6 +491,17 @@ impl Default for SpeedBumpConfig {
             pitch_noise_peak_scale: 3.0,
             trigger_confidence: 0.12,
             refractory_s: 4.0,
+        }
+    }
+}
+
+impl Default for TripConfig {
+    fn default() -> Self {
+        Self {
+            moving_speed_threshold_mps: 0.5,
+            reverse_speed_threshold_mps: 0.2,
+            rolling_tau_s: 5.0,
+            max_integrated_dt_s: 1.0,
         }
     }
 }

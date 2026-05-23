@@ -17,6 +17,7 @@ eframe = { version = "0.33.3", default-features = false, features = [
 ] }
 egui = "0.33.3"
 egui_plot = "0.34.1"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 sensor_fusion = { path = "../sensor_fusion", default-features = false, features = ["serde"] }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng"] }
 rayon = "1.10"
@@ -29,7 +30,6 @@ walkers = "0.52.0"
 egui-wgpu = { version = "0.33.3", default-features = false, features = [
     "fragile-send-sync-non-atomic-wasm",
 ] }
-flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 js-sys = "=0.3.95"
 serde-wasm-bindgen = "0.6"
 wasm-bindgen = "=0.2.118"

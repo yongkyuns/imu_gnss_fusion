@@ -75,11 +75,37 @@ impl App {
                 help_label(
                     ui,
                     "Map",
-                    "Control map overlays. GNSS toggles GNSS/reference trajectory traces, Heading toggles directional arrows, Events toggles detected road-event markers/segments, and the optional Mapbox token is set from the map corner button.",
+                    "Control map overlays. GNSS toggles GNSS/reference trajectory traces, Heading toggles directional arrows, Events toggles detected road-event markers/segments, and map-specific options live in the map corner controls.",
                 );
                 ui.checkbox(&mut self.show_gnss_map, "GNSS");
                 ui.checkbox(&mut self.show_heading, "Heading");
                 ui.checkbox(&mut self.show_events, "Events");
+                ui.add_enabled_ui(self.show_events, |ui| {
+                    ui.menu_button("Filter", |ui| {
+                        ui.set_min_width(190.0);
+                        ui.label(egui::RichText::new("Event Types").strong());
+                        ui.separator();
+                        ui.checkbox(&mut self.event_visibility.show_speed_bump, "Speed bumps");
+                        ui.checkbox(&mut self.event_visibility.show_uphill, "Uphill");
+                        ui.checkbox(&mut self.event_visibility.show_downhill, "Downhill");
+                        ui.checkbox(&mut self.event_visibility.show_reverse, "Reverse");
+                        ui.checkbox(&mut self.event_visibility.show_harsh_accel, "Harsh accel");
+                        ui.checkbox(&mut self.event_visibility.show_harsh_brake, "Harsh brake");
+                        ui.checkbox(
+                            &mut self.event_visibility.show_harsh_cornering,
+                            "Harsh cornering",
+                        );
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            if ui.button("All").clicked() {
+                                self.event_visibility.set_all(true);
+                            }
+                            if ui.button("None").clicked() {
+                                self.event_visibility.set_all(false);
+                            }
+                        });
+                    });
+                });
                 ui.separator();
                 help_label(
                     ui,

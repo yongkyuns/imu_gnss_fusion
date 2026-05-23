@@ -55,6 +55,43 @@ The browser loads `datasets/manifest.json` at startup. Entries are hardware-agno
 
 If `imu_gz`/`gnss_gz` are omitted, the loader tries `imu.csv.gz` and `gnss.csv.gz` under `base_url`, then falls back to plain `imu.csv` and `gnss.csv`. Plain CSV paths can also be set explicitly with `imu` and `gnss`. Reference files are optional and only fetched when listed explicitly. `reference_position.csv` is rendered as the fused reference trajectory on the map, `reference_motion.csv` provides vehicle-frame reference angular velocity and gravity-compensated acceleration in the Motion tab, and `gnss.csv` remains the GNSS-only trajectory and filter input.
 
+## Adding an iOS recording
+
+iOS raw recordings are stored as `.motionfusion` JSON logs. Do not commit the raw log for normal web-visualizer use. Convert it to generic replay CSVs, package those CSVs as compressed static assets, and update the web and CI manifests:
+
+```bash
+python3 scripts/package_ios_motionfusion_dataset.py \
+  target/ios-raw-sessions/<recording>.motionfusion \
+  --dataset-id ios-mixed-drive-reverse-parking-001 \
+  --title "iOS mixed drive with reverse parking 001" \
+  --label "iOS mixed drive, reverse parking 001" \
+  --description "iOS MotionFusion mixed-road drive with a low-speed reverse-parking maneuver; exported with course-accuracy velocity covariance."
+```
+
+The script writes an intermediate generic replay directory under `target/ios-web-replay/<dataset-id>/`, packages the official browser assets under `web/datasets/<dataset-id>/`, and appends or replaces entries in:
+
+- `web/datasets/manifest.json`, used by the browser dataset picker.
+- `.github/datasets/generic-datasets.json`, used by hosted dataset validation.
+
+Pass `--force` to replace an existing dataset package and manifest entries. Pass `--no-update-ci-manifest` for a local-only browser dataset. The generated package contains `imu.csv.gz`, `gnss.csv.gz`, and a per-dataset `manifest.json`. iOS logs usually do not have `reference_position`, `reference_attitude`, `reference_mount`, or `reference_motion` files, so those overlays are absent unless generated separately.
+
+Validate the result before committing:
+
+```bash
+python3 scripts/test_package_ios_motionfusion_dataset.py
+node scripts/validate_generic_datasets.mjs \
+  --manifest .github/datasets/generic-datasets.json \
+  --cache-dir .cache/generic-datasets \
+  --work-dir target/generic-datasets
+```
+
+Then serve `web/` and open the dataset by id:
+
+```bash
+python3 -m http.server --directory web 8080
+open "http://127.0.0.1:8080/?dataset=ios-mixed-drive-reverse-parking-001&theme=dark"
+```
+
 ## FPS benchmark
 
 After building `web/pkg/`, run the automated browser benchmark:

@@ -2,8 +2,9 @@ use anyhow::{Context, Result, bail};
 use road_events::{
     HarshAccelConfig, HarshAccelDetector, HarshBrakeConfig, HarshBrakeDetector, HarshCornerConfig,
     HarshCornerDetector, HarshCornerSample, HarshLongitudinalSample, HillConfig, HillDetector,
-    HillKind, HillSample, ReverseConfig, ReverseDetector, ReverseSample, SpeedBumpConfig,
-    SpeedBumpDetector, SpeedBumpSample,
+    HillKind, HillSample, ReverseConfig, ReverseDetector, ReverseSample, RoadRoughnessAnalyzer,
+    RoadRoughnessEstimate, RoadRoughnessLevel, RoadRoughnessSample, SpeedBumpConfig,
+    SpeedBumpDetector, SpeedBumpSample, TripEventKind, TripSample, TripStats, TripSummary,
 };
 use sensor_fusion::SensorFusion;
 use sensor_fusion::ekf::UPDATE_DIAG_TYPES;
@@ -18,7 +19,8 @@ use crate::eval::replay::{ReplayEvent, for_each_event};
 use crate::visualizer::math::{ecef_to_ned, lla_to_ecef, quat_rpy_deg};
 use crate::visualizer::model::{
     HeadingSample, MapCursorSample, PlotData, RoadEventSample, RoadSegmentSample,
-    StateContribution, StateCorrelation, Trace, UpdateInspectorSample, VisualizerMountMode,
+    StateContribution, StateCorrelation, Trace, TripEventCountsSample, TripSummarySample,
+    UpdateInspectorSample, VisualizerMountMode,
 };
 use crate::visualizer::pipeline::reference::{
     final_reference_mount_rpy, reference_mount_seed_q_bv, reference_rpy_at, rpy_series_from_samples,
@@ -532,16 +534,22 @@ fn build_generic_replay_plot_data_impl(
     let mut mount_ready_marker = Vec::new();
     let mut ekf_init_marker = Vec::new();
     let mut bump_detector = SpeedBumpDetector::new(SpeedBumpConfig::default());
+    let mut roughness_analyzer = RoadRoughnessAnalyzer::default();
     let mut bump_pitch_hpf = Vec::new();
     let mut bump_pitch_noise = Vec::new();
     let mut bump_vertical_accel_hpf = Vec::new();
     let mut bump_vertical_accel_noise = Vec::new();
+    let mut roughness_rms = Vec::new();
+    let mut roughness_bandpass = Vec::new();
+    let mut roughness_level = Vec::new();
     let mut road_events = Vec::new();
     let mut hill_detector = HillDetector::new(HillConfig::default());
     let mut reverse_detector = ReverseDetector::new(ReverseConfig::default());
     let mut harsh_accel_detector = HarshAccelDetector::new(HarshAccelConfig::default());
     let mut harsh_brake_detector = HarshBrakeDetector::new(HarshBrakeConfig::default());
     let mut harsh_corner_detector = HarshCornerDetector::new(HarshCornerConfig::default());
+    let mut trip_stats = TripStats::default();
+    let mut latest_gnss_height_m: Option<f32> = None;
     let mut visual_long_accel = VisualLongitudinalAccelEma::new(HarshAccelConfig::default());
     let mut road_event_motion = RoadEventMotionTraces::default();
     let mut road_segments = Vec::new();
@@ -550,6 +558,11 @@ fn build_generic_replay_plot_data_impl(
         ReplayEvent::Imu(index, sample) => {
             progress.report_stage(0.0, 0.55, sample.t_s);
             let _ = fusion.process_imu(fusion_imu_sample(*sample));
+            if let Some(trip_sample) =
+                trip_stats_sample(sample.t_s, sample, &fusion, latest_gnss_height_m)
+            {
+                trip_stats.update_motion(trip_sample);
+            }
             if let Some(detector_sample) =
                 speed_bump_detector_sample(sample.t_s, sample, &fusion, ref_gnss)
             {
@@ -578,31 +591,50 @@ fn build_generic_replay_plot_data_impl(
                     detector_sample.t_s as f64,
                     diag.vertical_accel_noise_mps2 as f64,
                 ]);
-                if let Some(event) = event
-                    && let Some([lat, lon, _]) = fusion.position_lla_f64()
-                {
-                    road_events.push(RoadEventSample {
-                        kind: "speed bump".to_string(),
-                        t_s: event.t_s as f64,
-                        lon_deg: lon,
-                        lat_deg: lat,
-                        confidence: event.confidence as f64,
-                        speed_mps: detector_sample.speed_mps as f64,
-                        trigger_window_start_t_s: 0.0,
-                        trigger_window_end_t_s: 0.0,
-                        trigger_traces: Vec::new(),
-                    });
+                if let Some(event) = event {
+                    trip_stats.record_event(TripEventKind::SpeedBump);
+                    if let Some([lat, lon, _]) = fusion.position_lla_f64() {
+                        road_events.push(RoadEventSample {
+                            kind: "speed bump".to_string(),
+                            t_s: event.t_s as f64,
+                            lon_deg: lon,
+                            lat_deg: lat,
+                            confidence: event.confidence as f64,
+                            speed_mps: detector_sample.speed_mps as f64,
+                            trigger_window_start_t_s: 0.0,
+                            trigger_window_end_t_s: 0.0,
+                            trigger_traces: Vec::new(),
+                        });
+                    }
+                }
+                if let Some(estimate) = roughness_analyzer.update(RoadRoughnessSample {
+                    t_s: detector_sample.t_s,
+                    speed_mps: detector_sample.speed_mps,
+                    vertical_accel_mps2: detector_sample.vertical_accel_mps2,
+                }) {
+                    roughness_rms.push([estimate.t_s as f64, estimate.roughness_rms_mps2 as f64]);
+                    roughness_bandpass.push([
+                        estimate.t_s as f64,
+                        estimate.vertical_accel_bandpass_mps2 as f64,
+                    ]);
+                    roughness_level
+                        .push([estimate.t_s as f64, roughness_level_value(estimate.level)]);
                 }
                 if let Some(event) = hill_detector.update(HillSample {
                     t_s: detector_sample.t_s,
                     speed_mps: detector_sample.speed_mps,
                     pitch_deg: detector_sample.pitch_deg,
                 }) {
+                    trip_stats.record_event(match event.kind {
+                        HillKind::Uphill => TripEventKind::Uphill,
+                        HillKind::Downhill => TripEventKind::Downhill,
+                    });
                     road_segments.push(road_segment_sample(event));
                 }
                 if let Some(reverse_sample) = reverse_detector_sample(sample.t_s, &fusion)
                     && let Some(event) = reverse_detector.update(reverse_sample)
                 {
+                    trip_stats.record_event(TripEventKind::Reverse);
                     road_segments.push(reverse_segment_sample(event));
                 }
                 if let Some(longitudinal_sample) = harsh_longitudinal_sample(sample.t_s, &fusion) {
@@ -621,12 +653,14 @@ fn build_generic_replay_plot_data_impl(
                             .push([longitudinal_sample.t_s as f64, accel_mps2]);
                     }
                     if let Some(event) = harsh_accel_detector.update(longitudinal_sample) {
+                        trip_stats.record_event(TripEventKind::HarshAcceleration);
                         road_segments.push(harsh_longitudinal_segment_sample(
                             "harsh acceleration",
                             event,
                         ));
                     }
                     if let Some(event) = harsh_brake_detector.update(longitudinal_sample) {
+                        trip_stats.record_event(TripEventKind::HarshBraking);
                         road_segments
                             .push(harsh_longitudinal_segment_sample("harsh braking", event));
                     }
@@ -644,6 +678,7 @@ fn build_generic_replay_plot_data_impl(
                         (corner_sample.yaw_rate_radps * corner_sample.speed_mps).abs() as f64,
                     ]);
                     if let Some(event) = harsh_corner_detector.update(corner_sample) {
+                        trip_stats.record_event(TripEventKind::HarshCornering);
                         road_segments.push(harsh_corner_segment_sample(event));
                     }
                 }
@@ -706,6 +741,7 @@ fn build_generic_replay_plot_data_impl(
         ReplayEvent::Gnss(_, sample) => {
             progress.report_stage(0.0, 0.55, sample.t_s);
             if !in_outage(sample.t_s, &outage_windows) {
+                latest_gnss_height_m = gnss_height_from_fixed_ned(sample, ref_gnss, ref_ecef);
                 let update = fusion.process_gnss(fusion_gnss_sample(*sample));
                 if update.mount_ready_changed && update.mount_ready {
                     mount_ready_marker.push([sample.t_s, 0.0]);
@@ -718,21 +754,29 @@ fn build_generic_replay_plot_data_impl(
     });
 
     if let Some(event) = hill_detector.finish() {
+        trip_stats.record_event(match event.kind {
+            HillKind::Uphill => TripEventKind::Uphill,
+            HillKind::Downhill => TripEventKind::Downhill,
+        });
         road_segments.push(road_segment_sample(event));
     }
     if let Some(event) = reverse_detector.finish() {
+        trip_stats.record_event(TripEventKind::Reverse);
         road_segments.push(reverse_segment_sample(event));
     }
     if let Some(event) = harsh_accel_detector.finish() {
+        trip_stats.record_event(TripEventKind::HarshAcceleration);
         road_segments.push(harsh_longitudinal_segment_sample(
             "harsh acceleration",
             event,
         ));
     }
     if let Some(event) = harsh_brake_detector.finish() {
+        trip_stats.record_event(TripEventKind::HarshBraking);
         road_segments.push(harsh_longitudinal_segment_sample("harsh braking", event));
     }
     if let Some(event) = harsh_corner_detector.finish() {
+        trip_stats.record_event(TripEventKind::HarshCornering);
         road_segments.push(harsh_corner_segment_sample(event));
     }
     attach_road_event_trigger_traces(&mut road_events, &road_event_motion);
@@ -1023,6 +1067,7 @@ fn build_generic_replay_plot_data_impl(
         ],
         road_events,
         road_segments,
+        trip_summary: trip_summary_sample(trip_stats.summary(), roughness_analyzer.estimate()),
         map_cursor,
         ekf_map_heading: ekf_heading,
         update_inspector,
@@ -1035,6 +1080,12 @@ fn build_generic_replay_plot_data_impl(
         bump_pitch_noise,
         bump_vertical_accel_hpf,
         bump_vertical_accel_noise,
+    );
+    populate_ekf_road_roughness(
+        &mut data,
+        roughness_rms,
+        roughness_bandpass,
+        roughness_level,
     );
     add_auxiliary_generic_traces_impl(&mut data, &ctx, None, None, &mut progress);
     progress.complete();
@@ -1524,6 +1575,28 @@ fn populate_ekf_bump_diagnostics(
     ];
 }
 
+fn populate_ekf_road_roughness(
+    data: &mut PlotData,
+    rms: Vec<[f64; 2]>,
+    bandpass: Vec<[f64; 2]>,
+    level: Vec<[f64; 2]>,
+) {
+    data.ekf_road_roughness = vec![
+        Trace {
+            name: "Road roughness RMS [m/s^2]".to_string(),
+            points: rms,
+        },
+        Trace {
+            name: "Road roughness vertical accel bandpass [m/s^2]".to_string(),
+            points: bandpass,
+        },
+        Trace {
+            name: "Road roughness level".to_string(),
+            points: level,
+        },
+    ];
+}
+
 fn ekf_nhc_mount_dx_traces(points: &[Vec<[f64; 2]>; 6]) -> Vec<Trace> {
     let mut traces = Vec::with_capacity(6);
     for (diag_i, (_, label)) in NHC_DIAG_TYPES.iter().copied().enumerate() {
@@ -1631,6 +1704,39 @@ fn speed_bump_detector_sample(
     })
 }
 
+fn trip_stats_sample(
+    t_s: f64,
+    sample: &GenericImuSample,
+    fusion: &SensorFusion,
+    gnss_height_m: Option<f32>,
+) -> Option<TripSample> {
+    let ekf = fusion.ekf()?;
+    let velocity_vehicle = ekf_vehicle_velocity(ekf);
+    let (_, accel_vehicle) = ekf_vehicle_motion(sample, ekf);
+    Some(TripSample {
+        t_s: t_s as f32,
+        speed_mps: velocity_vehicle[0].hypot(velocity_vehicle[1]) as f32,
+        forward_velocity_mps: velocity_vehicle[0] as f32,
+        height_m: gnss_height_m,
+        height_frame_id: 0,
+        longitudinal_accel_mps2: accel_vehicle[0] as f32,
+        lateral_accel_mps2: accel_vehicle[1] as f32,
+    })
+}
+
+fn gnss_height_from_fixed_ned(
+    sample: &GenericGnssSample,
+    ref_gnss: Option<GenericGnssSample>,
+    ref_ecef: Option<[f64; 3]>,
+) -> Option<f32> {
+    let (Some(ref_sample), Some(ref_ecef)) = (ref_gnss, ref_ecef) else {
+        return None;
+    };
+    let ecef = lla_to_ecef(sample.lat_deg, sample.lon_deg, sample.height_m);
+    let ned = ecef_to_ned(ecef, ref_ecef, ref_sample.lat_deg, ref_sample.lon_deg);
+    Some((-ned[2]) as f32)
+}
+
 fn reverse_detector_sample(t_s: f64, fusion: &SensorFusion) -> Option<ReverseSample> {
     let ekf = fusion.ekf()?;
     let velocity_vehicle = ekf_vehicle_velocity(ekf);
@@ -1638,6 +1744,64 @@ fn reverse_detector_sample(t_s: f64, fusion: &SensorFusion) -> Option<ReverseSam
         t_s: t_s as f32,
         forward_velocity_mps: velocity_vehicle[0] as f32,
     })
+}
+
+fn trip_summary_sample(
+    summary: TripSummary,
+    roughness: RoadRoughnessEstimate,
+) -> TripSummarySample {
+    TripSummarySample {
+        sample_count: summary.sample_count,
+        invalid_sample_count: summary.invalid_sample_count,
+        data_gap_count: summary.data_gap_count,
+        max_sample_gap_s: summary.max_sample_gap_s as f64,
+        total_gap_duration_s: summary.total_gap_duration_s as f64,
+        duration_s: summary.duration_s as f64,
+        moving_duration_s: summary.moving_duration_s as f64,
+        stationary_duration_s: summary.stationary_duration_s as f64,
+        distance_m: summary.distance_m as f64,
+        reverse_duration_s: summary.reverse_duration_s as f64,
+        reverse_distance_m: summary.reverse_distance_m as f64,
+        elevation_gain_m: summary.elevation_gain_m as f64,
+        elevation_loss_m: summary.elevation_loss_m as f64,
+        elevation_valid: summary.elevation_valid,
+        mean_speed_mps: summary.mean_speed_mps as f64,
+        moving_mean_speed_mps: summary.moving_mean_speed_mps as f64,
+        peak_speed_mps: summary.peak_speed_mps as f64,
+        peak_accel_mps2: summary.peak_accel_mps2 as f64,
+        peak_decel_mps2: summary.peak_decel_mps2 as f64,
+        peak_lateral_accel_mps2: summary.peak_lateral_accel_mps2 as f64,
+        rolling_speed_mps: summary.rolling_speed_mps as f64,
+        rolling_abs_longitudinal_accel_mps2: summary.rolling_abs_longitudinal_accel_mps2 as f64,
+        rolling_abs_lateral_accel_mps2: summary.rolling_abs_lateral_accel_mps2 as f64,
+        events: TripEventCountsSample {
+            speed_bumps: summary.events.speed_bumps,
+            uphill: summary.events.uphill,
+            downhill: summary.events.downhill,
+            reverse: summary.events.reverse,
+            harsh_acceleration: summary.events.harsh_acceleration,
+            harsh_braking: summary.events.harsh_braking,
+            harsh_cornering: summary.events.harsh_cornering,
+        },
+        speed_bumps_per_km: summary.speed_bumps_per_km as f64,
+        harsh_events_per_km: summary.harsh_events_per_km as f64,
+        reverse_seconds_per_km: summary.reverse_seconds_per_km as f64,
+        road_roughness_rms_mps2: roughness.roughness_rms_mps2 as f64,
+        road_roughness_level: roughness_level_value(roughness.level) as u8,
+        road_roughness_distance_m: roughness.distance_m as f64,
+    }
+}
+
+fn roughness_level_value(level: RoadRoughnessLevel) -> f64 {
+    match level {
+        RoadRoughnessLevel::VerySmooth => 0.0,
+        RoadRoughnessLevel::Smooth => 1.0,
+        RoadRoughnessLevel::LightTexture => 2.0,
+        RoadRoughnessLevel::Moderate => 3.0,
+        RoadRoughnessLevel::Rough => 4.0,
+        RoadRoughnessLevel::VeryRough => 5.0,
+        RoadRoughnessLevel::Severe => 6.0,
+    }
 }
 
 fn harsh_longitudinal_sample(t_s: f64, fusion: &SensorFusion) -> Option<HarshLongitudinalSample> {
@@ -1759,20 +1923,8 @@ fn attach_road_event_trigger_traces(
         event.trigger_traces = match event.kind.as_str() {
             "speed bump" => vec![
                 windowed_mini_trace(
-                    "Vertical accel raw [m/s^2]",
-                    &motion.bump_vertical_accel_mps2,
-                    start_t_s,
-                    end_t_s,
-                ),
-                windowed_mini_trace(
                     "Vertical accel HPF [m/s^2]",
                     &motion.bump_vertical_accel_hpf_mps2,
-                    start_t_s,
-                    end_t_s,
-                ),
-                windowed_mini_trace(
-                    "Accel noise floor [m/s^2]",
-                    &motion.bump_vertical_accel_noise_mps2,
                     start_t_s,
                     end_t_s,
                 ),
@@ -2629,6 +2781,45 @@ mod tests {
         assert!((traces[0].points[0][1] - 1.0).abs() < 1.0e-12);
         assert_eq!(traces[3].points[0][1], 2.5);
         assert_eq!(traces[6].points[0][1], 12.0);
+    }
+
+    #[test]
+    fn trip_summary_conversion_preserves_counts_and_metrics() {
+        let mut stats = TripStats::default();
+        stats.update_motion(TripSample {
+            t_s: 0.0,
+            speed_mps: 0.0,
+            forward_velocity_mps: 0.0,
+            height_m: Some(10.0),
+            height_frame_id: 0,
+            longitudinal_accel_mps2: 0.0,
+            lateral_accel_mps2: 0.0,
+        });
+        stats.update_motion(TripSample {
+            t_s: 1.0,
+            speed_mps: 10.0,
+            forward_velocity_mps: -2.0,
+            height_m: Some(12.0),
+            height_frame_id: 0,
+            longitudinal_accel_mps2: 3.0,
+            lateral_accel_mps2: -4.0,
+        });
+        stats.record_event(TripEventKind::SpeedBump);
+        stats.record_event(TripEventKind::HarshCornering);
+
+        let summary =
+            trip_summary_sample(stats.summary(), RoadRoughnessAnalyzer::default().estimate());
+
+        assert_eq!(summary.sample_count, 2);
+        assert_eq!(summary.events.speed_bumps, 1);
+        assert_eq!(summary.events.harsh_cornering, 1);
+        assert!(summary.distance_m > 0.0);
+        assert!(summary.reverse_distance_m > 0.0);
+        assert!(summary.elevation_gain_m > 0.0);
+        assert!(summary.elevation_valid);
+        assert_eq!(summary.elevation_gain_m, 2.0);
+        assert_eq!(summary.peak_accel_mps2, 3.0);
+        assert_eq!(summary.peak_lateral_accel_mps2, 4.0);
     }
 
     #[test]

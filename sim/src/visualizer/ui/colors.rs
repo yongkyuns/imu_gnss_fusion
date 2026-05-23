@@ -87,6 +87,26 @@ pub(super) fn shared_cursor_color(visuals: &egui::Visuals) -> egui::Color32 {
     }
 }
 
+pub(super) fn event_marker_color(kind: &str, visuals: &egui::Visuals) -> egui::Color32 {
+    match kind {
+        "speed bump" if visuals.dark_mode => egui::Color32::from_rgb(255, 212, 92),
+        "speed bump" => egui::Color32::from_rgb(190, 109, 0),
+        "uphill" if visuals.dark_mode => egui::Color32::from_rgb(255, 154, 68),
+        "uphill" => egui::Color32::from_rgb(214, 97, 0),
+        "downhill" if visuals.dark_mode => egui::Color32::from_rgb(86, 190, 255),
+        "downhill" => egui::Color32::from_rgb(0, 126, 182),
+        "reverse" if visuals.dark_mode => egui::Color32::from_rgb(196, 146, 255),
+        "reverse" => egui::Color32::from_rgb(133, 76, 214),
+        "harsh acceleration" if visuals.dark_mode => egui::Color32::from_rgb(92, 230, 128),
+        "harsh acceleration" => egui::Color32::from_rgb(0, 150, 78),
+        "harsh braking" if visuals.dark_mode => egui::Color32::from_rgb(255, 92, 92),
+        "harsh braking" => egui::Color32::from_rgb(206, 45, 45),
+        "harsh cornering" if visuals.dark_mode => egui::Color32::from_rgb(255, 116, 218),
+        "harsh cornering" => egui::Color32::from_rgb(190, 54, 165),
+        _ => map_marker_color(kind, visuals),
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) enum SeriesColor {
     Reference,

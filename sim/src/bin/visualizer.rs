@@ -376,6 +376,7 @@ fn main() -> Result<()> {
         group_stats("ekf_stationary_diag", &data.ekf_stationary_diag),
         group_stats("ekf_bump_pitch_speed", &data.ekf_bump_pitch_speed),
         group_stats("ekf_bump_diag", &data.ekf_bump_diag),
+        group_stats("ekf_road_roughness", &data.ekf_road_roughness),
         group_stats("ekf_map", &data.ekf_map),
         group_stats("align_cmp_att", &data.align_cmp_att),
         group_stats("align_res_vel", &data.align_res_vel),
@@ -419,6 +420,28 @@ fn main() -> Result<()> {
             event.peak_accel_mps2
         );
     }
+    let trip = data.trip_summary;
+    eprintln!(
+        "[profile] trip_stats samples={} distance_m={:.3} duration_s={:.3} moving_s={:.3} mean_speed_mps={:.3} peak_speed_mps={:.3} reverse_distance_m={:.3} reverse_duration_s={:.3} elevation_gain_m={:.3} elevation_loss_m={:.3} elevation_valid={} roughness_rms_mps2={:.3} roughness_level={} speed_bumps={} hills={} reverse_events={} harsh_events={} data_gaps={}",
+        trip.sample_count,
+        trip.distance_m,
+        trip.duration_s,
+        trip.moving_duration_s,
+        trip.mean_speed_mps,
+        trip.peak_speed_mps,
+        trip.reverse_distance_m,
+        trip.reverse_duration_s,
+        trip.elevation_gain_m,
+        trip.elevation_loss_m,
+        trip.elevation_valid,
+        trip.road_roughness_rms_mps2,
+        trip.road_roughness_level,
+        trip.events.speed_bumps,
+        trip.events.uphill + trip.events.downhill,
+        trip.events.reverse,
+        trip.events.harsh_acceleration + trip.events.harsh_braking + trip.events.harsh_cornering,
+        trip.data_gap_count
+    );
     for (group, traces) in [
         ("imu_raw_gyro", &data.imu_raw_gyro),
         ("imu_raw_accel", &data.imu_raw_accel),
@@ -433,6 +456,7 @@ fn main() -> Result<()> {
         ("ekf_misalignment", &data.ekf_misalignment),
         ("ekf_bump_pitch_speed", &data.ekf_bump_pitch_speed),
         ("ekf_bump_diag", &data.ekf_bump_diag),
+        ("ekf_road_roughness", &data.ekf_road_roughness),
         ("align_roll_contrib", &data.align_roll_contrib),
         ("align_pitch_contrib", &data.align_pitch_contrib),
         ("align_yaw_contrib", &data.align_yaw_contrib),
@@ -479,6 +503,12 @@ fn main() -> Result<()> {
         dump_traces_near_time(
             "ekf_bump_pitch_speed",
             &data.ekf_bump_pitch_speed,
+            t_s,
+            args.dump_window_s,
+        );
+        dump_traces_near_time(
+            "ekf_road_roughness",
+            &data.ekf_road_roughness,
             t_s,
             args.dump_window_s,
         );

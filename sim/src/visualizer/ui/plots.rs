@@ -8,7 +8,7 @@ use egui_plot::{
 
 use crate::visualizer::model::{PlotData, Trace};
 
-use super::colors::shared_cursor_color;
+use super::colors::{event_marker_color, shared_cursor_color};
 use super::orthogonal::{OrthogonalViewKind, draw_orthogonal_views_popup};
 use super::state::{TraceVisibility, display_filter_trace_name};
 use super::trace_query::trace_time_range;
@@ -33,6 +33,20 @@ pub(super) struct PlotSection<'a> {
     title: Option<&'static str>,
     default_open: bool,
     plots: Vec<PlotSpec<'a>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum PlotEventMarkerEdge {
+    Point,
+    SegmentStart,
+    SegmentEnd,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct PlotEventMarker {
+    pub(super) kind: String,
+    pub(super) t_s: f64,
+    pub(super) edge: PlotEventMarkerEdge,
 }
 
 #[derive(Clone, Copy)]
@@ -130,8 +144,17 @@ pub(super) fn draw_plot_spec_with_cursor_time(
     max_points_per_trace: usize,
     cursor_t_s: Option<f64>,
     ghost_data: Option<&PlotData>,
+    event_markers: &[PlotEventMarker],
 ) -> Option<f64> {
-    draw_plot_spec_with_title_label(ui, spec, max_points_per_trace, cursor_t_s, true, ghost_data)
+    draw_plot_spec_with_title_label(
+        ui,
+        spec,
+        max_points_per_trace,
+        cursor_t_s,
+        true,
+        ghost_data,
+        event_markers,
+    )
 }
 
 pub(super) fn draw_overview_plot_spec(
@@ -140,6 +163,7 @@ pub(super) fn draw_overview_plot_spec(
     max_points_per_trace: usize,
     cursor_t_s: Option<f64>,
     ghost_data: Option<&PlotData>,
+    event_markers: &[PlotEventMarker],
 ) -> Option<f64> {
     let mut hovered_t_s = None;
     egui::CollapsingHeader::new(spec.title)
@@ -152,6 +176,7 @@ pub(super) fn draw_overview_plot_spec(
                 cursor_t_s,
                 false,
                 ghost_data,
+                event_markers,
             );
         });
     hovered_t_s
@@ -172,6 +197,7 @@ pub(super) fn draw_analysis_sections_page(
     visibility: TraceVisibility,
     cursor_t_s: Option<f64>,
     ghost_data: Option<&PlotData>,
+    event_markers: &[PlotEventMarker],
 ) -> Option<f64> {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -204,6 +230,7 @@ pub(super) fn draw_analysis_sections_page(
                                     max_points_per_trace,
                                     hovered_t_s.or(cursor_t_s),
                                     ghost_data,
+                                    event_markers,
                                 ) {
                                     hovered_t_s = Some(t_s);
                                 }
@@ -216,6 +243,7 @@ pub(super) fn draw_analysis_sections_page(
                             max_points_per_trace,
                             hovered_t_s.or(cursor_t_s),
                             ghost_data,
+                            event_markers,
                         ) {
                             hovered_t_s = Some(t_s);
                         }
@@ -234,6 +262,7 @@ fn draw_plot_spec_with_title_label(
     cursor_t_s: Option<f64>,
     show_title_label: bool,
     ghost_data: Option<&PlotData>,
+    event_markers: &[PlotEventMarker],
 ) -> Option<f64> {
     let ghost_traces = spec_ghost_traces(spec, ghost_data);
     let hovered_t_s = draw_plot_with_cursor_time(
@@ -246,6 +275,7 @@ fn draw_plot_spec_with_title_label(
         show_title_label,
         max_points_per_trace,
         cursor_t_s,
+        event_markers,
     );
     if let Some(t_s) = hovered_t_s {
         draw_plot_interaction(ui, spec, t_s);
@@ -290,6 +320,7 @@ fn draw_plot_grid(
     max_points_per_trace: usize,
     cursor_t_s: Option<f64>,
     ghost_data: Option<&PlotData>,
+    event_markers: &[PlotEventMarker],
 ) -> Option<f64> {
     let mut hovered_t_s = None;
     let min_plot_width = 560.0;
@@ -303,6 +334,7 @@ fn draw_plot_grid(
                 max_points_per_trace,
                 hovered_t_s.or(cursor_t_s),
                 ghost_data,
+                event_markers,
             ) {
                 hovered_t_s = Some(t_s);
             }
@@ -434,6 +466,46 @@ fn ghost_plot_color(color: egui::Color32) -> egui::Color32 {
     egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 82)
 }
 
+fn plot_event_marker_color(marker: &PlotEventMarker, visuals: &egui::Visuals) -> egui::Color32 {
+    let color = event_marker_color(marker.kind.as_str(), visuals);
+    let alpha = match marker.edge {
+        PlotEventMarkerEdge::Point => 156,
+        PlotEventMarkerEdge::SegmentStart | PlotEventMarkerEdge::SegmentEnd => 118,
+    };
+    egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha)
+}
+
+fn draw_event_markers(
+    plot_ui: &mut egui_plot::PlotUi<'_>,
+    event_markers: &[PlotEventMarker],
+    time_range: Option<(f64, f64)>,
+    visuals: &egui::Visuals,
+) {
+    for marker in event_markers {
+        if !time_in_range(marker.t_s, time_range) {
+            continue;
+        }
+        let style = match marker.edge {
+            PlotEventMarkerEdge::Point => LineStyle::Dotted { spacing: 4.0 },
+            PlotEventMarkerEdge::SegmentStart | PlotEventMarkerEdge::SegmentEnd => {
+                LineStyle::Dotted { spacing: 7.0 }
+            }
+        };
+        let width = match marker.edge {
+            PlotEventMarkerEdge::Point => 1.35,
+            PlotEventMarkerEdge::SegmentStart | PlotEventMarkerEdge::SegmentEnd => 1.15,
+        };
+        plot_ui.vline(
+            VLine::new("event marker", marker.t_s)
+                .name("")
+                .allow_hover(false)
+                .color(plot_event_marker_color(marker, visuals))
+                .width(width)
+                .style(style),
+        );
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn draw_plot_with_cursor_time<'a, I>(
     ui: &mut egui::Ui,
@@ -445,6 +517,7 @@ fn draw_plot_with_cursor_time<'a, I>(
     show_title_label: bool,
     max_points_per_trace: usize,
     cursor_t_s: Option<f64>,
+    event_markers: &[PlotEventMarker],
 ) -> Option<f64>
 where
     I: IntoIterator<Item = &'a Trace>,
@@ -679,6 +752,7 @@ where
                     max_points_per_trace,
                     plot_height,
                     cursor_t_s,
+                    event_markers,
                 )
             })
             .inner;
@@ -699,6 +773,7 @@ where
                     max_points_per_trace,
                     TIME_SERIES_PLOT_HEIGHT,
                     cursor_t_s,
+                    event_markers,
                 )
             })
             .inner;
@@ -716,6 +791,7 @@ where
         max_points_per_trace: usize,
         plot_height: f32,
         cursor_t_s: Option<f64>,
+        event_markers: &[PlotEventMarker],
     ) -> Option<f64>
     where
         I: IntoIterator<Item = &'a Trace>,
@@ -775,7 +851,8 @@ where
                         Legend::default().color_conflict_handling(ColorConflictHandling::PickLast),
                     );
                 }
-                let shared_cursor_color = shared_cursor_color(ui.visuals());
+                let visuals = ui.visuals().clone();
+                let shared_cursor_color = shared_cursor_color(&visuals);
                 plot.show(ui, |plot_ui| {
                     let bounds = plot_ui.plot_bounds();
                     let xmin = bounds.min()[0];
@@ -842,6 +919,7 @@ where
                             }
                         }
                     }
+                    draw_event_markers(plot_ui, event_markers, data_time_range, &visuals);
                     if let Some((name, point, _)) = nearest_hover {
                         plot_ui.points(
                             Points::new("", vec![[point.x, point.y]])

@@ -16,6 +16,56 @@ pub(super) enum TuningPanel {
     Align,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct EventVisibility {
+    pub show_speed_bump: bool,
+    pub show_uphill: bool,
+    pub show_downhill: bool,
+    pub show_reverse: bool,
+    pub show_harsh_accel: bool,
+    pub show_harsh_brake: bool,
+    pub show_harsh_cornering: bool,
+}
+
+impl Default for EventVisibility {
+    fn default() -> Self {
+        Self {
+            show_speed_bump: true,
+            show_uphill: true,
+            show_downhill: true,
+            show_reverse: true,
+            show_harsh_accel: true,
+            show_harsh_brake: true,
+            show_harsh_cornering: true,
+        }
+    }
+}
+
+impl EventVisibility {
+    pub(super) fn allows_kind(self, kind: &str) -> bool {
+        match kind {
+            "speed bump" => self.show_speed_bump,
+            "uphill" => self.show_uphill,
+            "downhill" => self.show_downhill,
+            "reverse" => self.show_reverse,
+            "harsh acceleration" => self.show_harsh_accel,
+            "harsh braking" => self.show_harsh_brake,
+            "harsh cornering" => self.show_harsh_cornering,
+            _ => true,
+        }
+    }
+
+    pub(super) fn set_all(&mut self, enabled: bool) {
+        self.show_speed_bump = enabled;
+        self.show_uphill = enabled;
+        self.show_downhill = enabled;
+        self.show_reverse = enabled;
+        self.show_harsh_accel = enabled;
+        self.show_harsh_brake = enabled;
+        self.show_harsh_cornering = enabled;
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct TraceVisibility {
     pub show_reference: bool,
@@ -129,5 +179,28 @@ mod tests {
         assert!(!ekf_off.allows(&trace("EKF vehicle speed [m/s]")));
         assert!(ekf_off.allows(&trace("Reference mount roll [deg]")));
         assert!(ekf_off.allows(&trace("Align roll [deg]")));
+    }
+
+    #[test]
+    fn event_visibility_filters_known_event_kinds() {
+        let mut visibility = EventVisibility::default();
+        assert!(visibility.allows_kind("speed bump"));
+        assert!(visibility.allows_kind("uphill"));
+        assert!(visibility.allows_kind("harsh braking"));
+        assert!(visibility.allows_kind("unknown future event"));
+
+        visibility.show_speed_bump = false;
+        visibility.show_downhill = false;
+        visibility.show_harsh_cornering = false;
+        assert!(!visibility.allows_kind("speed bump"));
+        assert!(visibility.allows_kind("uphill"));
+        assert!(!visibility.allows_kind("downhill"));
+        assert!(visibility.allows_kind("harsh acceleration"));
+        assert!(!visibility.allows_kind("harsh cornering"));
+
+        visibility.set_all(false);
+        assert!(!visibility.allows_kind("reverse"));
+        assert!(!visibility.allows_kind("harsh braking"));
+        assert!(visibility.allows_kind("unknown future event"));
     }
 }

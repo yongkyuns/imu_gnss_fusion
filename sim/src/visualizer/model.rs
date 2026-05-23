@@ -37,8 +37,10 @@ pub struct PlotData {
     pub ekf_stationary_diag: Vec<Trace>,
     pub ekf_bump_pitch_speed: Vec<Trace>,
     pub ekf_bump_diag: Vec<Trace>,
+    pub ekf_road_roughness: Vec<Trace>,
     pub road_events: Vec<RoadEventSample>,
     pub road_segments: Vec<RoadSegmentSample>,
+    pub trip_summary: TripSummarySample,
     pub ekf_map: Vec<Trace>,
     pub map_cursor: Vec<MapCursorSample>,
     pub ekf_map_heading: Vec<HeadingSample>,
@@ -69,7 +71,7 @@ impl PlotData {
             .any(|trace| !trace.points.is_empty())
     }
 
-    fn trace_groups(&self) -> [&[Trace]; 39] {
+    fn trace_groups(&self) -> [&[Trace]; 40] {
         [
             &self.speed,
             &self.vehicle_motion_gyro,
@@ -100,6 +102,7 @@ impl PlotData {
             &self.ekf_stationary_diag,
             &self.ekf_bump_pitch_speed,
             &self.ekf_bump_diag,
+            &self.ekf_road_roughness,
             &self.ekf_map,
             &self.align_cmp_att,
             &self.align_res_vel,
@@ -228,6 +231,53 @@ pub struct RoadSegmentSample {
     pub trigger_window_start_t_s: f64,
     pub trigger_window_end_t_s: f64,
     pub trigger_traces: Vec<Trace>,
+}
+
+#[cfg_attr(target_arch = "wasm32", derive(serde::Deserialize, serde::Serialize))]
+#[derive(Clone, Copy, Default)]
+pub struct TripEventCountsSample {
+    pub speed_bumps: u32,
+    pub uphill: u32,
+    pub downhill: u32,
+    pub reverse: u32,
+    pub harsh_acceleration: u32,
+    pub harsh_braking: u32,
+    pub harsh_cornering: u32,
+}
+
+#[cfg_attr(target_arch = "wasm32", derive(serde::Deserialize, serde::Serialize))]
+#[derive(Clone, Copy, Default)]
+pub struct TripSummarySample {
+    pub sample_count: u32,
+    pub invalid_sample_count: u32,
+    pub data_gap_count: u32,
+    pub max_sample_gap_s: f64,
+    pub total_gap_duration_s: f64,
+    pub duration_s: f64,
+    pub moving_duration_s: f64,
+    pub stationary_duration_s: f64,
+    pub distance_m: f64,
+    pub reverse_duration_s: f64,
+    pub reverse_distance_m: f64,
+    pub elevation_gain_m: f64,
+    pub elevation_loss_m: f64,
+    pub elevation_valid: bool,
+    pub mean_speed_mps: f64,
+    pub moving_mean_speed_mps: f64,
+    pub peak_speed_mps: f64,
+    pub peak_accel_mps2: f64,
+    pub peak_decel_mps2: f64,
+    pub peak_lateral_accel_mps2: f64,
+    pub rolling_speed_mps: f64,
+    pub rolling_abs_longitudinal_accel_mps2: f64,
+    pub rolling_abs_lateral_accel_mps2: f64,
+    pub events: TripEventCountsSample,
+    pub speed_bumps_per_km: f64,
+    pub harsh_events_per_km: f64,
+    pub reverse_seconds_per_km: f64,
+    pub road_roughness_rms_mps2: f64,
+    pub road_roughness_level: u8,
+    pub road_roughness_distance_m: f64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

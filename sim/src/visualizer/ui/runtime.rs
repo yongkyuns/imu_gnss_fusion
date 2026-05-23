@@ -117,6 +117,8 @@ pub(super) fn create_app(
         show_gnss_map: true,
         show_ekf: true,
         show_events: true,
+        map_color_source: super::maps::MapColorSource::None,
+        event_visibility: super::state::EventVisibility::default(),
         shared_cursor_t_s: None,
         update_inspector_cursor_t_s: None,
         show_update_inspector: false,
