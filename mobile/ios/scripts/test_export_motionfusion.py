@@ -144,6 +144,8 @@ class ExportMotionFusionTests(unittest.TestCase):
             self.assertEqual(len(gnss_rows), 2)
             self.assertAlmostEqual(float(gnss_rows[1][4]), 0.0, places=12)
             self.assertAlmostEqual(float(gnss_rows[1][5]), 2.0, places=12)
+            self.assertAlmostEqual(float(gnss_rows[1][10]), 0.5, places=12)
+            self.assertAlmostEqual(float(gnss_rows[1][11]), 0.5, places=12)
             self.assertAlmostEqual(float(gnss_rows[1][13]), 1.5707963267948966)
 
             summary = result.summary_txt.read_text(encoding="utf-8")
@@ -265,6 +267,34 @@ class ExportMotionFusionTests(unittest.TestCase):
         )
 
         self.assertEqual(row.accel, (-1.0, 2.0, -9.81))
+
+    def test_velocity_sigma_uses_speed_accuracy_without_course_inflation(self) -> None:
+        row = export_motionfusion.parse_gnss_row(
+            0.0,
+            {
+                "latitudeDeg": 43.0,
+                "longitudeDeg": -79.0,
+                "altitudeM": 120.0,
+                "horizontalAccuracyM": 3.0,
+                "verticalAccuracyM": 5.0,
+                "speedMps": 20.0,
+                "courseDeg": 90.0,
+                "speedAccuracyMps": 0.5,
+                "courseAccuracyDeg": 30.0,
+                "positionNorthM": None,
+                "positionEastM": None,
+                "positionDownM": None,
+                "velocityNorthMps": None,
+                "velocityEastMps": None,
+                "velocityDownMps": None,
+            },
+            "unit",
+        )
+
+        self.assertIsNotNone(row)
+        assert row is not None
+        self.assertAlmostEqual(row.vel_std_mps[0], 0.5, places=12)
+        self.assertAlmostEqual(row.vel_std_mps[1], 0.5, places=12)
 
     def test_unsupported_imu_frame_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "attitudeReferenceFrame"):

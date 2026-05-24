@@ -56,6 +56,34 @@ final class MountMemorySettingsTests: XCTestCase {
         XCTAssertTrue(MountMemoryPolicy.shouldStore(previous: previous, next: largerYaw))
     }
 
+    func testMountMemoryStorePolicyRequiresSettledEkfMount() {
+        let initializedAt = Date(timeIntervalSince1970: 100.0)
+
+        XCTAssertFalse(MountMemoryPolicy.canStoreSettledMount(initializedAt: nil, sampleDate: initializedAt))
+        XCTAssertFalse(MountMemoryPolicy.canStoreSettledMount(
+            initializedAt: initializedAt,
+            sampleDate: initializedAt.addingTimeInterval(59.9)
+        ))
+        XCTAssertTrue(MountMemoryPolicy.canStoreSettledMount(
+            initializedAt: initializedAt,
+            sampleDate: initializedAt.addingTimeInterval(60.0)
+        ))
+    }
+
+    func testMountMemoryPeriodicStorePolicyRateLimitsWrites() {
+        let storedAt = Date(timeIntervalSince1970: 100.0)
+
+        XCTAssertTrue(MountMemoryPolicy.canStorePeriodicMount(lastStoredAt: nil, sampleDate: storedAt))
+        XCTAssertFalse(MountMemoryPolicy.canStorePeriodicMount(
+            lastStoredAt: storedAt,
+            sampleDate: storedAt.addingTimeInterval(29.9)
+        ))
+        XCTAssertTrue(MountMemoryPolicy.canStorePeriodicMount(
+            lastStoredAt: storedAt,
+            sampleDate: storedAt.addingTimeInterval(30.0)
+        ))
+    }
+
     func testMountMemoryTitlesDescribeFallbackAndSavedMode() {
         XCTAssertEqual(MountMemoryPolicy.activeModeTitle(MountMemorySettings()), "Auto Align")
         XCTAssertEqual(

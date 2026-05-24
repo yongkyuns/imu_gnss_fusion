@@ -620,15 +620,18 @@ impl App {
             return Vec::new();
         }
 
-        let point_markers = self.data.road_events.iter().filter_map(|event| {
-            (event.t_s.is_finite() && self.event_visibility.allows_kind(event.kind.as_str())).then(
-                || PlotEventMarker {
-                    kind: event.kind.clone(),
-                    t_s: event.t_s,
-                    edge: PlotEventMarkerEdge::Point,
-                },
-            )
-        });
+        let point_markers = self
+            .data
+            .road_events
+            .iter()
+            .filter(|event| {
+                event.t_s.is_finite() && self.event_visibility.allows_kind(event.kind.as_str())
+            })
+            .map(|event| PlotEventMarker {
+                kind: event.kind.clone(),
+                t_s: event.t_s,
+                edge: PlotEventMarkerEdge::Point,
+            });
         let segment_markers = self
             .data
             .road_segments

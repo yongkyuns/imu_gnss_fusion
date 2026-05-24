@@ -35,12 +35,12 @@ const VISUALIZER_AUX_SCENARIO: &str = "\
 initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
 wait 5s
 repeat 10 {
-    accelerate 1.0m/s^2 for 4s
+    accelerate 2.0m/s^2 for 4s
     hold 4s
     turn left 12dps for 4s
     hold 4s
     turn right 12dps for 4s
-    brake 1.0m/s^2 for 4s
+    brake 2.0m/s^2 for 4s
 }
 ";
 
@@ -427,7 +427,7 @@ fn synthetic_inputs_populate_visualizer_ekf_traces() -> Result<()> {
             early_vel_bias_ned_mps: [0.0; 3],
             early_fault_window_s: None,
         },
-        VisualizerMountMode::Manual,
+        VisualizerMountMode::Auto,
         FusionTuningConfig::default(),
         GnssOutageConfig::default(),
     );

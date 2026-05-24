@@ -45,6 +45,13 @@ pub(super) fn draw_ekf_tuning(
         );
         drag_f32(
             ui,
+            "Vehicle roll prior R",
+            &mut cfg.r_vehicle_roll_prior,
+            0.0001,
+            0.0..=10.0,
+        );
+        drag_f32(
+            ui,
             "Vehicle speed R",
             &mut cfg.r_vehicle_speed,
             0.01,
@@ -67,12 +74,17 @@ pub(super) fn draw_ekf_tuning(
             0.1,
             0.0..=40.0,
         );
-        drag_f32(
+        slider_f32(
             ui,
-            "Roll/pitch attitude sigma deg",
-            &mut cfg.attitude_roll_pitch_init_sigma_deg,
-            0.5,
-            0.0..=180.0,
+            "Roll attitude sigma deg",
+            &mut cfg.attitude_roll_init_sigma_deg,
+            0.0..=30.0,
+        );
+        slider_f32(
+            ui,
+            "Pitch attitude sigma deg",
+            &mut cfg.attitude_pitch_init_sigma_deg,
+            0.0..=30.0,
         );
         drag_f32(
             ui,
@@ -596,6 +608,9 @@ fn tuning_help(label: &str) -> Option<&'static str> {
         "NHC vertical R density" => Some(
             "Vertical nonholonomic constraint noise density.\nHigher: weaker vertical constraint, less pitch/mount correction.\nLower: stronger vertical constraint, faster pitch/mount correction, more risk from road grade or vertical motion.",
         ),
+        "Vehicle roll prior R" => Some(
+            "Optional Chapter-6-style vehicle-roll pseudo-observation noise density.\n0 disables it.\nApplied only at NHC epochs and scaled by the NHC observation interval.\nLower: more strongly assumes vehicle roll is near zero and pushes persistent roll into mount.\nThis is a flat-road prior and is not bank-safe.",
+        ),
         "Vehicle speed R" => Some(
             "Vehicle forward-speed measurement variance.\nHigher: speed input nudges velocity less.\nLower: speed input pulls longitudinal velocity more strongly.",
         ),
@@ -608,8 +623,11 @@ fn tuning_help(label: &str) -> Option<&'static str> {
         "Yaw init speed m/s" => Some(
             "Minimum horizontal GNSS speed used to initialize yaw from course.\nHigher: avoids noisy low-speed course yaw, but may delay reliable yaw initialization.\nLower: initializes yaw earlier, but can seed yaw from noisy course.",
         ),
-        "Roll/pitch attitude sigma deg" => Some(
-            "Initial roll/pitch attitude uncertainty.\nHigher: lets early measurements correct vehicle attitude more.\nLower: makes initial roll/pitch attitude stiffer.",
+        "Roll attitude sigma deg" => Some(
+            "Initial vehicle-roll uncertainty.\nHigher: lets early NHC/GNSS evidence move vehicle roll more, which can reduce wrong residual allocation into mount roll.\nLower: makes vehicle roll stiffer and can leave mount/roll split errors.",
+        ),
+        "Pitch attitude sigma deg" => Some(
+            "Initial vehicle-pitch uncertainty.\nHigher: lets early acceleration/braking evidence move vehicle pitch more.\nLower: keeps pitch attitude closer to the seed and isolates roll-only experiments.",
         ),
         "Yaw sigma deg" => Some(
             "Initial vehicle yaw uncertainty.\nHigher: lets early GNSS/NHC updates rotate yaw more.\nLower: trusts initial yaw more and can slow recovery from bad yaw seed.",

@@ -10,9 +10,13 @@ pub struct FusionTuningConfig {
     #[serde(default = "default_r_body_vel_z")]
     pub r_body_vel_z: f32,
     #[serde(default)]
+    pub r_vehicle_roll_prior: f32,
+    #[serde(default)]
     pub nhc_update_period_s: f32,
-    #[serde(default = "default_attitude_roll_pitch_init_sigma_deg")]
-    pub attitude_roll_pitch_init_sigma_deg: f32,
+    #[serde(default = "default_attitude_roll_init_sigma_deg")]
+    pub attitude_roll_init_sigma_deg: f32,
+    #[serde(default = "default_attitude_pitch_init_sigma_deg")]
+    pub attitude_pitch_init_sigma_deg: f32,
     pub yaw_init_sigma_deg: f32,
     pub gyro_bias_init_sigma_dps: f32,
     pub accel_bias_init_sigma_mps2: f32,
@@ -49,8 +53,10 @@ impl Default for FusionTuningConfig {
             align: AlignConfig::default(),
             r_body_vel: default_r_body_vel_y(),
             r_body_vel_z: default_r_body_vel_z(),
+            r_vehicle_roll_prior: 0.0,
             nhc_update_period_s: 0.1,
-            attitude_roll_pitch_init_sigma_deg: default_attitude_roll_pitch_init_sigma_deg(),
+            attitude_roll_init_sigma_deg: default_attitude_roll_init_sigma_deg(),
+            attitude_pitch_init_sigma_deg: default_attitude_pitch_init_sigma_deg(),
             yaw_init_sigma_deg: 6.0,
             gyro_bias_init_sigma_dps: 0.125,
             accel_bias_init_sigma_mps2: 0.15,
@@ -89,7 +95,11 @@ fn default_mount_roll_init_sigma_deg() -> f32 {
     1.7
 }
 
-fn default_attitude_roll_pitch_init_sigma_deg() -> f32 {
+fn default_attitude_roll_init_sigma_deg() -> f32 {
+    2.0
+}
+
+fn default_attitude_pitch_init_sigma_deg() -> f32 {
     2.0
 }
 
@@ -138,10 +148,10 @@ pub fn apply_fusion_tuning_config(fusion: &mut SensorFusion, cfg: FusionTuningCo
         fusion.set_ekf_noise(noise);
     }
     fusion.set_r_body_vel_yz(cfg.r_body_vel, cfg.r_body_vel_z);
+    fusion.set_r_vehicle_roll_prior(cfg.r_vehicle_roll_prior);
     fusion.set_nhc_update_period_s(cfg.nhc_update_period_s);
-    fusion.set_attitude_roll_pitch_init_sigma_rad(
-        cfg.attitude_roll_pitch_init_sigma_deg.to_radians(),
-    );
+    fusion.set_attitude_roll_init_sigma_rad(cfg.attitude_roll_init_sigma_deg.to_radians());
+    fusion.set_attitude_pitch_init_sigma_rad(cfg.attitude_pitch_init_sigma_deg.to_radians());
     fusion.set_yaw_init_sigma_rad(cfg.yaw_init_sigma_deg.to_radians());
     fusion.set_gyro_bias_init_sigma_radps(cfg.gyro_bias_init_sigma_dps.to_radians());
     fusion.set_accel_bias_init_sigma_mps2(cfg.accel_bias_init_sigma_mps2);
@@ -170,6 +180,7 @@ mod tests {
         let mut cfg = FusionTuningConfig {
             r_body_vel: 0.42,
             r_body_vel_z: 0.24,
+            r_vehicle_roll_prior: 0.21,
             use_align_mount_covariance_on_seed: true,
             predict_imu_lpf_cutoff_hz: Some(120.0),
             ..Default::default()
@@ -186,6 +197,15 @@ mod tests {
 
         assert_eq!(decoded.r_body_vel, cfg.r_body_vel);
         assert_eq!(decoded.r_body_vel_z, cfg.r_body_vel_z);
+        assert_eq!(decoded.r_vehicle_roll_prior, cfg.r_vehicle_roll_prior);
+        assert_eq!(
+            decoded.attitude_roll_init_sigma_deg,
+            cfg.attitude_roll_init_sigma_deg
+        );
+        assert_eq!(
+            decoded.attitude_pitch_init_sigma_deg,
+            cfg.attitude_pitch_init_sigma_deg
+        );
         assert_eq!(
             decoded.mount_roll_pitch_init_sigma_deg,
             cfg.mount_roll_pitch_init_sigma_deg
@@ -253,6 +273,14 @@ mod tests {
 
         assert_eq!(decoded.predict_imu_lpf_cutoff_hz, None);
         assert_eq!(decoded.r_body_vel_z, default_r_body_vel_z());
+        assert_eq!(
+            decoded.attitude_roll_init_sigma_deg,
+            default_attitude_roll_init_sigma_deg()
+        );
+        assert_eq!(
+            decoded.attitude_pitch_init_sigma_deg,
+            default_attitude_pitch_init_sigma_deg()
+        );
         assert_eq!(
             decoded.mount_roll_pitch_init_sigma_deg,
             default_mount_roll_pitch_init_sigma_deg()

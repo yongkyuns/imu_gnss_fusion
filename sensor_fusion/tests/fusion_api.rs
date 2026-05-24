@@ -9,7 +9,7 @@ fn gnss_sample(t_s: f32) -> GnssSample {
         lat_deg: 0.0,
         lon_deg: 0.0,
         height_m: 0.0,
-        vel_ned_mps: [5.0, 0.0, 0.0],
+        vel_ned_mps: [6.0, 0.0, 0.0],
         pos_std_m: [1.0, 1.0, 1.5],
         vel_std_mps: [0.2, 0.2, 0.2],
         heading_rad: Some(0.0),
@@ -25,18 +25,52 @@ fn stationary_gnss_sample(t_s: f32) -> GnssSample {
 }
 
 #[test]
-fn manual_mount_initializes_ekf_from_gnss_and_freezes_mount_states() {
+fn manual_mount_initializes_ekf_from_gnss_with_live_mount_prior() {
     let mut system = SensorFusion::with_mount([1.0, 0.0, 0.0, 0.0]);
     let upd = system.process_gnss(gnss_sample(1.0));
     assert!(upd.mount_ready);
     assert!(upd.ekf_initialized_now);
     let ekf = system.ekf().unwrap();
+    let expected_var = (3.0_f32.to_radians()).powi(2);
     for i in 15..18 {
-        for j in 0..ekf.p.len() {
-            assert_eq!(ekf.p[i][j], 0.0);
-            assert_eq!(ekf.p[j][i], 0.0);
-        }
+        assert_eq!(ekf.p[i][i], expected_var);
     }
+}
+
+#[test]
+fn manual_mount_waits_for_yaw_seed_before_ekf_initialization() {
+    let mut system = SensorFusion::with_mount([1.0, 0.0, 0.0, 0.0]);
+
+    let stationary = system.process_gnss(stationary_gnss_sample(1.0));
+    assert!(stationary.mount_ready);
+    assert!(!stationary.ekf_initialized);
+    assert!(!stationary.ekf_initialized_now);
+    assert!(system.ekf().is_none());
+
+    let mut moving = gnss_sample(2.0);
+    moving.heading_rad = None;
+    moving.vel_ned_mps = [-6.0, 0.0, 0.0];
+    let no_heading = system.process_gnss(moving);
+    assert!(!no_heading.ekf_initialized);
+    assert!(!no_heading.ekf_initialized_now);
+
+    moving.heading_rad = Some(core::f32::consts::PI);
+    moving.vel_ned_mps = [-5.5, 0.0, 0.0];
+    let below_speed = system.process_gnss(moving);
+    assert!(!below_speed.ekf_initialized);
+    assert!(!below_speed.ekf_initialized_now);
+
+    moving.vel_ned_mps = [-6.0, 0.0, 0.0];
+    let initialized = system.process_gnss(moving);
+    assert!(initialized.ekf_initialized_now);
+    let ekf = system.ekf().unwrap();
+    assert!(ekf.nominal.q3.abs() > 0.99);
+}
+
+#[test]
+fn manual_mount_seed_is_normalized() {
+    let system = SensorFusion::with_mount([2.0, 0.0, 0.0, 0.0]);
+    assert_eq!(system.mount_q_bv(), Some([1.0, 0.0, 0.0, 0.0]));
 }
 
 #[test]
@@ -70,12 +104,12 @@ fn vehicle_speed_sample_pulls_forward_velocity_upward() {
     let vn_before = system.ekf().unwrap().nominal.vn;
     let _ = system.process_vehicle_speed(VehicleSpeedSample {
         t_s: 1.1,
-        speed_mps: 6.0,
+        speed_mps: 7.0,
         direction: VehicleSpeedDirection::Forward,
     });
     let vn_after = system.ekf().unwrap().nominal.vn;
     assert!(vn_after > vn_before);
-    assert!(vn_after < 6.0);
+    assert!(vn_after < 7.0);
 }
 
 #[test]
@@ -134,19 +168,19 @@ fn zero_velocity_update_does_not_inject_mount_error() {
 fn unknown_direction_uses_predicted_sign_when_state_is_confident() {
     let mut system = SensorFusion::with_mount([1.0, 0.0, 0.0, 0.0]);
     let mut gnss = gnss_sample(1.0);
-    gnss.vel_ned_mps = [-3.0, 0.0, 0.0];
+    gnss.vel_ned_mps = [-6.0, 0.0, 0.0];
     gnss.heading_rad = Some(core::f32::consts::PI);
     let upd = system.process_gnss(gnss);
     assert!(upd.ekf_initialized_now);
     let vn_before = system.ekf().unwrap().nominal.vn;
     let _ = system.process_vehicle_speed(VehicleSpeedSample {
         t_s: 1.1,
-        speed_mps: 4.0,
+        speed_mps: 7.0,
         direction: VehicleSpeedDirection::Unknown,
     });
     let vn_after = system.ekf().unwrap().nominal.vn;
     assert!(vn_after < vn_before);
-    assert!(vn_after > -4.0);
+    assert!(vn_after > -7.0);
 }
 
 #[test]

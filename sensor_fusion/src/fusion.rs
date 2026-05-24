@@ -38,6 +38,8 @@ const CAN_SPEED_SIGN_INFER_MIN_MPS: f32 = 1.0;
 const GNSS_POS_MIN_STD_M: f32 = 0.1;
 const GNSS_VEL_MIN_STD_MPS: f32 = 0.01;
 const GNSS_VERTICAL_POS_STD_SCALE: f32 = 2.5;
+const MANUAL_MOUNT_SEED_SIGMA_RAD: f32 = 3.0_f32 * core::f32::consts::PI / 180.0;
+const MANUAL_MOUNT_YAW_SEED_MIN_SPEED_MPS: f32 = 20.0 / 3.6;
 
 #[derive(Clone, Copy, Debug, Default)]
 struct Anchor {
@@ -48,6 +50,19 @@ struct Anchor {
     ecef_m: [f64; 3],
     c_ne: [[f32; 3]; 3],
     gravity_mss: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct NhcEpoch {
+    r_body_vel_y: f32,
+    r_body_vel_z: f32,
+    r_scale: f32,
+}
+
+impl NhcEpoch {
+    fn variances(self) -> [f32; 2] {
+        [self.r_body_vel_y, self.r_body_vel_z]
+    }
 }
 
 /// Streaming fusion state for vehicle IMU, GNSS, and optional vehicle-speed inputs.
@@ -94,7 +109,7 @@ impl SensorFusion {
         Self::with_config(Config::default())
     }
 
-    /// Creates a fusion pipeline with a fixed manual vehicle-to-body mount quaternion.
+    /// Creates a fusion pipeline with a manual vehicle-to-body mount quaternion seed.
     ///
     /// The quaternion must satisfy `R(q_bv) = C_bv`, `x_b = C_bv x_v`.
     pub fn with_mount(q_bv: [f32; 4]) -> Self {
@@ -152,10 +167,12 @@ impl SensorFusion {
         out
     }
 
-    /// Replaces the current mount with a fixed manual vehicle-to-body quaternion.
+    /// Replaces the current mount with a manual vehicle-to-body quaternion seed.
     ///
     /// The quaternion must satisfy `R(q_bv) = C_bv`, `x_b = C_bv x_v`.
     pub fn set_misalignment(&mut self, q_bv: [f32; 4]) {
+        let mut q_bv = q_bv;
+        normalize_quat_f32(&mut q_bv);
         self.internal_align_enabled = false;
         self.mount_ready = true;
         self.mount_q_bv = Some(q_bv);
@@ -168,7 +185,7 @@ impl SensorFusion {
         n.q_bv1 = q_bv[1];
         n.q_bv2 = q_bv[2];
         n.q_bv3 = q_bv[3];
-        self.ekf.set_freeze_misalignment_states(true);
+        self.ekf.set_freeze_misalignment_states(false);
     }
 
     /// Replaces the EKF prediction-noise configuration.
@@ -224,6 +241,20 @@ impl SensorFusion {
         }
     }
 
+    /// Sets the Chapter-6-style vehicle-roll prior noise density.
+    ///
+    /// `0` disables the optional update. Positive values apply a soft
+    /// `vehicle_roll ~= 0` pseudo-observation at eligible NHC epochs. The
+    /// configured value is treated as a noise density and scaled by the same
+    /// observation interval as NHC. This is a flat-road prior and is not safe
+    /// for sustained banked roads unless the caller intentionally wants that
+    /// assumption.
+    pub fn set_r_vehicle_roll_prior(&mut self, r_vehicle_roll_prior: f32) {
+        if r_vehicle_roll_prior.is_finite() && r_vehicle_roll_prior >= 0.0 {
+            self.cfg.r_vehicle_roll_prior = r_vehicle_roll_prior;
+        }
+    }
+
     /// Sets the minimum period between NHC updates, in seconds.
     ///
     /// `0` applies NHC at every eligible IMU epoch. Positive values decimate
@@ -251,10 +282,17 @@ impl SensorFusion {
         }
     }
 
-    /// Sets initial roll/pitch one-sigma uncertainty, in radians.
-    pub fn set_attitude_roll_pitch_init_sigma_rad(&mut self, sigma_rad: f32) {
+    /// Sets initial roll one-sigma uncertainty, in radians.
+    pub fn set_attitude_roll_init_sigma_rad(&mut self, sigma_rad: f32) {
         if sigma_rad.is_finite() && sigma_rad >= 0.0 {
-            self.cfg.attitude_roll_pitch_init_sigma_rad = sigma_rad;
+            self.cfg.attitude_roll_init_sigma_rad = sigma_rad;
+        }
+    }
+
+    /// Sets initial pitch one-sigma uncertainty, in radians.
+    pub fn set_attitude_pitch_init_sigma_rad(&mut self, sigma_rad: f32) {
+        if sigma_rad.is_finite() && sigma_rad >= 0.0 {
+            self.cfg.attitude_pitch_init_sigma_rad = sigma_rad;
         }
     }
 
@@ -410,11 +448,20 @@ impl SensorFusion {
                 }
             } else {
                 let nhc = self.imu_epoch_nhc_variances(sample.t_s, dt, accel_vehicle, gyro_vehicle);
-                let used_nhc_with_gnss = self.fuse_pending_gnss_at_imu(sample.t_s, nhc);
-                if let Some(r) = nhc
+                let used_nhc_with_gnss =
+                    self.fuse_pending_gnss_at_imu(sample.t_s, nhc.map(NhcEpoch::variances));
+                if let Some(nhc) = nhc
                     && !used_nhc_with_gnss
                 {
-                    self.ekf.fuse_body_vel_yz(r[0], r[1]);
+                    self.ekf
+                        .fuse_body_vel_yz(nhc.r_body_vel_y, nhc.r_body_vel_z);
+                }
+                if let Some(nhc) = nhc
+                    && self.cfg.r_vehicle_roll_prior > 0.0
+                    && self.cfg.r_vehicle_roll_prior.is_finite()
+                {
+                    self.ekf
+                        .fuse_vehicle_roll_prior(self.cfg.r_vehicle_roll_prior * nhc.r_scale);
                 }
             }
             self.clamp_ekf_biases();
@@ -453,6 +500,10 @@ impl SensorFusion {
         }
 
         if !self.mount_ready {
+            return self.update(prev_mount_ready != self.mount_ready, false);
+        }
+
+        if !self.ekf_initialized && self.manual_mount_mode() && !self.gnss_can_seed_yaw(local) {
             return self.update(prev_mount_ready != self.mount_ready, false);
         }
 
@@ -620,9 +671,6 @@ impl SensorFusion {
             }
             self.ekf.raw_mut().p[i][i] = var;
         }
-        if self.manual_mount_mode() {
-            self.ekf.set_freeze_misalignment_states(true);
-        }
     }
 
     /// Diagnostic hook that directly sets residual-mount covariance per axis.
@@ -647,9 +695,6 @@ impl SensorFusion {
         ];
         let raw = self.ekf.raw_mut();
         set_covariance_axis_block(&mut raw.p, 15, variances, zero_cross);
-        if self.manual_mount_mode() {
-            self.ekf.set_freeze_misalignment_states(true);
-        }
     }
 
     /// Diagnostic hook that directly sets residual attitude roll/pitch covariance.
@@ -696,8 +741,10 @@ impl SensorFusion {
         if self.anchor.valid {
             self.ekf.set_gravity_mss(self.anchor.gravity_mss);
         }
-        self.ekf
-            .set_freeze_misalignment_states(self.manual_mount_mode());
+        self.ekf.set_freeze_misalignment_states(false);
+        let manual_mount_mode = self.manual_mount_mode();
+        let use_align_mount_covariance =
+            self.cfg.use_align_mount_covariance_on_seed && self.internal_align_enabled;
         let speed_h = sqrt_f32(
             gnss.vel_ned_mps[0] * gnss.vel_ned_mps[0] + gnss.vel_ned_mps[1] * gnss.vel_ned_mps[1],
         );
@@ -723,21 +770,33 @@ impl SensorFusion {
         raw.p[12][12] = sq_f32(self.cfg.accel_bias_init_sigma_mps2);
         raw.p[13][13] = raw.p[12][12];
         raw.p[14][14] = raw.p[12][12];
-        raw.p[0][0] = sq_f32(self.cfg.attitude_roll_pitch_init_sigma_rad);
-        raw.p[1][1] = raw.p[0][0];
+        raw.p[0][0] = sq_f32(self.cfg.attitude_roll_init_sigma_rad);
+        raw.p[1][1] = sq_f32(self.cfg.attitude_pitch_init_sigma_rad);
         raw.p[2][2] = sq_f32(self.cfg.yaw_init_sigma_rad);
         let mount_var = sq_f32(self.cfg.mount_init_sigma_rad);
         raw.p[15][15] = sq_f32(self.cfg.mount_roll_init_sigma_rad);
         raw.p[16][16] = sq_f32(self.cfg.mount_pitch_init_sigma_rad);
         raw.p[17][17] = mount_var;
-        if self.cfg.use_align_mount_covariance_on_seed && self.internal_align_enabled {
+        if manual_mount_mode {
+            let mount_seed_var = sq_f32(MANUAL_MOUNT_SEED_SIGMA_RAD);
+            set_covariance_axis_block(&mut raw.p, 15, [mount_seed_var; 3], true);
+        } else if use_align_mount_covariance {
             copy_mount_covariance_block(&mut raw.p, self.align.P);
-        }
-        if self.manual_mount_mode() {
-            self.ekf.set_freeze_misalignment_states(true);
         }
         self.last_ekf_gnss_fuse_t_s = Some(gnss.t_s);
         self.last_ekf_nhc_t_s = None;
+    }
+
+    fn gnss_can_seed_yaw(&self, gnss: crate::ekf::GnssSample) -> bool {
+        let speed_h = sqrt_f32(
+            gnss.vel_ned_mps[0] * gnss.vel_ned_mps[0] + gnss.vel_ned_mps[1] * gnss.vel_ned_mps[1],
+        );
+        gnss.heading_rad.is_some()
+            && speed_h
+                > self
+                    .cfg
+                    .yaw_init_speed_mps
+                    .max(MANUAL_MOUNT_YAW_SEED_MIN_SPEED_MPS)
     }
 
     fn align_handoff_ready(&mut self, coarse_ready: bool, t_s: f32) -> bool {
@@ -1007,7 +1066,7 @@ impl SensorFusion {
         dt: f32,
         accel_vehicle: [f32; 3],
         gyro_vehicle: [f32; 3],
-    ) -> Option<[f32; 2]> {
+    ) -> Option<NhcEpoch> {
         let speed_allows_nhc = nhc_speed_allows_update(self.ekf_speed_estimate_mps());
         let nhc_active = runtime_nhc_active(accel_vehicle, gyro_vehicle) && speed_allows_nhc;
         let (obs_dt, last_t_s) =
@@ -1015,10 +1074,11 @@ impl SensorFusion {
         self.last_ekf_nhc_t_s = last_t_s;
         let obs_dt = obs_dt?;
         let r_scale = nhc_observation_r_scale(obs_dt);
-        Some([
-            self.cfg.r_body_vel_y * r_scale,
-            self.cfg.r_body_vel_z * r_scale,
-        ])
+        Some(NhcEpoch {
+            r_body_vel_y: self.cfg.r_body_vel_y * r_scale,
+            r_body_vel_z: self.cfg.r_body_vel_z * r_scale,
+            r_scale,
+        })
     }
 
     fn nhc_observation_interval(

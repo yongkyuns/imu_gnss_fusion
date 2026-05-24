@@ -44,8 +44,10 @@ impl App {
                                 self.tuning_gnss_outages = GnssOutageConfig::default();
                                 self.tuning_cfg.r_body_vel = defaults.r_body_vel;
                                 self.tuning_cfg.r_body_vel_z = defaults.r_body_vel_z;
-                                self.tuning_cfg.attitude_roll_pitch_init_sigma_deg =
-                                    defaults.attitude_roll_pitch_init_sigma_deg;
+                                self.tuning_cfg.attitude_roll_init_sigma_deg =
+                                    defaults.attitude_roll_init_sigma_deg;
+                                self.tuning_cfg.attitude_pitch_init_sigma_deg =
+                                    defaults.attitude_pitch_init_sigma_deg;
                                 self.tuning_cfg.yaw_init_sigma_deg = defaults.yaw_init_sigma_deg;
                                 self.tuning_cfg.gyro_bias_init_sigma_dps =
                                     defaults.gyro_bias_init_sigma_dps;

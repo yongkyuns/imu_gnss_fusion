@@ -1,9 +1,9 @@
 {
-  "created_utc": "2026-05-21T22:15:58Z",
+  "created_utc": "2026-05-23T10:59:23Z",
   "dataset_id": "ios-drive-20260521-130835",
   "files": {
     "gnss": {
-      "bytes": 24342,
+      "bytes": 22424,
       "columns": [
         "t_s",
         "lat_deg",
@@ -26,7 +26,7 @@
       "media_type": "text/csv",
       "path": "gnss.csv.gz",
       "rows": 246,
-      "sha256": "92d34a2eca58d07910813245c59c6fded4e1da57cf4355eb07f3a80be110f953"
+      "sha256": "507911bc57576722959a28cd85d7b99e107a504ce6ea6393b8d0a8c1ee20896f"
     },
     "imu": {
       "bytes": 1523136,

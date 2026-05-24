@@ -1,9 +1,9 @@
 {
-  "created_utc": "2026-05-21T03:19:33Z",
+  "created_utc": "2026-05-23T10:59:47Z",
   "dataset_id": "ios-evening-mixed-road-drive-002",
   "files": {
     "gnss": {
-      "bytes": 52001,
+      "bytes": 47936,
       "columns": [
         "t_s",
         "lat_deg",
@@ -26,7 +26,7 @@
       "media_type": "text/csv",
       "path": "gnss.csv.gz",
       "rows": 524,
-      "sha256": "3e025ff30c9f2f0a2e77f557c69458acf6193e0a57a87303224815ef527d1635"
+      "sha256": "a6ef11ca25ea283850591ed440296184d4f8e1ff9420a00649623f84990a8332"
     },
     "imu": {
       "bytes": 3533836,

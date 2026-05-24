@@ -284,8 +284,6 @@ private struct DriveView: View {
                     )
                     .padding(.trailing, 12)
                     .padding(.top, 74)
-                    Spacer()
-                        .frame(width: 0)
                 }
                 .frame(maxHeight: .infinity, alignment: .topTrailing)
             }
@@ -383,6 +381,70 @@ private struct CompactStatusDot: View {
                     .stroke(tint.opacity(0.28), lineWidth: 4)
             )
             .accessibilityHidden(true)
+    }
+}
+
+private struct DriveSessionInlineControls: View {
+    @EnvironmentObject private var controls: SettingsControlModel
+
+    private var canToggleLogging: Bool {
+        controls.state.streamMode == .live && controls.state.isLiveSensorStreamRunning
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Button {
+                if controls.state.isLiveSensorStreamRunning {
+                    controls.stopSensors()
+                } else {
+                    controls.startSensors()
+                }
+            } label: {
+                DriveSessionInlineButtonLabel(
+                    systemImage: controls.state.isLiveSensorStreamRunning ? "pause.fill" : "play.fill",
+                    tint: controls.state.isLiveSensorStreamRunning ? .red : .accentColor
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(controls.state.streamMode == .playback)
+            .opacity(controls.state.streamMode == .playback ? 0.45 : 1.0)
+            .accessibilityLabel(controls.state.isLiveSensorStreamRunning ? "Stop data stream" : "Start data stream")
+
+            Button {
+                if controls.state.isRecording {
+                    controls.stopRecording()
+                } else {
+                    controls.startRecording()
+                }
+            } label: {
+                DriveSessionInlineButtonLabel(
+                    systemImage: controls.state.isRecording ? "stop.fill" : "record.circle",
+                    tint: controls.state.isRecording ? .red : .primary
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(!canToggleLogging && !controls.state.isRecording)
+            .opacity((canToggleLogging || controls.state.isRecording) ? 1.0 : 0.45)
+            .accessibilityLabel(controls.state.isRecording ? "Stop raw data logging" : "Start raw data logging")
+        }
+    }
+}
+
+private struct DriveSessionInlineButtonLabel: View {
+    let systemImage: String
+    let tint: Color
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 13, weight: .bold))
+            .frame(width: 34, height: 34)
+            .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(tint.opacity(0.24), lineWidth: 1)
+            )
+        .foregroundStyle(tint)
+        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 
@@ -598,6 +660,8 @@ private struct DriveTelemetryDrawer: View {
 }
 
 private struct CollapsedDriveReadout: View {
+    @EnvironmentObject private var controls: SettingsControlModel
+
     let speedKmhText: String
     let statusTitle: String
     let accuracyM: Double?
@@ -617,7 +681,11 @@ private struct CollapsedDriveReadout: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
-            Spacer(minLength: 8)
+
+            DriveSessionInlineControls()
+                .environmentObject(controls)
+
+            Spacer(minLength: 4)
             VStack(alignment: .trailing, spacing: 4) {
                 Text(statusTitle)
                     .font(.subheadline.weight(.semibold))
@@ -1680,31 +1748,6 @@ private struct SettingsView: View {
                     if state.streamMode == .playback {
                         ProgressView(value: state.replayProgress)
                     }
-                    if state.streamMode == .live {
-                        if state.isLiveSensorStreamRunning {
-                            Button(role: .destructive) {
-                                controls.stopSensors()
-                            } label: {
-                                SettingsActionButtonLabel(
-                                    title: "Stop Sensors",
-                                    systemImage: "stop.circle",
-                                    tint: .red
-                                )
-                            }
-                            .buttonStyle(.plain)
-                        } else {
-                            Button {
-                                controls.startSensors()
-                            } label: {
-                                SettingsActionButtonLabel(
-                                    title: "Start Sensors",
-                                    systemImage: "play.circle",
-                                    tint: .accentColor
-                                )
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
                 }
 
                 Section("Event Audio") {
@@ -1741,21 +1784,7 @@ private struct SettingsView: View {
 
                 Section("Raw Logging") {
                     valueRow("Saved Sessions", "\(state.savedSessionCount)")
-                    if state.isRecording {
-                        Button {
-                            controls.stopRecording()
-                        } label: {
-                            Label("Stop Recording", systemImage: "stop.fill")
-                        }
-                        .tint(.red)
-                    } else {
-                        Button {
-                            controls.startRecording()
-                        } label: {
-                            Label("Start Recording", systemImage: "record.circle")
-                        }
-                        .disabled(state.streamMode != .live || !state.isLiveSensorStreamRunning)
-                    }
+                    valueRow("State", state.isRecording ? "Recording" : "Idle")
                     Button {
                         controls.refreshSessions()
                     } label: {

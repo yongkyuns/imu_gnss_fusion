@@ -135,6 +135,8 @@ final class SensorStore: NSObject, ObservableObject {
     private var roadEventStreamStartTime: Date?
     private var isForegroundForEventAudio = true
     private var latestMountQBV: Quaternion?
+    private var fusionEkfInitializedAt: Date?
+    private var lastMountMemoryStoreDate: Date?
     private var motionEventDetector = MotionEventDetector()
     private let eventAudioNotifier = EventAudioNotifier()
 
@@ -263,6 +265,8 @@ final class SensorStore: NSObject, ObservableObject {
         latestMotionEvent = nil
         tripStatsSummary = .empty
         latestMountQBV = nil
+        fusionEkfInitializedAt = nil
+        lastMountMemoryStoreDate = nil
         motionEventDetector.reset()
         eventAudioNotifier.reset()
 #if DEBUG
@@ -385,6 +389,7 @@ final class SensorStore: NSObject, ObservableObject {
     }
 
     func stop() {
+        persistSettledMountIfAvailable(forceCadence: true)
         _ = advanceStreamGeneration()
         finishRecordingIfNeeded()
         playbackTask?.cancel()
@@ -453,6 +458,7 @@ final class SensorStore: NSObject, ObservableObject {
 
     func prepareForBackgroundTracking() {
         isForegroundForEventAudio = false
+        persistSettledMountIfAvailable(forceCadence: true)
         checkpointRecording()
         locationManager.allowsBackgroundLocationUpdates = true
         locationManager.showsBackgroundLocationIndicator = true
@@ -464,6 +470,7 @@ final class SensorStore: NSObject, ObservableObject {
 
     func applicationWillTerminate() {
         isForegroundForEventAudio = false
+        persistSettledMountIfAvailable(forceCadence: true)
         checkpointRecording()
         recordingQueue.waitUntilAllOperationsAreFinished()
     }
@@ -571,8 +578,10 @@ final class SensorStore: NSObject, ObservableObject {
         guard mountMemorySettings.isEnabled != isEnabled else { return }
         mountMemorySettings.isEnabled = isEnabled
         MountMemoryDefaults.saveEnabled(isEnabled)
-        if isEnabled, let latestMountQBV {
-            storeRememberedMountIfNeeded(latestMountQBV, force: true)
+        if isEnabled,
+           let latestMountQBV,
+           MountMemoryPolicy.canStoreSettledMount(initializedAt: fusionEkfInitializedAt, sampleDate: Date()) {
+            storeRememberedMountIfNeeded(latestMountQBV)
         }
         publishSettingsState()
     }
@@ -588,6 +597,7 @@ final class SensorStore: NSObject, ObservableObject {
         if let speedMultiplier {
             setPlaybackSpeedMultiplier(speedMultiplier)
         }
+        persistSettledMountIfAvailable(forceCadence: true)
         let generation = advanceStreamGeneration()
         finishRecordingIfNeeded()
         locationManager.stopUpdatingLocation()
@@ -679,6 +689,7 @@ final class SensorStore: NSObject, ObservableObject {
     }
 
     func stopPlayback() {
+        persistSettledMountIfAvailable(forceCadence: true)
         _ = advanceStreamGeneration()
         playbackTask?.cancel()
         playbackTask = nil
@@ -746,6 +757,8 @@ final class SensorStore: NSObject, ObservableObject {
         latestMotionEvent = nil
         tripStatsSummary = .empty
         latestMountQBV = nil
+        fusionEkfInitializedAt = nil
+        lastMountMemoryStoreDate = nil
         motionEventDetector.reset()
         eventAudioNotifier.reset()
 #if DEBUG
@@ -1665,9 +1678,6 @@ extension SensorStore: CLLocationManagerDelegate {
         ekfMountReady = status.mountReady
         if let mountQBV = status.mountQBV {
             latestMountQBV = mountQBV
-            if status.mountReady, mountMemorySettings.isEnabled {
-                storeRememberedMountIfNeeded(mountQBV)
-            }
         }
         alignProgress = AlignProgressSnapshot(
             isValid: alignProgressStatus.isValid,
@@ -1688,13 +1698,30 @@ extension SensorStore: CLLocationManagerDelegate {
         fusionConfidence = health.fusedConfidence
     }
 
-    private func storeRememberedMountIfNeeded(_ qBV: Quaternion, force: Bool = false) {
+    private func persistSettledMountIfAvailable(forceCadence: Bool = false) {
+        let sampleDate = Date()
+        guard let latestMountQBV,
+              MountMemoryPolicy.canStoreSettledMount(
+                  initializedAt: fusionEkfInitializedAt,
+                  sampleDate: sampleDate
+              ),
+              forceCadence || MountMemoryPolicy.canStorePeriodicMount(
+                  lastStoredAt: lastMountMemoryStoreDate,
+                  sampleDate: sampleDate
+              ) else {
+            return
+        }
+        storeRememberedMountIfNeeded(latestMountQBV, sampleDate: sampleDate)
+    }
+
+    private func storeRememberedMountIfNeeded(_ qBV: Quaternion, sampleDate: Date = Date()) {
         guard mountMemorySettings.isEnabled else { return }
-        guard force || MountMemoryPolicy.shouldStore(previous: mountMemorySettings.savedCalibration, next: qBV) else {
+        guard MountMemoryPolicy.shouldStore(previous: mountMemorySettings.savedCalibration, next: qBV) else {
             return
         }
         guard let calibration = SavedMountCalibration(qBV: qBV, savedAt: Date()) else { return }
         mountMemorySettings.savedCalibration = calibration
+        lastMountMemoryStoreDate = sampleDate
         MountMemoryDefaults.saveCalibration(calibration)
         publishSettingsState()
     }
@@ -1708,6 +1735,24 @@ extension SensorStore: CLLocationManagerDelegate {
     ) {
         ekfInitialized = snapshot.initialized
         ekfMountReady = snapshot.mountReady
+        if snapshot.initialized {
+            if fusionEkfInitializedAt == nil {
+                fusionEkfInitializedAt = sampleDate
+            }
+            latestMountQBV = snapshot.mountQBV
+            if snapshot.mountReady,
+               mountMemorySettings.isEnabled,
+               MountMemoryPolicy.canStoreSettledMount(
+                   initializedAt: fusionEkfInitializedAt,
+                   sampleDate: sampleDate
+               ),
+               MountMemoryPolicy.canStorePeriodicMount(
+                   lastStoredAt: lastMountMemoryStoreDate,
+                   sampleDate: sampleDate
+               ) {
+                storeRememberedMountIfNeeded(snapshot.mountQBV, sampleDate: sampleDate)
+            }
+        }
         fusedPosNorthM = snapshot.positionNedM.north
         fusedPosEastM = snapshot.positionNedM.east
         fusedPosDownM = snapshot.positionNedM.down
@@ -2140,7 +2185,10 @@ extension SensorStore: CLLocationManagerDelegate {
             motionEvents.removeFirst(motionEvents.count - motionEventHistoryMaxCount)
         }
         latestMotionEvent = events.last
-        if isForegroundForEventAudio {
+        if EventAudioPolicy.shouldDeliverAlert(
+            isForeground: isForegroundForEventAudio,
+            settings: eventAudioSettings
+        ) {
             events.forEach { eventAudioNotifier.notify($0, settings: eventAudioSettings) }
         }
     }

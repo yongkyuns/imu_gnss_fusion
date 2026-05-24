@@ -24,6 +24,8 @@ struct MountMemorySettings: Equatable, Sendable {
 
 enum MountMemoryPolicy {
     static let minimumStoreAngularDeltaDeg = 0.25
+    static let minimumStoreSettlingDurationSec: TimeInterval = 60.0
+    static let minimumPeriodicStoreIntervalSec: TimeInterval = 30.0
 
     static func validNormalizedQuaternion(_ q: Quaternion) -> Quaternion? {
         let norm = q.norm
@@ -42,6 +44,16 @@ enum MountMemoryPolicy {
         guard let next = validNormalizedQuaternion(qBV) else { return false }
         guard let previous else { return true }
         return angularDistanceDeg(previous.qBV, next) >= minimumStoreAngularDeltaDeg
+    }
+
+    static func canStoreSettledMount(initializedAt: Date?, sampleDate: Date) -> Bool {
+        guard let initializedAt else { return false }
+        return sampleDate.timeIntervalSince(initializedAt) >= minimumStoreSettlingDurationSec
+    }
+
+    static func canStorePeriodicMount(lastStoredAt: Date?, sampleDate: Date) -> Bool {
+        guard let lastStoredAt else { return true }
+        return sampleDate.timeIntervalSince(lastStoredAt) >= minimumPeriodicStoreIntervalSec
     }
 
     static func activeModeTitle(_ settings: MountMemorySettings) -> String {

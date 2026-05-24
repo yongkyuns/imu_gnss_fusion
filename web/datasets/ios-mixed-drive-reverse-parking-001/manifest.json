@@ -1,9 +1,9 @@
 {
-  "created_utc": "2026-05-20T17:30:11Z",
+  "created_utc": "2026-05-23T11:00:03Z",
   "dataset_id": "ios-mixed-drive-reverse-parking-001",
   "files": {
     "gnss": {
-      "bytes": 217214,
+      "bytes": 200827,
       "columns": [
         "t_s",
         "lat_deg",
@@ -26,7 +26,7 @@
       "media_type": "text/csv",
       "path": "gnss.csv.gz",
       "rows": 2586,
-      "sha256": "69dca57216fc4f353ef4cda76710dd398dba07f514fd6acaa9c7de8429261f17"
+      "sha256": "7188c006748a6eb25ff386d4ba88ddffeef2bfa8531f77e978b09e8806ec9e11"
     },
     "imu": {
       "bytes": 15605107,

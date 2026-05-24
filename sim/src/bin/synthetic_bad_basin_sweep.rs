@@ -20,7 +20,7 @@ use sim::visualizer::pipeline::generic::reference_mount_rpy_to_q_bv;
 const DIAG_GPS_VEL: usize = 1;
 const DIAG_BODY_VEL_Y: usize = 4;
 const DIAG_BODY_VEL_Z: usize = 5;
-const DIAG_TYPES: usize = 11;
+const DIAG_TYPES: usize = sensor_fusion::ekf::UPDATE_DIAG_TYPES;
 const RAD_TO_DEG: f64 = 180.0 / std::f64::consts::PI;
 const RADPS_TO_DPS: f64 = 180.0 / std::f64::consts::PI;
 

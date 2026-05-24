@@ -311,7 +311,7 @@ impl Plugin for TrackOverlay<'_> {
                     projection,
                     tr,
                     &self.cursor_samples,
-                    &color_scale,
+                    color_scale,
                     point_stride,
                     min_step_sq,
                 )
@@ -393,7 +393,6 @@ impl Plugin for TrackOverlay<'_> {
                 color_series,
                 mouse_pos,
                 point_stride,
-                &visuals,
             );
         }
 
@@ -701,8 +700,8 @@ fn draw_map_color_hover_tooltip(
     color_series: &MapColorSeries,
     mouse_pos: egui::Pos2,
     point_stride: usize,
-    visuals: &egui::Visuals,
 ) {
+    let visuals = ui.visuals().clone();
     let Some((pos, t_s)) =
         nearest_colorized_map_sample(projection, cursor_samples, mouse_pos, point_stride)
     else {
@@ -716,7 +715,7 @@ fn draw_map_color_hover_tooltip(
     painter.circle_stroke(
         pos,
         4.0,
-        egui::Stroke::new(1.2, marker_outline_color(visuals)),
+        egui::Stroke::new(1.2, marker_outline_color(&visuals)),
     );
     draw_map_color_window_markers(
         painter,
@@ -725,10 +724,10 @@ fn draw_map_color_hover_tooltip(
         t_s,
         10.0,
         color,
-        visuals,
+        &visuals,
     );
     let bg_min = pos + egui::vec2(10.0, -42.0);
-    show_map_color_tooltip(ui, bg_min, color_series, t_s, value, color, visuals);
+    show_map_color_tooltip(ui, bg_min, color_series, t_s, value, color, &visuals);
 }
 
 fn map_event_hover_plot_visible(

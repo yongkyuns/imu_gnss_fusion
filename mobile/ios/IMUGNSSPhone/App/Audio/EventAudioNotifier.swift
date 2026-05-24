@@ -4,28 +4,43 @@ import Foundation
 final class EventAudioNotifier: NSObject, @unchecked Sendable {
     private let synthesizer = AVSpeechSynthesizer()
     private var activePlayers: [AVAudioPlayer] = []
-    private var lastPlayedTSecByKind: [MotionEvent.Kind: Double] = [:]
+    private var lastPlayedDateByKind: [MotionEvent.Kind: Date] = [:]
+    private var lastSettings: EventAudioSettings?
     private let minimumIntervalSec = 2.0
 
     override init() {
         super.init()
         synthesizer.usesApplicationAudioSession = true
         synthesizer.delegate = self
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAudioSessionInterruption(_:)),
+            name: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance()
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 
     @MainActor
     func notify(_ event: MotionEvent, settings: EventAudioSettings) {
         guard settings.mode != .off else { return }
         guard EventAudioPolicy.shouldPlayAudio(for: event.kind) else { return }
-        if let lastTSec = lastPlayedTSecByKind[event.kind],
-           event.tSec - lastTSec < minimumIntervalSec {
+        if EventAudioPolicy.shouldThrottleAlert(
+            previousTimestamp: lastPlayedDateByKind[event.kind],
+            nextTimestamp: event.timestamp,
+            minimumIntervalSec: minimumIntervalSec
+        ) {
             return
         }
-        lastPlayedTSecByKind[event.kind] = event.tSec
+        lastPlayedDateByKind[event.kind] = event.timestamp
 
+        lastSettings = settings
         configureAudioSession(settings: settings)
 
-        if settings.mode.playsChime {
+        if EventAudioPolicy.shouldPlayChime(for: settings.mode) {
             playChime(for: event.kind)
         }
         if settings.mode.speaks {
@@ -35,7 +50,7 @@ final class EventAudioNotifier: NSObject, @unchecked Sendable {
 
     func reset() {
         DispatchQueue.main.async { [weak self] in
-            self?.lastPlayedTSecByKind.removeAll()
+            self?.lastPlayedDateByKind.removeAll()
             self?.synthesizer.stopSpeaking(at: .immediate)
             self?.activePlayers.forEach { $0.stop() }
             self?.activePlayers.removeAll()
@@ -45,12 +60,13 @@ final class EventAudioNotifier: NSObject, @unchecked Sendable {
     @MainActor
     private func configureAudioSession(settings: EventAudioSettings) {
         let session = AVAudioSession.sharedInstance()
+        let configuration = EventAudioPolicy.audioSessionConfiguration(for: settings)
         do {
-            if settings.playDrivingAlertsInSilentMode {
-                try session.setCategory(.playback, mode: .spokenAudio, options: [.mixWithOthers])
-            } else {
-                try session.setCategory(.ambient, mode: .default, options: [.mixWithOthers])
-            }
+            try session.setCategory(
+                configuration.category,
+                mode: configuration.mode,
+                options: configuration.options
+            )
             try session.setActive(true)
         } catch {
             #if DEBUG
@@ -77,9 +93,12 @@ final class EventAudioNotifier: NSObject, @unchecked Sendable {
 
     @MainActor
     private func speak(_ text: String) {
+        if synthesizer.isSpeaking {
+            synthesizer.stopSpeaking(at: .immediate)
+        }
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
-        utterance.rate = AVSpeechUtteranceDefaultSpeechRate * 0.92
+        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
         utterance.volume = 1.0
         utterance.preUtteranceDelay = 0.05
         utterance.postUtteranceDelay = 0.05
@@ -89,6 +108,19 @@ final class EventAudioNotifier: NSObject, @unchecked Sendable {
     @MainActor
     private func pruneInactivePlayers() {
         activePlayers.removeAll { !$0.isPlaying }
+    }
+
+    @objc
+    private func handleAudioSessionInterruption(_ notification: Notification) {
+        guard let rawType = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: rawType),
+              type == .ended else {
+            return
+        }
+        Task { @MainActor [weak self] in
+            guard let self, let lastSettings else { return }
+            self.configureAudioSession(settings: lastSettings)
+        }
     }
 }
 
@@ -104,6 +136,45 @@ extension EventAudioNotifier: AVAudioPlayerDelegate {
 extension EventAudioNotifier: AVSpeechSynthesizerDelegate {}
 
 enum EventAudioPolicy {
+    static func shouldThrottleAlert(
+        previousTimestamp: Date?,
+        nextTimestamp: Date,
+        minimumIntervalSec: TimeInterval
+    ) -> Bool {
+        guard let previousTimestamp else { return false }
+        return nextTimestamp.timeIntervalSince(previousTimestamp) < minimumIntervalSec
+    }
+
+    static func shouldDeliverAlert(isForeground: Bool, settings: EventAudioSettings) -> Bool {
+        settings.mode != .off && (isForeground || settings.playDrivingAlertsInSilentMode)
+    }
+
+    static func audioSessionConfiguration(for settings: EventAudioSettings) -> EventAudioSessionConfiguration {
+        if settings.playDrivingAlertsInSilentMode {
+            return EventAudioSessionConfiguration(
+                category: .playback,
+                mode: .spokenAudio,
+                options: [.mixWithOthers, .duckOthers, .interruptSpokenAudioAndMixWithOthers]
+            )
+        }
+        return EventAudioSessionConfiguration(
+            category: .ambient,
+            mode: .default,
+            options: [.mixWithOthers, .duckOthers]
+        )
+    }
+
+    static func shouldPlayChime(for mode: EventAudibleAlertMode) -> Bool {
+        switch mode {
+        case .off:
+            return false
+        case .chime, .chimeAndVoice:
+            return true
+        case .voice:
+            return true
+        }
+    }
+
     static func shouldPlayAudio(for kind: MotionEvent.Kind) -> Bool {
         switch kind {
         case .reverse, .harshAcceleration, .harshBraking, .harshCornering, .speedBump, .downhill, .uphill:

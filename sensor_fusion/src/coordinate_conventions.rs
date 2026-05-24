@@ -12,7 +12,7 @@ fn gnss_sample(t_s: f32) -> GnssSample {
         lat_deg: 42.0,
         lon_deg: -71.0,
         height_m: 12.0,
-        vel_ned_mps: [5.0, 0.0, 0.0],
+        vel_ned_mps: [6.0, 0.0, 0.0],
         pos_std_m: [1.0, 1.0, 1.5],
         vel_std_mps: [0.2, 0.2, 0.2],
         heading_rad: Some(0.0),
@@ -50,8 +50,12 @@ fn public_manual_mount_q_bv_maps_vehicle_vectors_to_body_vectors() {
     let q_bv = euler_to_quat_f32(0.0, 0.0, core::f32::consts::FRAC_PI_2);
     let mut ekf_system = SensorFusion::with_mount(q_bv);
 
-    assert_eq!(ekf_system.mount_q_bv(), Some(q_bv));
-    assert_eq!(ekf_system.ekf_mount_q_bv(), Some(q_bv));
+    assert_quat_close(ekf_system.mount_q_bv().unwrap(), q_bv, "public mount_q_bv");
+    assert_quat_close(
+        ekf_system.ekf_mount_q_bv().unwrap(),
+        q_bv,
+        "public ekf_mount_q_bv",
+    );
     assert_vec_close(
         mat_vec3_f32(
             quat_to_dcm_f32(ekf_system.mount_q_bv().unwrap()),
@@ -62,7 +66,7 @@ fn public_manual_mount_q_bv_maps_vehicle_vectors_to_body_vectors() {
     );
 
     let update = ekf_system.process_gnss(gnss_sample(1.0));
-    assert_eq!(update.mount_q_bv, Some(q_bv));
+    assert_quat_close(update.mount_q_bv.unwrap(), q_bv, "update q_bv");
     let ekf = ekf_system.ekf().unwrap();
     assert_quat_close(
         [

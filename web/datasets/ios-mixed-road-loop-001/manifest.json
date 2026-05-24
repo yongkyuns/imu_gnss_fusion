@@ -1,9 +1,9 @@
 {
-  "created_utc": "2026-05-21T03:19:26Z",
+  "created_utc": "2026-05-23T11:00:23Z",
   "dataset_id": "ios-mixed-road-loop-001",
   "files": {
     "gnss": {
-      "bytes": 159521,
+      "bytes": 147213,
       "columns": [
         "t_s",
         "lat_deg",
@@ -26,7 +26,7 @@
       "media_type": "text/csv",
       "path": "gnss.csv.gz",
       "rows": 1679,
-      "sha256": "eb771f0570ce5c8dbfe09c4fe96eb0b03817aed38e9bdc49d000f962a908baf3"
+      "sha256": "55145e6bef0a5942dc3aa9a34b8e1a9567ca5978f78a138ffdf23b83b530ccca"
     },
     "imu": {
       "bytes": 10355010,

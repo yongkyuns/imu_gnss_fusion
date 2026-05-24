@@ -936,8 +936,8 @@
         {
           "path": "gnss.csv.gz",
           "url": "../../web/datasets/ios-mixed-drive-reverse-parking-001/gnss.csv.gz",
-          "sha256": "69dca57216fc4f353ef4cda76710dd398dba07f514fd6acaa9c7de8429261f17",
-          "bytes": 217214
+          "sha256": "7188c006748a6eb25ff386d4ba88ddffeef2bfa8531f77e978b09e8806ec9e11",
+          "bytes": 200827
         }
       ],
       "smoke": {
@@ -1017,8 +1017,8 @@
         {
           "path": "gnss.csv.gz",
           "url": "../../web/datasets/ios-mixed-road-drive-001/gnss.csv.gz",
-          "sha256": "d042b5e38271519c5b6c75030ef0afec118a4be3273a9870faf3aa60ed8161f4",
-          "bytes": 65960
+          "sha256": "4d0ae8b11927f6b83ba24155ffadfc4b7750e9d9f0a619c7529819186b7f4c2f",
+          "bytes": 60842
         }
       ],
       "smoke": {
@@ -1044,8 +1044,8 @@
         {
           "path": "gnss.csv.gz",
           "url": "../../web/datasets/ios-mixed-road-drive-002/gnss.csv.gz",
-          "sha256": "a2798de49a77f0e44643d48f58ecbd9db5a2792b002286204d4aecb513adc0ad",
-          "bytes": 82467
+          "sha256": "6af8ae915690278bc4fe123ce3be3f89447da86331410bcff2f2c0061b1b3601",
+          "bytes": 76107
         }
       ],
       "smoke": {
@@ -1071,8 +1071,8 @@
         {
           "path": "gnss.csv.gz",
           "url": "../../web/datasets/ios-mixed-road-loop-001/gnss.csv.gz",
-          "sha256": "eb771f0570ce5c8dbfe09c4fe96eb0b03817aed38e9bdc49d000f962a908baf3",
-          "bytes": 159521
+          "sha256": "55145e6bef0a5942dc3aa9a34b8e1a9567ca5978f78a138ffdf23b83b530ccca",
+          "bytes": 147213
         }
       ],
       "smoke": {
@@ -1098,8 +1098,8 @@
         {
           "path": "gnss.csv.gz",
           "url": "../../web/datasets/ios-evening-mixed-road-drive-001/gnss.csv.gz",
-          "sha256": "d849e8b43c4c4f585acb11f5915acb6a6d50b86e1c105b4e5e3b770b49be8581",
-          "bytes": 65143
+          "sha256": "c993190083e5266f8f6a4393d83e9b664f047bad9ed31ba20f4b69c5f13bbad1",
+          "bytes": 60299
         }
       ],
       "smoke": {
@@ -1125,8 +1125,8 @@
         {
           "path": "gnss.csv.gz",
           "url": "../../web/datasets/ios-evening-mixed-road-drive-002/gnss.csv.gz",
-          "sha256": "3e025ff30c9f2f0a2e77f557c69458acf6193e0a57a87303224815ef527d1635",
-          "bytes": 52001
+          "sha256": "a6ef11ca25ea283850591ed440296184d4f8e1ff9420a00649623f84990a8332",
+          "bytes": 47936
         }
       ],
       "smoke": {
@@ -1152,8 +1152,8 @@
         {
           "path": "gnss.csv.gz",
           "url": "../../web/datasets/ios-drive-20260521-121635/gnss.csv.gz",
-          "sha256": "f599162486c4a71b23f0f89a8a6f8dadb0d7558e5300aec3d11da69967570d7b",
-          "bytes": 174745
+          "sha256": "7375fadb48ee5a35fc7e1a98ddc1dd14f33b0c09b0ed9d835a5a7f676591fcdd",
+          "bytes": 160698
         }
       ],
       "smoke": {
@@ -1179,8 +1179,8 @@
         {
           "path": "gnss.csv.gz",
           "url": "../../web/datasets/ios-drive-20260521-130835/gnss.csv.gz",
-          "sha256": "92d34a2eca58d07910813245c59c6fded4e1da57cf4355eb07f3a80be110f953",
-          "bytes": 24342
+          "sha256": "507911bc57576722959a28cd85d7b99e107a504ce6ea6393b8d0a8c1ee20896f",
+          "bytes": 22424
         }
       ],
       "smoke": {
@@ -1206,8 +1206,8 @@
         {
           "path": "gnss.csv.gz",
           "url": "../../web/datasets/ios-drive-20260521-131420/gnss.csv.gz",
-          "sha256": "5b3c98ebd7b69375f9abf6d81808454870a0a092e5611ca198ca0627b976aa17",
-          "bytes": 92575
+          "sha256": "29a0600fede3f24dcbf827a82181ec9a1ab727854c5734e270e337be4da0088c",
+          "bytes": 86312
         }
       ],
       "smoke": {
@@ -1233,8 +1233,8 @@
         {
           "path": "gnss.csv.gz",
           "url": "../../web/datasets/ios-drive-20260521-164415/gnss.csv.gz",
-          "sha256": "047f7795880e483e1b3614f96daf3408301e2d50f0bf2ff2d5038075bacc6d88",
-          "bytes": 51274
+          "sha256": "568a95e36788f8465b472b64887b802003e0079294630ceff88e3b478d519929",
+          "bytes": 47591
         }
       ],
       "smoke": {
@@ -1260,8 +1260,8 @@
         {
           "path": "gnss.csv.gz",
           "url": "../../web/datasets/ios-drive-20260521-180601/gnss.csv.gz",
-          "sha256": "83121bc544f0ecd975a1feb324766cca3f55e3a20e092651fd7686f05e9dd176",
-          "bytes": 87817
+          "sha256": "af3644755ffa59d117f50139c2761fa4dc857acdf378f90b1aa09717cf3f4f34",
+          "bytes": 81591
         }
       ],
       "smoke": {

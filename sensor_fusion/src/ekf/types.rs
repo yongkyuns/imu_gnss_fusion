@@ -3,7 +3,7 @@
 use super::generated::ERROR_STATES;
 use crate::ProcessNoise;
 
-pub const UPDATE_DIAG_TYPES: usize = 11;
+pub const UPDATE_DIAG_TYPES: usize = 12;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]

@@ -12,10 +12,10 @@
 //! NED/navigation-frame attitude with respect to the vehicle frame, with
 //! `R(q_nv) = C_nv` and `x_n = C_nv x_v`.
 
-use libm::{fabsf, sqrtf};
+use libm::{atan2f, fabsf, sqrtf};
 
 use crate::covariance::{self, SparseCovariancePolicy};
-use crate::math::{normalize_quat_f32, quat_multiply_f32};
+use crate::math::{normalize_quat_f32, quat_multiply_f32, quat_to_dcm_f32};
 #[doc(hidden)]
 pub mod generated;
 pub mod state_ops;
@@ -40,6 +40,7 @@ const DIAG_STATIONARY_Y: usize = 7;
 const DIAG_GPS_POS_D: usize = 8;
 const DIAG_GPS_VEL_D: usize = 9;
 const DIAG_ZERO_VEL_D: usize = 10;
+const DIAG_VEHICLE_ROLL_PRIOR: usize = 11;
 const BODY_VEL_Y_SUPPORT: [usize; 8] = [0, 1, 2, 3, 4, 5, 15, 17];
 const BODY_VEL_Z_SUPPORT: [usize; 8] = [0, 1, 2, 3, 4, 5, 15, 16];
 const MAX_BATCH_OBS: usize = 8;
@@ -436,6 +437,61 @@ impl Filter {
     /// separate measurement variances for the vehicle Y and Z axes.
     pub fn fuse_body_vel_yz(&mut self, r_body_vel_y: f32, r_body_vel_z: f32) {
         self.fuse_body_vel_yz_batch(r_body_vel_y, r_body_vel_z);
+    }
+
+    /// Fuses a Chapter-6-style soft prior that vehicle roll is near zero.
+    ///
+    /// This is not a mount-roll measurement. It anchors the vehicle-roll side
+    /// of the vehicle/mount roll split and can therefore push the EKF to
+    /// explain persistent body roll as mount roll. It is useful as an explicit
+    /// flat-road prior, but it is not bank-safe and is disabled by default at
+    /// the [`crate::SensorFusion`] layer.
+    pub fn fuse_vehicle_roll_prior(&mut self, r_vehicle_roll: f32) {
+        if r_vehicle_roll <= 0.0 || !r_vehicle_roll.is_finite() {
+            return;
+        }
+        let h0 = vehicle_roll_rad(&self.raw.nominal);
+        if !h0.is_finite() {
+            return;
+        }
+        let mut h = [0.0; ERROR_STATES];
+        const EPS: f32 = 1.0e-4;
+        for state in 0..=2 {
+            let mut perturbed = self.raw.nominal;
+            let mut dx = [0.0; ERROR_STATES];
+            dx[state] = EPS;
+            inject_error_state(&mut perturbed, &dx);
+            let hi = vehicle_roll_rad(&perturbed);
+            if !hi.is_finite() {
+                return;
+            }
+            h[state] = (hi - h0) / EPS;
+        }
+
+        let mut ph = [0.0; ERROR_STATES];
+        let mut s = r_vehicle_roll;
+        for i in 0..ERROR_STATES {
+            for state in 0..=2 {
+                ph[i] += self.raw.p[i][state] * h[state];
+            }
+        }
+        for state in 0..=2 {
+            s += h[state] * ph[state];
+        }
+        if s <= 0.0 || !s.is_finite() {
+            return;
+        }
+
+        let innovation = -h0;
+        let mut k = [0.0; ERROR_STATES];
+        let mut dx = [0.0; ERROR_STATES];
+        for i in 0..ERROR_STATES {
+            k[i] = ph[i] / s;
+            dx[i] = k[i] * innovation;
+        }
+        self.freeze_mount_update_if_needed(&mut k, &mut dx);
+        self.record_update_diag(DIAG_VEHICLE_ROLL_PRIOR, innovation, s, &h, &k, &dx);
+        self.fuse_measurement(s, &h, &k, &dx);
     }
 
     fn fuse_gps_pos_n(&mut self, pos_n: f32, r_pos_n: f32) {
@@ -965,6 +1021,12 @@ fn corr_from_cov(p: &[[f32; ERROR_STATES]; ERROR_STATES], a: usize, b: usize) ->
     }
 }
 
+fn vehicle_roll_rad(nominal: &NominalState) -> f32 {
+    let q = [nominal.q0, nominal.q1, nominal.q2, nominal.q3];
+    let c_nv = quat_to_dcm_f32(q);
+    atan2f(c_nv[2][1], c_nv[2][2])
+}
+
 #[allow(clippy::needless_range_loop)]
 fn update_covariance_joseph_scalar(
     p: &mut [[f32; ERROR_STATES]; ERROR_STATES],
@@ -1142,4 +1204,38 @@ fn nominal_vehicle_velocity(nominal: &NominalState) -> [f32; 3] {
             + 2.0 * (q2 * q3 - q0 * q1) * ve
             + (1.0 - 2.0 * q1 * q1 - 2.0 * q2 * q2) * vd,
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vehicle_roll_prior_reduces_vehicle_roll_without_direct_mount_jacobian() {
+        let mut filter = Filter::new(ProcessNoise::default());
+        let roll = 5.0_f32.to_radians();
+        filter.raw.nominal.q0 = (0.5 * roll).cos();
+        filter.raw.nominal.q1 = (0.5 * roll).sin();
+        filter.raw.nominal.q2 = 0.0;
+        filter.raw.nominal.q3 = 0.0;
+        filter.raw.nominal.q_bv0 = 1.0;
+        filter.raw.nominal.q_bv1 = 0.0;
+        filter.raw.nominal.q_bv2 = 0.0;
+        filter.raw.nominal.q_bv3 = 0.0;
+        for i in 0..ERROR_STATES {
+            filter.raw.p[i][i] = 0.1;
+        }
+
+        filter.fuse_vehicle_roll_prior(0.01);
+
+        assert!(vehicle_roll_rad(&filter.raw.nominal).abs() < roll.abs());
+        assert_eq!(
+            filter.raw.update_diag.type_counts[DIAG_VEHICLE_ROLL_PRIOR],
+            1
+        );
+        assert_eq!(
+            filter.raw.update_diag.last_h_mount_norm_by_type[DIAG_VEHICLE_ROLL_PRIOR],
+            0.0
+        );
+    }
 }

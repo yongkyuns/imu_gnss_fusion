@@ -302,16 +302,7 @@ def parse_gnss_row(t_s: float, payload: dict[str, Any], label: str) -> GnssRow |
     derived_velocity = False
     if explicit_velocity is not None:
         velocity = explicit_velocity
-        speed_for_std = (
-            speed_mps
-            if speed_mps is not None and speed_mps >= 0.0
-            else math.hypot(explicit_velocity[0], explicit_velocity[1])
-        )
-        horizontal_vel_std = horizontal_velocity_std_mps(
-            speed_for_std,
-            speed_accuracy,
-            course_accuracy,
-        )
+        horizontal_vel_std = horizontal_velocity_std_mps(speed_accuracy)
         vel_std = (
             horizontal_vel_std,
             horizontal_vel_std,
@@ -320,11 +311,7 @@ def parse_gnss_row(t_s: float, payload: dict[str, Any], label: str) -> GnssRow |
     else:
         if speed_mps is not None and 0.0 <= speed_mps <= STATIONARY_SPEED_THRESHOLD_MPS:
             velocity = (0.0, 0.0, 0.0)
-            horizontal_vel_std = horizontal_velocity_std_mps(
-                speed_mps,
-                speed_accuracy,
-                course_accuracy,
-            )
+            horizontal_vel_std = horizontal_velocity_std_mps(speed_accuracy)
             vel_std = (
                 horizontal_vel_std,
                 horizontal_vel_std,
@@ -338,11 +325,7 @@ def parse_gnss_row(t_s: float, payload: dict[str, Any], label: str) -> GnssRow |
                 speed_mps * math.sin(heading_rad),
                 0.0,
             )
-            horizontal_vel_std = horizontal_velocity_std_mps(
-                speed_mps,
-                speed_accuracy,
-                course_accuracy,
-            )
+            horizontal_vel_std = horizontal_velocity_std_mps(speed_accuracy)
             vel_std = (
                 horizontal_vel_std,
                 horizontal_vel_std,
@@ -370,16 +353,8 @@ def parse_gnss_row(t_s: float, payload: dict[str, Any], label: str) -> GnssRow |
     )
 
 
-def horizontal_velocity_std_mps(
-    speed_mps: float,
-    speed_accuracy_mps: float | None,
-    course_accuracy_deg: float | None,
-) -> float:
-    speed_std = speed_accuracy_mps or DEFAULT_SPEED_ACCURACY_MPS
-    if course_accuracy_deg is None:
-        return speed_std
-    direction_std = max(0.0, speed_mps) * math.radians(course_accuracy_deg)
-    return math.hypot(speed_std, direction_std)
+def horizontal_velocity_std_mps(speed_accuracy_mps: float | None) -> float:
+    return speed_accuracy_mps or DEFAULT_SPEED_ACCURACY_MPS
 
 
 def heading_course_accuracy_is_usable(course_accuracy_deg: float | None) -> bool:

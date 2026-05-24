@@ -4,7 +4,8 @@ use crate::visualizer::pipeline::FusionTuningConfig;
 pub struct FusionTuningConfigSnapshot {
     pub r_body_vel: f32,
     pub r_body_vel_z: f32,
-    pub attitude_roll_pitch_init_sigma_deg: f32,
+    pub attitude_roll_init_sigma_deg: f32,
+    pub attitude_pitch_init_sigma_deg: f32,
     pub yaw_init_sigma_deg: f32,
     pub gyro_bias_init_sigma_dps: f32,
     pub accel_bias_init_sigma_mps2: f32,
@@ -28,7 +29,8 @@ pub struct FusionTuningConfigSnapshot {
 pub const FUSION_TUNING_DEFAULTS: FusionTuningConfigSnapshot = FusionTuningConfigSnapshot {
     r_body_vel: 0.5,
     r_body_vel_z: 0.5,
-    attitude_roll_pitch_init_sigma_deg: 2.0,
+    attitude_roll_init_sigma_deg: 2.0,
+    attitude_pitch_init_sigma_deg: 2.0,
     yaw_init_sigma_deg: 6.0,
     gyro_bias_init_sigma_dps: 0.125,
     accel_bias_init_sigma_mps2: 0.15,
@@ -53,7 +55,8 @@ pub fn snapshot_fusion_tuning_config(cfg: &FusionTuningConfig) -> FusionTuningCo
     FusionTuningConfigSnapshot {
         r_body_vel: cfg.r_body_vel,
         r_body_vel_z: cfg.r_body_vel_z,
-        attitude_roll_pitch_init_sigma_deg: cfg.attitude_roll_pitch_init_sigma_deg,
+        attitude_roll_init_sigma_deg: cfg.attitude_roll_init_sigma_deg,
+        attitude_pitch_init_sigma_deg: cfg.attitude_pitch_init_sigma_deg,
         yaw_init_sigma_deg: cfg.yaw_init_sigma_deg,
         gyro_bias_init_sigma_dps: cfg.gyro_bias_init_sigma_dps,
         accel_bias_init_sigma_mps2: cfg.accel_bias_init_sigma_mps2,

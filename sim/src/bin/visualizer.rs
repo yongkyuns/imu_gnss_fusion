@@ -111,7 +111,11 @@ struct Args {
     #[arg(long)]
     r_body_vel_z: Option<f32>,
     #[arg(long)]
-    attitude_roll_pitch_init_sigma_deg: Option<f32>,
+    r_vehicle_roll_prior: Option<f32>,
+    #[arg(long)]
+    attitude_roll_init_sigma_deg: Option<f32>,
+    #[arg(long)]
+    attitude_pitch_init_sigma_deg: Option<f32>,
     #[arg(long)]
     yaw_init_sigma_deg: Option<f32>,
     #[arg(long)]
@@ -168,9 +172,15 @@ fn main() -> Result<()> {
         r_body_vel_z: args
             .r_body_vel_z
             .unwrap_or(FusionTuningConfig::default().r_body_vel_z),
-        attitude_roll_pitch_init_sigma_deg: args
-            .attitude_roll_pitch_init_sigma_deg
-            .unwrap_or(FusionTuningConfig::default().attitude_roll_pitch_init_sigma_deg),
+        r_vehicle_roll_prior: args
+            .r_vehicle_roll_prior
+            .unwrap_or(FusionTuningConfig::default().r_vehicle_roll_prior),
+        attitude_roll_init_sigma_deg: args
+            .attitude_roll_init_sigma_deg
+            .unwrap_or(FusionTuningConfig::default().attitude_roll_init_sigma_deg),
+        attitude_pitch_init_sigma_deg: args
+            .attitude_pitch_init_sigma_deg
+            .unwrap_or(FusionTuningConfig::default().attitude_pitch_init_sigma_deg),
         yaw_init_sigma_deg: args
             .yaw_init_sigma_deg
             .unwrap_or(FusionTuningConfig::default().yaw_init_sigma_deg),
@@ -325,7 +335,7 @@ fn main() -> Result<()> {
         tmax
     );
     eprintln!(
-        "[profile] ekf-only misalignment={:?} predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} r_body_vel_y={:.3} r_body_vel_z={:.3} attitude_roll_pitch_init_sigma_deg={:.3} yaw_init_sigma_deg={:.3} gyro_bias_init_sigma_dps={:.3} mount_roll_pitch_init_sigma_deg={:.3} mount_yaw_init_sigma_deg={:.3} use_align_mount_covariance_on_seed={} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} align_handoff_delay_s={:.3}",
+        "[profile] ekf-only misalignment={:?} predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} r_body_vel_y={:.3} r_body_vel_z={:.3} r_vehicle_roll_prior={:.6} attitude_roll_init_sigma_deg={:.3} attitude_pitch_init_sigma_deg={:.3} yaw_init_sigma_deg={:.3} gyro_bias_init_sigma_dps={:.3} mount_roll_pitch_init_sigma_deg={:.3} mount_yaw_init_sigma_deg={:.3} use_align_mount_covariance_on_seed={} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} align_handoff_delay_s={:.3}",
         args.misalignment,
         filter_cfg.predict_imu_decimation,
         filter_cfg
@@ -334,7 +344,9 @@ fn main() -> Result<()> {
             .unwrap_or_else(|| "off".to_string()),
         filter_cfg.r_body_vel,
         filter_cfg.r_body_vel_z,
-        filter_cfg.attitude_roll_pitch_init_sigma_deg,
+        filter_cfg.r_vehicle_roll_prior,
+        filter_cfg.attitude_roll_init_sigma_deg,
+        filter_cfg.attitude_pitch_init_sigma_deg,
         filter_cfg.yaw_init_sigma_deg,
         filter_cfg.gyro_bias_init_sigma_dps,
         filter_cfg.mount_roll_pitch_init_sigma_deg,

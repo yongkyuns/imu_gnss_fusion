@@ -1,3 +1,4 @@
+@preconcurrency import AVFoundation
 import Foundation
 
 enum EventAudibleAlertMode: String, CaseIterable, Identifiable, Sendable {
@@ -29,6 +30,12 @@ enum EventAudibleAlertMode: String, CaseIterable, Identifiable, Sendable {
 struct EventAudioSettings: Equatable, Sendable {
     var mode: EventAudibleAlertMode = .voice
     var playDrivingAlertsInSilentMode: Bool = true
+}
+
+struct EventAudioSessionConfiguration: Equatable {
+    let category: AVAudioSession.Category
+    let mode: AVAudioSession.Mode
+    let options: AVAudioSession.CategoryOptions
 }
 
 enum EventAudioSettingsDefaults {

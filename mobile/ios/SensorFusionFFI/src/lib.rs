@@ -855,7 +855,7 @@ mod tests {
 
         let update = unsafe {
             sensor_fusion_process_gnss(
-                handle, 1.0, 37.3318, -122.0312, 15.0, 5.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.2, 0.2, 0.2,
+                handle, 1.0, 37.3318, -122.0312, 15.0, 6.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.2, 0.2, 0.2,
                 0.0, true,
             )
         };
@@ -907,7 +907,7 @@ mod tests {
 
         let update = unsafe {
             sensor_fusion_process_gnss(
-                handle, 1.0, 37.3318, -122.0312, 15.0, 5.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.2, 0.2, 0.2,
+                handle, 1.0, 37.3318, -122.0312, 15.0, 6.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.2, 0.2, 0.2,
                 0.0, true,
             )
         };
@@ -928,12 +928,95 @@ mod tests {
             ],
             [1.0, 0.0, 0.0, 0.0]
         );
-        assert!((snapshot.vel_n_mps - 5.0).abs() < 1.0e-6);
+        assert!((snapshot.vel_n_mps - 6.0).abs() < 1.0e-6);
         assert!(snapshot.vel_e_mps.abs() < 1.0e-6);
         assert!(snapshot.vel_d_mps.abs() < 1.0e-6);
         assert!(snapshot.position_lla_valid);
         assert!((snapshot.lat_deg - 37.3318).abs() < 1.0e-6);
         assert!((snapshot.lon_deg + 122.0312).abs() < 1.0e-6);
+
+        unsafe {
+            sensor_fusion_destroy(handle);
+        }
+    }
+
+    #[test]
+    fn manual_mount_ffi_waits_for_yaw_seed_before_snapshot_initializes() {
+        let handle = sensor_fusion_create_ekf_manual(1.0, 0.0, 0.0, 0.0);
+        assert!(!handle.is_null());
+
+        let stationary = unsafe {
+            sensor_fusion_process_gnss(
+                handle, 1.0, 37.3318, -122.0312, 15.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.2, 0.2, 0.2,
+                0.0, false,
+            )
+        };
+        assert!(stationary.mount_ready);
+        assert!(!stationary.ekf_initialized);
+        assert!(!stationary.ekf_initialized_now);
+
+        let mut snapshot = SensorFusionFfiEkfSnapshot::default();
+        assert!(!unsafe { sensor_fusion_snapshot_ekf(handle, &mut snapshot) });
+        assert!(snapshot.mount_ready);
+        assert!(!snapshot.initialized);
+
+        let moving = unsafe {
+            sensor_fusion_process_gnss(
+                handle, 2.0, 37.3318, -122.0312, 15.0, -6.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.2, 0.2,
+                0.2, 0.0, false,
+            )
+        };
+        assert!(!moving.ekf_initialized);
+        assert!(!moving.ekf_initialized_now);
+
+        let below_speed = unsafe {
+            sensor_fusion_process_gnss(
+                handle,
+                3.0,
+                37.3318,
+                -122.0312,
+                15.0,
+                -5.5,
+                0.0,
+                0.0,
+                1.0,
+                1.0,
+                1.5,
+                0.2,
+                0.2,
+                0.2,
+                core::f32::consts::PI,
+                true,
+            )
+        };
+        assert!(!below_speed.ekf_initialized);
+        assert!(!below_speed.ekf_initialized_now);
+
+        let moving = unsafe {
+            sensor_fusion_process_gnss(
+                handle,
+                4.0,
+                37.3318,
+                -122.0312,
+                15.0,
+                -6.0,
+                0.0,
+                0.0,
+                1.0,
+                1.0,
+                1.5,
+                0.2,
+                0.2,
+                0.2,
+                core::f32::consts::PI,
+                true,
+            )
+        };
+        assert!(moving.ekf_initialized);
+        assert!(moving.ekf_initialized_now);
+
+        assert!(unsafe { sensor_fusion_snapshot_ekf(handle, &mut snapshot) });
+        assert!(snapshot.q3.abs() > 0.99);
 
         unsafe {
             sensor_fusion_destroy(handle);
