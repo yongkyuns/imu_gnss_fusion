@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="logo.png" alt="IMU/GNSS Fusion logo" width="160">
+</p>
+
 # IMU/GNSS Fusion
 
 [![CI](https://github.com/yongkyuns/imu_gnss_fusion/actions/workflows/ci.yml/badge.svg)](https://github.com/yongkyuns/imu_gnss_fusion/actions/workflows/ci.yml)
