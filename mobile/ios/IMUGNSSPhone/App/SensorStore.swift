@@ -85,6 +85,7 @@ final class SensorStore: NSObject, ObservableObject {
     @Published var activeSessionID: UUID?
     @Published var replayProgress: Double = 0.0
     @Published var playbackSpeedMultiplier: Double = PlaybackSpeedPolicy.defaultMultiplier
+    @Published var harshBehaviorPreset: HarshBehaviorPreset = HarshBehaviorPresetDefaults.load()
     @Published var eventAudioSettings: EventAudioSettings = EventAudioSettingsDefaults.load()
     @Published var mountMemorySettings: MountMemorySettings = MountMemoryDefaults.load()
     @Published var streamHealth: StreamHealth = .starting
@@ -194,6 +195,7 @@ final class SensorStore: NSObject, ObservableObject {
         recordingQueue.qualityOfService = .utility
         recordingQueue.maxConcurrentOperationCount = 1
 
+        fusionEngine.setHarshBehaviorPreset(harshBehaviorPreset)
         settingsControls.bind(sensorStore: self)
         publishSettingsState()
         loadRecordedSessions()
@@ -227,12 +229,6 @@ final class SensorStore: NSObject, ObservableObject {
         lastFusionProfilingPublishTS = nil
         lastStreamHealthPublishTS = nil
         lastTripStatsPublishTS = nil
-        lastImuUiSampleDate = nil
-        lastMotionErrorMessage = nil
-        lastLocationErrorMessage = nil
-        lastRecordingErrorMessage = nil
-        streamHealth = .starting
-        lastStreamHealthPublishTS = nil
         lastImuUiSampleDate = nil
         lastMotionErrorMessage = nil
         lastLocationErrorMessage = nil
@@ -282,6 +278,12 @@ final class SensorStore: NSObject, ObservableObject {
         fusionQueue.addOperation { [weak self] in
             guard let self, self.isCurrentGeneration(generation) else { return }
             self.resetFusionEngineState(using: mountSettings)
+        }
+
+        if AppLaunchConfiguration.suppressesSensorHardware {
+            publishSettingsState()
+            updateStreamHealth(now: Date(), force: true)
+            return
         }
 
         if authorization == .notDetermined {
@@ -456,6 +458,7 @@ final class SensorStore: NSObject, ObservableObject {
 
     func prepareForForegroundTracking() {
         isForegroundForEventAudio = true
+        guard !AppLaunchConfiguration.suppressesSensorHardware else { return }
         locationManager.allowsBackgroundLocationUpdates = true
         locationManager.showsBackgroundLocationIndicator = false
         if authorization == .authorizedWhenInUse {
@@ -467,6 +470,7 @@ final class SensorStore: NSObject, ObservableObject {
         isForegroundForEventAudio = false
         persistSettledMountIfAvailable(forceCadence: true)
         checkpointRecording()
+        guard !AppLaunchConfiguration.suppressesSensorHardware else { return }
         locationManager.allowsBackgroundLocationUpdates = true
         locationManager.showsBackgroundLocationIndicator = true
         if authorization == .authorizedAlways {
@@ -555,6 +559,16 @@ final class SensorStore: NSObject, ObservableObject {
         publishSettingsState()
     }
 
+    func setHarshBehaviorPreset(_ preset: HarshBehaviorPreset) {
+        guard harshBehaviorPreset != preset else { return }
+        harshBehaviorPreset = preset
+        HarshBehaviorPresetDefaults.save(preset)
+        fusionQueue.addOperation { [weak self] in
+            self?.fusionEngine.setHarshBehaviorPreset(preset)
+        }
+        publishSettingsState()
+    }
+
     func setEventAudibleAlertMode(_ mode: EventAudibleAlertMode) {
         guard eventAudioSettings.mode != mode else { return }
         eventAudioSettings.mode = mode
@@ -623,14 +637,30 @@ final class SensorStore: NSObject, ObservableObject {
         resetRuntimeState()
         publishSettingsState()
 
+        let rawSessionStore = rawSessionStore
         playbackTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let log = try self.rawSessionStore.load(from: fileURL)
-                let events = try RawSessionTimeline.events(for: log)
+                let loadTask = Task.detached(priority: .userInitiated) {
+                    let log = try rawSessionStore.load(from: fileURL)
+                    try Task.checkCancellation()
+                    let events = try RawSessionTimeline.events(for: log)
+                    try Task.checkCancellation()
+                    return (log, events)
+                }
+
+                let (log, events) = try await withTaskCancellationHandler {
+                    try await loadTask.value
+                } onCancel: {
+                    loadTask.cancel()
+                }
+                try Task.checkCancellation()
                 let duration = max(log.durationSec, 0.001)
                 var eventIndex = 0
-                var replayElapsed = 0.0
+                var replayElapsed = ReplayBatchPolicy.initialElapsedSec(
+                    firstEventElapsedSec: events.first?.elapsedSec,
+                    durationSec: duration
+                )
                 var lastTickUptime = ProcessInfo.processInfo.systemUptime
                 var lastProgressPublish = ProcessInfo.processInfo.systemUptime
 
@@ -680,6 +710,8 @@ final class SensorStore: NSObject, ObservableObject {
                     self.replayProgress = 1.0
                     self.publishSettingsState()
                 }
+            } catch is CancellationError {
+                return
             } catch {
                 print("Replay failed: \(error)")
                 await MainActor.run {
@@ -1260,6 +1292,7 @@ final class SensorStore: NSObject, ObservableObject {
                 activeSessionName: activeSessionName,
                 replayProgress: replayProgress,
                 playbackSpeedMultiplier: playbackSpeedMultiplier,
+                harshBehaviorPreset: harshBehaviorPreset,
                 eventAudioSettings: eventAudioSettings,
                 mountMemorySettings: mountMemorySettings,
                 isRecording: isRecording,

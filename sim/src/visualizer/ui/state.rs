@@ -14,6 +14,7 @@ pub(super) enum DataOrigin {
 pub(super) enum TuningPanel {
     Ekf,
     Align,
+    RoadEvents,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

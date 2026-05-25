@@ -9,8 +9,8 @@
 //! - [`ReverseDetector`] detects sustained reverse longitudinal velocity.
 //! - [`HarshAccelDetector`] and [`HarshBrakeDetector`] detect EMA-smoothed
 //!   velocity-derivative events.
-//! - [`HarshCornerDetector`] detects steady-turn lateral acceleration from
-//!   `abs(yaw_rate * speed)`.
+//! - [`HarshCornerDetector`] detects jerk-gated lateral side-load from
+//!   vehicle-frame specific force.
 //! - [`RoadRoughnessAnalyzer`] estimates distance-normalized vertical vibration
 //!   energy over a short effective road interval.
 //! - [`TripStats`] accumulates constant-memory trip distance, speed, grade,
@@ -35,11 +35,12 @@ pub use reverse::ReverseDetector;
 pub use roughness::RoadRoughnessAnalyzer;
 pub use trip::TripStats;
 pub use types::{
-    HarshAccelConfig, HarshBrakeConfig, HarshCornerConfig, HarshCornerEvent, HarshCornerSample,
-    HarshLongitudinalEvent, HarshLongitudinalSample, HillConfig, HillEvent, HillKind, HillSample,
-    ReverseConfig, ReverseEvent, ReverseSample, RoadRoughnessConfig, RoadRoughnessEstimate,
-    RoadRoughnessLevel, RoadRoughnessSample, SpeedBumpConfig, SpeedBumpDiagnostic, SpeedBumpEvent,
-    SpeedBumpSample, TripConfig, TripEventCounts, TripEventKind, TripSample, TripSummary,
+    HarshAccelConfig, HarshBehaviorConfig, HarshBehaviorPreset, HarshBrakeConfig,
+    HarshCornerConfig, HarshCornerEvent, HarshCornerSample, HarshLongitudinalEvent,
+    HarshLongitudinalSample, HillConfig, HillEvent, HillKind, HillSample, ReverseConfig,
+    ReverseEvent, ReverseSample, RoadRoughnessConfig, RoadRoughnessEstimate, RoadRoughnessLevel,
+    RoadRoughnessSample, SpeedBumpConfig, SpeedBumpDiagnostic, SpeedBumpEvent, SpeedBumpSample,
+    TripConfig, TripEventCounts, TripEventKind, TripSample, TripSummary,
 };
 
 #[cfg(test)]

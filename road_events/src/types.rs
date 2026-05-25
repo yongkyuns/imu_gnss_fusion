@@ -145,12 +145,17 @@ pub struct HarshCornerEvent {
     pub peak_speed_mps: f32,
 }
 
-/// Vehicle yaw-rate and speed sample consumed by [`crate::HarshCornerDetector`].
+/// Vehicle lateral-motion sample consumed by [`crate::HarshCornerDetector`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HarshCornerSample {
     pub t_s: f32,
     pub speed_mps: f32,
-    pub yaw_rate_radps: f32,
+    /// Vehicle-frame lateral acceleration/specific-force sample.
+    ///
+    /// This represents passenger side-load, including bank effects. Callers
+    /// should provide the bias-corrected accelerometer specific force rotated
+    /// into vehicle frame.
+    pub lateral_accel_mps2: f32,
 }
 
 /// Vehicle-motion sample consumed by [`crate::TripStats`].
@@ -249,6 +254,28 @@ pub struct TripSummary {
     pub speed_bumps_per_km: f32,
     pub harsh_events_per_km: f32,
     pub reverse_seconds_per_km: f32,
+}
+
+/// Sensitivity preset for harsh acceleration, braking, and cornering detectors.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
+pub enum HarshBehaviorPreset {
+    /// Detect mild-but-noticeable uncomfortable driving.
+    Sensitive,
+    /// Everyday default detection.
+    #[default]
+    Balanced,
+    /// Emit only clearer harsh events.
+    Conservative,
+}
+
+/// Detector configuration bundle derived from a [`HarshBehaviorPreset`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HarshBehaviorConfig {
+    pub accel: HarshAccelConfig,
+    pub brake: HarshBrakeConfig,
+    pub corner: HarshCornerConfig,
 }
 
 /// Configuration for streaming road-roughness analysis.
@@ -378,16 +405,26 @@ pub struct HarshBrakeConfig {
     pub refractory_s: f32,
 }
 
-/// Configuration for steady-turn harsh cornering detection.
+/// Configuration for jerk-gated harsh cornering detection.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HarshCornerConfig {
-    /// Enter threshold for `abs(yaw_rate * speed)`.
+    /// Minimum smoothed lateral side-load required to start an event.
     pub lateral_accel_threshold_mps2: f32,
-    /// Exit threshold for hysteresis.
+    /// Smoothed lateral side-load threshold below which an active event exits.
     pub exit_lateral_accel_threshold_mps2: f32,
-    /// Minimum duration above threshold before an event is emitted.
+    /// EMA time constant for denoising lateral side-load before differentiating.
+    pub lateral_accel_tau_s: f32,
+    /// EMA time constant for denoising absolute lateral jerk.
+    pub lateral_jerk_tau_s: f32,
+    /// Minimum smoothed absolute lateral jerk required to arm an event.
+    pub lateral_jerk_threshold_mps3: f32,
+    /// Maximum raw lateral jerk used before jerk smoothing.
+    pub max_raw_lateral_jerk_mps3: f32,
+    /// Time window in which a jerk trigger can start a lateral-load interval.
+    pub jerk_trigger_window_s: f32,
+    /// Minimum lateral-load interval duration before an event is emitted.
     pub min_duration_s: f32,
-    /// Minimum speed for the steady-turn assumption to be meaningful.
+    /// Minimum speed for harsh cornering detection.
     pub min_speed_mps: f32,
     /// Event refractory period after a trigger.
     pub refractory_s: f32,
@@ -397,7 +434,7 @@ impl Default for HillConfig {
     fn default() -> Self {
         Self {
             pitch_threshold_deg: 4.0,
-            min_duration_s: 3.0,
+            min_duration_s: 1.0,
         }
     }
 }
@@ -447,9 +484,56 @@ impl Default for HarshCornerConfig {
         Self {
             lateral_accel_threshold_mps2: 3.0,
             exit_lateral_accel_threshold_mps2: 2.4,
+            lateral_accel_tau_s: 0.15,
+            lateral_jerk_tau_s: 0.20,
+            lateral_jerk_threshold_mps3: 4.0,
+            max_raw_lateral_jerk_mps3: 80.0,
+            jerk_trigger_window_s: 0.50,
             min_duration_s: 0.5,
             min_speed_mps: 3.0,
             refractory_s: 2.0,
+        }
+    }
+}
+
+impl HarshBehaviorPreset {
+    pub const ALL: [Self; 3] = [Self::Sensitive, Self::Balanced, Self::Conservative];
+
+    pub fn configs(self) -> HarshBehaviorConfig {
+        let mut accel = HarshAccelConfig::default();
+        let mut brake = HarshBrakeConfig::default();
+        let mut corner = HarshCornerConfig::default();
+
+        match self {
+            Self::Sensitive => {
+                accel.accel_threshold_mps2 = 2.0;
+                accel.exit_accel_threshold_mps2 = 1.6;
+                brake.decel_threshold_mps2 = 2.5;
+                brake.exit_decel_threshold_mps2 = 2.0;
+                corner.lateral_accel_threshold_mps2 = 2.3;
+                corner.exit_lateral_accel_threshold_mps2 = 1.84;
+                corner.lateral_jerk_threshold_mps3 = 3.0;
+            }
+            Self::Balanced => {
+                corner.lateral_accel_threshold_mps2 = 3.4;
+                corner.exit_lateral_accel_threshold_mps2 = 2.9;
+                corner.lateral_jerk_threshold_mps3 = 5.0;
+            }
+            Self::Conservative => {
+                accel.accel_threshold_mps2 = 3.2;
+                accel.exit_accel_threshold_mps2 = 2.56;
+                brake.decel_threshold_mps2 = 4.0;
+                brake.exit_decel_threshold_mps2 = 3.2;
+                corner.lateral_accel_threshold_mps2 = 3.8;
+                corner.exit_lateral_accel_threshold_mps2 = 3.04;
+                corner.lateral_jerk_threshold_mps3 = 6.0;
+            }
+        }
+
+        HarshBehaviorConfig {
+            accel,
+            brake,
+            corner,
         }
     }
 }

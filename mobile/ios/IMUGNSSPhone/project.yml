@@ -33,6 +33,7 @@ targets:
         excludes:
           - EKF/generated/**
           - Analysis/Tests/**
+          - UI/Tests/**
     dependencies:
       - framework: ../build/SensorFusionFFI.xcframework
         embed: false
@@ -63,15 +64,29 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ykshin.ekf.imugnssphone.tests
         GENERATE_INFOPLIST_FILE: YES
+  IMUGNSSPhoneUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: App/UI/Tests
+    dependencies:
+      - target: IMUGNSSPhone
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ykshin.ekf.imugnssphone.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: IMUGNSSPhone
 schemes:
   IMUGNSSPhone:
     build:
       targets:
         IMUGNSSPhone: all
         IMUGNSSPhoneTests: [test]
+        IMUGNSSPhoneUITests: [test]
     run:
       config: Debug
     test:
       config: Debug
       targets:
         - IMUGNSSPhoneTests
+        - IMUGNSSPhoneUITests

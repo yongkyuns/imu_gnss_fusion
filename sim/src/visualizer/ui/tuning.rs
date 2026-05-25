@@ -1,6 +1,7 @@
 //! EKF and align tuning panel controls.
 
 use eframe::egui;
+use road_events::HarshBehaviorPreset;
 use sensor_fusion::ProcessNoise;
 
 use crate::visualizer::model::VisualizerMountMode;
@@ -346,6 +347,65 @@ pub(super) fn draw_align_tuning(ui: &mut egui::Ui, cfg: &mut FusionTuningConfig)
         ui.checkbox(&mut align.use_turn_gyro, "Use turn gyro updates"),
         "Use turn gyro updates",
     );
+}
+
+pub(super) fn draw_road_event_tuning(ui: &mut egui::Ui, cfg: &mut FusionTuningConfig) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Harsh behavior");
+        egui::ComboBox::from_id_salt("harsh_behavior_preset")
+            .selected_text(harsh_behavior_preset_label(cfg.harsh_behavior_preset))
+            .show_ui(ui, |ui| {
+                for preset in HarshBehaviorPreset::ALL {
+                    ui.selectable_value(
+                        &mut cfg.harsh_behavior_preset,
+                        preset,
+                        harsh_behavior_preset_label(preset),
+                    );
+                }
+            });
+    });
+
+    let configs = cfg.harsh_behavior_preset.configs();
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new("Preset thresholds").strong());
+    egui::Grid::new("harsh_behavior_preset_thresholds")
+        .num_columns(2)
+        .striped(true)
+        .show(ui, |ui| {
+            ui.label("Acceleration enter / exit");
+            ui.label(format!(
+                "{:.1} / {:.1} m/s^2",
+                configs.accel.accel_threshold_mps2, configs.accel.exit_accel_threshold_mps2
+            ));
+            ui.end_row();
+            ui.label("Braking enter / exit");
+            ui.label(format!(
+                "{:.1} / {:.1} m/s^2",
+                configs.brake.decel_threshold_mps2, configs.brake.exit_decel_threshold_mps2
+            ));
+            ui.end_row();
+            ui.label("Corner load enter / exit");
+            ui.label(format!(
+                "{:.2} / {:.2} m/s^2",
+                configs.corner.lateral_accel_threshold_mps2,
+                configs.corner.exit_lateral_accel_threshold_mps2
+            ));
+            ui.end_row();
+            ui.label("Corner jerk");
+            ui.label(format!(
+                "{:.1} m/s^3",
+                configs.corner.lateral_jerk_threshold_mps3
+            ));
+            ui.end_row();
+        });
+}
+
+pub(super) fn harsh_behavior_preset_label(preset: HarshBehaviorPreset) -> &'static str {
+    match preset {
+        HarshBehaviorPreset::Sensitive => "Sensitive",
+        HarshBehaviorPreset::Balanced => "Balanced",
+        HarshBehaviorPreset::Conservative => "Conservative",
+    }
 }
 
 fn drag_f32(

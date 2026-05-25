@@ -190,23 +190,32 @@ enum RawReplayEvent: Equatable, Sendable {
 
 enum RawSessionTimeline {
     static func events(for log: RawSessionLog) throws -> [RawReplayEvent] {
-        let events = try log.events.map { envelope -> RawReplayEvent in
+        var events: [RawReplayEvent] = []
+        events.reserveCapacity(log.events.count)
+        var isAlreadyOrdered = true
+        var previousEvent: RawReplayEvent?
+
+        for envelope in log.events {
             try envelope.validate()
+            let event: RawReplayEvent
             switch envelope.kind {
             case .imu:
-                return .imu(envelope, envelope.imu!)
+                event = .imu(envelope, envelope.imu!)
             case .gnss:
-                return .gnss(envelope, envelope.gnss!)
+                event = .gnss(envelope, envelope.gnss!)
             case .barometer:
-                return .barometer(envelope, envelope.barometer!)
+                event = .barometer(envelope, envelope.barometer!)
             }
-        }
-        return events.sorted { lhs, rhs in
-            if lhs.elapsedSec == rhs.elapsedSec {
-                return priority(lhs) < priority(rhs)
+
+            if let previousEvent, orderedBefore(event, previousEvent) {
+                isAlreadyOrdered = false
             }
-            return lhs.elapsedSec < rhs.elapsedSec
+            events.append(event)
+            previousEvent = event
         }
+
+        guard !isAlreadyOrdered else { return events }
+        return events.sorted(by: orderedBefore)
     }
 
     private static func priority(_ event: RawReplayEvent) -> Int {
@@ -215,6 +224,13 @@ enum RawSessionTimeline {
         case .imu: return 1
         case .gnss: return 2
         }
+    }
+
+    private static func orderedBefore(_ lhs: RawReplayEvent, _ rhs: RawReplayEvent) -> Bool {
+        if lhs.elapsedSec == rhs.elapsedSec {
+            return priority(lhs) < priority(rhs)
+        }
+        return lhs.elapsedSec < rhs.elapsedSec
     }
 }
 
@@ -233,6 +249,12 @@ enum ReplayBatchPolicy {
         let boundedDuration = max(0.0, durationSec.isFinite ? durationSec : 0.0)
         let next = previousElapsedSec + boundedDelta * speed
         return min(max(next, 0.0), boundedDuration)
+    }
+
+    static func initialElapsedSec(firstEventElapsedSec: Double?, durationSec: Double) -> Double {
+        guard let firstEventElapsedSec, firstEventElapsedSec.isFinite else { return 0.0 }
+        let boundedDuration = max(0.0, durationSec.isFinite ? durationSec : 0.0)
+        return min(max(firstEventElapsedSec, 0.0), boundedDuration)
     }
 
     static func shouldSleepAfterBatch(

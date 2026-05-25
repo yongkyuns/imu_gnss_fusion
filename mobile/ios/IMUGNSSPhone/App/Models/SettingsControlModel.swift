@@ -2,6 +2,35 @@ import Combine
 import CoreLocation
 import Foundation
 
+enum HarshBehaviorPreset: UInt32, CaseIterable, Identifiable, Sendable {
+    case sensitive = 1
+    case balanced = 2
+    case conservative = 3
+
+    var id: UInt32 { rawValue }
+
+    var displayTitle: String {
+        switch self {
+        case .sensitive: return "Sensitive"
+        case .balanced: return "Balanced"
+        case .conservative: return "Conservative"
+        }
+    }
+}
+
+enum HarshBehaviorPresetDefaults {
+    private static let presetKey = "harshBehaviorPreset"
+
+    static func load(from defaults: UserDefaults = .standard) -> HarshBehaviorPreset {
+        guard defaults.object(forKey: presetKey) != nil else { return .balanced }
+        return HarshBehaviorPreset(rawValue: UInt32(defaults.integer(forKey: presetKey))) ?? .balanced
+    }
+
+    static func save(_ preset: HarshBehaviorPreset, to defaults: UserDefaults = .standard) {
+        defaults.set(Int(preset.rawValue), forKey: presetKey)
+    }
+}
+
 struct SettingsControlState: Equatable {
     var authorization: CLAuthorizationStatus = .notDetermined
     var streamMode: SensorStore.StreamMode = .live
@@ -9,6 +38,7 @@ struct SettingsControlState: Equatable {
     var activeSessionName: String?
     var replayProgress: Double = 0.0
     var playbackSpeedMultiplier: Double = PlaybackSpeedPolicy.defaultMultiplier
+    var harshBehaviorPreset: HarshBehaviorPreset = .balanced
     var eventAudioSettings: EventAudioSettings = EventAudioSettings()
     var mountMemorySettings: MountMemorySettings = MountMemorySettings()
     var isRecording: Bool = false
@@ -25,6 +55,10 @@ struct SettingsControlState: Equatable {
 
     var playbackSpeedTitle: String {
         PlaybackSpeedPolicy.title(for: playbackSpeedMultiplier)
+    }
+
+    var harshBehaviorTitle: String {
+        harshBehaviorPreset.displayTitle
     }
 
     var mountModeTitle: String {
@@ -92,6 +126,10 @@ final class SettingsControlModel: ObservableObject {
 
     func setEventAlertsPlayInSilentMode(_ isEnabled: Bool) {
         sensorStore?.setEventAlertsPlayInSilentMode(isEnabled)
+    }
+
+    func setHarshBehaviorPreset(_ preset: HarshBehaviorPreset) {
+        sensorStore?.setHarshBehaviorPreset(preset)
     }
 
     func playTestEventAudioAlert() {

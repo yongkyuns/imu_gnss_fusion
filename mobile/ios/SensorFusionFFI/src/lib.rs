@@ -3,10 +3,10 @@
 use core::ptr;
 
 use road_events::{
-    HarshAccelConfig, HarshAccelDetector, HarshBrakeConfig, HarshBrakeDetector, HarshCornerConfig,
-    HarshCornerDetector, HarshCornerSample, HarshLongitudinalSample, HillConfig, HillDetector,
-    HillKind, HillSample, ReverseConfig, ReverseDetector, ReverseSample, SpeedBumpConfig,
-    SpeedBumpDetector, SpeedBumpSample, TripEventKind, TripSample, TripStats,
+    HarshAccelDetector, HarshBehaviorPreset, HarshBrakeDetector, HarshCornerDetector,
+    HarshCornerSample, HarshLongitudinalSample, HillConfig, HillDetector, HillKind, HillSample,
+    ReverseConfig, ReverseDetector, ReverseSample, SpeedBumpConfig, SpeedBumpDetector,
+    SpeedBumpSample, TripEventKind, TripSample, TripStats,
 };
 use sensor_fusion::{GnssSample, ImuSample, SensorFusion, Update};
 
@@ -17,6 +17,9 @@ const ROAD_EVENT_REVERSE: u32 = 4;
 const ROAD_EVENT_SPEED_BUMP: u32 = 5;
 const ROAD_EVENT_UPHILL: u32 = 6;
 const ROAD_EVENT_DOWNHILL: u32 = 7;
+const SENSOR_FUSION_HARSH_BEHAVIOR_SENSITIVE: u32 = 1;
+const SENSOR_FUSION_HARSH_BEHAVIOR_BALANCED: u32 = 2;
+const SENSOR_FUSION_HARSH_BEHAVIOR_CONSERVATIVE: u32 = 3;
 
 /// Opaque fusion handle owned by Rust and passed across the C ABI as a pointer.
 pub struct SensorFusionFfi {
@@ -218,23 +221,41 @@ struct RoadEventDetectors {
     harsh_brake: HarshBrakeDetector,
     harsh_corner: HarshCornerDetector,
     trip_stats: TripStats,
+    harsh_behavior_preset: HarshBehaviorPreset,
 }
 
 impl RoadEventDetectors {
     fn new() -> Self {
+        Self::new_with_harsh_behavior(HarshBehaviorPreset::Balanced)
+    }
+
+    fn new_with_harsh_behavior(harsh_behavior_preset: HarshBehaviorPreset) -> Self {
+        let harsh_behavior = harsh_behavior_preset.configs();
         Self {
             speed_bump: SpeedBumpDetector::new(SpeedBumpConfig::default()),
             hill: HillDetector::new(HillConfig::default()),
             reverse: ReverseDetector::new(ReverseConfig::default()),
-            harsh_accel: HarshAccelDetector::new(HarshAccelConfig::default()),
-            harsh_brake: HarshBrakeDetector::new(HarshBrakeConfig::default()),
-            harsh_corner: HarshCornerDetector::new(HarshCornerConfig::default()),
+            harsh_accel: HarshAccelDetector::new(harsh_behavior.accel),
+            harsh_brake: HarshBrakeDetector::new(harsh_behavior.brake),
+            harsh_corner: HarshCornerDetector::new(harsh_behavior.corner),
             trip_stats: TripStats::default(),
+            harsh_behavior_preset,
         }
     }
 
     fn reset(&mut self) {
-        *self = Self::new();
+        *self = Self::new_with_harsh_behavior(self.harsh_behavior_preset);
+    }
+
+    fn set_harsh_behavior_preset(&mut self, preset: HarshBehaviorPreset) {
+        if preset == self.harsh_behavior_preset {
+            return;
+        }
+        let harsh_behavior = preset.configs();
+        self.harsh_accel = HarshAccelDetector::new(harsh_behavior.accel);
+        self.harsh_brake = HarshBrakeDetector::new(harsh_behavior.brake);
+        self.harsh_corner = HarshCornerDetector::new(harsh_behavior.corner);
+        self.harsh_behavior_preset = preset;
     }
 }
 
@@ -269,6 +290,25 @@ impl SensorFusionFfi {
 }
 
 #[unsafe(no_mangle)]
+/// # Safety
+///
+/// `handle` must be either null or a valid pointer returned by this crate's
+/// create functions.
+pub unsafe extern "C" fn sensor_fusion_set_harsh_behavior_preset(
+    handle: *mut SensorFusionFfi,
+    preset: u32,
+) -> bool {
+    let Some(fusion) = fusion_mut(handle) else {
+        return false;
+    };
+    let Some(preset) = harsh_behavior_preset_from_ffi(preset) else {
+        return false;
+    };
+    fusion.road_events.set_harsh_behavior_preset(preset);
+    true
+}
+
+#[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
 /// # Safety
 ///
@@ -282,8 +322,8 @@ pub unsafe extern "C" fn sensor_fusion_process_road_event_motion(
     ground_speed_mps: f32,
     longitudinal_accel_mps2: f32,
     longitudinal_accel_valid: bool,
-    yaw_rate_radps: f32,
-    yaw_rate_valid: bool,
+    _yaw_rate_radps: f32,
+    _yaw_rate_valid: bool,
     pitch_deg: f32,
     pitch_valid: bool,
     lateral_accel_mps2: f32,
@@ -319,8 +359,6 @@ pub unsafe extern "C" fn sensor_fusion_process_road_event_motion(
         },
         lateral_accel_mps2: if lateral_accel_valid {
             lateral_accel_mps2
-        } else if yaw_rate_valid {
-            ground_speed_mps.max(0.0) * yaw_rate_radps
         } else {
             0.0
         },
@@ -378,11 +416,11 @@ pub unsafe extern "C" fn sensor_fusion_process_road_event_motion(
             confidence: 0.9,
         });
     }
-    if yaw_rate_valid {
+    if lateral_accel_valid {
         if let Some(event) = fusion.road_events.harsh_corner.update(HarshCornerSample {
             t_s,
             speed_mps: ground_speed_mps,
-            yaw_rate_radps,
+            lateral_accel_mps2,
         }) {
             fusion
                 .road_events
@@ -754,6 +792,15 @@ fn fusion_ref(handle: *const SensorFusionFfi) -> Option<&'static SensorFusionFfi
     }
 }
 
+fn harsh_behavior_preset_from_ffi(preset: u32) -> Option<HarshBehaviorPreset> {
+    match preset {
+        SENSOR_FUSION_HARSH_BEHAVIOR_SENSITIVE => Some(HarshBehaviorPreset::Sensitive),
+        SENSOR_FUSION_HARSH_BEHAVIOR_BALANCED => Some(HarshBehaviorPreset::Balanced),
+        SENSOR_FUSION_HARSH_BEHAVIOR_CONSERVATIVE => Some(HarshBehaviorPreset::Conservative),
+        _ => None,
+    }
+}
+
 fn ekf_snapshot(handle: *const SensorFusionFfi) -> SensorFusionFfiEkfSnapshot {
     let Some(fusion) = fusion_ref(handle) else {
         return SensorFusionFfiEkfSnapshot::default();
@@ -1087,6 +1134,24 @@ mod tests {
         assert!(trip.distance_m > 0.0);
         assert!(trip.reverse_distance_m > 0.0);
         assert!(trip.reverse_events > 0);
+
+        unsafe {
+            sensor_fusion_destroy(handle);
+        }
+    }
+
+    #[test]
+    fn harsh_behavior_preset_ffi_rejects_unknown_values() {
+        let handle = sensor_fusion_create_ekf_auto();
+        assert!(!handle.is_null());
+
+        assert!(unsafe {
+            sensor_fusion_set_harsh_behavior_preset(
+                handle,
+                SENSOR_FUSION_HARSH_BEHAVIOR_SENSITIVE,
+            )
+        });
+        assert!(!unsafe { sensor_fusion_set_harsh_behavior_preset(handle, 99) });
 
         unsafe {
             sensor_fusion_destroy(handle);

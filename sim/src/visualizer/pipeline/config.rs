@@ -1,3 +1,4 @@
+use road_events::HarshBehaviorPreset;
 use sensor_fusion::align::AlignConfig;
 use sensor_fusion::{ProcessNoise, SensorFusion};
 
@@ -44,6 +45,8 @@ pub struct FusionTuningConfig {
     pub predict_imu_decimation: usize,
     pub yaw_init_speed_mps: f64,
     #[serde(default)]
+    pub harsh_behavior_preset: HarshBehaviorPreset,
+    #[serde(default)]
     pub noise: NoiseConfig,
 }
 
@@ -74,6 +77,7 @@ impl Default for FusionTuningConfig {
             predict_imu_lpf_cutoff_hz: None,
             predict_imu_decimation: 1,
             yaw_init_speed_mps: 0.0 / 3.6,
+            harsh_behavior_preset: HarshBehaviorPreset::Balanced,
             noise: NoiseConfig::default(),
         }
     }
@@ -186,6 +190,7 @@ mod tests {
             r_body_vel_z: 0.24,
             r_vehicle_roll_prior: 0.21,
             use_align_mount_covariance_on_seed: true,
+            harsh_behavior_preset: HarshBehaviorPreset::Conservative,
             predict_imu_lpf_cutoff_hz: Some(120.0),
             ..Default::default()
         };
@@ -222,6 +227,7 @@ mod tests {
             decoded.predict_imu_lpf_cutoff_hz,
             cfg.predict_imu_lpf_cutoff_hz
         );
+        assert_eq!(decoded.harsh_behavior_preset, cfg.harsh_behavior_preset);
         assert_eq!(decoded.align.min_speed_mps, cfg.align.min_speed_mps);
         assert_eq!(decoded.align.q_mount_std_rad, cfg.align.q_mount_std_rad);
         assert_eq!(

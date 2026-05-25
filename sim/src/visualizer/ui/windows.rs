@@ -8,7 +8,7 @@ use crate::visualizer::pipeline::{FusionTuningConfig, GnssOutageConfig};
 use super::App;
 use super::inspector::{render_update_inspector_contents, update_inspector_view_model};
 use super::state::TuningPanel;
-use super::tuning::{draw_align_tuning, draw_ekf_tuning};
+use super::tuning::{draw_align_tuning, draw_ekf_tuning, draw_road_event_tuning};
 #[cfg(target_arch = "wasm32")]
 use super::web::web_remember_mapbox_token;
 
@@ -22,6 +22,7 @@ impl App {
         let title = match panel {
             TuningPanel::Ekf => "EKF Tuning",
             TuningPanel::Align => "Align Tuning",
+            TuningPanel::RoadEvents => "Road Event Tuning",
         };
         egui::Window::new(title)
             .open(&mut open)
@@ -33,6 +34,7 @@ impl App {
                         draw_ekf_tuning(ui, &mut self.tuning_misalignment, &mut self.tuning_cfg)
                     }
                     TuningPanel::Align => draw_align_tuning(ui, &mut self.tuning_cfg),
+                    TuningPanel::RoadEvents => draw_road_event_tuning(ui, &mut self.tuning_cfg),
                 }
                 ui.separator();
                 ui.horizontal_wrapped(|ui| {
@@ -80,6 +82,10 @@ impl App {
                             }
                             TuningPanel::Align => {
                                 self.tuning_cfg.align = defaults.align;
+                            }
+                            TuningPanel::RoadEvents => {
+                                self.tuning_cfg.harsh_behavior_preset =
+                                    defaults.harsh_behavior_preset;
                             }
                         }
                     }

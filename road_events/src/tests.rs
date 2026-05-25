@@ -102,9 +102,35 @@ fn detects_sustained_uphill_and_downhill_intervals() {
 
     assert_eq!(events.len(), 2);
     assert_eq!(events[0].kind, HillKind::Uphill);
-    assert!(events[0].duration_s >= 3.0);
+    assert!(events[0].duration_s >= 1.0);
     assert_eq!(events[1].kind, HillKind::Downhill);
-    assert!(events[1].duration_s >= 3.0);
+    assert!(events[1].duration_s >= 1.0);
+}
+
+#[test]
+fn emits_hill_once_when_confirmed_instead_of_waiting_for_exit() {
+    let mut detector = HillDetector::new(HillConfig::default());
+    let mut events = Vec::new();
+    for i in 0..180 {
+        let t = i as f32 * 0.1;
+        let pitch_deg = if (2.0..=14.0).contains(&t) { 4.5 } else { 0.0 };
+        if let Some(event) = detector.update(HillSample {
+            t_s: t,
+            speed_mps: 5.0,
+            pitch_deg,
+        }) {
+            events.push(event);
+        }
+    }
+    if let Some(event) = detector.finish() {
+        events.push(event);
+    }
+
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, HillKind::Uphill);
+    assert_close(events[0].start_t_s, 2.0, 1.0e-5);
+    assert!(events[0].end_t_s <= 3.1);
+    assert!(events[0].duration_s >= 1.0);
 }
 
 #[test]
@@ -113,7 +139,7 @@ fn ignores_short_hill_pitch_excursion() {
     let mut events = 0;
     for i in 0..80 {
         let t = i as f32 * 0.1;
-        let pitch_deg = if (2.0..4.0).contains(&t) { 5.0 } else { 0.0 };
+        let pitch_deg = if (2.0..2.8).contains(&t) { 5.0 } else { 0.0 };
         if detector
             .update(HillSample {
                 t_s: t,
@@ -245,16 +271,24 @@ fn detects_harsh_brake_from_velocity_derivative_ema() {
 }
 
 #[test]
-fn detects_harsh_cornering_from_yaw_rate_and_speed() {
+fn detects_harsh_cornering_from_lateral_specific_force_jerk() {
     let mut detector = HarshCornerDetector::new(HarshCornerConfig::default());
     let mut events = Vec::new();
-    for i in 0..180 {
+    for i in 0..220 {
         let t = i as f32 * 0.02;
-        let yaw_rate_radps = if (1.0..=2.0).contains(&t) { 0.35 } else { 0.0 };
+        let lateral_accel_mps2 = if t < 1.0 {
+            0.0
+        } else if t < 1.22 {
+            3.8 * (t - 1.0) / 0.22
+        } else if t <= 2.2 {
+            3.8
+        } else {
+            0.0
+        };
         if let Some(event) = detector.update(HarshCornerSample {
             t_s: t,
-            speed_mps: 10.0,
-            yaw_rate_radps,
+            speed_mps: 12.0,
+            lateral_accel_mps2,
         }) {
             events.push(event);
         }
@@ -265,6 +299,100 @@ fn detects_harsh_cornering_from_yaw_rate_and_speed() {
 
     assert_eq!(events.len(), 1);
     assert!(events[0].peak_lateral_accel_mps2 >= 3.0);
+}
+
+#[test]
+fn ignores_smooth_steady_high_lateral_load() {
+    let mut detector = HarshCornerDetector::new(HarshCornerConfig::default());
+    let mut events = Vec::new();
+    for i in 0..360 {
+        let t = i as f32 * 0.02;
+        let lateral_accel_mps2 = if t < 1.0 {
+            0.0
+        } else if t < 3.5 {
+            3.8 * (t - 1.0) / 2.5
+        } else {
+            3.8
+        };
+        if let Some(event) = detector.update(HarshCornerSample {
+            t_s: t,
+            speed_mps: 12.0,
+            lateral_accel_mps2,
+        }) {
+            events.push(event);
+        }
+    }
+    if let Some(event) = detector.finish() {
+        events.push(event);
+    }
+
+    assert_eq!(events.len(), 0);
+}
+
+#[test]
+fn ignores_invalid_lateral_specific_force() {
+    let mut detector = HarshCornerDetector::new(HarshCornerConfig::default());
+    let mut events = Vec::new();
+    for i in 0..180 {
+        let t = i as f32 * 0.02;
+        if let Some(event) = detector.update(HarshCornerSample {
+            t_s: t,
+            speed_mps: 10.0,
+            lateral_accel_mps2: f32::NAN,
+        }) {
+            events.push(event);
+        }
+    }
+    if let Some(event) = detector.finish() {
+        events.push(event);
+    }
+
+    assert_eq!(events.len(), 0);
+}
+
+#[test]
+fn harsh_behavior_presets_adjust_only_harsh_thresholds() {
+    let sensitive = super::HarshBehaviorPreset::Sensitive.configs();
+    let balanced = super::HarshBehaviorPreset::Balanced.configs();
+    let conservative = super::HarshBehaviorPreset::Conservative.configs();
+
+    assert_eq!(sensitive.accel.accel_tau_s, balanced.accel.accel_tau_s);
+    assert_eq!(conservative.accel.accel_tau_s, balanced.accel.accel_tau_s);
+    assert_eq!(
+        sensitive.corner.lateral_accel_tau_s,
+        balanced.corner.lateral_accel_tau_s
+    );
+    assert_eq!(
+        conservative.corner.lateral_jerk_tau_s,
+        balanced.corner.lateral_jerk_tau_s
+    );
+    assert_close(balanced.corner.lateral_accel_threshold_mps2, 3.4, 1.0e-6);
+    assert_close(
+        balanced.corner.exit_lateral_accel_threshold_mps2,
+        2.9,
+        1.0e-6,
+    );
+    assert_close(balanced.corner.lateral_jerk_threshold_mps3, 5.0, 1.0e-6);
+
+    assert!(sensitive.accel.accel_threshold_mps2 < balanced.accel.accel_threshold_mps2);
+    assert!(balanced.accel.accel_threshold_mps2 < conservative.accel.accel_threshold_mps2);
+    assert!(sensitive.brake.decel_threshold_mps2 < balanced.brake.decel_threshold_mps2);
+    assert!(balanced.brake.decel_threshold_mps2 < conservative.brake.decel_threshold_mps2);
+    assert!(
+        sensitive.corner.lateral_accel_threshold_mps2
+            < balanced.corner.lateral_accel_threshold_mps2
+    );
+    assert!(
+        balanced.corner.lateral_accel_threshold_mps2
+            < conservative.corner.lateral_accel_threshold_mps2
+    );
+    assert!(
+        sensitive.corner.lateral_jerk_threshold_mps3 < balanced.corner.lateral_jerk_threshold_mps3
+    );
+    assert!(
+        balanced.corner.lateral_jerk_threshold_mps3
+            < conservative.corner.lateral_jerk_threshold_mps3
+    );
 }
 
 #[test]

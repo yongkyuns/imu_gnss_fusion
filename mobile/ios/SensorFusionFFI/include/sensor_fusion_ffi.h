@@ -10,6 +10,10 @@ extern "C" {
 
 typedef struct SensorFusionFfi SensorFusionFfi;
 
+#define SENSOR_FUSION_HARSH_BEHAVIOR_SENSITIVE 1u
+#define SENSOR_FUSION_HARSH_BEHAVIOR_BALANCED 2u
+#define SENSOR_FUSION_HARSH_BEHAVIOR_CONSERVATIVE 3u
+
 typedef struct SensorFusionFfiUpdate {
     bool mount_ready;
     bool mount_ready_changed;
@@ -112,6 +116,8 @@ void sensor_fusion_destroy(SensorFusionFfi *handle);
 
 void sensor_fusion_reset_ekf_auto(SensorFusionFfi *handle);
 void sensor_fusion_reset_ekf_manual(SensorFusionFfi *handle, float qw, float qx, float qy, float qz);
+
+bool sensor_fusion_set_harsh_behavior_preset(SensorFusionFfi *handle, uint32_t preset);
 
 SensorFusionFfiUpdate sensor_fusion_snapshot_status(const SensorFusionFfi *handle);
 

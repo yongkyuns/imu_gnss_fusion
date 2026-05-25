@@ -233,6 +233,24 @@ final class RawSessionLogTests: XCTestCase {
         XCTAssertEqual(elapsed, 17.0, accuracy: 1.0e-12)
     }
 
+    func testReplayBatchPolicyStartsAtFirstEventElapsedTime() {
+        XCTAssertEqual(
+            ReplayBatchPolicy.initialElapsedSec(firstEventElapsedSec: 8.0, durationSec: 30.0),
+            8.0,
+            accuracy: 1.0e-12
+        )
+        XCTAssertEqual(
+            ReplayBatchPolicy.initialElapsedSec(firstEventElapsedSec: 40.0, durationSec: 30.0),
+            30.0,
+            accuracy: 1.0e-12
+        )
+        XCTAssertEqual(
+            ReplayBatchPolicy.initialElapsedSec(firstEventElapsedSec: .nan, durationSec: 30.0),
+            0.0,
+            accuracy: 1.0e-12
+        )
+    }
+
     func testReplayBatchPolicyClampsToDurationAndIgnoresInvalidWallDelta() {
         XCTAssertEqual(
             ReplayBatchPolicy.advancedElapsedSec(

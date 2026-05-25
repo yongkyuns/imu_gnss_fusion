@@ -4,7 +4,12 @@ import UIKit
 @main
 struct IMUGNSSPhoneApp: App {
     @Environment(\.scenePhase) private var scenePhase
-    @StateObject private var store = SensorStore()
+    @StateObject private var store: SensorStore
+
+    init() {
+        AppLaunchConfiguration.prepareProcessDefaults()
+        _store = StateObject(wrappedValue: SensorStore())
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -13,7 +18,9 @@ struct IMUGNSSPhoneApp: App {
                 .environmentObject(store.settingsControls)
                 .onAppear {
                     UIApplication.shared.isIdleTimerDisabled = true
-                    store.start()
+                    if AppLaunchConfiguration.shouldAutoStartSensors {
+                        store.start()
+                    }
                 }
                 .onChange(of: scenePhase) { phase in
                     switch phase {

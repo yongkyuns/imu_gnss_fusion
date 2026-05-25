@@ -37,16 +37,24 @@ enum RawSessionJSON {
     }
 
     private static func fractionalFormatter() -> ISO8601DateFormatter {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
+        fractionalISO8601Formatter
     }
 
     private static func fallbackFormatter() -> ISO8601DateFormatter {
+        fallbackISO8601Formatter
+    }
+
+    private static let fractionalISO8601Formatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let fallbackISO8601Formatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         return formatter
-    }
+    }()
 }
 
 struct RawSessionFileStore {

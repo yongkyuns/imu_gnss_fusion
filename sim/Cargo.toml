@@ -21,7 +21,7 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 sensor_fusion = { path = "../sensor_fusion", default-features = false, features = ["serde"] }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng"] }
 rayon = "1.10"
-road_events = { path = "../road_events" }
+road_events = { path = "../road_events", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 walkers = "0.52.0"

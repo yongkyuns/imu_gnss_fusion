@@ -136,9 +136,11 @@ struct TripStatsSummary: Equatable, Sendable {
 final class FusionEngine {
     private var handle: OpaquePointer?
     private var streamEpoch: Date?
+    private var harshBehaviorPreset: HarshBehaviorPreset = .balanced
 
     init() {
         handle = sensor_fusion_create_ekf_auto()
+        applyHarshBehaviorPreset()
     }
 
     deinit {
@@ -159,6 +161,7 @@ final class FusionEngine {
         } else {
             handle = sensor_fusion_create_ekf_manual(Float(q.w), Float(q.x), Float(q.y), Float(q.z))
         }
+        applyHarshBehaviorPreset()
     }
 
     func resetEkfAuto() {
@@ -168,6 +171,17 @@ final class FusionEngine {
         } else {
             handle = sensor_fusion_create_ekf_auto()
         }
+        applyHarshBehaviorPreset()
+    }
+
+    func setHarshBehaviorPreset(_ preset: HarshBehaviorPreset) {
+        harshBehaviorPreset = preset
+        applyHarshBehaviorPreset()
+    }
+
+    private func applyHarshBehaviorPreset() {
+        guard let handle else { return }
+        _ = sensor_fusion_set_harsh_behavior_preset(handle, harshBehaviorPreset.rawValue)
     }
 
     func processImu(

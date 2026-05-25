@@ -50,6 +50,13 @@ final class SettingsControlModelTests: XCTestCase {
         XCTAssertEqual(state.playbackSpeedTitle, "2x")
     }
 
+    func testSettingsStateCarriesHarshBehaviorPreset() {
+        let state = SettingsControlState(harshBehaviorPreset: .conservative)
+
+        XCTAssertEqual(state.harshBehaviorPreset, .conservative)
+        XCTAssertEqual(state.harshBehaviorTitle, "Conservative")
+    }
+
     func testSettingsStateCarriesEventAudioSettings() {
         let settings = EventAudioSettings(mode: .chimeAndVoice, playDrivingAlertsInSilentMode: true)
         let state = SettingsControlState(eventAudioSettings: settings)
@@ -72,5 +79,17 @@ final class SettingsControlModelTests: XCTestCase {
         XCTAssertEqual(EventAudibleAlertMode.chime.displayTitle, "Chime")
         XCTAssertEqual(EventAudibleAlertMode.voice.displayTitle, "Voice")
         XCTAssertEqual(EventAudibleAlertMode.chimeAndVoice.displayTitle, "Chime + Voice")
+    }
+
+    func testHarshBehaviorPresetDefaultsRoundTrip() {
+        let suiteName = "HarshBehaviorPresetDefaults.roundTrip.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        XCTAssertEqual(HarshBehaviorPresetDefaults.load(from: defaults), .balanced)
+        HarshBehaviorPresetDefaults.save(.sensitive, to: defaults)
+        XCTAssertEqual(HarshBehaviorPresetDefaults.load(from: defaults), .sensitive)
+        defaults.set(999, forKey: "harshBehaviorPreset")
+        XCTAssertEqual(HarshBehaviorPresetDefaults.load(from: defaults), .balanced)
     }
 }

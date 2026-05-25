@@ -89,8 +89,9 @@ impl HillDetector {
         match (self.active.take(), sample_kind) {
             (Some(mut active), Some(kind)) if active.kind == kind => {
                 active.add_sample(sample, dt);
-                if active.duration_s >= self.cfg.min_duration_s {
+                if !active.emitted && active.duration_s >= self.cfg.min_duration_s {
                     active.emitted = true;
+                    event = Some(active.event());
                 }
                 self.active = Some(active);
             }
@@ -116,7 +117,7 @@ impl HillDetector {
     }
 
     fn finish_active(&self, active: ActiveHill) -> Option<HillEvent> {
-        (active.emitted && active.duration_s >= self.cfg.min_duration_s).then(|| active.event())
+        (!active.emitted && active.duration_s >= self.cfg.min_duration_s).then(|| active.event())
     }
 }
 

@@ -36,8 +36,8 @@ offline window buffering.
 
 The detectors are not part of the EKF state estimator. They consume already
 estimated or referenced motion channels such as vehicle speed, vehicle pitch,
-gravity-compensated vertical acceleration, and yaw rate. The current event set
-is:
+gravity-compensated vertical acceleration, and vehicle-frame lateral specific
+force. The current event set is:
 \begin{itemize}[nosep]
   \item speed bumps,
   \item sustained uphill and downhill intervals,
@@ -62,15 +62,16 @@ is:
 \(\theta\) & deg & Vehicle pitch angle. Positive pitch is uphill in the current detector convention. \\
 \(a_z\) & m/s\(^2\) & Gravity-compensated vehicle-frame vertical acceleration. \\
 \(a_{z,\mathrm{bp}}\) & m/s\(^2\) & Band-passed vertical acceleration used for road roughness. \\
-\(\omega_z\) & rad/s & Vehicle yaw rate. \\
+\(a_y\) & m/s\(^2\) & Vehicle-frame lateral specific force. Positive is to vehicle right. \\
 \bottomrule
 \end{longtable}
 
 The speed-bump detector uses pitch and vertical acceleration. Road roughness
 uses gravity-compensated vertical acceleration and speed. Hill detection uses
 pitch and speed. Reverse and harsh longitudinal detection use forward velocity.
-Harsh cornering uses speed and yaw rate. Trip statistics consume the same
-vehicle-motion stream and update running totals without storing history.
+Harsh cornering uses speed and vehicle-frame lateral specific force. Trip
+statistics consume the same vehicle-motion stream and update running totals
+without storing history.
 
 \begin{figure}[h]
 \centering
@@ -359,15 +360,18 @@ piecewise-constant interval detector with sign:
   \end{cases}
 \end{equation}
 An interval is emitted when the same signed condition remains active for at
-least three seconds. During the interval, the detector reports:
+least one second. The implementation returns the event as soon as the
+confirmation duration is reached; it does not wait for pitch to leave the
+threshold band. During the confirmed interval, the detector reports:
 \begin{align}
   T &= t_{\mathrm{end}}-t_{\mathrm{start}},\\
   \bar{\theta} &= \frac{1}{T}\int_{t_{\mathrm{start}}}^{t_{\mathrm{end}}}\theta(t)\,dt,\\
   \theta_{\max} &= \max_t \abs{\theta(t)},\\
   \bar{s} &= \frac{1}{T}\int_{t_{\mathrm{start}}}^{t_{\mathrm{end}}} \max(s(t),0)\,dt.
 \end{align}
-The implementation emits the event when pitch exits the threshold band or when
-the detector is explicitly finished at the end of a replay.
+After an interval has been emitted, the detector keeps the active state only to
+avoid duplicate events for the same continuous hill. If pitch changes sign or
+leaves the threshold band before confirmation, the candidate is discarded.
 
 \section{Reverse Detector}
 
@@ -450,28 +454,60 @@ The reported \(\Delta v_x\) is signed, so braking events normally have
 
 \section{Harsh Cornering}
 
-Harsh cornering uses the steady-turn kinematic relation:
+Harsh cornering uses vehicle-frame lateral specific force as the side-load
+signal experienced by the passenger and tire contact patches. The input is the
+bias-corrected accelerometer specific force rotated into the vehicle frame:
 \begin{equation}
-  a_y \approx v\omega_z .
+  a_{y,k}.
 \end{equation}
-The detector metric is:
+This intentionally includes road-bank effects because the detector is scoring
+side load, not horizontal centripetal acceleration alone.
+
+The lateral load is first smoothed with a short EMA:
 \begin{equation}
-  m_{\mathrm{corner},k} =
-  \begin{cases}
-    \abs{s_k\omega_{z,k}}, & s_k\ge3~\mathrm{m/s},\\
-    0, & s_k<3~\mathrm{m/s}.
-  \end{cases}
+  \bar{a}_{y,k}
+    = \operatorname{EMA}(\bar{a}_{y,k-1}, a_{y,k}, \tau_a=0.15~\mathrm{s}, \dt_k).
 \end{equation}
-The default interval thresholds are:
+The detector then differentiates the smoothed load and smooths the absolute
+jerk:
+\begin{align}
+  j_{y,k} &=
+    \operatorname{clamp}\left(
+      \frac{\bar{a}_{y,k}-\bar{a}_{y,k-1}}{\dt_k},
+      -80,\;80
+    \right)~\mathrm{m/s^3},\\
+  \bar{j}_{y,k}
+    &= \operatorname{EMA}(\bar{j}_{y,k-1}, \abs{j_{y,k}}, \tau_j=0.20~\mathrm{s}, \dt_k).
+\end{align}
+An event can start only when both conditions have occurred:
+\begin{itemize}[nosep]
+  \item speed is at least \(3.0~\mathrm{m/s}\),
+  \item smoothed absolute jerk has exceeded its threshold within the last
+    \(0.50~\mathrm{s}\).
+\end{itemize}
+Once armed, the interval metric is:
+\begin{equation}
+  m_{\mathrm{corner},k}=\abs{\bar{a}_{y,k}}.
+\end{equation}
+The default low-level configuration has:
 \begin{align}
   m_{\mathrm{enter}} &= 3.0~\mathrm{m/s^2},\\
   m_{\mathrm{exit}} &= 2.4~\mathrm{m/s^2},\\
+  j_{\mathrm{enter}} &= 4.0~\mathrm{m/s^3},\\
   T_{\min} &= 0.5~\mathrm{s},\\
   T_{\mathrm{refractory}} &= 2.0~\mathrm{s}.
 \end{align}
-The steady-turn approximation is deliberately simple. It is robust for
-embedded event detection because it only needs speed and yaw rate, and it does
-not depend on lateral accelerometer calibration or road bank compensation.
+Production callers normally select a \path{HarshBehaviorPreset}. The default
+\path{Balanced} preset keeps harsh acceleration and braking thresholds at their
+low-level defaults, but raises cornering to:
+\begin{align}
+  m_{\mathrm{enter}} &= 3.4~\mathrm{m/s^2},\\
+  m_{\mathrm{exit}} &= 2.9~\mathrm{m/s^2},\\
+  j_{\mathrm{enter}} &= 5.0~\mathrm{m/s^3}.
+\end{align}
+The \path{Sensitive} and \path{Conservative} presets adjust only detector
+thresholds. Time constants, speed gates, minimum durations, and refractory
+periods remain fixed so preset changes are interpretable.
 
 \section{Default Configuration Summary}
 
@@ -486,12 +522,13 @@ Speed bump minimum speed & \(1.5~\mathrm{m/s}\) & Avoid static/creep false posit
 Speed bump duration & \(0.18\)--\(1.8~\mathrm{s}\) & Absolute event timing. \\
 Speed bump wheelbase bounds & \(1.8\)--\(3.6~\mathrm{m}\) & Speed-adaptive timing. \\
 Hill pitch threshold & \(4^\circ\) & Sustained uphill/downhill grade. \\
-Hill minimum duration & \(3.0~\mathrm{s}\) & Suppress short pitch transients. \\
+Hill minimum duration & \(1.0~\mathrm{s}\) & Suppress short pitch transients. \\
 Reverse enter/exit & \(-0.5/-0.2~\mathrm{m/s}\) & Hysteresis around zero speed. \\
 Reverse minimum duration & \(1.0~\mathrm{s}\) & Suppress brief backing corrections. \\
 Harsh accel enter/exit & \(2.5/2.0~\mathrm{m/s^2}\) & Longitudinal acceleration hysteresis. \\
 Harsh brake enter/exit & \(3.0/2.4~\mathrm{m/s^2}\) & Longitudinal deceleration hysteresis. \\
-Harsh corner enter/exit & \(3.0/2.4~\mathrm{m/s^2}\) & Lateral acceleration hysteresis. \\
+Harsh corner enter/exit & \(3.4/2.9~\mathrm{m/s^2}\) & Balanced preset lateral side-load hysteresis. \\
+Harsh corner jerk threshold & \(5.0~\mathrm{m/s^3}\) & Balanced preset abruptness gate. \\
 \bottomrule
 \end{longtable}
 
@@ -550,8 +587,9 @@ both sides when data is available:
 \end{equation}
 The mini-plot shows the signal that caused the detector to trigger, for example
 vertical acceleration and pitch for speed bumps, longitudinal acceleration for
-harsh acceleration/braking, and yaw-rate-derived lateral acceleration for harsh
-cornering.
+harsh acceleration/braking, and lateral side-load for harsh cornering. Yaw rate
+may still be shown as a diagnostic trace, but it is not the harsh-cornering
+trigger metric.
 
 \section{Design Rationale}
 
@@ -566,7 +604,8 @@ detectors instead use physically interpretable metrics:
   \item hills: sustained pitch sign and magnitude,
   \item reverse: signed vehicle-frame forward velocity with hysteresis,
   \item harsh acceleration/braking: smoothed velocity derivative,
-  \item harsh cornering: steady-turn lateral acceleration \(v\omega_z\).
+  \item harsh cornering: jerk-gated lateral side-load from vehicle-frame
+    specific force.
 \end{itemize}
 
 This keeps the algorithms easy to port to small embedded targets and easy to

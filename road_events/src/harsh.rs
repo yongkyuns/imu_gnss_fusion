@@ -19,6 +19,21 @@ struct SmoothedLongitudinalAccel {
 }
 
 #[derive(Clone, Copy, Debug)]
+struct LateralJerkEma {
+    last_t_s: Option<f32>,
+    lateral_accel_ema_mps2: f32,
+    jerk_abs_ema_mps3: f32,
+    initialized: bool,
+    jerk_initialized: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SmoothedLateralMotion {
+    lateral_accel_mps2: f32,
+    lateral_jerk_abs_mps3: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
 struct ActiveMetric {
     start_t_s: f32,
     last_t_s: f32,
@@ -89,6 +104,72 @@ impl LongitudinalDerivativeEma {
         Some(SmoothedLongitudinalAccel {
             accel_mps2: self.accel_ema_mps2,
             speed_mps,
+        })
+    }
+}
+
+impl LateralJerkEma {
+    fn new() -> Self {
+        Self {
+            last_t_s: None,
+            lateral_accel_ema_mps2: 0.0,
+            jerk_abs_ema_mps3: 0.0,
+            initialized: false,
+            jerk_initialized: false,
+        }
+    }
+
+    fn update(
+        &mut self,
+        t_s: f32,
+        lateral_accel_mps2: f32,
+        accel_tau_s: f32,
+        jerk_tau_s: f32,
+        max_raw_jerk_mps3: f32,
+    ) -> Option<SmoothedLateralMotion> {
+        let Some(last_t_s) = self.last_t_s else {
+            self.last_t_s = Some(t_s);
+            self.lateral_accel_ema_mps2 = lateral_accel_mps2;
+            self.initialized = true;
+            return Some(SmoothedLateralMotion {
+                lateral_accel_mps2: self.lateral_accel_ema_mps2,
+                lateral_jerk_abs_mps3: 0.0,
+            });
+        };
+        let dt = (t_s - last_t_s).clamp(0.0, 0.2);
+        self.last_t_s = Some(t_s);
+        if dt <= 1.0e-4 {
+            return None;
+        }
+
+        if !self.initialized {
+            self.lateral_accel_ema_mps2 = lateral_accel_mps2;
+            self.initialized = true;
+            return Some(SmoothedLateralMotion {
+                lateral_accel_mps2: self.lateral_accel_ema_mps2,
+                lateral_jerk_abs_mps3: 0.0,
+            });
+        }
+
+        let previous_lateral_accel_mps2 = self.lateral_accel_ema_mps2;
+        self.lateral_accel_ema_mps2 = update_ema(
+            self.lateral_accel_ema_mps2,
+            lateral_accel_mps2,
+            accel_tau_s,
+            dt,
+        );
+        let raw_jerk_mps3 = ((self.lateral_accel_ema_mps2 - previous_lateral_accel_mps2) / dt)
+            .clamp(-max_raw_jerk_mps3, max_raw_jerk_mps3);
+        self.jerk_abs_ema_mps3 = if self.jerk_initialized {
+            update_ema(self.jerk_abs_ema_mps3, raw_jerk_mps3.abs(), jerk_tau_s, dt)
+        } else {
+            self.jerk_initialized = true;
+            raw_jerk_mps3.abs()
+        };
+
+        Some(SmoothedLateralMotion {
+            lateral_accel_mps2: self.lateral_accel_ema_mps2,
+            lateral_jerk_abs_mps3: self.jerk_abs_ema_mps3,
         })
     }
 }
@@ -324,18 +405,22 @@ impl HarshBrakeDetector {
     }
 }
 
-/// Streaming detector for harsh cornering from `abs(yaw_rate * speed)`.
+/// Streaming detector for jerk-gated lateral side-load.
 #[derive(Clone, Debug)]
 pub struct HarshCornerDetector {
     cfg: HarshCornerConfig,
+    lateral_motion: LateralJerkEma,
     tracker: MetricIntervalTracker,
+    last_jerk_trigger_t_s: f32,
 }
 
 impl HarshCornerDetector {
     pub fn new(cfg: HarshCornerConfig) -> Self {
         Self {
             cfg,
+            lateral_motion: LateralJerkEma::new(),
             tracker: MetricIntervalTracker::new(),
+            last_jerk_trigger_t_s: -1.0e9,
         }
     }
 
@@ -344,22 +429,45 @@ impl HarshCornerDetector {
     }
 
     pub fn update(&mut self, sample: HarshCornerSample) -> Option<HarshCornerEvent> {
-        if !sample.t_s.is_finite()
-            || !sample.speed_mps.is_finite()
-            || !sample.yaw_rate_radps.is_finite()
-        {
+        if !sample.t_s.is_finite() || !sample.speed_mps.is_finite() {
             return None;
         }
         let speed_mps = sample.speed_mps.abs();
-        let lateral_accel_mps2 = if speed_mps >= self.cfg.min_speed_mps {
-            (sample.yaw_rate_radps * speed_mps).abs()
+        if !sample.lateral_accel_mps2.is_finite() {
+            return None;
+        }
+        let Some(motion) = self.lateral_motion.update(
+            sample.t_s,
+            sample.lateral_accel_mps2,
+            self.cfg.lateral_accel_tau_s,
+            self.cfg.lateral_jerk_tau_s,
+            self.cfg.max_raw_lateral_jerk_mps3,
+        ) else {
+            return None;
+        };
+
+        let load_mps2 = motion.lateral_accel_mps2.abs();
+        if speed_mps >= self.cfg.min_speed_mps
+            && motion.lateral_jerk_abs_mps3 >= self.cfg.lateral_jerk_threshold_mps3
+        {
+            self.last_jerk_trigger_t_s = sample.t_s;
+        }
+
+        let jerk_recent = sample.t_s - self.last_jerk_trigger_t_s <= self.cfg.jerk_trigger_window_s;
+        let speed_valid = speed_mps >= self.cfg.min_speed_mps;
+        let metric_mps2 = if speed_valid
+            && (self.tracker.active.is_some()
+                || (load_mps2 >= self.cfg.lateral_accel_threshold_mps2 && jerk_recent))
+        {
+            load_mps2
         } else {
             0.0
         };
+
         self.tracker
             .update(
                 sample.t_s,
-                lateral_accel_mps2,
+                metric_mps2,
                 speed_mps,
                 speed_mps,
                 self.metric_cfg(),

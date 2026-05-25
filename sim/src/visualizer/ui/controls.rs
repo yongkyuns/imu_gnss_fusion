@@ -118,6 +118,9 @@ impl App {
                 if ui.button("Align").clicked() {
                     self.tuning_panel = Some(TuningPanel::Align);
                 }
+                if ui.button("Events").clicked() {
+                    self.tuning_panel = Some(TuningPanel::RoadEvents);
+                }
                 ui.separator();
                 let inspector_response =
                     ui.toggle_value(&mut self.show_update_inspector, "Inspector");

@@ -1,10 +1,10 @@
 use anyhow::{Context, Result, bail};
 use road_events::{
-    HarshAccelConfig, HarshAccelDetector, HarshBrakeConfig, HarshBrakeDetector, HarshCornerConfig,
-    HarshCornerDetector, HarshCornerSample, HarshLongitudinalSample, HillConfig, HillDetector,
-    HillKind, HillSample, ReverseConfig, ReverseDetector, ReverseSample, RoadRoughnessAnalyzer,
-    RoadRoughnessEstimate, RoadRoughnessLevel, RoadRoughnessSample, SpeedBumpConfig,
-    SpeedBumpDetector, SpeedBumpSample, TripEventKind, TripSample, TripStats, TripSummary,
+    HarshAccelConfig, HarshAccelDetector, HarshBrakeDetector, HarshCornerDetector,
+    HarshCornerSample, HarshLongitudinalSample, HillConfig, HillDetector, HillKind, HillSample,
+    ReverseConfig, ReverseDetector, ReverseSample, RoadRoughnessAnalyzer, RoadRoughnessEstimate,
+    RoadRoughnessLevel, RoadRoughnessSample, SpeedBumpConfig, SpeedBumpDetector, SpeedBumpSample,
+    TripEventKind, TripSample, TripStats, TripSummary,
 };
 use sensor_fusion::SensorFusion;
 use sensor_fusion::ekf::UPDATE_DIAG_TYPES;
@@ -545,12 +545,13 @@ fn build_generic_replay_plot_data_impl(
     let mut road_events = Vec::new();
     let mut hill_detector = HillDetector::new(HillConfig::default());
     let mut reverse_detector = ReverseDetector::new(ReverseConfig::default());
-    let mut harsh_accel_detector = HarshAccelDetector::new(HarshAccelConfig::default());
-    let mut harsh_brake_detector = HarshBrakeDetector::new(HarshBrakeConfig::default());
-    let mut harsh_corner_detector = HarshCornerDetector::new(HarshCornerConfig::default());
+    let harsh_behavior = filter_cfg.harsh_behavior_preset.configs();
+    let mut harsh_accel_detector = HarshAccelDetector::new(harsh_behavior.accel);
+    let mut harsh_brake_detector = HarshBrakeDetector::new(harsh_behavior.brake);
+    let mut harsh_corner_detector = HarshCornerDetector::new(harsh_behavior.corner);
     let mut trip_stats = TripStats::default();
     let mut latest_gnss_height_m: Option<f32> = None;
-    let mut visual_long_accel = VisualLongitudinalAccelEma::new(HarshAccelConfig::default());
+    let mut visual_long_accel = VisualLongitudinalAccelEma::new(harsh_behavior.accel);
     let mut road_event_motion = RoadEventMotionTraces::default();
     let mut road_segments = Vec::new();
 
@@ -665,17 +666,19 @@ fn build_generic_replay_plot_data_impl(
                             .push(harsh_longitudinal_segment_sample("harsh braking", event));
                     }
                 }
-                if let Some(corner_sample) = harsh_corner_sample(sample.t_s, sample, &fusion) {
+                if let Some((corner_sample, yaw_rate_radps)) =
+                    harsh_corner_sample(sample.t_s, sample, &fusion)
+                {
                     road_event_motion
                         .speed_mps
                         .push([corner_sample.t_s as f64, corner_sample.speed_mps as f64]);
                     road_event_motion.yaw_rate_dps.push([
                         corner_sample.t_s as f64,
-                        (corner_sample.yaw_rate_radps as f64).to_degrees(),
+                        (yaw_rate_radps as f64).to_degrees(),
                     ]);
                     road_event_motion.lateral_accel_mps2.push([
                         corner_sample.t_s as f64,
-                        (corner_sample.yaw_rate_radps * corner_sample.speed_mps).abs() as f64,
+                        corner_sample.lateral_accel_mps2.abs() as f64,
                     ]);
                     if let Some(event) = harsh_corner_detector.update(corner_sample) {
                         trip_stats.record_event(TripEventKind::HarshCornering);
@@ -1817,15 +1820,18 @@ fn harsh_corner_sample(
     t_s: f64,
     sample: &GenericImuSample,
     fusion: &SensorFusion,
-) -> Option<HarshCornerSample> {
+) -> Option<(HarshCornerSample, f32)> {
     let ekf = fusion.ekf()?;
     let velocity_vehicle = ekf_vehicle_velocity(ekf);
-    let (gyro_vehicle, _) = ekf_vehicle_motion(sample, ekf);
-    Some(HarshCornerSample {
-        t_s: t_s as f32,
-        speed_mps: velocity_vehicle[0].hypot(velocity_vehicle[1]) as f32,
-        yaw_rate_radps: gyro_vehicle[2] as f32,
-    })
+    let (gyro_vehicle, accel_vehicle) = ekf_vehicle_motion(sample, ekf);
+    Some((
+        HarshCornerSample {
+            t_s: t_s as f32,
+            speed_mps: velocity_vehicle[0].hypot(velocity_vehicle[1]) as f32,
+            lateral_accel_mps2: accel_vehicle[1] as f32,
+        },
+        gyro_vehicle[2] as f32,
+    ))
 }
 
 fn road_segment_sample(event: road_events::HillEvent) -> RoadSegmentSample {

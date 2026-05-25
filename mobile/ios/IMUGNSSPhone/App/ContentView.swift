@@ -115,7 +115,7 @@ private extension RouteLayerSelection {
 
 struct ContentView: View {
 #if DEBUG
-    @AppStorage("developerToolsEnabled") private var developerToolsEnabled = false
+    @State private var developerToolsEnabled = UserDefaults.standard.bool(forKey: "developerToolsEnabled")
 #endif
 
     var body: some View {
@@ -131,6 +131,18 @@ struct ContentView: View {
                 }
 
 #if DEBUG
+            SettingsView(developerToolsEnabled: $developerToolsEnabled)
+                .tabItem {
+                    Label("Settings", systemImage: "gearshape")
+                }
+#else
+            SettingsView()
+                .tabItem {
+                    Label("Settings", systemImage: "gearshape")
+                }
+#endif
+
+#if DEBUG
             if developerToolsEnabled {
                 DiagnosticsView()
                     .tabItem {
@@ -138,12 +150,13 @@ struct ContentView: View {
                     }
             }
 #endif
-
-            SettingsView()
-                .tabItem {
-                    Label("Settings", systemImage: "gearshape")
-                }
         }
+#if DEBUG
+        .id(developerToolsEnabled)
+        .onChange(of: developerToolsEnabled) { isEnabled in
+            UserDefaults.standard.set(isEnabled, forKey: "developerToolsEnabled")
+        }
+#endif
     }
 }
 
@@ -1725,7 +1738,7 @@ private struct DeveloperComparisonSection: View {
 private struct SettingsView: View {
     @EnvironmentObject private var controls: SettingsControlModel
 #if DEBUG
-    @AppStorage("developerToolsEnabled") private var developerToolsEnabled = false
+    @Binding var developerToolsEnabled: Bool
 #endif
 
     var body: some View {
@@ -1756,6 +1769,15 @@ private struct SettingsView: View {
                 }
 
                 Section("Event Audio") {
+                    Picker("Harsh Behavior", selection: Binding(
+                        get: { controls.state.harshBehaviorPreset },
+                        set: { controls.setHarshBehaviorPreset($0) }
+                    )) {
+                        ForEach(HarshBehaviorPreset.allCases) { preset in
+                            Text(preset.displayTitle).tag(preset)
+                        }
+                    }
+                    .accessibilityIdentifier("harshBehaviorPresetPicker")
                     Picker("Audible Alerts", selection: Binding(
                         get: { controls.state.eventAudioSettings.mode },
                         set: { controls.setEventAudibleAlertMode($0) }
@@ -1798,20 +1820,23 @@ private struct SettingsView: View {
                 }
 
                 Section("Fusion") {
-                    valueRow("Mode", state.mountModeTitle)
+                    valueRow("Mode", controls.state.mountModeTitle)
+                        .accessibilityIdentifier("mountModeRow")
                     Toggle(isOn: Binding(
-                        get: { state.mountMemorySettings.isEnabled },
+                        get: { controls.state.mountMemorySettings.isEnabled },
                         set: { controls.setMountMemoryEnabled($0) }
                     )) {
                         Text("Remember Mount")
                     }
-                    valueRow("Saved Mount", state.savedMountTitle)
+                    .accessibilityIdentifier("rememberMountToggle")
+                    valueRow("Saved Mount", controls.state.savedMountTitle)
+                        .accessibilityIdentifier("savedMountRow")
                     Button {
                         controls.clearRememberedMount()
                     } label: {
                         Label("Clear Remembered Mount", systemImage: "trash")
                     }
-                    .disabled(state.mountMemorySettings.savedCalibration == nil)
+                    .disabled(controls.state.mountMemorySettings.savedCalibration == nil)
                     Text("When enabled, the app saves the aligned phone-to-vehicle mount and uses it on the next live or playback start. Auto alignment remains the fallback until a mount has been saved.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -1821,6 +1846,7 @@ private struct SettingsView: View {
 #if DEBUG
                 Section("Developer Tools") {
                     Toggle("Diagnostics", isOn: $developerToolsEnabled)
+                        .accessibilityIdentifier("developerDiagnosticsToggle")
                     Text("Shows internal comparison and diagnostic views in debug builds only.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -2946,6 +2972,8 @@ private func valueRow(_ label: String, _ value: String) -> some View {
             .multilineTextAlignment(.trailing)
             .monospacedDigit()
     }
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel("\(label), \(value)")
 }
 
 private func format(_ value: Double, decimals: Int) -> String {
