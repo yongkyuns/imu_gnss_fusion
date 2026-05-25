@@ -648,6 +648,138 @@ fn roughness_keeps_discrete_bumps_out_of_rough_level() {
 }
 
 #[test]
+fn roughness_emits_shocks_without_inflating_ambient_texture() {
+    let cfg = RoadRoughnessConfig {
+        high_pass_cutoff_hz: 0.05,
+        low_pass_cutoff_hz: 20.0,
+        distance_tau_m: 30.0,
+        min_speed_mps: 0.5,
+        shock_min_peak_mps2: 2.0,
+        ..RoadRoughnessConfig::default()
+    };
+    let mut analyzer = RoadRoughnessAnalyzer::new(cfg);
+    let mut shock_events = 0;
+    let mut rough_events = 0;
+    let mut peak_rms = 0.0;
+    for i in 0..5000 {
+        let t = i as f32 * 0.02;
+        let shock = [8.0, 11.0, 12.5, 14.0, 25.0, 31.0]
+            .iter()
+            .any(|center| (t - center).abs() < 0.03);
+        let accel = 0.25 * (8.0 * t).sin() + if shock { 10.0 } else { 0.0 };
+        let update = analyzer
+            .update_with_events(RoadRoughnessSample {
+                t_s: t,
+                speed_mps: 10.0,
+                vertical_accel_mps2: accel,
+            })
+            .expect("valid roughness sample");
+        peak_rms = update.estimate.roughness_rms_mps2.max(peak_rms);
+        shock_events += u32::from(update.shock_event.is_some());
+        rough_events += u32::from(update.roughness_event.is_some());
+    }
+
+    assert!(shock_events >= 3, "shock_events {shock_events}");
+    assert_eq!(rough_events, 0);
+    assert!(
+        peak_rms < cfg.rough_event_enter_mps2,
+        "peak roughness {peak_rms}"
+    );
+}
+
+#[test]
+fn roughness_emits_rough_road_event_without_shocks_for_sustained_texture() {
+    let cfg = RoadRoughnessConfig {
+        high_pass_cutoff_hz: 0.05,
+        low_pass_cutoff_hz: 20.0,
+        min_speed_mps: 0.5,
+        shock_min_peak_mps2: 2.5,
+        ..RoadRoughnessConfig::default()
+    };
+    let mut analyzer = RoadRoughnessAnalyzer::new(cfg);
+    let speed_mps = 10.0;
+    let dt = 0.02;
+    let spatial_wavelength_m = 5.0;
+    let mut rough_events = 0;
+    let mut shock_events = 0;
+    for i in 0..5000 {
+        let t = i as f32 * dt;
+        let x = speed_mps * t;
+        let phase = core::f32::consts::TAU * x / spatial_wavelength_m;
+        let accel = if (20.0..90.0).contains(&x) {
+            1.15 * phase.sin()
+        } else {
+            0.08 * phase.sin()
+        };
+        let update = analyzer
+            .update_with_events(RoadRoughnessSample {
+                t_s: t,
+                speed_mps,
+                vertical_accel_mps2: accel,
+            })
+            .expect("valid roughness sample");
+        rough_events += u32::from(update.roughness_event.is_some());
+        shock_events += u32::from(update.shock_event.is_some());
+    }
+
+    assert!(rough_events >= 1, "rough_events {rough_events}");
+    assert_eq!(shock_events, 0);
+}
+
+#[test]
+fn roughness_live_notification_and_completed_interval_are_separate() {
+    let cfg = RoadRoughnessConfig {
+        high_pass_cutoff_hz: 0.05,
+        low_pass_cutoff_hz: 20.0,
+        min_speed_mps: 0.5,
+        shock_min_peak_mps2: 2.5,
+        ..RoadRoughnessConfig::default()
+    };
+    let mut analyzer = RoadRoughnessAnalyzer::new(cfg);
+    let speed_mps = 10.0;
+    let dt = 0.02;
+    let spatial_wavelength_m = 5.0;
+    let mut live_event = None;
+    let mut completed_event = None;
+    let mut live_events = 0;
+    let mut completed_events = 0;
+
+    for i in 0..5000 {
+        let t = i as f32 * dt;
+        let x = speed_mps * t;
+        let phase = core::f32::consts::TAU * x / spatial_wavelength_m;
+        let accel = if (20.0..90.0).contains(&x) {
+            1.15 * phase.sin()
+        } else {
+            0.08 * phase.sin()
+        };
+        let update = analyzer
+            .update_with_events(RoadRoughnessSample {
+                t_s: t,
+                speed_mps,
+                vertical_accel_mps2: accel,
+            })
+            .expect("valid roughness sample");
+        if let Some(event) = update.roughness_event {
+            live_events += 1;
+            live_event = Some(event);
+        }
+        if let Some(event) = update.completed_roughness_event {
+            completed_events += 1;
+            completed_event = Some(event);
+        }
+    }
+
+    let live_event = live_event.expect("live rough-road notification");
+    let completed_event = completed_event.expect("completed rough-road interval");
+    assert_eq!(live_events, 1);
+    assert_eq!(completed_events, 1);
+    assert_eq!(live_event.start_t_s, completed_event.start_t_s);
+    assert!(completed_event.end_t_s > live_event.end_t_s);
+    assert!(completed_event.duration_s > live_event.duration_s);
+}
+
+#[test]
 fn roughness_dissipates_after_clean_road_distance() {
     let cfg = RoadRoughnessConfig {
         high_pass_cutoff_hz: 0.05,

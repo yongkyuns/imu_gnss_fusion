@@ -367,6 +367,7 @@ pub fn decimate_for_transport(data: &mut PlotData, max_points_per_trace: usize) 
     decimate_group(&mut data.ekf_bump_pitch_speed, max_points_per_trace);
     decimate_group(&mut data.ekf_bump_diag, max_points_per_trace);
     decimate_group(&mut data.ekf_road_roughness, max_points_per_trace);
+    decimate_group(&mut data.ekf_road_event_motion, max_points_per_trace);
     decimate_group(&mut data.align_cmp_att, max_points_per_trace);
     decimate_group(&mut data.align_res_vel, max_points_per_trace);
     decimate_group(&mut data.align_axis_err, max_points_per_trace);
@@ -670,6 +671,7 @@ mod tests {
         let mut data = PlotData {
             ekf_cmp_att: vec![dense_trace()],
             ekf_meas_gyro: vec![dense_trace()],
+            ekf_road_event_motion: vec![dense_trace()],
             ..PlotData::default()
         };
 
@@ -678,6 +680,7 @@ mod tests {
         assert!(data.ekf_cmp_att[0].points.len() > WEB_TRANSPORT_MAX_POINTS_PER_TRACE);
         assert!(data.ekf_cmp_att[0].points.len() <= WEB_TRANSPORT_DETAIL_POINTS_PER_TRACE);
         assert!(data.ekf_meas_gyro[0].points.len() <= WEB_TRANSPORT_MAX_POINTS_PER_TRACE);
+        assert!(data.ekf_road_event_motion[0].points.len() <= WEB_TRANSPORT_MAX_POINTS_PER_TRACE);
     }
 }
 

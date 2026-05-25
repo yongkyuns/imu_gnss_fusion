@@ -90,6 +90,7 @@ final class SensorStore: NSObject, ObservableObject {
     @Published var mountMemorySettings: MountMemorySettings = MountMemoryDefaults.load()
     @Published var streamHealth: StreamHealth = .starting
     @Published var fusionProfiling: FusionProfilingSnapshot = .empty
+    @Published var appResourceUsage: AppResourceUsageSnapshot = .empty
 #if DEBUG
     @Published var iosAttitudeEulerDeg: TimedVec3Sample?
 #endif
@@ -104,6 +105,7 @@ final class SensorStore: NSObject, ObservableObject {
     private let rawSessionStore = RawSessionFileStore()
     private let rawLogLock = NSLock()
     private let streamGenerationLock = NSLock()
+    private let resourceProfilerLock = NSLock()
     private let motionQueue = OperationQueue()
     private let fusionQueue = OperationQueue()
     private let barometerQueue = OperationQueue()
@@ -116,6 +118,7 @@ final class SensorStore: NSObject, ObservableObject {
     private var lastBaroPublishTS: TimeInterval?
     private var lastFusionUiPublishTS: TimeInterval?
     private var lastFusionProfilingPublishTS: TimeInterval?
+    private var lastResourceUsagePublishTS: TimeInterval?
     private var lastFusionSampleDate: Date?
     private var lastFusionImuSampleDate: Date?
     private var lastStreamHealthPublishTS: TimeInterval?
@@ -141,6 +144,7 @@ final class SensorStore: NSObject, ObservableObject {
     private var fusionEkfInitializedAt: Date?
     private var lastMountMemoryStoreDate: Date?
     private var fusionProfiler = FusionLoopProfiler()
+    private var resourceProfiler = AppResourceUsageProfiler()
     private var motionEventDetector = MotionEventDetector()
     private let eventAudioNotifier = EventAudioNotifier()
 
@@ -153,12 +157,13 @@ final class SensorStore: NSObject, ObservableObject {
         let gz: Double
     }
 
-    private let motionPublishMinDtSec = 1.0 / 10.0
+    private let motionPublishMinDtSec = 1.0 / 4.0
     private let baroPublishMinDtSec = 1.0 / 10.0
-    private let fusionUiPublishMinDtSec = 1.0 / 10.0
+    private let fusionUiPublishMinDtSec = 1.0 / 4.0
     private let fusionProfilingPublishMinDtSec = 1.0
+    private let resourceUsagePublishMinDtSec = 1.0
     private let streamHealthPublishMinDtSec = 0.5
-    private let replayProgressPublishMinDtSec = 1.0 / 15.0
+    private let replayProgressPublishMinDtSec = 1.0 / 5.0
     private let tripStatsPublishMinDtSec = 1.0
     private let chartHistoryMaxCount = 240
     private let routeHistoryMaxCount = 21_600
@@ -227,6 +232,7 @@ final class SensorStore: NSObject, ObservableObject {
         lastBaroPublishTS = nil
         lastFusionUiPublishTS = nil
         lastFusionProfilingPublishTS = nil
+        lastResourceUsagePublishTS = nil
         lastStreamHealthPublishTS = nil
         lastTripStatsPublishTS = nil
         lastImuUiSampleDate = nil
@@ -261,6 +267,8 @@ final class SensorStore: NSObject, ObservableObject {
         vehicleDownMps = nil
         fusionConfidence = 0.0
         fusionProfiling = .empty
+        appResourceUsage = .empty
+        resetResourceProfiling()
         alignProgress = .unavailable
         vehicleSegment = nil
         motionEvents.removeAll(keepingCapacity: true)
@@ -418,6 +426,7 @@ final class SensorStore: NSObject, ObservableObject {
         lastBaroPublishTS = nil
         lastFusionUiPublishTS = nil
         lastFusionProfilingPublishTS = nil
+        lastResourceUsagePublishTS = nil
         lastStreamHealthPublishTS = nil
         lastTripStatsPublishTS = nil
         lastImuUiSampleDate = nil
@@ -752,6 +761,7 @@ final class SensorStore: NSObject, ObservableObject {
         lastBaroPublishTS = nil
         lastFusionUiPublishTS = nil
         lastFusionProfilingPublishTS = nil
+        lastResourceUsagePublishTS = nil
         gnssRouteHistory.removeAll(keepingCapacity: true)
         fusedRouteHistory.removeAll(keepingCapacity: true)
         nedPositionHistory.removeAll(keepingCapacity: true)
@@ -792,6 +802,8 @@ final class SensorStore: NSObject, ObservableObject {
         vehicleDownMps = nil
         fusionConfidence = 0.0
         fusionProfiling = .empty
+        appResourceUsage = .empty
+        resetResourceProfiling()
         alignProgress = .unavailable
         vehicleSegment = nil
         motionEvents.removeAll(keepingCapacity: true)
@@ -817,6 +829,7 @@ final class SensorStore: NSObject, ObservableObject {
     private func handleRawImuSample(_ sample: RawImuSynchronizer.FusedSample, generation: Int) {
         let timestampSec = sample.timestampSec
         let sampleDate = dateFromMotionTimestamp(timestampSec)
+        recordResourceUsage { $0.recordImuCallback(now: ProcessInfo.processInfo.systemUptime) }
         let ax = sample.accel.x
         let ay = sample.accel.y
         let az = sample.accel.z
@@ -1342,9 +1355,13 @@ final class SensorStore: NSObject, ObservableObject {
         dropsWhenBacklogged: Bool = false,
         _ operation: @escaping (SensorStore) -> Void
     ) {
-        if dropsWhenBacklogged, fusionQueue.operationCount > maximumPendingLiveFusionOperations {
+        let pendingOperations = fusionQueue.operationCount
+        if dropsWhenBacklogged, pendingOperations > maximumPendingLiveFusionOperations {
+            AppPerformanceSignposts.event("Fusion Drop Backlog")
+            recordResourceUsage { $0.recordFusionDrop(queueDepth: pendingOperations, now: ProcessInfo.processInfo.systemUptime) }
             return
         }
+        recordResourceUsage { $0.recordFusionEnqueue(queueDepth: pendingOperations + 1, now: ProcessInfo.processInfo.systemUptime) }
         fusionQueue.addOperation { [weak self] in
             guard let self, self.isCurrentGeneration(generation) else { return }
             operation(self)
@@ -1436,6 +1453,7 @@ extension SensorStore: CLLocationManagerDelegate {
         }
         lastLocationErrorMessage = nil
         let generation = currentStreamGeneration()
+        recordResourceUsage { $0.recordGnssCallback(now: ProcessInfo.processInfo.systemUptime) }
         let nedPosition = computeNEDPositionFromGnss(current: loc)
         let nedVelocity = computeNEDVelocityFromGnss(current: loc)
 
@@ -1573,11 +1591,13 @@ extension SensorStore: CLLocationManagerDelegate {
             after: lastFusionSampleDate
         )
         let fusionStartTS = ProcessInfo.processInfo.systemUptime
-        let result = fusionEngine.processImu(
-            sampleDate: processingDate,
-            accelMps2: (x: ax, y: ay, z: az),
-            gyroRadps: (x: gx, y: gy, z: gz)
-        )
+        let result = AppPerformanceSignposts.interval("Fusion IMU Update") {
+            fusionEngine.processImu(
+                sampleDate: processingDate,
+                accelMps2: (x: ax, y: ay, z: az),
+                gyroRadps: (x: gx, y: gy, z: gz)
+            )
+        }
         recordFusionProfiling(
             loop: .imu,
             durationSec: ProcessInfo.processInfo.systemUptime - fusionStartTS,
@@ -1652,28 +1672,30 @@ extension SensorStore: CLLocationManagerDelegate {
             after: lastFusionSampleDate
         )
         let fusionStartTS = ProcessInfo.processInfo.systemUptime
-        let result = fusionEngine.processGnss(
-            sampleDate: processingDate,
-            latitudeDeg: latitudeDeg,
-            longitudeDeg: longitudeDeg,
-            altitudeM: altitudeM,
-            positionStdM: (
-                n: input.positionStdM.north,
-                e: input.positionStdM.east,
-                d: input.positionStdM.down
-            ),
-            velocityNedMps: (
-                n: input.velocityNedMps.north,
-                e: input.velocityNedMps.east,
-                d: input.velocityNedMps.down
-            ),
-            velocityStdMps: (
-                n: input.velocityStdMps.north,
-                e: input.velocityStdMps.east,
-                d: input.velocityStdMps.down
-            ),
-            headingRad: input.headingRad
-        )
+        let result = AppPerformanceSignposts.interval("Fusion GNSS Update") {
+            fusionEngine.processGnss(
+                sampleDate: processingDate,
+                latitudeDeg: latitudeDeg,
+                longitudeDeg: longitudeDeg,
+                altitudeM: altitudeM,
+                positionStdM: (
+                    n: input.positionStdM.north,
+                    e: input.positionStdM.east,
+                    d: input.positionStdM.down
+                ),
+                velocityNedMps: (
+                    n: input.velocityNedMps.north,
+                    e: input.velocityNedMps.east,
+                    d: input.velocityNedMps.down
+                ),
+                velocityStdMps: (
+                    n: input.velocityStdMps.north,
+                    e: input.velocityStdMps.east,
+                    d: input.velocityStdMps.down
+                ),
+                headingRad: input.headingRad
+            )
+        }
         recordFusionProfiling(
             loop: .gnss,
             durationSec: ProcessInfo.processInfo.systemUptime - fusionStartTS,
@@ -1702,11 +1724,14 @@ extension SensorStore: CLLocationManagerDelegate {
     ) {
         guard let result else { return }
         guard shouldPublishFusionUi(status: result.status) else { return }
+        recordResourceUsage { $0.recordFusionUiPublish(now: ProcessInfo.processInfo.systemUptime) }
         Task { @MainActor in
-            let tSec = self.relativeTimeSeconds(for: sampleDate)
-            self.applyFusionStatus(result.status, alignProgressStatus: result.alignProgress)
-            if let snapshot = result.snapshot {
-                self.appendEkfSamplesFromState(snapshot, tSec: tSec, sampleDate: sampleDate, imuSample: imuSample)
+            AppPerformanceSignposts.interval("Publish Fusion UI") {
+                let tSec = self.relativeTimeSeconds(for: sampleDate)
+                self.applyFusionStatus(result.status, alignProgressStatus: result.alignProgress)
+                if let snapshot = result.snapshot {
+                    self.appendEkfSamplesFromState(snapshot, tSec: tSec, sampleDate: sampleDate, imuSample: imuSample)
+                }
             }
         }
     }
@@ -1746,6 +1771,32 @@ extension SensorStore: CLLocationManagerDelegate {
         Task { @MainActor in
             guard self.isCurrentGeneration(generation) else { return }
             self.fusionProfiling = snapshot
+        }
+    }
+
+    private func resetResourceProfiling() {
+        resourceProfilerLock.lock()
+        resourceProfiler.reset(now: ProcessInfo.processInfo.systemUptime)
+        resourceProfilerLock.unlock()
+    }
+
+    private func recordResourceUsage(_ update: (inout AppResourceUsageProfiler) -> Void) {
+        resourceProfilerLock.lock()
+        update(&resourceProfiler)
+        let now = ProcessInfo.processInfo.systemUptime
+        if let lastResourceUsagePublishTS,
+           now - lastResourceUsagePublishTS < resourceUsagePublishMinDtSec {
+            resourceProfilerLock.unlock()
+            return
+        }
+        lastResourceUsagePublishTS = now
+        let snapshot = resourceProfiler.snapshot(
+            now: now,
+            residentMemoryMB: AppResourceUsageSampler.residentMemoryMB()
+        )
+        resourceProfilerLock.unlock()
+        Task { @MainActor in
+            self.appResourceUsage = snapshot
         }
     }
 
@@ -1984,39 +2035,42 @@ extension SensorStore: CLLocationManagerDelegate {
         gz: Double,
         sampleDate: Date
     ) {
-        lastImuUiSampleDate = sampleDate
-        lastMotionErrorMessage = nil
-        motion = MotionSample(
-            ax: ax,
-            ay: ay,
-            az: az,
-            gx: gx,
-            gy: gy,
-            gz: gz,
-            timestamp: sampleDate
-        )
-        let tSec = relativeTimeSeconds(for: sampleDate)
-        appendSample(
-            to: &imuAccelHistory,
-            sample: TimedVec3Sample(
-                tSec: tSec,
-                x: ax,
-                y: ay,
-                z: az
-            ),
-            maxCount: chartHistoryMaxCount
-        )
-        appendSample(
-            to: &imuGyroHistory,
-            sample: TimedVec3Sample(
-                tSec: tSec,
-                x: gx,
-                y: gy,
-                z: gz
-            ),
-            maxCount: chartHistoryMaxCount
-        )
-        updateStreamHealth(now: Date(), force: false)
+        AppPerformanceSignposts.interval("Publish Motion UI") {
+            recordResourceUsage { $0.recordMotionUiPublish(now: ProcessInfo.processInfo.systemUptime) }
+            lastImuUiSampleDate = sampleDate
+            lastMotionErrorMessage = nil
+            motion = MotionSample(
+                ax: ax,
+                ay: ay,
+                az: az,
+                gx: gx,
+                gy: gy,
+                gz: gz,
+                timestamp: sampleDate
+            )
+            let tSec = relativeTimeSeconds(for: sampleDate)
+            appendSample(
+                to: &imuAccelHistory,
+                sample: TimedVec3Sample(
+                    tSec: tSec,
+                    x: ax,
+                    y: ay,
+                    z: az
+                ),
+                maxCount: chartHistoryMaxCount
+            )
+            appendSample(
+                to: &imuGyroHistory,
+                sample: TimedVec3Sample(
+                    tSec: tSec,
+                    x: gx,
+                    y: gy,
+                    z: gz
+                ),
+                maxCount: chartHistoryMaxCount
+            )
+            updateStreamHealth(now: Date(), force: false)
+        }
     }
 
     @MainActor
@@ -2185,6 +2239,7 @@ extension SensorStore: CLLocationManagerDelegate {
         generation: Int
     ) {
         guard snapshot.initialized else { return }
+        recordResourceUsage { $0.recordRoadEventUpdate(now: ProcessInfo.processInfo.systemUptime) }
         let tSec = roadEventRelativeTimeSeconds(for: sampleDate)
         let nedVelocity = NavigationVectorNED(
             north: snapshot.velocityNedMps.n,
@@ -2203,16 +2258,19 @@ extension SensorStore: CLLocationManagerDelegate {
             qBV: snapshot.mountQBV,
             bodyAccelMps2: (x: ax, y: ay, z: az)
         )
-        let events = fusionEngine.processRoadEventMotion(
-            tSec: tSec,
-            forwardVelocityMps: vehicleVelocity.forward,
-            groundSpeedMps: MotionKinematics.groundSpeed(nedVelocity),
-            longitudinalAccelMps2: vehicleAccel.forward,
-            yawRateRadps: vehicleGyro.down,
-            pitchDeg: snapshot.eulerRad.pitch * 180.0 / .pi,
-            lateralAccelMps2: vehicleAccel.right,
-            verticalAccelerationMps2: vehicleAccel.down
-        ).map { detection in
+        let detections = AppPerformanceSignposts.interval("Road Event Update") {
+            fusionEngine.processRoadEventMotion(
+                tSec: tSec,
+                forwardVelocityMps: vehicleVelocity.forward,
+                groundSpeedMps: MotionKinematics.groundSpeed(nedVelocity),
+                longitudinalAccelMps2: vehicleAccel.forward,
+                yawRateRadps: vehicleGyro.down,
+                pitchDeg: snapshot.eulerRad.pitch * 180.0 / .pi,
+                lateralAccelMps2: vehicleAccel.right,
+                verticalAccelerationMps2: vehicleAccel.down
+            )
+        }
+        let events = detections.map { detection in
             MotionEvent(
                 roadEvent: detection,
                 sampleTimestamp: sampleDate,

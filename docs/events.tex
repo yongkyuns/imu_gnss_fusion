@@ -45,7 +45,8 @@ force. The current event set is:
   \item harsh acceleration,
   \item harsh braking,
   \item harsh cornering,
-  \item road-surface roughness,
+  \item road-surface roughness and rough-road intervals,
+  \item short vertical road shocks,
   \item streaming trip statistics such as distance, duration, speed extrema,
     elevation gain/loss, and event rates.
 \end{itemize}
@@ -174,20 +175,37 @@ duplicate events immediately after a valid event.
 
 \subsection{Metric}
 
-\path{RoadRoughnessAnalyzer} estimates continuous road-surface roughness rather
-than a discrete event. The input is vehicle-frame, gravity-compensated vertical
-acceleration. The implementation first rejects grade, body attitude drift, and
-high-frequency sensor/structure noise:
+\path{RoadRoughnessAnalyzer} estimates continuous road-surface roughness and
+also emits two event types from the same vertical-motion stream:
+\begin{itemize}[nosep]
+  \item rough-road intervals for sustained increases in ambient road texture,
+  \item road-shock intervals for short isolated vertical impacts such as sharp
+    joints, potholes, or large bump impulses.
+\end{itemize}
+
+The input is vehicle-frame, gravity-compensated vertical acceleration. The
+implementation first rejects grade, body attitude drift, and high-frequency
+sensor/structure noise:
 \begin{align}
   a_{z,\mathrm{hp},k} &=
     \operatorname{HPF}(a_{z,k}; f_c=0.7~\mathrm{Hz}),\\
   a_{z,\mathrm{bp},k} &=
     \operatorname{LPF}(a_{z,\mathrm{hp},k}; f_c=10~\mathrm{Hz}).
 \end{align}
-Large isolated defects are limited before they enter the roughness energy:
+Before the first ambient baseline is available, the limiter uses a conservative
+minimum cap. Afterwards, large isolated defects are hard-limited before they
+enter the roughness energy:
 \begin{equation}
+  C_k = \min\left(1.5,\max(0.6,3B_{k-1})\right),
+  \qquad
   \tilde{a}_{z,k}
-  = \operatorname{clamp}(a_{z,\mathrm{bp},k}, -1.5, 1.5).
+  = \operatorname{clamp}(a_{z,\mathrm{bp},k}, -C_k, C_k).
+\end{equation}
+The analyzer then tracks a local ambient vibration baseline from the robust
+band-passed magnitude:
+\begin{equation}
+  B_k = \operatorname{EMA}_{d}(B_{k-1}, \abs{\tilde{a}_{z,k}}, L_B),
+  \qquad L_B=20~\mathrm{m}.
 \end{equation}
 The roughness energy sample is
 \begin{equation}
@@ -229,9 +247,44 @@ Severe & \(R\ge1.20~\mathrm{m/s^2}\) & Extreme sustained vibration. \\
 
 Peak vertical acceleration is already used by speed-bump detection. Roughness is
 intended to describe a road interval, so a single bump or pothole should not
-dominate the estimate. The band-pass, clipping, speed gate, and 10 m
-distance-domain EMA make the metric local and streaming while keeping memory
-use constant.
+dominate the estimate. The band-pass, adaptive hard limiter, speed gate, and
+10 m distance-domain EMA make the metric local and streaming while keeping
+memory use constant.
+
+\subsection{Rough-Road Events}
+
+The continuous roughness estimate is also converted into a sparse event when
+there is a sustained local uptick:
+\begin{align}
+  \text{enter if}\quad &R_k \ge 0.60~\mathrm{m/s^2},\\
+  \text{remain active while}\quad &R_k \ge 0.42~\mathrm{m/s^2}.
+\end{align}
+The streaming analyzer distinguishes live notification from completed interval
+reporting. A live notification is emitted as soon as the active interval reaches
+one second, so embedded or UI consumers can react promptly. The completed
+rough-road interval is emitted when \(R_k\) falls below the exit threshold or
+when the stream is explicitly flushed. The completed interval is the one used
+for offline map and trace analysis because its end time, duration, mean
+roughness, peak roughness, mean speed, and distance are known. An eight-second
+refractory period prevents repeated live notifications while the same rough
+patch remains active.
+
+\subsection{Road-Shock Events}
+
+Road shocks use the raw band-passed magnitude before robust limiting, so
+isolated high-energy impacts can be reported without contaminating the ambient
+roughness estimate. The enter threshold is the larger of a fixed physical floor
+and the local baseline-scaled threshold:
+\begin{equation}
+  A_{\mathrm{shock},k}
+  = \max\left(2.5~\mathrm{m/s^2},\,6B_k\right).
+\end{equation}
+A shock candidate starts when
+\(\abs{a_{z,\mathrm{bp},k}}\ge A_{\mathrm{shock},k}\) and remains active until
+the magnitude falls below \(0.45A_{\mathrm{shock},k}\). It is emitted only if
+its duration is between \(0.02\) and \(0.65~\mathrm{s}\). This separates sharp
+impacts from sustained rough pavement. A \(0.5~\mathrm{s}\) refractory period
+suppresses duplicate shock events from the same impulse sequence.
 
 \section{Speed-Bump Detector}
 
@@ -586,10 +639,11 @@ both sides when data is available:
   [t_{\mathrm{start}}-5,\;t_{\mathrm{end}}+5].
 \end{equation}
 The mini-plot shows the signal that caused the detector to trigger, for example
-vertical acceleration and pitch for speed bumps, longitudinal acceleration for
-harsh acceleration/braking, and lateral side-load for harsh cornering. Yaw rate
-may still be shown as a diagnostic trace, but it is not the harsh-cornering
-trigger metric.
+vertical acceleration and pitch for speed bumps, roughness RMS and band-passed
+vertical acceleration for rough road and road shocks, longitudinal acceleration
+for harsh acceleration/braking, and lateral side-load for harsh cornering. Yaw
+rate may still be shown as a diagnostic trace, but it is not the
+harsh-cornering trigger metric.
 
 \section{Design Rationale}
 
@@ -605,7 +659,11 @@ detectors instead use physically interpretable metrics:
   \item reverse: signed vehicle-frame forward velocity with hysteresis,
   \item harsh acceleration/braking: smoothed velocity derivative,
   \item harsh cornering: jerk-gated lateral side-load from vehicle-frame
-    specific force.
+    specific force,
+  \item road roughness: distance-domain RMS of robustly limited band-passed
+    vertical acceleration,
+  \item road shocks: short raw band-passed vertical acceleration impulses
+    detected separately from the ambient roughness energy.
 \end{itemize}
 
 This keeps the algorithms easy to port to small embedded targets and easy to

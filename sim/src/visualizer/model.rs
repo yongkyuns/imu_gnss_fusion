@@ -5,6 +5,50 @@ pub struct Trace {
     pub points: Vec<[f64; 2]>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoadEventKind {
+    SpeedBump,
+    RoadShock,
+    RoughRoad,
+    Uphill,
+    Downhill,
+    Reverse,
+    HarshAcceleration,
+    HarshBraking,
+    HarshCornering,
+}
+
+impl RoadEventKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SpeedBump => "speed bump",
+            Self::RoadShock => "road shock",
+            Self::RoughRoad => "rough road",
+            Self::Uphill => "uphill",
+            Self::Downhill => "downhill",
+            Self::Reverse => "reverse",
+            Self::HarshAcceleration => "harsh acceleration",
+            Self::HarshBraking => "harsh braking",
+            Self::HarshCornering => "harsh cornering",
+        }
+    }
+
+    pub fn parse(kind: &str) -> Option<Self> {
+        match kind {
+            "speed bump" => Some(Self::SpeedBump),
+            "road shock" => Some(Self::RoadShock),
+            "rough road" => Some(Self::RoughRoad),
+            "uphill" => Some(Self::Uphill),
+            "downhill" => Some(Self::Downhill),
+            "reverse" => Some(Self::Reverse),
+            "harsh acceleration" => Some(Self::HarshAcceleration),
+            "harsh braking" => Some(Self::HarshBraking),
+            "harsh cornering" => Some(Self::HarshCornering),
+            _ => None,
+        }
+    }
+}
+
 #[cfg_attr(target_arch = "wasm32", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone, Default)]
 pub struct PlotData {
@@ -38,6 +82,7 @@ pub struct PlotData {
     pub ekf_bump_pitch_speed: Vec<Trace>,
     pub ekf_bump_diag: Vec<Trace>,
     pub ekf_road_roughness: Vec<Trace>,
+    pub ekf_road_event_motion: Vec<Trace>,
     pub road_events: Vec<RoadEventSample>,
     pub road_segments: Vec<RoadSegmentSample>,
     pub trip_summary: TripSummarySample,
@@ -71,7 +116,7 @@ impl PlotData {
             .any(|trace| !trace.points.is_empty())
     }
 
-    fn trace_groups(&self) -> [&[Trace]; 40] {
+    fn trace_groups(&self) -> [&[Trace]; 41] {
         [
             &self.speed,
             &self.vehicle_motion_gyro,
@@ -103,6 +148,7 @@ impl PlotData {
             &self.ekf_bump_pitch_speed,
             &self.ekf_bump_diag,
             &self.ekf_road_roughness,
+            &self.ekf_road_event_motion,
             &self.ekf_map,
             &self.align_cmp_att,
             &self.align_res_vel,
@@ -237,6 +283,8 @@ pub struct RoadSegmentSample {
 #[derive(Clone, Copy, Default)]
 pub struct TripEventCountsSample {
     pub speed_bumps: u32,
+    pub road_shocks: u32,
+    pub rough_road: u32,
     pub uphill: u32,
     pub downhill: u32,
     pub reverse: u32,
@@ -273,6 +321,8 @@ pub struct TripSummarySample {
     pub rolling_abs_lateral_accel_mps2: f64,
     pub events: TripEventCountsSample,
     pub speed_bumps_per_km: f64,
+    pub road_shocks_per_km: f64,
+    pub rough_road_events_per_km: f64,
     pub harsh_events_per_km: f64,
     pub reverse_seconds_per_km: f64,
     pub road_roughness_rms_mps2: f64,
@@ -318,6 +368,23 @@ mod tests {
             Some(&[[1.0, 2.0]][..])
         );
         assert!(data.has_trace_points());
+    }
+
+    #[test]
+    fn event_motion_traces_are_part_of_global_trace_lookup() {
+        let data = PlotData {
+            ekf_road_event_motion: vec![Trace {
+                name: "Event lateral accel [m/s^2]".to_string(),
+                points: vec![[2.0, 3.0]],
+            }],
+            ..PlotData::default()
+        };
+
+        assert_eq!(
+            data.trace_by_name("Event lateral accel [m/s^2]")
+                .map(|trace| trace.points.as_slice()),
+            Some(&[[2.0, 3.0]][..])
+        );
     }
 
     #[test]

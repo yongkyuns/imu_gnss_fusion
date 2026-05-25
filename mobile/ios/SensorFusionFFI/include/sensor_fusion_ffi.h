@@ -98,6 +98,8 @@ typedef struct SensorFusionFfiTripSummary {
     float rolling_abs_longitudinal_accel_mps2;
     float rolling_abs_lateral_accel_mps2;
     uint32_t speed_bumps;
+    uint32_t road_shocks;
+    uint32_t rough_road_events;
     uint32_t uphill_events;
     uint32_t downhill_events;
     uint32_t reverse_events;
@@ -105,6 +107,8 @@ typedef struct SensorFusionFfiTripSummary {
     uint32_t harsh_braking_events;
     uint32_t harsh_cornering_events;
     float speed_bumps_per_km;
+    float road_shocks_per_km;
+    float rough_road_events_per_km;
     float harsh_events_per_km;
     float reverse_seconds_per_km;
 } SensorFusionFfiTripSummary;

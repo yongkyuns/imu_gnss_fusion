@@ -46,6 +46,8 @@ struct RoadEventDetection: Equatable, Sendable {
         case speedBump = 5
         case uphill = 6
         case downhill = 7
+        case roadShock = 8
+        case roughRoad = 9
     }
 
     let kind: Kind
@@ -59,6 +61,8 @@ struct RoadEventDetection: Equatable, Sendable {
 
 struct TripEventCounts: Equatable, Sendable {
     var speedBumps: UInt32 = 0
+    var roadShocks: UInt32 = 0
+    var roughRoad: UInt32 = 0
     var uphill: UInt32 = 0
     var downhill: UInt32 = 0
     var reverse: UInt32 = 0
@@ -98,6 +102,8 @@ struct TripStatsSummary: Equatable, Sendable {
     var rollingAbsLateralAccelMps2: Double
     var events: TripEventCounts
     var speedBumpsPerKm: Double
+    var roadShocksPerKm: Double
+    var roughRoadEventsPerKm: Double
     var harshEventsPerKm: Double
     var reverseSecondsPerKm: Double
 
@@ -128,6 +134,8 @@ struct TripStatsSummary: Equatable, Sendable {
         rollingAbsLateralAccelMps2: 0.0,
         events: TripEventCounts(),
         speedBumpsPerKm: 0.0,
+        roadShocksPerKm: 0.0,
+        roughRoadEventsPerKm: 0.0,
         harshEventsPerKm: 0.0,
         reverseSecondsPerKm: 0.0
     )
@@ -323,7 +331,7 @@ final class FusionEngine {
         verticalAccelerationMps2: Double?
     ) -> [RoadEventDetection] {
         guard let handle else { return [] }
-        var rawEvents = Array(repeating: SensorFusionFfiRoadEvent(), count: 8)
+        var rawEvents = Array(repeating: SensorFusionFfiRoadEvent(), count: 10)
         let count = rawEvents.withUnsafeMutableBufferPointer { buffer in
             sensor_fusion_process_road_event_motion(
                 handle,
@@ -379,6 +387,8 @@ final class FusionEngine {
             rollingAbsLateralAccelMps2: Double(raw.rolling_abs_lateral_accel_mps2),
             events: TripEventCounts(
                 speedBumps: raw.speed_bumps,
+                roadShocks: raw.road_shocks,
+                roughRoad: raw.rough_road_events,
                 uphill: raw.uphill_events,
                 downhill: raw.downhill_events,
                 reverse: raw.reverse_events,
@@ -387,6 +397,8 @@ final class FusionEngine {
                 harshCornering: raw.harsh_cornering_events
             ),
             speedBumpsPerKm: Double(raw.speed_bumps_per_km),
+            roadShocksPerKm: Double(raw.road_shocks_per_km),
+            roughRoadEventsPerKm: Double(raw.rough_road_events_per_km),
             harshEventsPerKm: Double(raw.harsh_events_per_km),
             reverseSecondsPerKm: Double(raw.reverse_seconds_per_km)
         )

@@ -86,6 +86,8 @@ impl App {
                         ui.label(egui::RichText::new("Event Types").strong());
                         ui.separator();
                         ui.checkbox(&mut self.event_visibility.show_speed_bump, "Speed bumps");
+                        ui.checkbox(&mut self.event_visibility.show_road_shock, "Road shocks");
+                        ui.checkbox(&mut self.event_visibility.show_rough_road, "Rough road");
                         ui.checkbox(&mut self.event_visibility.show_uphill, "Uphill");
                         ui.checkbox(&mut self.event_visibility.show_downhill, "Downhill");
                         ui.checkbox(&mut self.event_visibility.show_reverse, "Reverse");

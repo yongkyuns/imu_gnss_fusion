@@ -276,7 +276,7 @@ final class MapRenderPolicyTests: XCTestCase {
     }
 
     func testRouteOverlayPolicyThrottlesContinuousRouteGrowth() {
-        XCTAssertLessThanOrEqual(MapRouteOverlayPolicy.minimumUpdateIntervalSec, 0.25)
+        XCTAssertGreaterThanOrEqual(MapRouteOverlayPolicy.minimumUpdateIntervalSec, 0.5)
         XCTAssertTrue(
             MapRouteOverlayPolicy.shouldUpdate(
                 previousGnssCount: nil,

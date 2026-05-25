@@ -12,7 +12,8 @@
 //! - [`HarshCornerDetector`] detects jerk-gated lateral side-load from
 //!   vehicle-frame specific force.
 //! - [`RoadRoughnessAnalyzer`] estimates distance-normalized vertical vibration
-//!   energy over a short effective road interval.
+//!   energy over a short effective road interval and emits rough-road or shock
+//!   events when enabled through [`RoadRoughnessAnalyzer::update_with_events`].
 //! - [`TripStats`] accumulates constant-memory trip distance, speed, grade,
 //!   rolling-motion, and event-count summaries.
 
@@ -38,9 +39,10 @@ pub use types::{
     HarshAccelConfig, HarshBehaviorConfig, HarshBehaviorPreset, HarshBrakeConfig,
     HarshCornerConfig, HarshCornerEvent, HarshCornerSample, HarshLongitudinalEvent,
     HarshLongitudinalSample, HillConfig, HillEvent, HillKind, HillSample, ReverseConfig,
-    ReverseEvent, ReverseSample, RoadRoughnessConfig, RoadRoughnessEstimate, RoadRoughnessLevel,
-    RoadRoughnessSample, SpeedBumpConfig, SpeedBumpDiagnostic, SpeedBumpEvent, SpeedBumpSample,
-    TripConfig, TripEventCounts, TripEventKind, TripSample, TripSummary,
+    ReverseEvent, ReverseSample, RoadRoughnessConfig, RoadRoughnessEstimate, RoadRoughnessEvent,
+    RoadRoughnessLevel, RoadRoughnessSample, RoadRoughnessUpdate, RoadShockEvent, SpeedBumpConfig,
+    SpeedBumpDiagnostic, SpeedBumpEvent, SpeedBumpSample, TripConfig, TripEventCounts,
+    TripEventKind, TripSample, TripSummary,
 };
 
 #[cfg(test)]

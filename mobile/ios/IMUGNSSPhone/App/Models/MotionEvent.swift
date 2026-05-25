@@ -7,6 +7,8 @@ struct MotionEvent: Equatable, Identifiable, Sendable {
         case harshBraking
         case harshCornering
         case speedBump
+        case roadShock
+        case roughRoad
         case downhill
         case uphill
         case gnssDegraded
@@ -20,6 +22,8 @@ struct MotionEvent: Equatable, Identifiable, Sendable {
             case .harshBraking: return "Hard Brake"
             case .harshCornering: return "Hard Corner"
             case .speedBump: return "Speed Bump"
+            case .roadShock: return "Road Shock"
+            case .roughRoad: return "Rough Road"
             case .downhill: return "Downhill"
             case .uphill: return "Uphill"
             case .gnssDegraded: return "GNSS Degraded"
@@ -97,6 +101,8 @@ private extension MotionEvent.Kind {
         case .harshCornering: self = .harshCornering
         case .reverse: self = .reverse
         case .speedBump: self = .speedBump
+        case .roadShock: self = .roadShock
+        case .roughRoad: self = .roughRoad
         case .uphill: self = .uphill
         case .downhill: self = .downhill
         }

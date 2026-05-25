@@ -1,6 +1,6 @@
 //! Shared UI state enums and trace visibility classification.
 
-use crate::visualizer::model::Trace;
+use crate::visualizer::model::{RoadEventKind, Trace};
 
 pub(super) const EKF_FILTER_LABEL: &str = "EKF";
 
@@ -20,6 +20,8 @@ pub(super) enum TuningPanel {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct EventVisibility {
     pub show_speed_bump: bool,
+    pub show_road_shock: bool,
+    pub show_rough_road: bool,
     pub show_uphill: bool,
     pub show_downhill: bool,
     pub show_reverse: bool,
@@ -32,6 +34,8 @@ impl Default for EventVisibility {
     fn default() -> Self {
         Self {
             show_speed_bump: true,
+            show_road_shock: true,
+            show_rough_road: true,
             show_uphill: true,
             show_downhill: true,
             show_reverse: true,
@@ -44,20 +48,24 @@ impl Default for EventVisibility {
 
 impl EventVisibility {
     pub(super) fn allows_kind(self, kind: &str) -> bool {
-        match kind {
-            "speed bump" => self.show_speed_bump,
-            "uphill" => self.show_uphill,
-            "downhill" => self.show_downhill,
-            "reverse" => self.show_reverse,
-            "harsh acceleration" => self.show_harsh_accel,
-            "harsh braking" => self.show_harsh_brake,
-            "harsh cornering" => self.show_harsh_cornering,
+        match RoadEventKind::parse(kind) {
+            Some(RoadEventKind::SpeedBump) => self.show_speed_bump,
+            Some(RoadEventKind::RoadShock) => self.show_road_shock,
+            Some(RoadEventKind::RoughRoad) => self.show_rough_road,
+            Some(RoadEventKind::Uphill) => self.show_uphill,
+            Some(RoadEventKind::Downhill) => self.show_downhill,
+            Some(RoadEventKind::Reverse) => self.show_reverse,
+            Some(RoadEventKind::HarshAcceleration) => self.show_harsh_accel,
+            Some(RoadEventKind::HarshBraking) => self.show_harsh_brake,
+            Some(RoadEventKind::HarshCornering) => self.show_harsh_cornering,
             _ => true,
         }
     }
 
     pub(super) fn set_all(&mut self, enabled: bool) {
         self.show_speed_bump = enabled;
+        self.show_road_shock = enabled;
+        self.show_rough_road = enabled;
         self.show_uphill = enabled;
         self.show_downhill = enabled;
         self.show_reverse = enabled;
@@ -186,14 +194,20 @@ mod tests {
     fn event_visibility_filters_known_event_kinds() {
         let mut visibility = EventVisibility::default();
         assert!(visibility.allows_kind("speed bump"));
+        assert!(visibility.allows_kind("road shock"));
+        assert!(visibility.allows_kind("rough road"));
         assert!(visibility.allows_kind("uphill"));
         assert!(visibility.allows_kind("harsh braking"));
         assert!(visibility.allows_kind("unknown future event"));
 
         visibility.show_speed_bump = false;
+        visibility.show_road_shock = false;
+        visibility.show_rough_road = false;
         visibility.show_downhill = false;
         visibility.show_harsh_cornering = false;
         assert!(!visibility.allows_kind("speed bump"));
+        assert!(!visibility.allows_kind("road shock"));
+        assert!(!visibility.allows_kind("rough road"));
         assert!(visibility.allows_kind("uphill"));
         assert!(!visibility.allows_kind("downhill"));
         assert!(visibility.allows_kind("harsh acceleration"));

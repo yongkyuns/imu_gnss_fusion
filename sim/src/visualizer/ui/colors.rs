@@ -2,6 +2,8 @@
 
 use eframe::egui;
 
+use crate::visualizer::model::RoadEventKind;
+
 use super::state::is_reference_trace_name;
 
 pub(super) fn map_trace_color(name: &str, visuals: &egui::Visuals) -> egui::Color32 {
@@ -88,21 +90,37 @@ pub(super) fn shared_cursor_color(visuals: &egui::Visuals) -> egui::Color32 {
 }
 
 pub(super) fn event_marker_color(kind: &str, visuals: &egui::Visuals) -> egui::Color32 {
-    match kind {
-        "speed bump" if visuals.dark_mode => egui::Color32::from_rgb(255, 212, 92),
-        "speed bump" => egui::Color32::from_rgb(190, 109, 0),
-        "uphill" if visuals.dark_mode => egui::Color32::from_rgb(255, 154, 68),
-        "uphill" => egui::Color32::from_rgb(214, 97, 0),
-        "downhill" if visuals.dark_mode => egui::Color32::from_rgb(86, 190, 255),
-        "downhill" => egui::Color32::from_rgb(0, 126, 182),
-        "reverse" if visuals.dark_mode => egui::Color32::from_rgb(196, 146, 255),
-        "reverse" => egui::Color32::from_rgb(133, 76, 214),
-        "harsh acceleration" if visuals.dark_mode => egui::Color32::from_rgb(92, 230, 128),
-        "harsh acceleration" => egui::Color32::from_rgb(0, 150, 78),
-        "harsh braking" if visuals.dark_mode => egui::Color32::from_rgb(255, 92, 92),
-        "harsh braking" => egui::Color32::from_rgb(206, 45, 45),
-        "harsh cornering" if visuals.dark_mode => egui::Color32::from_rgb(255, 116, 218),
-        "harsh cornering" => egui::Color32::from_rgb(190, 54, 165),
+    match RoadEventKind::parse(kind) {
+        Some(RoadEventKind::SpeedBump) if visuals.dark_mode => {
+            egui::Color32::from_rgb(255, 212, 92)
+        }
+        Some(RoadEventKind::SpeedBump) => egui::Color32::from_rgb(190, 109, 0),
+        Some(RoadEventKind::RoadShock) if visuals.dark_mode => {
+            egui::Color32::from_rgb(255, 184, 77)
+        }
+        Some(RoadEventKind::RoadShock) => egui::Color32::from_rgb(185, 91, 0),
+        Some(RoadEventKind::RoughRoad) if visuals.dark_mode => {
+            egui::Color32::from_rgb(180, 210, 95)
+        }
+        Some(RoadEventKind::RoughRoad) => egui::Color32::from_rgb(92, 134, 35),
+        Some(RoadEventKind::Uphill) if visuals.dark_mode => egui::Color32::from_rgb(255, 154, 68),
+        Some(RoadEventKind::Uphill) => egui::Color32::from_rgb(214, 97, 0),
+        Some(RoadEventKind::Downhill) if visuals.dark_mode => egui::Color32::from_rgb(86, 190, 255),
+        Some(RoadEventKind::Downhill) => egui::Color32::from_rgb(0, 126, 182),
+        Some(RoadEventKind::Reverse) if visuals.dark_mode => egui::Color32::from_rgb(196, 146, 255),
+        Some(RoadEventKind::Reverse) => egui::Color32::from_rgb(133, 76, 214),
+        Some(RoadEventKind::HarshAcceleration) if visuals.dark_mode => {
+            egui::Color32::from_rgb(92, 230, 128)
+        }
+        Some(RoadEventKind::HarshAcceleration) => egui::Color32::from_rgb(0, 150, 78),
+        Some(RoadEventKind::HarshBraking) if visuals.dark_mode => {
+            egui::Color32::from_rgb(255, 92, 92)
+        }
+        Some(RoadEventKind::HarshBraking) => egui::Color32::from_rgb(206, 45, 45),
+        Some(RoadEventKind::HarshCornering) if visuals.dark_mode => {
+            egui::Color32::from_rgb(255, 116, 218)
+        }
+        Some(RoadEventKind::HarshCornering) => egui::Color32::from_rgb(190, 54, 165),
         _ => map_marker_color(kind, visuals),
     }
 }

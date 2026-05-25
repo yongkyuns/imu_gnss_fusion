@@ -5,8 +5,8 @@ use core::ptr;
 use road_events::{
     HarshAccelDetector, HarshBehaviorPreset, HarshBrakeDetector, HarshCornerDetector,
     HarshCornerSample, HarshLongitudinalSample, HillConfig, HillDetector, HillKind, HillSample,
-    ReverseConfig, ReverseDetector, ReverseSample, SpeedBumpConfig, SpeedBumpDetector,
-    SpeedBumpSample, TripEventKind, TripSample, TripStats,
+    ReverseConfig, ReverseDetector, ReverseSample, RoadRoughnessAnalyzer, RoadRoughnessSample,
+    SpeedBumpConfig, SpeedBumpDetector, SpeedBumpSample, TripEventKind, TripSample, TripStats,
 };
 use sensor_fusion::{GnssSample, ImuSample, SensorFusion, Update};
 
@@ -17,6 +17,8 @@ const ROAD_EVENT_REVERSE: u32 = 4;
 const ROAD_EVENT_SPEED_BUMP: u32 = 5;
 const ROAD_EVENT_UPHILL: u32 = 6;
 const ROAD_EVENT_DOWNHILL: u32 = 7;
+const ROAD_EVENT_ROAD_SHOCK: u32 = 8;
+const ROAD_EVENT_ROUGH_ROAD: u32 = 9;
 const SENSOR_FUSION_HARSH_BEHAVIOR_SENSITIVE: u32 = 1;
 const SENSOR_FUSION_HARSH_BEHAVIOR_BALANCED: u32 = 2;
 const SENSOR_FUSION_HARSH_BEHAVIOR_CONSERVATIVE: u32 = 3;
@@ -201,6 +203,8 @@ pub struct SensorFusionFfiTripSummary {
     pub rolling_abs_longitudinal_accel_mps2: f32,
     pub rolling_abs_lateral_accel_mps2: f32,
     pub speed_bumps: u32,
+    pub road_shocks: u32,
+    pub rough_road_events: u32,
     pub uphill_events: u32,
     pub downhill_events: u32,
     pub reverse_events: u32,
@@ -208,6 +212,8 @@ pub struct SensorFusionFfiTripSummary {
     pub harsh_braking_events: u32,
     pub harsh_cornering_events: u32,
     pub speed_bumps_per_km: f32,
+    pub road_shocks_per_km: f32,
+    pub rough_road_events_per_km: f32,
     pub harsh_events_per_km: f32,
     pub reverse_seconds_per_km: f32,
 }
@@ -215,6 +221,7 @@ pub struct SensorFusionFfiTripSummary {
 #[derive(Clone, Debug)]
 struct RoadEventDetectors {
     speed_bump: SpeedBumpDetector,
+    roughness: RoadRoughnessAnalyzer,
     hill: HillDetector,
     reverse: ReverseDetector,
     harsh_accel: HarshAccelDetector,
@@ -233,6 +240,7 @@ impl RoadEventDetectors {
         let harsh_behavior = harsh_behavior_preset.configs();
         Self {
             speed_bump: SpeedBumpDetector::new(SpeedBumpConfig::default()),
+            roughness: RoadRoughnessAnalyzer::default(),
             hill: HillDetector::new(HillConfig::default()),
             reverse: ReverseDetector::new(ReverseConfig::default()),
             harsh_accel: HarshAccelDetector::new(harsh_behavior.accel),
@@ -487,6 +495,44 @@ pub unsafe extern "C" fn sensor_fusion_process_road_event_motion(
             });
         }
     }
+    if vertical_accel_valid {
+        if let Some(update) = fusion.road_events.roughness.update_with_events(RoadRoughnessSample {
+            t_s,
+            speed_mps: ground_speed_mps,
+            vertical_accel_mps2,
+        }) {
+            if let Some(event) = update.roughness_event {
+                fusion
+                    .road_events
+                    .trip_stats
+                    .record_event(TripEventKind::RoughRoad);
+                writer.push(SensorFusionFfiRoadEvent {
+                    kind: ROAD_EVENT_ROUGH_ROAD,
+                    t_s: event.end_t_s,
+                    start_t_s: event.start_t_s,
+                    end_t_s: event.end_t_s,
+                    duration_s: event.duration_s,
+                    value: event.peak_roughness_rms_mps2,
+                    confidence: 0.9,
+                });
+            }
+            if let Some(event) = update.shock_event {
+                fusion
+                    .road_events
+                    .trip_stats
+                    .record_event(TripEventKind::RoadShock);
+                writer.push(SensorFusionFfiRoadEvent {
+                    kind: ROAD_EVENT_ROAD_SHOCK,
+                    t_s: event.end_t_s,
+                    start_t_s: event.start_t_s,
+                    end_t_s: event.end_t_s,
+                    duration_s: event.duration_s,
+                    value: event.peak_abs_vertical_accel_mps2,
+                    confidence: 0.9,
+                });
+            }
+        }
+    }
 
     writer.len
 }
@@ -537,6 +583,8 @@ pub unsafe extern "C" fn sensor_fusion_snapshot_trip_summary(
                 rolling_abs_longitudinal_accel_mps2: summary.rolling_abs_longitudinal_accel_mps2,
                 rolling_abs_lateral_accel_mps2: summary.rolling_abs_lateral_accel_mps2,
                 speed_bumps: summary.events.speed_bumps,
+                road_shocks: summary.events.road_shocks,
+                rough_road_events: summary.events.rough_road,
                 uphill_events: summary.events.uphill,
                 downhill_events: summary.events.downhill,
                 reverse_events: summary.events.reverse,
@@ -544,6 +592,8 @@ pub unsafe extern "C" fn sensor_fusion_snapshot_trip_summary(
                 harsh_braking_events: summary.events.harsh_braking,
                 harsh_cornering_events: summary.events.harsh_cornering,
                 speed_bumps_per_km: summary.speed_bumps_per_km,
+                road_shocks_per_km: summary.road_shocks_per_km,
+                rough_road_events_per_km: summary.rough_road_events_per_km,
                 harsh_events_per_km: summary.harsh_events_per_km,
                 reverse_seconds_per_km: summary.reverse_seconds_per_km,
             },

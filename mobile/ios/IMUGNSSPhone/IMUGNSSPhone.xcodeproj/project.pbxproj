@@ -10,6 +10,8 @@
 		0A8E314C7F0E699F782F481E /* RawSessionLogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CA04E4149EBCF37E8B70112 /* RawSessionLogTests.swift */; };
 		1350542115AE72857E3CF9E7 /* IMUGNSSPhoneApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71F862D1F149E3C83E1B4EBB /* IMUGNSSPhoneApp.swift */; };
 		2DD033597A9BCEDA8B2D2EF1 /* MotionEventDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C361B38B6D297EBE08C5EB26 /* MotionEventDetectorTests.swift */; };
+		2E179A14F3FD39CCDAE06A9E /* AppPerformanceSignposts.swift in Sources */ = {isa = PBXBuildFile; fileRef = A94B708A9336D4B0DB7C8B69 /* AppPerformanceSignposts.swift */; };
+		2E2E3E53BBDF62C47DC382B3 /* AppResourceUsage.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4E156ECE4A13F8727319A95 /* AppResourceUsage.swift */; };
 		34101B548D55B84338CE8F40 /* DeveloperComparisonTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F545E9978287177F167E63CB /* DeveloperComparisonTests.swift */; };
 		383217F964186654C2CFDB2F /* MotionEventDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C2E110773FAAC8E0692F710 /* MotionEventDetector.swift */; };
 		3FA0DF4A6D846B8C96B03F56 /* MotionKinematics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F4792405B22C6897CC10911 /* MotionKinematics.swift */; };
@@ -99,7 +101,9 @@
 		9EA192EE98D0213A0A7BC24F /* AppLaunchConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLaunchConfiguration.swift; sourceTree = "<group>"; };
 		A140A6622AD524F605DCA5EF /* MapRenderPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapRenderPolicyTests.swift; sourceTree = "<group>"; };
 		A509E6299C597B39FA74E9B6 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		A94B708A9336D4B0DB7C8B69 /* AppPerformanceSignposts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppPerformanceSignposts.swift; sourceTree = "<group>"; };
 		C361B38B6D297EBE08C5EB26 /* MotionEventDetectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionEventDetectorTests.swift; sourceTree = "<group>"; };
+		C4E156ECE4A13F8727319A95 /* AppResourceUsage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppResourceUsage.swift; sourceTree = "<group>"; };
 		D34F17ABFCF04AC7D69A590C /* FusionProfilingMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FusionProfilingMetrics.swift; sourceTree = "<group>"; };
 		D64D651FC6A45816FEE96508 /* MotionEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionEvent.swift; sourceTree = "<group>"; };
 		DB210D6A2D12D40F3D9F25F6 /* EventAudioSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventAudioSettings.swift; sourceTree = "<group>"; };
@@ -134,6 +138,7 @@
 			isa = PBXGroup;
 			children = (
 				9EA192EE98D0213A0A7BC24F /* AppLaunchConfiguration.swift */,
+				A94B708A9336D4B0DB7C8B69 /* AppPerformanceSignposts.swift */,
 				41CE6DB2282095B66DEC3E6C /* Assets.xcassets */,
 				064866943C3B066A4F4483B6 /* ContentView.swift */,
 				58BC795608E08C7BC4688153 /* FusionEngine.swift */,
@@ -152,6 +157,7 @@
 		3DAA79CC27080430F3704BA0 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				C4E156ECE4A13F8727319A95 /* AppResourceUsage.swift */,
 				DB210D6A2D12D40F3D9F25F6 /* EventAudioSettings.swift */,
 				DD37CB158BB37D599B43EF50 /* FusionHealth.swift */,
 				D34F17ABFCF04AC7D69A590C /* FusionProfilingMetrics.swift */,
@@ -257,14 +263,14 @@
 			path = Analysis;
 			sourceTree = "<group>";
 		};
-		"TEMP_06E706F7-2446-418B-8706-007F2597B721" /* UI */ = {
+		"TEMP_A2E131DC-B464-42DF-952C-6A7E17E692FF" /* UI */ = {
 			isa = PBXGroup;
 			children = (
 			);
 			path = UI;
 			sourceTree = "<group>";
 		};
-		"TEMP_996235A7-3645-4076-BD5A-1F2244C30DFB" /* EKF */ = {
+		"TEMP_DC9A9334-3DF5-428D-B146-3C5C019A019F" /* EKF */ = {
 			isa = PBXGroup;
 			children = (
 			);
@@ -410,6 +416,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				AC6D101CD89D0E31B798B1AD /* AppLaunchConfiguration.swift in Sources */,
+				2E179A14F3FD39CCDAE06A9E /* AppPerformanceSignposts.swift in Sources */,
+				2E2E3E53BBDF62C47DC382B3 /* AppResourceUsage.swift in Sources */,
 				BBCB9BEE6962CF14A29237C9 /* ContentView.swift in Sources */,
 				540AD335D46E6C9BA62C65C5 /* DeveloperComparison.swift in Sources */,
 				FFC32E04A1AD29BB9AAE956D /* EventAudioNotifier.swift in Sources */,

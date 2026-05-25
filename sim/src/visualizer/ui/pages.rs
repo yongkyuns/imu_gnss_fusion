@@ -494,28 +494,81 @@ impl App {
                     .collect();
                 let bump_time: Vec<&Trace> = self.data.ekf_bump_diag.iter().collect();
                 let roughness: Vec<&Trace> = self.data.ekf_road_roughness.iter().collect();
+                let hill_reverse: Vec<&Trace> = concat_trace_refs_matching(
+                    [self.data.ekf_road_event_motion.as_slice()],
+                    &[
+                        "Event vehicle pitch",
+                        "Event forward velocity",
+                        "Event speed",
+                    ],
+                );
+                let harsh_longitudinal: Vec<&Trace> = concat_trace_refs_matching(
+                    [self.data.ekf_road_event_motion.as_slice()],
+                    &[
+                        "Event forward velocity",
+                        "Event longitudinal accel raw",
+                        "Event longitudinal accel EMA",
+                    ],
+                );
+                let harsh_cornering: Vec<&Trace> = concat_trace_refs_matching(
+                    [self.data.ekf_road_event_motion.as_slice()],
+                    &["Event lateral accel", "Event yaw rate", "Event speed"],
+                );
                 let mut hovered_t_s = None;
                 egui::CentralPanel::default().show(ctx, |ui| {
                     let event_markers = self.timeseries_event_markers();
                     hovered_t_s = draw_analysis_sections_page(
                         ui,
                         "Events",
-                        "Detector signals for bumps, stationarity, and related motion events.",
-                        vec![plot_section(
-                            "EKF Detectors",
-                            true,
-                            vec![
-                                plot_spec("EKF Bump Pitch", bump_pitch, true),
-                                plot_spec("EKF Bump Speed", bump_speed, true),
-                                plot_spec("Speed Bump Detector", bump_time, true),
-                                plot_spec("Road Roughness", roughness, true),
-                                plot_spec(
+                        "Detector signals for road-event investigation. Event markers are overlaid on each plot.",
+                        vec![
+                            plot_section(
+                                "Speed Bumps",
+                                true,
+                                vec![
+                                    plot_spec("EKF Bump Pitch", bump_pitch, true),
+                                    plot_spec("EKF Bump Speed", bump_speed, true),
+                                    plot_spec("Speed Bump Detector", bump_time, true),
+                                ],
+                            ),
+                            plot_section(
+                                "Hills And Reverse",
+                                true,
+                                vec![plot_spec("Pitch, Speed, Forward Velocity", hill_reverse, true)],
+                            ),
+                            plot_section(
+                                "Harsh Acceleration And Braking",
+                                true,
+                                vec![plot_spec(
+                                    "Longitudinal Event Signals",
+                                    harsh_longitudinal,
+                                    true,
+                                )],
+                            ),
+                            plot_section(
+                                "Harsh Cornering",
+                                true,
+                                vec![plot_spec(
+                                    "Lateral Load, Yaw Rate, Speed",
+                                    harsh_cornering,
+                                    true,
+                                )],
+                            ),
+                            plot_section(
+                                "Road Surface",
+                                true,
+                                vec![plot_spec("Roughness And Shocks", roughness, true)],
+                            ),
+                            plot_section(
+                                "Stationary",
+                                false,
+                                vec![plot_spec(
                                     "EKF Stationary Diagnostics",
                                     trace_refs(&self.data.ekf_stationary_diag),
                                     true,
-                                ),
-                            ],
-                        )],
+                                )],
+                            ),
+                        ],
                         self.max_points_per_trace,
                         self.trace_visibility(),
                         self.shared_cursor_t_s,

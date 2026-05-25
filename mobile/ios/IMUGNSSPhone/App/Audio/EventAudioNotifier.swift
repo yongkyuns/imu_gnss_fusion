@@ -177,7 +177,7 @@ enum EventAudioPolicy {
 
     static func shouldPlayAudio(for kind: MotionEvent.Kind) -> Bool {
         switch kind {
-        case .reverse, .harshAcceleration, .harshBraking, .harshCornering, .speedBump, .downhill, .uphill:
+        case .reverse, .harshAcceleration, .harshBraking, .harshCornering, .speedBump, .roadShock, .roughRoad, .downhill, .uphill:
             return true
         case .gnssDegraded, .mountReady, .fusionReady:
             return false
@@ -191,6 +191,8 @@ enum EventAudioPolicy {
         case .harshBraking: return "Harsh braking detected"
         case .harshCornering: return "Harsh cornering detected"
         case .speedBump: return "Speed bump detected"
+        case .roadShock: return "Road shock detected"
+        case .roughRoad: return "Rough road detected"
         case .downhill: return "Downhill detected"
         case .uphill: return "Uphill detected"
         case .gnssDegraded: return "GNSS degraded"
@@ -206,6 +208,8 @@ enum EventAudioPolicy {
         case .harshAcceleration: return 880.0
         case .reverse: return 520.0
         case .speedBump: return 784.0
+        case .roadShock: return 698.0
+        case .roughRoad: return 554.0
         case .downhill: return 494.0
         case .uphill: return 622.0
         case .gnssDegraded: return 440.0

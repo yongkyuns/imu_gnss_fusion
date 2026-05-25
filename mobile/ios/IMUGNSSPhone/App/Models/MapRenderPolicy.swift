@@ -198,6 +198,8 @@ enum MotionEventVisualPolicy {
         case .harshBraking: return "exclamationmark.octagon.fill"
         case .harshCornering: return "arrow.turn.up.right"
         case .speedBump: return "road.lanes"
+        case .roadShock: return "waveform.path.ecg"
+        case .roughRoad: return "point.3.connected.trianglepath.dotted"
         case .downhill: return "arrow.down.right"
         case .uphill: return "arrow.up.right"
         case .gnssDegraded: return "location.slash.fill"
@@ -213,6 +215,8 @@ enum MotionEventVisualPolicy {
         case .harshBraking: return .systemRed
         case .harshCornering: return .systemPink
         case .speedBump: return .systemOrange
+        case .roadShock: return .systemOrange
+        case .roughRoad: return .systemBrown
         case .downhill: return .systemIndigo
         case .uphill: return .systemMint
         case .gnssDegraded: return .systemOrange
@@ -278,7 +282,7 @@ enum AlignProgressPolicy {
 }
 
 enum MapRouteOverlayPolicy {
-    static let minimumUpdateIntervalSec: TimeInterval = 0.20
+    static let minimumUpdateIntervalSec: TimeInterval = 0.50
 
     static func shouldUpdate(
         previousGnssCount: Int?,

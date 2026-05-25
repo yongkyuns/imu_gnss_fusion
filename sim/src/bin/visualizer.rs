@@ -434,7 +434,7 @@ fn main() -> Result<()> {
     }
     let trip = data.trip_summary;
     eprintln!(
-        "[profile] trip_stats samples={} distance_m={:.3} duration_s={:.3} moving_s={:.3} mean_speed_mps={:.3} peak_speed_mps={:.3} reverse_distance_m={:.3} reverse_duration_s={:.3} elevation_gain_m={:.3} elevation_loss_m={:.3} elevation_valid={} roughness_rms_mps2={:.3} roughness_level={} speed_bumps={} hills={} reverse_events={} harsh_events={} data_gaps={}",
+        "[profile] trip_stats samples={} distance_m={:.3} duration_s={:.3} moving_s={:.3} mean_speed_mps={:.3} peak_speed_mps={:.3} reverse_distance_m={:.3} reverse_duration_s={:.3} elevation_gain_m={:.3} elevation_loss_m={:.3} elevation_valid={} roughness_rms_mps2={:.3} roughness_level={} speed_bumps={} road_shocks={} rough_road={} hills={} reverse_events={} harsh_events={} data_gaps={}",
         trip.sample_count,
         trip.distance_m,
         trip.duration_s,
@@ -449,6 +449,8 @@ fn main() -> Result<()> {
         trip.road_roughness_rms_mps2,
         trip.road_roughness_level,
         trip.events.speed_bumps,
+        trip.events.road_shocks,
+        trip.events.rough_road,
         trip.events.uphill + trip.events.downhill,
         trip.events.reverse,
         trip.events.harsh_acceleration + trip.events.harsh_braking + trip.events.harsh_cornering,

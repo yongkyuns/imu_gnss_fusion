@@ -436,15 +436,13 @@ impl HarshCornerDetector {
         if !sample.lateral_accel_mps2.is_finite() {
             return None;
         }
-        let Some(motion) = self.lateral_motion.update(
+        let motion = self.lateral_motion.update(
             sample.t_s,
             sample.lateral_accel_mps2,
             self.cfg.lateral_accel_tau_s,
             self.cfg.lateral_jerk_tau_s,
             self.cfg.max_raw_lateral_jerk_mps3,
-        ) else {
-            return None;
-        };
+        )?;
 
         let load_mps2 = motion.lateral_accel_mps2.abs();
         if speed_mps >= self.cfg.min_speed_mps

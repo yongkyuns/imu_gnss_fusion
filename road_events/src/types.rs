@@ -55,17 +55,51 @@ pub enum RoadRoughnessLevel {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RoadRoughnessEstimate {
     pub t_s: f32,
-    /// Distance-domain RMS of clipped, band-passed vertical acceleration.
+    /// Distance-domain RMS of robustly limited, band-passed vertical acceleration.
     pub roughness_rms_mps2: f32,
     pub level: RoadRoughnessLevel,
-    /// Band-passed vertical acceleration before clipping.
+    /// Band-passed vertical acceleration before robust limiting.
     pub vertical_accel_bandpass_mps2: f32,
-    /// Band-passed vertical acceleration after event-limiting clipping.
+    /// Band-passed vertical acceleration after robust impulse limiting.
     pub vertical_accel_clipped_mps2: f32,
     /// Integrated valid moving distance since analyzer reset.
     pub distance_m: f32,
     /// Whether this sample updated the distance-domain energy estimate.
     pub updated: bool,
+}
+
+/// One detected sustained rough-road interval.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RoadRoughnessEvent {
+    pub start_t_s: f32,
+    pub end_t_s: f32,
+    pub duration_s: f32,
+    pub mean_roughness_rms_mps2: f32,
+    pub peak_roughness_rms_mps2: f32,
+    pub mean_speed_mps: f32,
+    pub distance_m: f32,
+}
+
+/// One detected short vertical shock such as a pothole, bump, or sharp joint.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RoadShockEvent {
+    pub start_t_s: f32,
+    pub end_t_s: f32,
+    pub duration_s: f32,
+    pub peak_abs_vertical_accel_mps2: f32,
+    pub mean_speed_mps: f32,
+}
+
+/// Roughness analyzer output including optional event emissions.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RoadRoughnessUpdate {
+    pub estimate: RoadRoughnessEstimate,
+    /// Live notification emitted as soon as sustained roughness is confirmed.
+    pub roughness_event: Option<RoadRoughnessEvent>,
+    /// Completed rough-road interval emitted when the active rough patch exits
+    /// or is flushed.
+    pub completed_roughness_event: Option<RoadRoughnessEvent>,
+    pub shock_event: Option<RoadShockEvent>,
 }
 
 /// One detected uphill or downhill interval.
@@ -187,6 +221,8 @@ pub struct TripSample {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TripEventKind {
     SpeedBump,
+    RoadShock,
+    RoughRoad,
     Uphill,
     Downhill,
     Reverse,
@@ -199,6 +235,8 @@ pub enum TripEventKind {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TripEventCounts {
     pub speed_bumps: u32,
+    pub road_shocks: u32,
+    pub rough_road: u32,
     pub uphill: u32,
     pub downhill: u32,
     pub reverse: u32,
@@ -252,6 +290,8 @@ pub struct TripSummary {
     pub rolling_abs_lateral_accel_mps2: f32,
     pub events: TripEventCounts,
     pub speed_bumps_per_km: f32,
+    pub road_shocks_per_km: f32,
+    pub rough_road_events_per_km: f32,
     pub harsh_events_per_km: f32,
     pub reverse_seconds_per_km: f32,
 }
@@ -290,8 +330,34 @@ pub struct RoadRoughnessConfig {
     pub distance_tau_m: f32,
     /// Minimum speed required to update roughness energy.
     pub min_speed_mps: f32,
-    /// Symmetric clipping limit for band-passed acceleration to limit isolated bump/pothole impact.
+    /// Absolute ceiling for the adaptive robust limiter applied to band-passed acceleration.
     pub clip_mps2: f32,
+    /// Distance-domain EMA used to track local ambient vertical vibration.
+    pub robust_baseline_tau_m: f32,
+    /// Minimum robust limiter cap for preserving small real texture on smooth roads.
+    pub robust_min_cap_mps2: f32,
+    /// Multiplier from ambient baseline to robust limiter cap.
+    pub robust_cap_scale: f32,
+    /// Minimum band-passed vertical acceleration magnitude for a shock candidate.
+    pub shock_min_peak_mps2: f32,
+    /// Multiplier from ambient baseline to shock candidate threshold.
+    pub shock_baseline_scale: f32,
+    /// Candidate remains active until magnitude falls below this fraction of the enter threshold.
+    pub shock_exit_fraction: f32,
+    /// Minimum shock duration before event emission.
+    pub shock_min_duration_s: f32,
+    /// Maximum duration still considered a discrete shock instead of sustained roughness.
+    pub shock_max_duration_s: f32,
+    /// Refractory period after a shock event.
+    pub shock_refractory_s: f32,
+    /// Rough-road event enter threshold for robust roughness RMS.
+    pub rough_event_enter_mps2: f32,
+    /// Rough-road event exit threshold for robust roughness RMS.
+    pub rough_event_exit_mps2: f32,
+    /// Minimum rough-road interval duration before event emission.
+    pub rough_event_min_duration_s: f32,
+    /// Refractory period after a rough-road event.
+    pub rough_event_refractory_s: f32,
     /// Maximum sample interval used for filter and distance updates.
     pub max_dt_s: f32,
     /// Upper bound for VerySmooth roughness.
@@ -546,6 +612,19 @@ impl Default for RoadRoughnessConfig {
             distance_tau_m: 10.0,
             min_speed_mps: 2.0,
             clip_mps2: 1.5,
+            robust_baseline_tau_m: 20.0,
+            robust_min_cap_mps2: 0.60,
+            robust_cap_scale: 3.0,
+            shock_min_peak_mps2: 2.5,
+            shock_baseline_scale: 6.0,
+            shock_exit_fraction: 0.45,
+            shock_min_duration_s: 0.02,
+            shock_max_duration_s: 0.65,
+            shock_refractory_s: 0.50,
+            rough_event_enter_mps2: 0.60,
+            rough_event_exit_mps2: 0.42,
+            rough_event_min_duration_s: 1.0,
+            rough_event_refractory_s: 8.0,
             max_dt_s: 0.2,
             very_smooth_threshold_mps2: 0.15,
             smooth_threshold_mps2: 0.25,

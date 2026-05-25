@@ -131,6 +131,12 @@ impl TripStats {
             TripEventKind::SpeedBump => {
                 self.events.speed_bumps = self.events.speed_bumps.saturating_add(1)
             }
+            TripEventKind::RoadShock => {
+                self.events.road_shocks = self.events.road_shocks.saturating_add(1)
+            }
+            TripEventKind::RoughRoad => {
+                self.events.rough_road = self.events.rough_road.saturating_add(1)
+            }
             TripEventKind::Uphill => self.events.uphill = self.events.uphill.saturating_add(1),
             TripEventKind::Downhill => {
                 self.events.downhill = self.events.downhill.saturating_add(1)
@@ -182,6 +188,8 @@ impl TripStats {
             rolling_abs_lateral_accel_mps2: self.rolling_abs_lateral_accel_mps2,
             events: self.events,
             speed_bumps_per_km: per_km(self.events.speed_bumps, distance_km),
+            road_shocks_per_km: per_km(self.events.road_shocks, distance_km),
+            rough_road_events_per_km: per_km(self.events.rough_road, distance_km),
             harsh_events_per_km: per_km(harsh_count, distance_km),
             reverse_seconds_per_km: ratio_or_zero(self.reverse_duration_s, distance_km),
         }

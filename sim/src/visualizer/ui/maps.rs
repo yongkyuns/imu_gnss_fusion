@@ -7,7 +7,8 @@ use walkers::{HttpTiles, MapMemory, Plugin, TileId, lon_lat};
 
 use crate::visualizer::math::{ecef_to_ned, heading_endpoint, lla_to_ecef};
 use crate::visualizer::model::{
-    HeadingSample, MapCursorSample, PlotData, RoadEventSample, RoadSegmentSample, Trace,
+    HeadingSample, MapCursorSample, PlotData, RoadEventKind, RoadEventSample, RoadSegmentSample,
+    Trace,
 };
 use crate::visualizer::theme::UiTheme;
 
@@ -1150,8 +1151,8 @@ fn draw_road_segment_overlays(
 }
 
 fn road_segment_tooltip_lines(segment: &RoadSegmentSample) -> Vec<String> {
-    match segment.kind.as_str() {
-        "reverse" => {
+    match RoadEventKind::parse(segment.kind.as_str()) {
+        Some(RoadEventKind::Reverse) => {
             return vec![
                 segment.kind.clone(),
                 format!("Duration: {:.1} s", segment.duration_s),
@@ -1163,7 +1164,7 @@ fn road_segment_tooltip_lines(segment: &RoadSegmentSample) -> Vec<String> {
                 format!("Peak speed: {:.1} km/h", 3.6 * segment.peak_speed_mps),
             ];
         }
-        "harsh acceleration" => {
+        Some(RoadEventKind::HarshAcceleration) => {
             return vec![
                 segment.kind.clone(),
                 format!("Duration: {:.1} s", segment.duration_s),
@@ -1176,7 +1177,7 @@ fn road_segment_tooltip_lines(segment: &RoadSegmentSample) -> Vec<String> {
                 format!("Delta speed: {:+.1} km/h", 3.6 * segment.delta_speed_mps),
             ];
         }
-        "harsh braking" => {
+        Some(RoadEventKind::HarshBraking) => {
             return vec![
                 segment.kind.clone(),
                 format!("Duration: {:.1} s", segment.duration_s),
@@ -1189,7 +1190,7 @@ fn road_segment_tooltip_lines(segment: &RoadSegmentSample) -> Vec<String> {
                 format!("Delta speed: {:+.1} km/h", 3.6 * segment.delta_speed_mps),
             ];
         }
-        "harsh cornering" => {
+        Some(RoadEventKind::HarshCornering) => {
             return vec![
                 segment.kind.clone(),
                 format!("Duration: {:.1} s", segment.duration_s),
@@ -1199,6 +1200,31 @@ fn road_segment_tooltip_lines(segment: &RoadSegmentSample) -> Vec<String> {
                 ),
                 format!("Avg lateral: {:.1} m/s^2", segment.mean_accel_mps2),
                 format!("Peak lateral: {:.1} m/s^2", segment.peak_accel_mps2),
+                format!("Speed: {:.1} km/h", 3.6 * segment.mean_speed_mps),
+            ];
+        }
+        Some(RoadEventKind::RoughRoad) => {
+            return vec![
+                segment.kind.clone(),
+                format!("Duration: {:.1} s", segment.duration_s),
+                format!(
+                    "Start/end: {:.1} - {:.1} s",
+                    segment.start_t_s, segment.end_t_s
+                ),
+                format!("Mean RMS: {:.2} m/s^2", segment.mean_accel_mps2),
+                format!("Peak RMS: {:.2} m/s^2", segment.peak_accel_mps2),
+                format!("Speed: {:.1} km/h", 3.6 * segment.mean_speed_mps),
+            ];
+        }
+        Some(RoadEventKind::RoadShock) => {
+            return vec![
+                segment.kind.clone(),
+                format!("Duration: {:.2} s", segment.duration_s),
+                format!(
+                    "Start/end: {:.2} - {:.2} s",
+                    segment.start_t_s, segment.end_t_s
+                ),
+                format!("Peak vertical: {:.1} m/s^2", segment.peak_accel_mps2),
                 format!("Speed: {:.1} km/h", 3.6 * segment.mean_speed_mps),
             ];
         }

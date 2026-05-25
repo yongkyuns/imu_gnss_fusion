@@ -1659,6 +1659,18 @@ private struct DiagnosticsView: View {
                     valueRow("GNSS Avg", profilingText(store.fusionProfiling.gnss))
                 }
 
+                Section("App Resources") {
+                    valueRow("IMU Callback Rate", rateText(store.appResourceUsage.imuCallbackHz))
+                    valueRow("GNSS Callback Rate", rateText(store.appResourceUsage.gnssCallbackHz))
+                    valueRow("Fusion Enqueue Rate", rateText(store.appResourceUsage.fusionEnqueueHz))
+                    valueRow("Fusion UI Rate", rateText(store.appResourceUsage.fusionUiPublishHz))
+                    valueRow("Motion UI Rate", rateText(store.appResourceUsage.motionUiPublishHz))
+                    valueRow("Road Event Rate", rateText(store.appResourceUsage.roadEventUpdateHz))
+                    valueRow("Max Fusion Queue", "\(store.appResourceUsage.maxFusionQueueDepth)")
+                    valueRow("Dropped Fusion Ops", "\(store.appResourceUsage.droppedFusionOperations)")
+                    valueRow("Resident Memory", memoryText(store.appResourceUsage.residentMemoryMB))
+                }
+
 #if DEBUG
                 DeveloperComparisonSection(snapshot: comparisonSnapshot)
 #endif
@@ -2183,68 +2195,70 @@ private struct RawGNSSMapView: UIViewRepresentable {
     }
 
     func updateUIView(_ mapView: MKMapView, context: Context) {
-        context.coordinator.currentHeadingDeg = currentHeadingDeg
-        context.coordinator.isHeadingUp = followsCurrentMarker && currentHeadingDeg != nil
-        context.coordinator.handleFollowModeChange(followsCurrentMarker: followsCurrentMarker)
+        AppPerformanceSignposts.interval("Map Update") {
+            context.coordinator.currentHeadingDeg = currentHeadingDeg
+            context.coordinator.isHeadingUp = followsCurrentMarker && currentHeadingDeg != nil
+            context.coordinator.handleFollowModeChange(followsCurrentMarker: followsCurrentMarker)
 
-        let routeKey = RouteKey(
-            gnssCoordinates: gnssCoordinates,
-            fusedCoordinates: fusedCoordinates,
-            currentCoordinate: currentCoordinate,
-            fusedCurrentCoordinate: fusedCurrentCoordinate
-        )
-
-        context.coordinator.updateAccuracyOverlay(
-            on: mapView,
-            coordinate: showAccuracyOverlay ? currentCoordinate : nil,
-            horizontalAccuracyM: showAccuracyOverlay ? horizontalAccuracyM : nil
-        )
-        context.coordinator.updateRouteOverlays(
-            on: mapView,
-            gnssCoordinates: gnssCoordinates,
-            fusedCoordinates: fusedCoordinates,
-            routeKey: routeKey
-        )
-        context.coordinator.updateMarker(
-            on: mapView,
-            slot: .gnss,
-            coordinate: currentCoordinate,
-            title: "GNSS"
-        )
-        context.coordinator.updateMarker(
-            on: mapView,
-            slot: .fused,
-            coordinate: fusedCurrentCoordinate,
-            title: "Fused"
-        )
-        context.coordinator.updateEventAnnotations(on: mapView, events: eventAnnotations)
-
-        let shouldForceRefit = context.coordinator.lastViewportRefreshToken != viewportRefreshToken
-        if MapCameraPolicy.shouldRefit(
-            isForced: shouldForceRefit,
-            hasExistingViewport: context.coordinator.lastCameraViewportKey != nil,
-            hasVisibleRoute: routeKey.hasVisibleRoute
-        ) {
-            context.coordinator.lastViewportRefreshToken = viewportRefreshToken
-            context.coordinator.lastCameraViewportKey = routeKey.viewportKey
-            setVisibleRoute(on: mapView, animated: shouldForceRefit)
-        }
-        if MapFollowPolicy.shouldApplyFollowCamera(
-            followsCurrentMarker: followsCurrentMarker,
-            isUserInteracting: context.coordinator.isUserInteracting(with: mapView),
-            suspendedUntil: context.coordinator.followSuspendedUntil,
-            now: Date()
-        ),
-           let followCoordinate = MapFollowPolicy.targetCoordinate(
-            fusedCoordinate: fusedCurrentCoordinate,
-            gnssCoordinate: currentCoordinate
-           ) {
-            context.coordinator.updateFollowCamera(
-                on: mapView,
-                coordinate: followCoordinate,
-                headingDeg: currentHeadingDeg,
-                verticalScreenOffset: followCameraVerticalOffset
+            let routeKey = RouteKey(
+                gnssCoordinates: gnssCoordinates,
+                fusedCoordinates: fusedCoordinates,
+                currentCoordinate: currentCoordinate,
+                fusedCurrentCoordinate: fusedCurrentCoordinate
             )
+
+            context.coordinator.updateAccuracyOverlay(
+                on: mapView,
+                coordinate: showAccuracyOverlay ? currentCoordinate : nil,
+                horizontalAccuracyM: showAccuracyOverlay ? horizontalAccuracyM : nil
+            )
+            context.coordinator.updateRouteOverlays(
+                on: mapView,
+                gnssCoordinates: gnssCoordinates,
+                fusedCoordinates: fusedCoordinates,
+                routeKey: routeKey
+            )
+            context.coordinator.updateMarker(
+                on: mapView,
+                slot: .gnss,
+                coordinate: currentCoordinate,
+                title: "GNSS"
+            )
+            context.coordinator.updateMarker(
+                on: mapView,
+                slot: .fused,
+                coordinate: fusedCurrentCoordinate,
+                title: "Fused"
+            )
+            context.coordinator.updateEventAnnotations(on: mapView, events: eventAnnotations)
+
+            let shouldForceRefit = context.coordinator.lastViewportRefreshToken != viewportRefreshToken
+            if MapCameraPolicy.shouldRefit(
+                isForced: shouldForceRefit,
+                hasExistingViewport: context.coordinator.lastCameraViewportKey != nil,
+                hasVisibleRoute: routeKey.hasVisibleRoute
+            ) {
+                context.coordinator.lastViewportRefreshToken = viewportRefreshToken
+                context.coordinator.lastCameraViewportKey = routeKey.viewportKey
+                setVisibleRoute(on: mapView, animated: shouldForceRefit)
+            }
+            if MapFollowPolicy.shouldApplyFollowCamera(
+                followsCurrentMarker: followsCurrentMarker,
+                isUserInteracting: context.coordinator.isUserInteracting(with: mapView),
+                suspendedUntil: context.coordinator.followSuspendedUntil,
+                now: Date()
+            ),
+               let followCoordinate = MapFollowPolicy.targetCoordinate(
+                fusedCoordinate: fusedCurrentCoordinate,
+                gnssCoordinate: currentCoordinate
+               ) {
+                context.coordinator.updateFollowCamera(
+                    on: mapView,
+                    coordinate: followCoordinate,
+                    headingDeg: currentHeadingDeg,
+                    verticalScreenOffset: followCameraVerticalOffset
+                )
+            }
         }
     }
 
@@ -2991,6 +3005,16 @@ private func profilingText(_ stats: FusionLoopProfilingStats) -> String {
     return String(format: "%.3f ms avg / %.3f last (%d)", averageMs, lastMs, stats.sampleCount)
 }
 
+private func rateText(_ value: Double?) -> String {
+    guard let value else { return "-" }
+    return String(format: "%.1f Hz", value)
+}
+
+private func memoryText(_ value: Double?) -> String {
+    guard let value else { return "-" }
+    return String(format: "%.1f MB", value)
+}
+
 private func formatAge(_ date: Date?) -> String {
     guard let date else { return "-" }
     return String(format: "%.1f", max(0.0, Date().timeIntervalSince(date)))
@@ -3027,6 +3051,10 @@ private extension MotionEvent {
             return "\(format(value, decimals: 1)) m/s² lateral"
         case .speedBump:
             return "\(format(value, decimals: 1))° peak pitch"
+        case .roadShock:
+            return "\(format(value, decimals: 1)) m/s² vertical"
+        case .roughRoad:
+            return "\(format(value, decimals: 2)) m/s² RMS"
         case .downhill, .uphill:
             return "\(format(value, decimals: 1))° pitch"
         case .gnssDegraded:
