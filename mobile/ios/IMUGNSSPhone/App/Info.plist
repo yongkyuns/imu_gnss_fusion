@@ -20,22 +20,22 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Location is used to show GNSS position, speed, and accuracy.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>Location is used to continue the active tracking session while the app is in the background.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Location is used to show GNSS position, speed, and accuracy.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>Motion data is used to show accelerometer and gyroscope readings.</string>
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>audio</string>
-		<string>location</string>
-	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
 		<false/>
 	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>location</string>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UIColorName</key>

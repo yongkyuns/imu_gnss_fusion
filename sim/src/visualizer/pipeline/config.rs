@@ -9,7 +9,7 @@ pub struct FusionTuningConfig {
     pub r_body_vel: f32,
     #[serde(default = "default_r_body_vel_z")]
     pub r_body_vel_z: f32,
-    #[serde(default)]
+    #[serde(default = "default_r_vehicle_roll_prior")]
     pub r_vehicle_roll_prior: f32,
     #[serde(default)]
     pub nhc_update_period_s: f32,
@@ -53,7 +53,7 @@ impl Default for FusionTuningConfig {
             align: AlignConfig::default(),
             r_body_vel: default_r_body_vel_y(),
             r_body_vel_z: default_r_body_vel_z(),
-            r_vehicle_roll_prior: 0.0,
+            r_vehicle_roll_prior: default_r_vehicle_roll_prior(),
             nhc_update_period_s: 0.1,
             attitude_roll_init_sigma_deg: default_attitude_roll_init_sigma_deg(),
             attitude_pitch_init_sigma_deg: default_attitude_pitch_init_sigma_deg(),
@@ -85,6 +85,10 @@ fn default_r_body_vel_y() -> f32 {
 
 fn default_r_body_vel_z() -> f32 {
     0.5
+}
+
+fn default_r_vehicle_roll_prior() -> f32 {
+    0.1
 }
 
 fn default_mount_roll_pitch_init_sigma_deg() -> f32 {
@@ -273,6 +277,7 @@ mod tests {
 
         assert_eq!(decoded.predict_imu_lpf_cutoff_hz, None);
         assert_eq!(decoded.r_body_vel_z, default_r_body_vel_z());
+        assert_eq!(decoded.r_vehicle_roll_prior, default_r_vehicle_roll_prior());
         assert_eq!(
             decoded.attitude_roll_init_sigma_deg,
             default_attitude_roll_init_sigma_deg()

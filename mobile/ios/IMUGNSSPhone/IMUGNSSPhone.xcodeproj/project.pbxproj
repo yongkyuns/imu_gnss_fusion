@@ -20,7 +20,9 @@
 		504F742166131D5173688ED1 /* SettingsControlModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E163BF2388E305DAC124FD0D /* SettingsControlModelTests.swift */; };
 		540AD335D46E6C9BA62C65C5 /* DeveloperComparison.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8220177DC5F925633A3234CF /* DeveloperComparison.swift */; };
 		5A4B75BD8D0068E6753C5125 /* RawSessionLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FE4D5872E0CCD8175DC5BA5 /* RawSessionLog.swift */; };
+		650BDA42320ABBD481AE42BF /* FusionProfilingMetricsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF65B5FEC2357C4D9403658A /* FusionProfilingMetricsTests.swift */; };
 		6588F26F47350EE6FA5810BE /* NavigationModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67E25FBA2D389509C370DACC /* NavigationModels.swift */; };
+		66B112ECA8940EEB704934C5 /* FusionProfilingMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = D34F17ABFCF04AC7D69A590C /* FusionProfilingMetrics.swift */; };
 		6E27FF2B30066F26B0510954 /* GnssVelocityResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F58B536FB1DF8A26345B349 /* GnssVelocityResolverTests.swift */; };
 		777D1C24A829166100527584 /* SettingsControlModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51505C65CCFC50A81985CAAB /* SettingsControlModel.swift */; };
 		7E821BA33F1A98E4F31600E3 /* MountMemorySettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB684FD05E5E5D280AB89437 /* MountMemorySettings.swift */; };
@@ -86,6 +88,7 @@
 		A140A6622AD524F605DCA5EF /* MapRenderPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapRenderPolicyTests.swift; sourceTree = "<group>"; };
 		A509E6299C597B39FA74E9B6 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		C361B38B6D297EBE08C5EB26 /* MotionEventDetectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionEventDetectorTests.swift; sourceTree = "<group>"; };
+		D34F17ABFCF04AC7D69A590C /* FusionProfilingMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FusionProfilingMetrics.swift; sourceTree = "<group>"; };
 		D64D651FC6A45816FEE96508 /* MotionEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionEvent.swift; sourceTree = "<group>"; };
 		DB210D6A2D12D40F3D9F25F6 /* EventAudioSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventAudioSettings.swift; sourceTree = "<group>"; };
 		DD37CB158BB37D599B43EF50 /* FusionHealth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FusionHealth.swift; sourceTree = "<group>"; };
@@ -97,6 +100,7 @@
 		E80DDC2ABBEF69B940B47203 /* RawSessionFileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawSessionFileStore.swift; sourceTree = "<group>"; };
 		E8B34295A214912826BC4E69 /* GnssFusionInputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GnssFusionInputTests.swift; sourceTree = "<group>"; };
 		EB1827800952B687FFF88E94 /* StreamHealth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamHealth.swift; sourceTree = "<group>"; };
+		EF65B5FEC2357C4D9403658A /* FusionProfilingMetricsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FusionProfilingMetricsTests.swift; sourceTree = "<group>"; };
 		F545E9978287177F167E63CB /* DeveloperComparisonTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeveloperComparisonTests.swift; sourceTree = "<group>"; };
 		FB684FD05E5E5D280AB89437 /* MountMemorySettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MountMemorySettings.swift; sourceTree = "<group>"; };
 		FFCB25446DA7D3D6A2DC4368 /* GnssFusionInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GnssFusionInput.swift; sourceTree = "<group>"; };
@@ -137,6 +141,7 @@
 			children = (
 				DB210D6A2D12D40F3D9F25F6 /* EventAudioSettings.swift */,
 				DD37CB158BB37D599B43EF50 /* FusionHealth.swift */,
+				D34F17ABFCF04AC7D69A590C /* FusionProfilingMetrics.swift */,
 				49F24324DC070AD1AAD3F487 /* FusionTimingPolicy.swift */,
 				11AB526DD8B6E81BBE8B00C4 /* MapRenderPolicy.swift */,
 				D64D651FC6A45816FEE96508 /* MotionEvent.swift */,
@@ -172,6 +177,7 @@
 			children = (
 				F545E9978287177F167E63CB /* DeveloperComparisonTests.swift */,
 				E7B80C95E550957501BECF95 /* EventAudioSettingsTests.swift */,
+				EF65B5FEC2357C4D9403658A /* FusionProfilingMetricsTests.swift */,
 				04080336EC82C34573366F80 /* FusionTimingPolicyTests.swift */,
 				E8B34295A214912826BC4E69 /* GnssFusionInputTests.swift */,
 				1F58B536FB1DF8A26345B349 /* GnssVelocityResolverTests.swift */,
@@ -227,7 +233,7 @@
 			path = Analysis;
 			sourceTree = "<group>";
 		};
-		"TEMP_AEAFD6EA-2CF3-4AAB-A2B3-2BBA5986BDF7" /* EKF */ = {
+		"TEMP_90EF4515-10B6-4B0A-B067-8BB5D2B1BB8E" /* EKF */ = {
 			isa = PBXGroup;
 			children = (
 			);
@@ -321,6 +327,7 @@
 			files = (
 				34101B548D55B84338CE8F40 /* DeveloperComparisonTests.swift in Sources */,
 				A0464887A87883AB7CC0FE03 /* EventAudioSettingsTests.swift in Sources */,
+				650BDA42320ABBD481AE42BF /* FusionProfilingMetricsTests.swift in Sources */,
 				F1E43DD3900D9FC461587AC7 /* FusionTimingPolicyTests.swift in Sources */,
 				F3FEC82933575AAAD7EF4874 /* GnssFusionInputTests.swift in Sources */,
 				6E27FF2B30066F26B0510954 /* GnssVelocityResolverTests.swift in Sources */,
@@ -345,6 +352,7 @@
 				F617A6B9651A0E9C1CBEEB83 /* EventAudioSettings.swift in Sources */,
 				A28D05F0835892528688A77F /* FusionEngine.swift in Sources */,
 				B913FAB3C199614F82632398 /* FusionHealth.swift in Sources */,
+				66B112ECA8940EEB704934C5 /* FusionProfilingMetrics.swift in Sources */,
 				9780EB0C5AEB63EE042B5BF2 /* FusionTimingPolicy.swift in Sources */,
 				A76A1793EABCA14894B12AC8 /* GnssFusionInput.swift in Sources */,
 				482E5665EA18D0EE961A75FB /* GnssVelocityResolver.swift in Sources */,

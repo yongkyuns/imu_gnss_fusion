@@ -207,7 +207,7 @@ impl Default for RuntimeConfig {
             use_align_mount_covariance_on_seed: true,
             r_body_vel_y: 0.5,
             r_body_vel_z: 0.5,
-            r_vehicle_roll_prior: 0.0,
+            r_vehicle_roll_prior: 0.1,
             nhc_update_period_s: 0.1,
             align_handoff_delay_s: 0.0,
             r_vehicle_speed: 0.04,

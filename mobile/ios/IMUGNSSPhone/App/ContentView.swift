@@ -1641,6 +1641,11 @@ private struct DiagnosticsView: View {
                     valueRow("Latest EKF Samples", "\(store.ekfVelocityHistory.count)")
                 }
 
+                Section("Fusion Profiling") {
+                    valueRow("IMU Avg", profilingText(store.fusionProfiling.imu))
+                    valueRow("GNSS Avg", profilingText(store.fusionProfiling.gnss))
+                }
+
 #if DEBUG
                 DeveloperComparisonSection(snapshot: comparisonSnapshot)
 #endif
@@ -2950,6 +2955,12 @@ private func format(_ value: Double, decimals: Int) -> String {
 private func format(_ value: Double?, decimals: Int) -> String {
     guard let value else { return "-" }
     return String(format: "%.*f", decimals, value)
+}
+
+private func profilingText(_ stats: FusionLoopProfilingStats) -> String {
+    guard let averageMs = stats.averageMs else { return "-" }
+    let lastMs = stats.lastMs ?? averageMs
+    return String(format: "%.3f ms avg / %.3f last (%d)", averageMs, lastMs, stats.sampleCount)
 }
 
 private func formatAge(_ date: Date?) -> String {

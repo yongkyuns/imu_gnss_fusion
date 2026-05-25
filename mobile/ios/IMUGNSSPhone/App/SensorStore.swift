@@ -88,6 +88,7 @@ final class SensorStore: NSObject, ObservableObject {
     @Published var eventAudioSettings: EventAudioSettings = EventAudioSettingsDefaults.load()
     @Published var mountMemorySettings: MountMemorySettings = MountMemoryDefaults.load()
     @Published var streamHealth: StreamHealth = .starting
+    @Published var fusionProfiling: FusionProfilingSnapshot = .empty
 #if DEBUG
     @Published var iosAttitudeEulerDeg: TimedVec3Sample?
 #endif
@@ -113,6 +114,7 @@ final class SensorStore: NSObject, ObservableObject {
     private var lastMotionPublishTS: TimeInterval?
     private var lastBaroPublishTS: TimeInterval?
     private var lastFusionUiPublishTS: TimeInterval?
+    private var lastFusionProfilingPublishTS: TimeInterval?
     private var lastFusionSampleDate: Date?
     private var lastFusionImuSampleDate: Date?
     private var lastStreamHealthPublishTS: TimeInterval?
@@ -137,6 +139,7 @@ final class SensorStore: NSObject, ObservableObject {
     private var latestMountQBV: Quaternion?
     private var fusionEkfInitializedAt: Date?
     private var lastMountMemoryStoreDate: Date?
+    private var fusionProfiler = FusionLoopProfiler()
     private var motionEventDetector = MotionEventDetector()
     private let eventAudioNotifier = EventAudioNotifier()
 
@@ -152,6 +155,7 @@ final class SensorStore: NSObject, ObservableObject {
     private let motionPublishMinDtSec = 1.0 / 10.0
     private let baroPublishMinDtSec = 1.0 / 10.0
     private let fusionUiPublishMinDtSec = 1.0 / 10.0
+    private let fusionProfilingPublishMinDtSec = 1.0
     private let streamHealthPublishMinDtSec = 0.5
     private let replayProgressPublishMinDtSec = 1.0 / 15.0
     private let tripStatsPublishMinDtSec = 1.0
@@ -220,6 +224,7 @@ final class SensorStore: NSObject, ObservableObject {
         lastMotionPublishTS = nil
         lastBaroPublishTS = nil
         lastFusionUiPublishTS = nil
+        lastFusionProfilingPublishTS = nil
         lastStreamHealthPublishTS = nil
         lastTripStatsPublishTS = nil
         lastImuUiSampleDate = nil
@@ -259,6 +264,7 @@ final class SensorStore: NSObject, ObservableObject {
         vehicleRightMps = nil
         vehicleDownMps = nil
         fusionConfidence = 0.0
+        fusionProfiling = .empty
         alignProgress = .unavailable
         vehicleSegment = nil
         motionEvents.removeAll(keepingCapacity: true)
@@ -409,6 +415,7 @@ final class SensorStore: NSObject, ObservableObject {
         lastMotionPublishTS = nil
         lastBaroPublishTS = nil
         lastFusionUiPublishTS = nil
+        lastFusionProfilingPublishTS = nil
         lastStreamHealthPublishTS = nil
         lastTripStatsPublishTS = nil
         lastImuUiSampleDate = nil
@@ -712,6 +719,7 @@ final class SensorStore: NSObject, ObservableObject {
         lastMotionPublishTS = nil
         lastBaroPublishTS = nil
         lastFusionUiPublishTS = nil
+        lastFusionProfilingPublishTS = nil
         gnssRouteHistory.removeAll(keepingCapacity: true)
         fusedRouteHistory.removeAll(keepingCapacity: true)
         nedPositionHistory.removeAll(keepingCapacity: true)
@@ -751,6 +759,7 @@ final class SensorStore: NSObject, ObservableObject {
         vehicleRightMps = nil
         vehicleDownMps = nil
         fusionConfidence = 0.0
+        fusionProfiling = .empty
         alignProgress = .unavailable
         vehicleSegment = nil
         motionEvents.removeAll(keepingCapacity: true)
@@ -1048,7 +1057,8 @@ final class SensorStore: NSObject, ObservableObject {
                     vAcc: vAcc,
                     courseDeg: sample.courseDeg,
                     speedAccuracyMps: sample.speedAccuracyMps,
-                    courseAccuracyDeg: sample.courseAccuracyDeg
+                    courseAccuracyDeg: sample.courseAccuracyDeg,
+                    generation: generation
                 )
             }
             Task { @MainActor in
@@ -1445,7 +1455,8 @@ extension SensorStore: CLLocationManagerDelegate {
                 vAcc: vAcc,
                 courseDeg: courseDeg,
                 speedAccuracyMps: speedAccuracyMps,
-                courseAccuracyDeg: courseAccuracyDeg
+                courseAccuracyDeg: courseAccuracyDeg,
+                generation: generation
             )
         }
 
@@ -1528,10 +1539,16 @@ extension SensorStore: CLLocationManagerDelegate {
             for: sampleDate,
             after: lastFusionSampleDate
         )
+        let fusionStartTS = ProcessInfo.processInfo.systemUptime
         let result = fusionEngine.processImu(
             sampleDate: processingDate,
             accelMps2: (x: ax, y: ay, z: az),
             gyroRadps: (x: gx, y: gy, z: gz)
+        )
+        recordFusionProfiling(
+            loop: .imu,
+            durationSec: ProcessInfo.processInfo.systemUptime - fusionStartTS,
+            generation: generation
         )
         lastFusionSampleDate = processingDate
         lastFusionImuSampleDate = sampleDate
@@ -1570,7 +1587,8 @@ extension SensorStore: CLLocationManagerDelegate {
         vAcc: Double,
         courseDeg: Double?,
         speedAccuracyMps: Double?,
-        courseAccuracyDeg: Double?
+        courseAccuracyDeg: Double?,
+        generation: Int
     ) {
         _ = posN
         _ = posE
@@ -1600,6 +1618,7 @@ extension SensorStore: CLLocationManagerDelegate {
             for: sampleDate,
             after: lastFusionSampleDate
         )
+        let fusionStartTS = ProcessInfo.processInfo.systemUptime
         let result = fusionEngine.processGnss(
             sampleDate: processingDate,
             latitudeDeg: latitudeDeg,
@@ -1622,6 +1641,11 @@ extension SensorStore: CLLocationManagerDelegate {
             ),
             headingRad: input.headingRad
         )
+        recordFusionProfiling(
+            loop: .gnss,
+            durationSec: ProcessInfo.processInfo.systemUptime - fusionStartTS,
+            generation: generation
+        )
         lastFusionSampleDate = processingDate
         publishFusionResult(result, sampleDate: sampleDate)
     }
@@ -1629,6 +1653,8 @@ extension SensorStore: CLLocationManagerDelegate {
     private func resetFusionEngineState(using mountSettings: MountMemorySettings) {
         lastFusionSampleDate = nil
         lastFusionImuSampleDate = nil
+        lastFusionProfilingPublishTS = nil
+        fusionProfiler.reset()
         if let savedMount = mountSettings.savedCalibration, mountSettings.isEnabled {
             fusionEngine.resetEkfManual(qBV: savedMount.qBV)
         } else {
@@ -1670,6 +1696,24 @@ extension SensorStore: CLLocationManagerDelegate {
         }
         self.lastFusionUiPublishTS = now
         return true
+    }
+
+    private func recordFusionProfiling(
+        loop: FusionProfilingLoop,
+        durationSec: TimeInterval,
+        generation: Int
+    ) {
+        let snapshot = fusionProfiler.record(loop: loop, durationSec: durationSec)
+        let now = ProcessInfo.processInfo.systemUptime
+        if let lastFusionProfilingPublishTS,
+           now - lastFusionProfilingPublishTS < fusionProfilingPublishMinDtSec {
+            return
+        }
+        lastFusionProfilingPublishTS = now
+        Task { @MainActor in
+            guard self.isCurrentGeneration(generation) else { return }
+            self.fusionProfiling = snapshot
+        }
     }
 
     @MainActor

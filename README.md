@@ -205,14 +205,20 @@ if let Some(q_bv) = fusion.mount_q_bv() {
 
 ## Embedded Benchmark
 
-Current embedded budget notes should be regenerated after runtime changes. The
-benchmark harness measures predict-only and update-heavy schedules on an
-ESP32-S3-class target and reports linked flash contribution, state-object size,
-and CPU budget at the assumed IMU/GNSS rates.
+Latest ESP32-S3 benchmark for the public `SensorFusion` runtime, using a 100 Hz
+IMU stream and 2 Hz GNSS injection:
 
-Treat those numbers as budget-level embedded timings rather than
-cycle-accurate microbenchmarks, because the timing source on the target reports
-at millisecond granularity.
+| Path | Avg per 10 ms tick | CPU at 100 Hz |
+| --- | ---: | ---: |
+| Predict only | `950 us` | `9.5%` |
+| IMU + 10 Hz NHC, roll prior off | `1230 us` | `12.3%` |
+| IMU + 10 Hz NHC + roll prior | `1320 us` | `13.2%` |
+| IMU + 2 Hz GNSS | `1380 us` | `13.8%` |
+| Road events | `20 us` | `0.2%` |
+| Fusion + road events | `1400 us` | `14.0%` |
+
+`SensorFusion` persistent state is about `7.1 KiB` per instance. Treat these as
+budget-level embedded timings rather than cycle-accurate microbenchmarks.
 
 ## Filter And Replay Modes
 

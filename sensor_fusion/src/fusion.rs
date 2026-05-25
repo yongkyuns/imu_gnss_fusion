@@ -398,13 +398,9 @@ impl SensorFusion {
         let dt = sample.t_s - last_t;
         let prev_sample = prev_sample.unwrap_or(sample);
 
-        self.interval_imu_sum_gyro[0] += sample.gyro_radps[0];
-        self.interval_imu_sum_gyro[1] += sample.gyro_radps[1];
-        self.interval_imu_sum_gyro[2] += sample.gyro_radps[2];
-        self.interval_imu_sum_accel[0] += sample.accel_mps2[0];
-        self.interval_imu_sum_accel[1] += sample.accel_mps2[1];
-        self.interval_imu_sum_accel[2] += sample.accel_mps2[2];
-        self.interval_imu_count += 1;
+        if self.internal_align_enabled {
+            self.accumulate_interval_imu(sample);
+        }
 
         self.try_bootstrap_align(sample.accel_mps2, sample.gyro_radps);
 
@@ -415,8 +411,6 @@ impl SensorFusion {
             return self.update(false, false);
         }
 
-        let gyro_vehicle = self.current_vehicle_vector_from_body(sample.gyro_radps);
-        let accel_vehicle = self.current_vehicle_vector_from_body(sample.accel_mps2);
         let (gyro_predict, coriolis_delta_v_n) =
             self.ekf_navigation_rate_corrections(sample.gyro_radps, dt);
         self.ekf.predict(crate::ekf::ImuDelta {
@@ -443,10 +437,13 @@ impl SensorFusion {
                     self.ekf.fuse_zero_vel(self.cfg.r_zero_vel);
                 }
                 if self.cfg.r_stationary_accel > 0.0 {
+                    let accel_vehicle = self.current_vehicle_vector_from_body(sample.accel_mps2);
                     self.ekf
                         .fuse_stationary_gravity(accel_vehicle, self.cfg.r_stationary_accel);
                 }
             } else {
+                let gyro_vehicle = self.current_vehicle_vector_from_body(sample.gyro_radps);
+                let accel_vehicle = self.current_vehicle_vector_from_body(sample.accel_mps2);
                 let nhc = self.imu_epoch_nhc_variances(sample.t_s, dt, accel_vehicle, gyro_vehicle);
                 let used_nhc_with_gnss =
                     self.fuse_pending_gnss_at_imu(sample.t_s, nhc.map(NhcEpoch::variances));
@@ -819,6 +816,16 @@ impl SensorFusion {
         mat_vec3_f32(transpose3_f32(c_bv), vector_b)
     }
 
+    fn accumulate_interval_imu(&mut self, sample: ImuSample) {
+        self.interval_imu_sum_gyro[0] += sample.gyro_radps[0];
+        self.interval_imu_sum_gyro[1] += sample.gyro_radps[1];
+        self.interval_imu_sum_gyro[2] += sample.gyro_radps[2];
+        self.interval_imu_sum_accel[0] += sample.accel_mps2[0];
+        self.interval_imu_sum_accel[1] += sample.accel_mps2[1];
+        self.interval_imu_sum_accel[2] += sample.accel_mps2[2];
+        self.interval_imu_count += 1;
+    }
+
     fn try_bootstrap_align(&mut self, accel_b: [f32; 3], gyro_radps: [f32; 3]) {
         if !self.internal_align_enabled || self.align_initialized {
             return;
@@ -1171,16 +1178,14 @@ impl SensorFusion {
             return (gyro_body, [0.0; 3]);
         };
         let nominal = &ekf.nominal;
-        let lla = self.position_lla_f64().unwrap_or([
-            self.anchor.lat_deg,
-            self.anchor.lon_deg,
-            self.anchor.height_m,
-        ]);
-        let (omega_ie_n, omega_en_n) = navigation_rates_ned_f32(
-            lla[0] as f32,
-            lla[2] as f32,
-            [nominal.vn, nominal.ve, nominal.vd],
-        );
+        // Propagation only needs latitude/height for Earth-rate and transport-rate
+        // terms. Reanchors keep the local-NED origin within a few km, so this
+        // small-distance approximation avoids a full ECEF->LLA conversion at
+        // every IMU tick without materially changing the correction.
+        let lat_deg = self.anchor.lat_deg as f32 + nominal.pn / 111_111.0;
+        let height_m = self.anchor.height_m as f32 - nominal.pd;
+        let (omega_ie_n, omega_en_n) =
+            navigation_rates_ned_f32(lat_deg, height_m, [nominal.vn, nominal.ve, nominal.vd]);
         // The generated EKF propagation is a local-level NED model. The IMU
         // gyro measures body rate relative to inertial space, so subtract the
         // navigation frame's inertial rate before applying the flat local

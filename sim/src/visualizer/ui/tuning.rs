@@ -609,7 +609,7 @@ fn tuning_help(label: &str) -> Option<&'static str> {
             "Vertical nonholonomic constraint noise density.\nHigher: weaker vertical constraint, less pitch/mount correction.\nLower: stronger vertical constraint, faster pitch/mount correction, more risk from road grade or vertical motion.",
         ),
         "Vehicle roll prior R" => Some(
-            "Optional Chapter-6-style vehicle-roll pseudo-observation noise density.\n0 disables it.\nApplied only at NHC epochs and scaled by the NHC observation interval.\nLower: more strongly assumes vehicle roll is near zero and pushes persistent roll into mount.\nThis is a flat-road prior and is not bank-safe.",
+            "Chapter-6-style vehicle-roll pseudo-observation noise density.\nDefault: 0.1. Set 0 to disable it.\nApplied only at NHC epochs and scaled by the NHC observation interval.\nLower: more strongly assumes vehicle roll is near zero and pushes persistent roll into mount.\nThis is a flat-road prior and is not bank-safe.",
         ),
         "Vehicle speed R" => Some(
             "Vehicle forward-speed measurement variance.\nHigher: speed input nudges velocity less.\nLower: speed input pulls longitudinal velocity more strongly.",
