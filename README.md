@@ -1,12 +1,15 @@
-<h1 align="center">
-  <img src="logo.png" alt="IMU/GNSS Fusion logo" width="48" valign="middle">
-  IMU/GNSS Fusion
-</h1>
+<h1 align="center">IMU/GNSS Fusion</h1>
 
-[![CI](https://github.com/yongkyuns/imu_gnss_fusion/actions/workflows/ci.yml/badge.svg)](https://github.com/yongkyuns/imu_gnss_fusion/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/Rust-stable-orange.svg)](https://www.rust-lang.org/)
-[![Web demo](https://img.shields.io/badge/Web%20demo-GitHub%20Pages-blue)](https://yongkyuns.github.io/imu_gnss_fusion/)
+<p align="center">
+  <img src="logo.png" alt="IMU/GNSS Fusion logo" width="128">
+</p>
+
+<p align="center">
+  <a href="https://github.com/yongkyuns/imu_gnss_fusion/actions/workflows/ci.yml"><img src="https://github.com/yongkyuns/imu_gnss_fusion/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+  <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-stable-orange.svg" alt="Rust"></a>
+  <a href="https://yongkyuns.github.io/imu_gnss_fusion/"><img src="https://img.shields.io/badge/Web%20demo-GitHub%20Pages-blue" alt="Web demo"></a>
+</p>
 
 🌐 **Hosted web app:** [yongkyuns.github.io/imu_gnss_fusion](https://yongkyuns.github.io/imu_gnss_fusion/)
 
