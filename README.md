@@ -1,8 +1,7 @@
-<p align="center">
-  <img src="logo.png" alt="IMU/GNSS Fusion logo" width="160">
-</p>
-
-# IMU/GNSS Fusion
+<h1 align="center">
+  <img src="logo.png" alt="IMU/GNSS Fusion logo" width="48" valign="middle">
+  IMU/GNSS Fusion
+</h1>
 
 [![CI](https://github.com/yongkyuns/imu_gnss_fusion/actions/workflows/ci.yml/badge.svg)](https://github.com/yongkyuns/imu_gnss_fusion/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
