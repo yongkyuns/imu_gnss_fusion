@@ -110,10 +110,13 @@ Requirements:
 
 ## GitHub Pages artifact validation
 
-CI builds the wasm bundle, writes `web/pkg/`, and validates the static site before uploading a Pages artifact:
+CI builds the wasm bundle, builds Sphinx documentation, assembles a staged Pages artifact, and validates the static site before upload. The visualizer stays at the artifact root and generated docs are copied to `/docs/`:
 
 ```bash
-node scripts/validate_pages_static.mjs --site-dir web --require-wasm
+node scripts/validate_pages_static.mjs \
+  --site-dir target/pages-site \
+  --require-wasm \
+  --require-docs
 ```
 
-The validator checks that `index.html` uses relative wasm paths, required wasm files exist, `visualizer_bg.wasm` has a wasm header, and the local static server returns Pages-compatible MIME types for HTML, JavaScript, and wasm.
+The validator checks that `index.html` uses relative wasm paths, required wasm files exist, `visualizer_bg.wasm` has a wasm header, the Sphinx docs entry point exists, dataset URLs are safe, required static files are fetchable, and the local static server returns Pages-compatible MIME types for HTML, JavaScript, wasm, CSS, and common Sphinx assets. `local-config.js` is intentionally excluded from the Pages artifact; the browser treats it as an optional local-development override.

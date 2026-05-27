@@ -184,7 +184,7 @@ fn unknown_direction_uses_predicted_sign_when_state_is_confident() {
 }
 
 #[test]
-fn internal_alignment_bootstraps_mount_estimate() {
+fn internal_alignment_tilt_initializes_mount_estimate() {
     let mut system = SensorFusion::new();
     let _ = system.process_gnss(stationary_gnss_sample(0.0));
     for i in 0..120 {

@@ -117,7 +117,7 @@ impl Default for Config {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct BootstrapConfig {
+pub(crate) struct TiltInitConfig {
     pub(crate) ema_alpha: f32,
     pub(crate) max_speed_mps: f32,
     pub(crate) max_speed_rate_mps2: f32,
@@ -127,7 +127,7 @@ pub(crate) struct BootstrapConfig {
     pub(crate) max_accel_norm_err_mps2: f32,
 }
 
-impl Default for BootstrapConfig {
+impl Default for TiltInitConfig {
     fn default() -> Self {
         let align = AlignConfig::default();
         Self {
@@ -166,7 +166,7 @@ impl Default for NoiseConfig {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RuntimeConfig {
     pub(crate) align: AlignConfig,
-    pub(crate) bootstrap: BootstrapConfig,
+    pub(crate) tilt_init: TiltInitConfig,
     pub(crate) noise: NoiseConfig,
     pub(crate) attitude_roll_init_sigma_rad: f32,
     pub(crate) attitude_pitch_init_sigma_rad: f32,
@@ -193,7 +193,7 @@ impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             align: AlignConfig::default(),
-            bootstrap: BootstrapConfig::default(),
+            tilt_init: TiltInitConfig::default(),
             noise: NoiseConfig::default(),
             attitude_roll_init_sigma_rad: 2.0_f32.to_radians(),
             attitude_pitch_init_sigma_rad: 2.0_f32.to_radians(),

@@ -1316,7 +1316,6 @@ fn populate_align_traces(
     let mut horiz_yaw = Vec::new();
     let mut turn_roll = Vec::new();
     let mut turn_pitch = Vec::new();
-    let mut turn_yaw = Vec::new();
     let mut cov_roll = Vec::new();
     let mut cov_pitch = Vec::new();
     let mut cov_yaw = Vec::new();
@@ -1396,13 +1395,12 @@ fn populate_align_traces(
                 &mut horiz_pitch,
                 &mut horiz_yaw,
             );
-            push_update_contrib(
+            push_update_contrib_roll_pitch(
                 t,
                 trace.q_start,
                 trace.after_turn_gyro,
                 &mut turn_roll,
                 &mut turn_pitch,
-                &mut turn_yaw,
             );
             cov_roll.push([t, (align.P[0][0].max(0.0).sqrt() as f64).to_degrees()]);
             cov_pitch.push([t, (align.P[1][1].max(0.0).sqrt() as f64).to_degrees()]);
@@ -1468,7 +1466,7 @@ fn populate_align_traces(
             points: accel_norm,
         },
         Trace {
-            name: "Horizontal heading innovation [deg]".to_string(),
+            name: "Horizontal yaw innovation [deg]".to_string(),
             points: horiz_angle,
         },
         Trace {
@@ -1530,10 +1528,6 @@ fn populate_align_traces(
         Trace {
             name: "horizontal accel yaw update [deg]".to_string(),
             points: horiz_yaw,
-        },
-        Trace {
-            name: "turn gyro yaw update [deg]".to_string(),
-            points: turn_yaw,
         },
     ];
     data.align_cov = vec![
@@ -2603,6 +2597,24 @@ fn push_update_contrib(
     roll.push([t, wrap_deg(after.0 - before.0)]);
     pitch.push([t, wrap_deg(after.1 - before.1)]);
     yaw.push([t, wrap_deg(after.2 - before.2)]);
+}
+
+fn push_update_contrib_roll_pitch(
+    t: f64,
+    q_start: [f32; 4],
+    q_after: Option<[f32; 4]>,
+    roll: &mut Vec<[f64; 2]>,
+    pitch: &mut Vec<[f64; 2]>,
+) {
+    let Some(q_after) = q_after else {
+        roll.push([t, 0.0]);
+        pitch.push([t, 0.0]);
+        return;
+    };
+    let before = quat_rpy_deg(q_start[0], q_start[1], q_start[2], q_start[3]);
+    let after = quat_rpy_deg(q_after[0], q_after[1], q_after[2], q_after[3]);
+    roll.push([t, wrap_deg(after.0 - before.0)]);
+    pitch.push([t, wrap_deg(after.1 - before.1)]);
 }
 
 fn vec3_norm_f32(v: [f32; 3]) -> f32 {

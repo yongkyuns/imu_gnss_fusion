@@ -6,19 +6,19 @@ fn assert_close(a: f32, b: f32, tol: f32, ctx: &str) {
 }
 
 #[test]
-fn align_stationary_bootstrap_and_update_are_stable() {
+fn align_stationary_tilt_init_and_update_are_stable() {
     let cfg = AlignConfig::default();
     let mut align = Align::new(cfg);
     let accel_samples = vec![[0.0_f32, 0.0_f32, -9.80665_f32]; 16];
 
     align
-        .initialize_from_stationary(&accel_samples, 0.0)
-        .expect("stationary init should succeed");
+        .initialize_from_stationary(&accel_samples)
+        .expect("stationary tilt init should succeed");
 
-    assert_close(align.q_bv[0], 1.0, 1.0e-6, "bootstrap q0");
-    assert_close(align.q_bv[1], 0.0, 1.0e-6, "bootstrap q1");
-    assert_close(align.q_bv[2], 0.0, 1.0e-6, "bootstrap q2");
-    assert_close(align.q_bv[3], 0.0, 1.0e-6, "bootstrap q3");
+    assert_close(align.q_bv[0], 1.0, 1.0e-6, "tilt init q0");
+    assert_close(align.q_bv[1], 0.0, 1.0e-6, "tilt init q1");
+    assert_close(align.q_bv[2], 0.0, 1.0e-6, "tilt init q2");
+    assert_close(align.q_bv[3], 0.0, 1.0e-6, "tilt init q3");
 
     let window = AlignWindowSummary {
         dt: 0.1,

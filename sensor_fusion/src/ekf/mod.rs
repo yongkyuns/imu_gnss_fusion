@@ -1,6 +1,6 @@
 //! EKF runtime, public state structs, and standalone state helpers.
 //!
-//! Mathematical details are maintained in `docs/ekf.pdf`.
+//! Mathematical details are maintained in `docs/math/ekf.md`.
 //! The runtime filter is [`crate::ekf::Filter`]. Public structs in this module define the
 //! generated-code and diagnostics data layout. Focused state-operation helpers
 //! live under [`crate::ekf::state_ops`].
@@ -44,6 +44,7 @@ const DIAG_VEHICLE_ROLL_PRIOR: usize = 11;
 const BODY_VEL_Y_SUPPORT: [usize; 8] = [0, 1, 2, 3, 4, 5, 15, 17];
 const BODY_VEL_Z_SUPPORT: [usize; 8] = [0, 1, 2, 3, 4, 5, 15, 16];
 const MAX_BATCH_OBS: usize = 8;
+const GNSS_OUTLIER_GATE_SIGMA: f32 = 3.0;
 
 /// Rust EKF state machine with covariance and mount-control policy.
 #[derive(Debug, Clone)]
@@ -52,6 +53,8 @@ pub struct Filter {
     freeze_misalignment_states: bool,
     gravity_mss: f32,
     gnss_velocity_mount_gain_scale: f32,
+    gnss_position_outlier_gate_sigma: f32,
+    gnss_velocity_outlier_gate_sigma: f32,
 }
 
 impl Filter {
@@ -77,6 +80,8 @@ impl Filter {
             freeze_misalignment_states: false,
             gravity_mss: generated::GRAVITY_MSS,
             gnss_velocity_mount_gain_scale: 1.0,
+            gnss_position_outlier_gate_sigma: GNSS_OUTLIER_GATE_SIGMA,
+            gnss_velocity_outlier_gate_sigma: GNSS_OUTLIER_GATE_SIGMA,
         }
     }
 
@@ -123,6 +128,26 @@ impl Filter {
     pub fn analysis_set_gnss_velocity_mount_gain_scale(&mut self, scale: f32) {
         if scale.is_finite() && scale >= 0.0 {
             self.gnss_velocity_mount_gain_scale = scale;
+        }
+    }
+
+    /// Sets the per-axis sigma gate used for the GNSS position update group.
+    ///
+    /// The default is `3.0`. Passing `f32::INFINITY` disables position outlier
+    /// rejection.
+    pub fn set_gnss_position_outlier_gate_sigma(&mut self, gate_sigma: f32) {
+        if gate_sigma >= 0.0 {
+            self.gnss_position_outlier_gate_sigma = gate_sigma;
+        }
+    }
+
+    /// Sets the per-axis sigma gate used for the GNSS velocity update group.
+    ///
+    /// The default is `3.0`. Passing `f32::INFINITY` disables velocity outlier
+    /// rejection.
+    pub fn set_gnss_velocity_outlier_gate_sigma(&mut self, gate_sigma: f32) {
+        if gate_sigma >= 0.0 {
+            self.gnss_velocity_outlier_gate_sigma = gate_sigma;
         }
     }
 
@@ -266,30 +291,37 @@ impl Filter {
 
     /// Fuses GNSS position and velocity.
     pub fn fuse_gps(&mut self, sample: GnssSample) {
-        self.fuse_gps_pos_n(
-            sample.pos_ned_m[0],
+        let pos_residuals = [
+            sample.pos_ned_m[0] - self.raw.nominal.pn,
+            sample.pos_ned_m[1] - self.raw.nominal.pe,
+            sample.pos_ned_m[2] - self.raw.nominal.pd,
+        ];
+        let pos_variances = [
             sample.pos_std_m[0] * sample.pos_std_m[0],
-        );
-        self.fuse_gps_pos_e(
-            sample.pos_ned_m[1],
             sample.pos_std_m[1] * sample.pos_std_m[1],
-        );
-        self.fuse_gps_pos_d(
-            sample.pos_ned_m[2],
             sample.pos_std_m[2] * sample.pos_std_m[2],
-        );
-        self.fuse_gps_vel_n(
-            sample.vel_ned_mps[0],
+        ];
+        if self.gnss_group_passes_per_axis_sigma_gate(6, pos_residuals, pos_variances, true) {
+            self.fuse_gps_pos_n(sample.pos_ned_m[0], pos_variances[0]);
+            self.fuse_gps_pos_e(sample.pos_ned_m[1], pos_variances[1]);
+            self.fuse_gps_pos_d(sample.pos_ned_m[2], pos_variances[2]);
+        }
+
+        let vel_residuals = [
+            sample.vel_ned_mps[0] - self.raw.nominal.vn,
+            sample.vel_ned_mps[1] - self.raw.nominal.ve,
+            sample.vel_ned_mps[2] - self.raw.nominal.vd,
+        ];
+        let vel_variances = [
             sample.vel_std_mps[0] * sample.vel_std_mps[0],
-        );
-        self.fuse_gps_vel_e(
-            sample.vel_ned_mps[1],
             sample.vel_std_mps[1] * sample.vel_std_mps[1],
-        );
-        self.fuse_gps_vel_d(
-            sample.vel_ned_mps[2],
             sample.vel_std_mps[2] * sample.vel_std_mps[2],
-        );
+        ];
+        if self.gnss_group_passes_per_axis_sigma_gate(3, vel_residuals, vel_variances, false) {
+            self.fuse_gps_vel_n(sample.vel_ned_mps[0], vel_variances[0]);
+            self.fuse_gps_vel_e(sample.vel_ned_mps[1], vel_variances[1]);
+            self.fuse_gps_vel_d(sample.vel_ned_mps[2], vel_variances[2]);
+        }
     }
 
     /// Fuses GNSS position/velocity and optional lateral/vertical NHC rows as one batch.
@@ -320,22 +352,24 @@ impl Filter {
             sample.pos_std_m[1] * sample.pos_std_m[1],
             sample.pos_std_m[2] * sample.pos_std_m[2],
         ];
-        for axis in 0..3 {
-            push_batch_row(
-                &mut h_rows,
-                &mut residuals,
-                &mut variances,
-                &mut diag_types,
-                &mut obs_count,
-                gps_axis_h(6 + axis),
-                pos_residuals[axis],
-                pos_variances[axis],
-                if axis == 2 {
-                    DIAG_GPS_POS_D
-                } else {
-                    DIAG_GPS_POS
-                },
-            );
+        if self.gnss_group_passes_per_axis_sigma_gate(6, pos_residuals, pos_variances, true) {
+            for axis in 0..3 {
+                push_batch_row(
+                    &mut h_rows,
+                    &mut residuals,
+                    &mut variances,
+                    &mut diag_types,
+                    &mut obs_count,
+                    gps_axis_h(6 + axis),
+                    pos_residuals[axis],
+                    pos_variances[axis],
+                    if axis == 2 {
+                        DIAG_GPS_POS_D
+                    } else {
+                        DIAG_GPS_POS
+                    },
+                );
+            }
         }
 
         let vel_residuals = [
@@ -348,22 +382,24 @@ impl Filter {
             sample.vel_std_mps[1] * sample.vel_std_mps[1],
             sample.vel_std_mps[2] * sample.vel_std_mps[2],
         ];
-        for axis in 0..3 {
-            push_batch_row(
-                &mut h_rows,
-                &mut residuals,
-                &mut variances,
-                &mut diag_types,
-                &mut obs_count,
-                gps_axis_h(3 + axis),
-                vel_residuals[axis],
-                vel_variances[axis],
-                if axis == 2 {
-                    DIAG_GPS_VEL_D
-                } else {
-                    DIAG_GPS_VEL
-                },
-            );
+        if self.gnss_group_passes_per_axis_sigma_gate(3, vel_residuals, vel_variances, false) {
+            for axis in 0..3 {
+                push_batch_row(
+                    &mut h_rows,
+                    &mut residuals,
+                    &mut variances,
+                    &mut diag_types,
+                    &mut obs_count,
+                    gps_axis_h(3 + axis),
+                    vel_residuals[axis],
+                    vel_variances[axis],
+                    if axis == 2 {
+                        DIAG_GPS_VEL_D
+                    } else {
+                        DIAG_GPS_VEL
+                    },
+                );
+            }
         }
 
         let v_vehicle = nominal_vehicle_velocity(&self.raw.nominal);
@@ -835,6 +871,30 @@ impl Filter {
         }
     }
 
+    fn gnss_group_passes_per_axis_sigma_gate(
+        &self,
+        state_base: usize,
+        residuals: [f32; 3],
+        variances: [f32; 3],
+        position_group: bool,
+    ) -> bool {
+        let gate_sigma = if position_group {
+            self.gnss_position_outlier_gate_sigma
+        } else {
+            self.gnss_velocity_outlier_gate_sigma
+        };
+        if gate_sigma.is_infinite() {
+            return true;
+        }
+        gnss_group_passes_per_axis_sigma_gate(
+            &self.raw.p,
+            state_base,
+            residuals,
+            variances,
+            gate_sigma,
+        )
+    }
+
     fn clear_last_batch_diag(&mut self) {
         self.raw.last_dx = [0.0; ERROR_STATES];
         self.raw.last_h_by_obs = [[0.0; ERROR_STATES]; 8];
@@ -962,6 +1022,33 @@ fn gps_axis_h(axis: usize) -> [f32; ERROR_STATES] {
         h[axis] = 1.0;
     }
     h
+}
+
+fn gnss_group_passes_per_axis_sigma_gate(
+    p: &[[f32; ERROR_STATES]; ERROR_STATES],
+    state_base: usize,
+    residuals: [f32; 3],
+    variances: [f32; 3],
+    gate_sigma: f32,
+) -> bool {
+    if state_base + 2 >= ERROR_STATES {
+        return true;
+    }
+    let gate_nis = gate_sigma * gate_sigma;
+    for i in 0..3 {
+        if !residuals[i].is_finite() || variances[i] <= 0.0 || !variances[i].is_finite() {
+            continue;
+        }
+        let innovation_var = p[state_base + i][state_base + i] + variances[i];
+        if innovation_var <= 0.0 || !innovation_var.is_finite() {
+            continue;
+        }
+        let nis = residuals[i] * residuals[i] / innovation_var;
+        if nis.is_finite() && nis > gate_nis {
+            return false;
+        }
+    }
+    true
 }
 
 #[allow(clippy::too_many_arguments)]

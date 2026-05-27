@@ -408,7 +408,7 @@ fn assert_shared_auxiliary_groups_close(
                 "Window speed quality proxy [m/s]",
                 "Mean gyro norm [rad/s]",
                 "Mean accel norm [m/s^2]",
-                "Horizontal heading innovation [deg]",
+                "Horizontal yaw innovation [deg]",
                 "GNSS horizontal accel norm [m/s^2]",
                 "IMU horizontal accel norm [m/s^2]",
             ],
@@ -450,7 +450,6 @@ fn assert_shared_auxiliary_groups_close(
             &[
                 "gravity yaw update [deg]",
                 "horizontal accel yaw update [deg]",
-                "turn gyro yaw update [deg]",
             ],
         ),
         (

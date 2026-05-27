@@ -215,26 +215,17 @@ pub(super) fn draw_align_tuning(ui: &mut egui::Ui, cfg: &mut FusionTuningConfig)
             0.01,
             0.001..=10.0,
         );
-        let mut horiz = align.r_horiz_heading_std_rad.to_degrees();
-        let mut turn_heading = align.r_turn_heading_std_rad.to_degrees();
+        let mut horiz = align.r_horiz_yaw_std_rad.to_degrees();
         let mut turn_gyro = align.r_turn_gyro_std_radps.to_degrees();
+        drag_f32(ui, "Horizontal yaw std deg", &mut horiz, 0.1, 0.001..=90.0);
         drag_f32(
             ui,
-            "Horizontal heading std deg",
-            &mut horiz,
-            0.1,
-            0.001..=90.0,
+            "Turn gyro roll/pitch std deg/s",
+            &mut turn_gyro,
+            0.001,
+            0.0..=10.0,
         );
-        drag_f32(
-            ui,
-            "Turn heading std deg",
-            &mut turn_heading,
-            0.1,
-            0.001..=90.0,
-        );
-        drag_f32(ui, "Turn gyro std deg/s", &mut turn_gyro, 0.001, 0.0..=10.0);
-        align.r_horiz_heading_std_rad = horiz.to_radians();
-        align.r_turn_heading_std_rad = turn_heading.to_radians();
+        align.r_horiz_yaw_std_rad = horiz.to_radians();
         align.r_turn_gyro_std_radps = turn_gyro.to_radians();
     });
     ui.collapsing("Post-coarse refinement", |ui| {
@@ -767,14 +758,11 @@ fn tuning_help(label: &str) -> Option<&'static str> {
         "Gravity std m/s^2" => Some(
             "Align gravity observation standard deviation.\nHigher: gravity updates are weaker.\nLower: gravity updates are stronger, but more sensitive to acceleration/vibration.",
         ),
-        "Horizontal heading std deg" => Some(
-            "Align horizontal-motion heading observation standard deviation.\nHigher: heading observations are weaker.\nLower: heading observations pull mount more aggressively.",
+        "Horizontal yaw std deg" => Some(
+            "Align horizontal-acceleration yaw observation standard deviation.\nHigher: yaw observations are weaker.\nLower: yaw observations pull mount more aggressively.",
         ),
-        "Turn heading std deg" => Some(
-            "Align turn-derived heading observation standard deviation.\nHigher: turn heading is trusted less.\nLower: turn heading is trusted more and can create sharper corrections.",
-        ),
-        "Turn gyro std deg/s" => Some(
-            "Align turn gyro observation standard deviation.\nHigher: yaw-rate consistency is trusted less.\nLower: turn gyro consistency pushes roll/pitch harder.",
+        "Turn gyro roll/pitch std deg/s" => Some(
+            "Align turn gyro roll/pitch observation standard deviation.\nHigher: yaw-rate consistency is trusted less.\nLower: turn gyro consistency pushes roll/pitch harder. This update does not observe mount yaw.",
         ),
         "Smooth after coarse ready" => Some(
             "Continue refining align after coarse readiness.\nOn: align keeps adapting after initial seed.\nOff: align behaves closer to coarse-only handoff.",
@@ -795,7 +783,7 @@ fn tuning_help(label: &str) -> Option<&'static str> {
             "Minimum yaw rate for turn-based align updates.\nHigher: only strong turns contribute.\nLower: more turns contribute, including weak/noisy ones.",
         ),
         "Max stationary gyro deg/s" => Some(
-            "Maximum gyro norm accepted as stationary for bootstrap.\nHigher: easier stationary detection but more risk during slight motion.\nLower: stricter stationary detection and potentially delayed bootstrap.",
+            "Maximum gyro norm accepted as stationary for tilt initialization.\nHigher: easier stationary detection but more risk during slight motion.\nLower: stricter stationary detection and potentially delayed tilt initialization.",
         ),
         "Min lat accel m/s^2" => Some(
             "Minimum lateral acceleration for turn observability.\nHigher: only stronger turns update align.\nLower: weaker turns can update but may be noisier.",
@@ -804,7 +792,7 @@ fn tuning_help(label: &str) -> Option<&'static str> {
             "Minimum longitudinal acceleration for accel/brake observability.\nHigher: only stronger accel/brake windows update align.\nLower: weaker longitudinal motion can update but may be noisier.",
         ),
         "Max stationary accel norm err" => Some(
-            "Maximum acceleration-norm error accepted as stationary.\nHigher: easier stationary bootstrap but more contamination from motion.\nLower: stricter bootstrap and possible initialization delay.",
+            "Maximum acceleration-norm error accepted as stationary.\nHigher: easier stationary tilt initialization but more contamination from motion.\nLower: stricter tilt initialization and possible initialization delay.",
         ),
         "Min windows" => Some(
             "Minimum number of turn windows required for consistency gating.\nHigher: more evidence before accepting turn updates.\nLower: faster acceptance with less confirmation.",
@@ -822,7 +810,7 @@ fn tuning_help(label: &str) -> Option<&'static str> {
             "Enable align gravity observations.\nOn: roll/pitch seed uses stationary gravity.\nOff: removes gravity contribution from align.",
         ),
         "Use turn gyro updates" => Some(
-            "Enable align turn gyro observations.\nOn: turn yaw-rate evidence contributes to mount alignment.\nOff: align ignores turn gyro consistency.",
+            "Enable align turn gyro roll/pitch observations.\nOn: turn yaw-rate consistency contributes to mount roll/pitch alignment.\nOff: align ignores turn gyro consistency. This does not observe mount yaw.",
         ),
         _ => None,
     }

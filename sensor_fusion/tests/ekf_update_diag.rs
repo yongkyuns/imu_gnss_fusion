@@ -73,3 +73,53 @@ fn gnss_batch_records_row_diag_once_and_clears_on_predict() {
 
     assert_eq!(ekf.raw().last_obs_count, 0);
 }
+
+#[test]
+fn gnss_position_per_axis_three_sigma_rejection_keeps_velocity_update() {
+    let mut ekf = Filter::new(ProcessNoise::default());
+    ekf.fuse_gps_nhc_batch(
+        GnssSample {
+            t_s: 1.0,
+            pos_ned_m: [10.0, 0.0, 0.0],
+            vel_ned_mps: [0.4, -0.2, 0.1],
+            pos_std_m: [1.0; 3],
+            vel_std_mps: [1.0; 3],
+            heading_rad: None,
+        },
+        None,
+        None,
+    );
+
+    let raw = ekf.raw();
+    assert_eq!(raw.last_obs_count, 3);
+    assert_eq!(&raw.last_obs_types[..3], &[1, 1, 9]);
+    assert_eq!(raw.update_diag.type_counts[0], 0);
+    assert_eq!(raw.update_diag.type_counts[8], 0);
+    assert_eq!(raw.update_diag.type_counts[1], 2);
+    assert_eq!(raw.update_diag.type_counts[9], 1);
+}
+
+#[test]
+fn gnss_velocity_per_axis_three_sigma_rejection_keeps_position_update() {
+    let mut ekf = Filter::new(ProcessNoise::default());
+    ekf.fuse_gps_nhc_batch(
+        GnssSample {
+            t_s: 1.0,
+            pos_ned_m: [1.0, -2.0, 0.5],
+            vel_ned_mps: [10.0, 0.0, 0.0],
+            pos_std_m: [1.0; 3],
+            vel_std_mps: [1.0; 3],
+            heading_rad: None,
+        },
+        None,
+        None,
+    );
+
+    let raw = ekf.raw();
+    assert_eq!(raw.last_obs_count, 3);
+    assert_eq!(&raw.last_obs_types[..3], &[0, 0, 8]);
+    assert_eq!(raw.update_diag.type_counts[0], 2);
+    assert_eq!(raw.update_diag.type_counts[8], 1);
+    assert_eq!(raw.update_diag.type_counts[1], 0);
+    assert_eq!(raw.update_diag.type_counts[9], 0);
+}

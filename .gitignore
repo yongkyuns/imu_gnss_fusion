@@ -1,4 +1,5 @@
 /target
+/.cache/
 /ekf/target
 /ekf/c/build/
 **/target/
@@ -19,6 +20,9 @@ docs/*.out
 docs/*.toc
 doc.pdf
 /web/pkg/
+/web/docs/
 /web/local-config.js
+/target/docs-html/
+/target/pages-site/
 /mobile/ios/build/
 /mobile/ios/SensorFusionFFI/target/

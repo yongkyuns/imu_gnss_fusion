@@ -1,18 +1,16 @@
-# EKF Math Notes
+# EKF Math Index
 
-The detailed EKF derivations are PDF-first. Editable TEX sources live beside
-the PDFs under `docs/`. Keep `docs/math/*.md` pages as short operational
-indexes rather than duplicate derivations.
+The EKF is an error-state filter with nominal attitude, velocity, position, IMU bias, and residual mount terms. Generated Rust snippets implement symbolic Jacobians and update paths while the surrounding runtime controls gating, covariance policy, and diagnostics.
 
-Regenerate generated EKF snippets with:
+Core pages:
 
-```bash
-python sensor_fusion/src/ekf/formulation.py --emit-rust
-```
+- [](frames.md)
+- [](runtime-ekf.md)
+- [](align.md)
+- [](roll-observability.md)
+- [](road-events.md)
 
-Useful focused checks after model changes:
+Runtime summaries:
 
-```bash
-cargo test -p sensor_fusion --locked
-cargo test -p sim --test synthetic_gnss_ins --locked
-```
+- [](../filter-algorithms.md)
+- [](../algorithms/observability.md)

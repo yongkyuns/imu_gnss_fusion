@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">iOS app operation flow</title>
+  <desc id="desc">Diagram showing CoreMotion and CoreLocation feeding SensorStore, SensorFusionFFI, the Rust fusion and road events crates, and the Drive, Review, Settings, and Diagnostics app surfaces.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1220"/>
+      <stop offset="1" stop-color="#17243a"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8fbff"/>
+      <stop offset="1" stop-color="#eef5ff"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2 2 L10 6 L2 10 Z" fill="#5b7bb2"/>
+    </marker>
+    <style>
+      .title { fill: #f8fbff; font: 700 34px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .subtitle { fill: #c9d7ee; font: 500 17px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .card { fill: url(#card); stroke: #c5d5ee; stroke-width: 1.5; }
+      .card-dark { fill: #142238; stroke: #38506f; stroke-width: 1.5; }
+      .label { fill: #142033; font: 700 20px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .small { fill: #4b5f7d; font: 500 15px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .dark-label { fill: #edf5ff; font: 700 20px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .dark-small { fill: #b8c7dd; font: 500 15px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .arrow { stroke: #83a5d8; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+      .chip { fill: #dceaff; stroke: #b6c9e6; stroke-width: 1; }
+      .chip-text { fill: #314763; font: 600 14px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    </style>
+  </defs>
+  <rect width="1280" height="720" fill="url(#bg)"/>
+  <text class="title" x="64" y="70">iOS Vehicle Motion App Operation</text>
+  <text class="subtitle" x="64" y="100">Live sensors and replay logs flow through the same Rust-backed fusion and road-event path.</text>
+
+  <rect class="card" x="64" y="155" width="230" height="140" rx="14"/>
+  <text class="label" x="92" y="197">iPhone Sensors</text>
+  <text class="small" x="92" y="229">CoreMotion device motion</text>
+  <text class="small" x="92" y="254">CoreLocation GNSS</text>
+  <text class="small" x="92" y="279">Raw session logging</text>
+
+  <rect class="card" x="64" y="425" width="230" height="120" rx="14"/>
+  <text class="label" x="92" y="467">Replay / Export</text>
+  <text class="small" x="92" y="499">.motionfusion sessions</text>
+  <text class="small" x="92" y="524">generic replay CSV</text>
+
+  <rect class="card" x="374" y="248" width="230" height="155" rx="14"/>
+  <text class="label" x="402" y="290">SensorStore</text>
+  <text class="small" x="402" y="322">stream lifecycle</text>
+  <text class="small" x="402" y="347">recording / playback</text>
+  <text class="small" x="402" y="372">settings publication</text>
+
+  <rect class="card-dark" x="684" y="220" width="260" height="210" rx="14"/>
+  <text class="dark-label" x="716" y="262">SensorFusionFFI</text>
+  <text class="dark-small" x="716" y="296">sensor_fusion facade</text>
+  <text class="dark-small" x="716" y="322">road_events detectors</text>
+  <text class="dark-small" x="716" y="348">trip summaries</text>
+  <text class="dark-small" x="716" y="374">harsh behavior presets</text>
+  <rect class="chip" x="716" y="392" width="86" height="24" rx="12"/>
+  <text class="chip-text" x="735" y="409">no_std</text>
+  <rect class="chip" x="814" y="392" width="92" height="24" rx="12"/>
+  <text class="chip-text" x="833" y="409">Rust</text>
+
+  <rect class="card" x="1024" y="115" width="210" height="95" rx="14"/>
+  <text class="label" x="1052" y="154">Drive</text>
+  <text class="small" x="1052" y="183">map, telemetry, events</text>
+
+  <rect class="card" x="1024" y="255" width="210" height="95" rx="14"/>
+  <text class="label" x="1052" y="294">Review</text>
+  <text class="small" x="1052" y="323">completed sessions</text>
+
+  <rect class="card" x="1024" y="395" width="210" height="95" rx="14"/>
+  <text class="label" x="1052" y="434">Settings</text>
+  <text class="small" x="1052" y="463">presets, audio, mount</text>
+
+  <rect class="card" x="1024" y="535" width="210" height="95" rx="14"/>
+  <text class="label" x="1052" y="574">Diagnostics</text>
+  <text class="small" x="1052" y="603">profiling, status, rates</text>
+
+  <path class="arrow" d="M294 225 C330 225 338 305 374 305"/>
+  <path class="arrow" d="M294 485 C333 485 337 360 374 360"/>
+  <path class="arrow" d="M604 326 L684 326"/>
+  <path class="arrow" d="M944 285 C982 285 986 162 1024 162"/>
+  <path class="arrow" d="M944 318 C982 318 986 302 1024 302"/>
+  <path class="arrow" d="M944 350 C982 350 986 442 1024 442"/>
+  <path class="arrow" d="M944 382 C982 382 986 582 1024 582"/>
+</svg>

@@ -1,29 +1,13 @@
 # EKF Diagnostics
 
-Use this page as an index for current diagnostics that help explain EKF
-behavior during replay and synthetic testing.
+EKF diagnostics are exposed for replay analysis, tuning, and visualizer plots. They are not separate runtime sensors.
 
-## Primary Tools
+Useful diagnostic surfaces include:
 
-| Tool | Use |
-| --- | --- |
-| `visualizer` | Inspect traces, maps, mount estimates, update allocation, and summary statistics. |
-| `diag_mount_observability` | Exercise roll/pitch mount observability in synthetic scenarios. |
-| `synthetic_bad_basin_sweep` | Sweep early-convergence synthetic stress cases. |
-| `export_synthetic_replay_generic` | Export synthetic replay outputs to the generic CSV schema. |
+- update diagnostics for GNSS, zero-velocity, body-speed, NHC, stationary-gravity, and vehicle-roll-prior updates;
+- `align_debug` for the most recent align window and update trace;
+- anchor/reanchor debug accessors for local-frame behavior;
+- visualizer mount, motion, calibration, sensor, diagnostics, and road-event pages;
+- diagnostic binaries in `sim` for mount observability and synthetic sweeps.
 
-## What To Record
-
-When a diagnostic result should be preserved, record:
-
-- exact command line,
-- dataset or synthetic scenario name,
-- mount mode,
-- noise/tuning overrides,
-- time window,
-- key metrics and thresholds,
-- artifact paths for generated CSVs or screenshots.
-
-Keep interpretation tied to physical quantities: position, velocity, attitude,
-mount, IMU bias, residuals, NIS, and covariance. Avoid comparing field names
-without first confirming the frame and units.
+When reporting mount error, use the physical public convention `q_bv`, where `x_b = C_bv x_v`.

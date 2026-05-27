@@ -1,6 +1,6 @@
 //! IMU-to-vehicle mount alignment from stationary gravity and GNSS-derived motion windows.
 //!
-//! The formulation is documented in `docs/align.pdf`. In short, the filter
+//! The formulation is documented in `docs/math/align.md`. In short, the filter
 //! state is the vehicle-to-body mount quaternion `q_bv` plus a 3 by 3
 //! covariance over the mount small angle `[roll, pitch, yaw]`.
 //!
@@ -10,8 +10,8 @@
 //! x_v = C_bv^T x_b
 //! ```
 //!
-//! Stationary gravity constrains roll and pitch, GNSS-derived horizontal
-//! acceleration supplies a scalar vehicle-yaw correction, and planar turn gyro
+//! Stationary gravity initializes and refines tilt, GNSS-derived horizontal
+//! acceleration supplies a scalar mount-yaw correction, and planar turn gyro
 //! windows constrain vehicle-frame roll and pitch rates. The nominal mount is
 //! modeled as constant between observation windows; prediction only adds mount
 //! random-walk variance to the covariance diagonal.
@@ -27,8 +27,7 @@ pub const GRAVITY_MPS2: f32 = 9.80665;
 const COARSE_READY_SIGMA_DEG: [f32; ALIGN_N_STATES] = [5.0, 5.0, 8.0];
 const STATIONARY_INIT_SIGMA_DEG: [f32; ALIGN_N_STATES] = [10.0, 10.0, 60.0];
 const R_GRAVITY_STD_MPS2: f32 = 4.0;
-const R_HORIZ_HEADING_STD_RAD: f32 = 1.0_f32.to_radians();
-const R_TURN_HEADING_STD_RAD: f32 = 0.1_f32.to_radians();
+const R_HORIZ_YAW_STD_RAD: f32 = 1.0_f32.to_radians();
 const R_TURN_GYRO_STD_RADPS: f32 = 2.0_f32.to_radians();
 const TILT_JAC_EPS_RAD: f32 = 1.0e-4;
 
@@ -51,12 +50,11 @@ pub struct AlignConfig {
     pub refine_observation_std_scale: f32,
     /// Gravity-vector observation standard deviation, in meters per second squared.
     pub r_gravity_std_mps2: f32,
-    /// Horizontal-acceleration heading observation standard deviation, in radians.
-    pub r_horiz_heading_std_rad: f32,
-    /// Gyro-based turn observation standard deviation, in radians per second.
+    /// Horizontal-acceleration yaw observation standard deviation, in radians.
+    #[cfg_attr(feature = "serde", serde(alias = "rHorizHeadingStdRad"))]
+    pub r_horiz_yaw_std_rad: f32,
+    /// Turn-gyro roll/pitch observation standard deviation, in radians per second.
     pub r_turn_gyro_std_radps: f32,
-    /// GNSS turn-heading observation standard deviation, in radians.
-    pub r_turn_heading_std_rad: f32,
     /// Low-pass filter coefficient for stationary gravity samples.
     pub gravity_lpf_alpha: f32,
     /// Minimum horizontal speed required for motion-derived observations, in meters per second.
@@ -65,7 +63,7 @@ pub struct AlignConfig {
     pub min_turn_rate_radps: f32,
     /// Minimum lateral acceleration required for turn observations, in meters per second squared.
     pub min_lat_acc_mps2: f32,
-    /// Minimum longitudinal acceleration required for straight-line heading observations.
+    /// Minimum longitudinal acceleration required for straight-line yaw observations.
     pub min_long_acc_mps2: f32,
     /// Minimum retained turn windows before turn consistency can pass.
     pub turn_consistency_min_windows: usize,
@@ -97,8 +95,7 @@ impl Default for AlignConfig {
             refine_process_noise_scale: 1.0,
             refine_observation_std_scale: 1.0,
             r_gravity_std_mps2: R_GRAVITY_STD_MPS2,
-            r_horiz_heading_std_rad: R_HORIZ_HEADING_STD_RAD,
-            r_turn_heading_std_rad: R_TURN_HEADING_STD_RAD,
+            r_horiz_yaw_std_rad: R_HORIZ_YAW_STD_RAD,
             r_turn_gyro_std_radps: R_TURN_GYRO_STD_RADPS,
             gravity_lpf_alpha: 0.04,
             min_speed_mps: 3.0 / 3.6,
@@ -151,9 +148,9 @@ pub struct AlignUpdateTrace {
     pub after_gravity_quasi_static: bool,
     /// Quaternion after the horizontal-acceleration update, if applied.
     pub after_horiz_accel: Option<[f32; 4]>,
-    /// Horizontal heading innovation angle, in radians.
+    /// Horizontal yaw innovation angle, in radians.
     pub horiz_angle_err_rad: Option<f32>,
-    /// Effective standard deviation used for the horizontal heading update.
+    /// Effective standard deviation used for the horizontal yaw update.
     pub horiz_effective_std_rad: Option<f32>,
     /// GNSS-derived horizontal acceleration norm, in meters per second squared.
     pub horiz_gnss_norm_mps2: Option<f32>,
@@ -253,15 +250,16 @@ impl Align {
         }
     }
 
-    /// Initializes roll and pitch from stationary accelerometer samples and seeds yaw.
+    /// Initializes roll and pitch from stationary accelerometer samples.
+    ///
+    /// Yaw remains arbitrary after this tilt-only initialization and is
+    /// estimated later from horizontal acceleration windows.
     pub fn initialize_from_stationary(
         &mut self,
         accel_samples_b: &[[f32; 3]],
-        yaw_seed_rad: f32,
     ) -> Result<(), &'static str> {
-        let mean = mean_accel(accel_samples_b).ok_or("stationary bootstrap failed")?;
-        let c_bv =
-            stationary_mount_rotmat(mean, yaw_seed_rad).ok_or("stationary bootstrap failed")?;
+        let mean = mean_accel(accel_samples_b).ok_or("stationary tilt initialization failed")?;
+        let c_bv = stationary_tilt_rotmat(mean).ok_or("stationary tilt initialization failed")?;
         self.q_bv = rotmat_to_quat(c_bv);
         self.P = diag3([
             sq_f32(STATIONARY_INIT_SIGMA_DEG[0].to_radians()),
@@ -427,14 +425,14 @@ impl Align {
                 .clamp(0.35, 1.0);
                 trace.horiz_dominance_q = Some(dominance.clamp(0.0, 1.0));
                 trace.horiz_turn_q = Some(turn_q);
-                self.cfg.r_turn_heading_std_rad / turn_q
+                self.cfg.r_horiz_yaw_std_rad / turn_q
             } else {
                 let lat_ratio = a_lat.abs() / (0.5 + 0.6 * a_long.abs());
                 let long_q = ((a_long.abs() - self.cfg.min_long_acc_mps2) / 0.8).clamp(0.0, 1.0);
                 let straight_q = (speed_q * accel_q * long_q * (1.0 - lat_ratio.clamp(0.0, 1.0)))
                     .clamp(0.2, 1.0);
                 trace.horiz_straight_q = Some(straight_q);
-                self.cfg.r_horiz_heading_std_rad / straight_q
+                self.cfg.r_horiz_yaw_std_rad / straight_q
             };
             let effective_std = observation_scale * base_effective_std;
 
@@ -613,7 +611,7 @@ fn mean_accel(samples: &[[f32; 3]]) -> Option<[f32; 3]> {
     Some([sum[0] * inv, sum[1] * inv, sum[2] * inv])
 }
 
-fn stationary_mount_rotmat(accel_b: [f32; 3], yaw_seed_rad: f32) -> Option<[[f32; 3]; 3]> {
+fn stationary_tilt_rotmat(accel_b: [f32; 3]) -> Option<[[f32; 3]; 3]> {
     let z_v_in_b = vec3_normalize(vec3_scale(accel_b, -1.0))?;
     let mut x_ref = [1.0, 0.0, 0.0];
     let mut x_v_in_b = vec3_sub(x_ref, vec3_scale(z_v_in_b, vec3_dot(z_v_in_b, x_ref)));
@@ -628,18 +626,11 @@ fn stationary_mount_rotmat(accel_b: [f32; 3], yaw_seed_rad: f32) -> Option<[[f32
     let mut x_v_in_b = vec3_normalize(x_v_in_b)?;
     let y_v_in_b = vec3_normalize(vec3_cross(z_v_in_b, x_v_in_b))?;
     x_v_in_b = vec3_normalize(vec3_cross(y_v_in_b, z_v_in_b))?;
-    let c_b_v_tilt = [
+    Some([
         [x_v_in_b[0], y_v_in_b[0], z_v_in_b[0]],
         [x_v_in_b[1], y_v_in_b[1], z_v_in_b[1]],
         [x_v_in_b[2], y_v_in_b[2], z_v_in_b[2]],
-    ];
-    let rpy = rot_to_euler_zyx(c_b_v_tilt);
-    let yaw_delta = yaw_seed_rad - rpy[2];
-    let dyaw = atan2_f32(sin_f32(yaw_delta), cos_f32(yaw_delta));
-    let s = sin_f32(dyaw);
-    let c = cos_f32(dyaw);
-    let c_delta = [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]];
-    Some(mat3_mul(c_b_v_tilt, c_delta))
+    ])
 }
 
 fn remove_gravity_axis(q_bv: [f32; 4], accel_b: [f32; 3]) -> [f32; 3] {
@@ -1221,16 +1212,15 @@ mod tests {
     fn default_observation_noise_is_conservative() {
         let cfg = AlignConfig::default();
         assert_close(cfg.r_gravity_std_mps2, 4.0, 1.0e-6);
-        assert_close(cfg.r_horiz_heading_std_rad.to_degrees(), 1.0, 1.0e-6);
-        assert_close(cfg.r_turn_heading_std_rad.to_degrees(), 0.1, 1.0e-6);
+        assert_close(cfg.r_horiz_yaw_std_rad.to_degrees(), 1.0, 1.0e-6);
         assert_close(cfg.r_turn_gyro_std_radps.to_degrees(), 2.0, 1.0e-6);
     }
 
     #[test]
-    fn stationary_bootstrap_uses_conservative_tilt_sigma() {
+    fn stationary_tilt_init_uses_conservative_tilt_sigma() {
         let samples = [[0.0, 0.0, -GRAVITY_MPS2]; 16];
         let mut align = Align::new(AlignConfig::default());
-        align.initialize_from_stationary(&samples, 0.0).unwrap();
+        align.initialize_from_stationary(&samples).unwrap();
         assert_close(align.sigma_deg()[0], 10.0, 1.0e-3);
         assert_close(align.sigma_deg()[1], 10.0, 1.0e-3);
         assert_close(align.sigma_deg()[2], 60.0, 1.0e-3);

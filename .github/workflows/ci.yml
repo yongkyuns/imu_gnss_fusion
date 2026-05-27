@@ -122,6 +122,11 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -133,26 +138,41 @@ jobs:
       - name: Install wasm-bindgen CLI
         run: cargo install wasm-bindgen-cli --version 0.2.118 --locked
 
-      - name: Build browser visualizer
+      - name: Install docs dependencies
+        run: python -m pip install -r docs/requirements.txt
+
+      - name: Build documentation
+        run: sphinx-build -W --keep-going -b html docs target/docs-html
+
+      - name: Assemble Pages artifact
         run: |
+          rm -rf target/pages-site
+          mkdir -p target/pages-site
+          rsync -a \
+            --exclude local-config.js \
+            --exclude pkg/ \
+            --exclude docs/ \
+            web/ target/pages-site/
           cargo build -p sim --bin visualizer --release --target wasm32-unknown-unknown --locked
           wasm-bindgen \
             --target web \
-            --out-dir web/pkg \
+            --out-dir target/pages-site/pkg \
             target/wasm32-unknown-unknown/release/visualizer.wasm
-          touch web/.nojekyll
+          mkdir -p target/pages-site/docs
+          rsync -a target/docs-html/ target/pages-site/docs/
+          touch target/pages-site/.nojekyll
 
       - name: Validate Pages static artifact
-        run: node scripts/validate_pages_static.mjs --site-dir web --require-wasm
+        run: node scripts/validate_pages_static.mjs --site-dir target/pages-site --require-wasm --require-docs
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: web
+          path: target/pages-site
 
   deploy-pages:
     name: Deploy GitHub Pages
-    needs: web-pages-artifact
+    needs: [rust, hosted-generic-datasets, web-pages-artifact]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10

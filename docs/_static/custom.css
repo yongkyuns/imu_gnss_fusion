@@ -1,0 +1,185 @@
+@font-face {
+  font-family: "Roboto";
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url("fonts/roboto-400.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Roboto";
+  font-style: normal;
+  font-weight: 500;
+  font-display: block;
+  src: url("fonts/roboto-500.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Roboto";
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url("fonts/roboto-700.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Roboto Slab";
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url("fonts/roboto-slab-400.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Roboto Slab";
+  font-style: normal;
+  font-weight: 600;
+  font-display: block;
+  src: url("fonts/roboto-slab-600.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Roboto Slab";
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url("fonts/roboto-slab-700.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Source Code Pro";
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url("fonts/source-code-pro-400.ttf") format("truetype");
+}
+
+@font-face {
+  font-family: "Source Code Pro";
+  font-style: normal;
+  font-weight: 500;
+  font-display: block;
+  src: url("fonts/source-code-pro-500.ttf") format("truetype");
+}
+
+:root,
+body {
+  --font-stack: "Roboto", sans-serif;
+  --font-stack--headings: "Roboto Slab", serif;
+  --font-stack--monospace: "Source Code Pro", monospace;
+}
+
+body {
+  font-family: "Roboto", sans-serif !important;
+}
+
+.sidebar-brand-text,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+.toc-title,
+.sidebar-tree .caption {
+  font-family: "Roboto Slab", serif !important;
+}
+
+html body,
+html body article,
+html body .content,
+html body .content p,
+html body .content li,
+html body .content td,
+html body .content th,
+article,
+.content,
+.sidebar-tree,
+.toc-tree {
+  font-family: "Roboto", sans-serif !important;
+}
+
+html body pre,
+html body code,
+html body kbd,
+html body samp,
+html body .highlight,
+pre,
+code,
+kbd,
+samp,
+.highlight {
+  font-family: "Source Code Pro", monospace !important;
+}
+
+article figure {
+  margin: 1.5rem 0 2rem;
+}
+
+article img.titlebar {
+  display: block;
+  margin: 0.25rem auto 1.6rem;
+  max-width: min(100%, 56rem);
+  width: 100%;
+}
+
+article figure.framed img {
+  background: var(--color-background-secondary);
+  border: 1px solid var(--color-background-border);
+  border-radius: 0.5rem;
+  box-shadow: 0 0.75rem 2rem rgb(15 23 42 / 10%);
+  padding: 0;
+}
+
+article figure figcaption {
+  color: var(--color-foreground-secondary);
+  font-size: 0.92rem;
+  line-height: 1.45;
+  margin-top: 0.6rem;
+}
+
+body[data-theme="dark"] article figure.framed img {
+  box-shadow: 0 0.85rem 2.4rem rgb(0 0 0 / 28%);
+}
+
+body[data-theme="dark"] {
+  --color-background-primary: #0b1220;
+  --color-background-secondary: #101a2c;
+  --color-background-hover: #16233a;
+  --color-background-hover--transparent: #16233a00;
+  --color-background-border: #26364f;
+  --color-card-background: #101a2c;
+  --color-card-border: #26364f;
+  --color-admonition-background: #101a2c;
+  --color-code-background: #111c30;
+  --color-code-foreground: #dbe7ff;
+  --color-foreground-primary: #e6edf7;
+  --color-foreground-secondary: #b8c4d8;
+  --color-foreground-muted: #8fa0ba;
+  --color-foreground-border: #40516f;
+  --color-brand-primary: #7db4ff;
+  --color-brand-content: #8ab9ff;
+  --color-brand-visited: #c6a6ff;
+}
+
+@media (prefers-color-scheme: dark) {
+  body:not([data-theme="light"]) {
+    --color-background-primary: #0b1220;
+    --color-background-secondary: #101a2c;
+    --color-background-hover: #16233a;
+    --color-background-hover--transparent: #16233a00;
+    --color-background-border: #26364f;
+    --color-card-background: #101a2c;
+    --color-card-border: #26364f;
+    --color-admonition-background: #101a2c;
+    --color-code-background: #111c30;
+    --color-code-foreground: #dbe7ff;
+    --color-foreground-primary: #e6edf7;
+    --color-foreground-secondary: #b8c4d8;
+    --color-foreground-muted: #8fa0ba;
+    --color-foreground-border: #40516f;
+    --color-brand-primary: #7db4ff;
+    --color-brand-content: #8ab9ff;
+    --color-brand-visited: #c6a6ff;
+  }
+}

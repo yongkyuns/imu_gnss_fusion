@@ -4,24 +4,33 @@ IMU/GNSS Fusion is a Rust workspace for embedded-oriented EKF development,
 hardware-agnostic replay, synthetic scenario generation, diagnostics, and a
 native/browser visualizer.
 
+```{figure} _static/diagrams/overall-architecture.png
+:alt: Architecture diagram for replay, simulation, sensor fusion, and visualization.
+:class: framed
+
+The project keeps estimator behavior in reusable Rust crates while replay, visualization, hosted datasets, mobile capture, and documentation stay in separate integration layers.
+```
+
 ## Crates
 
 | Path | Role |
 | --- | --- |
 | `sensor_fusion/` | `#![no_std]` library crate exposing the public EKF facade, alignment, generated model wrappers, and state helpers. |
+| `road_events/` | `#![no_std]` streaming road-event detectors and trip statistics shared by simulator/web/iOS integration. |
 | `sim/` | Replay/evaluation crate with synthetic data generation, diagnostics, and the egui visualizer. |
 | `web/` | Static host for the wasm visualizer and hosted datasets. |
-| `mobile/ios/` | Experimental iOS sensor collection app and FFI shell. |
+| `mobile/ios/` | iOS sensor collection, replay/export tooling, SwiftUI app, and Rust FFI integration. |
 
-`sensor_fusion` is the reusable runtime. `sim` owns dataset parsing, replay
-ordering, visualizer trace construction, and diagnostic tools.
+`sensor_fusion` is the reusable navigation runtime. `road_events` is the reusable
+vehicle-event runtime. `sim` owns dataset parsing, replay ordering, visualizer
+trace construction, and diagnostic tools.
 
 ## Runtime Flow
 
 ```text
 IMU/GNSS samples
   -> SensorFusion
-  -> Align bootstrap when automatic mount mode is enabled
+  -> Align tilt initialization when automatic mount mode is enabled
   -> EKF initialization after mount and GNSS readiness
   -> EKF prediction/update loop
   -> public Update status and state accessors
@@ -30,7 +39,7 @@ IMU/GNSS samples
 The facade owns:
 
 - mount mode selection,
-- alignment bootstrap,
+- alignment tilt initialization,
 - WGS84/local anchoring,
 - sample dispatch,
 - NHC scheduling,
@@ -76,7 +85,8 @@ IMU and GNSS events by timestamp. The visualizer pipeline feeds only the public
 `SensorFusion` API and uses optional references for plots, maps, summaries, and
 manual mount seeding.
 
-Device-specific log conversion is outside the repository boundary.
+Generic dataset packaging is hardware-agnostic. The repository also includes an
+iOS `.motionfusion` exporter and packaging wrapper for the bundled iOS app.
 
 ## Visualizer Flow
 
@@ -123,6 +133,7 @@ Common diagnostic tools:
 ## Ownership Rules
 
 - `sensor_fusion` owns estimator behavior and public runtime contracts.
+- `road_events` owns event-detector behavior and trip-summary contracts.
 - `sim::datasets` owns source data parsing, not estimator math.
 - `sim::eval::replay` owns event ordering, not update behavior.
 - `sim::visualizer::pipeline` owns trace construction and reference overlays.

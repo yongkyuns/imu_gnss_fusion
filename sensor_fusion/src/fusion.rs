@@ -84,19 +84,19 @@ pub struct SensorFusion {
     pending_ekf_gnss: Option<crate::ekf::GnssSample>,
     last_ekf_gnss_fuse_t_s: Option<f32>,
     last_ekf_nhc_t_s: Option<f32>,
-    bootstrap_prev_ekf_gnss: Option<crate::ekf::GnssSample>,
+    align_prev_gnss: Option<crate::ekf::GnssSample>,
     gnss_velocity_mount_gain_scale: f32,
     anchor: Anchor,
     interval_imu_sum_gyro: [f32; 3],
     interval_imu_sum_accel: [f32; 3],
     interval_imu_count: u32,
-    bootstrap_speed_ema: Ema,
-    bootstrap_speed_rate_ema: Ema,
-    bootstrap_course_rate_ema: Ema,
-    bootstrap_gyro_ema: Ema,
-    bootstrap_accel_err_ema: Ema,
-    bootstrap_stationary_accel_sum: [f32; 3],
-    bootstrap_stationary_count: u32,
+    tilt_init_speed_ema: Ema,
+    tilt_init_speed_rate_ema: Ema,
+    tilt_init_course_rate_ema: Ema,
+    tilt_init_gyro_ema: Ema,
+    tilt_init_accel_err_ema: Ema,
+    tilt_init_accel_sum: [f32; 3],
+    tilt_init_sample_count: u32,
     last_align_window: Option<AlignWindowSummary>,
     last_align_trace: Option<AlignUpdateTrace>,
     reanchor_count: u32,
@@ -143,19 +143,19 @@ impl SensorFusion {
             pending_ekf_gnss: None,
             last_ekf_gnss_fuse_t_s: None,
             last_ekf_nhc_t_s: None,
-            bootstrap_prev_ekf_gnss: None,
+            align_prev_gnss: None,
             gnss_velocity_mount_gain_scale: 1.0,
             anchor: Anchor::default(),
             interval_imu_sum_gyro: [0.0; 3],
             interval_imu_sum_accel: [0.0; 3],
             interval_imu_count: 0,
-            bootstrap_speed_ema: Ema::default(),
-            bootstrap_speed_rate_ema: Ema::default(),
-            bootstrap_course_rate_ema: Ema::default(),
-            bootstrap_gyro_ema: Ema::default(),
-            bootstrap_accel_err_ema: Ema::default(),
-            bootstrap_stationary_accel_sum: [0.0; 3],
-            bootstrap_stationary_count: 0,
+            tilt_init_speed_ema: Ema::default(),
+            tilt_init_speed_rate_ema: Ema::default(),
+            tilt_init_course_rate_ema: Ema::default(),
+            tilt_init_gyro_ema: Ema::default(),
+            tilt_init_accel_err_ema: Ema::default(),
+            tilt_init_accel_sum: [0.0; 3],
+            tilt_init_sample_count: 0,
             last_align_window: None,
             last_align_trace: None,
             reanchor_count: 0,
@@ -198,26 +198,29 @@ impl SensorFusion {
 
     /// Replaces the mount-alignment filter configuration.
     ///
-    /// This resets the internal alignment filter and bootstrap state, so callers
+    /// This resets the internal alignment filter and tilt-initialization state, so callers
     /// should configure it before streaming samples for a replay.
     pub fn set_align_config(&mut self, align: AlignConfig) {
         self.cfg.align = align;
-        self.cfg.bootstrap.max_gyro_radps = align.max_stationary_gyro_radps;
-        self.cfg.bootstrap.max_accel_norm_err_mps2 = align.max_stationary_accel_norm_err_mps2;
+        self.cfg.tilt_init.max_gyro_radps = align.max_stationary_gyro_radps;
+        self.cfg.tilt_init.max_accel_norm_err_mps2 = align.max_stationary_accel_norm_err_mps2;
         self.align = Align::new(align);
         self.align_initialized = false;
         self.align_ready_since_t_s = None;
+        self.align_prev_gnss = None;
+        self.last_align_window = None;
+        self.last_align_trace = None;
         if self.internal_align_enabled {
             self.mount_ready = false;
             self.mount_q_bv = None;
         }
-        self.bootstrap_speed_ema = Ema::default();
-        self.bootstrap_speed_rate_ema = Ema::default();
-        self.bootstrap_course_rate_ema = Ema::default();
-        self.bootstrap_gyro_ema = Ema::default();
-        self.bootstrap_accel_err_ema = Ema::default();
-        self.bootstrap_stationary_accel_sum = [0.0; 3];
-        self.bootstrap_stationary_count = 0;
+        self.tilt_init_speed_ema = Ema::default();
+        self.tilt_init_speed_rate_ema = Ema::default();
+        self.tilt_init_course_rate_ema = Ema::default();
+        self.tilt_init_gyro_ema = Ema::default();
+        self.tilt_init_accel_err_ema = Ema::default();
+        self.tilt_init_accel_sum = [0.0; 3];
+        self.tilt_init_sample_count = 0;
         self.last_ekf_gnss_fuse_t_s = None;
         self.last_ekf_nhc_t_s = None;
     }
@@ -392,7 +395,7 @@ impl SensorFusion {
     pub fn process_imu(&mut self, sample: ImuSample) -> Update {
         let prev_sample = self.last_imu_sample.replace(sample);
         let Some(last_t) = self.last_imu_t_s.replace(sample.t_s) else {
-            self.try_bootstrap_align(sample.accel_mps2, sample.gyro_radps);
+            self.try_tilt_init_align(sample.accel_mps2, sample.gyro_radps);
             return self.update(false, false);
         };
         let dt = sample.t_s - last_t;
@@ -402,7 +405,7 @@ impl SensorFusion {
             self.accumulate_interval_imu(sample);
         }
 
-        self.try_bootstrap_align(sample.accel_mps2, sample.gyro_radps);
+        self.try_tilt_init_align(sample.accel_mps2, sample.gyro_radps);
 
         if !self.ekf_initialized || !self.mount_ready {
             return self.update(false, false);
@@ -477,11 +480,11 @@ impl SensorFusion {
         self.last_gnss = Some(local);
 
         let prev_mount_ready = self.mount_ready;
-        self.bootstrap_update_gnss_hints(local);
+        self.update_tilt_init_gnss_hints(local);
 
         if self.internal_align_enabled {
             if self.align_initialized
-                && let Some(prev) = self.bootstrap_prev_ekf_gnss
+                && let Some(prev) = self.align_prev_gnss
                 && let Some(summary) = self.take_interval_summary(prev, local)
             {
                 let (_score, trace) = self.align.update_window_with_trace(&summary);
@@ -491,7 +494,7 @@ impl SensorFusion {
                 self.mount_ready =
                     self.align_handoff_ready(trace.coarse_alignment_ready, local.t_s);
             }
-            self.bootstrap_prev_ekf_gnss = Some(local);
+            self.align_prev_gnss = Some(local);
         } else {
             self.reset_interval_summary();
         }
@@ -626,7 +629,7 @@ impl SensorFusion {
         Some(ecef_to_lla_f64(ecef))
     }
 
-    /// Returns the internal align filter after stationary bootstrap.
+    /// Returns the internal align filter after stationary tilt initialization.
     pub fn align(&self) -> Option<&Align> {
         self.align_initialized.then_some(&self.align)
     }
@@ -826,17 +829,17 @@ impl SensorFusion {
         self.interval_imu_count += 1;
     }
 
-    fn try_bootstrap_align(&mut self, accel_b: [f32; 3], gyro_radps: [f32; 3]) {
+    fn try_tilt_init_align(&mut self, accel_b: [f32; 3], gyro_radps: [f32; 3]) {
         if !self.internal_align_enabled || self.align_initialized {
             return;
         }
-        if self.bootstrap_update(accel_b, gyro_radps) {
+        if self.update_tilt_init(accel_b, gyro_radps) {
             let mean = [
-                self.bootstrap_stationary_accel_sum[0] / self.bootstrap_stationary_count as f32,
-                self.bootstrap_stationary_accel_sum[1] / self.bootstrap_stationary_count as f32,
-                self.bootstrap_stationary_accel_sum[2] / self.bootstrap_stationary_count as f32,
+                self.tilt_init_accel_sum[0] / self.tilt_init_sample_count as f32,
+                self.tilt_init_accel_sum[1] / self.tilt_init_sample_count as f32,
+                self.tilt_init_accel_sum[2] / self.tilt_init_sample_count as f32,
             ];
-            if self.align.initialize_from_stationary(&[mean], 0.0).is_ok() {
+            if self.align.initialize_from_stationary(&[mean]).is_ok() {
                 self.align_initialized = true;
                 self.mount_q_bv = Some(self.align.q_bv);
             }
@@ -858,7 +861,7 @@ impl SensorFusion {
             self.ekf.set_gravity_mss(self.anchor.gravity_mss);
             self.reanchor_count += 1;
             self.last_reanchor = Some((sample.t_s, horiz_dist));
-            self.bootstrap_prev_ekf_gnss = None;
+            self.align_prev_gnss = None;
             self.reset_interval_summary();
             pos_ned = [0.0; 3];
         }
@@ -953,17 +956,17 @@ impl SensorFusion {
             self.last_gnss = Some(last);
         }
 
-        if let Some(mut prev) = self.bootstrap_prev_ekf_gnss {
+        if let Some(mut prev) = self.align_prev_gnss {
             prev.vel_ned_mps = mat_vec3_f32(r_n1_n0, prev.vel_ned_mps);
-            self.bootstrap_prev_ekf_gnss = Some(prev);
+            self.align_prev_gnss = Some(prev);
         }
     }
 
-    fn bootstrap_update_gnss_hints(&mut self, sample: crate::ekf::GnssSample) {
+    fn update_tilt_init_gnss_hints(&mut self, sample: crate::ekf::GnssSample) {
         let speed = horiz_speed(sample.vel_ned_mps);
-        self.bootstrap_speed_ema
-            .update(speed, self.cfg.bootstrap.ema_alpha);
-        let Some(prev) = self.bootstrap_prev_ekf_gnss else {
+        self.tilt_init_speed_ema
+            .update(speed, self.cfg.tilt_init.ema_alpha);
+        let Some(prev) = self.align_prev_gnss else {
             return;
         };
         let dt = sample.t_s - prev.t_s;
@@ -975,41 +978,41 @@ impl SensorFusion {
         let course_prev = atan2_f32(prev.vel_ned_mps[1], prev.vel_ned_mps[0]);
         let course_curr = atan2_f32(sample.vel_ned_mps[1], sample.vel_ned_mps[0]);
         let course_rate = wrap_pi(course_curr - course_prev) / dt;
-        self.bootstrap_speed_rate_ema
-            .update(speed_rate.abs(), self.cfg.bootstrap.ema_alpha);
-        self.bootstrap_course_rate_ema
-            .update(course_rate.abs(), self.cfg.bootstrap.ema_alpha);
+        self.tilt_init_speed_rate_ema
+            .update(speed_rate.abs(), self.cfg.tilt_init.ema_alpha);
+        self.tilt_init_course_rate_ema
+            .update(course_rate.abs(), self.cfg.tilt_init.ema_alpha);
     }
 
-    fn bootstrap_update(&mut self, accel_b: [f32; 3], gyro_radps: [f32; 3]) -> bool {
+    fn update_tilt_init(&mut self, accel_b: [f32; 3], gyro_radps: [f32; 3]) -> bool {
         let gyro_norm = vec_norm3_f32(gyro_radps);
         let accel_err = (vec_norm3_f32(accel_b) - GRAVITY_MPS2).abs();
         let gyro_ema = self
-            .bootstrap_gyro_ema
-            .update(gyro_norm, self.cfg.bootstrap.ema_alpha);
+            .tilt_init_gyro_ema
+            .update(gyro_norm, self.cfg.tilt_init.ema_alpha);
         let accel_ema = self
-            .bootstrap_accel_err_ema
-            .update(accel_err, self.cfg.bootstrap.ema_alpha);
-        let low_dynamic = gyro_ema <= self.cfg.bootstrap.max_gyro_radps
-            && accel_ema <= self.cfg.bootstrap.max_accel_norm_err_mps2;
-        let low_speed = !self.bootstrap_speed_ema.valid
-            || self.bootstrap_speed_ema.value <= self.cfg.bootstrap.max_speed_mps;
-        let steady_motion = self.bootstrap_speed_rate_ema.valid
-            && self.bootstrap_course_rate_ema.valid
-            && self.bootstrap_speed_rate_ema.value <= self.cfg.bootstrap.max_speed_rate_mps2
-            && self.bootstrap_course_rate_ema.value <= self.cfg.bootstrap.max_course_rate_radps;
+            .tilt_init_accel_err_ema
+            .update(accel_err, self.cfg.tilt_init.ema_alpha);
+        let low_dynamic = gyro_ema <= self.cfg.tilt_init.max_gyro_radps
+            && accel_ema <= self.cfg.tilt_init.max_accel_norm_err_mps2;
+        let low_speed = !self.tilt_init_speed_ema.valid
+            || self.tilt_init_speed_ema.value <= self.cfg.tilt_init.max_speed_mps;
+        let steady_motion = self.tilt_init_speed_rate_ema.valid
+            && self.tilt_init_course_rate_ema.valid
+            && self.tilt_init_speed_rate_ema.value <= self.cfg.tilt_init.max_speed_rate_mps2
+            && self.tilt_init_course_rate_ema.value <= self.cfg.tilt_init.max_course_rate_radps;
         if low_dynamic && (low_speed || steady_motion) {
-            if self.bootstrap_stationary_count < 400 {
-                for (sum, sample) in self.bootstrap_stationary_accel_sum.iter_mut().zip(accel_b) {
+            if self.tilt_init_sample_count < 400 {
+                for (sum, sample) in self.tilt_init_accel_sum.iter_mut().zip(accel_b) {
                     *sum += sample;
                 }
-                self.bootstrap_stationary_count += 1;
+                self.tilt_init_sample_count += 1;
             }
         } else {
-            self.bootstrap_stationary_count = 0;
-            self.bootstrap_stationary_accel_sum = [0.0; 3];
+            self.tilt_init_sample_count = 0;
+            self.tilt_init_accel_sum = [0.0; 3];
         }
-        self.bootstrap_stationary_count >= self.cfg.bootstrap.stationary_samples
+        self.tilt_init_sample_count >= self.cfg.tilt_init.stationary_samples
     }
 
     fn take_interval_summary(
@@ -1051,14 +1054,14 @@ impl SensorFusion {
 
     fn runtime_zero_velocity_active(&mut self, accel_b: [f32; 3], gyro_radps: [f32; 3]) -> bool {
         let gyro_ema = self
-            .bootstrap_gyro_ema
-            .update(vec_norm3_f32(gyro_radps), self.cfg.bootstrap.ema_alpha);
-        let accel_ema = self.bootstrap_accel_err_ema.update(
+            .tilt_init_gyro_ema
+            .update(vec_norm3_f32(gyro_radps), self.cfg.tilt_init.ema_alpha);
+        let accel_ema = self.tilt_init_accel_err_ema.update(
             (vec_norm3_f32(accel_b) - GRAVITY_MPS2).abs(),
-            self.cfg.bootstrap.ema_alpha,
+            self.cfg.tilt_init.ema_alpha,
         );
-        let low_dynamic = gyro_ema <= self.cfg.bootstrap.max_gyro_radps
-            && accel_ema <= self.cfg.bootstrap.max_accel_norm_err_mps2;
+        let low_dynamic = gyro_ema <= self.cfg.tilt_init.max_gyro_radps
+            && accel_ema <= self.cfg.tilt_init.max_accel_norm_err_mps2;
         let low_speed = if self.ekf_initialized {
             self.ekf_speed_estimate_mps() <= RUNTIME_ZERO_SPEED_MPS
         } else {

@@ -74,7 +74,7 @@ General roll/pitch/yaw mount corrections are left-injected,
 \begin{equation}
   q_{bv}^{+}=\dq(\delta\theta)\otimes q_{bv}^{-},
 \end{equation}
-while the horizontal heading update applies a vehicle-frame yaw correction on
+while the horizontal acceleration update applies a vehicle-frame yaw correction on
 the right,
 \begin{equation}
   q_{bv}^{+}=q_{bv}^{-}\otimes q_z(\delta\psi_v).
@@ -100,7 +100,7 @@ configuration fields are one-sigma values; the filter stores variances in \(P\).
 
 \section{Stationary Initialization}
 
-Given stationary accelerometer samples \(f_{b,k}\), the bootstrap mean is
+Given stationary accelerometer samples \(f_{b,k}\), the tilt-initialization mean is
 \begin{equation}
   \bar f_b=\frac{1}{N}\sum_{k=1}^{N}f_{b,k}.
 \end{equation}
@@ -135,10 +135,9 @@ The tilt-only mount matrix uses these axes as body-frame columns:
   \hat x_v^b & \hat y_v^b & \hat z_v^b
   \end{bmatrix}.
 \end{equation}
-A supplied yaw seed is then applied as a vehicle-frame yaw delta:
-\begin{equation}
-  C_{bv,0}=C_{bv}^{\mathrm{tilt}} C_z(\psi_{\mathrm{seed}}-\psi_{\mathrm{tilt}}).
-\end{equation}
+No yaw seed is applied during stationary initialization. Gravity only observes
+tilt, so the yaw degree of freedom remains broad until horizontal motion
+provides a yaw cue.
 After initialization the covariance is reset to conservative roll, pitch, and
 yaw uncertainty:
 \begin{equation}
@@ -287,7 +286,7 @@ while making the confidence respond to source uncertainty.
 \section{Turn Consistency and Planar-Gyro Observation}
 
 Turn windows require minimum speed, course rate, and lateral acceleration.
-Before turn-heading observations receive nominal trust, a ring buffer checks
+Before turn-derived motion windows receive nominal trust, a ring buffer checks
 \begin{equation}
   a_{\mathrm{lat}}\approx v\,\dot\chi
 \end{equation}
@@ -302,9 +301,9 @@ The planar-motion constraint is
 \begin{equation}
   \omega_{v,x}\approx 0,\qquad \omega_{v,y}\approx 0.
 \end{equation}
-By default this update affects roll and pitch. It may update yaw only if the
-Yaw is intentionally not updated by this path; yaw information is supplied by
-the horizontal heading observation above.
+This update affects roll and pitch. Yaw is intentionally not updated by this
+path; yaw information is supplied by the horizontal acceleration observation
+above.
 
 \section{Readiness and Known Limitations}
 

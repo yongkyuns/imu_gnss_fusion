@@ -1,0 +1,8 @@
+{% extends "!base.html" %}
+
+{% block extrahead %}
+{{ super() }}
+<link rel="preload" href="{{ pathto('_static/fonts/roboto-400.ttf', 1) }}" as="font" type="font/ttf" crossorigin>
+<link rel="preload" href="{{ pathto('_static/fonts/roboto-slab-700.ttf', 1) }}" as="font" type="font/ttf" crossorigin>
+<link rel="preload" href="{{ pathto('_static/fonts/source-code-pro-400.ttf', 1) }}" as="font" type="font/ttf" crossorigin>
+{% endblock %}

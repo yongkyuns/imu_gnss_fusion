@@ -156,7 +156,7 @@
 <tspan x="1092" dy="0">align::Align</tspan>
 </text>
 <text class="label" x="1092" y="402" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
-<tspan x="1092" dy="0">stationary bootstrap</tspan>
+<tspan x="1092" dy="0">stationary tilt init</tspan>
 <tspan x="1092" dy="16.200000000000003">GNSS-window mount q_bv</tspan>
 </text>
 <rect x="1078" y="506" width="249" height="126" rx="8" fill="#FFFFFF" stroke="#E9B8C2" stroke-width="1"/>
@@ -257,7 +257,7 @@
 <tspan x="1286" dy="0">documentation</tspan>
 </text>
 <text class="label" x="1286" y="1034" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
-<tspan x="1286" dy="0">formulation PDFs</tspan>
+<tspan x="1286" dy="0">math notes</tspan>
 <tspan x="1286" dy="16.200000000000003">frame conventions</tspan>
 <tspan x="1286" dy="16.200000000000003">testing workflow</tspan>
 </text>

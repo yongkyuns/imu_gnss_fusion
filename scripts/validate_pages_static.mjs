@@ -14,6 +14,13 @@ const MIME_TYPES = new Map([
   [".wasm", "application/wasm"],
   [".css", "text/css; charset=utf-8"],
   [".json", "application/json; charset=utf-8"],
+  [".png", "image/png"],
+  [".svg", "image/svg+xml"],
+  [".ico", "image/x-icon"],
+  [".pdf", "application/pdf"],
+  [".txt", "text/plain; charset=utf-8"],
+  [".woff", "font/woff"],
+  [".woff2", "font/woff2"],
 ]);
 
 function usage() {
@@ -24,6 +31,7 @@ Validate the static GitHub Pages visualizer artifact before upload/deploy.
 Options:
   --site-dir <dir>    Static site directory (default: web)
   --require-wasm      Require web/pkg/visualizer.js and visualizer_bg.wasm
+  --require-docs      Require Sphinx docs under docs/
   --help              Show this help
 `);
 }
@@ -32,6 +40,7 @@ function parseArgs(argv) {
   const args = {
     siteDir: path.join(ROOT, "web"),
     requireWasm: false,
+    requireDocs: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -47,6 +56,9 @@ function parseArgs(argv) {
       case "--require-wasm":
         args.requireWasm = true;
         break;
+      case "--require-docs":
+        args.requireDocs = true;
+        break;
       case "--help":
       case "-h":
         usage();
@@ -58,7 +70,7 @@ function parseArgs(argv) {
   return args;
 }
 
-async function validateFiles(siteDir, requireWasm) {
+async function validateFiles(siteDir, requireWasm, requireDocs) {
   const indexPath = path.join(siteDir, "index.html");
   const index = await readFile(indexPath, "utf8");
   if (!index.includes('id="visualizer_canvas"')) {
@@ -82,6 +94,30 @@ async function validateFiles(siteDir, requireWasm) {
     const wasm = await readFile(wasmPath);
     if (wasm[0] !== 0x00 || wasm[1] !== 0x61 || wasm[2] !== 0x73 || wasm[3] !== 0x6d) {
       throw new Error("visualizer_bg.wasm does not have a wasm magic header");
+    }
+  }
+
+  if (requireDocs) {
+    const docsIndexPath = path.join(siteDir, "docs", "index.html");
+    const docsIndex = await readFile(docsIndexPath, "utf8");
+    if (!docsIndex.includes("IMU/GNSS Fusion")) {
+      throw new Error("docs/index.html does not look like the IMU/GNSS Fusion docs site");
+    }
+    if (/file:\/\/|\/Users\/|C:\\\\/.test(docsIndex)) {
+      throw new Error("docs/index.html contains a local filesystem reference");
+    }
+
+    const staticDir = path.join(siteDir, "docs", "_static");
+    if (!existsSync(staticDir)) {
+      throw new Error("docs/_static is missing");
+    }
+    const logoPath = path.join(staticDir, "logo.png");
+    if (!existsSync(logoPath)) {
+      throw new Error("docs/_static/logo.png is missing");
+    }
+    const logoInfo = await stat(logoPath);
+    if (logoInfo.size <= 0) {
+      throw new Error("docs/_static/logo.png is empty");
     }
   }
 
@@ -111,6 +147,8 @@ function validateDatasetManifest(manifest, manifestPath) {
       "gnss_gz",
       "imu_csv",
       "gnss_csv",
+      "imu_csv_gz",
+      "gnss_csv_gz",
       "reference_attitude",
       "reference_attitude_gz",
       "reference_attitude_csv",
@@ -119,6 +157,14 @@ function validateDatasetManifest(manifest, manifestPath) {
       "reference_mount_gz",
       "reference_mount_csv",
       "reference_mount_csv_gz",
+      "reference_position",
+      "reference_position_gz",
+      "reference_position_csv",
+      "reference_position_csv_gz",
+      "reference_motion",
+      "reference_motion_gz",
+      "reference_motion_csv",
+      "reference_motion_csv_gz",
     ]) {
       if (dataset[key] !== undefined && !isSafeDatasetUrl(dataset[key])) {
         throw new Error(`${manifestPath}: datasets[${index}].${key} must be relative or HTTPS`);
@@ -166,13 +212,17 @@ async function startStaticServer(rootDir) {
   };
 }
 
-async function validateHttp(siteDir, requireWasm) {
+async function validateHttp(siteDir, requireWasm, requireDocs) {
   const server = await startStaticServer(siteDir);
   try {
     await expectOk(`http://127.0.0.1:${server.port}/index.html`, "text/html");
     if (requireWasm) {
       await expectOk(`http://127.0.0.1:${server.port}/pkg/visualizer.js`, "text/javascript");
       await expectOk(`http://127.0.0.1:${server.port}/pkg/visualizer_bg.wasm`, "application/wasm");
+    }
+    if (requireDocs) {
+      await expectOk(`http://127.0.0.1:${server.port}/docs/index.html`, "text/html");
+      await expectOk(`http://127.0.0.1:${server.port}/docs/_static/logo.png`, "image/png");
     }
     await validateDatasetHttp(`http://127.0.0.1:${server.port}`);
   } finally {
@@ -193,16 +243,28 @@ async function validateDatasetHttp(origin) {
     for (const key of [
       "imu_gz",
       "gnss_gz",
+      "imu_csv_gz",
+      "gnss_csv_gz",
       "reference_attitude_gz",
       "reference_mount_gz",
+      "reference_position_gz",
+      "reference_motion_gz",
+      "reference_attitude_csv_gz",
+      "reference_mount_csv_gz",
+      "reference_position_csv_gz",
+      "reference_motion_csv_gz",
       "imu",
       "gnss",
       "reference_attitude",
       "reference_mount",
+      "reference_position",
+      "reference_motion",
       "imu_csv",
       "gnss_csv",
       "reference_attitude_csv",
       "reference_mount_csv",
+      "reference_position_csv",
+      "reference_motion_csv",
     ]) {
       if (!dataset[key]) continue;
       const url = new URL(
@@ -235,8 +297,8 @@ async function expectOk(url, contentTypePrefix) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  await validateFiles(args.siteDir, args.requireWasm);
-  await validateHttp(args.siteDir, args.requireWasm);
+  await validateFiles(args.siteDir, args.requireWasm, args.requireDocs);
+  await validateHttp(args.siteDir, args.requireWasm, args.requireDocs);
   console.log(`pages static artifact ok: ${args.siteDir}`);
 }
 

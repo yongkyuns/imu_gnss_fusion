@@ -1,191 +1,125 @@
-# IMU/GNSS Fusion API and Coordinate Conventions
+# API And Conventions
 
-This document describes the public `sensor_fusion` crate API and the frame,
-rotation, unit, initialization, and readiness conventions that callers must
-preserve. It focuses on `SensorFusion`, the public sample types, mount handling,
-and EKF readiness.
-
-For derivation details, see the formulation PDFs in `docs/`.
-
-## Public API Shape
-
-The crate is `#![no_std]` and exposes these main entry points:
-
-- `SensorFusion`: high-level streaming facade for IMU, GNSS, optional vehicle
-  speed, mount alignment, local anchoring, and EKF state.
-- `Config` and `MountMode`: construction-time mount handling.
-- `ImuSample`, `GnssSample`, `VehicleSpeedSample`, `VehicleSpeedDirection`,
-  and `Update`: public sample and status types.
-- `ProcessNoise`: continuous process-noise configuration.
-- `align`: standalone mount-alignment estimator and diagnostics.
-
-For most applications, use `SensorFusion`. Standalone modules and generated
-model wrappers are for focused estimator work, diagnostics, and tests.
+Public APIs use SI units unless the field name says otherwise. Raw IMU samples stay in the IMU body frame; callers do not pre-rotate them into the vehicle frame.
 
 ## Frames
 
-The public convention uses these frame labels:
+| Symbol | Meaning |
+| --- | --- |
+| `b` | raw IMU body/sensor frame |
+| `v` | vehicle frame, forward-right-down |
+| `n` | local NED navigation frame |
+| `e` | ECEF frame for WGS84 conversion |
 
-- `b`: raw IMU body/sensor frame. `ImuSample` gyro and accelerometer vectors
-  are expressed in this frame.
-- `v`: vehicle frame. Axes are forward, right, down.
-- `n`: local NED navigation frame. Axes are north, east, down.
-- `e`: ECEF frame used for WGS84 conversion and global position math.
-
-Public GNSS samples arrive as latitude, longitude, ellipsoidal height, and
-local-NED velocity at the sample location. The facade converts those
-measurements into the runtime basis internally.
-
-## Quaternion and DCM Naming
-
-The crate uses active rotations:
+The runtime uses active rotations. `C_ab` maps coordinates from frame `b` to frame `a`:
 
 ```text
-C_ab maps coordinates from frame b to frame a
 x_a = C_ab x_b
 R(q_ab) = C_ab
 R(q1 * q2) = R(q1) R(q2)
 ```
 
-Quaternions are scalar-first arrays: `[w, x, y, z]`.
+Quaternions are scalar-first `[w, x, y, z]`.
 
-Important public quaternions:
+The public mount quaternion is `q_bv`, the physical vehicle-to-body mount:
 
-- `q_bv`: physical vehicle-to-body mount. `R(q_bv) = C_bv`, so
-  `x_b = C_bv x_v`.
-- `q_vb`: inverse body-to-vehicle mount. It is the conjugate of `q_bv`, and
-  `C_vb = C_bv^T`.
-
-Propagation consumes raw IMU samples in body frame `b`. The EKF uses
-`C_vb = C_bv^T` to rotate raw body-frame inertial measurements into the vehicle
-frame.
-
-## Units and Sample Types
-
-Public APIs use SI units unless the field name says otherwise.
-
-`ImuSample`:
-
-- `t_s`: seconds.
-- `gyro_radps`: angular rate in raw body frame `b`, radians per second.
-- `accel_mps2`: specific force in raw body frame `b`, meters per second
-  squared.
-
-`GnssSample`:
-
-- `t_s`: seconds.
-- `lat_deg`, `lon_deg`: WGS84 geodetic latitude and longitude, degrees.
-- `height_m`: ellipsoidal height, meters.
-- `vel_ned_mps`: local NED velocity `[north, east, down]`, meters per second.
-- `pos_std_m`: one-sigma position standard deviations for NED axes, meters.
-- `vel_std_mps`: one-sigma velocity standard deviations for NED axes, meters
-  per second.
-- `heading_rad`: optional yaw/course heading in local NED, radians clockwise
-  from north toward east.
-
-`VehicleSpeedSample`:
-
-- `t_s`: seconds.
-- `speed_mps`: nonnegative speed magnitude, meters per second.
-- `direction`: `Forward`, `Reverse`, or `Unknown`.
-
-Covariance tuning setters that start with `set_r_...` take variances, not
-standard deviations. Setters with `sigma` in the name take one-sigma standard
-deviations.
-
-## Construction
-
-`SensorFusion::new()` is equivalent to `SensorFusion::with_config` using
-`Config::default()`: automatic mount alignment.
-
-Use `Config` when selecting mount behavior:
-
-```rust
-use sensor_fusion::{Config, MountMode, SensorFusion};
-
-let mut auto_mount = SensorFusion::with_config(Config {
-    mount_mode: MountMode::Auto,
-});
-
-let mut manual_mount = SensorFusion::with_config(Config {
-    mount_mode: MountMode::Manual([1.0, 0.0, 0.0, 0.0]),
-});
+```text
+x_b = C_bv x_v
+C_vb = C_bv^T
+x_v = C_vb x_b
 ```
+
+The EKF attitude is `q_nv`:
+
+```text
+x_n = C_nv x_v
+```
+
+## Core Inputs
+
+| Input | Required convention |
+| --- | --- |
+| `ImuSample::gyro_radps` | raw body-frame angular rate `[x_b, y_b, z_b]`, rad/s |
+| `ImuSample::accel_mps2` | raw body-frame specific force `[x_b, y_b, z_b]`, m/s^2 |
+| `GnssSample::lat_deg/lon_deg/height_m` | WGS84 latitude/longitude degrees and ellipsoidal height meters |
+| `GnssSample::vel_ned_mps` | local `[north, east, down]` velocity, m/s |
+| `GnssSample::pos_std_m` | one-sigma local NED position standard deviations, meters |
+| `GnssSample::vel_std_mps` | one-sigma local NED velocity standard deviations, m/s |
+| `GnssSample::heading_rad` | optional vehicle yaw/course heading in NED, radians clockwise from north toward east |
+| `VehicleSpeedSample` | nonnegative speed magnitude along vehicle `+X`; direction selects forward/reverse |
 
 ## Mount Modes
 
-`MountMode::Auto`:
+`SensorFusion` supports two public construction modes:
 
-- The facade bootstraps internal `align::Align` from low-dynamic IMU samples.
-- Alignment estimates the physical `q_bv`.
-- Handoff requires the align trace's `coarse_alignment_ready` flag and any
-  configured handoff delay.
-- After handoff, the EKF receives the mount seed and can estimate residual
-  mount states unless freezing is configured.
+| Mode | Behavior |
+| --- | --- |
+| `MountMode::Auto` | internal align estimates the initial `q_bv`; EKF initializes after mount readiness and GNSS yaw/course readiness |
+| `MountMode::Manual(q_bv)` | caller supplies the initial `q_bv`; internal align is disabled, but EKF residual mount states remain live with a prior |
 
-`MountMode::Manual(q_bv)` and `SensorFusion::with_mount(q_bv)`:
+Manual mode does not mean the facade freezes every EKF mount state. `with_mount` and `set_misalignment` provide the physical mount seed and bypass align. At EKF initialization, the runtime seeds mount covariance from the manual prior so residual mount correction can still occur.
 
-- The supplied quaternion is the physical vehicle-to-body mount `q_bv`.
-- `mount_ready` is true immediately.
-- Internal alignment is disabled.
-- Mount states are frozen.
+## EKF Initialization
 
-Do not pass a body-to-vehicle quaternion to manual APIs. If the mount you have
-maps body vectors into vehicle vectors, conjugate it before passing it as
-`q_bv`.
+Yaw initialization is mode-specific:
 
-## Typical Facade Call Sequence
+- auto mode can use `heading_rad`, or GNSS course once horizontal speed is at least `max(yaw_init_speed_mps, 1.0)`;
+- manual mode waits for `heading_rad` and speed above `max(yaw_init_speed_mps, 20 / 3.6)`.
 
-1. Construct the facade with `new`, `with_mount`, `with_mount_mode`, or
-   `with_config`.
-2. Apply tuning before replay or live streaming.
-3. Feed timestamped samples in time order:
-   - `process_imu(ImuSample)` at IMU rate.
-   - `process_gnss(GnssSample)` at GNSS rate.
-   - `process_vehicle_speed(VehicleSpeedSample)` when available.
-4. Inspect each returned `Update`.
-5. Read state through public accessors such as `mount_q_bv()`,
-   `position_lla_f64()`, and diagnostics after readiness has been reached.
+The runtime anchors WGS84 GNSS into a local navigation frame and reanchors when the local displacement grows large enough to keep local coordinates well-conditioned.
 
-Samples should be monotonic in timestamp. Invalid, duplicate, or very large
-intervals are rejected before EKF propagation.
+## Tuning Surface
 
-## Readiness and Accessors
+Important public setters include:
 
-Every `process_*` method returns `Update`:
+- `set_ekf_noise(ProcessNoise)`;
+- `set_accel_bias_rw_var` and `set_mount_align_rw_var`;
+- `set_r_body_vel` and `set_r_body_vel_yz`;
+- `set_nhc_update_period_s`;
+- `set_r_vehicle_roll_prior`;
+- `set_r_vehicle_speed`, `set_r_zero_vel`, and `set_r_stationary_accel`;
+- roll, pitch, yaw, bias, and per-axis mount initialization sigma setters;
+- `set_use_align_mount_covariance_on_seed`.
 
-- `mount_ready`: a physical mount estimate is available.
-- `mount_ready_changed`: this input changed `mount_ready`.
-- `ekf_initialized`: the EKF has been initialized from GNSS.
-- `ekf_initialized_now`: EKF initialization happened during this input.
-- `mount_q_bv`: current physical mount when available.
+The facade also exposes diagnostics such as `align_debug`, anchor/reanchor debug values, and `analysis_*` hooks. Treat `analysis_*` methods as diagnostic controls rather than normal production API.
 
-State accessors are readiness-gated. Do not read position, velocity, attitude,
-or diagnostics until the corresponding readiness flag is true.
+## Minimal Example
 
-EKF initialization requires `mount_ready` plus a GNSS sample. It seeds yaw from
-`heading_rad` when present; otherwise it uses GNSS course if horizontal speed is
-high enough.
+```rust
+use sensor_fusion::{
+    Config, GnssSample, ImuSample, MountMode, SensorFusion,
+    VehicleSpeedDirection, VehicleSpeedSample,
+};
 
-## NHC, Zero-Velocity, and Vehicle Speed Updates
+let mount_q = [1.0, 0.0, 0.0, 0.0]; // q_bv: x_b = R(q_bv) x_v
+let mut fusion = SensorFusion::with_config(Config {
+    mount_mode: MountMode::Manual(mount_q),
+});
 
-The nonholonomic constraint (NHC) constrains vehicle-frame lateral and vertical
-velocity (`v_y` and `v_z`) toward zero.
+fusion.process_imu(ImuSample {
+    t_s: 0.00,
+    gyro_radps: [0.0, 0.0, 0.0],
+    accel_mps2: [0.0, 0.0, -9.80665],
+});
 
-Facade NHC behavior:
+fusion.process_gnss(GnssSample {
+    t_s: 0.01,
+    lat_deg: 37.0,
+    lon_deg: -122.0,
+    height_m: 10.0,
+    vel_ned_mps: [5.0, 0.0, 0.0],
+    pos_std_m: [1.0, 1.0, 2.5],
+    vel_std_mps: [0.1, 0.1, 0.2],
+    heading_rad: Some(0.0),
+});
 
-- cadence is controlled by `set_nhc_update_period_s`,
-- lateral and vertical variances are controlled by `set_r_body_vel_yz`,
-- low-speed windows can prefer zero-velocity or stationary updates,
-- vehicle speed samples constrain vehicle-frame forward/reverse speed when the
-  EKF and mount are ready.
+fusion.process_vehicle_speed(VehicleSpeedSample {
+    t_s: 0.02,
+    speed_mps: 5.0,
+    direction: VehicleSpeedDirection::Forward,
+});
 
-## Integration Pitfalls
-
-- Passing body-to-vehicle mount quaternions to APIs that require `q_bv`.
-- Pre-rotating IMU samples before calling `process_imu`.
-- Treating covariance `r_*` values as standard deviations.
-- Feeding non-monotonic timestamps.
-- Reading EKF state before `Update::ekf_initialized`.
-- Assuming optional reference CSVs are runtime inputs. They are for
-  visualization, evaluation, and manual mount seeding only.
+if let Some(q_bv) = fusion.mount_q_bv() {
+    let _ = q_bv;
+}
+```
