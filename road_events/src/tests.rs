@@ -302,6 +302,45 @@ fn detects_harsh_cornering_from_lateral_specific_force_jerk() {
 }
 
 #[test]
+fn harsh_cornering_presets_change_detection_behavior_near_threshold() {
+    let sensitive = corner_events_for_profile(
+        super::HarshBehaviorPreset::Sensitive.configs().corner,
+        2.7,
+        12.0,
+    );
+    let balanced = corner_events_for_profile(
+        super::HarshBehaviorPreset::Balanced.configs().corner,
+        2.7,
+        12.0,
+    );
+    let conservative = corner_events_for_profile(
+        super::HarshBehaviorPreset::Conservative.configs().corner,
+        3.5,
+        12.0,
+    );
+
+    assert_eq!(sensitive, 1);
+    assert_eq!(balanced, 0);
+    assert_eq!(conservative, 0);
+}
+
+#[test]
+fn harsh_cornering_suppresses_low_speed_and_is_sign_symmetric() {
+    assert_eq!(
+        corner_events_for_profile(HarshCornerConfig::default(), 4.2, 2.0),
+        0
+    );
+    assert_eq!(
+        corner_events_for_signed_profile(HarshCornerConfig::default(), 4.2, 12.0, 1.0),
+        1
+    );
+    assert_eq!(
+        corner_events_for_signed_profile(HarshCornerConfig::default(), 4.2, 12.0, -1.0),
+        1
+    );
+}
+
+#[test]
 fn ignores_smooth_steady_high_lateral_load() {
     let mut detector = HarshCornerDetector::new(HarshCornerConfig::default());
     let mut events = Vec::new();
@@ -908,6 +947,44 @@ fn roughness_estimate_for_spatial_sine(
             .expect("valid roughness sample");
     }
     estimate
+}
+
+fn corner_events_for_profile(
+    cfg: HarshCornerConfig,
+    peak_lateral_accel_mps2: f32,
+    speed_mps: f32,
+) -> usize {
+    corner_events_for_signed_profile(cfg, peak_lateral_accel_mps2, speed_mps, 1.0)
+}
+
+fn corner_events_for_signed_profile(
+    cfg: HarshCornerConfig,
+    peak_lateral_accel_mps2: f32,
+    speed_mps: f32,
+    sign: f32,
+) -> usize {
+    let mut detector = HarshCornerDetector::new(cfg);
+    let mut events = 0;
+    for i in 0..220 {
+        let t = i as f32 * 0.02;
+        let lateral_accel_mps2 = if t < 1.0 {
+            0.0
+        } else if t < 1.22 {
+            peak_lateral_accel_mps2 * (t - 1.0) / 0.22
+        } else if t <= 2.2 {
+            peak_lateral_accel_mps2
+        } else {
+            0.0
+        };
+        events += detector
+            .update(HarshCornerSample {
+                t_s: t,
+                speed_mps,
+                lateral_accel_mps2: sign * lateral_accel_mps2,
+            })
+            .is_some() as usize;
+    }
+    events + detector.finish().is_some() as usize
 }
 
 fn assert_close(actual: f32, expected: f32, tol: f32) {

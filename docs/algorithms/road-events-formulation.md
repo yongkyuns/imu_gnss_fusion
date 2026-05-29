@@ -72,7 +72,7 @@ r_k &= \sqrt{\max(e_k,0)}.
 \end{aligned}
 $$
 
-Here `b_k` is the distance-domain EMA of `|a_rob|`. Samples only update the roughness energy when `speed_mps >= 2.0` and traveled distance in the clipped sample interval is positive.
+Here $b_k$ is the distance-domain EMA of $|a_\mathrm{rob}|$. Samples only update the roughness energy when `speed_mps` is at least $2.0$ and traveled distance in the clipped sample interval is positive.
 
 The output estimate includes:
 
@@ -85,17 +85,17 @@ The output estimate includes:
 
 Roughness deliberately excludes short shocks so a single pothole or speed bump does not dominate ambient road-noise classification.
 
-Default roughness levels are thresholded on `r_k`:
+Default roughness levels are thresholded on $r_k$:
 
 | Level | RMS range |
 | --- | --- |
-| `VerySmooth` | `< 0.15 m/s^2` |
-| `Smooth` | `< 0.25 m/s^2` |
-| `LightTexture` | `< 0.40 m/s^2` |
-| `Moderate` | `< 0.60 m/s^2` |
-| `Rough` | `< 0.90 m/s^2` |
-| `VeryRough` | `< 1.20 m/s^2` |
-| `Severe` | `>= 1.20 m/s^2` |
+| `VerySmooth` | $< 0.15\,\mathrm{m/s^2}$ |
+| `Smooth` | $< 0.25\,\mathrm{m/s^2}$ |
+| `LightTexture` | $< 0.40\,\mathrm{m/s^2}$ |
+| `Moderate` | $< 0.60\,\mathrm{m/s^2}$ |
+| `Rough` | $< 0.90\,\mathrm{m/s^2}$ |
+| `VeryRough` | $< 1.20\,\mathrm{m/s^2}$ |
+| `Severe` | $\ge 1.20\,\mathrm{m/s^2}$ |
 
 ## Rough-Road And Shock Events
 
@@ -113,7 +113,7 @@ $$
 T_\mathrm{shock}=\max(2.5,\;6b_k).
 $$
 
-A shock remains active until `|a_bp| < 0.45 T_shock`. It emits only if the duration is between `0.02 s` and `0.65 s`, with a `0.50 s` refractory period. The rough-road interval uses `r_k >= 0.60 m/s^2` to enter, `r_k >= 0.42 m/s^2` to remain active, `1.0 s` minimum duration, and `8.0 s` refractory.
+A shock remains active until $|a_\mathrm{bp}| < 0.45T_\mathrm{shock}$. It emits only if the duration is between $0.02\,\mathrm{s}$ and $0.65\,\mathrm{s}$, with a $0.50\,\mathrm{s}$ refractory period. The rough-road interval uses $r_k \ge 0.60\,\mathrm{m/s^2}$ to enter, $r_k \ge 0.42\,\mathrm{m/s^2}$ to remain active, $1.0\,\mathrm{s}$ minimum duration, and $8.0\,\mathrm{s}$ refractory.
 
 ## Speed Bumps
 
@@ -142,9 +142,9 @@ t_\max &= \min\left(1.8,\max\left(\frac{2.5\,l_\max}{v},t_\min\right)\right),
 \end{aligned}
 $$
 
-with `l_min = 1.8 m`, `l_max = 3.6 m`, and `v >= 1.5 m/s`. This is a loose wheelbase-scale timing model: the vertical impulse pair should compress in time as speed increases, but the constants stay broad enough for different vehicles and suspension responses.
+with $l_\min = 1.8\,\mathrm{m}$, $l_\max = 3.6\,\mathrm{m}$, and $v \ge 1.5\,\mathrm{m/s}$. This is a loose wheelbase-scale timing model: the vertical impulse pair should compress in time as speed increases, but the constants stay broad enough for different vehicles and suspension responses.
 
-Vertical acceleration also has to be active for at least `25%` of the candidate duration and at least `0.25 s`. The adaptive thresholds are:
+Vertical acceleration also has to be active for at least $25\%$ of the candidate duration and at least $0.25\,\mathrm{s}$. The adaptive thresholds are:
 
 $$
 \begin{aligned}
@@ -153,7 +153,7 @@ T_\theta &= \max(3.0\,n_\theta,\;0.25^\circ),
 \end{aligned}
 $$
 
-where `n_a` and `n_theta` are `6 s` absolute-EMA noise estimates for vertical acceleration and pitch.
+where $n_a$ and $n_\theta$ are $6\,\mathrm{s}$ absolute-EMA noise estimates for vertical acceleration and pitch.
 
 The internal pattern score is:
 
@@ -162,7 +162,7 @@ s = s_\theta \operatorname{clamp}
 \left(0.45s_a + 0.25s_t + 0.15s_b + 0.15s_\theta,\;0,\;1\right).
 $$
 
-The score components are clipped peak-over-threshold terms for acceleration and pitch, a centered timing score, and front/rear balance. The event emits when `s >= 0.12`, then maps the internal score to a UI confidence near `0.90..0.98`. Confidence is therefore a display score, not a calibrated probability.
+The score components are clipped peak-over-threshold terms for acceleration and pitch, a centered timing score, and front/rear balance. The event emits when $s \ge 0.12$, then maps the internal score to a UI confidence near $0.90\ldots0.98$. Confidence is therefore a display score, not a calibrated probability.
 
 ## Hills
 
@@ -172,7 +172,7 @@ Hill detection uses pitch and speed:
 - pitch below `-threshold` for downhill;
 - minimum duration gate.
 
-The default threshold is `4.0 deg` with `1.0 s` confirmation.
+The default threshold is $4.0^\circ$ with $1.0\,\mathrm{s}$ confirmation.
 
 ## Reverse
 
@@ -199,7 +199,7 @@ Raw derivative values are clamped, then EMA-smoothed. Separate enter/exit thresh
 
 ## Harsh Cornering
 
-Harsh cornering uses jerk-gated lateral side-load, not `yaw_rate * speed`.
+Harsh cornering uses jerk-gated lateral side-load, not $\dot{\psi}v$.
 
 The input lateral acceleration is bias-corrected vehicle-frame specific force:
 
@@ -219,7 +219,7 @@ j_{y,k} &= \operatorname{clip}\left(\frac{\bar{a}_{y,k}-\bar{a}_{y,k-1}}{dt}, -8
 \end{aligned}
 $$
 
-The lateral-load interval can start only when a jerk trigger occurred in the previous `0.50 s`, the speed is at least `3.0 m/s`, and the smoothed lateral load exceeds the preset enter threshold. The interval exits with hysteresis at the preset exit threshold. A confirmed interval must last `0.5 s` and then observes a `2.0 s` refractory period.
+The lateral-load interval can start only when a jerk trigger occurred in the previous $0.50\,\mathrm{s}$, the speed is at least $3.0\,\mathrm{m/s}$, and the smoothed lateral load exceeds the preset enter threshold. The interval exits with hysteresis at the preset exit threshold. A confirmed interval must last $0.5\,\mathrm{s}$ and then observes a $2.0\,\mathrm{s}$ refractory period.
 
 Balanced preset thresholds are:
 
@@ -237,9 +237,9 @@ The crate exposes `Sensitive`, `Balanced`, and `Conservative` harsh behavior pre
 
 | Preset | accel enter/exit | brake enter/exit | corner enter/exit | jerk gate |
 | --- | --- | --- | --- | --- |
-| `Sensitive` | `2.0 / 1.6 m/s^2` | `2.5 / 2.0 m/s^2` | `2.3 / 1.84 m/s^2` | `3.0 m/s^3` |
-| `Balanced` | `2.5 / 2.0 m/s^2` | `3.0 / 2.4 m/s^2` | `3.4 / 2.9 m/s^2` | `5.0 m/s^3` |
-| `Conservative` | `3.2 / 2.56 m/s^2` | `4.0 / 3.2 m/s^2` | `3.8 / 3.04 m/s^2` | `6.0 m/s^3` |
+| `Sensitive` | $2.0 / 1.6\,\mathrm{m/s^2}$ | $2.5 / 2.0\,\mathrm{m/s^2}$ | $2.3 / 1.84\,\mathrm{m/s^2}$ | $3.0\,\mathrm{m/s^3}$ |
+| `Balanced` | $2.5 / 2.0\,\mathrm{m/s^2}$ | $3.0 / 2.4\,\mathrm{m/s^2}$ | $3.4 / 2.9\,\mathrm{m/s^2}$ | $5.0\,\mathrm{m/s^3}$ |
+| `Conservative` | $3.2 / 2.56\,\mathrm{m/s^2}$ | $4.0 / 3.2\,\mathrm{m/s^2}$ | $3.8 / 3.04\,\mathrm{m/s^2}$ | $6.0\,\mathrm{m/s^3}$ |
 
 Road roughness default thresholds classify RMS levels from very smooth through severe. Shock defaults are separate from rough-road defaults so impulse artifacts do not inflate ambient roughness.
 

@@ -209,6 +209,38 @@ fn medium_sleep_enters_degraded_dead_reckoning_until_gnss_recovers() {
 }
 
 #[test]
+fn medium_sleep_with_unusable_covariance_waits_for_gnss_reseed() {
+    let mut system = SensorFusion::with_mount([1.0, 0.0, 0.0, 0.0]);
+    assert!(system.process_gnss(gnss_sample(1.0)).navigation_started);
+    let _ = system.process_imu(ImuSample {
+        t_s: 1.01,
+        gyro_radps: [0.0, 0.0, 0.0],
+        accel_mps2: [0.0, 0.0, 9.80665],
+    });
+    let _ = system.process_imu(ImuSample {
+        t_s: 1.02,
+        gyro_radps: [0.0, 0.0, 0.0],
+        accel_mps2: [0.0, 0.0, 9.80665],
+    });
+
+    system.analysis_set_ekf_attitude_roll_pitch_covariance(10.0_f32.to_radians());
+    let slept = system.process_imu(ImuSample {
+        t_s: 1200.0,
+        gyro_radps: [0.0, 0.0, 0.0],
+        accel_mps2: [0.0, 0.0, 9.80665],
+    });
+
+    assert!(!slept.navigation_usable);
+    assert_eq!(system.health().state, FusionState::AwaitingGnssReseed);
+    assert!(system.ekf().is_none());
+
+    let reseeded = system.process_gnss(gnss_sample(1200.1));
+    assert!(reseeded.navigation_usable);
+    assert!(reseeded.navigation_started);
+    assert_eq!(system.health().state, FusionState::Running);
+}
+
+#[test]
 fn long_sleep_makes_navigation_unusable_until_gnss_reseed() {
     let mut system = SensorFusion::with_mount([1.0, 0.0, 0.0, 0.0]);
     assert!(system.process_gnss(gnss_sample(1.0)).navigation_started);

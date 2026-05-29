@@ -64,31 +64,31 @@ The diagnostic module evaluates stability from accumulated post-initialization m
 
 | Criterion | Current gate | Reason |
 | --- | --- | --- |
-| post-initialization time | `>= 180 s` | avoid saving the early alignment transient |
-| driven distance | `>= 750 m` | require enough vehicle excitation to separate mount, attitude, and bias effects |
-| recent tail duration | `>= 90 s` | evaluate invariants over a fresh window, not only whole-trip averages |
-| recent tail samples | `>= 30` | avoid declaring stability from sparse updates |
-| mount tail drift | `<= 0.50 deg` | reject slowly moving mount estimates |
-| mount tail standard deviation | `<= 0.35 deg` | reject noisy mount estimates |
-| gyro-bias tail drift | `<= 0.00035 rad/s` | reject unresolved gyro-bias transients |
-| gyro-bias tail standard deviation | `<= 0.00020 rad/s` | reject noisy gyro-bias estimates |
-| accel-bias tail drift | `<= 0.05 m/s^2` | reject unresolved accel-bias transients |
-| accel-bias tail standard deviation | `<= 0.035 m/s^2` | reject noisy accel-bias estimates |
-| mount covariance | max sigma `<= 2 deg` | require internal covariance to agree with the tail test |
-| attitude covariance | max sigma `<= 6 deg` | avoid saving priors during weak attitude observability |
-| GNSS health | recent issue count `<= 12` and not stale | prevent bad/rejected GNSS from validating priors |
+| post-initialization time | $\ge 180\,\mathrm{s}$ | avoid saving the early alignment transient |
+| driven distance | $\ge 750\,\mathrm{m}$ | require enough vehicle excitation to separate mount, attitude, and bias effects |
+| recent tail duration | $\ge 90\,\mathrm{s}$ | evaluate invariants over a fresh window, not only whole-trip averages |
+| recent tail samples | $\ge 30$ | avoid declaring stability from sparse updates |
+| mount tail drift | $\le 0.50^\circ$ | reject slowly moving mount estimates |
+| mount tail standard deviation | $\le 0.35^\circ$ | reject noisy mount estimates |
+| gyro-bias tail drift | $\le 0.00035\,\mathrm{rad/s}$ | reject unresolved gyro-bias transients |
+| gyro-bias tail standard deviation | $\le 0.00020\,\mathrm{rad/s}$ | reject noisy gyro-bias estimates |
+| accel-bias tail drift | $\le 0.05\,\mathrm{m/s^2}$ | reject unresolved accel-bias transients |
+| accel-bias tail standard deviation | $\le 0.035\,\mathrm{m/s^2}$ | reject noisy accel-bias estimates |
+| mount covariance | max sigma $\le 2^\circ$ | require internal covariance to agree with the tail test |
+| attitude covariance | max sigma $\le 6^\circ$ | avoid saving priors during weak attitude observability |
+| GNSS health | recent issue count $\le 12$ and not stale | prevent bad/rejected GNSS from validating priors |
 
 The public API exposes this as `health.stable`. Callers should not replicate the table outside the library; the table documents the current implementation so saved-prior behavior is auditable.
 
 ## Sleep Gap Behavior
 
-An IMU timestamp gap above `0.05 s` clears sample-to-sample coupling. The first IMU after the gap anchors a new interval; the runtime does not strapdown-propagate across the missing time.
+An IMU timestamp gap above $0.05\,\mathrm{s}$ clears sample-to-sample coupling. The first IMU after the gap anchors a new interval; the runtime does not strapdown-propagate across the missing time.
 
 | Gap class | Duration | Behavior |
 | --- | --- | --- |
-| short sleep | `<= 15 min` | keep `Running`; navigation stays usable; apply bounded stationary covariance aging |
-| medium sleep | `> 15 min` and `<= 1 h` | apply bounded stationary covariance aging; enter `DegradedDeadReckoning` if covariance remains usable |
-| long sleep | `> 1 h` | enter `AwaitingGnssReseed` until an acceptable GNSS sample arrives |
+| short sleep | $\le 15\,\mathrm{min}$ | keep `Running`; navigation stays usable; apply bounded stationary covariance aging |
+| medium sleep | $>15\,\mathrm{min}$ and $\le 1\,\mathrm{h}$ | apply bounded stationary covariance aging; enter `DegradedDeadReckoning` if covariance remains usable |
+| long sleep | $>1\,\mathrm{h}$ | enter `AwaitingGnssReseed` until an acceptable GNSS sample arrives |
 
 During medium sleep, IMU prediction continues after wake in degraded dead-reckoning mode. If covariance grows beyond the navigation usability gate before GNSS returns, the state becomes `AwaitingGnssReseed`.
 
@@ -96,18 +96,18 @@ The degraded dead-reckoning gate is covariance-based:
 
 | Block | Usability gate |
 | --- | --- |
-| horizontal position | `<= 30 m` sigma |
-| horizontal velocity | `<= 2.5 m/s` sigma |
-| roll/pitch attitude | `<= 5 deg` sigma |
-| yaw attitude | `<= 15 deg` sigma |
+| horizontal position | $\le 30\,\mathrm{m}$ sigma |
+| horizontal velocity | $\le 2.5\,\mathrm{m/s}$ sigma |
+| roll/pitch attitude | $\le 5^\circ$ sigma |
+| yaw attitude | $\le 15^\circ$ sigma |
 
 When a GNSS sample is accepted in reseed mode, the runtime reseeds navigation from GNSS while preserving the last mount estimate and raw-body IMU bias priors. That is not a full reset to unknown mount. The preserved calibration covariance is never made more confident than either the previous covariance or these conservative floors:
 
 | Preserved block | Minimum one-sigma floor after reseed |
 | --- | --- |
-| gyro bias | `0.03 deg/s` |
-| accel bias | `0.05 m/s^2` |
-| mount residual angle | `0.50 deg` |
+| gyro bias | $0.03^\circ/\mathrm{s}$ |
+| accel bias | $0.05\,\mathrm{m/s^2}$ |
+| mount residual angle | $0.50^\circ$ |
 
 This keeps calibration continuity useful without pretending that a GNSS reseed has re-observed the invariant states.
 
@@ -123,26 +123,26 @@ Short sleep adds up to these one-sigma terms at 15 minutes:
 
 | State block | Added sigma at 15 min |
 | --- | --- |
-| horizontal position | `2 m` |
-| vertical position | `1 m` |
-| velocity | `0.25 m/s` |
-| roll/pitch attitude | `0.25 deg` |
-| yaw attitude | `1 deg` |
-| gyro bias | `0.002 deg/s` |
-| accel bias | `0.01 m/s^2` |
+| horizontal position | $2\,\mathrm{m}$ |
+| vertical position | $1\,\mathrm{m}$ |
+| velocity | $0.25\,\mathrm{m/s}$ |
+| roll/pitch attitude | $0.25^\circ$ |
+| yaw attitude | $1^\circ$ |
+| gyro bias | $0.002^\circ/\mathrm{s}$ |
+| accel bias | $0.01\,\mathrm{m/s^2}$ |
 | mount | unchanged |
 
 Medium sleep starts from the same short-sleep floor and grows to these one-sigma terms at one hour:
 
 | State block | Added sigma range |
 | --- | --- |
-| horizontal position | `2 m` to `8 m` |
-| vertical position | `1 m` to `4 m` |
-| velocity | `0.25 m/s` to `0.75 m/s` |
-| roll/pitch attitude | `0.25 deg` to `1 deg` |
-| yaw attitude | `1 deg` to `5 deg` |
-| gyro bias | `0.002 deg/s` to `0.010 deg/s` |
-| accel bias | `0.01 m/s^2` to `0.03 m/s^2` |
+| horizontal position | $2\,\mathrm{m}$ to $8\,\mathrm{m}$ |
+| vertical position | $1\,\mathrm{m}$ to $4\,\mathrm{m}$ |
+| velocity | $0.25\,\mathrm{m/s}$ to $0.75\,\mathrm{m/s}$ |
+| roll/pitch attitude | $0.25^\circ$ to $1^\circ$ |
+| yaw attitude | $1^\circ$ to $5^\circ$ |
+| gyro bias | $0.002^\circ/\mathrm{s}$ to $0.010^\circ/\mathrm{s}$ |
+| accel bias | $0.01\,\mathrm{m/s^2}$ to $0.03\,\mathrm{m/s^2}$ |
 | mount | unchanged |
 
 Mount is not aged by sleep because the physical device mount should not change while the device is asleep. If the mount can change, the caller should not preserve the context.

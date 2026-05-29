@@ -48,8 +48,8 @@ $$
 $$
 
 Gyro and accelerometer biases are additive corrections in the raw IMU body frame
-`b`. The mount quaternion `q_bv` is the physical vehicle-to-body mount, with
-`x_b = C_bv x_v`.
+$b$. The mount quaternion $q_{bv}$ is the physical vehicle-to-body mount, with
+$x_b = C_{bv}x_v$.
 
 The process-noise vector used by the generated transition is:
 
@@ -110,7 +110,7 @@ The generated matrices are discrete-time matrices for one IMU increment, not
 continuous-time matrices. The symbolic generator uses a perturb-propagate-linearize
 construction:
 
-1. Create a nominal state `x` and a perturbed true state `x \oplus \delta x`.
+1. Create a nominal state $x$ and a perturbed true state $x \oplus \delta x$.
 2. Propagate nominal and perturbed states through the same mechanization.
 3. Add noise to IMU increments, bias random walks, and mount random walk.
 4. Extract the next error state from the propagated true and nominal states.
@@ -137,11 +137,11 @@ $$
 P^+ = FPF^T + GQG^T .
 $$
 
-Gyro and accelerometer white-noise densities contribute `density * dt`.
-Bias-random-walk columns in `G` already include a factor of `dt`, so the runtime
-uses `density / dt` in the diagonal `Q` entries to produce a net
-`density * dt` contribution. Mount random-walk variance is applied per axis as
-`q_mount_i * dt`, or zero when residual mount states are frozen.
+Gyro and accelerometer white-noise densities contribute $\mathrm{density}\,\Delta t$.
+Bias-random-walk columns in $G$ already include a factor of $\Delta t$, so the runtime
+uses $\mathrm{density}/\Delta t$ in the diagonal $Q$ entries to produce a net
+$\mathrm{density}\,\Delta t$ contribution. Mount random-walk variance is applied per axis as
+$q_{\mathrm{mount},i}\Delta t$, or zero when residual mount states are frozen.
 
 The runtime uses generated row-support metadata to run the same prediction with
 sparse covariance multiplication.
@@ -149,14 +149,14 @@ sparse covariance multiplication.
 ## Scalar Observation Model
 
 Most measurement rows are generated as scalar observations. For a predicted
-scalar measurement `h(x)`, the generator differentiates the perturbed true
+scalar measurement $h(x)$, the generator differentiates the perturbed true
 measurement with respect to the error state:
 
 $$
 H = \left.\frac{\partial h(x\oplus\delta x)}{\partial \delta x}\right|_{\delta x=0}.
 $$
 
-For a scalar residual `r = z - h(x)`, innovation variance and gain are:
+For a scalar residual $r = z - h(x)$, innovation variance and gain are:
 
 $$
 S = HPH^T + R,\qquad K = PH^T S^{-1},\qquad \delta x = Kr .
@@ -183,7 +183,7 @@ p_n & p_e & p_d & v_n & v_e & v_d & v_y^v & v_z^v
 $$
 
 Rows are processed sequentially using scalar inverses. The batch keeps an
-accumulated correction `\delta x_b`. For row `i`, the effective residual is:
+accumulated correction $\delta x_b$. For row $i$, the effective residual is:
 
 $$
 r_i^\star = r_i - H_i\delta x_b .
@@ -227,7 +227,7 @@ $$
 \sigma_{p,d}'=2.5\sigma_p ,
 $$
 
-and velocity sigmas are floored per axis at `0.01 m/s`.
+and velocity sigmas are floored per axis at $0.01\,\mathrm{m/s}$.
 
 When GNSS position is fused faster than 1 Hz after initialization, position
 standard deviations are multiplied by:
@@ -263,8 +263,8 @@ Invalid residuals, nonpositive variances, and invalid innovation variances are
 skipped for that axis. A failed group is rejected unless one of two bypasses
 applies:
 
-- the elapsed GNSS update gap is greater than `3 s`;
-- reported RMS accuracy improves to at most `0.5` of the previous RMS.
+- the elapsed GNSS update gap is greater than $3\,\mathrm{s}$;
+- reported RMS accuracy improves to at most $0.5$ of the previous RMS.
 
 Rejected groups emit public `gnss_event_mask` bits. From the third consecutive
 rejection onward the runtime also emits the corresponding consecutive-rejection
@@ -303,11 +303,11 @@ cross-covariance created by prediction and previous updates.
 
 NHC is eligible only when:
 
-- EKF speed is greater than `0.05 m/s`;
-- vehicle-frame gyro norm is below `0.2 rad/s`;
-- accelerometer norm error from gravity is below `1.0 m/s^2`.
+- EKF speed is greater than $0.05\,\mathrm{m/s}$;
+- vehicle-frame gyro norm is below $0.2\,\mathrm{rad/s}$;
+- accelerometer norm error from gravity is below $1.0\,\mathrm{m/s^2}$.
 
-The default NHC period is `0.1 s`. If NHC is inactive, the previous NHC time is
+The default NHC period is $0.1\,\mathrm{s}$. If NHC is inactive, the previous NHC time is
 reset. If a positive period is configured, eligible updates are decimated until
 the elapsed observation interval reaches the period. The variance scale is:
 
@@ -317,7 +317,7 @@ R_0 \frac{1}{\min(\Delta t_\mathrm{obs},1)} .
 $$
 
 GNSS samples are queued on `process_gnss` and fused on the next IMU epoch. If the
-queued GNSS sample is no more than `0.05 s` older than that IMU epoch and NHC is
+queued GNSS sample is no more than $0.05\,\mathrm{s}$ older than that IMU epoch and NHC is
 eligible, GNSS position, GNSS velocity, and NHC rows are fused in the same
 sequential batch. Otherwise NHC is applied as a standalone vehicle-frame velocity
 update.
@@ -337,12 +337,12 @@ $$
 $$
 
 `SensorFusion` currently enables it by default with
-`r_vehicle_roll_prior = 0.1`; `0` disables it. The configured value is a variance
+$r_\mathrm{vehicle\_roll\_prior}=0.1$; $0$ disables it. The configured value is a variance
 density and is scaled by the same observation interval as NHC. The update is
 applied only at eligible NHC epochs.
 
-The residual is `-\operatorname{roll}(q_{nv})`. Its Jacobian is computed by
-finite-differencing only the vehicle-attitude error states `0..2`; direct mount
+The residual is $-\operatorname{roll}(q_{nv})$. Its Jacobian is computed by
+finite-differencing only the vehicle-attitude error states $0{:}2$; direct mount
 columns are zero. The update can still move mount states through covariance
 coupling.
 
@@ -369,7 +369,7 @@ G_\theta = I - \frac{1}{2}[\delta\theta_v]_\times .
 $$
 
 The reset transforms the attitude block and its cross-covariances, then
-symmetrizes `P`. The mount quaternion is normalized after injection, but there
+symmetrizes $P$. The mount quaternion is normalized after injection, but there
 is no separate mount tangent reset block in the current implementation.
 
 ## Initialization And Mount Modes
@@ -378,12 +378,12 @@ Auto mode waits for align to produce a ready physical mount seed. The EKF yaw
 seed is selected as:
 
 1. `heading_rad`, when present;
-2. GNSS course when horizontal speed is at least `max(yaw_init_speed_mps, 1.0)`;
-3. otherwise `0`.
+2. GNSS course when horizontal speed is at least $\max(\texttt{yaw\_init\_speed\_mps}, 1.0)$;
+3. otherwise $0$.
 
-Manual mode accepts a caller-supplied `q_bv`, bypasses internal align, and
+Manual mode accepts a caller-supplied $q_{bv}$, bypasses internal align, and
 requires `heading_rad` plus speed greater than
-`max(yaw_init_speed_mps, 20 / 3.6)` before EKF initialization.
+$\max(\texttt{yaw\_init\_speed\_mps}, 20 / 3.6)$ before EKF initialization.
 
 At initialization, the facade sets configured roll, pitch, yaw, gyro-bias,
 accelerometer-bias, and residual-mount covariance values. In automatic mode it

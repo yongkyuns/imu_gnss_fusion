@@ -36,6 +36,7 @@ html_favicon = "_static/logo.png"
 html_static_path = ["_static"]
 templates_path = ["_templates"]
 html_css_files = ["custom.css"]
+html_js_files = ["math-overflow.js"]
 html_baseurl = "https://yongkyuns.github.io/imu_gnss_fusion/docs/"
 html_theme_options = {
     "source_repository": "https://github.com/yongkyuns/imu_gnss_fusion/",

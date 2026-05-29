@@ -67,6 +67,50 @@ jobs:
       - name: Document workspace
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 
+  ios:
+    name: iOS
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+            mobile/ios/SensorFusionFFI
+
+      - name: Test iOS FFI crate
+        run: cargo test --manifest-path mobile/ios/SensorFusionFFI/Cargo.toml --locked
+
+      - name: Build SensorFusionFFI XCFramework
+        run: mobile/ios/scripts/build_sensor_fusion_xcframework.sh
+
+      - name: Build iOS app
+        run: |
+          xcodebuild build \
+            -project mobile/ios/IMUGNSSPhone/IMUGNSSPhone.xcodeproj \
+            -scheme IMUGNSSPhone \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Test iOS app
+        run: |
+          xcodebuild test \
+            -project mobile/ios/IMUGNSSPhone/IMUGNSSPhone.xcodeproj \
+            -scheme IMUGNSSPhone \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -only-testing:IMUGNSSPhoneTests \
+            CODE_SIGNING_ALLOWED=NO
+
   hosted-generic-datasets:
     name: Hosted generic datasets
     runs-on: ubuntu-latest
@@ -143,6 +187,11 @@ jobs:
           python -m pip install -r docs/requirements.txt
           npm ci
 
+      - name: Test scripts and docs config
+        run: |
+          python -m unittest discover -s scripts/tests -p 'test_*.py'
+          npm test
+
       - name: Render ELK diagrams
         run: npm run render:elk-diagrams
 
@@ -177,7 +226,7 @@ jobs:
 
   deploy-pages:
     name: Deploy GitHub Pages
-    needs: [rust, hosted-generic-datasets, web-pages-artifact]
+    needs: [rust, ios, hosted-generic-datasets, web-pages-artifact]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10

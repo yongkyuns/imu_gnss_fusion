@@ -83,7 +83,7 @@ Policy types keep settings behavior testable:
 - `HarshBehaviorPreset` persists detector sensitivity and is applied to the Rust
   FFI through `FusionEngine::setHarshBehaviorPreset`;
 - `EventAudioSettingsDefaults` persists alert mode and silent-mode behavior;
-- `MountMemoryPolicy` validates scalar-first `q_bv`, requires at least 60 s of
+- `MountMemoryPolicy` validates scalar-first $q_{bv}$, requires at least 60 s of
   initialized EKF time before saving, rate-limits periodic stores to 30 s, and
   ignores saved-mount changes below 0.25 deg.
 

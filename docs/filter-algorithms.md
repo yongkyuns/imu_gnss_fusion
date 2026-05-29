@@ -2,7 +2,7 @@
 
 The runtime has two filter layers:
 
-- `align`: a reduced mount estimator used to produce an initial `q_bv` seed in automatic mount mode.
+- `align`: a reduced mount estimator used to produce an initial $q_{bv}$ seed in automatic mount mode.
 - `ekf`: the runtime vehicle-state filter used after GNSS and mount readiness.
 
 ```{figure} _static/diagrams/estimator-runtime-orthogonal.svg
@@ -14,7 +14,7 @@ The facade owns readiness and dispatch. Align only seeds automatic mount mode; t
 
 ## Align
 
-Align estimates the physical vehicle-to-body mount quaternion `q_bv`. It uses stationary gravity for tilt initialization/refinement, GNSS-derived horizontal acceleration for yaw, and planar turn gyro windows for roll/pitch refinement. It is not the NHC runtime filter.
+Align estimates the physical vehicle-to-body mount quaternion $q_{bv}$. It uses stationary gravity for tilt initialization/refinement, GNSS-derived horizontal acceleration for yaw, and planar turn gyro windows for roll/pitch refinement. It is not the NHC runtime filter.
 
 See [](algorithms/align.md) for the full reduced-estimator formulation.
 
@@ -28,11 +28,11 @@ $$
 \end{aligned}
 $$
 
-Stationary tilt initialization seeds roll/pitch/yaw covariance at about `[10, 10, 60] deg`; yaw remains broad because gravity does not observe yaw. A fresh `Align::new` starts with about `[20, 20, 60] deg`.
+Stationary tilt initialization seeds roll/pitch/yaw covariance at about $[10, 10, 60]^\circ$; yaw remains broad because gravity does not observe yaw. A fresh `Align::new` starts with about $[20, 20, 60]^\circ$.
 
 ## EKF Runtime
 
-The EKF state includes vehicle attitude `q_nv`, local velocity/position, IMU biases, and residual mount states. Prediction consumes raw body-frame IMU deltas, rotates them through the current `C_vb`, and propagates the vehicle navigation state.
+The EKF state includes vehicle attitude $q_{nv}$, local velocity/position, IMU biases, and residual mount states. Prediction consumes raw body-frame IMU deltas, rotates them through the current $C_{vb}$, and propagates the vehicle navigation state.
 
 See [](algorithms/runtime-ekf.md) for the implemented EKF state ordering, generated Jacobians, scalar and sequential-batch update algebra, GNSS gating, NHC scheduling, and injection/reset behavior.
 
@@ -67,11 +67,11 @@ See [](runtime-state-and-persistence.md) for caller responsibilities and exact c
 
 NHC applies only when runtime gates pass:
 
-- EKF speed estimate is greater than `0.05 m/s`;
-- vehicle-frame gyro norm is below `0.2 rad/s`;
-- accelerometer norm error from gravity is below `1.0 m/s^2`.
+- EKF speed estimate is greater than $0.05\,\mathrm{m/s}$;
+- vehicle-frame gyro norm is below $0.2\,\mathrm{rad/s}$;
+- accelerometer norm error from gravity is below $1.0\,\mathrm{m/s^2}$.
 
-The default NHC update period is `0.1 s` (10 Hz). A positive period decimates eligible updates and scales observation variance by the elapsed NHC interval so the constraint behaves like a rate-limited continuous observation.
+The default NHC update period is $0.1\,\mathrm{s}$ (10 Hz). A positive period decimates eligible updates and scales observation variance by the elapsed NHC interval so the constraint behaves like a rate-limited continuous observation.
 
 See [](algorithms/observability.md) for the distinction between direct NHC sensitivity and covariance-mediated mount correction.
 
@@ -83,7 +83,7 @@ $$
 \operatorname{roll}(q_{nv}) \approx 0.
 $$
 
-`0` disables the prior. Positive values are interpreted as a variance density and scaled at the same eligible epochs as NHC. The default runtime value is `0.1`.
+$0$ disables the prior. Positive values are interpreted as a variance density and scaled at the same eligible epochs as NHC. The default runtime value is $0.1$.
 
 This is not a direct mount-roll measurement. It can reduce roll ambiguity on mostly flat roads, but sustained banked roads can convert the flat-road assumption into mount error.
 

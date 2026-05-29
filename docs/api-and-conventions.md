@@ -13,8 +13,8 @@ For the full frame convention, including error-state injection sides, see [](alg
 | `n` | local NED navigation frame |
 | `e` | ECEF frame for WGS84 conversion |
 
-The runtime uses active rotations. \(C_{ab}\) maps coordinates from frame \(b\)
-to frame \(a\):
+The runtime uses active rotations. $C_{ab}$ maps coordinates from frame $b$
+to frame $a$:
 
 $$
 \begin{aligned}
@@ -24,10 +24,10 @@ R(q_1 q_2) &= R(q_1)R(q_2).
 \end{aligned}
 $$
 
-Quaternions are scalar-first \([q_w, q_x, q_y, q_z]\). The full
+Quaternions are scalar-first $[q_w, q_x, q_y, q_z]$. The full
 quaternion-to-matrix definition is in [](algorithms/frames.md).
 
-The public mount quaternion is \(q_{bv}\), the physical vehicle-to-body mount:
+The public mount quaternion is $q_{bv}$, the physical vehicle-to-body mount:
 
 $$
 \begin{aligned}
@@ -37,7 +37,7 @@ x_v &= C_{vb} x_b .
 \end{aligned}
 $$
 
-The EKF attitude is \(q_{nv}\):
+The EKF attitude is $q_{nv}$:
 
 $$
 x_n = C_{nv} x_v.
@@ -47,10 +47,10 @@ $$
 
 | Input | Required convention |
 | --- | --- |
-| `ImuSample::gyro_radps` | raw body-frame angular rate `[x_b, y_b, z_b]`, rad/s |
-| `ImuSample::accel_mps2` | raw body-frame specific force `[x_b, y_b, z_b]`, m/s^2 |
+| `ImuSample::gyro_radps` | raw body-frame angular rate $[x_b, y_b, z_b]$, rad/s |
+| `ImuSample::accel_mps2` | raw body-frame specific force $[x_b, y_b, z_b]$, m/s^2 |
 | `GnssSample::lat_deg/lon_deg/height_m` | WGS84 latitude/longitude degrees and ellipsoidal height meters |
-| `GnssSample::vel_ned_mps` | local `[north, east, down]` velocity, m/s |
+| `GnssSample::vel_ned_mps` | local $[\text{north}, \text{east}, \text{down}]$ velocity, m/s |
 | `GnssSample::pos_std_m` | one-sigma local NED position standard deviations, meters |
 | `GnssSample::vel_std_mps` | one-sigma local NED velocity standard deviations, m/s |
 | `GnssSample::heading_rad` | optional vehicle yaw/course heading in NED, radians clockwise from north toward east |
@@ -62,8 +62,8 @@ $$
 
 | Mode | Behavior |
 | --- | --- |
-| `MountMode::Auto` | internal align estimates the initial `q_bv`; EKF initializes after mount readiness and GNSS yaw/course readiness |
-| `MountMode::Manual(q_bv)` | caller supplies the initial `q_bv`; internal align is disabled, but EKF residual mount states remain live with a prior |
+| `MountMode::Auto` | internal align estimates the initial $q_{bv}$; EKF initializes after mount readiness and GNSS yaw/course readiness |
+| `MountMode::Manual(q_bv)` | caller supplies the initial $q_{bv}$; internal align is disabled, but EKF residual mount states remain live with a prior |
 
 Manual mode does not mean the facade freezes every EKF mount state. `with_mount` and `set_misalignment` provide the physical mount seed and bypass align. At EKF initialization, the runtime seeds mount covariance from the manual prior so residual mount correction can still occur.
 
@@ -71,14 +71,14 @@ Manual mode does not mean the facade freezes every EKF mount state. `with_mount`
 
 Yaw initialization is mode-specific:
 
-- auto mode initializes once mount is ready and uses `heading_rad` when present, otherwise GNSS course once horizontal speed is at least `max(yaw_init_speed_mps, 1.0)`, otherwise yaw `0`;
-- manual mode waits for `heading_rad` and speed above `max(yaw_init_speed_mps, 20 / 3.6)`.
+- auto mode initializes once mount is ready and uses `heading_rad` when present, otherwise GNSS course once horizontal speed is at least $\max(\texttt{yaw\_init\_speed\_mps}, 1.0)$, otherwise yaw $0$;
+- manual mode waits for `heading_rad` and speed above $\max(\texttt{yaw\_init\_speed\_mps}, 20 / 3.6)$.
 
 The runtime anchors WGS84 GNSS into a local navigation frame and reanchors when the local displacement grows large enough to keep local coordinates well-conditioned.
 
 ## Runtime State
 
-Each processed input returns an `Update` with a single lifecycle `state`, `navigation_usable`, `navigation_started`, mount readiness, and the current `q_bv` when available. Use those public fields, or `SensorFusion::health()`, instead of inferring readiness from internal EKF existence.
+Each processed input returns an `Update` with a single lifecycle `state`, `navigation_usable`, `navigation_started`, mount readiness, and the current $q_{bv}$ when available. Use those public fields, or `SensorFusion::health()`, instead of inferring readiness from internal EKF existence.
 
 The main public states are:
 
@@ -96,7 +96,7 @@ Normal stream pauses should keep the same `SensorFusion` object. Source switches
 
 - position or velocity rejected;
 - repeated consecutive rejection;
-- bypass after a GNSS update gap greater than `3 s`;
+- bypass after a GNSS update gap greater than $3\,\mathrm{s}$;
 - bypass after reported RMS accuracy improves to at most half the previous RMS.
 
 Rejected groups are not fused. Consecutive-rejection bits are diagnostic events, not an automatic recovery update. See [](algorithms/runtime-ekf.md) for the update equations.

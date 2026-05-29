@@ -76,7 +76,7 @@ x_r =
 \end{bmatrix}^T ,
 $$
 
-where `delta phi_v` is vehicle roll error and `delta rho_b` is mount roll error.
+where $\delta\phi_v$ is vehicle roll error and $\delta\rho_b$ is mount roll error.
 
 For small errors, lateral and vertical vehicle-frame velocity error dynamics can
 have the approximate structure:
@@ -172,7 +172,7 @@ $$
 $$
 
 `SensorFusion` enables this by default with variance density
-`r_vehicle_roll_prior = 0.1`; `0` disables it. It is applied only at eligible
+$r_\mathrm{vehicle\_roll\_prior}=0.1$; $0$ disables it. It is applied only at eligible
 NHC epochs and scaled by the NHC observation interval.
 
 Its direct Jacobian is over vehicle-attitude error states only. It anchors the

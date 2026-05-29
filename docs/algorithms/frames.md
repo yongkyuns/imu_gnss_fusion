@@ -9,7 +9,7 @@ q_w & q_x & q_y & q_z
 \end{bmatrix}^{T}.
 $$
 
-\(C_{ab}\) maps coordinates from frame \(b\) to frame \(a\):
+$C_{ab}$ maps coordinates from frame $b$ to frame $a$:
 
 $$
 \begin{aligned}
@@ -85,7 +85,7 @@ q_{bv}^+ &= \delta q(\delta\psi_{bv})\,q_{bv}.
 $$
 
 The standalone align filter also left-multiplies generic small-angle mount
-updates into \(q_{bv}\). Its horizontal-acceleration yaw update is the exception:
+updates into $q_{bv}$. Its horizontal-acceleration yaw update is the exception:
 it right-multiplies a vehicle-yaw correction, because that update is formulated
 as an angle between horizontal vehicle-frame acceleration vectors.
 

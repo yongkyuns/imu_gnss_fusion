@@ -2,7 +2,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "render:elk-diagrams": "node scripts/render_elk_diagrams.mjs"
+    "render:elk-diagrams": "node scripts/render_elk_diagrams.mjs",
+    "test": "node --test scripts/tests/*.test.mjs"
   },
   "devDependencies": {
     "elkjs": "^0.11.1"

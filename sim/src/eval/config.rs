@@ -1,9 +1,12 @@
 use crate::visualizer::pipeline::FusionTuningConfig;
+use road_events::HarshBehaviorPreset;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FusionTuningConfigSnapshot {
     pub r_body_vel: f32,
     pub r_body_vel_z: f32,
+    pub r_vehicle_roll_prior: f32,
+    pub nhc_update_period_s: f32,
     pub attitude_roll_init_sigma_deg: f32,
     pub attitude_pitch_init_sigma_deg: f32,
     pub yaw_init_sigma_deg: f32,
@@ -23,12 +26,15 @@ pub struct FusionTuningConfigSnapshot {
     pub predict_imu_lpf_cutoff_hz: Option<f64>,
     pub predict_imu_decimation: usize,
     pub yaw_init_speed_mps: f64,
+    pub harsh_behavior_preset: HarshBehaviorPreset,
     pub ekf_noise_configured: bool,
 }
 
 pub const FUSION_TUNING_DEFAULTS: FusionTuningConfigSnapshot = FusionTuningConfigSnapshot {
     r_body_vel: 0.5,
     r_body_vel_z: 0.5,
+    r_vehicle_roll_prior: 0.1,
+    nhc_update_period_s: 0.1,
     attitude_roll_init_sigma_deg: 2.0,
     attitude_pitch_init_sigma_deg: 2.0,
     yaw_init_sigma_deg: 6.0,
@@ -48,6 +54,7 @@ pub const FUSION_TUNING_DEFAULTS: FusionTuningConfigSnapshot = FusionTuningConfi
     predict_imu_lpf_cutoff_hz: None,
     predict_imu_decimation: 1,
     yaw_init_speed_mps: 0.0,
+    harsh_behavior_preset: HarshBehaviorPreset::Balanced,
     ekf_noise_configured: true,
 };
 
@@ -55,6 +62,8 @@ pub fn snapshot_fusion_tuning_config(cfg: &FusionTuningConfig) -> FusionTuningCo
     FusionTuningConfigSnapshot {
         r_body_vel: cfg.r_body_vel,
         r_body_vel_z: cfg.r_body_vel_z,
+        r_vehicle_roll_prior: cfg.r_vehicle_roll_prior,
+        nhc_update_period_s: cfg.nhc_update_period_s,
         attitude_roll_init_sigma_deg: cfg.attitude_roll_init_sigma_deg,
         attitude_pitch_init_sigma_deg: cfg.attitude_pitch_init_sigma_deg,
         yaw_init_sigma_deg: cfg.yaw_init_sigma_deg,
@@ -74,6 +83,7 @@ pub fn snapshot_fusion_tuning_config(cfg: &FusionTuningConfig) -> FusionTuningCo
         predict_imu_lpf_cutoff_hz: cfg.predict_imu_lpf_cutoff_hz,
         predict_imu_decimation: cfg.predict_imu_decimation,
         yaw_init_speed_mps: cfg.yaw_init_speed_mps,
+        harsh_behavior_preset: cfg.harsh_behavior_preset,
         ekf_noise_configured: cfg.noise.ekf.is_some(),
     }
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createServer } from "node:http";
-import { readFile, stat } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,6 +30,9 @@ Validate the static GitHub Pages visualizer artifact before upload/deploy.
 
 Options:
   --site-dir <dir>    Static site directory (default: web)
+  --docs-source-dir <dir>
+                       Sphinx source directory checked with --require-docs
+                       (default: docs)
   --require-wasm      Require web/pkg/visualizer.js and visualizer_bg.wasm
   --require-docs      Require Sphinx docs under docs/
   --help              Show this help
@@ -39,6 +42,7 @@ Options:
 function parseArgs(argv) {
   const args = {
     siteDir: path.join(ROOT, "web"),
+    docsSourceDir: path.join(ROOT, "docs"),
     requireWasm: false,
     requireDocs: false,
   };
@@ -52,6 +56,9 @@ function parseArgs(argv) {
     switch (arg) {
       case "--site-dir":
         args.siteDir = path.resolve(ROOT, next());
+        break;
+      case "--docs-source-dir":
+        args.docsSourceDir = path.resolve(ROOT, next());
         break;
       case "--require-wasm":
         args.requireWasm = true;
@@ -70,7 +77,7 @@ function parseArgs(argv) {
   return args;
 }
 
-async function validateFiles(siteDir, requireWasm, requireDocs) {
+async function validateFiles(siteDir, requireWasm, requireDocs, docsSourceDir) {
   const indexPath = path.join(siteDir, "index.html");
   const index = await readFile(indexPath, "utf8");
   if (!index.includes('id="visualizer_canvas"')) {
@@ -98,6 +105,8 @@ async function validateFiles(siteDir, requireWasm, requireDocs) {
   }
 
   if (requireDocs) {
+    await validateDocsSourceMath(docsSourceDir);
+
     const docsIndexPath = path.join(siteDir, "docs", "index.html");
     const docsIndex = await readFile(docsIndexPath, "utf8");
     if (!docsIndex.includes("IMU/GNSS Fusion")) {
@@ -106,25 +115,188 @@ async function validateFiles(siteDir, requireWasm, requireDocs) {
     if (/file:\/\/|\/Users\/|C:\\\\/.test(docsIndex)) {
       throw new Error("docs/index.html contains a local filesystem reference");
     }
+    if (!docsIndex.includes("math-overflow.js")) {
+      throw new Error("docs/index.html does not load math-overflow.js");
+    }
 
     const staticDir = path.join(siteDir, "docs", "_static");
     if (!existsSync(staticDir)) {
       throw new Error("docs/_static is missing");
     }
-    const logoPath = path.join(staticDir, "logo.png");
-    if (!existsSync(logoPath)) {
-      throw new Error("docs/_static/logo.png is missing");
-    }
-    const logoInfo = await stat(logoPath);
-    if (logoInfo.size <= 0) {
-      throw new Error("docs/_static/logo.png is empty");
-    }
+    await validateDocsStaticAssets(staticDir);
+    await validateDocsHtml(path.join(siteDir, "docs"));
   }
 
   const datasetManifestPath = path.join(siteDir, "datasets", "manifest.json");
   if (existsSync(datasetManifestPath)) {
     validateDatasetManifest(JSON.parse(await readFile(datasetManifestPath, "utf8")), datasetManifestPath);
   }
+}
+
+async function validateDocsStaticAssets(staticDir) {
+  const requiredAssets = [
+    ["custom.css", "text"],
+    ["math-overflow.js", "text"],
+    ["logo.png", "png"],
+    ["titlebar.png", "png"],
+    ["diagrams/estimator-runtime-orthogonal.svg", "svg"],
+    ["diagrams/overall-architecture-orthogonal.svg", "svg"],
+    ["screenshots/web-visualizer-overview.png", "png"],
+  ];
+  for (const [relativePath, kind] of requiredAssets) {
+    const filePath = path.join(staticDir, relativePath);
+    if (!existsSync(filePath)) {
+      throw new Error(`docs/_static/${relativePath} is missing`);
+    }
+    const info = await stat(filePath);
+    if (info.size <= 0) {
+      throw new Error(`docs/_static/${relativePath} is empty`);
+    }
+    const body = await readFile(filePath);
+    if (kind === "png" && (body[0] !== 0x89 || body[1] !== 0x50 || body[2] !== 0x4e || body[3] !== 0x47)) {
+      throw new Error(`docs/_static/${relativePath} is not a PNG file`);
+    }
+    if (kind === "svg" && !body.toString("utf8").includes("<svg")) {
+      throw new Error(`docs/_static/${relativePath} does not look like an SVG file`);
+    }
+  }
+
+  const mathOverflow = await readFile(path.join(staticDir, "math-overflow.js"), "utf8");
+  if (!mathOverflow.includes("updateMathOverflow") || !mathOverflow.includes("math-no-scroll")) {
+    throw new Error("docs/_static/math-overflow.js does not contain the expected overflow updater");
+  }
+}
+
+async function validateDocsSourceMath(docsSourceDir) {
+  if (!existsSync(docsSourceDir)) {
+    return;
+  }
+  const markdownFiles = await listFiles(docsSourceDir, ".md");
+  const violations = [];
+  for (const filePath of markdownFiles) {
+    const lines = (await readFile(filePath, "utf8")).split(/\r?\n/);
+    let inFence = false;
+    let inDisplayMath = false;
+    for (const [index, line] of lines.entries()) {
+      if (line.trimStart().startsWith("```")) {
+        inFence = !inFence;
+        continue;
+      }
+      if (!inFence && line.trim() === "$$") {
+        inDisplayMath = !inDisplayMath;
+        continue;
+      }
+      if (inFence || inDisplayMath) {
+        continue;
+      }
+      if (/\\\(.+?\\\)|\\\[.+?\\\]|\\begin\{[^}]+\}|\\end\{[^}]+\}/.test(line)) {
+        violations.push(`${path.relative(ROOT, filePath)}:${index + 1}`);
+      }
+    }
+  }
+  if (violations.length > 0) {
+    throw new Error(
+      `docs source uses raw LaTeX math delimiters outside display math/code fences; use MyST dollar math instead: ${violations.join(", ")}`,
+    );
+  }
+}
+
+async function validateDocsHtml(docsDir) {
+  const htmlFiles = await listFiles(docsDir, ".html");
+  const violations = [];
+  for (const filePath of htmlFiles) {
+    const html = await readFile(filePath, "utf8");
+    if (/file:\/\/|\/Users\/|C:\\\\/.test(html)) {
+      throw new Error(`${path.relative(ROOT, filePath)} contains a local filesystem reference`);
+    }
+    const visibleText = htmlToVisibleTextWithoutMath(html);
+    const rawInlineLatex = /\\\([^)]*\\\)|\\\[[^\]]*\\\]|\\begin\{[^}]+\}|\\end\{[^}]+\}/.test(visibleText);
+    const escapedInlineSymbol =
+      /(^|[\s([{])\([A-Za-z\\]+_\{?[A-Za-z0-9_\\]+[^)]*\)/.test(visibleText) ||
+      /(^|[\s([{])\(\\[A-Za-z]+[^)]*\)/.test(visibleText);
+    if (rawInlineLatex || escapedInlineSymbol) {
+      violations.push(path.relative(ROOT, filePath));
+    }
+    await validateDocsHtmlReferences(filePath, html, docsDir);
+  }
+  if (violations.length > 0) {
+    throw new Error(
+      `docs HTML appears to contain unrendered inline math outside MathJax spans: ${violations.join(", ")}`,
+    );
+  }
+}
+
+async function validateDocsHtmlReferences(filePath, html, docsDir) {
+  const references = [];
+  for (const match of html.matchAll(/\b(?:href|src)="([^"]+)"/g)) {
+    references.push(match[1]);
+  }
+
+  for (const reference of references) {
+    if (
+      reference.length === 0 ||
+      reference.startsWith("#") ||
+      reference.startsWith("http://") ||
+      reference.startsWith("https://") ||
+      reference.startsWith("mailto:") ||
+      reference.startsWith("javascript:")
+    ) {
+      continue;
+    }
+    const withoutFragment = reference.split("#", 1)[0].split("?", 1)[0];
+    if (withoutFragment.length === 0) {
+      continue;
+    }
+    if (withoutFragment.startsWith("/")) {
+      throw new Error(`${path.relative(ROOT, filePath)} contains root-absolute docs reference ${reference}`);
+    }
+    const targetPath = path.resolve(path.dirname(filePath), decodeURIComponent(withoutFragment));
+    const relative = path.relative(docsDir, targetPath);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      continue;
+    }
+    if (!existsSync(targetPath)) {
+      throw new Error(`${path.relative(ROOT, filePath)} references missing docs asset ${reference}`);
+    }
+    const info = await stat(targetPath);
+    if (info.size <= 0) {
+      throw new Error(`${path.relative(ROOT, filePath)} references empty docs asset ${reference}`);
+    }
+  }
+}
+
+function htmlToVisibleTextWithoutMath(html) {
+  return html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<pre\b[^>]*>[\s\S]*?<\/pre>/gi, " ")
+    .replace(/<code\b[^>]*>[\s\S]*?<\/code>/gi, " ")
+    .replace(/<span\b[^>]*class="[^"]*\bmath\b[^"]*"[^>]*>[\s\S]*?<\/span>/gi, " ")
+    .replace(/<div\b[^>]*class="[^"]*\bmath\b[^"]*"[^>]*>[\s\S]*?<\/div>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/\s+/g, " ");
+}
+
+async function listFiles(rootDir, extension) {
+  const files = [];
+  async function walk(dir) {
+    const entries = await readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(entryPath);
+      } else if (entry.isFile() && entry.name.endsWith(extension)) {
+        files.push(entryPath);
+      }
+    }
+  }
+  await walk(rootDir);
+  return files;
 }
 
 function validateDatasetManifest(manifest, manifestPath) {
@@ -297,7 +469,7 @@ async function expectOk(url, contentTypePrefix) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  await validateFiles(args.siteDir, args.requireWasm, args.requireDocs);
+  await validateFiles(args.siteDir, args.requireWasm, args.requireDocs, args.docsSourceDir);
   await validateHttp(args.siteDir, args.requireWasm, args.requireDocs);
   console.log(`pages static artifact ok: ${args.siteDir}`);
 }

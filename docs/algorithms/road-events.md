@@ -34,13 +34,13 @@ Harsh acceleration, braking, and cornering use preset configuration sets exposed
 - `Balanced`
 - `Conservative`
 
-The balanced cornering thresholds currently use a corner load threshold of `3.4 m/s^2`, exit threshold of `2.9 m/s^2`, and jerk gate of `5.0 m/s^3`.
+The balanced cornering thresholds currently use a corner load threshold of $3.4\,\mathrm{m/s^2}$, exit threshold of $2.9\,\mathrm{m/s^2}$, and jerk gate of $5.0\,\mathrm{m/s^3}$.
 
-Harsh cornering is not based on `yaw_rate * speed`. It is based on jerk-gated lateral side-load from vehicle-frame specific force. The detector expects callers to feed bias-corrected vehicle-frame lateral specific force, which represents passenger side-load including bank effects.
+Harsh cornering is not based on $\dot{\psi}v$. It is based on jerk-gated lateral side-load from vehicle-frame specific force. The detector expects callers to feed bias-corrected vehicle-frame lateral specific force, which represents passenger side-load including bank effects.
 
 ## Hill Defaults
 
-The default hill detector uses a `4.0 deg` pitch threshold and `1.0 s` confirmation window.
+The default hill detector uses a $4.0^\circ$ pitch threshold and $1.0\,\mathrm{s}$ confirmation window.
 
 ## Integration
 

@@ -1,6 +1,6 @@
 # Alignment Estimator Formulation
 
-`align` estimates the physical vehicle-to-body mount quaternion `q_bv` before
+`align` estimates the physical vehicle-to-body mount quaternion $q_{bv}$ before
 the runtime EKF initializes in automatic mount mode. It is a reduced estimator:
 its state is the mount angle only, not the full vehicle navigation state.
 
@@ -70,7 +70,7 @@ deviations are scaled by the configured refinement factors.
 ## Generic Mount Observation Rows
 
 Gravity and turn-gyro rows use the same local linearization. For a body-frame
-vector `x_b`, the predicted vehicle-frame vector is:
+vector $x_b$, the predicted vehicle-frame vector is:
 
 $$
 \hat{x}_v = C_{vb}x_b .
@@ -120,14 +120,14 @@ $$
 with at least 100 accumulated samples by default. When gates fail, the
 accumulated tilt-initialization samples reset.
 
-Given the mean stationary accelerometer vector `\bar{f}_b`, the initializer
+Given the mean stationary accelerometer vector $\bar{f}_b$, the initializer
 constructs the vehicle down axis in body coordinates:
 
 $$
 z_v^b = -\frac{\bar{f}_b}{\|\bar{f}_b\|}.
 $$
 
-It then projects a body-frame reference axis into the plane normal to `z_v^b`:
+It then projects a body-frame reference axis into the plane normal to $z_v^b$:
 
 $$
 x_v^b =
@@ -137,7 +137,7 @@ x_v^b =
 y_v^b = \operatorname{normalize}(z_v^b \times x_v^b).
 $$
 
-The resulting `C_bv` is formed from these body-coordinate vehicle axes. This is
+The resulting $C_{bv}$ is formed from these body-coordinate vehicle axes. This is
 tilt-only initialization: the horizontal reference fixes an arbitrary yaw until
 motion provides a real yaw cue.
 
@@ -168,8 +168,8 @@ $$
 a_n = \frac{v_{n,k}-v_{n,k-1}}{\Delta t}.
 $$
 
-Using the mid-velocity direction `\hat{t}` and its left/right horizontal normal
-`\hat{\ell}`, align forms:
+Using the mid-velocity direction $\hat{t}$ and its left/right horizontal normal
+$\hat{\ell}$, align forms:
 
 $$
 a_\mathrm{gnss,xy} =
@@ -218,7 +218,7 @@ $$
 P_{\psi\psi}^+ = (1-K_\psi)P_{\psi\psi}.
 $$
 
-The implementation then clears yaw cross-covariances `P_{x\psi}` and `P_{y\psi}`.
+The implementation then clears yaw cross-covariances $P_{x\psi}$ and $P_{y\psi}$.
 
 Horizontal yaw updates are gated before the scalar update is allowed. The shared
 vector gate requires:
@@ -246,7 +246,7 @@ v > 2.78,\qquad
 |a_\mathrm{lat}| > 1.5\max(|a_\mathrm{long}|,0.2).
 $$
 
-The effective yaw observation standard deviation starts from `1 deg` and is
+The effective yaw observation standard deviation starts from $1^\circ$ and is
 divided by a quality factor. Straight windows use speed quality, acceleration
 quality, longitudinal-acceleration quality, and lateral-rejection quality. Turn
 windows use speed quality, acceleration quality, lateral-acceleration quality,

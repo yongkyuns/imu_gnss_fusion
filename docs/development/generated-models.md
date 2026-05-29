@@ -98,10 +98,10 @@ It does not encode runtime policy.
 | `derive_measurement_model()` | `stationary_accel_*_generated.rs` | `stationary_accel_*_observation()` | stationary gravity updates |
 | `derive_measurement_model()` | `body_vel_*_generated.rs` | `body_vel_*_observation()` | vehicle speed, NHC Y/Z, GNSS/NHC batch |
 
-Each generated scalar observation file computes the linearized row `H`, scalar
-Kalman gain `K = PH^T / S`, and innovation variance `S = HPH^T + R` for the
+Each generated scalar observation file computes the linearized row $H$, scalar
+Kalman gain $K = PH^T / S$, and innovation variance $S = HPH^T + R$ for the
 current covariance. The runtime still supplies the physical innovation
-`z - h(x_nom)`. That split is important: generated code knows the local
+$z - h(x_\mathrm{nom})$. That split is important: generated code knows the local
 linearization; `ekf/mod.rs` decides whether a measurement is valid, how it is
 gated, whether it is batched with other rows, and when the accumulated error is
 injected into the nominal state.
@@ -127,17 +127,17 @@ Changes usually fall into four categories:
 
 | Change type | Primary files | What must stay consistent |
 | --- | --- | --- |
-| Propagation or noise change | `propagate_nominal()`, `inject_true_state()`, `extract_error_state()`, `derive_error_dynamics()` | nominal propagation, perturbation side, `F`, `G`, support metadata, runtime `Q` scaling |
+| Propagation or noise change | `propagate_nominal()`, `inject_true_state()`, `extract_error_state()`, `derive_error_dynamics()` | nominal propagation, perturbation side, $F$, $G$, support metadata, runtime $Q$ scaling |
 | State or ABI change | `build_symbolic_model()`, `generated.rs`, `ekf/types.rs`, `state_ops.rs` | nominal/error/noise ordering and wrapper argument bindings |
-| New or changed scalar observation | `derive_measurement_model()`, `write_observation_equations()` | predicted scalar, variance symbol, generated `H/K/S`, runtime residual sign |
+| New or changed scalar observation | `derive_measurement_model()`, `write_observation_equations()` | predicted scalar, variance symbol, generated $H/K/S$, runtime residual sign |
 | New generated function boundary | `generated.rs`, sometimes `mod.rs` | wrapper inputs, variance symbol, scalar residual sign, gravity/local-frame arguments |
 | Runtime policy change | `mod.rs`, `fusion.rs` | gating, batching, covariance update form, diagnostics, public event/state reporting |
 
 The most important semantic check is whether a generated diff is explainable
 from the intended model change. For example:
 
-- a propagation change should alter `nominal_prediction`, `F`, and often `G`;
-- a noise-input change should alter `G`, support metadata, and runtime `Q`
+- a propagation change should alter `nominal_prediction`, $F$, and often $G$;
+- a noise-input change should alter $G$, support metadata, and runtime $Q$
   construction;
 - an observation change should alter one scalar `H/K/S` family and the runtime
   residual should keep the same sign convention;

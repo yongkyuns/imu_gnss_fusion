@@ -12,7 +12,7 @@ pub struct FusionTuningConfig {
     pub r_body_vel_z: f32,
     #[serde(default = "default_r_vehicle_roll_prior")]
     pub r_vehicle_roll_prior: f32,
-    #[serde(default)]
+    #[serde(default = "default_nhc_update_period_s")]
     pub nhc_update_period_s: f32,
     #[serde(default = "default_attitude_roll_init_sigma_deg")]
     pub attitude_roll_init_sigma_deg: f32,
@@ -92,6 +92,10 @@ fn default_r_body_vel_z() -> f32 {
 }
 
 fn default_r_vehicle_roll_prior() -> f32 {
+    0.1
+}
+
+fn default_nhc_update_period_s() -> f32 {
     0.1
 }
 
@@ -284,6 +288,8 @@ mod tests {
         assert_eq!(decoded.predict_imu_lpf_cutoff_hz, None);
         assert_eq!(decoded.r_body_vel_z, default_r_body_vel_z());
         assert_eq!(decoded.r_vehicle_roll_prior, default_r_vehicle_roll_prior());
+        assert_eq!(decoded.nhc_update_period_s, default_nhc_update_period_s());
+        assert_eq!(decoded.harsh_behavior_preset, HarshBehaviorPreset::Balanced);
         assert_eq!(
             decoded.attitude_roll_init_sigma_deg,
             default_attitude_roll_init_sigma_deg()

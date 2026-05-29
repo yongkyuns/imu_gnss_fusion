@@ -64,7 +64,7 @@ $$
 $$
 
 `SensorFusion` currently enables it by default with variance density
-`r_vehicle_roll_prior = 0.1`; setting it to `0` disables the update. The
+$r_\mathrm{vehicle\_roll\_prior}=0.1$; setting it to $0$ disables the update. The
 variance is scaled by the same observation interval as NHC.
 
 The residual is:
@@ -74,7 +74,7 @@ r_\phi = -\operatorname{roll}(q_{nv}).
 $$
 
 The Jacobian is finite-differenced only over vehicle-attitude error states
-`0..2`. Direct mount columns are zero, so any mount motion comes through
+$0{:}2$. Direct mount columns are zero, so any mount motion comes through
 covariance coupling.
 
 This prior reduces roll ambiguity on mostly flat roads by anchoring the
