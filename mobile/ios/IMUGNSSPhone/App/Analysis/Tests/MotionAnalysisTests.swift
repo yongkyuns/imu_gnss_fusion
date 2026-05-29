@@ -105,40 +105,40 @@ final class MotionAnalysisTests: XCTestCase {
                 mountReady: true,
                 initialized: true,
                 gnssAccuracy: GnssAccuracy(horizontalAccuracyM: 60.0)
-            ).status,
-            .poorGNSS
+            ).state,
+            .degraded
         )
         XCTAssertEqual(
             FusionHealth.evaluate(
                 mountReady: false,
                 initialized: false,
                 gnssAccuracy: GnssAccuracy(horizontalAccuracyM: 4.0)
-            ).status,
-            .aligning
+            ).state,
+            .initializing
         )
         XCTAssertEqual(
             FusionHealth.evaluate(
                 mountReady: false,
                 initialized: true,
                 gnssAccuracy: GnssAccuracy(horizontalAccuracyM: 4.0)
-            ).status,
-            .alignmentIncomplete
+            ).state,
+            .initializing
         )
         XCTAssertEqual(
             FusionHealth.evaluate(
                 mountReady: true,
                 initialized: false,
                 gnssAccuracy: GnssAccuracy(horizontalAccuracyM: 4.0)
-            ).status,
-            .needsMotion
+            ).state,
+            .initializing
         )
         XCTAssertEqual(
             FusionHealth.evaluate(
                 mountReady: true,
                 initialized: true,
                 gnssAccuracy: GnssAccuracy(horizontalAccuracyM: 4.0)
-            ).status,
-            .ready
+            ).state,
+            .running
         )
     }
 

@@ -1,13 +1,26 @@
 import Foundation
 
 struct FusionStatus {
+    let state: FusionHealth.State
     let mountReady: Bool
     let mountReadyChanged: Bool
-    let ekfInitialized: Bool
-    let ekfInitializedNow: Bool
-    let filterInitialized: Bool
-    let filterInitializedNow: Bool
+    let navigationUsable: Bool
+    let navigationStarted: Bool
     let mountQBV: Quaternion?
+    let gnssEvents: FusionGnssEvents
+}
+
+struct FusionGnssEvents: OptionSet, Sendable {
+    let rawValue: UInt32
+
+    static let positionRejected = FusionGnssEvents(rawValue: 1 << 0)
+    static let velocityRejected = FusionGnssEvents(rawValue: 1 << 1)
+    static let positionConsecutiveRejected = FusionGnssEvents(rawValue: 1 << 2)
+    static let velocityConsecutiveRejected = FusionGnssEvents(rawValue: 1 << 3)
+    static let positionGapBypass = FusionGnssEvents(rawValue: 1 << 4)
+    static let velocityGapBypass = FusionGnssEvents(rawValue: 1 << 5)
+    static let positionAccuracyBypass = FusionGnssEvents(rawValue: 1 << 6)
+    static let velocityAccuracyBypass = FusionGnssEvents(rawValue: 1 << 7)
 }
 
 struct FusionSnapshot {
@@ -35,6 +48,7 @@ struct FusionResult {
     let status: FusionStatus
     let snapshot: FusionSnapshot?
     let alignProgress: AlignProgressStatus
+    let health: FusionHealth
 }
 
 struct RoadEventDetection: Equatable, Sendable {
@@ -211,7 +225,8 @@ final class FusionEngine {
         return FusionResult(
             status: Self.status(from: update),
             snapshot: snapshot(),
-            alignProgress: alignProgress()
+            alignProgress: alignProgress(),
+            health: health()
         )
     }
 
@@ -247,13 +262,25 @@ final class FusionEngine {
         return FusionResult(
             status: Self.status(from: update),
             snapshot: snapshot(),
-            alignProgress: alignProgress()
+            alignProgress: alignProgress(),
+            health: health()
         )
     }
 
     func status() -> FusionStatus? {
         guard let handle else { return nil }
         return Self.status(from: sensor_fusion_snapshot_status(handle))
+    }
+
+    func health() -> FusionHealth {
+        guard let handle else { return .notReady }
+        let status = Self.status(from: sensor_fusion_snapshot_status(handle))
+        return FusionHealth.from(
+            raw: sensor_fusion_snapshot_health(handle),
+            initialized: status.navigationUsable,
+            mountReady: status.mountReady,
+            gnssAccuracy: GnssAccuracy(horizontalAccuracyM: nil)
+        )
     }
 
     func snapshot() -> FusionSnapshot? {
@@ -422,14 +449,33 @@ final class FusionEngine {
             )
             : nil
         return FusionStatus(
+            state: Self.fusionState(from: raw.state),
             mountReady: raw.mount_ready,
             mountReadyChanged: raw.mount_ready_changed,
-            ekfInitialized: raw.ekf_initialized,
-            ekfInitializedNow: raw.ekf_initialized_now,
-            filterInitialized: raw.filter_initialized,
-            filterInitializedNow: raw.filter_initialized_now,
-            mountQBV: mountQBV
+            navigationUsable: raw.navigation_usable,
+            navigationStarted: raw.navigation_started,
+            mountQBV: mountQBV,
+            gnssEvents: FusionGnssEvents(rawValue: raw.gnss_event_mask)
         )
+    }
+
+    private static func fusionState(from raw: UInt32) -> FusionHealth.State {
+        switch raw {
+        case SENSOR_FUSION_STATE_INITIALIZING:
+            return .initializing
+        case SENSOR_FUSION_STATE_RUNNING:
+            return .running
+        case SENSOR_FUSION_STATE_STABLE:
+            return .stable
+        case SENSOR_FUSION_STATE_DEGRADED:
+            return .degraded
+        case SENSOR_FUSION_STATE_DEGRADED_DEAD_RECKONING:
+            return .degradedDeadReckoning
+        case SENSOR_FUSION_STATE_AWAITING_GNSS_RESEED:
+            return .awaitingGnssReseed
+        default:
+            return .notReady
+        }
     }
 
     private static func roadEvent(from raw: SensorFusionFfiRoadEvent) -> RoadEventDetection? {

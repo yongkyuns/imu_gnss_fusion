@@ -854,7 +854,7 @@ fn capture_update_times(
     if update.mount_ready_changed && update.mount_ready && mount_ready_t_s.is_none() {
         *mount_ready_t_s = Some(t_s);
     }
-    if update.ekf_initialized_now && ekf_init_t_s.is_none() {
+    if update.navigation_started && ekf_init_t_s.is_none() {
         *ekf_init_t_s = Some(t_s);
     }
 }

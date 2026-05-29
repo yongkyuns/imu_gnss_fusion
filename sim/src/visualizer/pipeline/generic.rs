@@ -769,7 +769,7 @@ fn build_generic_replay_plot_data_impl(
                 if update.mount_ready_changed && update.mount_ready {
                     mount_ready_marker.push([sample.t_s, 0.0]);
                 }
-                if update.ekf_initialized_now && update.ekf_initialized {
+                if update.navigation_started && update.navigation_usable {
                     ekf_init_marker.push([sample.t_s, 0.0]);
                 }
             }

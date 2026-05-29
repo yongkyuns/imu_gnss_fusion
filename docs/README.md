@@ -9,4 +9,4 @@ sphinx-build -W --keep-going -b html docs target/docs-html
 
 The built site is deployed under `/docs/` in the GitHub Pages artifact. The Pages root remains the wasm visualizer from `web/index.html`.
 
-Start from [index.md](index.md) when editing documentation. Math notes should be maintained as normal Sphinx pages so the public site stays readable without separate document artifacts.
+Start from [index.md](index.md) when editing documentation. Algorithm and formulation notes should be maintained as normal Sphinx pages so the public site stays readable without separate document artifacts.

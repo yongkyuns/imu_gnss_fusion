@@ -2,6 +2,8 @@
 
 Public APIs use SI units unless the field name says otherwise. Raw IMU samples stay in the IMU body frame; callers do not pre-rotate them into the vehicle frame.
 
+For the full frame convention, including error-state injection sides, see [](algorithms/frames.md).
+
 ## Frames
 
 | Symbol | Meaning |
@@ -11,29 +13,35 @@ Public APIs use SI units unless the field name says otherwise. Raw IMU samples s
 | `n` | local NED navigation frame |
 | `e` | ECEF frame for WGS84 conversion |
 
-The runtime uses active rotations. `C_ab` maps coordinates from frame `b` to frame `a`:
+The runtime uses active rotations. \(C_{ab}\) maps coordinates from frame \(b\)
+to frame \(a\):
 
-```text
-x_a = C_ab x_b
-R(q_ab) = C_ab
-R(q1 * q2) = R(q1) R(q2)
-```
+$$
+\begin{aligned}
+x_a &= C_{ab} x_b,\\
+R(q_{ab}) &= C_{ab},\\
+R(q_1 q_2) &= R(q_1)R(q_2).
+\end{aligned}
+$$
 
-Quaternions are scalar-first `[w, x, y, z]`.
+Quaternions are scalar-first \([q_w, q_x, q_y, q_z]\). The full
+quaternion-to-matrix definition is in [](algorithms/frames.md).
 
-The public mount quaternion is `q_bv`, the physical vehicle-to-body mount:
+The public mount quaternion is \(q_{bv}\), the physical vehicle-to-body mount:
 
-```text
-x_b = C_bv x_v
-C_vb = C_bv^T
-x_v = C_vb x_b
-```
+$$
+\begin{aligned}
+x_b &= C_{bv} x_v,\\
+C_{vb} &= C_{bv}^{\top},\\
+x_v &= C_{vb} x_b .
+\end{aligned}
+$$
 
-The EKF attitude is `q_nv`:
+The EKF attitude is \(q_{nv}\):
 
-```text
-x_n = C_nv x_v
-```
+$$
+x_n = C_{nv} x_v.
+$$
 
 ## Core Inputs
 
@@ -63,10 +71,35 @@ Manual mode does not mean the facade freezes every EKF mount state. `with_mount`
 
 Yaw initialization is mode-specific:
 
-- auto mode can use `heading_rad`, or GNSS course once horizontal speed is at least `max(yaw_init_speed_mps, 1.0)`;
+- auto mode initializes once mount is ready and uses `heading_rad` when present, otherwise GNSS course once horizontal speed is at least `max(yaw_init_speed_mps, 1.0)`, otherwise yaw `0`;
 - manual mode waits for `heading_rad` and speed above `max(yaw_init_speed_mps, 20 / 3.6)`.
 
 The runtime anchors WGS84 GNSS into a local navigation frame and reanchors when the local displacement grows large enough to keep local coordinates well-conditioned.
+
+## Runtime State
+
+Each processed input returns an `Update` with a single lifecycle `state`, `navigation_usable`, `navigation_started`, mount readiness, and the current `q_bv` when available. Use those public fields, or `SensorFusion::health()`, instead of inferring readiness from internal EKF existence.
+
+The main public states are:
+
+- `NotReady` and `Initializing`: keep feeding samples; public navigation is not usable yet.
+- `Running`: navigation is usable, but convergence is not mature enough for saved priors.
+- `Stable`: navigation is usable and invariant states are stable enough to persist externally.
+- `Degraded` and `DegradedDeadReckoning`: navigation may still be usable, but callers should surface degraded confidence.
+- `AwaitingGnssReseed`: calibration is retained, but navigation output is intentionally unavailable until GNSS reseeds it.
+
+Normal stream pauses should keep the same `SensorFusion` object. Source switches, replay changes, physical mount changes, and lost retained memory should create a fresh context. See [](runtime-state-and-persistence.md) for the full sleep/resume contract and covariance aging behavior.
+
+## GNSS Events
+
+`Update.gnss_event_mask` reports GNSS rejection and bypass events emitted while queued GNSS rows are fused at an IMU epoch. Position and velocity groups are gated independently with a default three-sigma per-axis test. Public bits distinguish:
+
+- position or velocity rejected;
+- repeated consecutive rejection;
+- bypass after a GNSS update gap greater than `3 s`;
+- bypass after reported RMS accuracy improves to at most half the previous RMS.
+
+Rejected groups are not fused. Consecutive-rejection bits are diagnostic events, not an automatic recovery update. See [](algorithms/runtime-ekf.md) for the update equations.
 
 ## Tuning Surface
 

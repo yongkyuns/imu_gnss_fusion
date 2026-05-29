@@ -319,6 +319,14 @@
       "base_url": "ios-drive-20260521-180601",
       "imu_gz": "imu.csv.gz",
       "gnss_gz": "gnss.csv.gz"
+    },
+    {
+      "id": "ios-drive-20260526-174206",
+      "label": "iOS drive 2026-05-26 17:42Z",
+      "description": "Long iOS MotionFusion drive recorded on 2026-05-26 at 17:42:06Z; exported to generic IMU/GNSS replay format.",
+      "base_url": "ios-drive-20260526-174206",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz"
     }
   ]
 }

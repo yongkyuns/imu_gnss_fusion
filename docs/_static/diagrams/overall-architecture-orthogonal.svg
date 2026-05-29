@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="656" height="638" viewBox="0 0 656 638" role="img" aria-label="Overall Architecture">
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 9 4.5 L 0 9 z" fill="#6F7C84"/>
+    </marker>
+  </defs>
+  <rect width="100%" height="100%" fill="white"/>
+  <g font-family="Arial, sans-serif">
+    
+    <path d="M 195.0 148.0 L 195.0 230.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 501.0 148.0 L 501.0 230.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 386.0 264.0 L 310.0 264.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 195.0 298.0 L 195.0 380.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 310.0 414.0 L 386.0 414.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 195.0 448.0 L 195.0 530.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 501.0 448.0 L 501.0 530.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+
+    <g>
+      <path d="M 80 93 C 80 76, 310 76, 310 93 L 310 135 C 310 152, 80 152, 80 135 Z" fill="#FFF3E0" stroke="#FFB74D" stroke-width="2.5"/>
+      <path d="M 80 93 C 80 110, 310 110, 310 93" fill="none" stroke="#FFB74D" stroke-width="2.5"/>
+<text x="195" y="120.5" text-anchor="middle" font-size="17" fill="#263238">hosted datasets</text></g>
+<g><rect x="386" y="80" width="230" height="68" rx="10" fill="#E8F5E9" stroke="#43A047" stroke-width="2.5" />
+<text x="501" y="113.0" text-anchor="middle" font-size="17" fill="#263238">data sources</text>
+<text x="501" y="128.0" text-anchor="middle" font-size="12" fill="#607D8B">iOS, hosted, CSV, synthetic</text></g>
+<g><rect x="386" y="230" width="230" height="68" rx="10" fill="#E1F5FE" stroke="#0277BD" stroke-width="2.5" />
+<text x="501" y="263.0" text-anchor="middle" font-size="17" fill="#263238">dataset packaging</text>
+<text x="501" y="278.0" text-anchor="middle" font-size="12" fill="#607D8B">schema + checksums</text></g>
+<g><rect x="80" y="230" width="230" height="68" rx="10" fill="#E1F5FE" stroke="#0277BD" stroke-width="2.5" />
+<text x="195" y="263.0" text-anchor="middle" font-size="17" fill="#263238">replay + diagnostics</text>
+<text x="195" y="278.0" text-anchor="middle" font-size="12" fill="#607D8B">traces, sweeps, profiles</text></g>
+<g><rect x="80" y="380" width="230" height="68" rx="10" fill="#E1F5FE" stroke="#0277BD" stroke-width="2.5" />
+<text x="195" y="413.0" text-anchor="middle" font-size="17" fill="#263238">SensorFusion</text>
+<text x="195" y="428.0" text-anchor="middle" font-size="12" fill="#607D8B">align + EKF runtime</text></g>
+<g><rect x="386" y="380" width="230" height="68" rx="10" fill="#FFF9C4" stroke="#FBC02D" stroke-width="2.5" />
+<text x="501" y="413.0" text-anchor="middle" font-size="17" fill="#263238">road_events</text>
+<text x="501" y="428.0" text-anchor="middle" font-size="12" fill="#607D8B">streaming detectors</text></g>
+<g><rect x="80" y="530" width="230" height="68" rx="10" fill="#FCE4EC" stroke="#E91E63" stroke-width="2.5" />
+<text x="195" y="563.0" text-anchor="middle" font-size="17" fill="#263238">visualizers</text>
+<text x="195" y="578.0" text-anchor="middle" font-size="12" fill="#607D8B">web + native replay</text></g>
+<g><rect x="386" y="530" width="230" height="68" rx="10" fill="#FCE4EC" stroke="#E91E63" stroke-width="2.5" />
+<text x="501" y="563.0" text-anchor="middle" font-size="17" fill="#263238">iOS app</text>
+<text x="501" y="578.0" text-anchor="middle" font-size="12" fill="#607D8B">drive, review, settings</text></g>
+  </g>
+</svg>

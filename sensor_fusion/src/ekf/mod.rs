@@ -22,9 +22,16 @@ pub mod state_ops;
 mod types;
 
 use crate::ProcessNoise;
+use crate::fusion_types::{
+    GNSS_EVENT_POSITION_ACCURACY_BYPASS, GNSS_EVENT_POSITION_CONSECUTIVE_REJECTED,
+    GNSS_EVENT_POSITION_GAP_BYPASS, GNSS_EVENT_POSITION_REJECTED,
+    GNSS_EVENT_VELOCITY_ACCURACY_BYPASS, GNSS_EVENT_VELOCITY_CONSECUTIVE_REJECTED,
+    GNSS_EVENT_VELOCITY_GAP_BYPASS, GNSS_EVENT_VELOCITY_REJECTED,
+};
 use generated::{ERROR_STATES, NOISE_STATES};
 pub use types::{
-    GnssSample, ImuDelta, NominalState, State, StationaryDiag, UPDATE_DIAG_TYPES, UpdateDiag,
+    GnssSample, GnssUpdateResult, ImuDelta, NominalState, State, StationaryDiag, UPDATE_DIAG_TYPES,
+    UpdateDiag,
 };
 
 const RUNTIME_ZERO_VEL_R_DIAG: f32 = 0.01;
@@ -45,6 +52,9 @@ const BODY_VEL_Y_SUPPORT: [usize; 8] = [0, 1, 2, 3, 4, 5, 15, 17];
 const BODY_VEL_Z_SUPPORT: [usize; 8] = [0, 1, 2, 3, 4, 5, 15, 16];
 const MAX_BATCH_OBS: usize = 8;
 const GNSS_OUTLIER_GATE_SIGMA: f32 = 3.0;
+const GNSS_OUTLIER_GAP_BYPASS_S: f32 = 3.0;
+const GNSS_OUTLIER_CONSECUTIVE_REJECTION_EVENT_COUNT: u8 = 3;
+const GNSS_OUTLIER_ACCURACY_IMPROVEMENT_RATIO: f32 = 0.5;
 
 /// Rust EKF state machine with covariance and mount-control policy.
 #[derive(Debug, Clone)]
@@ -55,6 +65,15 @@ pub struct Filter {
     gnss_velocity_mount_gain_scale: f32,
     gnss_position_outlier_gate_sigma: f32,
     gnss_velocity_outlier_gate_sigma: f32,
+    gnss_position_gate_state: GnssOutlierGateState,
+    gnss_velocity_gate_state: GnssOutlierGateState,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct GnssOutlierGateState {
+    consecutive_rejections: u8,
+    last_t_s: Option<f32>,
+    last_accuracy_rms: Option<f32>,
 }
 
 impl Filter {
@@ -82,6 +101,8 @@ impl Filter {
             gnss_velocity_mount_gain_scale: 1.0,
             gnss_position_outlier_gate_sigma: GNSS_OUTLIER_GATE_SIGMA,
             gnss_velocity_outlier_gate_sigma: GNSS_OUTLIER_GATE_SIGMA,
+            gnss_position_gate_state: GnssOutlierGateState::default(),
+            gnss_velocity_gate_state: GnssOutlierGateState::default(),
         }
     }
 
@@ -218,6 +239,24 @@ impl Filter {
             self.raw.p[16][16] = mount_residual_sigma_rad * mount_residual_sigma_rad;
             self.raw.p[17][17] = mount_residual_sigma_rad * mount_residual_sigma_rad;
         }
+        self.gnss_position_gate_state = GnssOutlierGateState {
+            consecutive_rejections: 0,
+            last_t_s: Some(gnss.t_s),
+            last_accuracy_rms: accuracy_rms([
+                gnss.pos_std_m[0] * gnss.pos_std_m[0],
+                gnss.pos_std_m[1] * gnss.pos_std_m[1],
+                gnss.pos_std_m[2] * gnss.pos_std_m[2],
+            ]),
+        };
+        self.gnss_velocity_gate_state = GnssOutlierGateState {
+            consecutive_rejections: 0,
+            last_t_s: Some(gnss.t_s),
+            last_accuracy_rms: accuracy_rms([
+                gnss.vel_std_mps[0] * gnss.vel_std_mps[0],
+                gnss.vel_std_mps[1] * gnss.vel_std_mps[1],
+                gnss.vel_std_mps[2] * gnss.vel_std_mps[2],
+            ]),
+        };
     }
 
     /// Predicts nominal state and covariance from one raw body-frame IMU delta.
@@ -290,7 +329,8 @@ impl Filter {
     }
 
     /// Fuses GNSS position and velocity.
-    pub fn fuse_gps(&mut self, sample: GnssSample) {
+    pub fn fuse_gps(&mut self, sample: GnssSample) -> GnssUpdateResult {
+        let mut result = GnssUpdateResult::default();
         let pos_residuals = [
             sample.pos_ned_m[0] - self.raw.nominal.pn,
             sample.pos_ned_m[1] - self.raw.nominal.pe,
@@ -301,7 +341,14 @@ impl Filter {
             sample.pos_std_m[1] * sample.pos_std_m[1],
             sample.pos_std_m[2] * sample.pos_std_m[2],
         ];
-        if self.gnss_group_passes_per_axis_sigma_gate(6, pos_residuals, pos_variances, true) {
+        if self.gnss_group_passes_per_axis_sigma_gate(
+            sample.t_s,
+            6,
+            pos_residuals,
+            pos_variances,
+            true,
+            &mut result,
+        ) {
             self.fuse_gps_pos_n(sample.pos_ned_m[0], pos_variances[0]);
             self.fuse_gps_pos_e(sample.pos_ned_m[1], pos_variances[1]);
             self.fuse_gps_pos_d(sample.pos_ned_m[2], pos_variances[2]);
@@ -317,11 +364,19 @@ impl Filter {
             sample.vel_std_mps[1] * sample.vel_std_mps[1],
             sample.vel_std_mps[2] * sample.vel_std_mps[2],
         ];
-        if self.gnss_group_passes_per_axis_sigma_gate(3, vel_residuals, vel_variances, false) {
+        if self.gnss_group_passes_per_axis_sigma_gate(
+            sample.t_s,
+            3,
+            vel_residuals,
+            vel_variances,
+            false,
+            &mut result,
+        ) {
             self.fuse_gps_vel_n(sample.vel_ned_mps[0], vel_variances[0]);
             self.fuse_gps_vel_e(sample.vel_ned_mps[1], vel_variances[1]);
             self.fuse_gps_vel_d(sample.vel_ned_mps[2], vel_variances[2]);
         }
+        result
     }
 
     /// Fuses GNSS position/velocity and optional lateral/vertical NHC rows as one batch.
@@ -335,7 +390,8 @@ impl Filter {
         sample: GnssSample,
         r_body_vel_y: Option<f32>,
         r_body_vel_z: Option<f32>,
-    ) {
+    ) -> GnssUpdateResult {
+        let mut result = GnssUpdateResult::default();
         let mut h_rows = [[0.0; ERROR_STATES]; MAX_BATCH_OBS];
         let mut residuals = [0.0; MAX_BATCH_OBS];
         let mut variances = [0.0; MAX_BATCH_OBS];
@@ -352,7 +408,14 @@ impl Filter {
             sample.pos_std_m[1] * sample.pos_std_m[1],
             sample.pos_std_m[2] * sample.pos_std_m[2],
         ];
-        if self.gnss_group_passes_per_axis_sigma_gate(6, pos_residuals, pos_variances, true) {
+        if self.gnss_group_passes_per_axis_sigma_gate(
+            sample.t_s,
+            6,
+            pos_residuals,
+            pos_variances,
+            true,
+            &mut result,
+        ) {
             for axis in 0..3 {
                 push_batch_row(
                     &mut h_rows,
@@ -382,7 +445,14 @@ impl Filter {
             sample.vel_std_mps[1] * sample.vel_std_mps[1],
             sample.vel_std_mps[2] * sample.vel_std_mps[2],
         ];
-        if self.gnss_group_passes_per_axis_sigma_gate(3, vel_residuals, vel_variances, false) {
+        if self.gnss_group_passes_per_axis_sigma_gate(
+            sample.t_s,
+            3,
+            vel_residuals,
+            vel_variances,
+            false,
+            &mut result,
+        ) {
             for axis in 0..3 {
                 push_batch_row(
                     &mut h_rows,
@@ -433,6 +503,7 @@ impl Filter {
         }
 
         self.fuse_batch(obs_count, &h_rows, &residuals, &variances, &diag_types);
+        result
     }
 
     /// Applies a zero-velocity pseudo-measurement on all NED velocity axes.
@@ -872,11 +943,13 @@ impl Filter {
     }
 
     fn gnss_group_passes_per_axis_sigma_gate(
-        &self,
+        &mut self,
+        t_s: f32,
         state_base: usize,
         residuals: [f32; 3],
         variances: [f32; 3],
         position_group: bool,
+        result: &mut GnssUpdateResult,
     ) -> bool {
         let gate_sigma = if position_group {
             self.gnss_position_outlier_gate_sigma
@@ -886,13 +959,38 @@ impl Filter {
         if gate_sigma.is_infinite() {
             return true;
         }
-        gnss_group_passes_per_axis_sigma_gate(
+        let gate_failed = !gnss_group_passes_per_axis_sigma_gate(
             &self.raw.p,
             state_base,
             residuals,
             variances,
             gate_sigma,
-        )
+        );
+        let accuracy_rms = accuracy_rms(variances);
+        let state = if position_group {
+            &mut self.gnss_position_gate_state
+        } else {
+            &mut self.gnss_velocity_gate_state
+        };
+        let bits = if position_group {
+            GnssGateEventBits {
+                rejected: GNSS_EVENT_POSITION_REJECTED,
+                consecutive_rejected: GNSS_EVENT_POSITION_CONSECUTIVE_REJECTED,
+                gap_bypass: GNSS_EVENT_POSITION_GAP_BYPASS,
+                accuracy_bypass: GNSS_EVENT_POSITION_ACCURACY_BYPASS,
+            }
+        } else {
+            GnssGateEventBits {
+                rejected: GNSS_EVENT_VELOCITY_REJECTED,
+                consecutive_rejected: GNSS_EVENT_VELOCITY_CONSECUTIVE_REJECTED,
+                gap_bypass: GNSS_EVENT_VELOCITY_GAP_BYPASS,
+                accuracy_bypass: GNSS_EVENT_VELOCITY_ACCURACY_BYPASS,
+            }
+        };
+        let (accepted, event_mask) =
+            apply_gnss_gate_policy(state, t_s, gate_failed, accuracy_rms, bits);
+        result.event_mask |= event_mask;
+        accepted
     }
 
     fn clear_last_batch_diag(&mut self) {
@@ -1049,6 +1147,71 @@ fn gnss_group_passes_per_axis_sigma_gate(
         }
     }
     true
+}
+
+#[derive(Clone, Copy)]
+struct GnssGateEventBits {
+    rejected: u32,
+    consecutive_rejected: u32,
+    gap_bypass: u32,
+    accuracy_bypass: u32,
+}
+
+fn apply_gnss_gate_policy(
+    state: &mut GnssOutlierGateState,
+    t_s: f32,
+    gate_failed: bool,
+    accuracy_rms: Option<f32>,
+    bits: GnssGateEventBits,
+) -> (bool, u32) {
+    let gap_bypass = state
+        .last_t_s
+        .is_some_and(|last_t_s| t_s - last_t_s > GNSS_OUTLIER_GAP_BYPASS_S);
+    let accuracy_bypass = match (accuracy_rms, state.last_accuracy_rms) {
+        (Some(current), Some(previous)) if previous > 0.0 => {
+            current <= previous * GNSS_OUTLIER_ACCURACY_IMPROVEMENT_RATIO
+        }
+        _ => false,
+    };
+
+    let (accepted, event_mask) = if !gate_failed {
+        (true, 0)
+    } else if gap_bypass {
+        (true, bits.gap_bypass)
+    } else if accuracy_bypass {
+        (true, bits.accuracy_bypass)
+    } else {
+        let next_rejections = state.consecutive_rejections.saturating_add(1);
+        let event_mask = if next_rejections >= GNSS_OUTLIER_CONSECUTIVE_REJECTION_EVENT_COUNT {
+            bits.rejected | bits.consecutive_rejected
+        } else {
+            bits.rejected
+        };
+        (false, event_mask)
+    };
+
+    if accepted {
+        state.consecutive_rejections = 0;
+    } else {
+        state.consecutive_rejections = state.consecutive_rejections.saturating_add(1);
+    }
+    state.last_t_s = t_s.is_finite().then_some(t_s);
+    if accuracy_rms.is_some() {
+        state.last_accuracy_rms = accuracy_rms;
+    }
+    (accepted, event_mask)
+}
+
+fn accuracy_rms(variances: [f32; 3]) -> Option<f32> {
+    let mut sum = 0.0;
+    let mut count = 0.0;
+    for variance in variances {
+        if variance > 0.0 && variance.is_finite() {
+            sum += variance;
+            count += 1.0;
+        }
+    }
+    (count > 0.0).then(|| sqrtf(sum / count))
 }
 
 #[allow(clippy::too_many_arguments)]

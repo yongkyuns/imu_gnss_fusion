@@ -26,7 +26,7 @@
 
 \section{Scope}
 
-This document records the mathematical model implemented by
+This document records the estimator formulation implemented by
 \path{sensor_fusion/src/align/mod.rs}. The align filter is a standalone IMU-to-vehicle
 mount estimator. It estimates the mount quaternion and its three-dimensional
 small-angle covariance. The runtime fusion pipeline uses this mount as the
@@ -44,7 +44,7 @@ coarse seed for EKF initialization.
 \bottomrule
 \end{longtable}
 
-The project math notes use active rotation matrices
+The project algorithm notes use active rotation matrices
 \begin{equation}
   x_a = C_{ab} x_b ,
 \end{equation}

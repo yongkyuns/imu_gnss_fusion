@@ -1,6 +1,6 @@
 # Hosted Datasets
 
-The hosted web visualizer reads its dataset list from `web/datasets/manifest.json`. The current checked-in manifest contains 31 datasets:
+The hosted web visualizer reads its dataset list from `web/datasets/manifest.json`. The current checked-in manifest contains 32 datasets:
 
 ```text
 urban-short-turn-loop-nominal-001
@@ -34,8 +34,11 @@ ios-drive-20260521-130835
 ios-drive-20260521-131420
 ios-drive-20260521-164415
 ios-drive-20260521-180601
+ios-drive-20260526-174206
 ```
 
-The generic replay CI job validates the GitHub-hosted manifest, schema, checksums, and smoke profile. The Pages static validator checks that browser-facing dataset URLs are safe and that referenced core files are fetchable from the assembled static site.
+Dataset publishing validates manifest entries, schema, checksums, and replay
+smoke behavior before a dataset is added to the hosted list. The developer
+workflow is described in [](../development/datasets.md).
 
 iOS recordings usually provide IMU/GNSS rows without reference overlays. Synthetic and curated replay datasets may include reference attitude, position, motion, and mount streams for plotting and evaluation.

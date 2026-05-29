@@ -1,0 +1,190 @@
+{
+  "name": "estimator-runtime",
+  "title": "Estimator Lifecycle",
+  "output": "docs/_static/diagrams/estimator-runtime-orthogonal.svg",
+  "profile": "balanced",
+  "direction": "DOWN",
+  "edgeRouting": "SPLINES",
+  "layout": {
+    "partitioning": true,
+    "nodeNode": 72,
+    "nodeNodeBetweenLayers": 76,
+    "edgeNode": 38,
+    "edgeEdge": 30
+  },
+  "groups": [
+    {
+      "id": "inputs",
+      "title": "Inputs"
+    },
+    {
+      "id": "lifecycle",
+      "title": "Estimator Lifecycle"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "Inputs",
+      "title": "runtime inputs",
+      "subtitle": "IMU, GNSS, optional speed",
+      "role": "input",
+      "group": "inputs",
+      "row": 0,
+      "column": 1,
+      "layoutOptions": {
+        "elk.partitioning.partition": "0",
+        "elk.layered.crossingMinimization.positionId": "0"
+      }
+    },
+    {
+      "id": "Facade",
+      "title": "SensorFusion facade",
+      "subtitle": "mount mode + dispatch",
+      "role": "core",
+      "group": "lifecycle",
+      "row": 1,
+      "column": 1,
+      "layoutOptions": {
+        "elk.partitioning.partition": "1",
+        "elk.layered.crossingMinimization.positionId": "0"
+      }
+    },
+    {
+      "id": "Align",
+      "title": "align path",
+      "subtitle": "tilt init, motion yaw",
+      "role": "process",
+      "group": "lifecycle",
+      "row": 2,
+      "column": 0,
+      "layoutOptions": {
+        "elk.partitioning.partition": "2",
+        "elk.layered.crossingMinimization.positionId": "0"
+      }
+    },
+    {
+      "id": "Init",
+      "title": "EKF init",
+      "subtitle": "anchor + yaw readiness",
+      "role": "core",
+      "group": "lifecycle",
+      "row": 2,
+      "column": 1,
+      "layoutOptions": {
+        "elk.partitioning.partition": "2",
+        "elk.layered.crossingMinimization.positionId": "1"
+      }
+    },
+    {
+      "id": "Predict",
+      "title": "prediction",
+      "subtitle": "IMU integration",
+      "role": "core",
+      "group": "lifecycle",
+      "row": 3,
+      "column": 0,
+      "layoutOptions": {
+        "elk.partitioning.partition": "3",
+        "elk.layered.crossingMinimization.positionId": "0"
+      }
+    },
+    {
+      "id": "Updates",
+      "title": "EKF updates",
+      "subtitle": "GNSS, NHC, priors",
+      "role": "core",
+      "group": "lifecycle",
+      "row": 3,
+      "column": 1,
+      "layoutOptions": {
+        "elk.partitioning.partition": "3",
+        "elk.layered.crossingMinimization.positionId": "1"
+      }
+    },
+    {
+      "id": "State",
+      "title": "public state",
+      "subtitle": "pose + diagnostics",
+      "role": "storage",
+      "shape": "cylinder",
+      "group": "lifecycle",
+      "row": 4,
+      "column": 1,
+      "layoutOptions": {
+        "elk.partitioning.partition": "4",
+        "elk.layered.crossingMinimization.positionId": "1"
+      }
+    },
+    {
+      "id": "Constraints",
+      "title": "vehicle constraints",
+      "subtitle": "NHC Y/Z, roll prior, stop",
+      "role": "warning",
+      "group": "lifecycle",
+      "row": 3,
+      "column": 2,
+      "layoutOptions": {
+        "elk.partitioning.partition": "3",
+        "elk.layered.crossingMinimization.positionId": "2"
+      }
+    },
+    {
+      "id": "Note",
+      "title": "Roll prior is a flat-road assumption,",
+      "subtitle": "not a direct mount observation.",
+      "role": "note",
+      "width": 300,
+      "height": 58,
+      "group": "lifecycle",
+      "row": 4,
+      "column": 2,
+      "layoutOptions": {
+        "elk.partitioning.partition": "4",
+        "elk.layered.crossingMinimization.positionId": "0"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Inputs",
+      "to": "Facade"
+    },
+    {
+      "from": "Facade",
+      "to": "Align",
+      "fromSide": "WEST",
+      "toSide": "NORTH"
+    },
+    {
+      "from": "Align",
+      "to": "Init"
+    },
+    {
+      "from": "Facade",
+      "to": "Init",
+      "dashed": true
+    },
+    {
+      "from": "Init",
+      "to": "Predict"
+    },
+    {
+      "from": "Predict",
+      "to": "Updates"
+    },
+    {
+      "from": "Updates",
+      "to": "State"
+    },
+    {
+      "from": "Constraints",
+      "to": "Updates",
+      "dashed": true
+    },
+    {
+      "from": "Note",
+      "to": "Constraints",
+      "dashed": true
+    }
+  ]
+}

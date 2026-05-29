@@ -55,6 +55,8 @@ The browser loads `datasets/manifest.json` at startup. Entries are hardware-agno
 
 If `imu_gz`/`gnss_gz` are omitted, the loader tries `imu.csv.gz` and `gnss.csv.gz` under `base_url`, then falls back to plain `imu.csv` and `gnss.csv`. Plain CSV paths can also be set explicitly with `imu` and `gnss`. Reference files are optional and only fetched when listed explicitly. `reference_position.csv` is rendered as the fused reference trajectory on the map, `reference_motion.csv` provides vehicle-frame reference angular velocity and gravity-compensated acceleration in the Motion tab, and `gnss.csv` remains the GNSS-only trajectory and filter input.
 
+The web dataset picker groups manifest entries whose id starts with `ios-` or label starts with `iOS ` under "iOS recordings"; all other manifest entries appear under "UBX/reference datasets".
+
 ## Adding an iOS recording
 
 iOS raw recordings are stored as `.motionfusion` JSON logs. Do not commit the raw log for normal web-visualizer use. Convert it to generic replay CSVs, package those CSVs as compressed static assets, and update the web and CI manifests:

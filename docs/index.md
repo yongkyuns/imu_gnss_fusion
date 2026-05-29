@@ -22,11 +22,11 @@ The public GitHub Pages site has two entry points:
 
 The core runtime accepts timestamped raw IMU samples in the sensor/body frame, GNSS position and NED velocity samples, and optional vehicle-speed observations. It can run with a caller-supplied vehicle-to-body mount quaternion or estimate the mount internally before EKF initialization.
 
-```{figure} _static/diagrams/overall-architecture.png
-:alt: Overall project architecture showing data inputs, replay tooling, reusable Rust runtimes, visualizers, iOS app, docs, and CI.
+```{figure} _static/diagrams/overall-architecture-orthogonal.svg
+:alt: Overall project architecture showing data inputs, replay tooling, reusable Rust runtimes, visualizers, and iOS app.
 :class: framed
 
-Data capture, replay, reusable Rust runtimes, visualizers, mobile integration, docs, and CI are intentionally separated so estimator behavior can be reused across every surface.
+Data capture, replay, reusable Rust runtimes, visualizers, and mobile integration are intentionally separated so estimator behavior can be reused across every surface.
 ```
 
 ```{figure} _static/screenshots/web-visualizer-overview.png
@@ -42,17 +42,45 @@ The browser visualizer is the fastest way to inspect replay outputs, map traces,
 
 quick-start
 architecture
-api-and-conventions
+codebase-guide
 ```
 
 ```{toctree}
 :maxdepth: 2
-:caption: Algorithms
+:caption: Filter Algorithms
 
 filter-algorithms
+api-and-conventions
+algorithms/frames
+algorithms/ekf
+algorithms/runtime-ekf
+algorithms/align
 algorithms/observability
-algorithms/road-events
+algorithms/roll-observability
+runtime-state-and-persistence
 ekf-diagnostics
+```
+
+```{toctree}
+:maxdepth: 2
+:caption: Visualizer
+
+tools/visualizer
+```
+
+```{toctree}
+:maxdepth: 2
+:caption: Mobile
+
+mobile/ios
+```
+
+```{toctree}
+:maxdepth: 2
+:caption: Road Events
+
+algorithms/road-events
+algorithms/road-events-formulation
 ```
 
 ```{toctree}
@@ -61,30 +89,16 @@ ekf-diagnostics
 
 data-and-simulation
 data/hosted-datasets
-tools/visualizer
-visualizer-tools-testing
-mobile/ios
 ```
 
 ```{toctree}
 :maxdepth: 2
-:caption: Development
+:caption: Developer Reference
 
 testing
+development/generated-models
 development/ci
+development/datasets
 development/embedded-performance
 reference/workspace
-```
-
-```{toctree}
-:maxdepth: 2
-:caption: Math Notes
-
-math/frames
-math/ekf
-math/align
-math/runtime-ekf
-math/roll-observability
-math/road-events
-math/notes
 ```

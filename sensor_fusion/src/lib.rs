@@ -29,6 +29,7 @@
 #[cfg(test)]
 mod coordinate_conventions;
 mod covariance;
+pub mod diagnostics;
 mod fusion;
 mod fusion_types;
 mod math;
@@ -45,8 +46,21 @@ pub mod generated_ekf {
 /// EKF runtime, public state structs, and standalone state helpers.
 pub mod ekf;
 
+pub use diagnostics::{
+    FUSION_HEALTH_REASON_BIAS_UNSTABLE, FUSION_HEALTH_REASON_COVARIANCE_HIGH,
+    FUSION_HEALTH_REASON_GNSS_REJECTING, FUSION_HEALTH_REASON_GNSS_STALE,
+    FUSION_HEALTH_REASON_INSUFFICIENT_MOTION, FUSION_HEALTH_REASON_INSUFFICIENT_TIME,
+    FUSION_HEALTH_REASON_MOUNT_NOT_READY, FUSION_HEALTH_REASON_MOUNT_UNSTABLE,
+    FUSION_HEALTH_REASON_NAV_UNUSABLE, FUSION_HEALTH_REASON_NOT_INITIALIZED,
+    FUSION_HEALTH_REASON_NUMERIC_INVALID, FUSION_HEALTH_REASON_SLEEP_GAP,
+    FUSION_HEALTH_REASON_TAIL_TOO_SHORT, FusionHealth, FusionHealthMetrics, FusionState,
+};
 pub use fusion::{
-    AlignDebug, Config, GnssSample, ImuSample, MountMode, SensorFusion, Update,
+    AlignDebug, Config, GNSS_EVENT_POSITION_ACCURACY_BYPASS,
+    GNSS_EVENT_POSITION_CONSECUTIVE_REJECTED, GNSS_EVENT_POSITION_GAP_BYPASS,
+    GNSS_EVENT_POSITION_REJECTED, GNSS_EVENT_VELOCITY_ACCURACY_BYPASS,
+    GNSS_EVENT_VELOCITY_CONSECUTIVE_REJECTED, GNSS_EVENT_VELOCITY_GAP_BYPASS,
+    GNSS_EVENT_VELOCITY_REJECTED, GnssSample, ImuSample, MountMode, SensorFusion, Update,
     VehicleSpeedDirection, VehicleSpeedSample,
 };
 pub use noise::ProcessNoise;

@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1002" height="1522" viewBox="0 0 1002 1522" role="img" aria-label="Lifecycle">
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 9 4.5 L 0 9 z" fill="#6F7C84"/>
+    </marker>
+  </defs>
+  <rect width="100%" height="100%" fill="white"/>
+  <g font-family="Arial, sans-serif">
+    
+    <rect x="40" y="40" width="922" height="1442" rx="14" fill="#F7FAFC" stroke="#CFD8DC" stroke-width="2" stroke-dasharray="8 8"/>
+    <text x="501" y="68" text-anchor="middle" font-size="20" fill="#263238">Lifecycle</text>
+  
+    <path d="M 507.0 172.0 L 507.0 280.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 507.0 352.0 L 507.0 460.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 507.0 532.0 L 507.0 640.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 390.0 496.0 L 366.0 496.0 Q 348.0 496.0 348.0 514.0 L 348.0 658.0 Q 348.0 676.0 330.0 676.0 L 306.0 676.0" fill="none" stroke="#8FA1AA" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="8 8" marker-end="url(#arrow)"/>
+<path d="M 507.0 712.0 L 507.0 820.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 420.0 878.0 L 219.0 878.0 Q 201.0 878.0 201.0 896.0 L 201.0 1046.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 507.0 936.0 L 507.0 1046.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 594.0 878.0 L 795.0 878.0 Q 813.0 878.0 813.0 896.0 L 813.0 1044.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 201.0 1090.0 L 201.0 1200.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 507.0 1090.0 L 507.0 1200.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 813.0 1092.0 L 813.0 1200.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 507.0 1272.0 L 507.0 1380.0" fill="none" stroke="#8FA1AA" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="8 8" marker-end="url(#arrow)"/>
+    <g><rect x="392" y="102" width="230" height="68" rx="10" fill="#E8F5E9" stroke="#43A047" stroke-width="2.5" />
+<text x="507" y="135.0" text-anchor="middle" font-size="17" fill="#263238">fresh context</text>
+<text x="507" y="150.0" text-anchor="middle" font-size="12" fill="#607D8B">auto/manual mount seed</text></g>
+<g><rect x="392" y="282" width="230" height="68" rx="10" fill="#E1F5FE" stroke="#0277BD" stroke-width="2.5" />
+<text x="507" y="315.0" text-anchor="middle" font-size="17" fill="#263238">initialize EKF</text>
+<text x="507" y="330.0" text-anchor="middle" font-size="12" fill="#607D8B">GNSS anchor + yaw readiness</text></g>
+<g><rect x="392" y="462" width="230" height="68" rx="10" fill="#E1F5FE" stroke="#0277BD" stroke-width="2.5" />
+<text x="507" y="487.5" text-anchor="middle" font-size="17" fill="#263238">Running / Stable</text>
+<text x="507" y="502.5" text-anchor="middle" font-size="12" fill="#607D8B">pose + covariance</text>
+<text x="507" y="517.5" text-anchor="middle" font-size="12" fill="#607D8B">mount + biases</text></g>
+<g>
+      <path d="M 74 655 C 74 638, 304 638, 304 655 L 304 697 C 304 714, 74 714, 74 697 Z" fill="#FFF3E0" stroke="#FFB74D" stroke-width="2.5"/>
+      <path d="M 74 655 C 74 672, 304 672, 304 655" fill="none" stroke="#FFB74D" stroke-width="2.5"/>
+<text x="189" y="675.0" text-anchor="middle" font-size="17" fill="#263238">optional saved prior</text>
+<text x="189" y="690.0" text-anchor="middle" font-size="12" fill="#607D8B">only when Stable</text></g>
+<g><rect x="392" y="642" width="230" height="68" rx="10" fill="#FFF9C4" stroke="#FBC02D" stroke-width="2.5" />
+<text x="507" y="675.0" text-anchor="middle" font-size="17" fill="#263238">stream pause</text>
+<text x="507" y="690.0" text-anchor="middle" font-size="12" fill="#607D8B">keep SensorFusion object</text></g>
+<g><path d="M 507 822 L 592 878 L 507 934 L 422 878 Z" fill="#FFF9C4" stroke="#FBC02D" stroke-width="2.5"/>
+<text x="507" y="884.5" text-anchor="middle" font-size="17" fill="#263238">next IMU gap?</text></g>
+<g><rect x="149" y="1048" width="104" height="40" rx="12" fill="#E1F5FE" stroke="#0277BD" stroke-width="2.5" />
+<text x="201" y="1073.0" text-anchor="middle" font-size="14" fill="#263238">short</text></g>
+<g><rect x="449" y="1048" width="116" height="40" rx="12" fill="#FFF9C4" stroke="#FBC02D" stroke-width="2.5" />
+<text x="507" y="1073.0" text-anchor="middle" font-size="14" fill="#263238">medium</text></g>
+<g><rect x="741" y="1046" width="144" height="44" rx="12" fill="#FCE4EC" stroke="#E91E63" stroke-width="2.5" />
+<text x="813" y="1073.0" text-anchor="middle" font-size="14" fill="#263238">long or unsafe</text></g>
+<g><rect x="86" y="1202" width="230" height="68" rx="10" fill="#E1F5FE" stroke="#0277BD" stroke-width="2.5" />
+<text x="201" y="1235.0" text-anchor="middle" font-size="17" fill="#263238">short sleep</text>
+<text x="201" y="1250.0" text-anchor="middle" font-size="12" fill="#607D8B">&lt;= 15 min, still Running</text></g>
+<g><rect x="392" y="1202" width="230" height="68" rx="10" fill="#FFF9C4" stroke="#FBC02D" stroke-width="2.5" />
+<text x="507" y="1235.0" text-anchor="middle" font-size="17" fill="#263238">medium sleep</text>
+<text x="507" y="1250.0" text-anchor="middle" font-size="12" fill="#607D8B">degraded dead reckoning</text></g>
+<g><rect x="698" y="1202" width="230" height="68" rx="10" fill="#FCE4EC" stroke="#E91E63" stroke-width="2.5" />
+<text x="813" y="1235.0" text-anchor="middle" font-size="17" fill="#263238">await GNSS reseed</text>
+<text x="813" y="1250.0" text-anchor="middle" font-size="12" fill="#607D8B">long or unusable covariance</text></g>
+<g><rect x="197" y="1382" width="620" height="66" rx="10" fill="#FFFFFF" stroke="#CFD8DC" stroke-width="1.5" stroke-dasharray="8 8"/>
+<text x="507" y="1414.0" text-anchor="middle" font-size="17" fill="#263238">Sleep assumes the device is stationary: covariance aging is bounded and mount is not aged.</text>
+<text x="507" y="1429.0" text-anchor="middle" font-size="12" fill="#607D8B">Accepted GNSS brings degraded/reseed states back to normal running.</text></g>
+  </g>
+</svg>

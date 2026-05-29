@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "render:elk-diagrams": "node scripts/render_elk_diagrams.mjs"
+  },
+  "devDependencies": {
+    "elkjs": "^0.11.1"
+  }
+}

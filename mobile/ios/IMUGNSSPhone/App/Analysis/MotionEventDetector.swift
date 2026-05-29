@@ -10,7 +10,7 @@ struct MotionEventSample: Equatable, Sendable {
 }
 
 struct MotionEventDetector: Sendable {
-    private var lastHealthStatus: FusionHealth.Status?
+    private var lastHealthState: FusionHealth.State?
     private var lastInitialized: Bool?
     private var lastMountReady: Bool?
 
@@ -22,9 +22,8 @@ struct MotionEventDetector: Sendable {
         guard sample.tSec.isFinite else { return [] }
 
         var events: [MotionEvent] = []
-        if let lastHealthStatus,
-           lastHealthStatus != .poorGNSS,
-           sample.health.status == .poorGNSS {
+        let wasDegraded = lastHealthState.map(Self.isDegradedState) ?? false
+        if !wasDegraded, sample.health.degraded {
             events.append(systemEvent(sample, kind: .gnssDegraded, confidence: 0.75))
         }
         if let lastInitialized,
@@ -37,10 +36,19 @@ struct MotionEventDetector: Sendable {
            sample.mountReady {
             events.append(systemEvent(sample, kind: .mountReady))
         }
-        lastHealthStatus = sample.health.status
+        lastHealthState = sample.health.state
         lastInitialized = sample.initialized
         lastMountReady = sample.mountReady
         return events
+    }
+
+    private static func isDegradedState(_ state: FusionHealth.State) -> Bool {
+        switch state {
+        case .degraded, .degradedDeadReckoning, .awaitingGnssReseed:
+            return true
+        case .notReady, .initializing, .running, .stable:
+            return false
+        }
     }
 
     private func systemEvent(

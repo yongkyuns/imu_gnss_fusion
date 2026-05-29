@@ -63,6 +63,6 @@ sphinx-build -W --keep-going -b html docs target/docs-html
 | `sim/` | replay, simulation, diagnostics, synthetic generation, native/wasm visualizer |
 | `web/` | static browser host for the wasm visualizer and hosted datasets |
 | `mobile/ios/` | iOS app, Rust FFI wrapper, recording/export tools |
-| `docs/` | Sphinx source, integrated math notes, and documentation assets |
+| `docs/` | Sphinx source, integrated algorithm notes, and documentation assets |
 
-See the [documentation site](https://yongkyuns.github.io/imu_gnss_fusion/docs/) for API conventions, EKF/alignment details, road events, hosted datasets, iOS workflows, CI, and benchmark notes.
+See the [documentation site](https://yongkyuns.github.io/imu_gnss_fusion/docs/) for codebase navigation, API conventions, EKF/alignment details, road events, hosted datasets, visualizer workflows, iOS usage, and developer notes.

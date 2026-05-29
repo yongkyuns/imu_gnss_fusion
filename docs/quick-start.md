@@ -8,12 +8,17 @@ Open the hosted visualizer:
 
 The visualizer can run checked-in hosted datasets, synthetic scenarios compiled into the wasm app, or user-provided generic replay CSVs.
 
+## Integrate The Runtime
+
+Create one `SensorFusion` object per live sensor stream and feed timestamped IMU/GNSS samples in order. Keep that object across ordinary stream pauses so the EKF can apply its built-in short/medium/long sleep behavior. Reset only for a new source, a changed mount, lost retained memory, or a replay switch.
+
+Use `Update.navigation_usable` before consuming navigation output, and use `SensorFusion::health().stable` before saving priors. See [](runtime-state-and-persistence.md) for the full state model.
+
 ## Build And Test Locally
 
 Requirements:
 
 - Rust stable.
-- `wasm32-unknown-unknown` target and `wasm-bindgen-cli` for the browser visualizer.
 - Python only for scripts and generated-code workflows.
 
 ```bash
@@ -36,18 +41,5 @@ cargo run --release -p sim --bin visualizer -- \
   --synthetic-noise low
 ```
 
-Build and serve the browser visualizer:
-
-```bash
-cargo build -p sim --bin visualizer --release --target wasm32-unknown-unknown --locked
-wasm-bindgen --target web --out-dir web/pkg \
-  target/wasm32-unknown-unknown/release/visualizer.wasm
-python3 -m http.server --directory web 8080
-```
-
-Build this documentation site:
-
-```bash
-python -m pip install -r docs/requirements.txt
-sphinx-build -W --keep-going -b html docs target/docs-html
-```
+For browser visualizer builds, documentation builds, and dataset publication,
+see the Developer Reference section.

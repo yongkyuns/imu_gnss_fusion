@@ -20,7 +20,6 @@ exclude_patterns = [
     "Thumbs.db",
     ".DS_Store",
     "README.md",
-    "assets/tikz/README.md",
 ]
 
 myst_enable_extensions = [

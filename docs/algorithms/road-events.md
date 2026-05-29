@@ -2,7 +2,7 @@
 
 `road_events` is a standalone `#![no_std]` crate of streaming detectors. It consumes vehicle-motion samples and emits compact events that can be used in embedded runtimes, the simulator, the browser visualizer, and the iOS FFI layer.
 
-```{figure} ../_static/diagrams/road-events-pipeline.png
+```{figure} ../_static/diagrams/road-events-pipeline-orthogonal.svg
 :alt: Road events pipeline from vehicle motion samples through detector families to point events, interval events, trip stats, iOS, and visualizer consumers.
 :class: framed
 

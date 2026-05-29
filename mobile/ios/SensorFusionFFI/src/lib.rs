@@ -8,7 +8,7 @@ use road_events::{
     ReverseConfig, ReverseDetector, ReverseSample, RoadRoughnessAnalyzer, RoadRoughnessSample,
     SpeedBumpConfig, SpeedBumpDetector, SpeedBumpSample, TripEventKind, TripSample, TripStats,
 };
-use sensor_fusion::{GnssSample, ImuSample, SensorFusion, Update};
+use sensor_fusion::{FusionHealth, FusionState, GnssSample, ImuSample, SensorFusion, Update};
 
 const ROAD_EVENT_HARSH_ACCELERATION: u32 = 1;
 const ROAD_EVENT_HARSH_BRAKING: u32 = 2;
@@ -22,6 +22,13 @@ const ROAD_EVENT_ROUGH_ROAD: u32 = 9;
 const SENSOR_FUSION_HARSH_BEHAVIOR_SENSITIVE: u32 = 1;
 const SENSOR_FUSION_HARSH_BEHAVIOR_BALANCED: u32 = 2;
 const SENSOR_FUSION_HARSH_BEHAVIOR_CONSERVATIVE: u32 = 3;
+const SENSOR_FUSION_STATE_NOT_READY: u32 = 0;
+const SENSOR_FUSION_STATE_INITIALIZING: u32 = 1;
+const SENSOR_FUSION_STATE_RUNNING: u32 = 2;
+const SENSOR_FUSION_STATE_STABLE: u32 = 3;
+const SENSOR_FUSION_STATE_DEGRADED: u32 = 4;
+const SENSOR_FUSION_STATE_DEGRADED_DEAD_RECKONING: u32 = 5;
+const SENSOR_FUSION_STATE_AWAITING_GNSS_RESEED: u32 = 6;
 
 /// Opaque fusion handle owned by Rust and passed across the C ABI as a pointer.
 pub struct SensorFusionFfi {
@@ -33,27 +40,27 @@ pub struct SensorFusionFfi {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct SensorFusionFfiUpdate {
+    pub state: u32,
     pub mount_ready: bool,
     pub mount_ready_changed: bool,
-    pub ekf_initialized: bool,
-    pub ekf_initialized_now: bool,
-    pub filter_initialized: bool,
-    pub filter_initialized_now: bool,
+    pub navigation_usable: bool,
+    pub navigation_started: bool,
     pub mount_q_bv_valid: bool,
     pub mount_q_bv: [f32; 4],
+    pub gnss_event_mask: u32,
 }
 
 impl Default for SensorFusionFfiUpdate {
     fn default() -> Self {
         Self {
+            state: SENSOR_FUSION_STATE_NOT_READY,
             mount_ready: false,
             mount_ready_changed: false,
-            ekf_initialized: false,
-            ekf_initialized_now: false,
-            filter_initialized: false,
-            filter_initialized_now: false,
+            navigation_usable: false,
+            navigation_started: false,
             mount_q_bv_valid: false,
             mount_q_bv: [1.0, 0.0, 0.0, 0.0],
+            gnss_event_mask: 0,
         }
     }
 }
@@ -61,31 +68,95 @@ impl Default for SensorFusionFfiUpdate {
 impl From<Update> for SensorFusionFfiUpdate {
     fn from(update: Update) -> Self {
         Self {
+            state: fusion_state_code(update.state),
             mount_ready: update.mount_ready,
             mount_ready_changed: update.mount_ready_changed,
-            ekf_initialized: update.ekf_initialized,
-            ekf_initialized_now: update.ekf_initialized_now,
-            filter_initialized: update.ekf_initialized,
-            filter_initialized_now: update.ekf_initialized_now,
+            navigation_usable: update.navigation_usable,
+            navigation_started: update.navigation_started,
             mount_q_bv_valid: update.mount_q_bv.is_some(),
             mount_q_bv: update.mount_q_bv.unwrap_or([1.0, 0.0, 0.0, 0.0]),
+            gnss_event_mask: update.gnss_event_mask,
         }
     }
 }
 
 impl SensorFusionFfiUpdate {
     fn from_fusion_state(fusion: &SensorFusion) -> Self {
-        let filter_initialized = fusion.ekf().is_some();
+        let health = fusion.health();
         let mount_q_bv = fusion.mount_q_bv();
 
         Self {
+            state: fusion_state_code(health.state),
             mount_ready: fusion.mount_ready(),
-            ekf_initialized: fusion.ekf().is_some(),
-            filter_initialized,
+            navigation_usable: health.navigation_usable,
             mount_q_bv_valid: mount_q_bv.is_some(),
             mount_q_bv: mount_q_bv.unwrap_or([1.0, 0.0, 0.0, 0.0]),
             ..Self::default()
         }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SensorFusionFfiHealth {
+    pub state: u32,
+    pub running: bool,
+    pub stable: bool,
+    pub degraded: bool,
+    pub navigation_usable: bool,
+    pub reason_mask: u32,
+    pub post_init_time_s: f32,
+    pub distance_m: f32,
+    pub mean_speed_mps: f32,
+    pub tail_duration_s: f32,
+    pub tail_samples: u32,
+    pub mount_tail_drift_deg: f32,
+    pub mount_tail_std_deg: f32,
+    pub gyro_bias_tail_drift_radps: f32,
+    pub gyro_bias_tail_std_radps: f32,
+    pub accel_bias_tail_drift_mps2: f32,
+    pub accel_bias_tail_std_mps2: f32,
+    pub mount_sigma_max_deg: f32,
+    pub attitude_sigma_max_deg: f32,
+    pub recent_gnss_issue_count: u32,
+}
+
+impl From<FusionHealth> for SensorFusionFfiHealth {
+    fn from(health: FusionHealth) -> Self {
+        Self {
+            state: fusion_state_code(health.state),
+            running: health.running,
+            stable: health.stable,
+            degraded: health.degraded,
+            navigation_usable: health.navigation_usable,
+            reason_mask: health.reason_mask,
+            post_init_time_s: health.metrics.post_init_time_s,
+            distance_m: health.metrics.distance_m,
+            mean_speed_mps: health.metrics.mean_speed_mps,
+            tail_duration_s: health.metrics.tail_duration_s,
+            tail_samples: health.metrics.tail_samples,
+            mount_tail_drift_deg: health.metrics.mount_tail_drift_deg,
+            mount_tail_std_deg: health.metrics.mount_tail_std_deg,
+            gyro_bias_tail_drift_radps: health.metrics.gyro_bias_tail_drift_radps,
+            gyro_bias_tail_std_radps: health.metrics.gyro_bias_tail_std_radps,
+            accel_bias_tail_drift_mps2: health.metrics.accel_bias_tail_drift_mps2,
+            accel_bias_tail_std_mps2: health.metrics.accel_bias_tail_std_mps2,
+            mount_sigma_max_deg: health.metrics.mount_sigma_max_deg,
+            attitude_sigma_max_deg: health.metrics.attitude_sigma_max_deg,
+            recent_gnss_issue_count: health.metrics.recent_gnss_issue_count,
+        }
+    }
+}
+
+fn fusion_state_code(state: FusionState) -> u32 {
+    match state {
+        FusionState::NotReady => SENSOR_FUSION_STATE_NOT_READY,
+        FusionState::Initializing => SENSOR_FUSION_STATE_INITIALIZING,
+        FusionState::Running => SENSOR_FUSION_STATE_RUNNING,
+        FusionState::Stable => SENSOR_FUSION_STATE_STABLE,
+        FusionState::Degraded => SENSOR_FUSION_STATE_DEGRADED,
+        FusionState::DegradedDeadReckoning => SENSOR_FUSION_STATE_DEGRADED_DEAD_RECKONING,
+        FusionState::AwaitingGnssReseed => SENSOR_FUSION_STATE_AWAITING_GNSS_RESEED,
     }
 }
 
@@ -280,8 +351,8 @@ impl SensorFusionFfi {
     fn status(&self) -> SensorFusionFfiUpdate {
         let mut status = SensorFusionFfiUpdate::from_fusion_state(&self.inner);
         status.mount_ready_changed = self.last_update.mount_ready_changed;
-        status.ekf_initialized_now = self.last_update.ekf_initialized_now;
-        status.filter_initialized_now = self.last_update.filter_initialized_now;
+        status.navigation_started = self.last_update.navigation_started;
+        status.gnss_event_mask = self.last_update.gnss_event_mask;
         status
     }
 
@@ -701,6 +772,20 @@ pub unsafe extern "C" fn sensor_fusion_snapshot_status(
 ///
 /// `handle` must be either null or a valid pointer returned by this crate's
 /// create functions.
+pub unsafe extern "C" fn sensor_fusion_snapshot_health(
+    handle: *const SensorFusionFfi,
+) -> SensorFusionFfiHealth {
+    let Some(fusion) = fusion_ref(handle) else {
+        return SensorFusionFfiHealth::default();
+    };
+    fusion.inner.health().into()
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// `handle` must be either null or a valid pointer returned by this crate's
+/// create functions.
 pub unsafe extern "C" fn sensor_fusion_process_imu(
     handle: *mut SensorFusionFfi,
     t_s: f32,
@@ -905,14 +990,20 @@ mod tests {
         let update = unsafe {
             sensor_fusion_process_imu(ptr::null_mut(), 0.0, 0.0, 0.0, 9.80665, 0.0, 0.0, 0.0)
         };
-        assert!(!update.filter_initialized);
+        assert!(!update.navigation_usable);
 
         let status = unsafe { sensor_fusion_snapshot_status(ptr::null()) };
         assert!(!status.mount_ready);
-        assert!(!status.ekf_initialized);
-        assert!(!status.filter_initialized);
+        assert!(!status.navigation_usable);
+        assert!(!status.navigation_usable);
         assert!(!status.mount_q_bv_valid);
         assert_eq!(status.mount_q_bv, [1.0, 0.0, 0.0, 0.0]);
+
+        let health = unsafe { sensor_fusion_snapshot_health(ptr::null()) };
+        assert_eq!(health.state, SENSOR_FUSION_STATE_NOT_READY);
+        assert!(!health.running);
+        assert!(!health.stable);
+        assert!(!health.degraded);
 
         let mut snapshot = SensorFusionFfiEkfSnapshot {
             lat_deg: 42.0,
@@ -939,12 +1030,16 @@ mod tests {
         let status = unsafe { sensor_fusion_snapshot_status(handle) };
         assert!(status.mount_ready);
         assert!(!status.mount_ready_changed);
-        assert!(!status.ekf_initialized);
-        assert!(!status.ekf_initialized_now);
-        assert!(!status.filter_initialized);
-        assert!(!status.filter_initialized_now);
+        assert!(!status.navigation_usable);
+        assert!(!status.navigation_started);
+        assert!(!status.navigation_usable);
+        assert!(!status.navigation_started);
         assert!(status.mount_q_bv_valid);
         assert_eq!(status.mount_q_bv, [0.5, 0.5, 0.5, 0.5]);
+        let health = unsafe { sensor_fusion_snapshot_health(handle) };
+        assert_eq!(health.state, SENSOR_FUSION_STATE_NOT_READY);
+        assert!(!health.running);
+        assert!(!health.stable);
 
         let mut align = SensorFusionFfiAlignProgress::default();
         assert!(!unsafe { sensor_fusion_snapshot_align_progress(handle, &mut align) });
@@ -956,14 +1051,18 @@ mod tests {
                 0.0, true,
             )
         };
-        assert!(update.ekf_initialized_now);
+        assert!(update.navigation_started);
 
         let status = unsafe { sensor_fusion_snapshot_status(handle) };
         assert!(status.mount_ready);
-        assert!(status.ekf_initialized);
-        assert!(status.ekf_initialized_now);
-        assert!(status.filter_initialized);
-        assert!(status.filter_initialized_now);
+        assert!(status.navigation_usable);
+        assert!(status.navigation_started);
+        assert!(status.navigation_usable);
+        assert!(status.navigation_started);
+        let health = unsafe { sensor_fusion_snapshot_health(handle) };
+        assert_eq!(health.state, SENSOR_FUSION_STATE_RUNNING);
+        assert!(health.running);
+        assert!(!health.stable);
         assert_eq!(status.mount_q_bv, [0.5, 0.5, 0.5, 0.5]);
 
         unsafe {
@@ -972,10 +1071,10 @@ mod tests {
         let status = unsafe { sensor_fusion_snapshot_status(handle) };
         assert!(!status.mount_ready);
         assert!(!status.mount_ready_changed);
-        assert!(!status.ekf_initialized);
-        assert!(!status.ekf_initialized_now);
-        assert!(!status.filter_initialized);
-        assert!(!status.filter_initialized_now);
+        assert!(!status.navigation_usable);
+        assert!(!status.navigation_started);
+        assert!(!status.navigation_usable);
+        assert!(!status.navigation_started);
         assert!(!status.mount_q_bv_valid);
         assert_eq!(status.mount_q_bv, [1.0, 0.0, 0.0, 0.0]);
 
@@ -985,10 +1084,10 @@ mod tests {
         let status = unsafe { sensor_fusion_snapshot_status(handle) };
         assert!(status.mount_ready);
         assert!(!status.mount_ready_changed);
-        assert!(!status.ekf_initialized);
-        assert!(!status.ekf_initialized_now);
-        assert!(!status.filter_initialized);
-        assert!(!status.filter_initialized_now);
+        assert!(!status.navigation_usable);
+        assert!(!status.navigation_started);
+        assert!(!status.navigation_usable);
+        assert!(!status.navigation_started);
         assert!(status.mount_q_bv_valid);
         assert_eq!(status.mount_q_bv, [1.0, 0.0, 0.0, 0.0]);
 
@@ -998,7 +1097,7 @@ mod tests {
     }
 
     #[test]
-    fn manual_gnss_initializes_and_snapshots_ekf_state() {
+    fn manual_gnss_initializes_and_snapshots_state() {
         let handle = sensor_fusion_create_ekf_manual(1.0, 0.0, 0.0, 0.0);
         assert!(!handle.is_null());
 
@@ -1009,8 +1108,8 @@ mod tests {
             )
         };
         assert!(update.mount_ready);
-        assert!(update.ekf_initialized);
-        assert!(update.ekf_initialized_now);
+        assert!(update.navigation_usable);
+        assert!(update.navigation_started);
 
         let mut snapshot = SensorFusionFfiEkfSnapshot::default();
         assert!(unsafe { sensor_fusion_snapshot_ekf(handle, &mut snapshot) });
@@ -1049,8 +1148,8 @@ mod tests {
             )
         };
         assert!(stationary.mount_ready);
-        assert!(!stationary.ekf_initialized);
-        assert!(!stationary.ekf_initialized_now);
+        assert!(!stationary.navigation_usable);
+        assert!(!stationary.navigation_started);
 
         let mut snapshot = SensorFusionFfiEkfSnapshot::default();
         assert!(!unsafe { sensor_fusion_snapshot_ekf(handle, &mut snapshot) });
@@ -1063,8 +1162,8 @@ mod tests {
                 0.2, 0.0, false,
             )
         };
-        assert!(!moving.ekf_initialized);
-        assert!(!moving.ekf_initialized_now);
+        assert!(!moving.navigation_usable);
+        assert!(!moving.navigation_started);
 
         let below_speed = unsafe {
             sensor_fusion_process_gnss(
@@ -1086,8 +1185,8 @@ mod tests {
                 true,
             )
         };
-        assert!(!below_speed.ekf_initialized);
-        assert!(!below_speed.ekf_initialized_now);
+        assert!(!below_speed.navigation_usable);
+        assert!(!below_speed.navigation_started);
 
         let moving = unsafe {
             sensor_fusion_process_gnss(
@@ -1109,8 +1208,8 @@ mod tests {
                 true,
             )
         };
-        assert!(moving.ekf_initialized);
-        assert!(moving.ekf_initialized_now);
+        assert!(moving.navigation_usable);
+        assert!(moving.navigation_started);
 
         assert!(unsafe { sensor_fusion_snapshot_ekf(handle, &mut snapshot) });
         assert!(snapshot.q3.abs() > 0.99);

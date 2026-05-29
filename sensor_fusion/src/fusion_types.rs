@@ -2,6 +2,24 @@
 
 use crate::ProcessNoise;
 use crate::align::{AlignConfig, AlignUpdateTrace, AlignWindowSummary};
+use crate::diagnostics::FusionState;
+
+/// GNSS position rows were rejected by the per-axis sigma gate.
+pub const GNSS_EVENT_POSITION_REJECTED: u32 = 1 << 0;
+/// GNSS velocity rows were rejected by the per-axis sigma gate.
+pub const GNSS_EVENT_VELOCITY_REJECTED: u32 = 1 << 1;
+/// GNSS position rows were rejected after repeated consecutive rejection.
+pub const GNSS_EVENT_POSITION_CONSECUTIVE_REJECTED: u32 = 1 << 2;
+/// GNSS velocity rows were rejected after repeated consecutive rejection.
+pub const GNSS_EVENT_VELOCITY_CONSECUTIVE_REJECTED: u32 = 1 << 3;
+/// GNSS position rows bypassed the gate after a large GNSS update gap.
+pub const GNSS_EVENT_POSITION_GAP_BYPASS: u32 = 1 << 4;
+/// GNSS velocity rows bypassed the gate after a large GNSS update gap.
+pub const GNSS_EVENT_VELOCITY_GAP_BYPASS: u32 = 1 << 5;
+/// GNSS position rows bypassed the gate after reported accuracy improved sharply.
+pub const GNSS_EVENT_POSITION_ACCURACY_BYPASS: u32 = 1 << 6;
+/// GNSS velocity rows bypassed the gate after reported accuracy improved sharply.
+pub const GNSS_EVENT_VELOCITY_ACCURACY_BYPASS: u32 = 1 << 7;
 
 /// One timestamped IMU sample in the raw IMU body frame `b`.
 #[derive(Clone, Copy, Debug)]
@@ -62,19 +80,23 @@ pub enum VehicleSpeedDirection {
 /// Status returned after each fusion input sample.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Update {
+    /// Single public lifecycle state after this input sample.
+    pub state: FusionState,
     /// Whether a mount estimate is ready for EKF initialization or propagation.
     pub mount_ready: bool,
     /// Whether `mount_ready` changed during this input sample.
     pub mount_ready_changed: bool,
-    /// Whether the EKF has been initialized from GNSS.
-    pub ekf_initialized: bool,
-    /// Whether EKF initialization happened during this input sample.
-    pub ekf_initialized_now: bool,
+    /// Whether public navigation output is currently usable.
+    pub navigation_usable: bool,
+    /// Whether navigation became usable during this input sample.
+    pub navigation_started: bool,
     /// Current physical vehicle-to-body mount quaternion, when available.
     ///
     /// `R(q_bv) = C_bv`, `x_b = C_bv x_v`. Runtime propagation uses
     /// `C_vb = C_bv^T` to rotate IMU samples into the vehicle frame.
     pub mount_q_bv: Option<[f32; 4]>,
+    /// Bitmask of GNSS rejection/bypass events emitted by this update.
+    pub gnss_event_mask: u32,
 }
 
 /// Last alignment window and update trace captured by [`crate::SensorFusion`].

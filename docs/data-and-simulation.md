@@ -2,13 +2,12 @@
 
 The common replay format is hardware-agnostic and uses timestamped IMU/GNSS CSV files. Synthetic scenarios and field recordings both convert into this format so the replay, evaluation, and visualizer paths stay shared.
 
-```{figure} _static/diagrams/overall-architecture.png
+```{figure} _static/diagrams/overall-architecture-orthogonal.svg
 :alt: Architecture diagram highlighting generic replay and visualization flow.
 :class: framed
 
 Synthetic scenarios, hosted datasets, and iOS exports all enter the shared generic replay path before they reach the visualizer and `SensorFusion` runtime.
 ```
-
 ## Generic Replay Directory
 
 Required files:
@@ -29,17 +28,9 @@ IMU gyro and acceleration columns are raw body-frame samples. GNSS velocity and 
 
 Optional reference files can provide attitude, position, motion, and mount streams for plots and evaluation. Reference data is not a normal runtime input unless a tool explicitly runs manual mount mode from reference mount.
 
-## Packaging
-
-Use `scripts/package_dataset.py` to create a deterministic per-dataset package with `manifest.json`, `imu.csv.gz`, `gnss.csv.gz`, and optional reference streams. It packages one dataset directory; it does not update the browser or CI manifest lists.
-
-Use `scripts/package_ios_motionfusion_dataset.py` for `.motionfusion` recordings produced by the iOS app. By default that wrapper packages the dataset and updates both `web/datasets/manifest.json` and `.github/datasets/generic-datasets.json`; pass `--no-update-web-manifest` or `--no-update-ci-manifest` to disable those updates.
-
-The hosted generic dataset CI job validates the GitHub dataset manifest, schema, checksums, and smoke profile. Browser-facing Pages validation checks safe relative/HTTPS paths and fetchability for the static artifact.
-
 ## Hosted Data
 
-The current browser manifest contains 31 datasets. See [](data/hosted-datasets.md) for the checked-in list.
+The current browser manifest contains 32 datasets. See [](data/hosted-datasets.md) for the checked-in list.
 
 ## Synthetic Scenarios
 
@@ -53,3 +44,21 @@ cargo run --release -p sim --bin export_synthetic_replay_generic -- \
   --noise low \
   --output-dir /tmp/city-blocks
 ```
+
+## Dataset Packaging And Validation
+
+Hosted datasets are static packages: `manifest.json`, `imu.csv.gz`,
+`gnss.csv.gz`, and optional gzip reference streams. `scripts/package_dataset.py`
+validates CSV headers, row counts, time bounds, byte counts, and SHA-256 hashes
+before writing the package manifest. It accepts an existing generic replay
+directory or output from the synthetic replay exporter.
+
+iOS packaging is layered on top of the same generic format.
+`scripts/package_ios_motionfusion_dataset.py` runs
+`mobile/ios/scripts/export_motionfusion.py` to convert `.motionfusion` JSON into
+generic `imu.csv`/`gnss.csv`, then calls `scripts/package_dataset.py` and upserts
+the web and CI dataset manifests. Browser loading consumes those manifest entries
+and fetches required IMU/GNSS streams plus optional references.
+
+Detailed publication commands and CI validation behavior live in
+[](development/datasets.md).

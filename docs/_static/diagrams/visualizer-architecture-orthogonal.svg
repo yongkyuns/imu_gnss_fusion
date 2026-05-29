@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="962" height="788" viewBox="0 0 962 788" role="img" aria-label="Visualizer Architecture">
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 9 4.5 L 0 9 z" fill="#6F7C84"/>
+    </marker>
+  </defs>
+  <rect width="100%" height="100%" fill="white"/>
+  <g font-family="Arial, sans-serif">
+    
+    <path d="M 195.0 148.0 L 195.0 173.0 Q 195.0 189.0 211.0 189.0 L 485.0 189.0 Q 501.0 189.0 501.0 205.0 L 501.0 230.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 501.0 148.0 L 501.0 230.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 807.0 148.0 L 807.0 173.0 Q 807.0 189.0 791.0 189.0 L 517.0 189.0 Q 501.0 189.0 501.0 205.0 L 501.0 230.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 501.0 298.0 L 501.0 323.0 Q 501.0 339.0 485.0 339.0 L 211.0 339.0 Q 195.0 339.0 195.0 355.0 L 195.0 380.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 310.0 414.0 L 386.0 414.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 501.0 448.0 L 501.0 530.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 195.0 448.0 L 195.0 473.0 Q 195.0 489.0 211.0 489.0 L 485.0 489.0 Q 501.0 489.0 501.0 505.0 L 501.0 530.0" fill="none" stroke="#8FA1AA" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="8 8" marker-end="url(#arrow)"/>
+<path d="M 501.0 598.0 L 501.0 623.0 Q 501.0 639.0 485.0 639.0 L 211.0 639.0 Q 195.0 639.0 195.0 655.0 L 195.0 680.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 501.0 598.0 L 501.0 680.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+    <g>
+      <path d="M 80 93 C 80 76, 310 76, 310 93 L 310 135 C 310 152, 80 152, 80 135 Z" fill="#FFF3E0" stroke="#FFB74D" stroke-width="2.5"/>
+      <path d="M 80 93 C 80 110, 310 110, 310 93" fill="none" stroke="#FFB74D" stroke-width="2.5"/>
+<text x="195" y="113.0" text-anchor="middle" font-size="17" fill="#263238">hosted datasets</text>
+<text x="195" y="128.0" text-anchor="middle" font-size="12" fill="#607D8B">manifest + packaged CSV</text></g>
+<g><rect x="386" y="80" width="230" height="68" rx="10" fill="#E8F5E9" stroke="#43A047" stroke-width="2.5" />
+<text x="501" y="113.0" text-anchor="middle" font-size="17" fill="#263238">drag/drop replay</text>
+<text x="501" y="128.0" text-anchor="middle" font-size="12" fill="#607D8B">imu, gnss, references</text></g>
+<g><rect x="692" y="80" width="230" height="68" rx="10" fill="#E8F5E9" stroke="#43A047" stroke-width="2.5" />
+<text x="807" y="113.0" text-anchor="middle" font-size="17" fill="#263238">synthetic scenarios</text>
+<text x="807" y="128.0" text-anchor="middle" font-size="12" fill="#607D8B">compiled profiles</text></g>
+<g><rect x="386" y="230" width="230" height="68" rx="10" fill="#E1F5FE" stroke="#0277BD" stroke-width="2.5" />
+<text x="501" y="263.0" text-anchor="middle" font-size="17" fill="#263238">ReplayJob</text>
+<text x="501" y="278.0" text-anchor="middle" font-size="12" fill="#607D8B">load + order samples</text></g>
+<g><rect x="80" y="380" width="230" height="68" rx="10" fill="#E1F5FE" stroke="#0277BD" stroke-width="2.5" />
+<text x="195" y="413.0" text-anchor="middle" font-size="17" fill="#263238">SensorFusion</text>
+<text x="195" y="428.0" text-anchor="middle" font-size="12" fill="#607D8B">align, EKF, diagnostics</text></g>
+<g><rect x="386" y="380" width="230" height="68" rx="10" fill="#FFF9C4" stroke="#FBC02D" stroke-width="2.5" />
+<text x="501" y="413.0" text-anchor="middle" font-size="17" fill="#263238">road_events</text>
+<text x="501" y="428.0" text-anchor="middle" font-size="12" fill="#607D8B">event stream + trip stats</text></g>
+<g>
+      <path d="M 386 543 C 386 526, 616 526, 616 543 L 616 585 C 616 602, 386 602, 386 585 Z" fill="#FFF3E0" stroke="#FFB74D" stroke-width="2.5"/>
+      <path d="M 386 543 C 386 560, 616 560, 616 543" fill="none" stroke="#FFB74D" stroke-width="2.5"/>
+<text x="501" y="563.0" text-anchor="middle" font-size="17" fill="#263238">PlotData</text>
+<text x="501" y="578.0" text-anchor="middle" font-size="12" fill="#607D8B">traces, map, inspector</text></g>
+<g><rect x="80" y="680" width="230" height="68" rx="10" fill="#FCE4EC" stroke="#E91E63" stroke-width="2.5" />
+<text x="195" y="713.0" text-anchor="middle" font-size="17" fill="#263238">native visualizer</text>
+<text x="195" y="728.0" text-anchor="middle" font-size="12" fill="#607D8B">egui desktop</text></g>
+<g><rect x="386" y="680" width="230" height="68" rx="10" fill="#FCE4EC" stroke="#E91E63" stroke-width="2.5" />
+<text x="501" y="713.0" text-anchor="middle" font-size="17" fill="#263238">browser visualizer</text>
+<text x="501" y="728.0" text-anchor="middle" font-size="12" fill="#607D8B">wasm + web worker</text></g>
+  </g>
+</svg>

@@ -1,0 +1,176 @@
+{
+  "name": "visualizer-architecture",
+  "title": "Visualizer Architecture",
+  "output": "docs/_static/diagrams/visualizer-architecture-orthogonal.svg",
+  "profile": "balanced",
+  "direction": "DOWN",
+  "edgeRouting": "SPLINES",
+  "layout": {
+    "partitioning": true,
+    "nodeNode": 72,
+    "nodeNodeBetweenLayers": 76,
+    "edgeNode": 38,
+    "edgeEdge": 28
+  },
+  "groups": [],
+  "nodes": [
+    {
+      "id": "Hosted",
+      "title": "hosted datasets",
+      "subtitle": "manifest + packaged CSV",
+      "role": "storage",
+      "shape": "cylinder",
+      "group": "sources",
+      "row": 0,
+      "column": 0,
+      "layoutOptions": {
+        "elk.partitioning.partition": "0",
+        "elk.layered.crossingMinimization.positionId": "0"
+      }
+    },
+    {
+      "id": "Dropped",
+      "title": "drag/drop replay",
+      "subtitle": "imu, gnss, references",
+      "role": "input",
+      "group": "sources",
+      "row": 0,
+      "column": 1,
+      "layoutOptions": {
+        "elk.partitioning.partition": "0",
+        "elk.layered.crossingMinimization.positionId": "1"
+      }
+    },
+    {
+      "id": "Synthetic",
+      "title": "synthetic scenarios",
+      "subtitle": "compiled profiles",
+      "role": "input",
+      "group": "sources",
+      "row": 0,
+      "column": 2,
+      "layoutOptions": {
+        "elk.partitioning.partition": "0",
+        "elk.layered.crossingMinimization.positionId": "2"
+      }
+    },
+    {
+      "id": "ReplayJob",
+      "title": "ReplayJob",
+      "subtitle": "load + order samples",
+      "role": "core",
+      "group": "pipeline",
+      "row": 1,
+      "column": 1,
+      "layoutOptions": {
+        "elk.partitioning.partition": "1",
+        "elk.layered.crossingMinimization.positionId": "1"
+      }
+    },
+    {
+      "id": "Fusion",
+      "title": "SensorFusion",
+      "subtitle": "align, EKF, diagnostics",
+      "role": "core",
+      "group": "pipeline",
+      "row": 2,
+      "column": 0,
+      "layoutOptions": {
+        "elk.partitioning.partition": "2",
+        "elk.layered.crossingMinimization.positionId": "0"
+      }
+    },
+    {
+      "id": "Events",
+      "title": "road_events",
+      "subtitle": "event stream + trip stats",
+      "role": "process",
+      "group": "pipeline",
+      "row": 2,
+      "column": 1,
+      "layoutOptions": {
+        "elk.partitioning.partition": "2",
+        "elk.layered.crossingMinimization.positionId": "1"
+      }
+    },
+    {
+      "id": "PlotData",
+      "title": "PlotData",
+      "subtitle": "traces, map, inspector",
+      "role": "storage",
+      "shape": "cylinder",
+      "group": "pipeline",
+      "row": 3,
+      "column": 1,
+      "layoutOptions": {
+        "elk.partitioning.partition": "3",
+        "elk.layered.crossingMinimization.positionId": "1"
+      }
+    },
+    {
+      "id": "Native",
+      "title": "native visualizer",
+      "subtitle": "egui desktop",
+      "role": "warning",
+      "group": "ui",
+      "row": 4,
+      "column": 0,
+      "layoutOptions": {
+        "elk.partitioning.partition": "4",
+        "elk.layered.crossingMinimization.positionId": "0"
+      }
+    },
+    {
+      "id": "Browser",
+      "title": "browser visualizer",
+      "subtitle": "wasm + web worker",
+      "role": "warning",
+      "group": "ui",
+      "row": 4,
+      "column": 1,
+      "layoutOptions": {
+        "elk.partitioning.partition": "4",
+        "elk.layered.crossingMinimization.positionId": "1"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Hosted",
+      "to": "ReplayJob"
+    },
+    {
+      "from": "Dropped",
+      "to": "ReplayJob"
+    },
+    {
+      "from": "Synthetic",
+      "to": "ReplayJob"
+    },
+    {
+      "from": "ReplayJob",
+      "to": "Fusion"
+    },
+    {
+      "from": "Fusion",
+      "to": "Events"
+    },
+    {
+      "from": "Events",
+      "to": "PlotData"
+    },
+    {
+      "from": "Fusion",
+      "to": "PlotData",
+      "dashed": true
+    },
+    {
+      "from": "PlotData",
+      "to": "Native"
+    },
+    {
+      "from": "PlotData",
+      "to": "Browser"
+    }
+  ]
+}

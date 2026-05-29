@@ -1270,6 +1270,33 @@
         "max_gnss_rows": 400,
         "misalignment": "auto"
       }
+    },
+    {
+      "id": "ios-drive-20260526-174206",
+      "version": "v1",
+      "description": "Long iOS MotionFusion drive recorded on 2026-05-26 at 17:42:06Z; exported to generic IMU/GNSS replay format.",
+      "license": "MIT",
+      "replay_dir": ".",
+      "files": [
+        {
+          "path": "imu.csv.gz",
+          "url": "../../web/datasets/ios-drive-20260526-174206/imu.csv.gz",
+          "sha256": "980fd2df67c6dfac739103d57e6aa03316da9f57479d57b859565da47f87a66a",
+          "bytes": 24274723
+        },
+        {
+          "path": "gnss.csv.gz",
+          "url": "../../web/datasets/ios-drive-20260526-174206/gnss.csv.gz",
+          "sha256": "9b05a750ad13ffe8187f1603eaa0590088c39e6b7066ab9dc642a688c93d9801",
+          "bytes": 346556
+        }
+      ],
+      "smoke": {
+        "enabled": false,
+        "max_imu_rows": 20000,
+        "max_gnss_rows": 400,
+        "misalignment": "auto"
+      }
     }
   ]
 }

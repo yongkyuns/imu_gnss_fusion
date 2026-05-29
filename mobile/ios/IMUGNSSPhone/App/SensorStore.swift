@@ -72,6 +72,7 @@ final class SensorStore: NSObject, ObservableObject {
     @Published var vehicleForwardMps: Double?
     @Published var vehicleRightMps: Double?
     @Published var vehicleDownMps: Double?
+    @Published var fusionHealth: FusionHealth = .notReady
     @Published var fusionConfidence: Double = 0.0
     @Published var alignProgress: AlignProgressSnapshot = .unavailable
     @Published var vehicleSegment: VehicleMotionDisplay.Segment?
@@ -143,6 +144,7 @@ final class SensorStore: NSObject, ObservableObject {
     private var latestMountQBV: Quaternion?
     private var fusionEkfInitializedAt: Date?
     private var lastMountMemoryStoreDate: Date?
+    private var fusionEngineConfigured = false
     private var fusionProfiler = FusionLoopProfiler()
     private var resourceProfiler = AppResourceUsageProfiler()
     private var motionEventDetector = MotionEventDetector()
@@ -200,6 +202,8 @@ final class SensorStore: NSObject, ObservableObject {
         recordingQueue.qualityOfService = .utility
         recordingQueue.maxConcurrentOperationCount = 1
 
+        resetFusionEngineState(using: mountMemorySettings)
+        fusionEngineConfigured = true
         fusionEngine.setHarshBehaviorPreset(harshBehaviorPreset)
         settingsControls.bind(sensorStore: self)
         publishSettingsState()
@@ -212,6 +216,10 @@ final class SensorStore: NSObject, ObservableObject {
     }
 
     func start() {
+        start(resetFusion: false)
+    }
+
+    private func start(resetFusion: Bool) {
         let generation = advanceStreamGeneration()
         playbackTask?.cancel()
         playbackTask = nil
@@ -282,10 +290,13 @@ final class SensorStore: NSObject, ObservableObject {
 #if DEBUG
         iosAttitudeEulerDeg = nil
 #endif
-        let mountSettings = mountMemorySettings
-        fusionQueue.addOperation { [weak self] in
-            guard let self, self.isCurrentGeneration(generation) else { return }
-            self.resetFusionEngineState(using: mountSettings)
+        if resetFusion || !fusionEngineConfigured {
+            fusionEngineConfigured = true
+            let mountSettings = mountMemorySettings
+            fusionQueue.addOperation { [weak self] in
+                guard let self, self.isCurrentGeneration(generation) else { return }
+                self.resetFusionEngineState(using: mountSettings)
+            }
         }
 
         if AppLaunchConfiguration.suppressesSensorHardware {
@@ -643,7 +654,7 @@ final class SensorStore: NSObject, ObservableObject {
         activeSessionName = summary.name
         activeSessionID = summary.id
         replayProgress = 0.0
-        resetRuntimeState()
+        resetRuntimeState(resetFusion: true)
         publishSettingsState()
 
         let rawSessionStore = rawSessionStore
@@ -748,10 +759,10 @@ final class SensorStore: NSObject, ObservableObject {
         activeSessionID = nil
         replayProgress = 0.0
         publishSettingsState()
-        start()
+        start(resetFusion: true)
     }
 
-    private func resetRuntimeState() {
+    private func resetRuntimeState(resetFusion: Bool = false) {
         nedReference = nil
         lastBarometerSample = nil
         filteredVerticalUpMps = nil
@@ -818,11 +829,14 @@ final class SensorStore: NSObject, ObservableObject {
         iosAttitudeEulerDeg = nil
 #endif
         fusionQueue.cancelAllOperations()
-        let generation = currentStreamGeneration()
-        let mountSettings = mountMemorySettings
-        fusionQueue.addOperation { [weak self] in
-            guard let self, self.isCurrentGeneration(generation) else { return }
-            self.resetFusionEngineState(using: mountSettings)
+        if resetFusion {
+            fusionEngineConfigured = true
+            let generation = currentStreamGeneration()
+            let mountSettings = mountMemorySettings
+            fusionQueue.addOperation { [weak self] in
+                guard let self, self.isCurrentGeneration(generation) else { return }
+                self.resetFusionEngineState(using: mountSettings)
+            }
         }
     }
 
@@ -1728,9 +1742,17 @@ extension SensorStore: CLLocationManagerDelegate {
         Task { @MainActor in
             AppPerformanceSignposts.interval("Publish Fusion UI") {
                 let tSec = self.relativeTimeSeconds(for: sampleDate)
-                self.applyFusionStatus(result.status, alignProgressStatus: result.alignProgress)
+                let health = result.health.withContext(
+                    initialized: result.status.navigationUsable,
+                    mountReady: result.status.mountReady,
+                    gnssAccuracy: GnssAccuracy(
+                        horizontalAccuracyM: self.horizontalAccuracyM,
+                        verticalAccuracyM: self.verticalAccuracyM
+                    )
+                )
+                self.applyFusionStatus(result.status, alignProgressStatus: result.alignProgress, health: health)
                 if let snapshot = result.snapshot {
-                    self.appendEkfSamplesFromState(snapshot, tSec: tSec, sampleDate: sampleDate, imuSample: imuSample)
+                    self.appendEkfSamplesFromState(snapshot, tSec: tSec, sampleDate: sampleDate, imuSample: imuSample, health: health)
                 }
             }
         }
@@ -1739,8 +1761,7 @@ extension SensorStore: CLLocationManagerDelegate {
     private func shouldPublishFusionUi(status: FusionStatus) -> Bool {
         let now = ProcessInfo.processInfo.systemUptime
         let isStateTransition = status.mountReadyChanged
-            || status.ekfInitializedNow
-            || status.filterInitializedNow
+            || status.navigationStarted
         if isStateTransition {
             lastFusionUiPublishTS = now
             return true
@@ -1801,8 +1822,12 @@ extension SensorStore: CLLocationManagerDelegate {
     }
 
     @MainActor
-    private func applyFusionStatus(_ status: FusionStatus, alignProgressStatus: AlignProgressStatus) {
-        ekfInitialized = status.filterInitialized
+    private func applyFusionStatus(
+        _ status: FusionStatus,
+        alignProgressStatus: AlignProgressStatus,
+        health: FusionHealth
+    ) {
+        ekfInitialized = status.navigationUsable
         ekfMountReady = status.mountReady
         if let mountQBV = status.mountQBV {
             latestMountQBV = mountQBV
@@ -1814,21 +1839,14 @@ extension SensorStore: CLLocationManagerDelegate {
             pitchSigmaDeg: alignProgressStatus.pitchSigmaDeg,
             yawSigmaDeg: alignProgressStatus.yawSigmaDeg
         )
-        let health = FusionHealth.evaluate(
-            mountReady: status.mountReady,
-            initialized: status.filterInitialized,
-            gnssAccuracy: GnssAccuracy(
-                horizontalAccuracyM: horizontalAccuracyM,
-                verticalAccuracyM: verticalAccuracyM
-            ),
-            streamHealth: streamHealth
-        )
+        fusionHealth = health
         fusionConfidence = health.fusedConfidence
     }
 
     private func persistSettledMountIfAvailable(forceCadence: Bool = false) {
         let sampleDate = Date()
         guard let latestMountQBV,
+              fusionHealth.stable,
               MountMemoryPolicy.canStoreSettledMount(
                   initializedAt: fusionEkfInitializedAt,
                   sampleDate: sampleDate
@@ -1859,7 +1877,8 @@ extension SensorStore: CLLocationManagerDelegate {
         _ snapshot: FusionSnapshot,
         tSec: Double,
         sampleDate: Date,
-        imuSample: RawMotionInput?
+        imuSample: RawMotionInput?,
+        health: FusionHealth
     ) {
         ekfInitialized = snapshot.initialized
         ekfMountReady = snapshot.mountReady
@@ -1869,6 +1888,7 @@ extension SensorStore: CLLocationManagerDelegate {
             }
             latestMountQBV = snapshot.mountQBV
             if snapshot.mountReady,
+               health.stable,
                mountMemorySettings.isEnabled,
                MountMemoryPolicy.canStoreSettledMount(
                    initializedAt: fusionEkfInitializedAt,
@@ -1895,15 +1915,7 @@ extension SensorStore: CLLocationManagerDelegate {
             east: snapshot.velocityNedMps.e,
             down: snapshot.velocityNedMps.d
         )
-        let health = FusionHealth.evaluate(
-            mountReady: snapshot.mountReady,
-            initialized: snapshot.initialized,
-            gnssAccuracy: GnssAccuracy(
-                horizontalAccuracyM: horizontalAccuracyM,
-                verticalAccuracyM: verticalAccuracyM
-            ),
-            streamHealth: streamHealth
-        )
+        fusionHealth = health
         let vehicleGyro = imuSample.map {
             MotionKinematics.vehicleFRDGyro(
                 qBV: snapshot.mountQBV,

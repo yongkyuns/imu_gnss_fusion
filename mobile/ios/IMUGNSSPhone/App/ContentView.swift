@@ -549,40 +549,32 @@ private struct DriveTelemetryDrawer: View {
     }
 
     private var health: FusionHealth {
-        FusionHealth.evaluate(
-            mountReady: store.ekfMountReady,
-            initialized: store.ekfInitialized,
-            gnssAccuracy: GnssAccuracy(
-                horizontalAccuracyM: store.horizontalAccuracyM,
-                verticalAccuracyM: store.verticalAccuracyM
-            ),
-            streamHealth: store.streamHealth
-        )
+        store.fusionHealth
     }
 
     private var statusProgress: Double {
-        switch health.status {
-        case .aligning, .alignmentIncomplete:
+        switch health.state {
+        case .notReady, .initializing:
             return AlignProgressPolicy.progress(store.alignProgress, mountReady: store.ekfMountReady)
-        case .ready, .poorGNSS, .needsMotion:
+        case .running, .stable, .degraded, .degradedDeadReckoning, .awaitingGnssReseed:
             return health.fusedConfidence
         }
     }
 
     private var statusProgressLabel: String {
-        switch health.status {
-        case .aligning, .alignmentIncomplete:
+        switch health.state {
+        case .notReady, .initializing:
             return "Alignment progress"
-        case .ready, .poorGNSS, .needsMotion:
+        case .running, .stable, .degraded, .degradedDeadReckoning, .awaitingGnssReseed:
             return "Fusion confidence"
         }
     }
 
     private var statusProgressTint: Color {
-        switch health.status {
-        case .aligning, .alignmentIncomplete:
+        switch health.state {
+        case .notReady, .initializing:
             return .orange
-        case .ready, .poorGNSS, .needsMotion:
+        case .running, .stable, .degraded, .degradedDeadReckoning, .awaitingGnssReseed:
             if health.fusedConfidence >= 0.75 { return .accentColor }
             if health.fusedConfidence >= 0.45 { return .orange }
             return .red
@@ -657,17 +649,21 @@ private struct DriveTelemetryDrawer: View {
     }
 
     private var primaryDriveState: String {
-        switch health.status {
-        case .ready:
+        switch health.state {
+        case .stable:
+            return "Stable"
+        case .running:
             return "Ready"
-        case .aligning:
+        case .initializing:
             return "Aligning"
-        case .poorGNSS:
-            return "Weak GNSS"
-        case .needsMotion:
-            return "Need Motion"
-        case .alignmentIncomplete:
-            return "Mount Pending"
+        case .degraded:
+            return "Degraded"
+        case .degradedDeadReckoning:
+            return "Dead Reckoning"
+        case .awaitingGnssReseed:
+            return "Awaiting GNSS"
+        case .notReady:
+            return "Not Ready"
         }
     }
 }
@@ -1305,15 +1301,7 @@ private struct DriveMetricSheet: View {
     }
 
     private var health: FusionHealth {
-        FusionHealth.evaluate(
-            mountReady: store.ekfMountReady,
-            initialized: store.ekfInitialized,
-            gnssAccuracy: GnssAccuracy(
-                horizontalAccuracyM: store.horizontalAccuracyM,
-                verticalAccuracyM: store.verticalAccuracyM
-            ),
-            streamHealth: store.streamHealth
-        )
+        store.fusionHealth
     }
 
     var body: some View {
@@ -1360,32 +1348,40 @@ private struct DriveMetricSheet: View {
     }
 
     private var primaryDriveState: String {
-        switch health.status {
-        case .ready:
-            return "Ready"
-        case .aligning:
+        switch health.state {
+        case .stable:
+            return "Stable"
+        case .running:
+            return "Running"
+        case .initializing:
             return "Aligning phone mount"
-        case .poorGNSS:
-            return "Weak GNSS"
-        case .needsMotion:
-            return "Need vehicle motion"
-        case .alignmentIncomplete:
-            return "Mount calibration pending"
+        case .degraded:
+            return "Degraded"
+        case .degradedDeadReckoning:
+            return "Dead reckoning"
+        case .awaitingGnssReseed:
+            return "Awaiting GNSS"
+        case .notReady:
+            return "Not ready"
         }
     }
 
     private var secondaryDriveState: String {
-        switch health.status {
-        case .ready:
+        switch health.state {
+        case .stable:
+            return "Fusion is converged enough to persist mount calibration."
+        case .running:
             return "Fused route and vehicle-frame motion are active."
-        case .aligning:
+        case .initializing:
             return "Keep the phone fixed while alignment observes motion."
-        case .poorGNSS:
-            return "Move to clearer sky or wait for location accuracy to recover."
-        case .needsMotion:
-            return "Drive straight briefly so the filter can settle."
-        case .alignmentIncomplete:
-            return "Motion is live while mount confidence improves."
+        case .degraded:
+            return "Fusion is initialized, but current inputs or state checks are unhealthy."
+        case .degradedDeadReckoning:
+            return "Navigation is using degraded IMU dead reckoning until GNSS updates recover."
+        case .awaitingGnssReseed:
+            return "Calibration is retained, but navigation is waiting for GNSS reseed."
+        case .notReady:
+            return "Waiting for IMU and GNSS samples."
         }
     }
 }

@@ -245,6 +245,16 @@ impl WebDatasetEntry {
             .unwrap_or("unnamed dataset")
             .to_string()
     }
+
+    pub(super) fn picker_group_label(&self) -> &'static str {
+        let id = self.id.as_deref().unwrap_or_default();
+        let label = self.label.as_deref().unwrap_or_default();
+        if id.starts_with("ios-") || label.starts_with("iOS ") {
+            "iOS recordings"
+        } else {
+            "UBX/reference datasets"
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

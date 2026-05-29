@@ -101,7 +101,7 @@ struct VehicleMotionDisplay: Equatable, Sendable {
         verticalAccelerationMps2: Double?,
         stoppedSpeedThresholdMps: Double
     ) -> Segment {
-        if health.status == .poorGNSS {
+        if health.degraded {
             return .gnssDegraded
         }
         if groundSpeedMps < stoppedSpeedThresholdMps {

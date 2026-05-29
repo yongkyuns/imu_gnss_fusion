@@ -1,0 +1,143 @@
+{
+  "name": "sympy-generation-architecture",
+  "title": "SymPy Generation Architecture",
+  "output": "docs/_static/diagrams/sympy-generation-architecture-orthogonal.svg",
+  "profile": "balanced",
+  "direction": "DOWN",
+  "edgeRouting": "SPLINES",
+  "layout": {
+    "partitioning": true,
+    "nodeNode": 72,
+    "nodeNodeBetweenLayers": 76,
+    "edgeNode": 38,
+    "edgeEdge": 28
+  },
+  "groups": [],
+  "nodes": [
+    {
+      "id": "Formulation",
+      "title": "formulation.py",
+      "subtitle": "state, propagation, observations",
+      "role": "input",
+      "group": "source",
+      "width": 250,
+      "row": 0,
+      "column": 0,
+      "layoutOptions": {
+        "elk.partitioning.partition": "0",
+        "elk.layered.crossingMinimization.positionId": "0"
+      }
+    },
+    {
+      "id": "SymPy",
+      "title": "SymPy model",
+      "subtitle": "Jacobians, CSE, scalar updates",
+      "role": "core",
+      "group": "generation",
+      "width": 250,
+      "row": 0,
+      "column": 1,
+      "layoutOptions": {
+        "elk.partitioning.partition": "1",
+        "elk.layered.crossingMinimization.positionId": "0"
+      }
+    },
+    {
+      "id": "CodeGen",
+      "title": "RustCodeGenerator",
+      "subtitle": "ccode assignments",
+      "role": "process",
+      "group": "generation",
+      "width": 250,
+      "row": 0,
+      "column": 2,
+      "layoutOptions": {
+        "elk.partitioning.partition": "1",
+        "elk.layered.crossingMinimization.positionId": "1"
+      }
+    },
+    {
+      "id": "Fragments",
+      "title": "generated/*.rs",
+      "subtitle": "F, G, H, K, S, reset",
+      "role": "storage",
+      "shape": "cylinder",
+      "group": "rust",
+      "width": 250,
+      "row": 1,
+      "column": 2,
+      "layoutOptions": {
+        "elk.partitioning.partition": "2",
+        "elk.layered.crossingMinimization.positionId": "0"
+      }
+    },
+    {
+      "id": "Wrapper",
+      "title": "ekf/generated.rs",
+      "subtitle": "stable Rust functions",
+      "role": "core",
+      "group": "rust",
+      "width": 250,
+      "row": 1,
+      "column": 1,
+      "layoutOptions": {
+        "elk.partitioning.partition": "2",
+        "elk.layered.crossingMinimization.positionId": "1"
+      }
+    },
+    {
+      "id": "Ekf",
+      "title": "ekf/mod.rs",
+      "subtitle": "gating, batching, covariance",
+      "role": "core",
+      "group": "runtime",
+      "width": 250,
+      "row": 1,
+      "column": 0,
+      "layoutOptions": {
+        "elk.partitioning.partition": "3",
+        "elk.layered.crossingMinimization.positionId": "0"
+      }
+    },
+    {
+      "id": "Tests",
+      "title": "tests + replay",
+      "subtitle": "behavior evidence",
+      "role": "warning",
+      "group": "runtime",
+      "width": 250,
+      "row": 2,
+      "column": 0,
+      "layoutOptions": {
+        "elk.partitioning.partition": "3",
+        "elk.layered.crossingMinimization.positionId": "1"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Formulation",
+      "to": "SymPy"
+    },
+    {
+      "from": "SymPy",
+      "to": "CodeGen"
+    },
+    {
+      "from": "CodeGen",
+      "to": "Fragments"
+    },
+    {
+      "from": "Fragments",
+      "to": "Wrapper"
+    },
+    {
+      "from": "Wrapper",
+      "to": "Ekf"
+    },
+    {
+      "from": "Ekf",
+      "to": "Tests"
+    }
+  ]
+}

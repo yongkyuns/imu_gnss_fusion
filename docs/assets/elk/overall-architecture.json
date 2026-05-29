@@ -1,0 +1,166 @@
+{
+  "name": "overall-architecture",
+  "title": "Overall Architecture",
+  "output": "docs/_static/diagrams/overall-architecture-orthogonal.svg",
+  "profile": "balanced",
+  "direction": "DOWN",
+  "edgeRouting": "SPLINES",
+  "layout": {
+    "partitioning": true,
+    "nodeNode": 72,
+    "nodeNodeBetweenLayers": 76,
+    "edgeNode": 36,
+    "edgeEdge": 28,
+    "laneSpacing": 130
+  },
+  "groups": [],
+  "nodes": [
+    {
+      "id": "Datasets",
+      "title": "hosted datasets",
+      "role": "storage",
+      "shape": "cylinder",
+      "group": "inputs",
+      "lane": 0,
+      "row": 0,
+      "column": 0,
+      "layoutOptions": {
+        "elk.partitioning.partition": "0",
+        "elk.layered.crossingMinimization.positionId": "0"
+      }
+    },
+    {
+      "id": "Sources",
+      "title": "data sources",
+      "subtitle": "iOS, hosted, CSV, synthetic",
+      "role": "input",
+      "group": "inputs",
+      "lane": 1,
+      "row": 0,
+      "column": 1,
+      "layoutOptions": {
+        "elk.partitioning.partition": "0",
+        "elk.layered.crossingMinimization.positionId": "1"
+      }
+    },
+    {
+      "id": "Packaging",
+      "title": "dataset packaging",
+      "subtitle": "schema + checksums",
+      "role": "core",
+      "group": "tools",
+      "lane": 1,
+      "row": 1,
+      "column": 1,
+      "layoutOptions": {
+        "elk.partitioning.partition": "1",
+        "elk.layered.crossingMinimization.positionId": "1"
+      }
+    },
+    {
+      "id": "Replay",
+      "title": "replay + diagnostics",
+      "subtitle": "traces, sweeps, profiles",
+      "role": "core",
+      "group": "tools",
+      "lane": 0,
+      "row": 1,
+      "column": 0,
+      "layoutOptions": {
+        "elk.partitioning.partition": "1",
+        "elk.layered.crossingMinimization.positionId": "0"
+      }
+    },
+    {
+      "id": "Fusion",
+      "title": "SensorFusion",
+      "subtitle": "align + EKF runtime",
+      "role": "core",
+      "group": "runtime",
+      "lane": 0,
+      "row": 2,
+      "column": 0,
+      "layoutOptions": {
+        "elk.partitioning.partition": "2",
+        "elk.layered.crossingMinimization.positionId": "0"
+      }
+    },
+    {
+      "id": "Events",
+      "title": "road_events",
+      "subtitle": "streaming detectors",
+      "role": "process",
+      "group": "runtime",
+      "lane": 0,
+      "row": 2,
+      "column": 1,
+      "layoutOptions": {
+        "elk.partitioning.partition": "2",
+        "elk.layered.crossingMinimization.positionId": "0"
+      }
+    },
+    {
+      "id": "Visualizer",
+      "title": "visualizers",
+      "subtitle": "web + native replay",
+      "role": "warning",
+      "group": "surfaces",
+      "lane": 1,
+      "row": 3,
+      "column": 0,
+      "layoutOptions": {
+        "elk.partitioning.partition": "3",
+        "elk.layered.crossingMinimization.positionId": "1"
+      }
+    },
+    {
+      "id": "MobileDocs",
+      "title": "iOS app",
+      "subtitle": "drive, review, settings",
+      "role": "warning",
+      "group": "surfaces",
+      "lane": 0,
+      "row": 3,
+      "column": 1,
+      "layoutOptions": {
+        "elk.partitioning.partition": "3",
+        "elk.layered.crossingMinimization.positionId": "0"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Datasets",
+      "to": "Replay"
+    },
+    {
+      "from": "Sources",
+      "to": "Packaging"
+    },
+    {
+      "from": "Packaging",
+      "to": "Replay"
+    },
+    {
+      "from": "Replay",
+      "to": "Fusion"
+    },
+    {
+      "from": "Fusion",
+      "to": "Events"
+    },
+    {
+      "from": "Fusion",
+      "to": "Visualizer"
+    },
+    {
+      "from": "Events",
+      "to": "MobileDocs"
+    },
+    {
+      "from": "Events",
+      "to": "Visualizer",
+      "hidden": true
+    }
+  ]
+}

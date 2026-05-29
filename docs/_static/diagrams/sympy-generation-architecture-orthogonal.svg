@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1022" height="488" viewBox="0 0 1022 488" role="img" aria-label="SymPy Generation Architecture">
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 9 4.5 L 0 9 z" fill="#6F7C84"/>
+    </marker>
+  </defs>
+  <rect width="100%" height="100%" fill="white"/>
+  <g font-family="Arial, sans-serif">
+    
+    <path d="M 330.0 114.0 L 406.0 114.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 656.0 114.0 L 732.0 114.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 857.0 148.0 L 857.0 230.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 732.0 264.0 L 656.0 264.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 406.0 264.0 L 330.0 264.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 205.0 298.0 L 205.0 380.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+    <g><rect x="80" y="80" width="250" height="68" rx="10" fill="#E8F5E9" stroke="#43A047" stroke-width="2.5" />
+<text x="205" y="113.0" text-anchor="middle" font-size="17" fill="#263238">formulation.py</text>
+<text x="205" y="128.0" text-anchor="middle" font-size="12" fill="#607D8B">state, propagation, observations</text></g>
+<g><rect x="406" y="80" width="250" height="68" rx="10" fill="#E1F5FE" stroke="#0277BD" stroke-width="2.5" />
+<text x="531" y="113.0" text-anchor="middle" font-size="17" fill="#263238">SymPy model</text>
+<text x="531" y="128.0" text-anchor="middle" font-size="12" fill="#607D8B">Jacobians, CSE, scalar updates</text></g>
+<g><rect x="732" y="80" width="250" height="68" rx="10" fill="#FFF9C4" stroke="#FBC02D" stroke-width="2.5" />
+<text x="857" y="113.0" text-anchor="middle" font-size="17" fill="#263238">RustCodeGenerator</text>
+<text x="857" y="128.0" text-anchor="middle" font-size="12" fill="#607D8B">ccode assignments</text></g>
+<g>
+      <path d="M 732 243 C 732 226, 982 226, 982 243 L 982 285 C 982 302, 732 302, 732 285 Z" fill="#FFF3E0" stroke="#FFB74D" stroke-width="2.5"/>
+      <path d="M 732 243 C 732 260, 982 260, 982 243" fill="none" stroke="#FFB74D" stroke-width="2.5"/>
+<text x="857" y="263.0" text-anchor="middle" font-size="17" fill="#263238">generated/*.rs</text>
+<text x="857" y="278.0" text-anchor="middle" font-size="12" fill="#607D8B">F, G, H, K, S, reset</text></g>
+<g><rect x="406" y="230" width="250" height="68" rx="10" fill="#E1F5FE" stroke="#0277BD" stroke-width="2.5" />
+<text x="531" y="263.0" text-anchor="middle" font-size="17" fill="#263238">ekf/generated.rs</text>
+<text x="531" y="278.0" text-anchor="middle" font-size="12" fill="#607D8B">stable Rust functions</text></g>
+<g><rect x="80" y="230" width="250" height="68" rx="10" fill="#E1F5FE" stroke="#0277BD" stroke-width="2.5" />
+<text x="205" y="263.0" text-anchor="middle" font-size="17" fill="#263238">ekf/mod.rs</text>
+<text x="205" y="278.0" text-anchor="middle" font-size="12" fill="#607D8B">gating, batching, covariance</text></g>
+<g><rect x="80" y="380" width="250" height="68" rx="10" fill="#FCE4EC" stroke="#E91E63" stroke-width="2.5" />
+<text x="205" y="413.0" text-anchor="middle" font-size="17" fill="#263238">tests + replay</text>
+<text x="205" y="428.0" text-anchor="middle" font-size="12" fill="#607D8B">behavior evidence</text></g>
+  </g>
+</svg>

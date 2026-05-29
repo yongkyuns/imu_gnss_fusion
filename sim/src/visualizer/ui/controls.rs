@@ -279,27 +279,41 @@ impl App {
                                     egui::ComboBox::from_id_salt("web_real_data_select")
                                         .selected_text(selected_text)
                                         .show_ui(ui, |ui| {
+                                            ui.label(egui::RichText::new("Local files").strong());
                                             ui.selectable_value(
                                                 &mut self.web_real_data_source,
                                                 WebRealDataSource::DroppedCsv,
                                                 "Dropped CSV files",
                                             );
-                                            for (idx, dataset) in
-                                                self.web_datasets.datasets.iter().enumerate()
-                                            {
-                                                let selected = self.web_real_data_source
-                                                    == WebRealDataSource::ManifestDataset
-                                                    && self.web_datasets.selected == idx;
-                                                if ui
-                                                    .selectable_label(
-                                                        selected,
-                                                        dataset.display_label(),
-                                                    )
-                                                    .clicked()
+                                            let groups =
+                                                ["UBX/reference datasets", "iOS recordings"];
+                                            for group in groups {
+                                                let mut showed_group = false;
+                                                for (idx, dataset) in
+                                                    self.web_datasets.datasets.iter().enumerate()
                                                 {
-                                                    self.web_real_data_source =
-                                                        WebRealDataSource::ManifestDataset;
-                                                    self.web_datasets.selected = idx;
+                                                    if dataset.picker_group_label() != group {
+                                                        continue;
+                                                    }
+                                                    if !showed_group {
+                                                        ui.separator();
+                                                        ui.label(egui::RichText::new(group).strong());
+                                                        showed_group = true;
+                                                    }
+                                                    let selected = self.web_real_data_source
+                                                        == WebRealDataSource::ManifestDataset
+                                                        && self.web_datasets.selected == idx;
+                                                    if ui
+                                                        .selectable_label(
+                                                            selected,
+                                                            dataset.display_label(),
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        self.web_real_data_source =
+                                                            WebRealDataSource::ManifestDataset;
+                                                        self.web_datasets.selected = idx;
+                                                    }
                                                 }
                                             }
                                         });

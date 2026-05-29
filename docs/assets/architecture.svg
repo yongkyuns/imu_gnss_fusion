@@ -223,7 +223,7 @@
 </text>
 <rect x="40" y="940" width="1645" height="190" rx="10" fill="#FFFFFF" stroke="#D8E0EA" stroke-width="1"/>
 <text x="60" y="956" fill="#172033" font-size="18" font-weight="700" text-anchor="start">
-<tspan x="60" dy="0">Foundation modules, generated math, and verification</tspan>
+<tspan x="60" dy="0">Foundation modules, generated formulation, and verification</tspan>
 </text>
 <rect x="60" y="996" width="380" height="108" rx="8" fill="#F7F3FF" stroke="#D0C8F1" stroke-width="1"/>
 <text x="74" y="1008" fill="#172033" font-size="15" font-weight="700" text-anchor="start">
@@ -257,7 +257,7 @@
 <tspan x="1286" dy="0">documentation</tspan>
 </text>
 <text class="label" x="1286" y="1034" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
-<tspan x="1286" dy="0">math notes</tspan>
+<tspan x="1286" dy="0">algorithm notes</tspan>
 <tspan x="1286" dy="16.200000000000003">frame conventions</tspan>
 <tspan x="1286" dy="16.200000000000003">testing workflow</tspan>
 </text>

@@ -1,0 +1,160 @@
+{
+  "name": "sympy-update-workflow",
+  "title": "Generated EKF Boundary",
+  "output": "docs/_static/diagrams/sympy-update-boundary-orthogonal.svg",
+  "profile": "balanced",
+  "direction": "DOWN",
+  "edgeRouting": "SPLINES",
+  "layout": {
+    "partitioning": true,
+    "nodeNode": 72,
+    "nodeNodeBetweenLayers": 76,
+    "edgeNode": 38,
+    "edgeEdge": 28
+  },
+  "groups": [],
+  "nodes": [
+    {
+      "id": "Define",
+      "title": "Model ABI",
+      "subtitle": "nominal, error, noise order",
+      "role": "input",
+      "group": "design",
+      "width": 250,
+      "row": 0,
+      "column": 0,
+      "layoutOptions": {
+        "elk.partitioning.partition": "0",
+        "elk.layered.crossingMinimization.positionId": "0"
+      }
+    },
+    {
+      "id": "Edit",
+      "title": "Dynamics derivation",
+      "subtitle": "propagate, inject, extract",
+      "role": "core",
+      "group": "design",
+      "width": 250,
+      "row": 0,
+      "column": 1,
+      "layoutOptions": {
+        "elk.partitioning.partition": "0",
+        "elk.layered.crossingMinimization.positionId": "1"
+      }
+    },
+    {
+      "id": "Emit",
+      "title": "Observation derivation",
+      "subtitle": "predicted scalar + H",
+      "role": "process",
+      "group": "generate",
+      "width": 250,
+      "row": 0,
+      "column": 2,
+      "layoutOptions": {
+        "elk.partitioning.partition": "1",
+        "elk.layered.crossingMinimization.positionId": "0"
+      }
+    },
+    {
+      "id": "Inspect",
+      "title": "Emit fragments",
+      "subtitle": "nominal, F, G, reset, rows",
+      "role": "process",
+      "group": "verify",
+      "width": 250,
+      "row": 1,
+      "column": 2,
+      "layoutOptions": {
+        "elk.partitioning.partition": "1",
+        "elk.layered.crossingMinimization.positionId": "1"
+      }
+    },
+    {
+      "id": "Runtime",
+      "title": "Wrapper ABI",
+      "subtitle": "typed generated.rs API",
+      "role": "warning",
+      "group": "verify",
+      "width": 250,
+      "row": 1,
+      "column": 1,
+      "layoutOptions": {
+        "elk.partitioning.partition": "2",
+        "elk.layered.crossingMinimization.positionId": "0"
+      }
+    },
+    {
+      "id": "Tests",
+      "title": "Runtime policy",
+      "subtitle": "residuals, gates, batches",
+      "role": "core",
+      "group": "verify",
+      "width": 250,
+      "row": 1,
+      "column": 0,
+      "layoutOptions": {
+        "elk.partitioning.partition": "2",
+        "elk.layered.crossingMinimization.positionId": "1"
+      }
+    },
+    {
+      "id": "Docs",
+      "title": "Semantic checks",
+      "subtitle": "diff matches model change",
+      "role": "note",
+      "group": "publish",
+      "width": 250,
+      "row": 2,
+      "column": 0,
+      "layoutOptions": {
+        "elk.partitioning.partition": "3",
+        "elk.layered.crossingMinimization.positionId": "0"
+      }
+    },
+    {
+      "id": "Commit",
+      "title": "Behavior evidence",
+      "subtitle": "focused tests or replay",
+      "role": "storage",
+      "group": "publish",
+      "width": 250,
+      "row": 2,
+      "column": 1,
+      "layoutOptions": {
+        "elk.partitioning.partition": "3",
+        "elk.layered.crossingMinimization.positionId": "1"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Define",
+      "to": "Edit"
+    },
+    {
+      "from": "Edit",
+      "to": "Emit"
+    },
+    {
+      "from": "Emit",
+      "to": "Inspect"
+    },
+    {
+      "from": "Inspect",
+      "to": "Runtime"
+    },
+    {
+      "from": "Runtime",
+      "to": "Tests"
+    },
+    {
+      "from": "Tests",
+      "to": "Docs"
+    },
+    {
+      "from": "Docs",
+      "to": "Commit"
+    }
+  ]
+}

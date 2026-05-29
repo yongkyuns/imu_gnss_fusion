@@ -4,7 +4,7 @@ IMU/GNSS Fusion is a Rust workspace for embedded-oriented EKF development,
 hardware-agnostic replay, synthetic scenario generation, diagnostics, and a
 native/browser visualizer.
 
-```{figure} _static/diagrams/overall-architecture.png
+```{figure} _static/diagrams/overall-architecture-orthogonal.svg
 :alt: Architecture diagram for replay, simulation, sensor fusion, and visualization.
 :class: framed
 
@@ -33,7 +33,7 @@ IMU/GNSS samples
   -> Align tilt initialization when automatic mount mode is enabled
   -> EKF initialization after mount and GNSS readiness
   -> EKF prediction/update loop
-  -> public Update status and state accessors
+  -> public Update lifecycle state, health, and state accessors
 ```
 
 The facade owns:
@@ -48,24 +48,22 @@ The facade owns:
 - vehicle-speed updates,
 - public accessors and diagnostics.
 
+The facade also owns runtime continuity policy. Keeping the same `SensorFusion`
+object preserves navigation state, covariance, mount, biases, and diagnostics
+across normal stream pauses. The next IMU timestamp classifies the gap as short,
+medium, or long sleep; long or unsafe gaps wait for GNSS reseed while retaining
+calibration priors. See [](runtime-state-and-persistence.md) for the public
+contract.
+
 ## Frames
 
 - `b`: raw IMU body/sensor frame.
 - `v`: physical vehicle frame, forward-right-down.
 - `n`: local NED frame.
-- `e`: ECEF frame for WGS84 conversion and global position math.
+- `e`: ECEF frame for WGS84 conversion and global position calculations.
 
 Raw IMU samples are not pre-rotated by callers. The runtime rotates body-frame
 increments through the physical mount internally.
-
-## Generated Model Code
-
-Generated EKF snippets are checked in so normal Rust builds do not require
-Python or SymPy. The symbolic sources are kept beside the implementation
-modules and emit Rust wrappers used by the runtime.
-
-Edit symbolic model files, regenerate, review the generated diff, and run the
-focused tests from [testing.md](testing.md).
 
 ## Replay Data Flow
 
@@ -116,11 +114,6 @@ The UI owns presentation state only. Runtime estimator behavior remains in
 
 ## Diagnostics
 
-Diagnostic binaries are intentionally thin wrappers around reusable replay,
-state-summary, trace, and covariance helpers. Prefer adding reusable analysis
-code under `sim::eval` or the visualizer pipeline before adding logic directly
-to a binary.
-
 Common diagnostic tools:
 
 | Tool | Purpose |
@@ -134,9 +127,13 @@ Common diagnostic tools:
 
 - `sensor_fusion` owns estimator behavior and public runtime contracts.
 - `road_events` owns event-detector behavior and trip-summary contracts.
-- `sim::datasets` owns source data parsing, not estimator math.
+- `sim::datasets` owns source data parsing, not estimator formulation.
 - `sim::eval::replay` owns event ordering, not update behavior.
 - `sim::visualizer::pipeline` owns trace construction and reference overlays.
 - `web/` owns static hosting and browser loading behavior.
 - `scripts/` own packaging and validation automation.
 - `mobile/ios/` owns mobile collection/FFI integration, not estimator behavior.
+
+Developer-only workflows such as generated EKF code regeneration, Pages
+artifact assembly, and hosted dataset validation live under the Developer
+Reference section.

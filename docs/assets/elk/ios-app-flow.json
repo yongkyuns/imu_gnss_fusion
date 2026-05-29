@@ -1,0 +1,136 @@
+{
+  "name": "ios-app-flow",
+  "title": "iOS App Flow",
+  "output": "docs/_static/diagrams/ios-app-flow.svg",
+  "profile": "structured",
+  "direction": "RIGHT",
+  "edgeRouting": "SPLINES",
+  "layout": {
+    "nodeNode": 82,
+    "nodeNodeBetweenLayers": 112,
+    "edgeNode": 38,
+    "edgeEdge": 28
+  },
+  "groups": [
+    {
+      "id": "sources",
+      "title": "Inputs"
+    },
+    {
+      "id": "store",
+      "title": "App Runtime"
+    },
+    {
+      "id": "tabs",
+      "title": "User Interface"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "Sensors",
+      "title": "live sensors",
+      "subtitle": "CoreMotion + CoreLocation",
+      "role": "input",
+      "group": "sources"
+    },
+    {
+      "id": "Sessions",
+      "title": ".motionfusion sessions",
+      "subtitle": "recorded raw events",
+      "role": "storage",
+      "shape": "cylinder",
+      "group": "sources"
+    },
+    {
+      "id": "Store",
+      "title": "SensorStore",
+      "subtitle": "stream, record, replay",
+      "role": "core",
+      "group": "store"
+    },
+    {
+      "id": "FFI",
+      "title": "Rust FFI",
+      "subtitle": "fusion + road events",
+      "role": "core",
+      "group": "store"
+    },
+    {
+      "id": "State",
+      "title": "app state",
+      "subtitle": "health, route, events",
+      "role": "process",
+      "group": "store"
+    },
+    {
+      "id": "Drive",
+      "title": "Drive",
+      "subtitle": "map, route, events",
+      "role": "warning",
+      "group": "tabs"
+    },
+    {
+      "id": "Review",
+      "title": "Review",
+      "subtitle": "sessions + replay",
+      "role": "warning",
+      "group": "tabs"
+    },
+    {
+      "id": "Settings",
+      "title": "Settings",
+      "subtitle": "alerts, presets, mount memory",
+      "role": "warning",
+      "group": "tabs"
+    },
+    {
+      "id": "Diagnostics",
+      "title": "Diagnostics",
+      "subtitle": "debug-only health + charts",
+      "role": "note",
+      "group": "tabs"
+    }
+  ],
+  "edges": [
+    {
+      "from": "Sensors",
+      "to": "Store"
+    },
+    {
+      "from": "Sessions",
+      "to": "Store"
+    },
+    {
+      "from": "Store",
+      "to": "FFI"
+    },
+    {
+      "from": "FFI",
+      "to": "State"
+    },
+    {
+      "from": "Store",
+      "to": "State",
+      "dashed": true
+    },
+    {
+      "from": "State",
+      "to": "Drive"
+    },
+    {
+      "from": "State",
+      "to": "Review"
+    },
+    {
+      "from": "State",
+      "to": "Settings"
+    },
+    {
+      "from": "State",
+      "to": "Diagnostics",
+      "dashed": true,
+      "fromSide": "SOUTH",
+      "toSide": "NORTH"
+    }
+  ]
+}

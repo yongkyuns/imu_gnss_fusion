@@ -24,6 +24,8 @@ Build and validate the Pages artifact locally:
 
 ```bash
 python -m pip install -r docs/requirements.txt
+npm ci
+npm run render:elk-diagrams
 sphinx-build -W --keep-going -b html docs target/docs-html
 
 rm -rf target/pages-site

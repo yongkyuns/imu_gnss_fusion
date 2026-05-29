@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 77;
+	objectVersion = 63;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -111,7 +111,7 @@
 		DE9DC1A63C10EC9303F84AFE /* RawImuSynchronizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawImuSynchronizer.swift; sourceTree = "<group>"; };
 		E163BF2388E305DAC124FD0D /* SettingsControlModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsControlModelTests.swift; sourceTree = "<group>"; };
 		E6386F87275B56D1FB856B99 /* IMUGNSSPhone-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "IMUGNSSPhone-Bridging-Header.h"; sourceTree = "<group>"; };
-		E69330CEE244184E9EC347F0 /* IMUGNSSPhone.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = IMUGNSSPhone.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E69330CEE244184E9EC347F0 /* IMUGNSSPhone.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = IMUGNSSPhone.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E7B80C95E550957501BECF95 /* EventAudioSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventAudioSettingsTests.swift; sourceTree = "<group>"; };
 		E80DDC2ABBEF69B940B47203 /* RawSessionFileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawSessionFileStore.swift; sourceTree = "<group>"; };
 		E8B34295A214912826BC4E69 /* GnssFusionInputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GnssFusionInputTests.swift; sourceTree = "<group>"; };
@@ -263,20 +263,6 @@
 			path = Analysis;
 			sourceTree = "<group>";
 		};
-		"TEMP_A2E131DC-B464-42DF-952C-6A7E17E692FF" /* UI */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = UI;
-			sourceTree = "<group>";
-		};
-		"TEMP_DC9A9334-3DF5-428D-B146-3C5C019A019F" /* EKF */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = EKF;
-			sourceTree = "<group>";
-		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -359,7 +345,6 @@
 			);
 			mainGroup = A23724E3B0D669BDBDDA6A10;
 			minimizedProjectReferenceProxies = 1;
-			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -526,6 +511,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = WWT2Q26LY9;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/../build",
@@ -688,6 +674,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = WWT2Q26LY9;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/../build",

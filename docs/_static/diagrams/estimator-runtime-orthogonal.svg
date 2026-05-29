@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1066" height="844" viewBox="0 0 1066 844" role="img" aria-label="Estimator Lifecycle">
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 9 4.5 L 0 9 z" fill="#6F7C84"/>
+    </marker>
+  </defs>
+  <rect width="100%" height="100%" fill="white"/>
+  <g font-family="Arial, sans-serif">
+    
+    <rect x="352" y="40" width="298" height="164" rx="14" fill="#F7FAFC" stroke="#CFD8DC" stroke-width="2" stroke-dasharray="8 8"/>
+    <text x="501" y="68" text-anchor="middle" font-size="20" fill="#263238">Inputs</text>
+  
+
+    <rect x="46" y="190" width="980" height="614" rx="14" fill="#F7FAFC" stroke="#CFD8DC" stroke-width="2" stroke-dasharray="8 8"/>
+    <text x="536" y="218" text-anchor="middle" font-size="20" fill="#263238">Estimator Lifecycle</text>
+  
+    <path d="M 501.0 170.0 L 501.0 252.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 386.0 286.0 L 211.0 286.0 Q 195.0 286.0 195.0 302.0 L 195.0 402.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 310.0 436.0 L 386.0 436.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 501.0 320.0 L 501.0 402.0" fill="none" stroke="#8FA1AA" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="8 8" marker-end="url(#arrow)"/>
+<path d="M 501.0 470.0 L 501.0 495.0 Q 501.0 511.0 485.0 511.0 L 211.0 511.0 Q 195.0 511.0 195.0 527.0 L 195.0 552.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 310.0 586.0 L 386.0 586.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 501.0 620.0 L 501.0 702.0" fill="none" stroke="#6F7C84" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"  marker-end="url(#arrow)"/>
+<path d="M 727.0 586.0 L 616.0 586.0" fill="none" stroke="#8FA1AA" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="8 8" marker-end="url(#arrow)"/>
+<path d="M 842.0 765.0 L 842.0 552.0" fill="none" stroke="#8FA1AA" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="8 8" marker-end="url(#arrow)"/>
+    <g><rect x="386" y="102" width="230" height="68" rx="10" fill="#E8F5E9" stroke="#43A047" stroke-width="2.5" />
+<text x="501" y="135.0" text-anchor="middle" font-size="17" fill="#263238">runtime inputs</text>
+<text x="501" y="150.0" text-anchor="middle" font-size="12" fill="#607D8B">IMU, GNSS, optional speed</text></g>
+<g><rect x="386" y="252" width="230" height="68" rx="10" fill="#E1F5FE" stroke="#0277BD" stroke-width="2.5" />
+<text x="501" y="285.0" text-anchor="middle" font-size="17" fill="#263238">SensorFusion facade</text>
+<text x="501" y="300.0" text-anchor="middle" font-size="12" fill="#607D8B">mount mode + dispatch</text></g>
+<g><rect x="80" y="402" width="230" height="68" rx="10" fill="#FFF9C4" stroke="#FBC02D" stroke-width="2.5" />
+<text x="195" y="435.0" text-anchor="middle" font-size="17" fill="#263238">align path</text>
+<text x="195" y="450.0" text-anchor="middle" font-size="12" fill="#607D8B">tilt init, motion yaw</text></g>
+<g><rect x="386" y="402" width="230" height="68" rx="10" fill="#E1F5FE" stroke="#0277BD" stroke-width="2.5" />
+<text x="501" y="435.0" text-anchor="middle" font-size="17" fill="#263238">EKF init</text>
+<text x="501" y="450.0" text-anchor="middle" font-size="12" fill="#607D8B">anchor + yaw readiness</text></g>
+<g><rect x="80" y="552" width="230" height="68" rx="10" fill="#E1F5FE" stroke="#0277BD" stroke-width="2.5" />
+<text x="195" y="585.0" text-anchor="middle" font-size="17" fill="#263238">prediction</text>
+<text x="195" y="600.0" text-anchor="middle" font-size="12" fill="#607D8B">IMU integration</text></g>
+<g><rect x="386" y="552" width="230" height="68" rx="10" fill="#E1F5FE" stroke="#0277BD" stroke-width="2.5" />
+<text x="501" y="585.0" text-anchor="middle" font-size="17" fill="#263238">EKF updates</text>
+<text x="501" y="600.0" text-anchor="middle" font-size="12" fill="#607D8B">GNSS, NHC, priors</text></g>
+<g>
+      <path d="M 386 715 C 386 698, 616 698, 616 715 L 616 757 C 616 774, 386 774, 386 757 Z" fill="#FFF3E0" stroke="#FFB74D" stroke-width="2.5"/>
+      <path d="M 386 715 C 386 732, 616 732, 616 715" fill="none" stroke="#FFB74D" stroke-width="2.5"/>
+<text x="501" y="735.0" text-anchor="middle" font-size="17" fill="#263238">public state</text>
+<text x="501" y="750.0" text-anchor="middle" font-size="12" fill="#607D8B">pose + diagnostics</text></g>
+<g><rect x="727" y="552" width="230" height="68" rx="10" fill="#FCE4EC" stroke="#E91E63" stroke-width="2.5" />
+<text x="842" y="585.0" text-anchor="middle" font-size="17" fill="#263238">vehicle constraints</text>
+<text x="842" y="600.0" text-anchor="middle" font-size="12" fill="#607D8B">NHC Y/Z, roll prior, stop</text></g>
+<g><rect x="692" y="707" width="300" height="58" rx="10" fill="#FFFFFF" stroke="#CFD8DC" stroke-width="1.5" stroke-dasharray="8 8"/>
+<text x="842" y="735.0" text-anchor="middle" font-size="17" fill="#263238">Roll prior is a flat-road assumption,</text>
+<text x="842" y="750.0" text-anchor="middle" font-size="12" fill="#607D8B">not a direct mount observation.</text></g>
+  </g>
+</svg>

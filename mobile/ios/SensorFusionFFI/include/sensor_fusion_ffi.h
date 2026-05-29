@@ -13,17 +13,55 @@ typedef struct SensorFusionFfi SensorFusionFfi;
 #define SENSOR_FUSION_HARSH_BEHAVIOR_SENSITIVE 1u
 #define SENSOR_FUSION_HARSH_BEHAVIOR_BALANCED 2u
 #define SENSOR_FUSION_HARSH_BEHAVIOR_CONSERVATIVE 3u
+#define SENSOR_FUSION_GNSS_EVENT_POSITION_REJECTED (1u << 0)
+#define SENSOR_FUSION_GNSS_EVENT_VELOCITY_REJECTED (1u << 1)
+#define SENSOR_FUSION_GNSS_EVENT_POSITION_CONSECUTIVE_REJECTED (1u << 2)
+#define SENSOR_FUSION_GNSS_EVENT_VELOCITY_CONSECUTIVE_REJECTED (1u << 3)
+#define SENSOR_FUSION_GNSS_EVENT_POSITION_GAP_BYPASS (1u << 4)
+#define SENSOR_FUSION_GNSS_EVENT_VELOCITY_GAP_BYPASS (1u << 5)
+#define SENSOR_FUSION_GNSS_EVENT_POSITION_ACCURACY_BYPASS (1u << 6)
+#define SENSOR_FUSION_GNSS_EVENT_VELOCITY_ACCURACY_BYPASS (1u << 7)
+#define SENSOR_FUSION_STATE_NOT_READY 0u
+#define SENSOR_FUSION_STATE_INITIALIZING 1u
+#define SENSOR_FUSION_STATE_RUNNING 2u
+#define SENSOR_FUSION_STATE_STABLE 3u
+#define SENSOR_FUSION_STATE_DEGRADED 4u
+#define SENSOR_FUSION_STATE_DEGRADED_DEAD_RECKONING 5u
+#define SENSOR_FUSION_STATE_AWAITING_GNSS_RESEED 6u
 
 typedef struct SensorFusionFfiUpdate {
+    uint32_t state;
     bool mount_ready;
     bool mount_ready_changed;
-    bool ekf_initialized;
-    bool ekf_initialized_now;
-    bool filter_initialized;
-    bool filter_initialized_now;
+    bool navigation_usable;
+    bool navigation_started;
     bool mount_q_bv_valid;
     float mount_q_bv[4];
+    uint32_t gnss_event_mask;
 } SensorFusionFfiUpdate;
+
+typedef struct SensorFusionFfiHealth {
+    uint32_t state;
+    bool running;
+    bool stable;
+    bool degraded;
+    bool navigation_usable;
+    uint32_t reason_mask;
+    float post_init_time_s;
+    float distance_m;
+    float mean_speed_mps;
+    float tail_duration_s;
+    uint32_t tail_samples;
+    float mount_tail_drift_deg;
+    float mount_tail_std_deg;
+    float gyro_bias_tail_drift_radps;
+    float gyro_bias_tail_std_radps;
+    float accel_bias_tail_drift_mps2;
+    float accel_bias_tail_std_mps2;
+    float mount_sigma_max_deg;
+    float attitude_sigma_max_deg;
+    uint32_t recent_gnss_issue_count;
+} SensorFusionFfiHealth;
 
 typedef struct SensorFusionFfiEkfSnapshot {
     bool mount_ready;
@@ -124,6 +162,8 @@ void sensor_fusion_reset_ekf_manual(SensorFusionFfi *handle, float qw, float qx,
 bool sensor_fusion_set_harsh_behavior_preset(SensorFusionFfi *handle, uint32_t preset);
 
 SensorFusionFfiUpdate sensor_fusion_snapshot_status(const SensorFusionFfi *handle);
+
+SensorFusionFfiHealth sensor_fusion_snapshot_health(const SensorFusionFfi *handle);
 
 SensorFusionFfiUpdate sensor_fusion_process_imu(
     SensorFusionFfi *handle,

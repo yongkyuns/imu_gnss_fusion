@@ -1,0 +1,164 @@
+{
+  "name": "road-events-pipeline",
+  "title": "Road Events Pipeline",
+  "output": "docs/_static/diagrams/road-events-pipeline-orthogonal.svg",
+  "profile": "balanced",
+  "direction": "DOWN",
+  "edgeRouting": "SPLINES",
+  "layout": {
+    "partitioning": true,
+    "nodeNode": 72,
+    "nodeNodeBetweenLayers": 76,
+    "edgeNode": 38,
+    "edgeEdge": 30
+  },
+  "groups": [],
+  "nodes": [
+    {
+      "id": "Preset",
+      "title": "event preset",
+      "subtitle": "sensitivity set",
+      "role": "input",
+      "group": "inputs",
+      "row": 0,
+      "column": 0,
+      "layoutOptions": {
+        "elk.partitioning.partition": "0",
+        "elk.layered.crossingMinimization.positionId": "0"
+      }
+    },
+    {
+      "id": "Sample",
+      "title": "VehicleMotionSample",
+      "subtitle": "speed, accel, attitude",
+      "role": "input",
+      "group": "inputs",
+      "row": 0,
+      "column": 1,
+      "layoutOptions": {
+        "elk.partitioning.partition": "0",
+        "elk.layered.crossingMinimization.positionId": "1"
+      }
+    },
+    {
+      "id": "Detectors",
+      "title": "detector bank",
+      "subtitle": "vertical, longitudinal, lateral, grade",
+      "role": "core",
+      "width": 260,
+      "group": "analysis",
+      "row": 1,
+      "column": 0,
+      "layoutOptions": {
+        "elk.partitioning.partition": "1",
+        "elk.layered.crossingMinimization.positionId": "0"
+      }
+    },
+    {
+      "id": "Roughness",
+      "title": "roughness separation",
+      "subtitle": "ambient energy vs shocks",
+      "role": "process",
+      "width": 260,
+      "group": "analysis",
+      "row": 1,
+      "column": 1,
+      "layoutOptions": {
+        "elk.partitioning.partition": "1",
+        "elk.layered.crossingMinimization.positionId": "1"
+      }
+    },
+    {
+      "id": "Events",
+      "title": "event stream",
+      "subtitle": "bumps, shocks, hills, harsh",
+      "role": "warning",
+      "group": "outputs",
+      "row": 2,
+      "column": 0,
+      "layoutOptions": {
+        "elk.partitioning.partition": "2",
+        "elk.layered.crossingMinimization.positionId": "0"
+      }
+    },
+    {
+      "id": "Stats",
+      "title": "TripStats",
+      "subtitle": "constant memory",
+      "role": "storage",
+      "shape": "cylinder",
+      "group": "outputs",
+      "row": 2,
+      "column": 1,
+      "layoutOptions": {
+        "elk.partitioning.partition": "2",
+        "elk.layered.crossingMinimization.positionId": "1"
+      }
+    },
+    {
+      "id": "Consumers",
+      "title": "consumers",
+      "subtitle": "iOS alerts, review, visualizer plots",
+      "role": "input",
+      "width": 270,
+      "group": "consumers",
+      "row": 3,
+      "column": 1,
+      "layoutOptions": {
+        "elk.partitioning.partition": "3",
+        "elk.layered.crossingMinimization.positionId": "1"
+      }
+    },
+    {
+      "id": "Note",
+      "title": "Impulse shocks are reported separately,",
+      "subtitle": "so ambient roughness stays stable.",
+      "role": "note",
+      "width": 360,
+      "height": 58,
+      "row": 2,
+      "column": 2,
+      "layoutOptions": {
+        "elk.partitioning.partition": "2",
+        "elk.layered.crossingMinimization.positionId": "2"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "Sample",
+      "to": "Detectors"
+    },
+    {
+      "from": "Preset",
+      "to": "Detectors",
+      "dashed": true
+    },
+    {
+      "from": "Detectors",
+      "to": "Roughness"
+    },
+    {
+      "from": "Roughness",
+      "to": "Events"
+    },
+    {
+      "from": "Events",
+      "to": "Stats"
+    },
+    {
+      "from": "Events",
+      "to": "Consumers"
+    },
+    {
+      "from": "Stats",
+      "to": "Consumers",
+      "dashed": true
+    },
+    {
+      "from": "Roughness",
+      "to": "Note",
+      "dashed": true
+    }
+  ]
+}

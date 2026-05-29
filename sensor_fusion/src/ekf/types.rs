@@ -195,3 +195,9 @@ pub struct GnssSample {
     /// Optional local-NED heading, radians clockwise from north toward east.
     pub heading_rad: Option<f32>,
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GnssUpdateResult {
+    /// Bitmask of GNSS rejection/bypass events emitted while processing this sample.
+    pub event_mask: u32,
+}

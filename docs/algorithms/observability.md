@@ -1,34 +1,108 @@
 # Mount Observability
 
-Mount estimation is split between a reduced alignment estimator and the EKF runtime.
+Mount estimation is split between a reduced alignment estimator and the EKF
+runtime. The important distinction is direct measurement sensitivity versus
+propagation-mediated correction through covariance.
 
-## What Is Observable From IMU/GNSS
+For the detailed roll-channel derivation, see [](roll-observability.md).
 
-GNSS velocity changes and raw IMU angular/specific-force signals make mount pitch and yaw strongly visible during ordinary acceleration, braking, and turning. Mount roll is weaker because many ground-vehicle motions can trade vehicle roll, road bank, and mount roll while producing similar body-frame measurements.
+## What IMU/GNSS Can See
 
-Nonholonomic constraints help the EKF enforce vehicle-frame motion consistency:
+GNSS velocity changes and raw IMU angular/specific-force signals make mount
+pitch and yaw visible during ordinary acceleration, braking, and turning. Mount
+roll is weaker because ground-vehicle motion can trade vehicle roll, road bank,
+and mount roll while producing similar body-frame measurements.
 
-```text
-v_y ~= 0
-v_z ~= 0
-```
+In practical terms:
 
-Those constraints are defined in the vehicle frame. They affect the EKF through the current attitude and mount estimate, but the measurement still observes vehicle-frame velocity consistency, not mount roll as an isolated physical quantity. During banked-road motion, a wrong mount roll can be partially compensated by a different vehicle roll/attitude history, so low residuals do not prove unique mount-roll identification.
+| Motion regime | Mount information |
+| --- | --- |
+| Stationary | gravity constrains body tilt but not yaw or road-bank decomposition |
+| Straight constant speed | weak mount excitation |
+| Acceleration/braking | strong pitch and yaw cues |
+| Flat turns | lateral acceleration can improve roll conditioning if bank is known or small |
+| Banked turns | vehicle roll/bank and mount roll can trade |
+
+## Implemented NHC Rows
+
+Nonholonomic constraints enforce vehicle-frame velocity consistency:
+
+$$
+\begin{aligned}
+v_y^v &\approx 0,\\
+v_z^v &\approx 0.
+\end{aligned}
+$$
+
+The implemented instantaneous rows are:
+
+$$
+\begin{aligned}
+r_y &= -e_y^T C_{nv}^T v_n,\\
+r_z &= -e_z^T C_{nv}^T v_n.
+\end{aligned}
+$$
+
+Their direct Jacobian has attitude and velocity sensitivity, but no residual
+mount columns:
+
+$$
+H_\mathrm{mount}=0.
+$$
+
+Mount states can still be corrected through Kalman gain if prediction and prior
+updates have created cross-covariance between mount and the observed
+attitude/velocity states. That is not the same as NHC directly measuring mount
+roll.
 
 ## Vehicle-Roll Prior
 
-The runtime includes an optional soft vehicle-roll prior at eligible NHC epochs. Its default variance density is currently enabled in `RuntimeConfig` as `r_vehicle_roll_prior = 0.1`; setting it to `0` disables the update.
+The runtime includes a soft flat-road prior at eligible NHC epochs:
 
-This prior is a flat-road assumption:
+$$
+\operatorname{roll}(q_{nv}) \approx 0.
+$$
 
-```text
-vehicle_roll ~= 0
-```
+`SensorFusion` currently enables it by default with variance density
+`r_vehicle_roll_prior = 0.1`; setting it to `0` disables the update. The
+variance is scaled by the same observation interval as NHC.
 
-It can reduce mount-roll ambiguity on mostly flat driving, but it is not a sensor-derived proof that the road is flat. Sustained banked roads can violate the assumption, so roll-prior tuning should be evaluated against banked scenarios and field data.
+The residual is:
+
+$$
+r_\phi = -\operatorname{roll}(q_{nv}).
+$$
+
+The Jacobian is finite-differenced only over vehicle-attitude error states
+`0..2`. Direct mount columns are zero, so any mount motion comes through
+covariance coupling.
+
+This prior reduces roll ambiguity on mostly flat roads by anchoring the
+vehicle-roll side of the roll split. It is not bank-safe: sustained banked roads
+can be converted into mount error if the prior is trusted too strongly.
+
+## Why Roll Remains Ambiguous
+
+The practical roll nullspace is a forward-axis gauge. A change in vehicle roll
+can be offset by a corresponding change in mount roll while preserving many
+body-frame measurements and NHC residuals.
+
+Lateral acceleration can improve practical conditioning under a flat-road or
+known-bank assumption, but it does not remove the gauge by itself. Therefore the
+public claim should be narrow:
+
+NHC and GNSS constrain the full vehicle-motion solution. They do not provide
+bank-safe absolute mount-roll observability using only IMU/GNSS. Mount roll
+becomes practically separable only with sufficiently informative motion plus an
+external or assumed roll/bank anchor, such as the flat-road vehicle-roll prior.
 
 ## Alignment Versus EKF
 
-Align is a reduced formulation with mount angles as its main states. It can seed the EKF well when the motion excites the mount, but it cannot fully separate mount roll from vehicle roll/bank by itself. The EKF has more states and a dynamic model, but it can still inherit a poor seed when the data does not identify the same decomposition.
+Align is a reduced formulation with mount angles as its main states. It can seed
+the EKF well when the motion excites the mount, but it cannot fully separate
+mount roll from vehicle roll/bank by itself.
 
-The correct public claim is therefore narrower than "NHC observes mount roll": NHC and GNSS help constrain the full vehicle-motion solution; mount roll needs sufficiently informative motion, assumptions, or priors to become practically separable.
+The EKF has a richer dynamic state and covariance coupling, but it can still
+inherit a poor seed when the data does not identify the same decomposition. A
+low NHC residual or smaller covariance is not by itself proof that mount roll is
+uniquely observable.

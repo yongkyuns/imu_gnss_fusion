@@ -13,9 +13,14 @@
 
 use crate::ProcessNoise;
 use crate::align::{Align, AlignConfig, AlignUpdateTrace, AlignWindowSummary, GRAVITY_MPS2};
+use crate::diagnostics::{FusionHealth, FusionHealthMonitor, FusionState};
 use crate::fusion_types::RuntimeConfig;
 pub use crate::fusion_types::{
-    AlignDebug, Config, GnssSample, ImuSample, MountMode, Update, VehicleSpeedDirection,
+    AlignDebug, Config, GNSS_EVENT_POSITION_ACCURACY_BYPASS,
+    GNSS_EVENT_POSITION_CONSECUTIVE_REJECTED, GNSS_EVENT_POSITION_GAP_BYPASS,
+    GNSS_EVENT_POSITION_REJECTED, GNSS_EVENT_VELOCITY_ACCURACY_BYPASS,
+    GNSS_EVENT_VELOCITY_CONSECUTIVE_REJECTED, GNSS_EVENT_VELOCITY_GAP_BYPASS,
+    GNSS_EVENT_VELOCITY_REJECTED, GnssSample, ImuSample, MountMode, Update, VehicleSpeedDirection,
     VehicleSpeedSample,
 };
 use crate::math::{
@@ -40,6 +45,12 @@ const GNSS_VEL_MIN_STD_MPS: f32 = 0.01;
 const GNSS_VERTICAL_POS_STD_SCALE: f32 = 2.5;
 const MANUAL_MOUNT_SEED_SIGMA_RAD: f32 = 3.0_f32 * core::f32::consts::PI / 180.0;
 const MANUAL_MOUNT_YAW_SEED_MIN_SPEED_MPS: f32 = 20.0 / 3.6;
+const SHORT_SLEEP_MAX_S: f32 = 15.0 * 60.0;
+const MEDIUM_SLEEP_MAX_S: f32 = 3600.0;
+const NAV_USABLE_HORIZONTAL_POS_SIGMA_M: f32 = 30.0;
+const NAV_USABLE_HORIZONTAL_VEL_SIGMA_MPS: f32 = 2.5;
+const NAV_USABLE_YAW_SIGMA_RAD: f32 = 15.0_f32 * core::f32::consts::PI / 180.0;
+const NAV_USABLE_ROLL_PITCH_SIGMA_RAD: f32 = 5.0_f32 * core::f32::consts::PI / 180.0;
 
 #[derive(Clone, Copy, Debug, Default)]
 struct Anchor {
@@ -101,6 +112,7 @@ pub struct SensorFusion {
     last_align_trace: Option<AlignUpdateTrace>,
     reanchor_count: u32,
     last_reanchor: Option<(f32, f32)>,
+    diagnostics: FusionHealthMonitor,
 }
 
 impl SensorFusion {
@@ -160,6 +172,7 @@ impl SensorFusion {
             last_align_trace: None,
             reanchor_count: 0,
             last_reanchor: None,
+            diagnostics: FusionHealthMonitor::default(),
         };
         if let MountMode::Manual(q_bv) = config.mount_mode {
             out.set_misalignment(q_bv);
@@ -393,6 +406,14 @@ impl SensorFusion {
 
     /// Processes one IMU sample and returns updated runtime status.
     pub fn process_imu(&mut self, sample: ImuSample) -> Update {
+        let mut gnss_event_mask = 0;
+        self.diagnostics.record_imu(sample.t_s);
+        if let Some(last_t) = self.last_imu_t_s {
+            let gap_s = sample.t_s - last_t;
+            if gap_s > 0.05 {
+                self.handle_imu_sleep_gap(gap_s);
+            }
+        }
         let prev_sample = self.last_imu_sample.replace(sample);
         let Some(last_t) = self.last_imu_t_s.replace(sample.t_s) else {
             self.try_tilt_init_align(sample.accel_mps2, sample.gyro_radps);
@@ -408,6 +429,9 @@ impl SensorFusion {
         self.try_tilt_init_align(sample.accel_mps2, sample.gyro_radps);
 
         if !self.ekf_initialized || !self.mount_ready {
+            return self.update(false, false);
+        }
+        if self.awaiting_gnss_reseed() {
             return self.update(false, false);
         }
         if !(0.001..=0.05).contains(&dt) {
@@ -432,10 +456,17 @@ impl SensorFusion {
             nominal.vd += coriolis_delta_v_n[2];
         }
         self.clamp_ekf_biases();
+        if self.diagnostics.state() == FusionState::DegradedDeadReckoning
+            && !self.nav_covariance_usable()
+        {
+            self.enter_navigation_reseed_mode();
+            return self.update(false, false);
+        }
 
         if self.cfg.r_body_vel_y > 0.0 || self.cfg.r_body_vel_z > 0.0 {
             if self.runtime_zero_velocity_active(sample.accel_mps2, sample.gyro_radps) {
-                self.fuse_pending_gnss_at_imu(sample.t_s, None);
+                let (_used_nhc, events) = self.fuse_pending_gnss_at_imu(sample.t_s, None);
+                gnss_event_mask |= events;
                 if self.cfg.r_zero_vel > 0.0 {
                     self.ekf.fuse_zero_vel(self.cfg.r_zero_vel);
                 }
@@ -448,8 +479,9 @@ impl SensorFusion {
                 let gyro_vehicle = self.current_vehicle_vector_from_body(sample.gyro_radps);
                 let accel_vehicle = self.current_vehicle_vector_from_body(sample.accel_mps2);
                 let nhc = self.imu_epoch_nhc_variances(sample.t_s, dt, accel_vehicle, gyro_vehicle);
-                let used_nhc_with_gnss =
+                let (used_nhc_with_gnss, events) =
                     self.fuse_pending_gnss_at_imu(sample.t_s, nhc.map(NhcEpoch::variances));
+                gnss_event_mask |= events;
                 if let Some(nhc) = nhc
                     && !used_nhc_with_gnss
                 {
@@ -466,10 +498,27 @@ impl SensorFusion {
             }
             self.clamp_ekf_biases();
         } else {
-            self.fuse_pending_gnss_at_imu(sample.t_s, None);
+            let (_used_nhc, events) = self.fuse_pending_gnss_at_imu(sample.t_s, None);
+            gnss_event_mask |= events;
         }
 
-        self.update(false, false)
+        self.diagnostics
+            .record_gnss_event_mask(sample.t_s, gnss_event_mask);
+        self.diagnostics.record_state(sample.t_s, self.ekf.raw());
+        if self.diagnostics.state() == FusionState::DegradedDeadReckoning
+            && self
+                .last_ekf_gnss_fuse_t_s
+                .is_some_and(|t_s| (sample.t_s - t_s).abs() <= 0.10)
+            && gnss_event_mask
+                & (GNSS_EVENT_POSITION_REJECTED
+                    | GNSS_EVENT_VELOCITY_REJECTED
+                    | GNSS_EVENT_POSITION_CONSECUTIVE_REJECTED
+                    | GNSS_EVENT_VELOCITY_CONSECUTIVE_REJECTED)
+                == 0
+        {
+            self.diagnostics.mark_running();
+        }
+        self.update_with_gnss_events(false, false, gnss_event_mask)
     }
 
     /// Processes one GNSS sample and returns updated runtime status.
@@ -477,6 +526,7 @@ impl SensorFusion {
         let Some(local) = self.prepare_local_gnss_sample(gnss) else {
             return self.update(false, false);
         };
+        self.diagnostics.record_gnss(local.t_s, local.vel_ned_mps);
         self.last_gnss = Some(local);
 
         let prev_mount_ready = self.mount_ready;
@@ -503,11 +553,20 @@ impl SensorFusion {
             return self.update(prev_mount_ready != self.mount_ready, false);
         }
 
+        if self.awaiting_gnss_reseed() {
+            if self.manual_mount_mode() && !self.gnss_can_seed_yaw(local) {
+                return self.update(prev_mount_ready != self.mount_ready, false);
+            }
+            self.reseed_navigation_from_gnss_preserving_calibration(local);
+            self.ekf_initialized = true;
+            return self.update(prev_mount_ready != self.mount_ready, true);
+        }
+
         if !self.ekf_initialized && self.manual_mount_mode() && !self.gnss_can_seed_yaw(local) {
             return self.update(prev_mount_ready != self.mount_ready, false);
         }
 
-        let ekf_initialized_now = if !self.ekf_initialized {
+        let navigation_started = if !self.ekf_initialized {
             self.ekf_mount_q_bv = self.mount_q_bv;
             self.initialize_ekf_from_gnss(local);
             self.ekf_initialized = true;
@@ -517,7 +576,7 @@ impl SensorFusion {
             false
         };
 
-        self.update(prev_mount_ready != self.mount_ready, ekf_initialized_now)
+        self.update(prev_mount_ready != self.mount_ready, navigation_started)
     }
 
     /// Processes one vehicle-speed sample and returns updated runtime status.
@@ -552,7 +611,16 @@ impl SensorFusion {
 
     /// Returns the current EKF state after GNSS initialization.
     pub fn ekf(&self) -> Option<&crate::ekf::State> {
-        self.ekf_initialized.then_some(self.ekf.raw())
+        (self.ekf_initialized && !self.awaiting_gnss_reseed()).then_some(self.ekf.raw())
+    }
+
+    /// Returns runtime health and convergence diagnostics for the fusion state.
+    pub fn health(&self) -> FusionHealth {
+        self.diagnostics.health(
+            self.mount_ready,
+            self.ekf_initialized,
+            self.ekf_initialized.then_some(self.ekf.raw()),
+        )
     }
 
     /// Returns the latest physical vehicle-to-body mount quaternion, if ready.
@@ -724,13 +792,173 @@ impl SensorFusion {
         !self.internal_align_enabled
     }
 
-    fn update(&self, mount_ready_changed: bool, filter_initialized_now: bool) -> Update {
+    fn awaiting_gnss_reseed(&self) -> bool {
+        self.diagnostics.state() == FusionState::AwaitingGnssReseed
+    }
+
+    fn handle_imu_sleep_gap(&mut self, gap_s: f32) {
+        self.clear_stream_coupling_after_gap();
+        if !gap_s.is_finite() || gap_s < 0.0 {
+            self.enter_navigation_reseed_mode();
+            return;
+        }
+        if !self.ekf_initialized {
+            self.diagnostics.mark_initializing();
+            return;
+        }
+        if gap_s <= SHORT_SLEEP_MAX_S {
+            self.age_ekf_covariance_for_short_sleep(gap_s);
+            return;
+        }
+        if gap_s <= MEDIUM_SLEEP_MAX_S {
+            self.age_ekf_covariance_for_medium_sleep(gap_s);
+            if self.nav_covariance_usable() {
+                self.diagnostics.mark_degraded_dead_reckoning();
+            } else {
+                self.enter_navigation_reseed_mode();
+            }
+            return;
+        }
+        self.enter_navigation_reseed_mode();
+    }
+
+    fn clear_stream_coupling_after_gap(&mut self) {
+        self.last_imu_t_s = None;
+        self.last_imu_sample = None;
+        self.pending_ekf_gnss = None;
+        self.last_ekf_nhc_t_s = None;
+        self.reset_interval_summary();
+        if !self.ekf_initialized {
+            self.align_prev_gnss = None;
+            self.align_ready_since_t_s = None;
+        }
+    }
+
+    fn enter_navigation_reseed_mode(&mut self) {
+        self.pending_ekf_gnss = None;
+        self.last_ekf_nhc_t_s = None;
+        self.diagnostics.mark_awaiting_gnss_reseed();
+    }
+
+    fn age_ekf_covariance_for_short_sleep(&mut self, gap_s: f32) {
+        let scale = sleep_gap_scale(gap_s, SHORT_SLEEP_MAX_S);
+        let raw = self.ekf.raw_mut();
+        // Sleep means the device is stationary. Age confidence for stale
+        // sensors and thermal drift, but do not model unobserved vehicle travel.
+        add_covariance_sigma(&mut raw.p, 6, 2.0 * scale);
+        add_covariance_sigma(&mut raw.p, 7, 2.0 * scale);
+        add_covariance_sigma(&mut raw.p, 8, 1.0 * scale);
+        for i in 3..6 {
+            add_covariance_sigma(&mut raw.p, i, 0.25 * scale);
+        }
+        add_covariance_sigma(&mut raw.p, 0, 0.25_f32.to_radians() * scale);
+        add_covariance_sigma(&mut raw.p, 1, 0.25_f32.to_radians() * scale);
+        add_covariance_sigma(&mut raw.p, 2, 1.0_f32.to_radians() * scale);
+        for i in 9..12 {
+            add_covariance_sigma(&mut raw.p, i, 0.002_f32.to_radians() * scale);
+        }
+        for i in 12..15 {
+            add_covariance_sigma(&mut raw.p, i, 0.01 * scale);
+        }
+    }
+
+    fn age_ekf_covariance_for_medium_sleep(&mut self, gap_s: f32) {
+        let gap_s = gap_s.clamp(0.0, MEDIUM_SLEEP_MAX_S);
+        let scale = sleep_gap_scale(
+            (gap_s - SHORT_SLEEP_MAX_S).max(0.0),
+            MEDIUM_SLEEP_MAX_S - SHORT_SLEEP_MAX_S,
+        );
+        let raw = self.ekf.raw_mut();
+        let pos_h_sigma_m = 2.0 + 6.0 * scale;
+        add_covariance_sigma(&mut raw.p, 6, pos_h_sigma_m);
+        add_covariance_sigma(&mut raw.p, 7, pos_h_sigma_m);
+        add_covariance_sigma(&mut raw.p, 8, 1.0 + 3.0 * scale);
+
+        let vel_sigma_mps = 0.25 + 0.50 * scale;
+        for i in 3..6 {
+            add_covariance_sigma(&mut raw.p, i, vel_sigma_mps);
+        }
+
+        add_covariance_sigma(&mut raw.p, 0, (0.25 + 0.75 * scale).to_radians());
+        add_covariance_sigma(&mut raw.p, 1, (0.25 + 0.75 * scale).to_radians());
+        add_covariance_sigma(&mut raw.p, 2, (1.0 + 4.0 * scale).to_radians());
+
+        for i in 9..12 {
+            add_covariance_sigma(&mut raw.p, i, (0.002 + 0.008 * scale).to_radians());
+        }
+        for i in 12..15 {
+            add_covariance_sigma(&mut raw.p, i, 0.01 + 0.02 * scale);
+        }
+    }
+
+    fn nav_covariance_usable(&self) -> bool {
+        if !self.ekf_initialized {
+            return false;
+        }
+        let p = &self.ekf.raw().p;
+        let pos_h_sigma_m = sqrt_f32(p[6][6].max(0.0).max(p[7][7].max(0.0)));
+        let vel_h_sigma_mps = sqrt_f32(p[3][3].max(0.0).max(p[4][4].max(0.0)));
+        let yaw_sigma_rad = sqrt_f32(p[2][2].max(0.0));
+        let roll_pitch_sigma_rad = sqrt_f32(p[0][0].max(0.0).max(p[1][1].max(0.0)));
+        pos_h_sigma_m <= NAV_USABLE_HORIZONTAL_POS_SIGMA_M
+            && vel_h_sigma_mps <= NAV_USABLE_HORIZONTAL_VEL_SIGMA_MPS
+            && yaw_sigma_rad <= NAV_USABLE_YAW_SIGMA_RAD
+            && roll_pitch_sigma_rad <= NAV_USABLE_ROLL_PITCH_SIGMA_RAD
+    }
+
+    fn reseed_navigation_from_gnss_preserving_calibration(&mut self, gnss: crate::ekf::GnssSample) {
+        let prev = self.ekf.raw().nominal;
+        let prev_p = self.ekf.raw().p;
+        let q_bv = [prev.q_bv0, prev.q_bv1, prev.q_bv2, prev.q_bv3];
+        let bg = [prev.bgx, prev.bgy, prev.bgz];
+        let ba = [prev.bax, prev.bay, prev.baz];
+        self.mount_q_bv = Some(q_bv);
+        self.ekf_mount_q_bv = Some(q_bv);
+        self.initialize_ekf_from_gnss(gnss);
+        {
+            let raw = self.ekf.raw_mut();
+            raw.nominal.bgx = bg[0];
+            raw.nominal.bgy = bg[1];
+            raw.nominal.bgz = bg[2];
+            raw.nominal.bax = ba[0];
+            raw.nominal.bay = ba[1];
+            raw.nominal.baz = ba[2];
+
+            let gyro_floor_var = sq_f32(0.03_f32.to_radians());
+            let accel_floor_var = sq_f32(0.05);
+            let mount_floor_var = sq_f32(0.50_f32.to_radians());
+            for i in 9..12 {
+                raw.p[i][i] = raw.p[i][i].max(prev_p[i][i]).max(gyro_floor_var);
+            }
+            for i in 12..15 {
+                raw.p[i][i] = raw.p[i][i].max(prev_p[i][i]).max(accel_floor_var);
+            }
+            for i in 15..18 {
+                raw.p[i][i] = raw.p[i][i].max(prev_p[i][i]).max(mount_floor_var);
+            }
+        }
+        self.diagnostics.mark_running();
+    }
+
+    fn update(&self, mount_ready_changed: bool, navigation_started: bool) -> Update {
+        self.update_with_gnss_events(mount_ready_changed, navigation_started, 0)
+    }
+
+    fn update_with_gnss_events(
+        &self,
+        mount_ready_changed: bool,
+        navigation_started: bool,
+        gnss_event_mask: u32,
+    ) -> Update {
+        let health = self.health();
         Update {
+            state: health.state,
             mount_ready: self.mount_ready,
             mount_ready_changed,
-            ekf_initialized: self.ekf_initialized,
-            ekf_initialized_now: filter_initialized_now,
+            navigation_usable: health.navigation_usable,
+            navigation_started,
             mount_q_bv: self.mount_q_bv,
+            gnss_event_mask,
         }
     }
 
@@ -785,6 +1013,7 @@ impl SensorFusion {
         }
         self.last_ekf_gnss_fuse_t_s = Some(gnss.t_s);
         self.last_ekf_nhc_t_s = None;
+        self.diagnostics.mark_initialized(gnss.t_s);
     }
 
     fn gnss_can_seed_yaw(&self, gnss: crate::ekf::GnssSample) -> bool {
@@ -1116,21 +1345,22 @@ impl SensorFusion {
         (Some(elapsed_s.max(fallback_dt_s)), Some(t_s))
     }
 
-    fn fuse_pending_gnss_at_imu(&mut self, imu_t_s: f32, nhc: Option<[f32; 2]>) -> bool {
+    fn fuse_pending_gnss_at_imu(&mut self, imu_t_s: f32, nhc: Option<[f32; 2]>) -> (bool, u32) {
         let Some(gnss) = self.pending_ekf_gnss else {
-            return false;
+            return (false, 0);
         };
         let age_s = imu_t_s - gnss.t_s;
         if age_s < -1.0e-6 {
-            return false;
+            return (false, 0);
         }
         self.pending_ekf_gnss = None;
         let use_nhc = (0.0..=0.05).contains(&age_s).then_some(nhc).flatten();
         let gnss = self.rate_normalized_ekf_gnss(gnss);
         self.last_ekf_gnss_fuse_t_s = Some(gnss.t_s);
-        self.ekf
-            .fuse_gps_nhc_batch(gnss, use_nhc.map(|r| r[0]), use_nhc.map(|r| r[1]));
-        use_nhc.is_some()
+        let result =
+            self.ekf
+                .fuse_gps_nhc_batch(gnss, use_nhc.map(|r| r[0]), use_nhc.map(|r| r[1]));
+        (use_nhc.is_some(), result.event_mask)
     }
 
     fn rate_normalized_ekf_gnss(&self, mut gnss: crate::ekf::GnssSample) -> crate::ekf::GnssSample {
@@ -1368,6 +1598,19 @@ fn set_covariance_axis_block<const N: usize>(
         }
         p[i][i] = variances[axis];
     }
+}
+
+fn add_covariance_sigma<const N: usize>(p: &mut [[f32; N]; N], index: usize, sigma: f32) {
+    if index < N && sigma.is_finite() && sigma > 0.0 {
+        p[index][index] += sigma * sigma;
+    }
+}
+
+fn sleep_gap_scale(gap_s: f32, max_gap_s: f32) -> f32 {
+    if !gap_s.is_finite() || !max_gap_s.is_finite() || max_gap_s <= 0.0 {
+        return 0.0;
+    }
+    sqrt_f32((gap_s.max(0.0) / max_gap_s).min(1.0))
 }
 
 fn copy_mount_covariance_block<const N: usize>(p: &mut [[f32; N]; N], align_p: [[f32; 3]; 3]) {

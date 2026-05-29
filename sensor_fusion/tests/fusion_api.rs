@@ -1,6 +1,7 @@
-use sensor_fusion::ProcessNoise;
+use sensor_fusion::{FusionState, ProcessNoise};
 use sensor_fusion::{
-    GnssSample, ImuSample, SensorFusion, VehicleSpeedDirection, VehicleSpeedSample,
+    GNSS_EVENT_POSITION_REJECTED, GnssSample, ImuSample, SensorFusion, VehicleSpeedDirection,
+    VehicleSpeedSample,
 };
 
 fn gnss_sample(t_s: f32) -> GnssSample {
@@ -29,7 +30,7 @@ fn manual_mount_initializes_ekf_from_gnss_with_live_mount_prior() {
     let mut system = SensorFusion::with_mount([1.0, 0.0, 0.0, 0.0]);
     let upd = system.process_gnss(gnss_sample(1.0));
     assert!(upd.mount_ready);
-    assert!(upd.ekf_initialized_now);
+    assert!(upd.navigation_started);
     let ekf = system.ekf().unwrap();
     let expected_var = (3.0_f32.to_radians()).powi(2);
     for i in 15..18 {
@@ -43,26 +44,26 @@ fn manual_mount_waits_for_yaw_seed_before_ekf_initialization() {
 
     let stationary = system.process_gnss(stationary_gnss_sample(1.0));
     assert!(stationary.mount_ready);
-    assert!(!stationary.ekf_initialized);
-    assert!(!stationary.ekf_initialized_now);
+    assert!(!stationary.navigation_usable);
+    assert!(!stationary.navigation_started);
     assert!(system.ekf().is_none());
 
     let mut moving = gnss_sample(2.0);
     moving.heading_rad = None;
     moving.vel_ned_mps = [-6.0, 0.0, 0.0];
     let no_heading = system.process_gnss(moving);
-    assert!(!no_heading.ekf_initialized);
-    assert!(!no_heading.ekf_initialized_now);
+    assert!(!no_heading.navigation_usable);
+    assert!(!no_heading.navigation_started);
 
     moving.heading_rad = Some(core::f32::consts::PI);
     moving.vel_ned_mps = [-5.5, 0.0, 0.0];
     let below_speed = system.process_gnss(moving);
-    assert!(!below_speed.ekf_initialized);
-    assert!(!below_speed.ekf_initialized_now);
+    assert!(!below_speed.navigation_usable);
+    assert!(!below_speed.navigation_started);
 
     moving.vel_ned_mps = [-6.0, 0.0, 0.0];
     let initialized = system.process_gnss(moving);
-    assert!(initialized.ekf_initialized_now);
+    assert!(initialized.navigation_started);
     let ekf = system.ekf().unwrap();
     assert!(ekf.nominal.q3.abs() > 0.99);
 }
@@ -79,7 +80,7 @@ fn ekf_nhc_uses_estimated_motion_during_gnss_outage() {
     system.set_nhc_update_period_s(0.0);
 
     let update = system.process_gnss(gnss_sample(1.0));
-    assert!(update.ekf_initialized_now);
+    assert!(update.navigation_started);
 
     let before = system.ekf().unwrap().update_diag.total_updates;
     let _ = system.process_imu(ImuSample {
@@ -97,10 +98,149 @@ fn ekf_nhc_uses_estimated_motion_during_gnss_outage() {
 }
 
 #[test]
+fn gnss_gate_events_are_returned_when_pending_gnss_is_fused() {
+    let mut system = SensorFusion::with_mount([1.0, 0.0, 0.0, 0.0]);
+    let update = system.process_gnss(gnss_sample(1.0));
+    assert!(update.navigation_started);
+
+    let _ = system.process_imu(ImuSample {
+        t_s: 1.01,
+        gyro_radps: [0.0, 0.0, 0.0],
+        accel_mps2: [0.0, 0.0, 9.80665],
+    });
+    let queued = system.process_gnss(GnssSample {
+        t_s: 1.02,
+        lat_deg: 0.001,
+        ..gnss_sample(1.02)
+    });
+    assert_eq!(queued.gnss_event_mask, 0);
+
+    let fused = system.process_imu(ImuSample {
+        t_s: 1.03,
+        gyro_radps: [0.0, 0.0, 0.0],
+        accel_mps2: [0.0, 0.0, 9.80665],
+    });
+
+    assert_eq!(
+        fused.gnss_event_mask & GNSS_EVENT_POSITION_REJECTED,
+        GNSS_EVENT_POSITION_REJECTED
+    );
+}
+
+#[test]
+fn short_sleep_keeps_navigation_running() {
+    let mut system = SensorFusion::with_mount([1.0, 0.0, 0.0, 0.0]);
+    assert!(system.process_gnss(gnss_sample(1.0)).navigation_started);
+    let _ = system.process_imu(ImuSample {
+        t_s: 1.01,
+        gyro_radps: [0.0, 0.0, 0.0],
+        accel_mps2: [0.0, 0.0, 9.80665],
+    });
+    let _ = system.process_imu(ImuSample {
+        t_s: 1.02,
+        gyro_radps: [0.0, 0.0, 0.0],
+        accel_mps2: [0.0, 0.0, 9.80665],
+    });
+
+    let slept = system.process_imu(ImuSample {
+        t_s: 600.0,
+        gyro_radps: [0.0, 0.0, 0.0],
+        accel_mps2: [0.0, 0.0, 9.80665],
+    });
+
+    assert!(slept.navigation_usable);
+    assert_eq!(system.health().state, FusionState::Running);
+    let ekf = system.ekf().unwrap();
+    let pos_h_sigma_m = ekf.p[6][6].max(ekf.p[7][7]).sqrt();
+    let vel_h_sigma_mps = ekf.p[3][3].max(ekf.p[4][4]).sqrt();
+    assert!(
+        pos_h_sigma_m < 5.0,
+        "stationary short sleep should not add unbounded position uncertainty"
+    );
+    assert!(
+        vel_h_sigma_mps < 1.0,
+        "stationary short sleep should preserve usable velocity confidence"
+    );
+}
+
+#[test]
+fn medium_sleep_enters_degraded_dead_reckoning_until_gnss_recovers() {
+    let mut system = SensorFusion::with_mount([1.0, 0.0, 0.0, 0.0]);
+    assert!(system.process_gnss(gnss_sample(1.0)).navigation_started);
+    let _ = system.process_imu(ImuSample {
+        t_s: 1.01,
+        gyro_radps: [0.0, 0.0, 0.0],
+        accel_mps2: [0.0, 0.0, 9.80665],
+    });
+    let _ = system.process_imu(ImuSample {
+        t_s: 1.02,
+        gyro_radps: [0.0, 0.0, 0.0],
+        accel_mps2: [0.0, 0.0, 9.80665],
+    });
+
+    let _ = system.process_imu(ImuSample {
+        t_s: 1200.0,
+        gyro_radps: [0.0, 0.0, 0.0],
+        accel_mps2: [0.0, 0.0, 9.80665],
+    });
+    let health = system.health();
+    assert_eq!(health.state, FusionState::DegradedDeadReckoning);
+    assert!(health.degraded);
+    assert!(health.navigation_usable);
+    let ekf = system.ekf().unwrap();
+    let pos_h_sigma_m = ekf.p[6][6].max(ekf.p[7][7]).sqrt();
+    let yaw_sigma_deg = ekf.p[2][2].sqrt().to_degrees();
+    assert!(
+        pos_h_sigma_m < 10.0,
+        "stationary medium sleep should stay within bounded position aging"
+    );
+    assert!(
+        yaw_sigma_deg < 10.0,
+        "stationary medium sleep should not quickly destroy yaw confidence"
+    );
+
+    let _ = system.process_gnss(gnss_sample(1200.01));
+    let _ = system.process_imu(ImuSample {
+        t_s: 1200.02,
+        gyro_radps: [0.0, 0.0, 0.0],
+        accel_mps2: [0.0, 0.0, 9.80665],
+    });
+    assert_eq!(system.health().state, FusionState::Running);
+}
+
+#[test]
+fn long_sleep_makes_navigation_unusable_until_gnss_reseed() {
+    let mut system = SensorFusion::with_mount([1.0, 0.0, 0.0, 0.0]);
+    assert!(system.process_gnss(gnss_sample(1.0)).navigation_started);
+    let _ = system.process_imu(ImuSample {
+        t_s: 1.01,
+        gyro_radps: [0.0, 0.0, 0.0],
+        accel_mps2: [0.0, 0.0, 9.80665],
+    });
+
+    let slept = system.process_imu(ImuSample {
+        t_s: 4000.0,
+        gyro_radps: [0.0, 0.0, 0.0],
+        accel_mps2: [0.0, 0.0, 9.80665],
+    });
+    let health = system.health();
+    assert_eq!(health.state, FusionState::AwaitingGnssReseed);
+    assert!(!health.navigation_usable);
+    assert!(!slept.navigation_usable);
+    assert!(system.ekf().is_none());
+
+    let reseeded = system.process_gnss(gnss_sample(4000.1));
+    assert!(reseeded.navigation_usable);
+    assert!(reseeded.navigation_started);
+    assert_eq!(system.health().state, FusionState::Running);
+    assert!(system.ekf().is_some());
+}
+
+#[test]
 fn vehicle_speed_sample_pulls_forward_velocity_upward() {
     let mut system = SensorFusion::with_mount([1.0, 0.0, 0.0, 0.0]);
     let upd = system.process_gnss(gnss_sample(1.0));
-    assert!(upd.ekf_initialized_now);
+    assert!(upd.navigation_started);
     let vn_before = system.ekf().unwrap().nominal.vn;
     let _ = system.process_vehicle_speed(VehicleSpeedSample {
         t_s: 1.1,
@@ -171,7 +311,7 @@ fn unknown_direction_uses_predicted_sign_when_state_is_confident() {
     gnss.vel_ned_mps = [-6.0, 0.0, 0.0];
     gnss.heading_rad = Some(core::f32::consts::PI);
     let upd = system.process_gnss(gnss);
-    assert!(upd.ekf_initialized_now);
+    assert!(upd.navigation_started);
     let vn_before = system.ekf().unwrap().nominal.vn;
     let _ = system.process_vehicle_speed(VehicleSpeedSample {
         t_s: 1.1,

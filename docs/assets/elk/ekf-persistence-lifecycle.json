@@ -1,0 +1,185 @@
+{
+  "name": "ekf-persistence-lifecycle-elk",
+  "title": "Lifecycle",
+  "output": "docs/_static/diagrams/ekf-persistence-lifecycle-elk.svg",
+  "profile": "dense",
+  "direction": "DOWN",
+  "edgeRouting": "ORTHOGONAL",
+  "layout": {
+    "nodeNode": 72,
+    "nodeNodeBetweenLayers": 108,
+    "edgeNode": 42,
+    "edgeEdge": 30
+  },
+  "groups": [
+    {
+      "id": "lifecycle",
+      "title": "Lifecycle"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "Fresh",
+      "title": "fresh context",
+      "subtitle": "auto/manual mount seed",
+      "role": "input",
+      "group": "lifecycle"
+    },
+    {
+      "id": "Init",
+      "title": "initialize EKF",
+      "subtitle": "GNSS anchor + yaw readiness",
+      "role": "core",
+      "group": "lifecycle"
+    },
+    {
+      "id": "Run",
+      "title": "Running / Stable",
+      "subtitle": [
+        "pose + covariance",
+        "mount + biases"
+      ],
+      "role": "core",
+      "group": "lifecycle"
+    },
+    {
+      "id": "Persist",
+      "title": "optional saved prior",
+      "subtitle": "only when Stable",
+      "role": "storage",
+      "shape": "cylinder",
+      "group": "lifecycle"
+    },
+    {
+      "id": "Pause",
+      "title": "stream pause",
+      "subtitle": "keep SensorFusion object",
+      "role": "process",
+      "group": "lifecycle"
+    },
+    {
+      "id": "Gap",
+      "title": "next IMU gap?",
+      "role": "process",
+      "shape": "diamond",
+      "width": 170,
+      "height": 112,
+      "group": "lifecycle"
+    },
+    {
+      "id": "ShortChip",
+      "title": "short",
+      "role": "core",
+      "shape": "chip",
+      "width": 104,
+      "height": 40,
+      "group": "lifecycle"
+    },
+    {
+      "id": "MediumChip",
+      "title": "medium",
+      "role": "process",
+      "shape": "chip",
+      "width": 116,
+      "height": 40,
+      "group": "lifecycle"
+    },
+    {
+      "id": "LongChip",
+      "title": "long or unsafe",
+      "role": "warning",
+      "shape": "chip",
+      "width": 144,
+      "height": 44,
+      "group": "lifecycle"
+    },
+    {
+      "id": "Short",
+      "title": "short sleep",
+      "subtitle": "<= 15 min, still Running",
+      "role": "core",
+      "group": "lifecycle"
+    },
+    {
+      "id": "Medium",
+      "title": "medium sleep",
+      "subtitle": "degraded dead reckoning",
+      "role": "process",
+      "group": "lifecycle"
+    },
+    {
+      "id": "Reseed",
+      "title": "await GNSS reseed",
+      "subtitle": "long or unusable covariance",
+      "role": "warning",
+      "group": "lifecycle"
+    },
+    {
+      "id": "Note",
+      "title": "Sleep assumes the device is stationary: covariance aging is bounded and mount is not aged.",
+      "subtitle": "Accepted GNSS brings degraded/reseed states back to normal running.",
+      "role": "note",
+      "width": 620,
+      "height": 66,
+      "group": "lifecycle"
+    }
+  ],
+  "edges": [
+    {
+      "from": "Fresh",
+      "to": "Init"
+    },
+    {
+      "from": "Init",
+      "to": "Run"
+    },
+    {
+      "from": "Run",
+      "to": "Pause"
+    },
+    {
+      "from": "Run",
+      "to": "Persist",
+      "fromSide": "WEST",
+      "toSide": "EAST",
+      "dashed": true
+    },
+    {
+      "from": "Pause",
+      "to": "Gap"
+    },
+    {
+      "from": "Gap",
+      "to": "ShortChip",
+      "fromSide": "WEST",
+      "toSide": "NORTH"
+    },
+    {
+      "from": "Gap",
+      "to": "MediumChip"
+    },
+    {
+      "from": "Gap",
+      "to": "LongChip",
+      "fromSide": "EAST",
+      "toSide": "NORTH"
+    },
+    {
+      "from": "ShortChip",
+      "to": "Short"
+    },
+    {
+      "from": "MediumChip",
+      "to": "Medium"
+    },
+    {
+      "from": "LongChip",
+      "to": "Reseed"
+    },
+    {
+      "from": "Medium",
+      "to": "Note",
+      "dashed": true
+    }
+  ]
+}
