@@ -51,6 +51,10 @@ Gyro and accelerometer biases are additive corrections in the raw IMU body frame
 $b$. The mount quaternion $q_{bv}$ is the physical vehicle-to-body mount, with
 $x_b = C_{bv}x_v$.
 
+For why mount is part of the runtime state, how it differs from vehicle
+attitude, and why automatic mode uses a separate align seed, see
+[](mount-states.md).
+
 The process-noise vector used by the generated transition is:
 
 $$
@@ -136,6 +140,11 @@ Covariance prediction is:
 $$
 P^+ = FPF^T + GQG^T .
 $$
+
+This generated-discrete-Jacobian workflow is conceptually similar to the
+generated algebra used by production estimators such as PX4 EKF2, but the state
+and aid-source set here are ground-vehicle and mount-estimation specific. See
+[](../reference/prior-work.md) for a technical comparison.
 
 Gyro and accelerometer white-noise densities contribute $\mathrm{density}\,\Delta t$.
 Bias-random-walk columns in $G$ already include a factor of $\Delta t$, so the runtime

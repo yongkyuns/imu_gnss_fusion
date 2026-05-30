@@ -4,6 +4,10 @@ Mount estimation is split between a reduced alignment estimator and the EKF
 runtime. The important distinction is direct measurement sensitivity versus
 propagation-mediated correction through covariance.
 
+For the broader state-design discussion, including why mount is estimated in
+the EKF and why AHRS-only attitude filters are insufficient during vehicle
+dynamics, see [](mount-states.md).
+
 For the detailed roll-channel derivation, see [](roll-observability.md).
 
 ## What IMU/GNSS Can See
@@ -95,6 +99,14 @@ NHC and GNSS constrain the full vehicle-motion solution. They do not provide
 bank-safe absolute mount-roll observability using only IMU/GNSS. Mount roll
 becomes practically separable only with sufficiently informative motion plus an
 external or assumed roll/bank anchor, such as the flat-road vehicle-roll prior.
+
+This is consistent with the closest smartphone-telematics prior work: Wahlstrom
+2017 augments a GNSS-aided INS with phone-to-vehicle orientation and NHC, but
+also introduces a roll pseudo-observation because GNSS plus NHC alone do not
+fade out the initial phone-to-vehicle roll ambiguity. See
+[](../reference/prior-work.md) for the full comparison and for why some
+state-coordinate choices show direct NHC mount Jacobian columns while the
+implemented rows here do not.
 
 ## Alignment Versus EKF
 

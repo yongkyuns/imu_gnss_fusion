@@ -44,6 +44,35 @@ Runtime update families include:
 - nonholonomic vehicle-frame lateral/vertical velocity constraints;
 - optional vehicle-roll prior at eligible NHC epochs.
 
+For comparisons with related smartphone telematics, automotive INS/GNSS,
+OpenIMU, and PX4 EKF2 formulations, see [](reference/prior-work.md).
+
+## Mount States And AHRS Boundaries
+
+The runtime estimates mount because $q_{bv}$ is part of IMU mechanization. A
+mount error rotates gyro and accelerometer increments into the wrong vehicle
+axes before attitude, velocity, and position are propagated. Automatic mode uses
+align to obtain the initial mount seed; the EKF then estimates residual mount
+states.
+
+The separation is also a local-linearity boundary. Align is a reduced estimator
+with a wider practical capture range for stationary tilt, horizontal-acceleration
+yaw, and planar turn cues. The EKF is a local error-state filter; after
+initialization it expects small attitude and mount corrections around the
+current nominal state.
+
+Mahony-, Madgwick-, and other AHRS-style filters estimate attitude from gyro
+integration plus accelerometer leveling, and sometimes magnetometer heading.
+They do not estimate local velocity/position, accelerometer bias, or
+sensor-to-vehicle mount as part of a GNSS-aided navigation state. During
+acceleration, braking, and cornering, treating the accelerometer as a gravity
+vector can bias the attitude estimate. The EKF uses the accelerometer as a
+propagation input and uses GNSS, vehicle-frame constraints, and covariance to
+allocate residuals among attitude, velocity, bias, and mount.
+
+See [](algorithms/mount-states.md) for the detailed discussion, including the
+mount/vehicle-roll ambiguity, bias states, and omitted scale/lever-arm terms.
+
 ## Runtime Persistence
 
 The runtime EKF is persistent as long as the caller keeps the same `SensorFusion` object. That context includes nominal navigation state, covariance, mount, raw-body IMU biases, and diagnostics. A normal pause does not require a new alignment cycle.
@@ -55,7 +84,7 @@ The runtime EKF is persistent as long as the caller keeps the same `SensorFusion
 Sleep gaps are treated as stationary missing-sample intervals. The runtime ages covariance in a bounded way, keeps mount unchanged, and decides whether navigation can continue or must wait for GNSS reseed.
 ```
 
-The post-gap model is intentionally conservative:
+The post-gap model is conservative:
 
 - short sleep up to 15 minutes keeps navigation usable;
 - medium sleep up to one hour enters degraded dead reckoning if covariance remains usable;

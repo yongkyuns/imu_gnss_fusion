@@ -14,7 +14,14 @@ IMU/GNSS Fusion is a Rust workspace for ground-vehicle inertial/GNSS navigation 
 - Web visualizer: [yongkyuns.github.io/imu_gnss_fusion](https://yongkyuns.github.io/imu_gnss_fusion/)
 - Documentation: [yongkyuns.github.io/imu_gnss_fusion/docs](https://yongkyuns.github.io/imu_gnss_fusion/docs/)
 
-![IMU/GNSS Fusion web visualizer](screenshot.png)
+![Hosted replay workflow in the web visualizer](docs/_static/gifs/web-visualizer-workflow.gif)
+
+The browser visualizer is a wasm replay/simulation environment: it feeds hosted,
+local, or synthetic IMU/GNSS inputs through the Rust fusion runtime and
+`road_events`, then plots the resulting states, diagnostics, map traces, and
+events. The example above loads a hosted iOS drive, runs the replay, shows speed,
+attitude, bias, position, and map traces, then opens the Events tab and zooms and
+pans the timeline around detected road-event activity.
 
 ## Quick Start
 

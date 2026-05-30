@@ -1,6 +1,6 @@
 //! EKF runtime, public state structs, and standalone state helpers.
 //!
-//! Mathematical details are maintained in `docs/math/ekf.md`.
+//! Algorithm details are maintained in `docs/algorithms/ekf.md`.
 //! The runtime filter is [`crate::ekf::Filter`]. Public structs in this module define the
 //! generated-code and diagnostics data layout. Focused state-operation helpers
 //! live under [`crate::ekf::state_ops`].
@@ -551,8 +551,8 @@ impl Filter {
     /// This is not a mount-roll measurement. It anchors the vehicle-roll side
     /// of the vehicle/mount roll split and can therefore push the EKF to
     /// explain persistent body roll as mount roll. It is useful as an explicit
-    /// flat-road prior, but it is not bank-safe and is disabled by default at
-    /// the [`crate::SensorFusion`] layer.
+    /// flat-road prior, but it is not bank-safe. The [`crate::SensorFusion`]
+    /// facade currently enables it by default with a density of `0.1`.
     pub fn fuse_vehicle_roll_prior(&mut self, r_vehicle_roll: f32) {
         if r_vehicle_roll <= 0.0 || !r_vehicle_roll.is_finite() {
             return;

@@ -21,7 +21,7 @@
 //!   with respect to the vehicle frame, with `R(q_nv) = C_nv` and
 //!   `x_n = C_nv x_v`.
 //!
-//! Maintained mathematical references live in the Sphinx docs under `docs/math/`.
+//! Maintained algorithm references live in the Sphinx docs under `docs/algorithms/`.
 
 #![no_std]
 #![allow(clippy::needless_range_loop)]

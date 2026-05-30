@@ -13,6 +13,10 @@ It uses:
 It does not run NHC. NHC is an EKF runtime update.
 
 For frame and injection conventions, see [](frames.md).
+For why this reduced estimator exists separately from the local EKF, see
+[](mount-states.md).
+For related smartphone-to-vehicle alignment formulations, especially the
+Wahlstrom 2017 augmented-EKF approach, see [](../reference/prior-work.md).
 
 ## State And Covariance
 

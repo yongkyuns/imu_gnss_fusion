@@ -2,14 +2,18 @@
   "name": "ios-app-flow",
   "title": "iOS App Flow",
   "output": "docs/_static/diagrams/ios-app-flow.svg",
-  "profile": "structured",
+  "profile": "balanced",
   "direction": "RIGHT",
-  "edgeRouting": "SPLINES",
+  "edgeRouting": "ORTHOGONAL",
   "layout": {
-    "nodeNode": 82,
-    "nodeNodeBetweenLayers": 112,
-    "edgeNode": 38,
-    "edgeEdge": 28
+    "originX": 72,
+    "originY": 96,
+    "columnSpacing": 74,
+    "rowSpacing": 42,
+    "nodeNode": 78,
+    "nodeNodeBetweenLayers": 96,
+    "edgeNode": 40,
+    "edgeEdge": 30
   },
   "groups": [
     {
@@ -31,7 +35,9 @@
       "title": "live sensors",
       "subtitle": "CoreMotion + CoreLocation",
       "role": "input",
-      "group": "sources"
+      "group": "sources",
+      "row": 0,
+      "column": 0
     },
     {
       "id": "Sessions",
@@ -39,66 +45,93 @@
       "subtitle": "recorded raw events",
       "role": "storage",
       "shape": "cylinder",
-      "group": "sources"
+      "group": "sources",
+      "row": 2,
+      "column": 0
     },
     {
       "id": "Store",
       "title": "SensorStore",
       "subtitle": "stream, record, replay",
       "role": "core",
-      "group": "store"
+      "group": "store",
+      "row": 1,
+      "column": 1
     },
     {
       "id": "FFI",
       "title": "Rust FFI",
       "subtitle": "fusion + road events",
       "role": "core",
-      "group": "store"
+      "group": "store",
+      "row": 1,
+      "column": 2
     },
     {
       "id": "State",
       "title": "app state",
       "subtitle": "health, route, events",
       "role": "process",
-      "group": "store"
+      "group": "store",
+      "row": 1,
+      "column": 3
+    },
+    {
+      "id": "UISurfaces",
+      "title": "UI surfaces",
+      "subtitle": "SwiftUI tabs + debug views",
+      "role": "process",
+      "group": "tabs",
+      "row": 1,
+      "column": 4
     },
     {
       "id": "Drive",
       "title": "Drive",
       "subtitle": "map, route, events",
       "role": "warning",
-      "group": "tabs"
+      "group": "tabs",
+      "row": 0,
+      "column": 5
     },
     {
       "id": "Review",
       "title": "Review",
       "subtitle": "sessions + replay",
       "role": "warning",
-      "group": "tabs"
+      "group": "tabs",
+      "row": 1,
+      "column": 5
     },
     {
       "id": "Settings",
       "title": "Settings",
       "subtitle": "alerts, presets, mount memory",
       "role": "warning",
-      "group": "tabs"
+      "group": "tabs",
+      "row": 2,
+      "column": 5
     },
     {
       "id": "Diagnostics",
       "title": "Diagnostics",
       "subtitle": "debug-only health + charts",
       "role": "note",
-      "group": "tabs"
+      "group": "tabs",
+      "row": 3,
+      "column": 4
     }
   ],
   "edges": [
     {
       "from": "Sensors",
-      "to": "Store"
+      "to": "Store",
+      "toSide": "NORTH"
     },
     {
       "from": "Sessions",
-      "to": "Store"
+      "to": "Store",
+      "toSide": "SOUTH"
     },
     {
       "from": "Store",
@@ -109,26 +142,24 @@
       "to": "State"
     },
     {
-      "from": "Store",
-      "to": "State",
-      "dashed": true
+      "from": "State",
+      "to": "UISurfaces"
     },
     {
-      "from": "State",
+      "from": "UISurfaces",
       "to": "Drive"
     },
     {
-      "from": "State",
+      "from": "UISurfaces",
       "to": "Review"
     },
     {
-      "from": "State",
+      "from": "UISurfaces",
       "to": "Settings"
     },
     {
-      "from": "State",
+      "from": "UISurfaces",
       "to": "Diagnostics",
-      "dashed": true,
       "fromSide": "SOUTH",
       "toSide": "NORTH"
     }

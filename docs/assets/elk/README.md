@@ -14,6 +14,8 @@ Use per-diagram profiles instead of separate layout engines:
   ordering so edges can behave more like a clean Graphviz flow.
 - `structured`: normal left-to-right process diagrams where model order should
   be mostly preserved.
+- `balanced`: compact row/column explanatory diagrams. Prefer rounded
+  orthogonal routing for simple flows without overlap.
 - `dense`: compact lifecycle/state/decision diagrams. Uses orthogonal routing,
   explicit ports, and rounded rendered bends.
 

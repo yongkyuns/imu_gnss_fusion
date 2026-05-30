@@ -32,6 +32,11 @@ the runtime stays small and deterministic:
   include-file assignments into typed Rust functions consumed by
   `sensor_fusion/src/ekf/mod.rs`.
 
+PX4 EKF2 is a useful external reference for the same general idea of keeping
+generated estimator algebra behind a hand-written runtime boundary, though its
+state and sensor suite are aimed at flight control rather than ground-vehicle
+mount estimation. See [](../reference/prior-work.md).
+
 The checked-in generated Rust fragments live under:
 
 ```text

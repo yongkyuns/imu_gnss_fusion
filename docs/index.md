@@ -36,6 +36,16 @@ Data capture, replay, reusable Rust runtimes, visualizers, and mobile integratio
 The browser visualizer is the fastest way to inspect replay outputs, map traces, mount behavior, diagnostics, and event detector signals.
 ```
 
+```{figure} _static/gifs/web-visualizer-workflow.gif
+:alt: Hosted replay workflow in the browser visualizer.
+:class: framed
+
+Hosted recordings can be replayed directly in the browser. The workflow shows a
+selected iOS drive, the replay result, map trace inspection, hover/cursor
+interaction, and the analysis tabs used to inspect motion, mount, sensors,
+events, and EKF diagnostics.
+```
+
 ```{toctree}
 :maxdepth: 2
 :caption: Start
@@ -54,9 +64,11 @@ api-and-conventions
 algorithms/frames
 algorithms/ekf
 algorithms/runtime-ekf
+algorithms/mount-states
 algorithms/align
 algorithms/observability
 algorithms/roll-observability
+reference/prior-work
 runtime-state-and-persistence
 ekf-diagnostics
 ```

@@ -116,10 +116,10 @@ pub enum MountMode {
     /// Align provides the initial mount seed; the selected runtime filter then
     /// estimates its own mount states.
     Auto,
-    /// Use the supplied vehicle-to-body mount quaternion as a fixed mount.
+    /// Use the supplied vehicle-to-body mount quaternion as the EKF mount seed.
     ///
-    /// The quaternion follows `R(q_bv) = C_bv`, `x_b = C_bv x_v`; mount states
-    /// are frozen.
+    /// The quaternion follows `R(q_bv) = C_bv`, `x_b = C_bv x_v`. This bypasses
+    /// align and initializes EKF residual mount states with a tight prior.
     Manual([f32; 4]),
 }
 

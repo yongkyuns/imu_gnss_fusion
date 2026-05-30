@@ -1,44 +1,102 @@
 # Visualizer And Simulator
 
-The visualizer is the main inspection surface for replays, synthetic scenarios,
-mount behavior, EKF diagnostics, and road events. The native app and browser app
-share the same Rust replay pipeline and the same `PlotData` model, so plots in
-the browser are intended to mean the same thing as plots in the desktop build.
+The visualizer is a replay and simulation environment for the fusion runtime,
+not only a plotting frontend. Each run feeds recorded or synthesized IMU/GNSS
+samples through the Rust `SensorFusion` implementation and `road_events`
+detectors, then plots the resulting states, diagnostics, map traces, and events.
+The browser version runs the wasm-compiled visualizer and fusion code.
+
+Use synthetic runs to study theoretical properties of the filter under
+controlled motion, and use experimental runs to evaluate performance on real
+sensor data.
 
 ```{figure} ../_static/screenshots/web-visualizer-overview.png
 :alt: Web visualizer overview with plots and map.
 :class: framed
 
-A replay overview with synchronized plots and map trace. Current builds also
-include Events, Diagnostics, tuning controls, and road-event map overlays.
+Overview page for a replay with speed, mount, attitude, bias, and map panels.
 ```
 
-```{figure} ../_static/diagrams/visualizer-architecture-orthogonal.svg
-:alt: Visualizer architecture from hosted datasets, drag and drop CSVs, and synthetic scenarios through replay jobs, sensor fusion, road events, PlotData, and native/browser surfaces.
+```{figure} ../_static/gifs/web-visualizer-workflow.gif
+:alt: Browser workflow loading a hosted replay and inspecting map and plots.
 :class: framed
 
-Hosted data, drag/drop files, and synthetic scenarios all become replay jobs.
-Replay jobs feed `sensor_fusion` and `road_events`, then publish `PlotData` to
-the native egui shell or the browser wasm shell.
+Hosted replay workflow: load a dataset, run replay, inspect map and trace
+panels, then open Events and zoom/pan the timeline around detected activity.
 ```
 
-## Entry Points
+```{figure} ../_static/gifs/web-visualizer-tabs.gif
+:alt: Browser visualizer tabs for synthetic replay inspection.
+:class: framed
 
-Browser visualizer:
+Synthetic and experimental runs share the same page structure, so controlled
+filter behavior and real-data behavior can be compared with the same plots.
+```
 
-- the public Pages root loads `web/index.html`;
-- `web/index.html` loads `pkg/visualizer.js` and `pkg/visualizer_bg.wasm`;
-- browser replay work runs through `web/replay_worker.js` so the UI stays
-  responsive while a dataset is parsed and replayed.
+## Choosing A Run Type
 
-Native visualizer:
+Synthetic runs are for filter reasoning. They are useful when checking:
+
+- whether a motion pattern should make mount, attitude, velocity, or bias
+  observable;
+- how align and EKF behave when the ground-truth trajectory is known;
+- how noise level, mount angle, acceleration, turns, stops, and GNSS outages
+  affect convergence;
+- whether a proposed model change fixes the intended theoretical case without
+  relying on dataset-specific behavior.
+
+Experimental runs are for actual performance. They are useful when checking:
+
+- whether the filter remains stable on real IMU/GNSS timing, noise, and outages;
+- whether mount, bias, position, velocity, and attitude estimates are consistent
+  across trips;
+- whether road-event detectors match observed bumps, roughness, hills, reverse,
+  harsh acceleration/braking, and cornering;
+- whether iOS-exported recordings and hosted datasets replay correctly.
+
+The distinction matters: synthetic data can show that a formulation is
+internally plausible, but real recordings determine whether the implementation
+is robust to sensor quality, mounting, road geometry, and driving behavior.
+
+## Browser Workflow
+
+Open the hosted visualizer:
+
+```text
+https://yongkyuns.github.io/imu_gnss_fusion/
+```
+
+For synthetic analysis:
+
+1. Select `Synthetic`.
+2. Choose a scenario and noise preset.
+3. Press `Run`.
+4. Inspect Overview first, then Motion, Mount, Calibration, and Diagnostics.
+
+For experimental analysis:
+
+1. Select `Experimental/real data`.
+2. Choose a hosted dataset, or drop generic replay CSV files.
+3. Press `Run`.
+4. Inspect Overview and Map first, then use Sensors to check input quality,
+   Mount/Calibration for estimator consistency, and Events for road-event
+   detector behavior.
+
+Browser replay accepts hosted datasets listed in `web/datasets/manifest.json`.
+The current hosted set contains 32 datasets. Drag/drop replay accepts plain-text
+generic CSV files; at minimum provide `imu.csv` and `gnss.csv`. Optional
+reference files add attitude, mount, position, or vehicle-motion traces.
+
+## Native Workflow
+
+Run a generic replay directory:
 
 ```bash
 cargo run --release -p sim --bin visualizer -- \
   --generic-replay-dir /path/to/replay-dir
 ```
 
-Synthetic native run:
+Run a synthetic scenario:
 
 ```bash
 cargo run --release -p sim --bin visualizer -- \
@@ -46,124 +104,73 @@ cargo run --release -p sim --bin visualizer -- \
   --synthetic-noise low
 ```
 
-## Data Sources
+Use native replay when browser decimation or browser memory limits hide a
+high-rate detail.
 
-Hosted datasets are listed in `web/datasets/manifest.json` and grouped in the
-browser's dataset picker. The current hosted set contains 32 datasets, including
-reference-style generic replays and iOS recordings converted to the generic CSV
-layout.
+## Main Controls
 
-Drag/drop replay accepts text CSV files in the same generic layout. At minimum,
-drop an `imu.csv` and `gnss.csv`. Optional reference files can add attitude,
-mount, position, or vehicle-motion truth traces. Browser drag/drop expects plain
-text files, not compressed archives.
+| Control | Use |
+| --- | --- |
+| `Theme` | Switch light/dark rendering. |
+| `Traces` | Show or hide Reference, Align, and EKF traces across plots. |
+| `Map` | Show or hide GNSS/reference paths, heading arrows, and event overlays. |
+| `Filter` | Choose which road-event kinds are visible. |
+| `Tune` | Adjust EKF, align, or road-event parameters for the next run. |
+| `Inspector` | Show update-level residual allocation near the hovered plot time. |
 
-Synthetic scenarios are compiled into the browser app and can also be loaded by
-the native binary. Built-in browser scenarios include city blocks, figure eight,
-straight acceleration/braking, and several mount-observability cases. Noise
-presets are `None`, `Low`, `Mid`, and `High`; use `None` to separate model
-behavior from sensor-noise behavior.
+Changing tabs, trace visibility, map overlays, event filters, map color, hover,
+or inspector state does not rerun the filter. Changing input data, synthetic
+scenario, noise, mount mode, GNSS-outage settings, or tuning parameters requires
+pressing `Run` to create a new replay result.
 
-## Replay Product
+## Page Guide
 
-Every visualizer run produces a `PlotData` value. That object is the boundary
-between replay computation and UI rendering. It contains:
+| Page | Use |
+| --- | --- |
+| `Overview` | First-pass check for speed, mount, attitude, bias, and map consistency. |
+| `Motion` | Inspect velocity, acceleration, attitude error, and route motion. |
+| `Mount` | Inspect mount roll/pitch/yaw estimates, reference comparison, and mount uncertainty. |
+| `Calibration` | Inspect gyro bias, accelerometer bias, mount states, and covariance-like traces. |
+| `Sensors` | Check raw/calibrated IMU, GNSS measurements, timing, and source quality. |
+| `Events` | Inspect road-event detector signals, trip summary, event markers, and trigger traces. |
+| `Diagnostics` | Inspect align internals, EKF correction traces, and update-inspector context. |
 
-- synchronized time-series traces for motion, attitude, mount, bias,
-  covariance, residuals, and update diagnostics;
-- map-ready GNSS, fused, synthetic truth, and optional reference paths;
-- road-event point samples, interval segments, trip summary counters, and
-  captured trigger windows;
-- cursor and inspector samples used to correlate plots, map hover state, and
-  update-level EKF behavior;
-- metadata describing source type, mount mode, replay configuration, and whether
-  reference truth was present.
+## Map And Hover
 
-This structure matters because the native and browser shells render the same
-analysis product. Browser replay adds asynchronous fetch/worker plumbing and
-transport decimation; it does not change estimator equations or event-detector
-logic.
+Real-data runs use a geographic map when latitude/longitude are available.
+Synthetic runs without geographic coordinates use a plot-style trajectory view.
+CARTO tiles are used by default; Mapbox is optional when a token is supplied.
 
-## Page Semantics
+The map can show EKF, GNSS, synthetic truth, and reference paths depending on
+the dataset. The map color selector can color the EKF path by speed,
+longitudinal acceleration, lateral acceleration, road roughness, or vehicle
+pitch. Hovering plots and map traces synchronizes the cursor time across visible
+panels.
 
-`Overview` is the fastest sanity check. It combines map traces, speed, attitude,
-navigation health, and summary plots.
+Road events appear as point markers or route segments. Point events include
+speed bumps and shocks. Segment events include rough road, hills, reverse, and
+harsh maneuvers. When trigger traces are available, hover cards show the local
+signals that caused the event.
 
-`Motion` focuses on vehicle and navigation motion: NED position/velocity,
-vehicle-frame velocity, acceleration channels, and route behavior.
+## What Happens On Run
 
-`Mount` shows mount roll, pitch, yaw, covariance, reference comparison when
-available, and update-allocation inspection used for roll-observability work.
+When `Run` is pressed, the visualizer builds a replay job from the selected
+input and current tuning values. In the browser, that replay job is executed by
+the wasm-compiled Rust visualizer/fusion code. The replay path feeds each
+recorded or synthesized sample through `SensorFusion` and `road_events`, then
+returns one render product containing time-series traces, map traces, event
+outputs, trip statistics, and diagnostic samples. The UI only displays and
+filters that render product; it does not change estimator state after replay
+finishes.
 
-`Calibration` collects estimator quantities that should move slowly: gyro bias,
-accelerometer bias, mount states, and related uncertainty traces.
+Browser replay runs this job in a web worker so the page can remain responsive.
+Dense browser traces are decimated for transport and rendering. Native replay is
+the better tool when every high-rate sample matters.
 
-`Sensors` shows raw IMU and GNSS streams, timing, sample quality, and source
-measurements. Use it first when a replay looks physically impossible.
-
-`Events` is the road-event inspection page. It includes trip summary counters,
-event filters, event point/segment overlays, and trigger-window plots for
-signals such as vertical shock, roughness energy, harsh corner load, and hill
-grade.
-
-`Diagnostics` is for estimator internals: update residuals, accepted/rejected
-measurements, covariance/correlation views, and health/lifecycle state.
-
-## Map And Event Overlays
-
-The map can show GNSS, fused, synthetic truth, and reference traces depending on
-the replay. Event overlays are derived from `road_events` output. Point events
-such as speed bumps and shocks appear at event timestamps; segment events such
-as rough road and hills cover intervals. Hovering or selecting an event exposes
-the trigger traces when they were captured in `PlotData`.
-
-Map coloring can be tied to data channels such as speed or event state. Browser
-maps use CARTO tiles by default and can use Mapbox when a token is supplied.
-
-## Browser Configuration
-
-The browser shell reads optional configuration from URL query parameters, local
-storage, and `web/local-config.js`.
+## Useful URLs
 
 - `?theme=light` or `?theme=dark` selects the initial visual theme.
+- `?dataset=<id>` auto-loads a hosted dataset after the manifest is fetched.
+- `?scenario=<name>` and `?noise=<level>` initialize synthetic controls.
 - `?mapbox_token=...` supplies and remembers a Mapbox token.
-- `web/local-config.js` is for local development and is not required for the
-  hosted visualizer.
-
-## Replay Pipeline
-
-The replay pipeline lives in `sim/src/visualizer`:
-
-- `pipeline/generic.rs` parses generic CSV replay inputs and creates estimator
-  traces.
-- `pipeline/synthetic.rs` generates synthetic measurements and truth overlays.
-- `replay_job.rs` owns replay request/config/result types and transport
-  decimation.
-- `model.rs` defines `PlotData`, trace containers, road-event samples, pages,
-  and visualizer mount mode.
-- `ui/` renders pages, maps, tuning windows, inspector panels, and browser-only
-  dataset controls.
-
-The browser and native shells differ mostly in file access and worker plumbing.
-The estimator, road events, replay parsing, and plot construction stay in Rust.
-
-Implementation ownership is deliberately narrow:
-
-- `sim::datasets` decodes CSV rows and reference streams.
-- `sim::visualizer::pipeline` orders samples, feeds the public `SensorFusion`
-  facade, converts fused snapshots into `road_events::VehicleMotionSample`, and
-  records derived traces.
-- `sensor_fusion` owns EKF/align behavior. Tuning controls only change public
-  `SensorFusion` configuration before replay.
-- `road_events` owns detector state and trip statistics. The visualizer displays
-  events and trigger channels; it does not reclassify events in the UI layer.
-- `web/replay_worker.js` isolates replay execution from browser rendering and
-  returns serialized `PlotData`.
-
-## Practical Caveats
-
-Browser transport decimates dense traces so large datasets stay responsive.
-Use native replay or targeted trace export when investigating a very high-rate
-detail. iOS datasets often lack external reference truth, so missing reference
-traces usually mean the source recording did not contain them rather than a
-failed replay.
+- `?bench=1` enables browser-frame timing diagnostics.
