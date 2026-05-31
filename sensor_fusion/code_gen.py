@@ -12,6 +12,10 @@ class FilterC99CodePrinter(C99CodePrinter):
         if isinstance(exp, Integer) and 2 <= int(exp) <= 4:
             base = self.parenthesize(expr.base, precedence(expr))
             return "*".join([base] * int(exp))
+        if isinstance(exp, Integer) and -4 <= int(exp) <= -2:
+            base = self.parenthesize(expr.base, precedence(expr))
+            denominator = "*".join([base] * abs(int(exp)))
+            return f"1.0F/({denominator})"
         return super()._print_Pow(expr)
 
 

@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use sensor_fusion::SensorFusion;
 use fusion_tools::datasets::generic_replay::{
     GenericGnssSample, GenericImuSample, fusion_gnss_sample, fusion_imu_sample,
 };
@@ -7,6 +6,7 @@ use fusion_tools::eval::gnss_ins::{as_q64, quat_angle_deg, quat_rotate};
 use fusion_tools::eval::replay::{ReplayEvent, for_each_event};
 use fusion_tools::synthetic::gnss_ins_path::{MotionProfile, PathGenConfig, generate};
 use fusion_tools::visualizer::pipeline::generic::reference_mount_rpy_to_q_bv;
+use sensor_fusion::SensorFusion;
 
 const NOMINAL_MANEUVER: &str = "\
 initial lat=32 lon=120 alt=20 speed=0 yaw=0 pitch=0 roll=0

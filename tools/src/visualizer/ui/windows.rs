@@ -70,7 +70,6 @@ impl App {
                                 self.tuning_cfg.align_handoff_delay_s =
                                     defaults.align_handoff_delay_s;
                                 self.tuning_cfg.r_zero_vel = defaults.r_zero_vel;
-                                self.tuning_cfg.r_stationary_accel = defaults.r_stationary_accel;
                                 self.tuning_cfg.vehicle_meas_lpf_cutoff_hz =
                                     defaults.vehicle_meas_lpf_cutoff_hz;
                                 self.tuning_cfg.predict_imu_lpf_cutoff_hz =

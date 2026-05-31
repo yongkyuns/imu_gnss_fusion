@@ -341,32 +341,6 @@ eligible, GNSS position, GNSS velocity, and NHC rows are fused in the same
 sequential batch. Otherwise NHC is applied as a standalone vehicle-frame velocity
 update.
 
-### Stationary Gravity
-
-When stationary, the runtime can compare vehicle-frame acceleration with the
-gravity direction. This is separate from dynamic acceleration propagation and is
-disabled unless configured.
-
-The implemented stationary-gravity update fuses only vehicle X/Y rows:
-
-$$
-h_g = -C_{nv}^{T}g_n .
-$$
-
-The residuals are:
-
-$$
-\begin{aligned}
-r_x &= (a_{v,x} - b_{a,x}) - h_{g,x},\\
-r_y &= (a_{v,y} - b_{a,y}) - h_{g,y}.
-\end{aligned}
-$$
-
-The generated Jacobian has attitude columns only. Accelerometer-bias correction
-comes from covariance coupling because the residual subtracts the current bias
-estimate but the row does not include direct bias columns. Before each row, the
-runtime floors roll/pitch attitude covariance to $0.10^\circ$ one-sigma.
-
 ### Vehicle-Roll Prior
 
 The optional vehicle-roll prior observes:
@@ -382,8 +356,8 @@ applied only at eligible NHC epochs. Because the facade enters the NHC/roll-prio
 block only when at least one lateral/vertical NHC variance is positive, setting
 both NHC variances to zero also disables vehicle-roll-prior scheduling.
 
-The residual is $-\operatorname{roll}(q_{nv})$. Its Jacobian is computed by
-finite-differencing only the vehicle-attitude error states $0{:}2$; direct mount
+The residual is $-\operatorname{roll}(q_{nv})$. Its SymPy-generated Jacobian has
+nonzero entries only in vehicle-attitude error states $0{:}2$; direct mount
 columns are zero. The update can still move mount states through covariance
 coupling.
 

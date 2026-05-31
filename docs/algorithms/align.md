@@ -6,7 +6,7 @@ its state is the mount angle only, not the full vehicle navigation state.
 
 It uses:
 
-- stationary gravity to initialize and refine roll/pitch;
+- static accelerometer tilt samples to initialize and refine roll/pitch;
 - GNSS-derived horizontal acceleration to constrain mount yaw;
 - planar turn gyro consistency to refine roll/pitch during turns.
 
@@ -107,7 +107,7 @@ P^+ = (I-KH)P,
 $$
 
 followed by symmetrization. Masked rows zero selected state columns so, for
-example, turn-gyro and stationary-gravity updates do not directly update yaw.
+example, turn-gyro and tilt-vector updates do not directly update yaw.
 
 ## Stationary Tilt Initialization
 
@@ -145,11 +145,11 @@ The resulting $C_{bv}$ is formed from these body-coordinate vehicle axes. This i
 tilt-only initialization: the horizontal reference fixes an arbitrary yaw until
 motion provides a real yaw cue.
 
-## Stationary Gravity Updates
+## Static Tilt Refinement
 
-During stationary windows, align low-pass filters the body-frame gravity vector.
-It then constrains vehicle-frame horizontal acceleration components toward zero
-and vertical magnitude toward gravity. Roll and pitch are active; yaw is masked:
+During stationary windows, align low-pass filters the body-frame accelerometer
+vector. It then constrains vehicle-frame horizontal components toward zero and
+vertical magnitude toward gravity. Roll and pitch are active; yaw is masked:
 
 $$
 \begin{aligned}
@@ -159,7 +159,8 @@ r_z &= -\|\bar{f}_b\| - \hat{f}_{v,z}.
 \end{aligned}
 $$
 
-These rows can tighten tilt, but gravity alone cannot observe yaw.
+These rows can tighten tilt, but the static accelerometer direction alone cannot
+observe yaw.
 
 ## Horizontal Acceleration Yaw Update
 

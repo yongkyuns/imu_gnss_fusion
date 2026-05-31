@@ -59,13 +59,6 @@ pub(super) fn draw_ekf_tuning(
             0.0..=10.0,
         );
         drag_f32(ui, "Zero velocity R", &mut cfg.r_zero_vel, 0.01, 0.0..=10.0);
-        drag_f32(
-            ui,
-            "Stationary accel R",
-            &mut cfg.r_stationary_accel,
-            0.01,
-            0.0..=10.0,
-        );
     });
     ui.collapsing("Initialization", |ui| {
         drag_f64(
@@ -294,7 +287,7 @@ pub(super) fn draw_align_tuning(ui: &mut egui::Ui, cfg: &mut FusionTuningConfig)
         );
         drag_f32(
             ui,
-            "Max stationary accel norm err",
+            "Max static accel norm err",
             &mut align.max_stationary_accel_norm_err_mps2,
             0.01,
             0.0..=10.0,
@@ -331,8 +324,8 @@ pub(super) fn draw_align_tuning(ui: &mut egui::Ui, cfg: &mut FusionTuningConfig)
         );
     });
     help_response(
-        ui.checkbox(&mut align.use_gravity, "Use gravity updates"),
-        "Use gravity updates",
+        ui.checkbox(&mut align.use_gravity, "Use static tilt samples"),
+        "Use static tilt samples",
     );
     help_response(
         ui.checkbox(&mut align.use_turn_gyro, "Use turn gyro updates"),
@@ -668,9 +661,6 @@ fn tuning_help(label: &str) -> Option<&'static str> {
         "Zero velocity R" => Some(
             "Zero-velocity pseudo-measurement variance when stationary.\nHigher: weaker stationary velocity correction.\nLower: pins velocity closer to zero, but can over-constrain if stationary detection is wrong.",
         ),
-        "Stationary accel R" => Some(
-            "Stationary gravity/accel pseudo-measurement variance.\nHigher: weaker roll/pitch/bias correction while stopped.\nLower: stronger gravity alignment while stopped, but more sensitive to vibration or non-level acceleration.",
-        ),
         "Yaw init speed m/s" => Some(
             "Minimum horizontal GNSS speed used to initialize yaw from course.\nHigher: avoids noisy low-speed course yaw, but may delay reliable yaw initialization.\nLower: initializes yaw earlier, but can seed yaw from noisy course.",
         ),
@@ -756,7 +746,7 @@ fn tuning_help(label: &str) -> Option<&'static str> {
             "Align process noise standard deviation for mount yaw.\nHigher: align yaw can move more between windows.\nLower: align yaw is smoother/stiffer.",
         ),
         "Gravity std m/s^2" => Some(
-            "Align gravity observation standard deviation.\nHigher: gravity updates are weaker.\nLower: gravity updates are stronger, but more sensitive to acceleration/vibration.",
+            "Align static-tilt observation standard deviation.\nHigher: tilt samples are weaker.\nLower: tilt samples are stronger, but more sensitive to acceleration/vibration.",
         ),
         "Horizontal yaw std deg" => Some(
             "Align horizontal-acceleration yaw observation standard deviation.\nHigher: yaw observations are weaker.\nLower: yaw observations pull mount more aggressively.",
@@ -791,7 +781,7 @@ fn tuning_help(label: &str) -> Option<&'static str> {
         "Min long accel m/s^2" => Some(
             "Minimum longitudinal acceleration for accel/brake observability.\nHigher: only stronger accel/brake windows update align.\nLower: weaker longitudinal motion can update but may be noisier.",
         ),
-        "Max stationary accel norm err" => Some(
+        "Max static accel norm err" => Some(
             "Maximum acceleration-norm error accepted as stationary.\nHigher: easier stationary tilt initialization but more contamination from motion.\nLower: stricter tilt initialization and possible initialization delay.",
         ),
         "Min windows" => Some(
@@ -806,8 +796,8 @@ fn tuning_help(label: &str) -> Option<&'static str> {
         "Max rel lat err" => Some(
             "Maximum relative lateral-acceleration consistency error.\nHigher: more permissive turn acceptance.\nLower: stricter turn acceptance.",
         ),
-        "Use gravity updates" => Some(
-            "Enable align gravity observations.\nOn: roll/pitch seed uses stationary gravity.\nOff: removes gravity contribution from align.",
+        "Use static tilt samples" => Some(
+            "Enable align static accelerometer tilt samples.\nOn: roll/pitch can initialize from stationary samples.\nOff: removes this tilt contribution from align.",
         ),
         "Use turn gyro updates" => Some(
             "Enable align turn gyro roll/pitch observations.\nOn: turn yaw-rate consistency contributes to mount roll/pitch alignment.\nOff: align ignores turn gyro consistency. This does not observe mount yaw.",

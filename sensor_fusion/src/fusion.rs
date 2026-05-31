@@ -403,13 +403,6 @@ impl SensorFusion {
         }
     }
 
-    /// Sets the stationary-gravity observation variance.
-    pub fn set_r_stationary_accel(&mut self, r_stationary_accel: f32) {
-        if r_stationary_accel.is_finite() && r_stationary_accel >= 0.0 {
-            self.cfg.r_stationary_accel = r_stationary_accel;
-        }
-    }
-
     /// Marks the current trip as complete.
     ///
     /// Call this before an intentional stream stop or MCU sleep where the
@@ -493,11 +486,6 @@ impl SensorFusion {
                 gnss_event_mask |= events;
                 if self.cfg.r_zero_vel > 0.0 {
                     self.ekf.fuse_zero_vel(self.cfg.r_zero_vel);
-                }
-                if self.cfg.r_stationary_accel > 0.0 {
-                    let accel_vehicle = self.current_vehicle_vector_from_body(sample.accel_mps2);
-                    self.ekf
-                        .fuse_stationary_gravity(accel_vehicle, self.cfg.r_stationary_accel);
                 }
             } else {
                 let gyro_vehicle = self.current_vehicle_vector_from_body(sample.gyro_radps);

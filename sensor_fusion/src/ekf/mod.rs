@@ -30,8 +30,7 @@ use crate::fusion_types::{
 };
 use generated::{ERROR_STATES, NOISE_STATES};
 pub use types::{
-    GnssSample, GnssUpdateResult, ImuDelta, NominalState, State, StationaryDiag, UPDATE_DIAG_TYPES,
-    UpdateDiag,
+    GnssSample, GnssUpdateResult, ImuDelta, NominalState, State, UPDATE_DIAG_TYPES, UpdateDiag,
 };
 
 const RUNTIME_ZERO_VEL_R_DIAG: f32 = 0.01;
@@ -42,12 +41,10 @@ const DIAG_ZERO_VEL: usize = 2;
 const DIAG_BODY_SPEED_X: usize = 3;
 const DIAG_BODY_VEL_Y: usize = 4;
 const DIAG_BODY_VEL_Z: usize = 5;
-const DIAG_STATIONARY_X: usize = 6;
-const DIAG_STATIONARY_Y: usize = 7;
-const DIAG_GPS_POS_D: usize = 8;
-const DIAG_GPS_VEL_D: usize = 9;
-const DIAG_ZERO_VEL_D: usize = 10;
-const DIAG_VEHICLE_ROLL_PRIOR: usize = 11;
+const DIAG_GPS_POS_D: usize = 6;
+const DIAG_GPS_VEL_D: usize = 7;
+const DIAG_ZERO_VEL_D: usize = 8;
+const DIAG_VEHICLE_ROLL_PRIOR: usize = 9;
 const BODY_VEL_Y_SUPPORT: [usize; 8] = [0, 1, 2, 3, 4, 5, 15, 17];
 const BODY_VEL_Z_SUPPORT: [usize; 8] = [0, 1, 2, 3, 4, 5, 15, 16];
 const MAX_BATCH_OBS: usize = 8;
@@ -88,7 +85,6 @@ impl Filter {
             },
             p: [[0.0; ERROR_STATES]; ERROR_STATES],
             noise,
-            stationary_diag: StationaryDiag::default(),
             update_diag: UpdateDiag::default(),
             ..State::default()
         };
@@ -523,16 +519,6 @@ impl Filter {
         self.fuse_gps_vel_d_impl(0.0, r_zero_vel, true);
     }
 
-    /// Applies stationary gravity pseudo-measurements from vehicle-frame acceleration.
-    pub fn fuse_stationary_gravity(
-        &mut self,
-        accel_vehicle_mps2: [f32; 3],
-        r_stationary_accel: f32,
-    ) {
-        self.fuse_stationary_gravity_x(accel_vehicle_mps2[0], r_stationary_accel);
-        self.fuse_stationary_gravity_y(accel_vehicle_mps2[1], r_stationary_accel);
-    }
-
     /// Fuses forward vehicle speed as a vehicle-frame X velocity observation.
     pub fn fuse_body_speed_x(&mut self, speed_mps: f32, r_speed: f32) {
         let obs = generated::body_vel_x_observation(&self.raw.nominal, &self.raw.p, r_speed);
@@ -571,44 +557,21 @@ impl Filter {
         if !h0.is_finite() {
             return;
         }
-        let mut h = [0.0; ERROR_STATES];
-        const EPS: f32 = 1.0e-4;
-        for state in 0..=2 {
-            let mut perturbed = self.raw.nominal;
-            let mut dx = [0.0; ERROR_STATES];
-            dx[state] = EPS;
-            inject_error_state(&mut perturbed, &dx);
-            let hi = vehicle_roll_rad(&perturbed);
-            if !hi.is_finite() {
-                return;
-            }
-            h[state] = (hi - h0) / EPS;
-        }
-
-        let mut ph = [0.0; ERROR_STATES];
-        let mut s = r_vehicle_roll;
-        for i in 0..ERROR_STATES {
-            for state in 0..=2 {
-                ph[i] += self.raw.p[i][state] * h[state];
-            }
-        }
-        for state in 0..=2 {
-            s += h[state] * ph[state];
-        }
-        if s <= 0.0 || !s.is_finite() {
+        let obs = generated::vehicle_roll_prior_observation(
+            &self.raw.nominal,
+            &self.raw.p,
+            r_vehicle_roll,
+        );
+        if obs.s <= 0.0 || !obs.s.is_finite() {
             return;
         }
 
         let innovation = -h0;
-        let mut k = [0.0; ERROR_STATES];
-        let mut dx = [0.0; ERROR_STATES];
-        for i in 0..ERROR_STATES {
-            k[i] = ph[i] / s;
-            dx[i] = k[i] * innovation;
-        }
+        let mut k = obs.k;
+        let mut dx = gain_dx(k, innovation);
         self.freeze_mount_update_if_needed(&mut k, &mut dx);
-        self.record_update_diag(DIAG_VEHICLE_ROLL_PRIOR, innovation, s, &h, &k, &dx);
-        self.fuse_measurement(s, &h, &k, &dx);
+        self.record_update_diag(DIAG_VEHICLE_ROLL_PRIOR, innovation, obs.s, &obs.h, &k, &dx);
+        self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
     fn fuse_gps_pos_n(&mut self, pos_n: f32, r_pos_n: f32) {
@@ -713,59 +676,6 @@ impl Filter {
             DIAG_GPS_VEL_D
         };
         self.record_update_diag(diag, innovation, obs.s, &obs.h, &k, &dx);
-        self.fuse_measurement(obs.s, &obs.h, &k, &dx);
-    }
-
-    fn fuse_stationary_gravity_x(&mut self, accel_x: f32, r_stationary_accel: f32) {
-        floor_attitude_covariance(&mut self.raw, 0.10 * core::f32::consts::PI / 180.0);
-        let obs = generated::stationary_accel_x_observation(
-            &self.raw.nominal,
-            &self.raw.p,
-            r_stationary_accel,
-        );
-        let q0 = self.raw.nominal.q0;
-        let q1 = self.raw.nominal.q1;
-        let q2 = self.raw.nominal.q2;
-        let q3 = self.raw.nominal.q3;
-        let gravity_x = 2.0 * (q1 * q3 - q0 * q2) * self.gravity_mss;
-        let innovation = (accel_x - self.raw.nominal.bax) - (-gravity_x);
-        let mut k = obs.k;
-        let mut dx = gain_dx(k, innovation);
-        self.freeze_mount_update_if_needed(&mut k, &mut dx);
-        self.raw.stationary_diag.innovation_x = innovation;
-        self.raw.stationary_diag.k_theta_x_from_x = k[0];
-        self.raw.stationary_diag.k_theta_y_from_x = k[1];
-        self.raw.stationary_diag.k_bax_from_x = k[12];
-        self.raw.stationary_diag.k_bay_from_x = k[13];
-        self.copy_stationary_p_diag();
-        self.record_update_diag(DIAG_STATIONARY_X, innovation, obs.s, &obs.h, &k, &dx);
-        self.fuse_measurement(obs.s, &obs.h, &k, &dx);
-    }
-
-    fn fuse_stationary_gravity_y(&mut self, accel_y: f32, r_stationary_accel: f32) {
-        floor_attitude_covariance(&mut self.raw, 0.10 * core::f32::consts::PI / 180.0);
-        let obs = generated::stationary_accel_y_observation(
-            &self.raw.nominal,
-            &self.raw.p,
-            r_stationary_accel,
-        );
-        let q0 = self.raw.nominal.q0;
-        let q1 = self.raw.nominal.q1;
-        let q2 = self.raw.nominal.q2;
-        let q3 = self.raw.nominal.q3;
-        let gravity_y = 2.0 * (q2 * q3 + q0 * q1) * self.gravity_mss;
-        let innovation = (accel_y - self.raw.nominal.bay) - (-gravity_y);
-        let mut k = obs.k;
-        let mut dx = gain_dx(k, innovation);
-        self.freeze_mount_update_if_needed(&mut k, &mut dx);
-        self.raw.stationary_diag.innovation_y = innovation;
-        self.raw.stationary_diag.k_theta_x_from_y = k[0];
-        self.raw.stationary_diag.k_theta_y_from_y = k[1];
-        self.raw.stationary_diag.k_bax_from_y = k[12];
-        self.raw.stationary_diag.k_bay_from_y = k[13];
-        self.copy_stationary_p_diag();
-        self.raw.stationary_diag.updates += 1;
-        self.record_update_diag(DIAG_STATIONARY_Y, innovation, obs.s, &obs.h, &k, &dx);
         self.fuse_measurement(obs.s, &obs.h, &k, &dx);
     }
 
@@ -1105,15 +1015,6 @@ impl Filter {
         diag.last_corr_yaw_mount_yaw = corr_yaw_mount_yaw;
         diag.last_type = diag_type as u32;
     }
-
-    fn copy_stationary_p_diag(&mut self) {
-        self.raw.stationary_diag.p_theta_x = self.raw.p[0][0];
-        self.raw.stationary_diag.p_theta_y = self.raw.p[1][1];
-        self.raw.stationary_diag.p_bax = self.raw.p[12][12];
-        self.raw.stationary_diag.p_bay = self.raw.p[13][13];
-        self.raw.stationary_diag.p_theta_x_bax = self.raw.p[0][12];
-        self.raw.stationary_diag.p_theta_y_bay = self.raw.p[1][13];
-    }
 }
 
 fn gain_dx(k: [f32; ERROR_STATES], innovation: f32) -> [f32; ERROR_STATES] {
@@ -1441,17 +1342,6 @@ fn apply_reset_block(p: &mut [[f32; ERROR_STATES]; ERROR_STATES], offset: usize,
     }
 }
 
-fn floor_attitude_covariance(ekf: &mut State, sigma_rad: f32) {
-    let var_floor = sigma_rad * sigma_rad;
-    if ekf.p[0][0] < var_floor {
-        ekf.p[0][0] = var_floor;
-    }
-    if ekf.p[1][1] < var_floor {
-        ekf.p[1][1] = var_floor;
-    }
-    covariance::symmetrize(&mut ekf.p);
-}
-
 fn nominal_vehicle_velocity(nominal: &NominalState) -> [f32; 3] {
     let q0 = nominal.q0;
     let q1 = nominal.q1;
@@ -1476,6 +1366,114 @@ fn nominal_vehicle_velocity(nominal: &NominalState) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn old_finite_difference_vehicle_roll_prior_observation(
+        nominal: &NominalState,
+        p: &[[f32; ERROR_STATES]; ERROR_STATES],
+        r_vehicle_roll: f32,
+    ) -> generated::ScalarObservation {
+        let h0 = vehicle_roll_rad(nominal);
+        let mut h = [0.0; ERROR_STATES];
+        const EPS: f32 = 1.0e-4;
+        for state in 0..=2 {
+            let mut perturbed = *nominal;
+            let mut dx = [0.0; ERROR_STATES];
+            dx[state] = EPS;
+            inject_error_state(&mut perturbed, &dx);
+            let hi = vehicle_roll_rad(&perturbed);
+            h[state] = (hi - h0) / EPS;
+        }
+
+        let mut ph = [0.0; ERROR_STATES];
+        let mut s = r_vehicle_roll;
+        for i in 0..ERROR_STATES {
+            for state in 0..=2 {
+                ph[i] += p[i][state] * h[state];
+            }
+        }
+        for state in 0..=2 {
+            s += h[state] * ph[state];
+        }
+
+        let mut k = [0.0; ERROR_STATES];
+        for i in 0..ERROR_STATES {
+            k[i] = ph[i] / s;
+        }
+
+        generated::ScalarObservation { h, k, s }
+    }
+
+    fn set_attitude_rpy(nominal: &mut NominalState, roll: f32, pitch: f32, yaw: f32) {
+        let qx = [(0.5 * roll).cos(), (0.5 * roll).sin(), 0.0, 0.0];
+        let qy = [(0.5 * pitch).cos(), 0.0, (0.5 * pitch).sin(), 0.0];
+        let qz = [(0.5 * yaw).cos(), 0.0, 0.0, (0.5 * yaw).sin()];
+        let q = quat_multiply_f32(quat_multiply_f32(qz, qy), qx);
+        nominal.q0 = q[0];
+        nominal.q1 = q[1];
+        nominal.q2 = q[2];
+        nominal.q3 = q[3];
+        normalize_nominal_quat(nominal);
+    }
+
+    fn test_covariance() -> [[f32; ERROR_STATES]; ERROR_STATES] {
+        let mut p = [[0.0; ERROR_STATES]; ERROR_STATES];
+        for i in 0..ERROR_STATES {
+            p[i][i] = 0.01 + 0.001 * i as f32;
+        }
+        for i in 0..ERROR_STATES {
+            for j in (i + 1)..ERROR_STATES {
+                let value = 1.0e-5 * ((i + j + 1) as f32);
+                p[i][j] = value;
+                p[j][i] = value;
+            }
+        }
+        p
+    }
+
+    #[test]
+    fn generated_vehicle_roll_prior_matches_previous_finite_difference_row() {
+        let cases = [
+            (0.0_f32, 0.0_f32, 0.0_f32),
+            (5.0_f32, 0.0_f32, 0.0_f32),
+            (-8.0_f32, 4.0_f32, 15.0_f32),
+            (12.0_f32, -7.0_f32, -30.0_f32),
+        ];
+        let p = test_covariance();
+        for (roll_deg, pitch_deg, yaw_deg) in cases {
+            let mut nominal = NominalState::default();
+            set_attitude_rpy(
+                &mut nominal,
+                roll_deg.to_radians(),
+                pitch_deg.to_radians(),
+                yaw_deg.to_radians(),
+            );
+
+            let generated = generated::vehicle_roll_prior_observation(&nominal, &p, 0.1);
+            let finite_diff =
+                old_finite_difference_vehicle_roll_prior_observation(&nominal, &p, 0.1);
+
+            for i in 0..ERROR_STATES {
+                assert!(
+                    (generated.h[i] - finite_diff.h[i]).abs() < 2.0e-3,
+                    "H[{i}] mismatch for roll={roll_deg}, pitch={pitch_deg}, yaw={yaw_deg}: generated={} finite_diff={}",
+                    generated.h[i],
+                    finite_diff.h[i]
+                );
+                assert!(
+                    (generated.k[i] - finite_diff.k[i]).abs() < 2.0e-3,
+                    "K[{i}] mismatch for roll={roll_deg}, pitch={pitch_deg}, yaw={yaw_deg}: generated={} finite_diff={}",
+                    generated.k[i],
+                    finite_diff.k[i]
+                );
+            }
+            assert!(
+                (generated.s - finite_diff.s).abs() < 2.0e-4,
+                "S mismatch for roll={roll_deg}, pitch={pitch_deg}, yaw={yaw_deg}: generated={} finite_diff={}",
+                generated.s,
+                finite_diff.s
+            );
+        }
+    }
 
     #[test]
     fn vehicle_roll_prior_reduces_vehicle_roll_without_direct_mount_jacobian() {

@@ -4,7 +4,6 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Result, bail};
-use sensor_fusion::SensorFusion;
 use fusion_tools::datasets::generic_replay::{
     GenericGnssSample, GenericImuSample, fusion_gnss_sample, fusion_imu_sample,
 };
@@ -24,6 +23,7 @@ use fusion_tools::visualizer::pipeline::synthetic::{
     SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_plot_data,
 };
 use fusion_tools::visualizer::pipeline::{FusionTuningConfig, GnssOutageConfig};
+use sensor_fusion::SensorFusion;
 
 const SHORT_PROFILE: &str = "\
 initial lat=32 lon=120 alt=0 vx=0 vy=0 vz=0 yaw=0 pitch=0 roll=0
@@ -876,7 +876,11 @@ fn final_trace_value(trace: &fusion_tools::visualizer::model::Trace) -> Result<f
         .ok_or_else(|| anyhow::anyhow!("trace '{}' has no points", trace.name))
 }
 
-fn trace_window_max(trace: &fusion_tools::visualizer::model::Trace, start_s: f64, end_s: f64) -> f64 {
+fn trace_window_max(
+    trace: &fusion_tools::visualizer::model::Trace,
+    start_s: f64,
+    end_s: f64,
+) -> f64 {
     trace
         .points
         .iter()

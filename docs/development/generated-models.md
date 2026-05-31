@@ -102,8 +102,8 @@ It does not encode runtime policy.
 | `emit_matrix_supports()` | `error_transition_support_generated.rs` | constants included by `generated.rs` | sparse covariance prediction |
 | `build_symbolic_model()` reset block | `attitude_reset_jacobian_generated.rs` | `attitude_reset_jacobian()` | attitude covariance reset |
 | `derive_measurement_model()` | `gps_*_generated.rs` | `gps_*_observation()` | standalone GNSS scalar rows |
-| `derive_measurement_model()` | `stationary_accel_*_generated.rs` | `stationary_accel_*_observation()` | stationary gravity updates |
 | `derive_measurement_model()` | `body_vel_*_generated.rs` | `body_vel_*_observation()` | vehicle speed, NHC Y/Z, GNSS/NHC batch |
+| `derive_measurement_model()` | `vehicle_roll_prior_generated.rs` | `vehicle_roll_prior_observation()` | flat-road vehicle-roll prior row |
 
 Each generated scalar observation file computes the linearized row $H$, scalar
 Kalman gain $K = PH^T / S$, and innovation variance $S = HPH^T + R$ for the

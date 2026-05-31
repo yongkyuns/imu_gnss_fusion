@@ -79,9 +79,9 @@ $$
 r_\phi = -\operatorname{roll}(q_{nv}).
 $$
 
-The Jacobian is finite-differenced only over vehicle-attitude error states
-$0{:}2$. Direct mount columns are zero, so any mount motion comes through
-covariance coupling.
+The SymPy-generated Jacobian has nonzero entries only over vehicle-attitude
+error states $0{:}2$. Direct mount columns are zero, so any mount motion comes
+through covariance coupling.
 
 This prior reduces roll ambiguity on mostly flat roads by anchoring the
 vehicle-roll side of the roll split. It is not bank-safe: sustained banked roads

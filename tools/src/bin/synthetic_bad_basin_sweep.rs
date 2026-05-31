@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, ValueEnum};
-use sensor_fusion::SensorFusion;
 use fusion_tools::datasets::generic_replay::{
     GenericGnssSample, GenericImuSample, fusion_gnss_sample, fusion_imu_sample,
 };
@@ -16,6 +15,7 @@ use fusion_tools::synthetic::gnss_ins_path::{
 };
 use fusion_tools::visualizer::math::{ecef_to_ned, lla_to_ecef, quat_rpy_deg};
 use fusion_tools::visualizer::pipeline::generic::reference_mount_rpy_to_q_bv;
+use sensor_fusion::SensorFusion;
 
 const DIAG_GPS_VEL: usize = 1;
 const DIAG_BODY_VEL_Y: usize = 4;
@@ -82,8 +82,6 @@ struct Args {
     r_vehicle_speed: f32,
     #[arg(long, default_value_t = 0.0)]
     r_zero_vel: f32,
-    #[arg(long, default_value_t = 0.0)]
-    r_stationary_accel: f32,
     #[arg(long, default_value_t = 0.0)]
     mount_align_rw_var: f32,
     #[arg(long, default_value_t = 0.0)]
@@ -995,7 +993,6 @@ fn apply_fusion_config(fusion: &mut SensorFusion, args: &Args) {
     fusion.set_mount_init_sigma_rad(args.mount_init_sigma_deg.to_radians());
     fusion.set_r_vehicle_speed(args.r_vehicle_speed);
     fusion.set_r_zero_vel(args.r_zero_vel);
-    fusion.set_r_stationary_accel(args.r_stationary_accel);
     fusion.set_mount_align_rw_var(args.mount_align_rw_var);
 }
 

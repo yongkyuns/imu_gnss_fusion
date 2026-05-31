@@ -38,7 +38,6 @@ pub struct FusionTuningConfig {
     pub mount_align_rw_var: f32,
     pub align_handoff_delay_s: f32,
     pub r_zero_vel: f32,
-    pub r_stationary_accel: f32,
     pub vehicle_meas_lpf_cutoff_hz: f64,
     #[serde(default)]
     pub predict_imu_lpf_cutoff_hz: Option<f64>,
@@ -72,7 +71,6 @@ impl Default for FusionTuningConfig {
             mount_align_rw_var: 0.0,
             align_handoff_delay_s: 0.0,
             r_zero_vel: 0.0,
-            r_stationary_accel: 0.0,
             vehicle_meas_lpf_cutoff_hz: 35.0,
             predict_imu_lpf_cutoff_hz: None,
             predict_imu_decimation: 1,
@@ -174,7 +172,6 @@ pub fn apply_fusion_tuning_config(fusion: &mut SensorFusion, cfg: FusionTuningCo
     fusion.set_use_align_mount_covariance_on_seed(cfg.use_align_mount_covariance_on_seed);
     fusion.set_r_vehicle_speed(cfg.r_vehicle_speed);
     fusion.set_r_zero_vel(cfg.r_zero_vel);
-    fusion.set_r_stationary_accel(cfg.r_stationary_accel);
     fusion.set_mount_align_rw_var(cfg.mount_align_rw_var);
     fusion.set_align_handoff_delay_s(cfg.align_handoff_delay_s);
 }
@@ -277,7 +274,6 @@ mod tests {
             "mountUpdateYawRateGateDps": 10.0,
             "alignHandoffDelayS": 0.0,
             "rZeroVel": 0.0,
-            "rStationaryAccel": 0.0,
             "vehicleMeasLpfCutoffHz": 35.0,
             "predictImuDecimation": 1,
             "yawInitSpeedMps": 0.0,

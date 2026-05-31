@@ -59,7 +59,7 @@ fn gnss_batch_records_row_diag_once_and_clears_on_predict() {
     assert_eq!(result.event_mask, 0);
     let raw = ekf.raw();
     assert_eq!(raw.last_obs_count, 6);
-    assert_eq!(&raw.last_obs_types[..6], &[0, 0, 8, 1, 1, 9]);
+    assert_eq!(&raw.last_obs_types[..6], &[0, 0, 6, 1, 1, 7]);
     assert!(
         raw.last_dx_by_obs[..6]
             .iter()
@@ -99,11 +99,11 @@ fn gnss_position_per_axis_large_jump_rejection_keeps_velocity_update() {
     assert_eq!(result.event_mask, GNSS_EVENT_POSITION_REJECTED);
     let raw = ekf.raw();
     assert_eq!(raw.last_obs_count, 3);
-    assert_eq!(&raw.last_obs_types[..3], &[1, 1, 9]);
+    assert_eq!(&raw.last_obs_types[..3], &[1, 1, 7]);
     assert_eq!(raw.update_diag.type_counts[0], 0);
-    assert_eq!(raw.update_diag.type_counts[8], 0);
+    assert_eq!(raw.update_diag.type_counts[6], 0);
     assert_eq!(raw.update_diag.type_counts[1], 2);
-    assert_eq!(raw.update_diag.type_counts[9], 1);
+    assert_eq!(raw.update_diag.type_counts[7], 1);
 }
 
 #[test]
@@ -125,11 +125,11 @@ fn gnss_velocity_per_axis_large_jump_rejection_keeps_position_update() {
     assert_eq!(result.event_mask, GNSS_EVENT_VELOCITY_REJECTED);
     let raw = ekf.raw();
     assert_eq!(raw.last_obs_count, 3);
-    assert_eq!(&raw.last_obs_types[..3], &[0, 0, 8]);
+    assert_eq!(&raw.last_obs_types[..3], &[0, 0, 6]);
     assert_eq!(raw.update_diag.type_counts[0], 2);
-    assert_eq!(raw.update_diag.type_counts[8], 1);
+    assert_eq!(raw.update_diag.type_counts[6], 1);
     assert_eq!(raw.update_diag.type_counts[1], 0);
-    assert_eq!(raw.update_diag.type_counts[9], 0);
+    assert_eq!(raw.update_diag.type_counts[7], 0);
 }
 
 #[test]
@@ -159,7 +159,7 @@ fn gnss_position_consecutive_rejections_emit_event_without_fusing_jump() {
         result.event_mask,
         GNSS_EVENT_POSITION_REJECTED | GNSS_EVENT_POSITION_CONSECUTIVE_REJECTED
     );
-    assert_eq!(&ekf.raw().last_obs_types[..3], &[1, 1, 9]);
+    assert_eq!(&ekf.raw().last_obs_types[..3], &[1, 1, 7]);
 }
 
 #[test]
@@ -181,7 +181,7 @@ fn gnss_position_gap_bypass_accepts_first_update_after_large_gap() {
     let result = ekf.fuse_gps_nhc_batch(GnssSample { t_s: 4.2, ..sample }, None, None);
 
     assert_eq!(result.event_mask, GNSS_EVENT_POSITION_GAP_BYPASS);
-    assert_eq!(&ekf.raw().last_obs_types[..6], &[0, 0, 8, 1, 1, 9]);
+    assert_eq!(&ekf.raw().last_obs_types[..6], &[0, 0, 6, 1, 1, 7]);
 }
 
 #[test]
@@ -218,5 +218,5 @@ fn gnss_position_accuracy_bypass_accepts_after_reported_accuracy_improves() {
     );
 
     assert_eq!(result.event_mask, GNSS_EVENT_POSITION_ACCURACY_BYPASS);
-    assert_eq!(&ekf.raw().last_obs_types[..6], &[0, 0, 8, 1, 1, 9]);
+    assert_eq!(&ekf.raw().last_obs_types[..6], &[0, 0, 6, 1, 1, 7]);
 }

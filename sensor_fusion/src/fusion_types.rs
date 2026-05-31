@@ -207,7 +207,6 @@ pub(crate) struct RuntimeConfig {
     pub(crate) align_handoff_delay_s: f32,
     pub(crate) r_vehicle_speed: f32,
     pub(crate) r_zero_vel: f32,
-    pub(crate) r_stationary_accel: f32,
     pub(crate) yaw_init_speed_mps: f32,
 }
 
@@ -234,7 +233,6 @@ impl Default for RuntimeConfig {
             align_handoff_delay_s: 0.0,
             r_vehicle_speed: 0.04,
             r_zero_vel: 0.0,
-            r_stationary_accel: 0.0,
             yaw_init_speed_mps: 0.0,
         }
     }

@@ -10,7 +10,9 @@ use fusion_tools::synthetic::gnss_ins_path::{
 };
 use fusion_tools::visualizer::math::quat_rpy_deg;
 use fusion_tools::visualizer::model::{HeadingSample, PlotData, Trace, VisualizerMountMode};
-use fusion_tools::visualizer::pipeline::generic::{GenericReplayInput, reference_mount_rpy_to_q_bv};
+use fusion_tools::visualizer::pipeline::generic::{
+    GenericReplayInput, reference_mount_rpy_to_q_bv,
+};
 use fusion_tools::visualizer::pipeline::synthetic::{
     SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_plot_data,
 };
@@ -318,11 +320,6 @@ fn assert_plot_data_close(
             "ekf_misalignment",
             &left.ekf_misalignment,
             &right.ekf_misalignment,
-        ),
-        (
-            "ekf_stationary_diag",
-            &left.ekf_stationary_diag,
-            &right.ekf_stationary_diag,
         ),
         (
             "ekf_bump_pitch_speed",

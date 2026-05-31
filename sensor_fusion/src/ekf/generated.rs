@@ -234,52 +234,6 @@ pub fn gps_vel_d_observation(
     ScalarObservation { h: H, k: K, s: S }
 }
 
-/// Builds the generated stationary-gravity X-axis scalar observation.
-pub fn stationary_accel_x_observation(
-    nominal: &NominalState,
-    p: &[[f32; ERROR_STATES]; ERROR_STATES],
-    r_stationary_accel: f32,
-) -> ScalarObservation {
-    let P = p;
-    let R_STATIONARY_ACCEL = r_stationary_accel;
-    let q0 = nominal.q0;
-    let q1 = nominal.q1;
-    let q2 = nominal.q2;
-    let q3 = nominal.q3;
-    let bax = nominal.bax;
-    let g = GRAVITY_MSS;
-    let mut H = [0.0; ERROR_STATES];
-    let mut K = [0.0; ERROR_STATES];
-    let mut S = 0.0;
-
-    include!("generated/stationary_accel_x_generated.rs");
-
-    ScalarObservation { h: H, k: K, s: S }
-}
-
-/// Builds the generated stationary-gravity Y-axis scalar observation.
-pub fn stationary_accel_y_observation(
-    nominal: &NominalState,
-    p: &[[f32; ERROR_STATES]; ERROR_STATES],
-    r_stationary_accel: f32,
-) -> ScalarObservation {
-    let P = p;
-    let R_STATIONARY_ACCEL = r_stationary_accel;
-    let q0 = nominal.q0;
-    let q1 = nominal.q1;
-    let q2 = nominal.q2;
-    let q3 = nominal.q3;
-    let bay = nominal.bay;
-    let g = GRAVITY_MSS;
-    let mut H = [0.0; ERROR_STATES];
-    let mut K = [0.0; ERROR_STATES];
-    let mut S = 0.0;
-
-    include!("generated/stationary_accel_y_generated.rs");
-
-    ScalarObservation { h: H, k: K, s: S }
-}
-
 /// Builds the generated vehicle-frame forward-velocity scalar observation.
 pub fn body_vel_x_observation(
     nominal: &NominalState,
@@ -360,6 +314,27 @@ pub fn body_vel_z_observation(
     let mut S = 0.0;
 
     include!("generated/body_vel_z_generated.rs");
+
+    ScalarObservation { h: H, k: K, s: S }
+}
+
+/// Builds the generated vehicle-roll prior scalar observation.
+pub fn vehicle_roll_prior_observation(
+    nominal: &NominalState,
+    p: &[[f32; ERROR_STATES]; ERROR_STATES],
+    r_vehicle_roll: f32,
+) -> ScalarObservation {
+    let P = p;
+    let R_VEHICLE_ROLL = r_vehicle_roll;
+    let q0 = nominal.q0;
+    let q1 = nominal.q1;
+    let q2 = nominal.q2;
+    let q3 = nominal.q3;
+    let mut H = [0.0; ERROR_STATES];
+    let mut K = [0.0; ERROR_STATES];
+    let mut S = 0.0;
+
+    include!("generated/vehicle_roll_prior_generated.rs");
 
     ScalarObservation { h: H, k: K, s: S }
 }

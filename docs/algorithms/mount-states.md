@@ -101,7 +101,7 @@ Automatic mount mode therefore uses `align` as a reduced estimator before EKF
 initialization. Align estimates only $q_{bv}$ and a 3 by 3 local mount
 covariance. It uses broader-capture cues:
 
-- stationary gravity to seed and refine roll/pitch;
+- static accelerometer tilt samples to seed and refine roll/pitch;
 - GNSS-derived horizontal acceleration to constrain yaw;
 - planar turn-gyro consistency to refine roll/pitch during turns.
 

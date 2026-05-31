@@ -119,7 +119,7 @@ Important public setters include:
 - `set_r_body_vel` and `set_r_body_vel_yz`;
 - `set_nhc_update_period_s`;
 - `set_r_vehicle_roll_prior`;
-- `set_r_vehicle_speed`, `set_r_zero_vel`, and `set_r_stationary_accel`;
+- `set_r_vehicle_speed` and `set_r_zero_vel`;
 - roll, pitch, yaw, bias, and per-axis mount initialization sigma setters;
 - `set_use_align_mount_covariance_on_seed`.
 

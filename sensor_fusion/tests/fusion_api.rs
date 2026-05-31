@@ -110,7 +110,7 @@ fn gnss_gate_events_are_returned_when_pending_gnss_is_fused() {
     });
     let queued = system.process_gnss(GnssSample {
         t_s: 1.02,
-        lat_deg: 0.001,
+        lat_deg: 0.01,
         ..gnss_sample(1.02)
     });
     assert_eq!(queued.gnss_event_mask, 0);
@@ -381,7 +381,7 @@ fn vehicle_speed_sample_pulls_forward_velocity_upward() {
 #[test]
 fn zero_velocity_update_does_not_inject_mount_error() {
     const DIAG_ZERO_VEL: usize = 2;
-    const DIAG_ZERO_VEL_D: usize = 10;
+    const DIAG_ZERO_VEL_D: usize = 8;
 
     let mut ekf = sensor_fusion::ekf::Filter::new(ProcessNoise::default());
     {

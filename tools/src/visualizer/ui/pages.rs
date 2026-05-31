@@ -559,15 +559,6 @@ impl App {
                                 true,
                                 vec![plot_spec("Roughness And Shocks", roughness, true)],
                             ),
-                            plot_section(
-                                "Stationary",
-                                false,
-                                vec![plot_spec(
-                                    "EKF Stationary Diagnostics",
-                                    trace_refs(&self.data.ekf_stationary_diag),
-                                    true,
-                                )],
-                            ),
                         ],
                         self.max_points_per_trace,
                         self.trace_visibility(),

@@ -144,7 +144,7 @@ yaw uncertainty:
   \sigma_{\phi,\theta,\psi,0} =
   \begin{bmatrix}10^\circ & 10^\circ & 60^\circ\end{bmatrix}.
 \end{equation}
-This keeps the stationary gravity seed useful without treating the initial
+This keeps the static tilt seed useful without treating the initial
 tilt estimate as calibrated mount accuracy.
 
 \section{Prediction}
@@ -197,16 +197,16 @@ After each update, the small angle is injected into \(q_{bv}\) and \(P\) is
 symmetrized. The implementation uses the simplified covariance update above,
 not the Joseph form.
 
-\section{Stationary Gravity Observation}
+\section{Static Tilt Refinement}
 
 Stationary windows are detected by low gyro norm, accelerometer norm near
 standard gravity, and near-zero GNSS speed. During such windows, the low-pass
-gravity vector is updated:
+accelerometer vector is updated:
 \begin{equation}
   g_{b,\mathrm{lp}}^{+}
   =(1-\alpha)g_{b,\mathrm{lp}}^{-}+\alpha\bar f_b .
 \end{equation}
-The gravity observation rotates this vector into the vehicle frame:
+The tilt observation rotates this vector into the vehicle frame:
 \begin{equation}
   g_v=C_{vb}g_{b,\mathrm{lp}} .
 \end{equation}
@@ -215,7 +215,7 @@ For a level stationary vehicle, the constrained channels are
   g_{v,y}\approx 0,\qquad g_{v,z}\approx -\|g_{b,\mathrm{lp}}\|.
 \end{equation}
 The current implementation applies the \(y\) and \(z\) rows with a roll/pitch
-mask, so yaw is not directly updated by stationary gravity.
+mask, so yaw is not directly updated by the static accelerometer direction.
 
 \section{GNSS-Derived Horizontal Heading Observation}
 

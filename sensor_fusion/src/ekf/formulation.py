@@ -31,16 +31,16 @@ Noise input order generated here:
     gyro_delta_noise_b[3], accel_delta_noise_b[3],
     gyro_bias_rw_b[3], accel_bias_rw_b[3], mount_rw_bv[3]
 
-The generated EKF model intentionally uses scalar observation files for
-GNSS, stationary-gravity, and vehicle-frame velocity/NHC updates. Each scalar
-file contains H, K, and S for a one-dimensional Kalman update so runtime code can
-avoid a dense measurement inverse.
+The generated EKF model intentionally uses scalar observation files for GNSS and
+vehicle-frame velocity/NHC updates. Each scalar file contains H, K, and S for a
+one-dimensional Kalman update so runtime code can avoid a dense measurement
+inverse.
 """
 
 import sys
 from pathlib import Path
 
-from sympy import Matrix, Symbol, cse, symbols
+from sympy import Matrix, Symbol, atan2, cse, symbols
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -406,8 +406,8 @@ def derive_measurement_model():
 
     - GNSS position in local NED: `gps_pos_n/e/d`.
     - GNSS velocity in local NED: `gps_vel_n/e/d`.
-    - Stationary gravity cues in vehicle frame: `stationary_accel_x/y`.
     - Vehicle-frame velocity/NHC rows: `body_vel_x/y/z`.
+    - Vehicle-roll prior row: `vehicle_roll_prior`.
 
     All rows are linearized at zero error. Runtime code passes the residual
     `z - h(x_nom)` and the generated row/gain/innovation variance to the shared
@@ -433,8 +433,7 @@ def derive_measurement_model():
     )
     r_true_to_n = quat_to_rot(q_true)
     v_true_v = r_true_to_n.T * v_true
-    g_true_v = r_true_to_n.T * model["g_n"]
-    stationary_gravity_v = -g_true_v
+    vehicle_roll = atan2(r_true_to_n[2, 1], r_true_to_n[2, 2])
     return {
         **model,
         "P_cov": p_cov,
@@ -444,11 +443,10 @@ def derive_measurement_model():
         "gps_vel_n": generate_observation_equations(p_cov, model["dx"], v_true[0], Symbol("R_VEL_N", real=True), "tmp_hk_vel_n", zero_error_subs),
         "gps_vel_e": generate_observation_equations(p_cov, model["dx"], v_true[1], Symbol("R_VEL_E", real=True), "tmp_hk_vel_e", zero_error_subs),
         "gps_vel_d": generate_observation_equations(p_cov, model["dx"], v_true[2], Symbol("R_VEL_D", real=True), "tmp_hk_vel_d", zero_error_subs),
-        "stationary_accel_x": generate_observation_equations(p_cov, model["dx"], stationary_gravity_v[0], Symbol("R_STATIONARY_ACCEL", real=True), "tmp_hk_stat_ax", zero_error_subs),
-        "stationary_accel_y": generate_observation_equations(p_cov, model["dx"], stationary_gravity_v[1], Symbol("R_STATIONARY_ACCEL", real=True), "tmp_hk_stat_ay", zero_error_subs),
         "body_vel_x": generate_observation_equations(p_cov, model["dx"], v_true_v[0], Symbol("R_BODY_VEL", real=True), "tmp_hk_body_x", zero_error_subs),
         "body_vel_y": generate_observation_equations(p_cov, model["dx"], v_true_v[1], Symbol("R_BODY_VEL", real=True), "tmp_hk_body_y", zero_error_subs),
         "body_vel_z": generate_observation_equations(p_cov, model["dx"], v_true_v[2], Symbol("R_BODY_VEL", real=True), "tmp_hk_body_z", zero_error_subs),
+        "vehicle_roll_prior": generate_observation_equations(p_cov, model["dx"], vehicle_roll, Symbol("R_VEHICLE_ROLL", real=True), "tmp_hk_roll_prior", zero_error_subs),
     }
 
 
@@ -538,11 +536,10 @@ def emit_generated_rust():
     gps_vel_n_path = GENERATED_RUST_DIR / "gps_vel_n_generated.rs"
     gps_vel_e_path = GENERATED_RUST_DIR / "gps_vel_e_generated.rs"
     gps_vel_d_path = GENERATED_RUST_DIR / "gps_vel_d_generated.rs"
-    stationary_accel_x_path = GENERATED_RUST_DIR / "stationary_accel_x_generated.rs"
-    stationary_accel_y_path = GENERATED_RUST_DIR / "stationary_accel_y_generated.rs"
     body_vel_x_path = GENERATED_RUST_DIR / "body_vel_x_generated.rs"
     body_vel_y_path = GENERATED_RUST_DIR / "body_vel_y_generated.rs"
     body_vel_z_path = GENERATED_RUST_DIR / "body_vel_z_generated.rs"
+    vehicle_roll_prior_path = GENERATED_RUST_DIR / "vehicle_roll_prior_generated.rs"
 
     emit_nominal_prediction_rust(model)
     emit_cse_matrix_assignments(
@@ -580,11 +577,10 @@ def emit_generated_rust():
     write_observation_equations(gps_vel_n_path, meas["gps_vel_n"], state_dim)
     write_observation_equations(gps_vel_e_path, meas["gps_vel_e"], state_dim)
     write_observation_equations(gps_vel_d_path, meas["gps_vel_d"], state_dim)
-    write_observation_equations(stationary_accel_x_path, meas["stationary_accel_x"], state_dim)
-    write_observation_equations(stationary_accel_y_path, meas["stationary_accel_y"], state_dim)
     write_observation_equations(body_vel_x_path, meas["body_vel_x"], state_dim)
     write_observation_equations(body_vel_y_path, meas["body_vel_y"], state_dim)
     write_observation_equations(body_vel_z_path, meas["body_vel_z"], state_dim)
+    write_observation_equations(vehicle_roll_prior_path, meas["vehicle_roll_prior"], state_dim)
 
     for path in [
         pred_path,
@@ -597,11 +593,10 @@ def emit_generated_rust():
         gps_vel_n_path,
         gps_vel_e_path,
         gps_vel_d_path,
-        stationary_accel_x_path,
-        stationary_accel_y_path,
         body_vel_x_path,
         body_vel_y_path,
         body_vel_z_path,
+        vehicle_roll_prior_path,
     ]:
         print("Wrote:", path)
 

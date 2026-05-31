@@ -78,7 +78,6 @@ pub struct PlotData {
     pub ekf_nhc_nis: Vec<Trace>,
     pub ekf_nhc_h_mount_norm: Vec<Trace>,
     pub ekf_misalignment: Vec<Trace>,
-    pub ekf_stationary_diag: Vec<Trace>,
     pub ekf_bump_pitch_speed: Vec<Trace>,
     pub ekf_bump_diag: Vec<Trace>,
     pub ekf_road_roughness: Vec<Trace>,
@@ -116,7 +115,7 @@ impl PlotData {
             .any(|trace| !trace.points.is_empty())
     }
 
-    fn trace_groups(&self) -> [&[Trace]; 41] {
+    fn trace_groups(&self) -> [&[Trace]; 40] {
         [
             &self.speed,
             &self.vehicle_motion_gyro,
@@ -144,7 +143,6 @@ impl PlotData {
             &self.ekf_nhc_nis,
             &self.ekf_nhc_h_mount_norm,
             &self.ekf_misalignment,
-            &self.ekf_stationary_diag,
             &self.ekf_bump_pitch_speed,
             &self.ekf_bump_diag,
             &self.ekf_road_roughness,

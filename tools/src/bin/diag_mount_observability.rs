@@ -1,15 +1,17 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use sensor_fusion::ProcessNoise;
-use sensor_fusion::ekf::{self, Filter, GnssSample, ImuDelta};
 use fusion_tools::datasets::generic_replay::{GenericGnssSample, GenericImuSample};
 use fusion_tools::eval::gnss_ins::quat_angle_deg;
 use fusion_tools::eval::replay::{ReplayEvent, for_each_event};
 use fusion_tools::visualizer::math::{ecef_to_ned, lla_to_ecef};
-use fusion_tools::visualizer::pipeline::generic::{GenericReplayInput, reference_mount_rpy_to_q_bv};
+use fusion_tools::visualizer::pipeline::generic::{
+    GenericReplayInput, reference_mount_rpy_to_q_bv,
+};
 use fusion_tools::visualizer::pipeline::synthetic::{
     SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_replay_input,
 };
+use sensor_fusion::ProcessNoise;
+use sensor_fusion::ekf::{self, Filter, GnssSample, ImuDelta};
 
 const G: f64 = 9.80665;
 

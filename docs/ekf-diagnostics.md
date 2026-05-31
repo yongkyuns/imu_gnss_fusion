@@ -4,7 +4,7 @@ EKF diagnostics are exposed for replay analysis, tuning, and visualizer plots. T
 
 Useful diagnostic surfaces include:
 
-- update diagnostics for GNSS, zero-velocity, body-speed, NHC, stationary-gravity, and vehicle-roll-prior updates;
+- update diagnostics for GNSS, zero-velocity, body-speed, NHC, and vehicle-roll-prior updates;
 - `Update.state`, `Update.navigation_usable`, and `SensorFusion::health()` for the public lifecycle and convergence verdict;
 - `align_debug` for the most recent align window and update trace;
 - anchor/reanchor debug accessors for local-frame behavior;

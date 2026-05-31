@@ -3,7 +3,7 @@
 use super::generated::ERROR_STATES;
 use crate::ProcessNoise;
 
-pub const UPDATE_DIAG_TYPES: usize = 12;
+pub const UPDATE_DIAG_TYPES: usize = 10;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -39,28 +39,6 @@ pub struct NominalState {
     pub q_bv1: f32,
     pub q_bv2: f32,
     pub q_bv3: f32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct StationaryDiag {
-    pub innovation_x: f32,
-    pub innovation_y: f32,
-    pub k_theta_x_from_x: f32,
-    pub k_theta_y_from_x: f32,
-    pub k_bax_from_x: f32,
-    pub k_bay_from_x: f32,
-    pub k_theta_x_from_y: f32,
-    pub k_theta_y_from_y: f32,
-    pub k_bax_from_y: f32,
-    pub k_bay_from_y: f32,
-    pub p_theta_x: f32,
-    pub p_theta_y: f32,
-    pub p_bax: f32,
-    pub p_bay: f32,
-    pub p_theta_x_bax: f32,
-    pub p_theta_y_bay: f32,
-    pub updates: u32,
 }
 
 #[repr(C)]
@@ -128,7 +106,6 @@ pub struct State {
     pub nominal: NominalState,
     pub p: [[f32; ERROR_STATES]; ERROR_STATES],
     pub noise: ProcessNoise,
-    pub stationary_diag: StationaryDiag,
     pub update_diag: UpdateDiag,
     pub last_dx: [f32; ERROR_STATES],
     pub last_h_by_obs: [[f32; ERROR_STATES]; 8],
@@ -150,7 +127,6 @@ impl Default for State {
             },
             p: [[0.0; ERROR_STATES]; ERROR_STATES],
             noise: ProcessNoise::lsm6dso_104hz(),
-            stationary_diag: StationaryDiag::default(),
             update_diag: UpdateDiag::default(),
             last_dx: [0.0; ERROR_STATES],
             last_h_by_obs: [[0.0; ERROR_STATES]; 8],

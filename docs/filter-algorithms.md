@@ -14,7 +14,7 @@ The facade owns readiness and dispatch. Align only seeds automatic mount mode; t
 
 ## Align
 
-Align estimates the physical vehicle-to-body mount quaternion $q_{bv}$. It uses stationary gravity for tilt initialization/refinement, GNSS-derived horizontal acceleration for yaw, and planar turn gyro windows for roll/pitch refinement. It is not the NHC runtime filter.
+Align estimates the physical vehicle-to-body mount quaternion $q_{bv}$. It uses static accelerometer tilt samples for roll/pitch initialization/refinement, GNSS-derived horizontal acceleration for yaw, and planar turn gyro windows for roll/pitch refinement. It is not the NHC runtime filter.
 
 See [](algorithms/align.md) for the full reduced-estimator formulation.
 
@@ -39,7 +39,7 @@ See [](algorithms/runtime-ekf.md) for the implemented EKF state ordering, genera
 Runtime update families include:
 
 - GNSS position and velocity;
-- zero-velocity and stationary-gravity updates when the runtime detects stationary conditions;
+- zero-velocity updates when the runtime detects stationary conditions;
 - optional vehicle-speed observations;
 - nonholonomic vehicle-frame lateral/vertical velocity constraints;
 - optional vehicle-roll prior at eligible NHC epochs.

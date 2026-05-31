@@ -133,8 +133,6 @@ struct Args {
     #[arg(long)]
     r_zero_vel: Option<f32>,
     #[arg(long)]
-    r_stationary_accel: Option<f32>,
-    #[arg(long)]
     mount_align_rw_var: Option<f32>,
     #[arg(long)]
     align_handoff_delay_s: Option<f32>,
@@ -209,9 +207,6 @@ fn main() -> Result<()> {
         r_zero_vel: args
             .r_zero_vel
             .unwrap_or(FusionTuningConfig::default().r_zero_vel),
-        r_stationary_accel: args
-            .r_stationary_accel
-            .unwrap_or(FusionTuningConfig::default().r_stationary_accel),
         mount_align_rw_var: args
             .mount_align_rw_var
             .unwrap_or(FusionTuningConfig::default().mount_align_rw_var),
@@ -335,7 +330,7 @@ fn main() -> Result<()> {
         tmax
     );
     eprintln!(
-        "[profile] ekf-only misalignment={:?} predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} r_body_vel_y={:.3} r_body_vel_z={:.3} r_vehicle_roll_prior={:.6} attitude_roll_init_sigma_deg={:.3} attitude_pitch_init_sigma_deg={:.3} yaw_init_sigma_deg={:.3} gyro_bias_init_sigma_dps={:.3} mount_roll_pitch_init_sigma_deg={:.3} mount_yaw_init_sigma_deg={:.3} use_align_mount_covariance_on_seed={} r_vehicle_speed={:.3} r_zero_vel={:.3} r_stationary_accel={:.3} mount_align_rw_var={:.6e} align_handoff_delay_s={:.3}",
+        "[profile] ekf-only misalignment={:?} predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} r_body_vel_y={:.3} r_body_vel_z={:.3} r_vehicle_roll_prior={:.6} attitude_roll_init_sigma_deg={:.3} attitude_pitch_init_sigma_deg={:.3} yaw_init_sigma_deg={:.3} gyro_bias_init_sigma_dps={:.3} mount_roll_pitch_init_sigma_deg={:.3} mount_yaw_init_sigma_deg={:.3} use_align_mount_covariance_on_seed={} r_vehicle_speed={:.3} r_zero_vel={:.3} mount_align_rw_var={:.6e} align_handoff_delay_s={:.3}",
         args.misalignment,
         filter_cfg.predict_imu_decimation,
         filter_cfg
@@ -354,7 +349,6 @@ fn main() -> Result<()> {
         filter_cfg.use_align_mount_covariance_on_seed,
         filter_cfg.r_vehicle_speed,
         filter_cfg.r_zero_vel,
-        filter_cfg.r_stationary_accel,
         filter_cfg.mount_align_rw_var,
         filter_cfg.align_handoff_delay_s,
     );
@@ -385,7 +379,6 @@ fn main() -> Result<()> {
         group_stats("ekf_nhc_nis", &data.ekf_nhc_nis),
         group_stats("ekf_nhc_h_mount_norm", &data.ekf_nhc_h_mount_norm),
         group_stats("ekf_misalignment", &data.ekf_misalignment),
-        group_stats("ekf_stationary_diag", &data.ekf_stationary_diag),
         group_stats("ekf_bump_pitch_speed", &data.ekf_bump_pitch_speed),
         group_stats("ekf_bump_diag", &data.ekf_bump_diag),
         group_stats("ekf_road_roughness", &data.ekf_road_roughness),
@@ -597,35 +590,36 @@ pub fn build_replay_job_json_with_progress(
         .map_err(|err| JsValue::from_str(&format!("invalid replay job request: {err}")))?;
     let job_id = request.job_id;
 
-    let mut progress = |progress: fusion_tools::visualizer::pipeline::generic::GenericReplayProgress| {
-        let message = Object::new();
-        let _ = Reflect::set(
-            &message,
-            &JsValue::from_str("type"),
-            &JsValue::from_str("progress"),
-        );
-        let _ = Reflect::set(
-            &message,
-            &JsValue::from_str("jobId"),
-            &JsValue::from_f64(job_id as f64),
-        );
-        let _ = Reflect::set(
-            &message,
-            &JsValue::from_str("progress"),
-            &JsValue::from_f64(progress.fraction),
-        );
-        let _ = Reflect::set(
-            &message,
-            &JsValue::from_str("currentTimeS"),
-            &JsValue::from_f64(progress.current_t_s),
-        );
-        let _ = Reflect::set(
-            &message,
-            &JsValue::from_str("finalTimeS"),
-            &JsValue::from_f64(progress.final_t_s),
-        );
-        let _ = progress_callback.call1(&JsValue::NULL, &message);
-    };
+    let mut progress =
+        |progress: fusion_tools::visualizer::pipeline::generic::GenericReplayProgress| {
+            let message = Object::new();
+            let _ = Reflect::set(
+                &message,
+                &JsValue::from_str("type"),
+                &JsValue::from_str("progress"),
+            );
+            let _ = Reflect::set(
+                &message,
+                &JsValue::from_str("jobId"),
+                &JsValue::from_f64(job_id as f64),
+            );
+            let _ = Reflect::set(
+                &message,
+                &JsValue::from_str("progress"),
+                &JsValue::from_f64(progress.fraction),
+            );
+            let _ = Reflect::set(
+                &message,
+                &JsValue::from_str("currentTimeS"),
+                &JsValue::from_f64(progress.current_t_s),
+            );
+            let _ = Reflect::set(
+                &message,
+                &JsValue::from_str("finalTimeS"),
+                &JsValue::from_f64(progress.final_t_s),
+            );
+            let _ = progress_callback.call1(&JsValue::NULL, &message);
+        };
 
     let response = build_web_replay_job_response(request, Some(&mut progress));
     serde_json::to_string(&response)
@@ -651,35 +645,36 @@ pub fn build_replay_plot_data_json_with_progress(
         .map_err(|err| JsValue::from_str(&format!("invalid replay job request: {err}")))?;
     let job_id = request.job_id;
 
-    let mut progress = |progress: fusion_tools::visualizer::pipeline::generic::GenericReplayProgress| {
-        let message = Object::new();
-        let _ = Reflect::set(
-            &message,
-            &JsValue::from_str("type"),
-            &JsValue::from_str("progress"),
-        );
-        let _ = Reflect::set(
-            &message,
-            &JsValue::from_str("jobId"),
-            &JsValue::from_f64(job_id as f64),
-        );
-        let _ = Reflect::set(
-            &message,
-            &JsValue::from_str("progress"),
-            &JsValue::from_f64(progress.fraction),
-        );
-        let _ = Reflect::set(
-            &message,
-            &JsValue::from_str("currentTimeS"),
-            &JsValue::from_f64(progress.current_t_s),
-        );
-        let _ = Reflect::set(
-            &message,
-            &JsValue::from_str("finalTimeS"),
-            &JsValue::from_f64(progress.final_t_s),
-        );
-        let _ = progress_callback.call1(&JsValue::NULL, &message);
-    };
+    let mut progress =
+        |progress: fusion_tools::visualizer::pipeline::generic::GenericReplayProgress| {
+            let message = Object::new();
+            let _ = Reflect::set(
+                &message,
+                &JsValue::from_str("type"),
+                &JsValue::from_str("progress"),
+            );
+            let _ = Reflect::set(
+                &message,
+                &JsValue::from_str("jobId"),
+                &JsValue::from_f64(job_id as f64),
+            );
+            let _ = Reflect::set(
+                &message,
+                &JsValue::from_str("progress"),
+                &JsValue::from_f64(progress.fraction),
+            );
+            let _ = Reflect::set(
+                &message,
+                &JsValue::from_str("currentTimeS"),
+                &JsValue::from_f64(progress.current_t_s),
+            );
+            let _ = Reflect::set(
+                &message,
+                &JsValue::from_str("finalTimeS"),
+                &JsValue::from_f64(progress.final_t_s),
+            );
+            let _ = progress_callback.call1(&JsValue::NULL, &message);
+        };
 
     let data = build_web_replay_plot_data(request, Some(&mut progress))
         .map_err(|err| JsValue::from_str(&format!("replay failed: {err}")))?;
@@ -791,7 +786,9 @@ fn web_request_misalignment(
     request
         .misalignment
         .as_deref()
-        .and_then(|value| fusion_tools::visualizer::model::VisualizerMountMode::from_cli_value(value).ok())
+        .and_then(|value| {
+            fusion_tools::visualizer::model::VisualizerMountMode::from_cli_value(value).ok()
+        })
         .unwrap_or(fusion_tools::visualizer::model::VisualizerMountMode::Auto)
 }
 
@@ -812,7 +809,9 @@ fn web_request_filter_cfg(
 #[cfg(target_arch = "wasm32")]
 fn build_web_replay_job_response(
     request: WebReplayJobRequest,
-    progress: Option<&mut dyn FnMut(fusion_tools::visualizer::pipeline::generic::GenericReplayProgress)>,
+    progress: Option<
+        &mut dyn FnMut(fusion_tools::visualizer::pipeline::generic::GenericReplayProgress),
+    >,
 ) -> WebReplayJobResponse {
     let job_id = request.job_id;
     let fallback_label = request
@@ -897,7 +896,9 @@ fn build_web_replay_job_response(
 #[cfg(target_arch = "wasm32")]
 fn build_web_replay_plot_data(
     request: WebReplayJobRequest,
-    progress: Option<&mut dyn FnMut(fusion_tools::visualizer::pipeline::generic::GenericReplayProgress)>,
+    progress: Option<
+        &mut dyn FnMut(fusion_tools::visualizer::pipeline::generic::GenericReplayProgress),
+    >,
 ) -> anyhow::Result<fusion_tools::visualizer::model::PlotData> {
     let source_kind = request
         .source
@@ -1006,7 +1007,9 @@ fn build_web_csv_replay_input(
 #[cfg(target_arch = "wasm32")]
 fn build_web_synthetic_replay_job_response(
     request: WebReplayJobRequest,
-    progress: Option<&mut dyn FnMut(fusion_tools::visualizer::pipeline::generic::GenericReplayProgress)>,
+    progress: Option<
+        &mut dyn FnMut(fusion_tools::visualizer::pipeline::generic::GenericReplayProgress),
+    >,
 ) -> WebReplayJobResponse {
     let job_id = request.job_id;
     let fallback_label = request
@@ -1140,7 +1143,9 @@ fn build_web_synthetic_replay_job_response(
 #[cfg(target_arch = "wasm32")]
 fn build_web_synthetic_plot_data(
     request: &WebReplayJobRequest,
-    progress: Option<&mut dyn FnMut(fusion_tools::visualizer::pipeline::generic::GenericReplayProgress)>,
+    progress: Option<
+        &mut dyn FnMut(fusion_tools::visualizer::pipeline::generic::GenericReplayProgress),
+    >,
 ) -> anyhow::Result<fusion_tools::visualizer::model::PlotData> {
     let Some(source) = request.source.as_ref() else {
         anyhow::bail!("synthetic replay source is missing");

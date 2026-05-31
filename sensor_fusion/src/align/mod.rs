@@ -1,4 +1,4 @@
-//! IMU-to-vehicle mount alignment from stationary gravity and GNSS-derived motion windows.
+//! IMU-to-vehicle mount alignment from static tilt and GNSS-derived motion windows.
 //!
 //! The formulation is documented in `docs/algorithms/align.md`. In short, the filter
 //! state is the vehicle-to-body mount quaternion `q_bv` plus a 3 by 3
@@ -10,7 +10,7 @@
 //! x_v = C_bv^T x_b
 //! ```
 //!
-//! Stationary gravity initializes and refines tilt, GNSS-derived horizontal
+//! Static accelerometer samples initialize and refine tilt, GNSS-derived horizontal
 //! acceleration supplies a scalar mount-yaw correction, and planar turn gyro
 //! windows constrain vehicle-frame roll and pitch rates. The nominal mount is
 //! modeled as constant between observation windows; prediction only adds mount
@@ -55,7 +55,7 @@ pub struct AlignConfig {
     pub r_horiz_yaw_std_rad: f32,
     /// Turn-gyro roll/pitch observation standard deviation, in radians per second.
     pub r_turn_gyro_std_radps: f32,
-    /// Low-pass filter coefficient for stationary gravity samples.
+    /// Low-pass filter coefficient for static accelerometer tilt samples.
     pub gravity_lpf_alpha: f32,
     /// Minimum horizontal speed required for motion-derived observations, in meters per second.
     pub min_speed_mps: f32,
@@ -77,7 +77,7 @@ pub struct AlignConfig {
     pub max_stationary_gyro_radps: f32,
     /// Maximum acceleration-norm error for stationary detection, in meters per second squared.
     pub max_stationary_accel_norm_err_mps2: f32,
-    /// Enables stationary gravity updates.
+    /// Enables static accelerometer tilt updates.
     pub use_gravity: bool,
     /// Enables turn-gyro alignment updates.
     pub use_turn_gyro: bool,
@@ -215,7 +215,7 @@ pub struct Align {
     pub q_bv: [f32; 4],
     /// Small-angle mount covariance for roll, pitch, and yaw.
     pub P: [[f32; ALIGN_N_STATES]; ALIGN_N_STATES],
-    /// Low-pass stationary gravity vector in the IMU body frame.
+    /// Low-pass static accelerometer vector in the IMU body frame.
     pub gravity_lp_b: [f32; 3],
     coarse_aligned: bool,
     yaw_observed: bool,
