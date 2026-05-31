@@ -54,6 +54,8 @@ $$
 H_\mathrm{mount}=0.
 $$
 
+The full row expression is listed in [](ekf-matrices.md).
+
 Mount states can still be corrected through Kalman gain if prediction and prior
 updates have created cross-covariance between mount and the observed
 attitude/velocity states. That is not the same as NHC directly measuring mount

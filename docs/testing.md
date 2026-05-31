@@ -36,7 +36,7 @@ rsync -a \
   --exclude docs/ \
   web/ target/pages-site/
 
-cargo build -p sim --bin visualizer --release --target wasm32-unknown-unknown --locked
+cargo build -p fusion_tools --bin visualizer --release --target wasm32-unknown-unknown --locked
 wasm-bindgen --target web --out-dir target/pages-site/pkg \
   target/wasm32-unknown-unknown/release/visualizer.wasm
 

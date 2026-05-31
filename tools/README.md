@@ -1,6 +1,9 @@
-# `sim` Tooling Map
+# `fusion_tools` Tooling Map
 
-This crate contains the hardware-agnostic replay, evaluation, synthetic-data, and visualization tooling around the `sensor_fusion` library.
+This crate contains the hardware-agnostic replay, evaluation, synthetic-data,
+and visualization tooling around the `sensor_fusion` library. The browser UI is
+compiled from this crate to wasm; `web/` only hosts the generated wasm package,
+HTML shell, worker script, and hosted dataset files.
 
 ## Canonical Binaries
 
@@ -14,15 +17,15 @@ This crate contains the hardware-agnostic replay, evaluation, synthetic-data, an
 Run a generic replay directory containing `imu.csv` and `gnss.csv`:
 
 ```bash
-cargo run --release -p sim --bin visualizer -- \
+cargo run --release -p fusion_tools --bin visualizer -- \
   --generic-replay-dir /path/to/replay-dir
 ```
 
 Run a synthetic motion scenario:
 
 ```bash
-cargo run --release -p sim --bin visualizer -- \
-  --synthetic-motion-def sim/motion_profiles/city_blocks_15min.scenario \
+cargo run --release -p fusion_tools --bin visualizer -- \
+  --synthetic-motion-def tools/motion_profiles/city_blocks_15min.scenario \
   --synthetic-noise low
 ```
 
@@ -89,7 +92,7 @@ Prefer these shared modules instead of duplicating replay logic in new tools:
 
 ## Source Module Overview
 
-The `sim` crate is deliberately split between data ingestion, evaluation,
+The `fusion_tools` crate is deliberately split between data ingestion, evaluation,
 synthetic generation, and visualization. New tools should reuse these modules
 instead of adding one-off CSV parsers or filter replay loops.
 

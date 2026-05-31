@@ -11,35 +11,35 @@ use anyhow::Result;
 #[cfg(not(target_arch = "wasm32"))]
 use clap::{ArgAction, Parser, ValueEnum};
 #[cfg(not(target_arch = "wasm32"))]
-use sim::datasets::generic_replay::{
+use fusion_tools::datasets::generic_replay::{
     load_gnss_samples, load_imu_samples, load_reference_attitude_samples,
     load_reference_motion_samples, load_reference_mount_samples, load_reference_position_samples,
 };
 #[cfg(not(target_arch = "wasm32"))]
-use sim::eval::gnss_ins::wrap_deg180;
+use fusion_tools::eval::gnss_ins::wrap_deg180;
 #[cfg(not(target_arch = "wasm32"))]
-use sim::eval::state_summary::{SummaryMode, summarize_trace_pair};
+use fusion_tools::eval::state_summary::{SummaryMode, summarize_trace_pair};
 #[cfg(not(target_arch = "wasm32"))]
-use sim::eval::trace::sample_nearest_value;
+use fusion_tools::eval::trace::sample_nearest_value;
 #[cfg(not(target_arch = "wasm32"))]
-use sim::visualizer::model::{PlotData, Trace, VisualizerMountMode};
+use fusion_tools::visualizer::model::{PlotData, Trace, VisualizerMountMode};
 #[cfg(not(target_arch = "wasm32"))]
-use sim::visualizer::pipeline::generic::GenericReplayInput;
+use fusion_tools::visualizer::pipeline::generic::GenericReplayInput;
 #[cfg(not(target_arch = "wasm32"))]
-use sim::visualizer::pipeline::synthetic::{
+use fusion_tools::visualizer::pipeline::synthetic::{
     SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_plot_data,
 };
 #[cfg(not(target_arch = "wasm32"))]
-use sim::visualizer::pipeline::{FusionTuningConfig, GnssOutageConfig};
+use fusion_tools::visualizer::pipeline::{FusionTuningConfig, GnssOutageConfig};
 #[cfg(not(target_arch = "wasm32"))]
-use sim::visualizer::replay_job::{GenericReplayJobConfig, run_generic_replay_job};
+use fusion_tools::visualizer::replay_job::{GenericReplayJobConfig, run_generic_replay_job};
 #[cfg(not(target_arch = "wasm32"))]
-use sim::visualizer::stats::{
+use fusion_tools::visualizer::stats::{
     group_stats, max_gap_sec, max_gap_trace, max_step_abs, trace_stats, trace_time_bounds,
     trace_value_bounds,
 };
 #[cfg(not(target_arch = "wasm32"))]
-use sim::visualizer::ui::{ReplayState, run_visualizer};
+use fusion_tools::visualizer::ui::{ReplayState, run_visualizer};
 
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Parser, Debug)]
@@ -557,10 +557,10 @@ pub async fn start_visualizer(canvas_id: &str) -> std::result::Result<(), JsValu
         .ok_or_else(|| JsValue::from_str("missing visualizer canvas"))?
         .dyn_into::<eframe::web_sys::HtmlCanvasElement>()?;
     let runner = Box::leak(Box::new(eframe::WebRunner::new()));
-    sim::visualizer::ui::run_visualizer_web(
+    fusion_tools::visualizer::ui::run_visualizer_web(
         runner,
         canvas,
-        sim::visualizer::model::PlotData::default(),
+        fusion_tools::visualizer::model::PlotData::default(),
         false,
     )
     .await
@@ -597,7 +597,7 @@ pub fn build_replay_job_json_with_progress(
         .map_err(|err| JsValue::from_str(&format!("invalid replay job request: {err}")))?;
     let job_id = request.job_id;
 
-    let mut progress = |progress: sim::visualizer::pipeline::generic::GenericReplayProgress| {
+    let mut progress = |progress: fusion_tools::visualizer::pipeline::generic::GenericReplayProgress| {
         let message = Object::new();
         let _ = Reflect::set(
             &message,
@@ -651,7 +651,7 @@ pub fn build_replay_plot_data_json_with_progress(
         .map_err(|err| JsValue::from_str(&format!("invalid replay job request: {err}")))?;
     let job_id = request.job_id;
 
-    let mut progress = |progress: sim::visualizer::pipeline::generic::GenericReplayProgress| {
+    let mut progress = |progress: fusion_tools::visualizer::pipeline::generic::GenericReplayProgress| {
         let message = Object::new();
         let _ = Reflect::set(
             &message,
@@ -696,9 +696,9 @@ struct WebReplayJobRequest {
     #[serde(default)]
     misalignment: Option<String>,
     #[serde(default, alias = "ekfCfg")]
-    filter_cfg: Option<sim::visualizer::pipeline::FusionTuningConfig>,
+    filter_cfg: Option<fusion_tools::visualizer::pipeline::FusionTuningConfig>,
     #[serde(default)]
-    gnss_outages: Option<sim::visualizer::pipeline::GnssOutageConfig>,
+    gnss_outages: Option<fusion_tools::visualizer::pipeline::GnssOutageConfig>,
     label: Option<String>,
     imu_name: Option<String>,
     gnss_name: Option<String>,
@@ -781,38 +781,38 @@ struct WebReplayInput {
     label: String,
     imu_name: String,
     gnss_name: String,
-    replay: sim::visualizer::pipeline::generic::GenericReplayInput,
+    replay: fusion_tools::visualizer::pipeline::generic::GenericReplayInput,
 }
 
 #[cfg(target_arch = "wasm32")]
 fn web_request_misalignment(
     request: &WebReplayJobRequest,
-) -> sim::visualizer::model::VisualizerMountMode {
+) -> fusion_tools::visualizer::model::VisualizerMountMode {
     request
         .misalignment
         .as_deref()
-        .and_then(|value| sim::visualizer::model::VisualizerMountMode::from_cli_value(value).ok())
-        .unwrap_or(sim::visualizer::model::VisualizerMountMode::Auto)
+        .and_then(|value| fusion_tools::visualizer::model::VisualizerMountMode::from_cli_value(value).ok())
+        .unwrap_or(fusion_tools::visualizer::model::VisualizerMountMode::Auto)
 }
 
 #[cfg(target_arch = "wasm32")]
 fn web_request_gnss_outages(
     request: &WebReplayJobRequest,
-) -> sim::visualizer::pipeline::GnssOutageConfig {
+) -> fusion_tools::visualizer::pipeline::GnssOutageConfig {
     request.gnss_outages.unwrap_or_default()
 }
 
 #[cfg(target_arch = "wasm32")]
 fn web_request_filter_cfg(
     request: &WebReplayJobRequest,
-) -> sim::visualizer::pipeline::FusionTuningConfig {
+) -> fusion_tools::visualizer::pipeline::FusionTuningConfig {
     request.filter_cfg.unwrap_or_default()
 }
 
 #[cfg(target_arch = "wasm32")]
 fn build_web_replay_job_response(
     request: WebReplayJobRequest,
-    progress: Option<&mut dyn FnMut(sim::visualizer::pipeline::generic::GenericReplayProgress)>,
+    progress: Option<&mut dyn FnMut(fusion_tools::visualizer::pipeline::generic::GenericReplayProgress)>,
 ) -> WebReplayJobResponse {
     let job_id = request.job_id;
     let fallback_label = request
@@ -839,7 +839,7 @@ fn build_web_replay_job_response(
             let gnss_name = input.gnss_name;
             let mut data = match progress {
                 Some(progress) => {
-                    sim::visualizer::pipeline::generic::build_generic_replay_plot_data_with_progress(
+                    fusion_tools::visualizer::pipeline::generic::build_generic_replay_plot_data_with_progress(
                         &input.replay,
                         misalignment,
                         filter_cfg,
@@ -847,16 +847,16 @@ fn build_web_replay_job_response(
                         progress,
                     )
                 }
-                None => sim::visualizer::pipeline::generic::build_generic_replay_plot_data(
+                None => fusion_tools::visualizer::pipeline::generic::build_generic_replay_plot_data(
                     &input.replay,
                     misalignment,
                     filter_cfg,
                     gnss_outages,
                 ),
             };
-            sim::visualizer::replay_job::decimate_for_transport(
+            fusion_tools::visualizer::replay_job::decimate_for_transport(
                 &mut data,
-                sim::visualizer::replay_job::WEB_TRANSPORT_MAX_POINTS_PER_TRACE,
+                fusion_tools::visualizer::replay_job::WEB_TRANSPORT_MAX_POINTS_PER_TRACE,
             );
             match serde_json::to_string(&data) {
                 Ok(json) => WebReplayJobResponse {
@@ -897,8 +897,8 @@ fn build_web_replay_job_response(
 #[cfg(target_arch = "wasm32")]
 fn build_web_replay_plot_data(
     request: WebReplayJobRequest,
-    progress: Option<&mut dyn FnMut(sim::visualizer::pipeline::generic::GenericReplayProgress)>,
-) -> anyhow::Result<sim::visualizer::model::PlotData> {
+    progress: Option<&mut dyn FnMut(fusion_tools::visualizer::pipeline::generic::GenericReplayProgress)>,
+) -> anyhow::Result<fusion_tools::visualizer::model::PlotData> {
     let source_kind = request
         .source
         .as_ref()
@@ -914,7 +914,7 @@ fn build_web_replay_plot_data(
         let gnss_outages = web_request_gnss_outages(&request);
         match progress {
             Some(progress) => {
-                sim::visualizer::pipeline::generic::build_generic_replay_plot_data_with_progress(
+                fusion_tools::visualizer::pipeline::generic::build_generic_replay_plot_data_with_progress(
                     &input.replay,
                     misalignment,
                     filter_cfg,
@@ -922,7 +922,7 @@ fn build_web_replay_plot_data(
                     progress,
                 )
             }
-            None => sim::visualizer::pipeline::generic::build_generic_replay_plot_data(
+            None => fusion_tools::visualizer::pipeline::generic::build_generic_replay_plot_data(
                 &input.replay,
                 misalignment,
                 filter_cfg,
@@ -930,9 +930,9 @@ fn build_web_replay_plot_data(
             ),
         }
     };
-    sim::visualizer::replay_job::decimate_for_transport(
+    fusion_tools::visualizer::replay_job::decimate_for_transport(
         &mut data,
-        sim::visualizer::replay_job::WEB_TRANSPORT_MAX_POINTS_PER_TRACE,
+        fusion_tools::visualizer::replay_job::WEB_TRANSPORT_MAX_POINTS_PER_TRACE,
     );
     Ok(data)
 }
@@ -977,7 +977,7 @@ fn build_web_csv_replay_input(
         .and_then(|source| source.reference_motion_csv.as_deref())
         .or(request.reference_motion_csv.as_deref());
     let replay =
-        sim::visualizer::pipeline::generic::parse_generic_replay_csvs_with_optional_motion(
+        fusion_tools::visualizer::pipeline::generic::parse_generic_replay_csvs_with_optional_motion(
             imu_csv,
             gnss_csv,
             reference_attitude_csv,
@@ -1006,7 +1006,7 @@ fn build_web_csv_replay_input(
 #[cfg(target_arch = "wasm32")]
 fn build_web_synthetic_replay_job_response(
     request: WebReplayJobRequest,
-    progress: Option<&mut dyn FnMut(sim::visualizer::pipeline::generic::GenericReplayProgress)>,
+    progress: Option<&mut dyn FnMut(fusion_tools::visualizer::pipeline::generic::GenericReplayProgress)>,
 ) -> WebReplayJobResponse {
     let job_id = request.job_id;
     let fallback_label = request
@@ -1038,11 +1038,11 @@ fn build_web_synthetic_replay_job_response(
         .as_str()
     {
         "truth" | "none" | "zero" => {
-            sim::visualizer::pipeline::synthetic::SyntheticNoiseMode::Truth
+            fusion_tools::visualizer::pipeline::synthetic::SyntheticNoiseMode::Truth
         }
-        "low" => sim::visualizer::pipeline::synthetic::SyntheticNoiseMode::Low,
-        "mid" | "medium" => sim::visualizer::pipeline::synthetic::SyntheticNoiseMode::Mid,
-        "high" => sim::visualizer::pipeline::synthetic::SyntheticNoiseMode::High,
+        "low" => fusion_tools::visualizer::pipeline::synthetic::SyntheticNoiseMode::Low,
+        "mid" | "medium" => fusion_tools::visualizer::pipeline::synthetic::SyntheticNoiseMode::Mid,
+        "high" => fusion_tools::visualizer::pipeline::synthetic::SyntheticNoiseMode::High,
         other => {
             return WebReplayJobResponse {
                 ok: false,
@@ -1056,7 +1056,7 @@ fn build_web_synthetic_replay_job_response(
             };
         }
     };
-    let synth_cfg = sim::visualizer::pipeline::synthetic::SyntheticVisualizerConfig {
+    let synth_cfg = fusion_tools::visualizer::pipeline::synthetic::SyntheticVisualizerConfig {
         motion_def: None,
         motion_label: motion_label.to_string(),
         motion_text,
@@ -1075,7 +1075,7 @@ fn build_web_synthetic_replay_job_response(
     };
     let data_result = match progress {
         Some(progress) => {
-            sim::visualizer::pipeline::synthetic::build_synthetic_plot_data_with_progress(
+            fusion_tools::visualizer::pipeline::synthetic::build_synthetic_plot_data_with_progress(
                 &synth_cfg,
                 web_request_misalignment(&request),
                 web_request_filter_cfg(&request),
@@ -1083,7 +1083,7 @@ fn build_web_synthetic_replay_job_response(
                 progress,
             )
         }
-        None => sim::visualizer::pipeline::synthetic::build_synthetic_plot_data(
+        None => fusion_tools::visualizer::pipeline::synthetic::build_synthetic_plot_data(
             &synth_cfg,
             web_request_misalignment(&request),
             web_request_filter_cfg(&request),
@@ -1097,9 +1097,9 @@ fn build_web_synthetic_replay_job_response(
         .unwrap_or_else(|| format!("Synthetic: {motion_label}"));
     match data_result {
         Ok(mut data) => {
-            sim::visualizer::replay_job::decimate_for_transport(
+            fusion_tools::visualizer::replay_job::decimate_for_transport(
                 &mut data,
-                sim::visualizer::replay_job::WEB_TRANSPORT_MAX_POINTS_PER_TRACE,
+                fusion_tools::visualizer::replay_job::WEB_TRANSPORT_MAX_POINTS_PER_TRACE,
             );
             match serde_json::to_string(&data) {
                 Ok(json) => WebReplayJobResponse {
@@ -1140,8 +1140,8 @@ fn build_web_synthetic_replay_job_response(
 #[cfg(target_arch = "wasm32")]
 fn build_web_synthetic_plot_data(
     request: &WebReplayJobRequest,
-    progress: Option<&mut dyn FnMut(sim::visualizer::pipeline::generic::GenericReplayProgress)>,
-) -> anyhow::Result<sim::visualizer::model::PlotData> {
+    progress: Option<&mut dyn FnMut(fusion_tools::visualizer::pipeline::generic::GenericReplayProgress)>,
+) -> anyhow::Result<fusion_tools::visualizer::model::PlotData> {
     let Some(source) = request.source.as_ref() else {
         anyhow::bail!("synthetic replay source is missing");
     };
@@ -1158,14 +1158,14 @@ fn build_web_synthetic_plot_data(
         .as_str()
     {
         "truth" | "none" | "zero" => {
-            sim::visualizer::pipeline::synthetic::SyntheticNoiseMode::Truth
+            fusion_tools::visualizer::pipeline::synthetic::SyntheticNoiseMode::Truth
         }
-        "low" => sim::visualizer::pipeline::synthetic::SyntheticNoiseMode::Low,
-        "mid" | "medium" => sim::visualizer::pipeline::synthetic::SyntheticNoiseMode::Mid,
-        "high" => sim::visualizer::pipeline::synthetic::SyntheticNoiseMode::High,
+        "low" => fusion_tools::visualizer::pipeline::synthetic::SyntheticNoiseMode::Low,
+        "mid" | "medium" => fusion_tools::visualizer::pipeline::synthetic::SyntheticNoiseMode::Mid,
+        "high" => fusion_tools::visualizer::pipeline::synthetic::SyntheticNoiseMode::High,
         other => anyhow::bail!("unsupported synthetic noise mode '{other}'"),
     };
-    let synth_cfg = sim::visualizer::pipeline::synthetic::SyntheticVisualizerConfig {
+    let synth_cfg = fusion_tools::visualizer::pipeline::synthetic::SyntheticVisualizerConfig {
         motion_def: None,
         motion_label: motion_label.to_string(),
         motion_text,
@@ -1184,7 +1184,7 @@ fn build_web_synthetic_plot_data(
     };
     match progress {
         Some(progress) => {
-            sim::visualizer::pipeline::synthetic::build_synthetic_plot_data_with_progress(
+            fusion_tools::visualizer::pipeline::synthetic::build_synthetic_plot_data_with_progress(
                 &synth_cfg,
                 web_request_misalignment(request),
                 web_request_filter_cfg(request),
@@ -1192,7 +1192,7 @@ fn build_web_synthetic_plot_data(
                 progress,
             )
         }
-        None => sim::visualizer::pipeline::synthetic::build_synthetic_plot_data(
+        None => fusion_tools::visualizer::pipeline::synthetic::build_synthetic_plot_data(
             &synth_cfg,
             web_request_misalignment(request),
             web_request_filter_cfg(request),
@@ -1211,15 +1211,15 @@ pub fn build_generic_replay_plot_data_json(
     reference_position_csv: Option<String>,
     reference_motion_csv: Option<String>,
 ) -> std::result::Result<String, JsValue> {
-    let data = sim::visualizer::replay_job::run_generic_csv_replay_job(
-        sim::visualizer::replay_job::GenericReplayCsvJob {
+    let data = fusion_tools::visualizer::replay_job::run_generic_csv_replay_job(
+        fusion_tools::visualizer::replay_job::GenericReplayCsvJob {
             imu_csv,
             gnss_csv,
             reference_attitude_csv: reference_attitude_csv.as_deref(),
             reference_mount_csv: reference_mount_csv.as_deref(),
             reference_position_csv: reference_position_csv.as_deref(),
             reference_motion_csv: reference_motion_csv.as_deref(),
-            config: sim::visualizer::replay_job::GenericReplayJobConfig::web_transport(),
+            config: fusion_tools::visualizer::replay_job::GenericReplayJobConfig::web_transport(),
         },
     )
     .map_err(|err| JsValue::from_str(&format!("CSV replay failed: {err}")))?;

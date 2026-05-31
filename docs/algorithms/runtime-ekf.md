@@ -155,6 +155,9 @@ $q_{\mathrm{mount},i}\Delta t$, or zero when residual mount states are frozen.
 The runtime uses generated row-support metadata to run the same prediction with
 sparse covariance multiplication.
 
+The complete sparse block structure and measurement Jacobians are listed in
+[](ekf-matrices.md).
+
 ## Scalar Observation Model
 
 Most measurement rows are generated as scalar observations. For a predicted
@@ -260,17 +263,21 @@ $$
 ### GNSS Gating And Events
 
 Position and velocity are gated independently as two three-axis groups. The
-default gate is three sigma per axis:
+default gate is intentionally loose, at 25 sigma per axis, so ordinary urban
+GNSS drift is fused through the measurement model rather than treated as a hard
+outlier:
 
 $$
 \mathrm{NIS}_i =
 \frac{r_i^2}{P_{ii}+R_i}
-\le 3^2 .
+\le 25^2 .
 $$
 
-Invalid residuals, nonpositive variances, and invalid innovation variances are
-skipped for that axis. A failed group is rejected unless one of two bypasses
-applies:
+The gate ignores invalid axes while deciding whether the three-axis group has a
+finite outlier. If the group is accepted, the runtime still pushes the full
+three-axis group to the update path, so callers should provide finite positive
+variances for axes they want fused. A failed group is rejected unless one of two
+bypasses applies:
 
 - the elapsed GNSS update gap is greater than $3\,\mathrm{s}$;
 - reported RMS accuracy improves to at most $0.5$ of the previous RMS.
@@ -308,7 +315,8 @@ $$
 
 The direct NHC row Jacobian contains attitude and velocity sensitivity, but no
 direct residual-mount columns. Mount correction can still occur through
-cross-covariance created by prediction and previous updates.
+cross-covariance created by prediction and previous updates. The exact
+attitude/velocity row entries are listed in [](ekf-matrices.md).
 
 NHC is eligible only when:
 
@@ -316,9 +324,11 @@ NHC is eligible only when:
 - vehicle-frame gyro norm is below $0.2\,\mathrm{rad/s}$;
 - accelerometer norm error from gravity is below $1.0\,\mathrm{m/s^2}$.
 
-The default NHC period is $0.1\,\mathrm{s}$. If NHC is inactive, the previous NHC time is
-reset. If a positive period is configured, eligible updates are decimated until
-the elapsed observation interval reaches the period. The variance scale is:
+The default NHC period is $0.1\,\mathrm{s}$. If NHC is inactive, the runtime records
+the inactive sample time as the last NHC scheduling timestamp. The next active
+epoch must still satisfy the configured period from that timestamp. If a
+positive period is configured, eligible updates are decimated until
+`elapsed + 1e-4 >= period`. The variance scale is:
 
 $$
 R_\mathrm{eff} =
@@ -337,6 +347,26 @@ When stationary, the runtime can compare vehicle-frame acceleration with the
 gravity direction. This is separate from dynamic acceleration propagation and is
 disabled unless configured.
 
+The implemented stationary-gravity update fuses only vehicle X/Y rows:
+
+$$
+h_g = -C_{nv}^{T}g_n .
+$$
+
+The residuals are:
+
+$$
+\begin{aligned}
+r_x &= (a_{v,x} - b_{a,x}) - h_{g,x},\\
+r_y &= (a_{v,y} - b_{a,y}) - h_{g,y}.
+\end{aligned}
+$$
+
+The generated Jacobian has attitude columns only. Accelerometer-bias correction
+comes from covariance coupling because the residual subtracts the current bias
+estimate but the row does not include direct bias columns. Before each row, the
+runtime floors roll/pitch attitude covariance to $0.10^\circ$ one-sigma.
+
 ### Vehicle-Roll Prior
 
 The optional vehicle-roll prior observes:
@@ -348,7 +378,9 @@ $$
 `SensorFusion` currently enables it by default with
 $r_\mathrm{vehicle\_roll\_prior}=0.1$; $0$ disables it. The configured value is a variance
 density and is scaled by the same observation interval as NHC. The update is
-applied only at eligible NHC epochs.
+applied only at eligible NHC epochs. Because the facade enters the NHC/roll-prior
+block only when at least one lateral/vertical NHC variance is positive, setting
+both NHC variances to zero also disables vehicle-roll-prior scheduling.
 
 The residual is $-\operatorname{roll}(q_{nv})$. Its Jacobian is computed by
 finite-differencing only the vehicle-attitude error states $0{:}2$; direct mount
@@ -394,18 +426,25 @@ Manual mode accepts a caller-supplied $q_{bv}$, bypasses internal align, and
 requires `heading_rad` plus speed greater than
 $\max(\texttt{yaw\_init\_speed\_mps}, 20 / 3.6)$ before EKF initialization.
 
-At initialization, the facade sets configured roll, pitch, yaw, gyro-bias,
-accelerometer-bias, and residual-mount covariance values. In automatic mode it
-can copy align's 3 by 3 mount covariance block into EKF residual mount
-covariance. In manual mode it seeds a tighter mount prior around the supplied
-mount.
+`Filter::init_nominal_from_gnss()` has standalone defaults, but normal facade
+initialization immediately overwrites the mount and configured covariance values
+in `SensorFusion::initialize_ekf_from_gnss()`. At facade initialization, the
+runtime sets configured roll, pitch, yaw, gyro-bias, accelerometer-bias, and
+residual-mount covariance values. In automatic mode, align's 3 by 3 mount
+covariance block is copied into EKF residual mount covariance by default unless
+disabled. In manual mode it seeds a tighter mount prior around the supplied
+mount; manual mode does not freeze residual mount states.
 
 ## Sleep And Reseed Model
 
 The public facade treats a large IMU timestamp gap as a missing-sample interval,
-not as a long strapdown propagation interval. It clears stream coupling, anchors
-the next IMU sample as the start of a new integration interval, and then applies
-a stationary sleep model to selected covariance diagonals.
+not as a long strapdown propagation interval. It clears stream coupling and
+anchors the next IMU sample as the start of a new integration interval.
+
+The stationary sleep model is only applied when the caller first marks the
+stream boundary with `SensorFusion::end_trip()`. Without that marker, a gap of
+at least 1 s is treated as unexpected in-trip data loss and the facade enters
+GNSS reseed mode rather than aging the old navigation state.
 
 For each aged diagonal covariance entry:
 
@@ -413,11 +452,14 @@ $$
 P_{ii}^+ = P_{ii} + \sigma_\mathrm{added}^2 .
 $$
 
-Mount covariance is not aged because sleep assumes the physical mount is
-unchanged. Short sleep is bounded at 15 minutes and keeps navigation usable.
+Mount covariance is not aged because declared sleep assumes the physical mount
+is unchanged. Short sleep is bounded at 15 minutes and keeps navigation usable.
 Medium sleep is bounded at one hour and enters degraded dead reckoning only if
 the resulting navigation covariance passes usability gates. Longer gaps, invalid
 gaps, or failed usability gates enter GNSS reseed mode.
+
+After declared sleep, the next GNSS update must pass the normal position and
+velocity residual gates without the large-gap or accuracy-improvement bypass.
 
 For exact public state behavior and sigma values, see
 [](../runtime-state-and-persistence.md).
@@ -430,3 +472,13 @@ constraints. In the implemented measurement model their direct mount Jacobian is
 zero; mount updates are propagation- and covariance-mediated. Absolute mount
 roll remains weak or ambiguous without informative motion plus a defensible
 roll/bank anchor such as a flat-road prior.
+
+The facade clamps estimated IMU biases after prediction/update to avoid
+physically implausible runaway values:
+
+$$
+\begin{aligned}
+|b_g| &\le 1.5^\circ/\mathrm{s}\quad\text{per axis},\\
+|b_a| &\le 1.5\,\mathrm{m/s^2}\quad\text{per axis}.
+\end{aligned}
+$$

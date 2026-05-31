@@ -323,7 +323,10 @@ $$
 $$
 
 The `SensorFusion` facade can optionally copy align's 3 by 3 mount covariance
-into the EKF residual mount block at handoff.
+into the EKF residual mount block at handoff. The default runtime configuration
+enables this covariance handoff. The facade also has an `align_handoff_delay_s`
+setting; its default is `0`, so EKF initialization can happen immediately after
+align readiness and a usable GNSS seed are both available.
 
 ## Known Limitations
 

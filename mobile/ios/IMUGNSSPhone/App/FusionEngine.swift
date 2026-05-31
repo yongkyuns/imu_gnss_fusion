@@ -206,6 +206,11 @@ final class FusionEngine {
         _ = sensor_fusion_set_harsh_behavior_preset(handle, harshBehaviorPreset.rawValue)
     }
 
+    func endTrip() {
+        guard let handle else { return }
+        _ = sensor_fusion_end_trip(handle)
+    }
+
     func processImu(
         sampleDate: Date,
         accelMps2: (x: Double, y: Double, z: Double),

@@ -10,7 +10,7 @@ struct MotionEventSample: Equatable, Sendable {
 }
 
 struct MotionEventDetector: Sendable {
-    private var lastHealthState: FusionHealth.State?
+    private var lastDegraded: Bool?
     private var lastInitialized: Bool?
     private var lastMountReady: Bool?
 
@@ -22,7 +22,7 @@ struct MotionEventDetector: Sendable {
         guard sample.tSec.isFinite else { return [] }
 
         var events: [MotionEvent] = []
-        let wasDegraded = lastHealthState.map(Self.isDegradedState) ?? false
+        let wasDegraded = lastDegraded ?? false
         if !wasDegraded, sample.health.degraded {
             events.append(systemEvent(sample, kind: .gnssDegraded, confidence: 0.75))
         }
@@ -36,19 +36,10 @@ struct MotionEventDetector: Sendable {
            sample.mountReady {
             events.append(systemEvent(sample, kind: .mountReady))
         }
-        lastHealthState = sample.health.state
+        lastDegraded = sample.health.degraded
         lastInitialized = sample.initialized
         lastMountReady = sample.mountReady
         return events
-    }
-
-    private static func isDegradedState(_ state: FusionHealth.State) -> Bool {
-        switch state {
-        case .degraded, .degradedDeadReckoning, .awaitingGnssReseed:
-            return true
-        case .notReady, .initializing, .running, .stable:
-            return false
-        }
     }
 
     private func systemEvent(

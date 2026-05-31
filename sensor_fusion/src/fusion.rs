@@ -51,6 +51,8 @@ const NAV_USABLE_HORIZONTAL_POS_SIGMA_M: f32 = 30.0;
 const NAV_USABLE_HORIZONTAL_VEL_SIGMA_MPS: f32 = 2.5;
 const NAV_USABLE_YAW_SIGMA_RAD: f32 = 15.0_f32 * core::f32::consts::PI / 180.0;
 const NAV_USABLE_ROLL_PITCH_SIGMA_RAD: f32 = 5.0_f32 * core::f32::consts::PI / 180.0;
+const UNEXPECTED_STREAM_GAP_RESEED_MIN_S: f32 = 1.0;
+const SLEEP_GAP_UNOBSERVED_YAW_SIGMA_RAD: f32 = 45.0_f32 * core::f32::consts::PI / 180.0;
 
 #[derive(Clone, Copy, Debug, Default)]
 struct Anchor {
@@ -95,6 +97,8 @@ pub struct SensorFusion {
     pending_ekf_gnss: Option<crate::ekf::GnssSample>,
     last_ekf_gnss_fuse_t_s: Option<f32>,
     last_ekf_nhc_t_s: Option<f32>,
+    stationary_sleep_expected: bool,
+    preserve_attitude_on_reseed: bool,
     align_prev_gnss: Option<crate::ekf::GnssSample>,
     gnss_velocity_mount_gain_scale: f32,
     anchor: Anchor,
@@ -155,6 +159,8 @@ impl SensorFusion {
             pending_ekf_gnss: None,
             last_ekf_gnss_fuse_t_s: None,
             last_ekf_nhc_t_s: None,
+            stationary_sleep_expected: false,
+            preserve_attitude_on_reseed: false,
             align_prev_gnss: None,
             gnss_velocity_mount_gain_scale: 1.0,
             anchor: Anchor::default(),
@@ -404,6 +410,22 @@ impl SensorFusion {
         }
     }
 
+    /// Marks the current trip as complete.
+    ///
+    /// Call this before an intentional stream stop or MCU sleep where the
+    /// vehicle/device is expected to remain stationary. The next IMU timestamp
+    /// gap may then use the bounded stationary sleep covariance model. Large
+    /// gaps without this marker are treated as unexpected in-trip data loss and
+    /// force GNSS navigation reseed before public navigation is usable again.
+    pub fn end_trip(&mut self) -> Update {
+        self.stationary_sleep_expected = true;
+        self.preserve_attitude_on_reseed = false;
+        self.pending_ekf_gnss = None;
+        self.last_ekf_nhc_t_s = None;
+        self.reset_interval_summary();
+        self.update(false, false)
+    }
+
     /// Processes one IMU sample and returns updated runtime status.
     pub fn process_imu(&mut self, sample: ImuSample) -> Update {
         let mut gnss_event_mask = 0;
@@ -411,7 +433,9 @@ impl SensorFusion {
         if let Some(last_t) = self.last_imu_t_s {
             let gap_s = sample.t_s - last_t;
             if gap_s > 0.05 {
-                self.handle_imu_sleep_gap(gap_s);
+                self.handle_imu_stream_gap(gap_s);
+            } else {
+                self.stationary_sleep_expected = false;
             }
         }
         let prev_sample = self.last_imu_sample.replace(sample);
@@ -554,17 +578,23 @@ impl SensorFusion {
         }
 
         if self.awaiting_gnss_reseed() {
-            if self.manual_mount_mode() && !self.gnss_can_seed_yaw(local) {
+            if self.manual_mount_mode()
+                && !self.preserve_attitude_on_reseed
+                && !self.gnss_can_seed_yaw(local)
+            {
                 return self.update(prev_mount_ready != self.mount_ready, false);
             }
-            self.reseed_navigation_from_gnss_preserving_calibration(local);
+            let preserve_attitude = self.preserve_attitude_on_reseed;
+            self.reseed_navigation_from_gnss_preserving_calibration(local, preserve_attitude);
             self.ekf_initialized = true;
+            self.preserve_attitude_on_reseed = false;
             return self.update(prev_mount_ready != self.mount_ready, true);
         }
 
         if !self.ekf_initialized && self.manual_mount_mode() && !self.gnss_can_seed_yaw(local) {
             return self.update(prev_mount_ready != self.mount_ready, false);
         }
+        self.stationary_sleep_expected = false;
 
         let navigation_started = if !self.ekf_initialized {
             self.ekf_mount_q_bv = self.mount_q_bv;
@@ -796,7 +826,9 @@ impl SensorFusion {
         self.diagnostics.state() == FusionState::AwaitingGnssReseed
     }
 
-    fn handle_imu_sleep_gap(&mut self, gap_s: f32) {
+    fn handle_imu_stream_gap(&mut self, gap_s: f32) {
+        let stationary_sleep_expected = self.stationary_sleep_expected;
+        self.stationary_sleep_expected = false;
         self.clear_stream_coupling_after_gap();
         if !gap_s.is_finite() || gap_s < 0.0 {
             self.enter_navigation_reseed_mode();
@@ -806,6 +838,13 @@ impl SensorFusion {
             self.diagnostics.mark_initializing();
             return;
         }
+        if !stationary_sleep_expected {
+            if gap_s >= UNEXPECTED_STREAM_GAP_RESEED_MIN_S {
+                self.enter_navigation_reseed_mode_preserving_attitude();
+            }
+            return;
+        }
+        self.ekf.require_next_gnss_gate_pass();
         if gap_s <= SHORT_SLEEP_MAX_S {
             self.age_ekf_covariance_for_short_sleep(gap_s);
             return;
@@ -837,7 +876,14 @@ impl SensorFusion {
     fn enter_navigation_reseed_mode(&mut self) {
         self.pending_ekf_gnss = None;
         self.last_ekf_nhc_t_s = None;
+        self.stationary_sleep_expected = false;
+        self.preserve_attitude_on_reseed = false;
         self.diagnostics.mark_awaiting_gnss_reseed();
+    }
+
+    fn enter_navigation_reseed_mode_preserving_attitude(&mut self) {
+        self.enter_navigation_reseed_mode();
+        self.preserve_attitude_on_reseed = true;
     }
 
     fn age_ekf_covariance_for_short_sleep(&mut self, gap_s: f32) {
@@ -906,9 +952,16 @@ impl SensorFusion {
             && roll_pitch_sigma_rad <= NAV_USABLE_ROLL_PITCH_SIGMA_RAD
     }
 
-    fn reseed_navigation_from_gnss_preserving_calibration(&mut self, gnss: crate::ekf::GnssSample) {
+    fn reseed_navigation_from_gnss_preserving_calibration(
+        &mut self,
+        gnss: crate::ekf::GnssSample,
+        preserve_attitude_when_yaw_unobservable: bool,
+    ) {
         let prev = self.ekf.raw().nominal;
         let prev_p = self.ekf.raw().p;
+        let preserve_attitude =
+            preserve_attitude_when_yaw_unobservable && !self.gnss_can_seed_yaw(gnss);
+        let q_prev = [prev.q0, prev.q1, prev.q2, prev.q3];
         let q_bv = [prev.q_bv0, prev.q_bv1, prev.q_bv2, prev.q_bv3];
         let bg = [prev.bgx, prev.bgy, prev.bgz];
         let ba = [prev.bax, prev.bay, prev.baz];
@@ -923,6 +976,17 @@ impl SensorFusion {
             raw.nominal.bax = ba[0];
             raw.nominal.bay = ba[1];
             raw.nominal.baz = ba[2];
+            if preserve_attitude {
+                raw.nominal.q0 = q_prev[0];
+                raw.nominal.q1 = q_prev[1];
+                raw.nominal.q2 = q_prev[2];
+                raw.nominal.q3 = q_prev[3];
+                raw.p[0][0] = raw.p[0][0].max(prev_p[0][0]);
+                raw.p[1][1] = raw.p[1][1].max(prev_p[1][1]);
+                raw.p[2][2] = raw.p[2][2]
+                    .max(prev_p[2][2])
+                    .max(sq_f32(SLEEP_GAP_UNOBSERVED_YAW_SIGMA_RAD));
+            }
 
             let gyro_floor_var = sq_f32(0.03_f32.to_radians());
             let accel_floor_var = sq_f32(0.05);

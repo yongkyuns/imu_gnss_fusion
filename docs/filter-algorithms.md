@@ -114,6 +114,10 @@ $$
 
 $0$ disables the prior. Positive values are interpreted as a variance density and scaled at the same eligible epochs as NHC. The default runtime value is $0.1$.
 
+The prior is scheduled inside the NHC epoch path. If both lateral and vertical
+NHC variances are set to zero, the facade does not enter that path and the
+vehicle-roll prior will not run even if its own variance is positive.
+
 This is not a direct mount-roll measurement. It can reduce roll ambiguity on mostly flat roads, but sustained banked roads can convert the flat-road assumption into mount error.
 
 Diagnostics for these update families are summarized in [](ekf-diagnostics.md).

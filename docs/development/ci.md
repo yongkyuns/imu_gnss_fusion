@@ -2,7 +2,7 @@
 
 The CI workflow has three main responsibilities:
 
-- Rust validation on Linux and macOS: format, clippy, workspace build, workspace tests, selected sim binary checks, and `cargo doc`.
+- Rust validation on Linux and macOS: format, clippy, workspace build, workspace tests, selected tools binary checks, and `cargo doc`.
 - Hosted generic dataset validation: manifest/schema/checksum validation plus smoke profiling.
 - GitHub Pages artifact assembly: wasm visualizer build, Sphinx docs build, static artifact validation, and upload.
 

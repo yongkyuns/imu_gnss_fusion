@@ -62,7 +62,7 @@ $$
 
 | Mode | Behavior |
 | --- | --- |
-| `MountMode::Auto` | internal align estimates the initial $q_{bv}$; EKF initializes after mount readiness and GNSS yaw/course readiness |
+| `MountMode::Auto` | internal align estimates the initial $q_{bv}$; EKF initializes after mount readiness and the first usable GNSS seed |
 | `MountMode::Manual(q_bv)` | caller supplies the initial $q_{bv}$; internal align is disabled, but EKF residual mount states remain live with a prior |
 
 Manual mode does not mean the facade freezes every EKF mount state. `with_mount` and `set_misalignment` provide the physical mount seed and bypass align. At EKF initialization, the runtime seeds mount covariance from the manual prior so residual mount correction can still occur.
@@ -74,7 +74,16 @@ Yaw initialization is mode-specific:
 - auto mode initializes once mount is ready and uses `heading_rad` when present, otherwise GNSS course once horizontal speed is at least $\max(\texttt{yaw\_init\_speed\_mps}, 1.0)$, otherwise yaw $0$;
 - manual mode waits for `heading_rad` and speed above $\max(\texttt{yaw\_init\_speed\_mps}, 20 / 3.6)$.
 
-The runtime anchors WGS84 GNSS into a local navigation frame and reanchors when the local displacement grows large enough to keep local coordinates well-conditioned.
+The first GNSS sample after mount readiness initializes the EKF immediately when
+the mode-specific yaw rule is satisfied. After initialization, GNSS samples are
+queued by `process_gnss` and fused at the next IMU epoch. If the queued GNSS
+sample is between $0$ and $0.05\,\mathrm{s}$ older than that IMU epoch, eligible NHC
+rows can be fused in the same batch.
+
+The runtime anchors WGS84 GNSS into a local navigation frame and reanchors when
+local displacement exceeds $5000\,\mathrm{m}$. Reanchoring creates a new local origin,
+rotates the navigation state/covariance into the new local frame, clears
+align/GNSS interval coupling, and resets the current local position near zero.
 
 ## Runtime State
 
@@ -88,11 +97,11 @@ The main public states are:
 - `Degraded` and `DegradedDeadReckoning`: navigation may still be usable, but callers should surface degraded confidence.
 - `AwaitingGnssReseed`: calibration is retained, but navigation output is intentionally unavailable until GNSS reseeds it.
 
-Normal stream pauses should keep the same `SensorFusion` object. Source switches, replay changes, physical mount changes, and lost retained memory should create a fresh context. See [](runtime-state-and-persistence.md) for the full sleep/resume contract and covariance aging behavior.
+Normal trip-end pauses should keep the same `SensorFusion` object and call `SensorFusion::end_trip()` before samples stop. This marks the next timestamp gap as expected stationary sleep. Unmarked long gaps are treated as unexpected in-trip data loss and public navigation waits for GNSS reseed. Source switches, replay changes, physical mount changes, and lost retained memory should create a fresh context. See [](runtime-state-and-persistence.md) for the full sleep/resume contract and covariance aging behavior.
 
 ## GNSS Events
 
-`Update.gnss_event_mask` reports GNSS rejection and bypass events emitted while queued GNSS rows are fused at an IMU epoch. Position and velocity groups are gated independently with a default three-sigma per-axis test. Public bits distinguish:
+`Update.gnss_event_mask` reports GNSS rejection and bypass events emitted while queued GNSS rows are fused at an IMU epoch. Position and velocity groups are gated independently with a deliberately loose default 25-sigma per-axis test, so only very large GNSS discontinuities are rejected by default. Public bits distinguish:
 
 - position or velocity rejected;
 - repeated consecutive rejection;
@@ -115,6 +124,17 @@ Important public setters include:
 - `set_use_align_mount_covariance_on_seed`.
 
 The facade also exposes diagnostics such as `align_debug`, anchor/reanchor debug values, and `analysis_*` hooks. Treat `analysis_*` methods as diagnostic controls rather than normal production API.
+
+Important default values include:
+
+| Setting | Default |
+| --- | --- |
+| lateral/vertical NHC variance | `0.5`, `0.5` |
+| NHC update period | `0.1 s` |
+| vehicle-roll prior variance density | `0.1` |
+| align covariance handoff on EKF seed | enabled |
+| automatic mount seed sigma | align covariance when handoff is enabled |
+| manual residual mount sigma | `0.5 deg` per axis |
 
 ## Minimal Example
 
@@ -140,7 +160,7 @@ fusion.process_gnss(GnssSample {
     lat_deg: 37.0,
     lon_deg: -122.0,
     height_m: 10.0,
-    vel_ned_mps: [5.0, 0.0, 0.0],
+    vel_ned_mps: [6.0, 0.0, 0.0],
     pos_std_m: [1.0, 1.0, 2.5],
     vel_std_mps: [0.1, 0.1, 0.2],
     heading_rad: Some(0.0),

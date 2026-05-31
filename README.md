@@ -33,22 +33,22 @@ cargo test --workspace --locked
 Run the native visualizer on a generic replay directory:
 
 ```bash
-cargo run --release -p sim --bin visualizer -- \
+cargo run --release -p fusion_tools --bin visualizer -- \
   --generic-replay-dir /path/to/replay-dir
 ```
 
 Run the native visualizer on a synthetic scenario:
 
 ```bash
-cargo run --release -p sim --bin visualizer -- \
-  --synthetic-motion-def sim/motion_profiles/city_blocks_15min.scenario \
+cargo run --release -p fusion_tools --bin visualizer -- \
+  --synthetic-motion-def tools/motion_profiles/city_blocks_15min.scenario \
   --synthetic-noise low
 ```
 
 Build and serve the browser visualizer locally:
 
 ```bash
-cargo build -p sim --bin visualizer --release --target wasm32-unknown-unknown --locked
+cargo build -p fusion_tools --bin visualizer --release --target wasm32-unknown-unknown --locked
 wasm-bindgen --target web --out-dir web/pkg \
   target/wasm32-unknown-unknown/release/visualizer.wasm
 python3 -m http.server --directory web 8080
@@ -67,8 +67,8 @@ sphinx-build -W --keep-going -b html docs target/docs-html
 | --- | --- |
 | `sensor_fusion/` | no-std fusion library, high-level `SensorFusion` facade, alignment estimator, EKF runtime, and tests |
 | `road_events/` | no-std streaming road-event detectors and trip statistics |
-| `sim/` | replay, simulation, diagnostics, synthetic generation, native/wasm visualizer |
-| `web/` | static browser host for the wasm visualizer and hosted datasets |
+| `tools/` | `fusion_tools` crate for replay, simulation, diagnostics, synthetic generation, and native/wasm visualizer builds |
+| `web/` | static browser host for the wasm visualizer and hosted datasets; not a Rust crate |
 | `mobile/ios/` | iOS app, Rust FFI wrapper, recording/export tools |
 | `docs/` | Sphinx source, integrated algorithm notes, and documentation assets |
 

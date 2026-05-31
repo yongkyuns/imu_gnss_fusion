@@ -141,6 +141,7 @@ fn short_sleep_keeps_navigation_running() {
         gyro_radps: [0.0, 0.0, 0.0],
         accel_mps2: [0.0, 0.0, 9.80665],
     });
+    let _ = system.end_trip();
 
     let slept = system.process_imu(ImuSample {
         t_s: 600.0,
@@ -164,6 +165,96 @@ fn short_sleep_keeps_navigation_running() {
 }
 
 #[test]
+fn unexpected_data_gap_reseeds_navigation_without_stale_yaw() {
+    let mut system = SensorFusion::with_mount([1.0, 0.0, 0.0, 0.0]);
+    assert!(system.process_gnss(gnss_sample(1.0)).navigation_started);
+    let _ = system.process_imu(ImuSample {
+        t_s: 1.01,
+        gyro_radps: [0.0, 0.0, 0.0],
+        accel_mps2: [0.0, 0.0, 9.80665],
+    });
+    let _ = system.process_imu(ImuSample {
+        t_s: 1.02,
+        gyro_radps: [0.0, 0.0, 0.0],
+        accel_mps2: [0.0, 0.0, 9.80665],
+    });
+
+    let _ = system.process_imu(ImuSample {
+        t_s: 180.0,
+        gyro_radps: [0.0, 0.0, 0.0],
+        accel_mps2: [0.0, 0.0, 9.80665],
+    });
+    let reseeded = system.process_gnss(GnssSample {
+        t_s: 180.1,
+        lat_deg: 0.001,
+        vel_ned_mps: [0.02, 0.0, 0.0],
+        heading_rad: Some(core::f32::consts::PI),
+        ..gnss_sample(180.1)
+    });
+
+    assert!(reseeded.navigation_started);
+    let ekf = system.ekf().unwrap();
+    assert!(
+        ekf.nominal.pn > 100.0,
+        "post-gap GNSS position should reacquire instead of being rejected"
+    );
+    assert!(
+        ekf.nominal.q3.abs() < 0.5,
+        "stale low-speed GNSS heading must not flip yaw during reacquisition"
+    );
+    assert!(
+        ekf.p[2][2].sqrt().to_degrees() >= 40.0,
+        "yaw should remain uncertain when the gap contradicted stationary sleep"
+    );
+}
+
+#[test]
+fn declared_trip_sleep_rejects_large_gnss_position_jump() {
+    let mut system = SensorFusion::with_mount([1.0, 0.0, 0.0, 0.0]);
+    assert!(system.process_gnss(gnss_sample(1.0)).navigation_started);
+    let _ = system.process_imu(ImuSample {
+        t_s: 1.01,
+        gyro_radps: [0.0, 0.0, 0.0],
+        accel_mps2: [0.0, 0.0, 9.80665],
+    });
+    let _ = system.process_imu(ImuSample {
+        t_s: 1.02,
+        gyro_radps: [0.0, 0.0, 0.0],
+        accel_mps2: [0.0, 0.0, 9.80665],
+    });
+    let _ = system.end_trip();
+
+    let slept = system.process_imu(ImuSample {
+        t_s: 180.0,
+        gyro_radps: [0.0, 0.0, 0.0],
+        accel_mps2: [0.0, 0.0, 9.80665],
+    });
+    assert!(slept.navigation_usable);
+
+    let _ = system.process_gnss(GnssSample {
+        t_s: 180.03,
+        lat_deg: 0.001,
+        vel_ned_mps: [0.02, 0.0, 0.0],
+        heading_rad: Some(core::f32::consts::PI),
+        ..gnss_sample(180.03)
+    });
+    let fused = system.process_imu(ImuSample {
+        t_s: 180.04,
+        gyro_radps: [0.0, 0.0, 0.0],
+        accel_mps2: [0.0, 0.0, 9.80665],
+    });
+
+    assert_eq!(
+        fused.gnss_event_mask & GNSS_EVENT_POSITION_REJECTED,
+        GNSS_EVENT_POSITION_REJECTED
+    );
+    assert!(
+        system.ekf().unwrap().nominal.pn < 50.0,
+        "declared stationary sleep should not accept a large reported-accurate GNSS jump"
+    );
+}
+
+#[test]
 fn medium_sleep_enters_degraded_dead_reckoning_until_gnss_recovers() {
     let mut system = SensorFusion::with_mount([1.0, 0.0, 0.0, 0.0]);
     assert!(system.process_gnss(gnss_sample(1.0)).navigation_started);
@@ -177,6 +268,7 @@ fn medium_sleep_enters_degraded_dead_reckoning_until_gnss_recovers() {
         gyro_radps: [0.0, 0.0, 0.0],
         accel_mps2: [0.0, 0.0, 9.80665],
     });
+    let _ = system.end_trip();
 
     let _ = system.process_imu(ImuSample {
         t_s: 1200.0,
@@ -222,6 +314,7 @@ fn medium_sleep_with_unusable_covariance_waits_for_gnss_reseed() {
         gyro_radps: [0.0, 0.0, 0.0],
         accel_mps2: [0.0, 0.0, 9.80665],
     });
+    let _ = system.end_trip();
 
     system.analysis_set_ekf_attitude_roll_pitch_covariance(10.0_f32.to_radians());
     let slept = system.process_imu(ImuSample {
@@ -249,6 +342,7 @@ fn long_sleep_makes_navigation_unusable_until_gnss_reseed() {
         gyro_radps: [0.0, 0.0, 0.0],
         accel_mps2: [0.0, 0.0, 9.80665],
     });
+    let _ = system.end_trip();
 
     let slept = system.process_imu(ImuSample {
         t_s: 4000.0,

@@ -14,7 +14,7 @@
 </text>
 <rect x="1238" y="60" width="18" height="12" rx="3" fill="#DCEBFF" stroke="none"/>
 <text class="label" x="1264" y="56" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
-<tspan x="1264" dy="0">sim modules</tspan>
+<tspan x="1264" dy="0">tools modules</tspan>
 </text>
 <rect x="1370" y="60" width="18" height="12" rx="3" fill="#FFE0E7" stroke="none"/>
 <text class="label" x="1396" y="56" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
@@ -249,7 +249,7 @@
 </text>
 <text class="label" x="882" y="1034" fill="#536174" font-size="12" font-weight="normal" text-anchor="start">
 <tspan x="882" dy="0">sensor_fusion/tests</tspan>
-<tspan x="882" dy="16.200000000000003">sim/tests</tspan>
+<tspan x="882" dy="16.200000000000003">tools/tests</tspan>
 <tspan x="882" dy="16.200000000000003">synthetic + replay equivalence</tspan>
 </text>
 <rect x="1272" y="996" width="380" height="108" rx="8" fill="#F6F7FB" stroke="#D8E0EA" stroke-width="1"/>

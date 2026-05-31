@@ -28,7 +28,15 @@ Every input update returns one public lifecycle state:
 | `DegradedDeadReckoning` | navigation is continuing after a medium sleep gap without new GNSS yet | yes |
 | `AwaitingGnssReseed` | mount and bias priors are retained, but navigation must be reseeded from GNSS | no |
 
-Use `Update.state` and `Update.navigation_usable` after each sample. `SensorFusion::health()` returns the same state plus convergence metrics and reason bits. The boolean flags are intentionally derived from the single state:
+Use `Update.state` and `Update.navigation_usable` after each sample.
+`SensorFusion::health()` returns the public state plus convergence metrics and
+reason bits. Some diagnostic reason bits, such as stale or repeatedly rejected
+GNSS, can set `health.degraded` while the public lifecycle remains `Running`;
+callers that want warning badges should inspect both `state` and
+`health.reason_mask`.
+
+The boolean flags are intentionally derived from the public lifecycle and
+diagnostic verdict:
 
 - `navigation_usable`: public pose/velocity output can be consumed.
 - `navigation_started`: navigation became usable on this update.
@@ -41,8 +49,9 @@ Do not separately infer health from whether an EKF object exists internally. Dur
 
 For normal live operation:
 
-- Keep the same `SensorFusion` object across stop/start streaming, app backgrounding, and short MCU sleep when the device is physically stationary.
-- Continue feeding timestamped IMU and GNSS samples. The library classifies short, medium, and long sleep gaps from sample timestamps.
+- Keep the same `SensorFusion` object across trip-end sleep when retained memory is available.
+- Call `SensorFusion::end_trip()` before intentionally stopping samples at the end of a trip. This declares that the vehicle/device is expected to remain stationary through the next timestamp gap.
+- Continue feeding timestamped IMU and GNSS samples after wake. The library classifies declared sleep gaps as short, medium, or long from sample timestamps.
 - Consume pose, velocity, and vehicle-frame outputs only when `navigation_usable` is true.
 - Save external priors only when `health.stable` is true.
 
@@ -54,7 +63,7 @@ Start a fresh context when the data source changes or the physical situation inv
 - losing retained EKF memory;
 - allowing the device or vehicle to move while samples are stopped.
 
-The sleep model assumes the device is stationary during the missing sample interval. If that assumption is false, preserving the context can make the old position, velocity, and yaw overconfident. Reset and reseed from GNSS instead.
+The sleep model assumes the device is stationary during the missing sample interval. That assumption is only used after `end_trip()`. A large IMU stream gap without `end_trip()` is treated as unexpected in-trip data loss: stale sample coupling is cleared, public navigation becomes unavailable, and the next GNSS sample reseeds navigation while retaining mount and IMU bias calibration.
 
 ## Stable Prior Criteria
 
@@ -84,11 +93,18 @@ The public API exposes this as `health.stable`. Callers should not replicate the
 
 An IMU timestamp gap above $0.05\,\mathrm{s}$ clears sample-to-sample coupling. The first IMU after the gap anchors a new interval; the runtime does not strapdown-propagate across the missing time.
 
+Gap handling depends on whether the caller declared a trip end:
+
+- Declared gap: `end_trip()` was called before samples stopped, so the gap is treated as expected stationary sleep.
+- Undeclared gap: a gap of at least $1\,\mathrm{s}$ is treated as unexpected in-trip data loss and enters `AwaitingGnssReseed`.
+
 | Gap class | Duration | Behavior |
 | --- | --- | --- |
 | short sleep | $\le 15\,\mathrm{min}$ | keep `Running`; navigation stays usable; apply bounded stationary covariance aging |
 | medium sleep | $>15\,\mathrm{min}$ and $\le 1\,\mathrm{h}$ | apply bounded stationary covariance aging; enter `DegradedDeadReckoning` if covariance remains usable |
 | long sleep | $>1\,\mathrm{h}$ | enter `AwaitingGnssReseed` until an acceptable GNSS sample arrives |
+
+After a declared sleep gap, the next GNSS position/velocity sample must pass the normal residual gate without using the large-GNSS-gap or accuracy-improvement bypass. This prevents a GNSS receiver jump that reports plausible accuracy from being accepted only because the receiver had been absent during sleep.
 
 During medium sleep, IMU prediction continues after wake in degraded dead-reckoning mode. If covariance grows beyond the navigation usability gate before GNSS returns, the state becomes `AwaitingGnssReseed`.
 

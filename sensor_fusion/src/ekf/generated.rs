@@ -8,7 +8,7 @@
 //!
 //! The generated model implements the augmented EKF documented in
 //! `docs/algorithms/ekf.md`: 18 error states
-//! `[dtheta_v, dv_n, dp_n, dbg, dba, dpsi_vb]` and 15 process-noise states
+//! `[dtheta_v, dv_n, dp_n, dbg, dba, dpsi_bv]` and 15 process-noise states
 //! `[gyro, accel, gyro_bias_rw, accel_bias_rw, mount_rw]`.
 
 #![allow(non_snake_case)]

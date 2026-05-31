@@ -418,7 +418,7 @@ async function runSmokeProfile(dataset, replayDir, args) {
   await run(args.cargo, [
     "run",
     "-p",
-    "sim",
+    "fusion_tools",
     "--bin",
     "visualizer",
     "--locked",

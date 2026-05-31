@@ -3,7 +3,7 @@
 This directory is a static host for the wasm visualizer. Build the wasm bundle into `web/pkg/`, then serve this directory from any static file server or GitHub Pages.
 
 ```bash
-cargo build -p sim --bin visualizer --release --target wasm32-unknown-unknown
+cargo build -p fusion_tools --bin visualizer --release --target wasm32-unknown-unknown
 wasm-bindgen \
   --target web \
   --out-dir web/pkg \

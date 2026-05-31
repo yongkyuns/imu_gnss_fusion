@@ -10,6 +10,9 @@ algorithm reference.
 - [](runtime-ekf.md): nominal state, error state, propagation, generated
   Jacobians, measurement rows, scalar/batch update algebra, GNSS gating, NHC
   scheduling, vehicle-roll prior, injection, reset, and initialization.
+- [](ekf-matrices.md): state/noise ordering, complete sparse transition and
+  noise-input matrix structure, generated measurement Jacobians, and update
+  forms.
 - [](mount-states.md): why mount is estimated inside the EKF, why align is
   separate, how mount/attitude ambiguity arises, and why full navigation differs
   from AHRS-only attitude filters.

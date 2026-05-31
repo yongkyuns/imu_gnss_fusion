@@ -64,6 +64,7 @@ api-and-conventions
 algorithms/frames
 algorithms/ekf
 algorithms/runtime-ekf
+algorithms/ekf-matrices
 algorithms/mount-states
 algorithms/align
 algorithms/observability

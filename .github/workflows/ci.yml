@@ -58,8 +58,8 @@ jobs:
       - name: Build workspace
         run: cargo build --workspace --locked
 
-      - name: Check key sim binaries
-        run: cargo check -p sim --bins --locked
+      - name: Check key tool binaries
+        run: cargo check -p fusion_tools --bins --locked
 
       - name: Test workspace
         run: cargo test --workspace --locked
@@ -207,7 +207,7 @@ jobs:
             --exclude pkg/ \
             --exclude docs/ \
             web/ target/pages-site/
-          cargo build -p sim --bin visualizer --release --target wasm32-unknown-unknown --locked
+          cargo build -p fusion_tools --bin visualizer --release --target wasm32-unknown-unknown --locked
           wasm-bindgen \
             --target web \
             --out-dir target/pages-site/pkg \

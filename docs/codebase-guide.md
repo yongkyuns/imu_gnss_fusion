@@ -21,23 +21,23 @@ vehicle speed samples rather than reaching into EKF internals.
 
 | Area | Files | Role |
 | --- | --- | --- |
-| Generic replay parsing | `sim/src/datasets/generic_replay.rs` | loads `imu.csv`, `gnss.csv`, and optional reference streams |
-| Replay job orchestration | `sim/src/visualizer/replay_job.rs` | runs generic or synthetic jobs and produces `PlotData` |
-| Trace construction | `sim/src/visualizer/pipeline/generic.rs` | feeds `SensorFusion`, builds traces, maps, event samples, and diagnostics |
-| Synthetic scenarios | `sim/src/visualizer/pipeline/synthetic.rs`, `sim/motion_profiles/` | creates controlled replay inputs |
-| Visualizer UI | `sim/src/visualizer/ui/` | pages, maps, plots, tuning windows, web dataset loading |
+| Generic replay parsing | `tools/src/datasets/generic_replay.rs` | loads `imu.csv`, `gnss.csv`, and optional reference streams |
+| Replay job orchestration | `tools/src/visualizer/replay_job.rs` | runs generic or synthetic jobs and produces `PlotData` |
+| Trace construction | `tools/src/visualizer/pipeline/generic.rs` | feeds `SensorFusion`, builds traces, maps, event samples, and diagnostics |
+| Synthetic scenarios | `tools/src/visualizer/pipeline/synthetic.rs`, `tools/motion_profiles/` | creates controlled replay inputs |
+| Visualizer UI | `tools/src/visualizer/ui/` | pages, maps, plots, tuning windows, web dataset loading |
 | Browser shell | `web/index.html`, `web/replay_worker.js`, `web/datasets/manifest.json` | wasm host, replay worker, hosted dataset picker |
 
-The native and browser visualizers share the same Rust visualizer model. The
-browser path adds a static HTML shell, wasm package, hosted dataset manifest,
-and web worker so replay work stays off the UI thread.
+The native and browser visualizers share the same Rust visualizer model from the
+`fusion_tools` crate. `web/` is only the static HTML shell, wasm package output
+location, hosted dataset manifest, and web worker layer.
 
 ## Road Events Path
 
 | Area | Files | Role |
 | --- | --- | --- |
 | Detector crate | `road_events/src/` | no-std streaming event detectors and trip stats |
-| Visualizer integration | `sim/src/visualizer/pipeline/generic.rs` | converts fusion outputs into road-event motion samples and plot traces |
+| Visualizer integration | `tools/src/visualizer/pipeline/generic.rs` | converts fusion outputs into road-event motion samples and plot traces |
 | iOS integration | `mobile/ios/SensorFusionFFI/src/lib.rs`, `mobile/ios/IMUGNSSPhone/App/Analysis/MotionEventDetector.swift` | exposes detector events and display models to Swift |
 
 `road_events` is independent from the EKF. It consumes vehicle-motion quantities
@@ -74,7 +74,7 @@ Generated documentation output belongs under `target/docs-html` or
 
 - Estimator behavior: change `sensor_fusion`, then update the algorithm/reference docs.
 - Road-event detection: change `road_events`, then update road-event docs and iOS/visualizer integration notes.
-- Replay format: change `sim::datasets`, packaging scripts, and data docs together.
-- Visualizer UI or trace plots: change `sim/src/visualizer`, then update [](tools/visualizer.md).
+- Replay format: change `fusion_tools::datasets`, packaging scripts, and data docs together.
+- Visualizer UI or trace plots: change `tools/src/visualizer`, then update [](tools/visualizer.md).
 - iOS collection/review behavior: change `mobile/ios`, then update [](mobile/ios.md).
 - CI, Pages, and validation automation: keep details under the Developer Reference section.

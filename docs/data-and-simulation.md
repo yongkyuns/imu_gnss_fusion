@@ -34,13 +34,13 @@ The current browser manifest contains 32 datasets. See [](data/hosted-datasets.m
 
 ## Synthetic Scenarios
 
-The repository includes 14 `.scenario` files under `sim/motion_profiles`. They cover city blocks, figure-eight paths, grade/stops, high-speed straight motion, roll/pitch excitation, and robustness cases.
+The repository includes 14 `.scenario` files under `tools/motion_profiles`. They cover city blocks, figure-eight paths, grade/stops, high-speed straight motion, roll/pitch excitation, and robustness cases.
 
 Generate a synthetic replay directory:
 
 ```bash
-cargo run --release -p sim --bin export_synthetic_replay_generic -- \
-  --motion-def sim/motion_profiles/city_blocks_15min.scenario \
+cargo run --release -p fusion_tools --bin export_synthetic_replay_generic -- \
+  --motion-def tools/motion_profiles/city_blocks_15min.scenario \
   --noise low \
   --output-dir /tmp/city-blocks
 ```

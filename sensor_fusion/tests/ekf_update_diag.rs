@@ -81,12 +81,12 @@ fn gnss_batch_records_row_diag_once_and_clears_on_predict() {
 }
 
 #[test]
-fn gnss_position_per_axis_three_sigma_rejection_keeps_velocity_update() {
+fn gnss_position_per_axis_large_jump_rejection_keeps_velocity_update() {
     let mut ekf = Filter::new(ProcessNoise::default());
     let result = ekf.fuse_gps_nhc_batch(
         GnssSample {
             t_s: 1.0,
-            pos_ned_m: [10.0, 0.0, 0.0],
+            pos_ned_m: [100.0, 0.0, 0.0],
             vel_ned_mps: [0.4, -0.2, 0.1],
             pos_std_m: [1.0; 3],
             vel_std_mps: [1.0; 3],
@@ -107,13 +107,13 @@ fn gnss_position_per_axis_three_sigma_rejection_keeps_velocity_update() {
 }
 
 #[test]
-fn gnss_velocity_per_axis_three_sigma_rejection_keeps_position_update() {
+fn gnss_velocity_per_axis_large_jump_rejection_keeps_position_update() {
     let mut ekf = Filter::new(ProcessNoise::default());
     let result = ekf.fuse_gps_nhc_batch(
         GnssSample {
             t_s: 1.0,
             pos_ned_m: [1.0, -2.0, 0.5],
-            vel_ned_mps: [10.0, 0.0, 0.0],
+            vel_ned_mps: [100.0, 0.0, 0.0],
             pos_std_m: [1.0; 3],
             vel_std_mps: [1.0; 3],
             heading_rad: None,
@@ -137,7 +137,7 @@ fn gnss_position_consecutive_rejections_emit_event_without_fusing_jump() {
     let mut ekf = Filter::new(ProcessNoise::default());
     let sample = GnssSample {
         t_s: 1.0,
-        pos_ned_m: [10.0, 0.0, 0.0],
+        pos_ned_m: [100.0, 0.0, 0.0],
         vel_ned_mps: [0.0; 3],
         pos_std_m: [1.0; 3],
         vel_std_mps: [1.0; 3],
@@ -167,7 +167,7 @@ fn gnss_position_gap_bypass_accepts_first_update_after_large_gap() {
     let mut ekf = Filter::new(ProcessNoise::default());
     let sample = GnssSample {
         t_s: 1.0,
-        pos_ned_m: [10.0, 0.0, 0.0],
+        pos_ned_m: [100.0, 0.0, 0.0],
         vel_ned_mps: [0.0; 3],
         pos_std_m: [1.0; 3],
         vel_std_mps: [1.0; 3],
@@ -191,7 +191,7 @@ fn gnss_position_accuracy_bypass_accepts_after_reported_accuracy_improves() {
         ekf.fuse_gps_nhc_batch(
             GnssSample {
                 t_s: 1.0,
-                pos_ned_m: [100.0, 0.0, 0.0],
+                pos_ned_m: [1000.0, 0.0, 0.0],
                 vel_ned_mps: [0.0; 3],
                 pos_std_m: [10.0; 3],
                 vel_std_mps: [1.0; 3],
@@ -207,7 +207,7 @@ fn gnss_position_accuracy_bypass_accepts_after_reported_accuracy_improves() {
     let result = ekf.fuse_gps_nhc_batch(
         GnssSample {
             t_s: 2.0,
-            pos_ned_m: [100.0, 0.0, 0.0],
+            pos_ned_m: [1000.0, 0.0, 0.0],
             vel_ned_mps: [0.0; 3],
             pos_std_m: [1.0; 3],
             vel_std_mps: [1.0; 3],

@@ -165,6 +165,8 @@ SensorFusionFfiUpdate sensor_fusion_snapshot_status(const SensorFusionFfi *handl
 
 SensorFusionFfiHealth sensor_fusion_snapshot_health(const SensorFusionFfi *handle);
 
+SensorFusionFfiUpdate sensor_fusion_end_trip(SensorFusionFfi *handle);
+
 SensorFusionFfiUpdate sensor_fusion_process_imu(
     SensorFusionFfi *handle,
     float t_s,

@@ -86,7 +86,9 @@ n_{\psi_{bv}}
 $$
 
 This ordering is the contract between `formulation.py`, generated include
-files, `generated.rs`, `ekf/types.rs`, and `state_ops.rs`.
+files, `generated.rs`, and `ekf/types.rs`. `state_ops.rs` contains standalone
+state-operation helpers and tests; it is not the authoritative runtime
+mechanization and does not own the generated prediction model.
 
 ## What The Generator Emits
 
@@ -99,7 +101,7 @@ It does not encode runtime policy.
 | `derive_error_dynamics()` | `error_transition_generated.rs`, `error_noise_input_generated.rs` | `error_transition_with_gravity()` | covariance prediction |
 | `emit_matrix_supports()` | `error_transition_support_generated.rs` | constants included by `generated.rs` | sparse covariance prediction |
 | `build_symbolic_model()` reset block | `attitude_reset_jacobian_generated.rs` | `attitude_reset_jacobian()` | attitude covariance reset |
-| `derive_measurement_model()` | `gps_*_generated.rs` | `gps_*_observation()` | GNSS scalar rows and GNSS/NHC batch |
+| `derive_measurement_model()` | `gps_*_generated.rs` | `gps_*_observation()` | standalone GNSS scalar rows |
 | `derive_measurement_model()` | `stationary_accel_*_generated.rs` | `stationary_accel_*_observation()` | stationary gravity updates |
 | `derive_measurement_model()` | `body_vel_*_generated.rs` | `body_vel_*_observation()` | vehicle speed, NHC Y/Z, GNSS/NHC batch |
 
@@ -110,6 +112,10 @@ $z - h(x_\mathrm{nom})$. That split is important: generated code knows the local
 linearization; `ekf/mod.rs` decides whether a measurement is valid, how it is
 gated, whether it is batched with other rows, and when the accumulated error is
 injected into the nominal state.
+
+The GNSS/NHC batch path does not call the generated `gps_*_observation()`
+wrappers. It constructs the equivalent direct position/velocity unit rows by
+hand so GNSS rows and NHC rows share one pre-update linearization point.
 
 ## Generated/Runtime Boundary
 
@@ -133,7 +139,7 @@ Changes usually fall into four categories:
 | Change type | Primary files | What must stay consistent |
 | --- | --- | --- |
 | Propagation or noise change | `propagate_nominal()`, `inject_true_state()`, `extract_error_state()`, `derive_error_dynamics()` | nominal propagation, perturbation side, $F$, $G$, support metadata, runtime $Q$ scaling |
-| State or ABI change | `build_symbolic_model()`, `generated.rs`, `ekf/types.rs`, `state_ops.rs` | nominal/error/noise ordering and wrapper argument bindings |
+| State or ABI change | `build_symbolic_model()`, `generated.rs`, `ekf/types.rs` | nominal/error/noise ordering and wrapper argument bindings |
 | New or changed scalar observation | `derive_measurement_model()`, `write_observation_equations()` | predicted scalar, variance symbol, generated $H/K/S$, runtime residual sign |
 | New generated function boundary | `generated.rs`, sometimes `mod.rs` | wrapper inputs, variance symbol, scalar residual sign, gravity/local-frame arguments |
 | Runtime policy change | `mod.rs`, `fusion.rs` | gating, batching, covariance update form, diagnostics, public event/state reporting |
@@ -150,8 +156,9 @@ from the intended model change. For example:
 
 ## Implementation Checks
 
-- State ordering in `formulation.py`, `generated.rs`, `ekf/types.rs`, and
-  `state_ops.rs` must agree.
+- State ordering in `formulation.py`, `generated.rs`, and `ekf/types.rs` must
+  agree. Treat `state_ops.rs` as helper/test infrastructure unless a runtime
+  caller explicitly uses it.
 - The nominal/error convention must match [](../algorithms/frames.md): EKF
   vehicle attitude uses right injection, residual mount uses left injection.
 - `F` and `G` are discrete matrices for one IMU increment; runtime process
@@ -175,7 +182,7 @@ cargo test -p sensor_fusion --test ekf_state_ops --locked
 cargo test -p sensor_fusion --test ekf_nhc_jacobian --locked
 cargo test -p sensor_fusion --test ekf_update_diag --locked
 cargo test -p sensor_fusion --locked
-cargo check -p sim --bin visualizer --locked
+cargo check -p fusion_tools --bin visualizer --locked
 . .venv-docs/bin/activate
 sphinx-build -W --keep-going -b html docs target/docs-html
 ```

@@ -92,15 +92,15 @@ reference files add attitude, mount, position, or vehicle-motion traces.
 Run a generic replay directory:
 
 ```bash
-cargo run --release -p sim --bin visualizer -- \
+cargo run --release -p fusion_tools --bin visualizer -- \
   --generic-replay-dir /path/to/replay-dir
 ```
 
 Run a synthetic scenario:
 
 ```bash
-cargo run --release -p sim --bin visualizer -- \
-  --synthetic-motion-def sim/motion_profiles/city_blocks_15min.scenario \
+cargo run --release -p fusion_tools --bin visualizer -- \
+  --synthetic-motion-def tools/motion_profiles/city_blocks_15min.scenario \
   --synthetic-noise low
 ```
 

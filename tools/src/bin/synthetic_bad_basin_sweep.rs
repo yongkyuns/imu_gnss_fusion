@@ -3,19 +3,19 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use clap::{Parser, ValueEnum};
 use sensor_fusion::SensorFusion;
-use sim::datasets::generic_replay::{
+use fusion_tools::datasets::generic_replay::{
     GenericGnssSample, GenericImuSample, fusion_gnss_sample, fusion_imu_sample,
 };
-use sim::eval::gnss_ins::{
+use fusion_tools::eval::gnss_ins::{
     as_q64, quat_angle_deg, quat_from_rpy_alg_deg, quat_mul, quat_rotate, wrap_deg180,
 };
-use sim::eval::replay::{ReplayEvent, for_each_event};
-use sim::synthetic::gnss_ins_path::{
+use fusion_tools::eval::replay::{ReplayEvent, for_each_event};
+use fusion_tools::synthetic::gnss_ins_path::{
     GeneratedMeasurementSet, GpsNoiseModel, ImuAccuracy, MeasurementNoiseConfig, MotionProfile,
     PathGenConfig, generate_with_noise,
 };
-use sim::visualizer::math::{ecef_to_ned, lla_to_ecef, quat_rpy_deg};
-use sim::visualizer::pipeline::generic::reference_mount_rpy_to_q_bv;
+use fusion_tools::visualizer::math::{ecef_to_ned, lla_to_ecef, quat_rpy_deg};
+use fusion_tools::visualizer::pipeline::generic::reference_mount_rpy_to_q_bv;
 
 const DIAG_GPS_VEL: usize = 1;
 const DIAG_BODY_VEL_Y: usize = 4;
@@ -29,7 +29,7 @@ const RADPS_TO_DPS: f64 = 180.0 / std::f64::consts::PI;
 struct Args {
     #[arg(
         long,
-        default_value = "sim/motion_profiles/real_early_bad_basin.scenario"
+        default_value = "tools/motion_profiles/real_early_bad_basin.scenario"
     )]
     scenario: PathBuf,
     #[arg(long, value_enum, default_value_t = NoiseMode::Mid)]
@@ -101,7 +101,7 @@ struct Args {
     #[arg(
         long,
         value_delimiter = ',',
-        default_value = "sim/motion_profiles/city_blocks_15min.scenario,sim/motion_profiles/figure8_15min.scenario,sim/motion_profiles/real_early_bad_basin.scenario"
+        default_value = "tools/motion_profiles/city_blocks_15min.scenario,tools/motion_profiles/figure8_15min.scenario,tools/motion_profiles/real_early_bad_basin.scenario"
     )]
     matrix_scenarios: Vec<PathBuf>,
 }
@@ -637,7 +637,7 @@ fn perturb_gnss(
 
 fn run_case(
     args: &Args,
-    truth: &[sim::datasets::synthetic_replay::TruthSample],
+    truth: &[fusion_tools::datasets::synthetic_replay::TruthSample],
     imu: &[GenericImuSample],
     gnss: &[GenericGnssSample],
     shift_ms: f64,
@@ -863,7 +863,7 @@ fn capture_update_times(
 fn snapshot_state(
     fusion: &SensorFusion,
     t_s: f64,
-    truth: Option<&sim::datasets::synthetic_replay::TruthSample>,
+    truth: Option<&fusion_tools::datasets::synthetic_replay::TruthSample>,
     fallback_ref_ecef: [f64; 3],
     fallback_ref_lat_deg: f64,
     fallback_ref_lon_deg: f64,

@@ -17,13 +17,14 @@ The project keeps estimator behavior in reusable Rust crates while replay, visua
 | --- | --- |
 | `sensor_fusion/` | `#![no_std]` library crate exposing the public EKF facade, alignment, generated model wrappers, and state helpers. |
 | `road_events/` | `#![no_std]` streaming road-event detectors and trip statistics shared by simulator/web/iOS integration. |
-| `sim/` | Replay/evaluation crate with synthetic data generation, diagnostics, and the egui visualizer. |
+| `tools/` | Replay/evaluation crate with synthetic data generation, diagnostics, and the egui visualizer. |
 | `web/` | Static host for the wasm visualizer and hosted datasets. |
 | `mobile/ios/` | iOS sensor collection, replay/export tooling, SwiftUI app, and Rust FFI integration. |
 
 `sensor_fusion` is the reusable navigation runtime. `road_events` is the reusable
-vehicle-event runtime. `sim` owns dataset parsing, replay ordering, visualizer
-trace construction, and diagnostic tools.
+vehicle-event runtime. `fusion_tools` owns dataset parsing, replay ordering,
+visualizer trace construction, and diagnostic tools. `web/` is not a Rust crate;
+it is the static browser host for the wasm build produced by `fusion_tools`.
 
 ## Runtime Flow
 
@@ -78,7 +79,7 @@ reference_mount.csv      # optional
 reference_motion.csv     # optional
 ```
 
-`sim::datasets` parses the hardware-agnostic CSVs. `sim::eval::replay` merges
+`fusion_tools::datasets` parses the hardware-agnostic CSVs. `fusion_tools::eval::replay` merges
 IMU and GNSS events by timestamp. The visualizer pipeline feeds only the public
 `SensorFusion` API and uses optional references for plots, maps, summaries, and
 manual mount seeding.
@@ -110,7 +111,7 @@ static web shell
 ```
 
 The UI owns presentation state only. Runtime estimator behavior remains in
-`sensor_fusion`; replay and trace construction remain in `sim`.
+`sensor_fusion`; replay and trace construction remain in `fusion_tools`.
 
 ## Diagnostics
 
@@ -127,9 +128,9 @@ Common diagnostic tools:
 
 - `sensor_fusion` owns estimator behavior and public runtime contracts.
 - `road_events` owns event-detector behavior and trip-summary contracts.
-- `sim::datasets` owns source data parsing, not estimator formulation.
-- `sim::eval::replay` owns event ordering, not update behavior.
-- `sim::visualizer::pipeline` owns trace construction and reference overlays.
+- `fusion_tools::datasets` owns source data parsing, not estimator formulation.
+- `fusion_tools::eval::replay` owns event ordering, not update behavior.
+- `fusion_tools::visualizer::pipeline` owns trace construction and reference overlays.
 - `web/` owns static hosting and browser loading behavior.
 - `scripts/` own packaging and validation automation.
 - `mobile/ios/` owns mobile collection/FFI integration, not estimator behavior.

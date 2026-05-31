@@ -1,10 +1,10 @@
-use sim::eval::config::{FUSION_TUNING_DEFAULTS, snapshot_fusion_tuning_config};
-use sim::eval::trace::{
+use fusion_tools::eval::config::{FUSION_TUNING_DEFAULTS, snapshot_fusion_tuning_config};
+use fusion_tools::eval::trace::{
     find_trace, require_trace, require_trace_points, require_trace_schema, sample_nearest_point,
     sample_nearest_value,
 };
-use sim::visualizer::model::Trace;
-use sim::visualizer::pipeline::FusionTuningConfig;
+use fusion_tools::visualizer::model::Trace;
+use fusion_tools::visualizer::pipeline::FusionTuningConfig;
 
 #[test]
 fn trace_helpers_find_required_traces_and_sample_nearest_values() {

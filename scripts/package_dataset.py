@@ -383,7 +383,7 @@ def run_synthetic_replay_export(input_dir: Path, generic_dir: Path, args: argpar
         "run",
         "--release",
         "-p",
-        "sim",
+        "fusion_tools",
         "--bin",
         "export_synthetic_replay_generic",
         "--",

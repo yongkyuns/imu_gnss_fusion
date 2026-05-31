@@ -51,7 +51,7 @@ const DIAG_VEHICLE_ROLL_PRIOR: usize = 11;
 const BODY_VEL_Y_SUPPORT: [usize; 8] = [0, 1, 2, 3, 4, 5, 15, 17];
 const BODY_VEL_Z_SUPPORT: [usize; 8] = [0, 1, 2, 3, 4, 5, 15, 16];
 const MAX_BATCH_OBS: usize = 8;
-const GNSS_OUTLIER_GATE_SIGMA: f32 = 3.0;
+const GNSS_OUTLIER_GATE_SIGMA: f32 = 25.0;
 const GNSS_OUTLIER_GAP_BYPASS_S: f32 = 3.0;
 const GNSS_OUTLIER_CONSECUTIVE_REJECTION_EVENT_COUNT: u8 = 3;
 const GNSS_OUTLIER_ACCURACY_IMPROVEMENT_RATIO: f32 = 0.5;
@@ -74,6 +74,7 @@ struct GnssOutlierGateState {
     consecutive_rejections: u8,
     last_t_s: Option<f32>,
     last_accuracy_rms: Option<f32>,
+    require_next_gate_pass: bool,
 }
 
 impl Filter {
@@ -154,8 +155,8 @@ impl Filter {
 
     /// Sets the per-axis sigma gate used for the GNSS position update group.
     ///
-    /// The default is `3.0`. Passing `f32::INFINITY` disables position outlier
-    /// rejection.
+    /// The default is `25.0`, so only physically implausible jumps are rejected
+    /// by default. Passing `f32::INFINITY` disables position outlier rejection.
     pub fn set_gnss_position_outlier_gate_sigma(&mut self, gate_sigma: f32) {
         if gate_sigma >= 0.0 {
             self.gnss_position_outlier_gate_sigma = gate_sigma;
@@ -164,12 +165,19 @@ impl Filter {
 
     /// Sets the per-axis sigma gate used for the GNSS velocity update group.
     ///
-    /// The default is `3.0`. Passing `f32::INFINITY` disables velocity outlier
-    /// rejection.
+    /// The default is `25.0`, so only physically implausible jumps are rejected
+    /// by default. Passing `f32::INFINITY` disables velocity outlier rejection.
     pub fn set_gnss_velocity_outlier_gate_sigma(&mut self, gate_sigma: f32) {
         if gate_sigma >= 0.0 {
             self.gnss_velocity_outlier_gate_sigma = gate_sigma;
         }
+    }
+
+    /// Requires the next GNSS position/velocity sample to pass the sigma gate
+    /// without gap or accuracy-improvement bypass.
+    pub fn require_next_gnss_gate_pass(&mut self) {
+        self.gnss_position_gate_state.require_next_gate_pass = true;
+        self.gnss_velocity_gate_state.require_next_gate_pass = true;
     }
 
     /// Reports whether residual-mount states are currently frozen.
@@ -247,6 +255,7 @@ impl Filter {
                 gnss.pos_std_m[1] * gnss.pos_std_m[1],
                 gnss.pos_std_m[2] * gnss.pos_std_m[2],
             ]),
+            require_next_gate_pass: false,
         };
         self.gnss_velocity_gate_state = GnssOutlierGateState {
             consecutive_rejections: 0,
@@ -256,6 +265,7 @@ impl Filter {
                 gnss.vel_std_mps[1] * gnss.vel_std_mps[1],
                 gnss.vel_std_mps[2] * gnss.vel_std_mps[2],
             ]),
+            require_next_gate_pass: false,
         };
     }
 
@@ -1164,14 +1174,20 @@ fn apply_gnss_gate_policy(
     accuracy_rms: Option<f32>,
     bits: GnssGateEventBits,
 ) -> (bool, u32) {
-    let gap_bypass = state
-        .last_t_s
-        .is_some_and(|last_t_s| t_s - last_t_s > GNSS_OUTLIER_GAP_BYPASS_S);
-    let accuracy_bypass = match (accuracy_rms, state.last_accuracy_rms) {
-        (Some(current), Some(previous)) if previous > 0.0 => {
-            current <= previous * GNSS_OUTLIER_ACCURACY_IMPROVEMENT_RATIO
+    let require_gate_pass = state.require_next_gate_pass;
+    let gap_bypass = !require_gate_pass
+        && state
+            .last_t_s
+            .is_some_and(|last_t_s| t_s - last_t_s > GNSS_OUTLIER_GAP_BYPASS_S);
+    let accuracy_bypass = if require_gate_pass {
+        false
+    } else {
+        match (accuracy_rms, state.last_accuracy_rms) {
+            (Some(current), Some(previous)) if previous > 0.0 => {
+                current <= previous * GNSS_OUTLIER_ACCURACY_IMPROVEMENT_RATIO
+            }
+            _ => false,
         }
-        _ => false,
     };
 
     let (accepted, event_mask) = if !gate_failed {
@@ -1199,6 +1215,7 @@ fn apply_gnss_gate_policy(
     if accuracy_rms.is_some() {
         state.last_accuracy_rms = accuracy_rms;
     }
+    state.require_next_gate_pass = false;
     (accepted, event_mask)
 }
 

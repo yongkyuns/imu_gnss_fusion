@@ -9,7 +9,7 @@ Useful diagnostic surfaces include:
 - `align_debug` for the most recent align window and update trace;
 - anchor/reanchor debug accessors for local-frame behavior;
 - visualizer mount, motion, calibration, sensor, diagnostics, and road-event pages;
-- diagnostic binaries in `sim` for mount observability and synthetic sweeps.
+- diagnostic binaries in `fusion_tools` for mount observability and synthetic sweeps.
 
 When reporting mount error, use the physical public convention $q_{bv}$, where $x_b = C_{bv}x_v$.
 

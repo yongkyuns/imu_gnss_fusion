@@ -87,10 +87,11 @@ Policy types keep settings behavior testable:
   initialized EKF time before saving, rate-limits periodic stores to 30 s, and
   ignores saved-mount changes below 0.25 deg.
 
-Mount memory is a stored prior, not a forced reset path. Normal stop/start
-pauses retain the existing Rust `SensorFusion` object so the library can
-classify the gap as short, medium, or long sleep. Saving a mount prior should be
-tied to a stable fusion state; see [](../runtime-state-and-persistence.md).
+Mount memory is a stored prior, not a forced reset path. The Stop data stream
+control calls the Rust trip-end API before samples stop, so the retained
+`SensorFusion` object can classify the next gap as declared stationary sleep.
+Saving a mount prior should be tied to a stable fusion state; see
+[](../runtime-state-and-persistence.md).
 
 ## Diagnostics Tab
 
@@ -116,7 +117,8 @@ old events.
 The app should keep a live `SensorFusion` context across ordinary Drive
 stop/start operations. Stopping the sensor stream resets app-side synchronizers,
 audio notification state, and profiling counters, but it should not force a
-fresh estimator. The next IMU timestamp lets the library classify the pause:
+fresh estimator. The stop path calls `sensor_fusion_end_trip`, which declares
+the next gap as expected stationary sleep:
 
 - short sleep: retain navigation with small covariance inflation;
 - medium sleep: continue degraded IMU prediction until GNSS returns, unless

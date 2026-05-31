@@ -10,7 +10,7 @@ The visualizer can run checked-in hosted datasets, synthetic scenarios compiled 
 
 ## Integrate The Runtime
 
-Create one `SensorFusion` object per live sensor stream and feed timestamped IMU/GNSS samples in order. Keep that object across ordinary stream pauses so the EKF can apply its built-in short/medium/long sleep behavior. Reset only for a new source, a changed mount, lost retained memory, or a replay switch.
+Create one `SensorFusion` object per live sensor stream and feed timestamped IMU/GNSS samples in order. Keep that object across intentional trip-end sleep by calling `SensorFusion::end_trip()` before stopping samples. Unmarked long sample gaps are treated as unexpected in-trip data loss and require GNSS reseed. Reset only for a new source, a changed mount, lost retained memory, or a replay switch.
 
 Use `Update.navigation_usable` before consuming navigation output, and use `SensorFusion::health().stable` before saving priors. See [](runtime-state-and-persistence.md) for the full state model.
 
@@ -29,15 +29,15 @@ cargo test --workspace --locked
 Run the native visualizer on a generic replay directory:
 
 ```bash
-cargo run --release -p sim --bin visualizer -- \
+cargo run --release -p fusion_tools --bin visualizer -- \
   --generic-replay-dir /path/to/replay-dir
 ```
 
 Run the native visualizer on a synthetic scenario:
 
 ```bash
-cargo run --release -p sim --bin visualizer -- \
-  --synthetic-motion-def sim/motion_profiles/city_blocks_15min.scenario \
+cargo run --release -p fusion_tools --bin visualizer -- \
+  --synthetic-motion-def tools/motion_profiles/city_blocks_15min.scenario \
   --synthetic-noise low
 ```
 

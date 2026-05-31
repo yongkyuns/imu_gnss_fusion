@@ -567,11 +567,14 @@ pub unsafe extern "C" fn sensor_fusion_process_road_event_motion(
         }
     }
     if vertical_accel_valid
-        && let Some(update) = fusion.road_events.roughness.update_with_events(RoadRoughnessSample {
-            t_s,
-            speed_mps: ground_speed_mps,
-            vertical_accel_mps2,
-        })
+        && let Some(update) = fusion
+            .road_events
+            .roughness
+            .update_with_events(RoadRoughnessSample {
+                t_s,
+                speed_mps: ground_speed_mps,
+                vertical_accel_mps2,
+            })
     {
         if let Some(event) = update.roughness_event {
             fusion
@@ -779,6 +782,21 @@ pub unsafe extern "C" fn sensor_fusion_snapshot_health(
         return SensorFusionFfiHealth::default();
     };
     fusion.inner.health().into()
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// `handle` must be either null or a valid pointer returned by this crate's
+/// create functions.
+pub unsafe extern "C" fn sensor_fusion_end_trip(
+    handle: *mut SensorFusionFfi,
+) -> SensorFusionFfiUpdate {
+    let Some(fusion) = fusion_mut(handle) else {
+        return SensorFusionFfiUpdate::default();
+    };
+    let update = fusion.inner.end_trip();
+    fusion.store_update(update)
 }
 
 #[unsafe(no_mangle)]
@@ -1233,12 +1251,10 @@ mod tests {
         assert_eq!(initialized.state, SENSOR_FUSION_STATE_RUNNING);
         assert!(initialized.navigation_usable);
 
-        let _ = unsafe {
-            sensor_fusion_process_imu(handle, 1.01, 0.0, 0.0, 9.80665, 0.0, 0.0, 0.0)
-        };
-        let slept = unsafe {
-            sensor_fusion_process_imu(handle, 4000.0, 0.0, 0.0, 9.80665, 0.0, 0.0, 0.0)
-        };
+        let _ =
+            unsafe { sensor_fusion_process_imu(handle, 1.01, 0.0, 0.0, 9.80665, 0.0, 0.0, 0.0) };
+        let slept =
+            unsafe { sensor_fusion_process_imu(handle, 4000.0, 0.0, 0.0, 9.80665, 0.0, 0.0, 0.0) };
         assert_eq!(slept.state, SENSOR_FUSION_STATE_AWAITING_GNSS_RESEED);
         assert!(!slept.navigation_usable);
 
@@ -1265,6 +1281,33 @@ mod tests {
         assert!(snapshot.initialized);
         assert!(snapshot.position_lla_valid);
         assert!((snapshot.lat_deg - 37.3319).abs() < 1.0e-6);
+
+        unsafe {
+            sensor_fusion_destroy(handle);
+        }
+    }
+
+    #[test]
+    fn ffi_end_trip_declares_stationary_sleep_gap() {
+        let handle = sensor_fusion_create_ekf_manual(1.0, 0.0, 0.0, 0.0);
+        assert!(!handle.is_null());
+
+        let initialized = unsafe {
+            sensor_fusion_process_gnss(
+                handle, 1.0, 37.3318, -122.0312, 15.0, 6.0, 0.0, 0.0, 1.0, 1.0, 1.5, 0.2, 0.2, 0.2,
+                0.0, true,
+            )
+        };
+        assert_eq!(initialized.state, SENSOR_FUSION_STATE_RUNNING);
+        let _ =
+            unsafe { sensor_fusion_process_imu(handle, 1.01, 0.0, 0.0, 9.80665, 0.0, 0.0, 0.0) };
+        let ended = unsafe { sensor_fusion_end_trip(handle) };
+        assert!(ended.navigation_usable);
+
+        let slept =
+            unsafe { sensor_fusion_process_imu(handle, 600.0, 0.0, 0.0, 9.80665, 0.0, 0.0, 0.0) };
+        assert_eq!(slept.state, SENSOR_FUSION_STATE_RUNNING);
+        assert!(slept.navigation_usable);
 
         unsafe {
             sensor_fusion_destroy(handle);
@@ -1347,10 +1390,7 @@ mod tests {
         assert!(!handle.is_null());
 
         assert!(unsafe {
-            sensor_fusion_set_harsh_behavior_preset(
-                handle,
-                SENSOR_FUSION_HARSH_BEHAVIOR_SENSITIVE,
-            )
+            sensor_fusion_set_harsh_behavior_preset(handle, SENSOR_FUSION_HARSH_BEHAVIOR_SENSITIVE)
         });
         assert!(!unsafe { sensor_fusion_set_harsh_behavior_preset(handle, 99) });
 

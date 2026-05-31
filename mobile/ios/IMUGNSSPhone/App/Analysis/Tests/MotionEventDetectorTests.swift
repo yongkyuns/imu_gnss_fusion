@@ -25,6 +25,30 @@ final class MotionEventDetectorTests: XCTestCase {
         XCTAssertTrue(poorEvents.contains { $0.kind == .gnssDegraded })
     }
 
+    func testGnssDegradedUsesBooleanEdgeNotStateName() {
+        var detector = MotionEventDetector()
+        let runningButDegraded = FusionHealth(
+            state: .running,
+            initialized: true,
+            mountReady: true,
+            gnssQuality: .good,
+            fusedConfidence: 0.8,
+            degraded: true,
+            navigationUsable: true,
+            reasonMask: 1 << 9
+        )
+
+        let first = detector.updateSystemEvents(
+            sample(tSec: 1.0, health: runningButDegraded, initialized: true, mountReady: true)
+        )
+        let second = detector.updateSystemEvents(
+            sample(tSec: 1.1, health: runningButDegraded, initialized: true, mountReady: true)
+        )
+
+        XCTAssertEqual(first.filter { $0.kind == .gnssDegraded }.count, 1)
+        XCTAssertFalse(second.contains { $0.kind == .gnssDegraded })
+    }
+
     func testRoadEventMappingUsesRustFfiEventKind() {
         let event = MotionEvent(
             roadEvent: RoadEventDetection(

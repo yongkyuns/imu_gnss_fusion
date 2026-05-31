@@ -2,11 +2,11 @@ use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 use clap::Parser;
-use sim::datasets::generic_replay::{GenericGnssSample, GenericImuSample, write_samples};
-use sim::datasets::synthetic_replay::{
+use fusion_tools::datasets::generic_replay::{GenericGnssSample, GenericImuSample, write_samples};
+use fusion_tools::datasets::synthetic_replay::{
     load_gnss_samples as load_dataset_gnss_samples, load_imu_samples as load_dataset_imu_samples,
 };
-use sim::eval::gnss_ins::{SignalSource, quat_from_rpy_alg_deg, quat_rotate};
+use fusion_tools::eval::gnss_ins::{SignalSource, quat_from_rpy_alg_deg, quat_rotate};
 
 #[derive(Parser, Debug)]
 #[command(name = "export_synthetic_replay_generic")]

@@ -1,21 +1,21 @@
 use std::fmt::Write as _;
 
 use anyhow::{Context, Result, bail};
-use sim::datasets::generic_replay::{
+use fusion_tools::datasets::generic_replay::{
     GenericGnssSample, GenericImuSample, GenericReferenceRpySample,
 };
-use sim::eval::gnss_ins::quat_rotate;
-use sim::synthetic::gnss_ins_path::{
+use fusion_tools::eval::gnss_ins::quat_rotate;
+use fusion_tools::synthetic::gnss_ins_path::{
     GpsNoiseModel, MeasurementNoiseConfig, MotionProfile, PathGenConfig, generate_with_noise,
 };
-use sim::visualizer::math::quat_rpy_deg;
-use sim::visualizer::model::{HeadingSample, PlotData, Trace, VisualizerMountMode};
-use sim::visualizer::pipeline::generic::{GenericReplayInput, reference_mount_rpy_to_q_bv};
-use sim::visualizer::pipeline::synthetic::{
+use fusion_tools::visualizer::math::quat_rpy_deg;
+use fusion_tools::visualizer::model::{HeadingSample, PlotData, Trace, VisualizerMountMode};
+use fusion_tools::visualizer::pipeline::generic::{GenericReplayInput, reference_mount_rpy_to_q_bv};
+use fusion_tools::visualizer::pipeline::synthetic::{
     SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_plot_data,
 };
-use sim::visualizer::pipeline::{FusionTuningConfig, GnssOutageConfig};
-use sim::visualizer::replay_job::{
+use fusion_tools::visualizer::pipeline::{FusionTuningConfig, GnssOutageConfig};
+use fusion_tools::visualizer::replay_job::{
     GenericReplayCsvJob, GenericReplayJobConfig, run_generic_csv_replay_job, run_generic_replay_job,
 };
 

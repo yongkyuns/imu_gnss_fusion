@@ -35,7 +35,7 @@ Velocity-derivative and jerk metrics use EMA smoothing:
 $$
 \bar{x}_k = \bar{x}_{k-1} + \alpha (x_k - \bar{x}_{k-1}),
 \qquad
-\alpha = 1 - e^{-dt/\tau}.
+\alpha = \frac{dt}{\max(\tau,dt)+dt}.
 $$
 
 ### Distance-Domain EMA

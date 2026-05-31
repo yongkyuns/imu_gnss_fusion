@@ -5,25 +5,25 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 use sensor_fusion::SensorFusion;
-use sim::datasets::generic_replay::{
+use fusion_tools::datasets::generic_replay::{
     GenericGnssSample, GenericImuSample, fusion_gnss_sample, fusion_imu_sample,
 };
-use sim::eval::gnss_ins::{as_q64, quat_angle_deg, quat_rotate};
-use sim::eval::replay::{ReplayEvent, for_each_event};
-use sim::eval::trace::{
+use fusion_tools::eval::gnss_ins::{as_q64, quat_angle_deg, quat_rotate};
+use fusion_tools::eval::replay::{ReplayEvent, for_each_event};
+use fusion_tools::eval::trace::{
     require_trace, require_trace_points, require_trace_schema, sample_nearest_value,
 };
-use sim::synthetic::gnss_ins_path::{
+use fusion_tools::synthetic::gnss_ins_path::{
     AxisNoise, GpsNoiseModel, ImuAccuracy, ImuNoiseModel, MeasurementNoiseConfig, MotionProfile,
     PathGenConfig, VibrationNoise, add_measurement_noise, generate, generate_with_noise,
 };
-use sim::visualizer::math::{ecef_to_ned, lla_to_ecef};
-use sim::visualizer::model::VisualizerMountMode;
-use sim::visualizer::pipeline::generic::reference_mount_rpy_to_q_bv;
-use sim::visualizer::pipeline::synthetic::{
+use fusion_tools::visualizer::math::{ecef_to_ned, lla_to_ecef};
+use fusion_tools::visualizer::model::VisualizerMountMode;
+use fusion_tools::visualizer::pipeline::generic::reference_mount_rpy_to_q_bv;
+use fusion_tools::visualizer::pipeline::synthetic::{
     SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_plot_data,
 };
-use sim::visualizer::pipeline::{FusionTuningConfig, GnssOutageConfig};
+use fusion_tools::visualizer::pipeline::{FusionTuningConfig, GnssOutageConfig};
 
 const SHORT_PROFILE: &str = "\
 initial lat=32 lon=120 alt=0 vx=0 vy=0 vz=0 yaw=0 pitch=0 roll=0
@@ -868,7 +868,7 @@ fn assert_ekf_converges_on_profile(profile_name: &str) -> Result<()> {
     Ok(())
 }
 
-fn final_trace_value(trace: &sim::visualizer::model::Trace) -> Result<f64> {
+fn final_trace_value(trace: &fusion_tools::visualizer::model::Trace) -> Result<f64> {
     trace
         .points
         .last()
@@ -876,7 +876,7 @@ fn final_trace_value(trace: &sim::visualizer::model::Trace) -> Result<f64> {
         .ok_or_else(|| anyhow::anyhow!("trace '{}' has no points", trace.name))
 }
 
-fn trace_window_max(trace: &sim::visualizer::model::Trace, start_s: f64, end_s: f64) -> f64 {
+fn trace_window_max(trace: &fusion_tools::visualizer::model::Trace, start_s: f64, end_s: f64) -> f64 {
     trace
         .points
         .iter()
@@ -909,7 +909,7 @@ struct StateErr {
 }
 
 fn run_ekf_on_generated_path(
-    generated: &sim::synthetic::gnss_ins_path::GeneratedPath,
+    generated: &fusion_tools::synthetic::gnss_ins_path::GeneratedPath,
     mount_rpy_deg: [f64; 3],
 ) -> Result<EKFSyntheticSummary> {
     run_ekf_on_samples(
@@ -923,9 +923,9 @@ fn run_ekf_on_generated_path(
 }
 
 fn run_ekf_on_samples(
-    reference: &sim::synthetic::gnss_ins_path::GeneratedPath,
-    imu_samples: &[sim::datasets::synthetic_replay::ImuSample],
-    gnss_samples: &[sim::datasets::synthetic_replay::GnssSample],
+    reference: &fusion_tools::synthetic::gnss_ins_path::GeneratedPath,
+    imu_samples: &[fusion_tools::datasets::synthetic_replay::ImuSample],
+    gnss_samples: &[fusion_tools::datasets::synthetic_replay::GnssSample],
     mount_rpy_deg: [f64; 3],
     pos_std_m: [f64; 3],
     vel_std_mps: [f64; 3],
@@ -942,9 +942,9 @@ fn run_ekf_on_samples(
 }
 
 fn run_ekf_on_samples_configured(
-    reference: &sim::synthetic::gnss_ins_path::GeneratedPath,
-    imu_samples: &[sim::datasets::synthetic_replay::ImuSample],
-    gnss_samples: &[sim::datasets::synthetic_replay::GnssSample],
+    reference: &fusion_tools::synthetic::gnss_ins_path::GeneratedPath,
+    imu_samples: &[fusion_tools::datasets::synthetic_replay::ImuSample],
+    gnss_samples: &[fusion_tools::datasets::synthetic_replay::GnssSample],
     mount_rpy_deg: [f64; 3],
     pos_std_m: [f64; 3],
     vel_std_mps: [f64; 3],
@@ -1066,10 +1066,10 @@ fn run_ekf_on_samples_configured(
 }
 
 fn gnss_with_early_velocity_bias(
-    gnss: &[sim::datasets::synthetic_replay::GnssSample],
+    gnss: &[fusion_tools::datasets::synthetic_replay::GnssSample],
     bias_ned_mps: [f64; 3],
     end_t_s: f64,
-) -> Vec<sim::datasets::synthetic_replay::GnssSample> {
+) -> Vec<fusion_tools::datasets::synthetic_replay::GnssSample> {
     gnss.iter()
         .map(|sample| {
             let mut sample = *sample;

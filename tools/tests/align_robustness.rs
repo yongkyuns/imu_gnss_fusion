@@ -1,12 +1,12 @@
 use anyhow::{Context, Result};
 use sensor_fusion::SensorFusion;
-use sim::datasets::generic_replay::{
+use fusion_tools::datasets::generic_replay::{
     GenericGnssSample, GenericImuSample, fusion_gnss_sample, fusion_imu_sample,
 };
-use sim::eval::gnss_ins::{as_q64, quat_angle_deg, quat_rotate};
-use sim::eval::replay::{ReplayEvent, for_each_event};
-use sim::synthetic::gnss_ins_path::{MotionProfile, PathGenConfig, generate};
-use sim::visualizer::pipeline::generic::reference_mount_rpy_to_q_bv;
+use fusion_tools::eval::gnss_ins::{as_q64, quat_angle_deg, quat_rotate};
+use fusion_tools::eval::replay::{ReplayEvent, for_each_event};
+use fusion_tools::synthetic::gnss_ins_path::{MotionProfile, PathGenConfig, generate};
+use fusion_tools::visualizer::pipeline::generic::reference_mount_rpy_to_q_bv;
 
 const NOMINAL_MANEUVER: &str = "\
 initial lat=32 lon=120 alt=20 speed=0 yaw=0 pitch=0 roll=0
@@ -86,7 +86,7 @@ struct AlignRobustnessOutcome {
 }
 
 fn run_align_on_generated_path(
-    generated: &sim::synthetic::gnss_ins_path::GeneratedPath,
+    generated: &fusion_tools::synthetic::gnss_ins_path::GeneratedPath,
     mount_rpy_deg: [f64; 3],
 ) -> Result<AlignRobustnessOutcome> {
     let q_truth = reference_mount_rpy_to_q_bv(mount_rpy_deg);

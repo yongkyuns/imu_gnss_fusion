@@ -417,6 +417,7 @@ final class SensorStore: NSObject, ObservableObject {
 
     func stop() {
         persistSettledMountIfAvailable(forceCadence: true)
+        fusionEngine.endTrip()
         _ = advanceStreamGeneration()
         finishRecordingIfNeeded()
         playbackTask?.cancel()
