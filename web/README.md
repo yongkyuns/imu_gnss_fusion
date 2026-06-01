@@ -13,6 +13,8 @@ python3 -m http.server --directory web 8080
 
 Open `http://localhost:8080`. The browser visualizer can generate built-in synthetic scenarios, load a generic replay by dragging `imu.csv`, `gnss.csv`, and optional reference CSVs into the app, or load an experimental generic dataset from `web/datasets/manifest.json`.
 
+The wasm build enables WebGPU with a WebGL2 fallback through `wgpu`, so browsers that do not expose `navigator.gpu` can still run the visualizer when WebGL2 is available.
+
 The overview page embeds the map beside the primary plots. Browser and native maps are rendered by the Rust `walkers` egui widget, so map interaction stays inside the same canvas as the rest of the visualizer. The app has light and dark themes; the map source follows the selected theme. Without a Mapbox token, maps use CARTO Positron for light theme and CARTO Dark Matter for dark theme, with OpenStreetMap/CARTO attribution. With a Mapbox token, maps use Mapbox Light or Mapbox Dark to match the app theme.
 
 ```text
