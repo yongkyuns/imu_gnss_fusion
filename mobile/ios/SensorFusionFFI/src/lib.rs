@@ -232,6 +232,7 @@ pub struct SensorFusionFfiAlignProgress {
     pub roll_sigma_deg: f32,
     pub pitch_sigma_deg: f32,
     pub yaw_sigma_deg: f32,
+    pub progress: f32,
 }
 
 #[repr(C)]
@@ -907,6 +908,20 @@ pub unsafe extern "C" fn sensor_fusion_snapshot_align_progress(
         }
         return false;
     };
+    if fusion.inner.mount_ready() {
+        unsafe {
+            ptr::write(
+                out,
+                SensorFusionFfiAlignProgress {
+                    valid: true,
+                    coarse_ready: true,
+                    progress: 1.0,
+                    ..SensorFusionFfiAlignProgress::default()
+                },
+            );
+        }
+        return true;
+    }
     let Some(align) = fusion.inner.align() else {
         unsafe {
             ptr::write(out, SensorFusionFfiAlignProgress::default());
@@ -923,6 +938,7 @@ pub unsafe extern "C" fn sensor_fusion_snapshot_align_progress(
                 roll_sigma_deg: sigma_deg[0],
                 pitch_sigma_deg: sigma_deg[1],
                 yaw_sigma_deg: sigma_deg[2],
+                progress: align.coarse_progress(),
             },
         );
     }
@@ -1060,8 +1076,10 @@ mod tests {
         assert!(!health.stable);
 
         let mut align = SensorFusionFfiAlignProgress::default();
-        assert!(!unsafe { sensor_fusion_snapshot_align_progress(handle, &mut align) });
-        assert!(!align.valid);
+        assert!(unsafe { sensor_fusion_snapshot_align_progress(handle, &mut align) });
+        assert!(align.valid);
+        assert!(align.coarse_ready);
+        assert_eq!(align.progress, 1.0);
 
         let update = unsafe {
             sensor_fusion_process_gnss(

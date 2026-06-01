@@ -98,6 +98,7 @@ typedef struct SensorFusionFfiAlignProgress {
     float roll_sigma_deg;
     float pitch_sigma_deg;
     float yaw_sigma_deg;
+    float progress;
 } SensorFusionFfiAlignProgress;
 
 typedef struct SensorFusionFfiRoadEvent {

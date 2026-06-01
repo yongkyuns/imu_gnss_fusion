@@ -593,10 +593,10 @@ function renderSvg(spec, graph) {
   const maxX = Math.max(...graph.children.map((node) => node.x + node.width), ...bounds.map((entry) => entry.bounds.x + entry.bounds.width)) + 40;
   const maxY = Math.max(...graph.children.map((node) => node.y + node.height), ...bounds.map((entry) => entry.bounds.y + entry.bounds.height)) + 40;
 
-  const clusterSvg = bounds.map(({ group, bounds: box }) => `
-    <rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" rx="14" fill="${palette.clusterFill}" stroke="${palette.clusterStroke}" stroke-width="2" stroke-dasharray="8 8"/>
-    <text x="${box.x + box.width / 2}" y="${box.y + 28}" text-anchor="middle" font-size="20" fill="${palette.text}">${escapeXml(group.title ?? group.id)}</text>
-  `).join("\n");
+  const clusterSvg = bounds.map(({ group, bounds: box }) => [
+    `    <rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" rx="14" fill="${palette.clusterFill}" stroke="${palette.clusterStroke}" stroke-width="2" stroke-dasharray="8 8"/>`,
+    `    <text x="${box.x + box.width / 2}" y="${box.y + 28}" text-anchor="middle" font-size="20" fill="${palette.text}">${escapeXml(group.title ?? group.id)}</text>`
+  ].join("\n")).join("\n");
   const nodesById = new Map(graph.children.map((node) => [node.id, node]));
   const edgeSvg = graph.edges.map((edge) => drawEdge(edge, nodesById)).join("\n");
   const nodeSvg = graph.children.map(drawNode).join("\n");

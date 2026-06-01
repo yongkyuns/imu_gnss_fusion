@@ -39,6 +39,7 @@ struct FusionSnapshot {
 struct AlignProgressStatus {
     let isValid: Bool
     let coarseReady: Bool
+    let progress: Double?
     let rollSigmaDeg: Double?
     let pitchSigmaDeg: Double?
     let yawSigmaDeg: Double?
@@ -337,15 +338,30 @@ final class FusionEngine {
 
     func alignProgress() -> AlignProgressStatus {
         guard let handle else {
-            return AlignProgressStatus(isValid: false, coarseReady: false, rollSigmaDeg: nil, pitchSigmaDeg: nil, yawSigmaDeg: nil)
+            return AlignProgressStatus(
+                isValid: false,
+                coarseReady: false,
+                progress: nil,
+                rollSigmaDeg: nil,
+                pitchSigmaDeg: nil,
+                yawSigmaDeg: nil
+            )
         }
         var raw = SensorFusionFfiAlignProgress()
         guard sensor_fusion_snapshot_align_progress(handle, &raw), raw.valid else {
-            return AlignProgressStatus(isValid: false, coarseReady: false, rollSigmaDeg: nil, pitchSigmaDeg: nil, yawSigmaDeg: nil)
+            return AlignProgressStatus(
+                isValid: false,
+                coarseReady: false,
+                progress: nil,
+                rollSigmaDeg: nil,
+                pitchSigmaDeg: nil,
+                yawSigmaDeg: nil
+            )
         }
         return AlignProgressStatus(
             isValid: true,
             coarseReady: raw.coarse_ready,
+            progress: Double(raw.progress),
             rollSigmaDeg: Double(raw.roll_sigma_deg),
             pitchSigmaDeg: Double(raw.pitch_sigma_deg),
             yawSigmaDeg: Double(raw.yaw_sigma_deg)

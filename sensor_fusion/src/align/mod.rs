@@ -26,6 +26,8 @@ pub const ALIGN_N_STATES: usize = 3;
 pub const GRAVITY_MPS2: f32 = 9.80665;
 const COARSE_READY_SIGMA_DEG: [f32; ALIGN_N_STATES] = [5.0, 5.0, 8.0];
 const STATIONARY_INIT_SIGMA_DEG: [f32; ALIGN_N_STATES] = [10.0, 10.0, 60.0];
+const TILT_PROGRESS_WEIGHT: f32 = 0.30;
+const YAW_PROGRESS_WEIGHT: f32 = 0.70;
 const R_GRAVITY_STD_MPS2: f32 = 4.0;
 const R_HORIZ_YAW_STD_RAD: f32 = 1.0_f32.to_radians();
 const R_TURN_GYRO_STD_RADPS: f32 = 2.0_f32.to_radians();
@@ -504,6 +506,31 @@ impl Align {
         ]
     }
 
+    /// Returns coarse-alignment progress in `[0, 1]`.
+    ///
+    /// Progress is a UI-facing heuristic, not a calibrated probability. It uses
+    /// the same conservative covariance gates as coarse readiness: roll/pitch
+    /// tilt progress contributes 30%, and yaw progress contributes 70%.
+    pub fn coarse_progress(&self) -> f32 {
+        let sigma_deg = self.sigma_deg();
+        let tilt_progress = axis_progress(
+            sigma_deg[0],
+            STATIONARY_INIT_SIGMA_DEG[0],
+            COARSE_READY_SIGMA_DEG[0],
+        )
+        .min(axis_progress(
+            sigma_deg[1],
+            STATIONARY_INIT_SIGMA_DEG[1],
+            COARSE_READY_SIGMA_DEG[1],
+        ));
+        let yaw_progress = axis_progress(
+            sigma_deg[2],
+            STATIONARY_INIT_SIGMA_DEG[2],
+            COARSE_READY_SIGMA_DEG[2],
+        );
+        (TILT_PROGRESS_WEIGHT * tilt_progress + YAW_PROGRESS_WEIGHT * yaw_progress).clamp(0.0, 1.0)
+    }
+
     fn compute_coarse_alignment_ready(&self) -> bool {
         self.yaw_observed
             && sqrt_f32(self.P[0][0].max(0.0)).to_degrees() <= COARSE_READY_SIGMA_DEG[0]
@@ -585,6 +612,26 @@ impl Align {
 
     fn turn_consistency_reset(&mut self) {
         self.turn_count = 0;
+    }
+}
+
+fn axis_progress(sigma_deg: f32, initial_sigma_deg: f32, ready_sigma_deg: f32) -> f32 {
+    if !sigma_deg.is_finite() {
+        return 0.0;
+    }
+    if initial_sigma_deg <= ready_sigma_deg {
+        return if sigma_deg <= ready_sigma_deg {
+            1.0
+        } else {
+            0.0
+        };
+    }
+    if sigma_deg <= ready_sigma_deg {
+        1.0
+    } else if sigma_deg >= initial_sigma_deg {
+        0.0
+    } else {
+        (initial_sigma_deg - sigma_deg) / (initial_sigma_deg - ready_sigma_deg)
     }
 }
 
@@ -1224,6 +1271,38 @@ mod tests {
         assert_close(align.sigma_deg()[0], 10.0, 1.0e-3);
         assert_close(align.sigma_deg()[1], 10.0, 1.0e-3);
         assert_close(align.sigma_deg()[2], 60.0, 1.0e-3);
+    }
+
+    #[test]
+    fn coarse_progress_uses_tilt_then_yaw_covariance_collapse() {
+        let mut align = Align::new(AlignConfig::default());
+        align.P = diag3([
+            sq_f32(10.0_f32.to_radians()),
+            sq_f32(10.0_f32.to_radians()),
+            sq_f32(60.0_f32.to_radians()),
+        ]);
+        assert_close(align.coarse_progress(), 0.0, 1.0e-6);
+
+        align.P = diag3([
+            sq_f32(5.0_f32.to_radians()),
+            sq_f32(5.0_f32.to_radians()),
+            sq_f32(60.0_f32.to_radians()),
+        ]);
+        assert_close(align.coarse_progress(), 0.3, 1.0e-6);
+
+        align.P = diag3([
+            sq_f32(7.5_f32.to_radians()),
+            sq_f32(7.5_f32.to_radians()),
+            sq_f32(34.0_f32.to_radians()),
+        ]);
+        assert_close(align.coarse_progress(), 0.5, 1.0e-6);
+
+        align.P = diag3([
+            sq_f32(5.0_f32.to_radians()),
+            sq_f32(5.0_f32.to_radians()),
+            sq_f32(8.0_f32.to_radians()),
+        ]);
+        assert_close(align.coarse_progress(), 1.0, 1.0e-6);
     }
 
     #[test]

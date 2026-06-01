@@ -22,11 +22,13 @@ The public GitHub Pages site has two entry points:
 
 The core runtime accepts timestamped raw IMU samples in the sensor/body frame, GNSS position and NED velocity samples, and optional vehicle-speed observations. It can run with a caller-supplied vehicle-to-body mount quaternion or estimate the mount internally before EKF initialization.
 
-```{figure} _static/diagrams/overall-architecture-orthogonal.svg
+```{figure} _static/diagrams/overall-runtime-architecture.svg
 :alt: Overall project architecture showing data inputs, replay tooling, reusable Rust runtimes, visualizers, and iOS app.
 :class: framed
 
-Data capture, replay, reusable Rust runtimes, visualizers, and mobile integration are intentionally separated so estimator behavior can be reused across every surface.
+Offline and realtime sources are normalized into the `sensor_fusion` input
+contract. Fusion records drive host outputs directly; `road_events` is an
+optional downstream consumer of fusion-derived vehicle-motion samples.
 ```
 
 ```{figure} _static/screenshots/web-visualizer-overview.png

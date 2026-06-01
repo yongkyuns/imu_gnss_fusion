@@ -46,6 +46,7 @@ struct GeographicCoordinate: Equatable, Sendable {
 struct AlignProgressSnapshot: Equatable, Sendable {
     var isValid: Bool
     var coarseReady: Bool
+    var progress: Double?
     var rollSigmaDeg: Double?
     var pitchSigmaDeg: Double?
     var yawSigmaDeg: Double?
@@ -53,12 +54,14 @@ struct AlignProgressSnapshot: Equatable, Sendable {
     init(
         isValid: Bool = false,
         coarseReady: Bool = false,
+        progress: Double? = nil,
         rollSigmaDeg: Double? = nil,
         pitchSigmaDeg: Double? = nil,
         yawSigmaDeg: Double? = nil
     ) {
         self.isValid = isValid
         self.coarseReady = coarseReady
+        self.progress = Self.validProgress(progress)
         self.rollSigmaDeg = Self.validSigma(rollSigmaDeg)
         self.pitchSigmaDeg = Self.validSigma(pitchSigmaDeg)
         self.yawSigmaDeg = Self.validSigma(yawSigmaDeg)
@@ -69,6 +72,11 @@ struct AlignProgressSnapshot: Equatable, Sendable {
     private static func validSigma(_ value: Double?) -> Double? {
         guard let value, value.isFinite, value >= 0.0 else { return nil }
         return value
+    }
+
+    private static func validProgress(_ value: Double?) -> Double? {
+        guard let value, value.isFinite else { return nil }
+        return min(max(value, 0.0), 1.0)
     }
 }
 

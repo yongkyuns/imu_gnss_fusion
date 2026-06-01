@@ -140,7 +140,7 @@ async function validateDocsStaticAssets(staticDir) {
     ["logo.png", "png"],
     ["titlebar.png", "png"],
     ["diagrams/estimator-runtime-orthogonal.svg", "svg"],
-    ["diagrams/overall-architecture-orthogonal.svg", "svg"],
+    ["diagrams/overall-runtime-architecture.svg", "svg"],
     ["screenshots/web-visualizer-overview.png", "png"],
   ];
   for (const [relativePath, kind] of requiredAssets) {

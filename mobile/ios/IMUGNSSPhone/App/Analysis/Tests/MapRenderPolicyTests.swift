@@ -230,49 +230,17 @@ final class MapRenderPolicyTests: XCTestCase {
         XCTAssertEqual(coordinates[0].longitude, -122.0, accuracy: 1.0e-12)
     }
 
-    func testAlignProgressPolicyUsesTiltThenYawCovarianceCollapse() {
-        XCTAssertEqual(
-            AlignProgressPolicy.progress(.unavailable, mountReady: false),
-            0.0,
-            accuracy: 1e-12
-        )
-        XCTAssertEqual(
-            AlignProgressPolicy.progress(.unavailable, mountReady: true),
-            1.0,
-            accuracy: 1e-12
-        )
+    func testAlignProgressSnapshotUsesRustProgressValue() {
+        XCTAssertNil(AlignProgressSnapshot.unavailable.progress)
 
-        let initial = AlignProgressSnapshot(
-            isValid: true,
-            rollSigmaDeg: 10.0,
-            pitchSigmaDeg: 10.0,
-            yawSigmaDeg: 60.0
-        )
-        XCTAssertEqual(AlignProgressPolicy.progress(initial, mountReady: false), 0.0, accuracy: 1e-12)
+        let negative = AlignProgressSnapshot(isValid: true, progress: -0.25)
+        XCTAssertEqual(negative.progress ?? .nan, 0.0, accuracy: 1e-12)
 
-        let tiltReady = AlignProgressSnapshot(
-            isValid: true,
-            rollSigmaDeg: 5.0,
-            pitchSigmaDeg: 5.0,
-            yawSigmaDeg: 60.0
-        )
-        XCTAssertEqual(AlignProgressPolicy.progress(tiltReady, mountReady: false), 0.3, accuracy: 1e-12)
+        let halfway = AlignProgressSnapshot(isValid: true, progress: 0.5)
+        XCTAssertEqual(halfway.progress ?? .nan, 0.5, accuracy: 1e-12)
 
-        let halfway = AlignProgressSnapshot(
-            isValid: true,
-            rollSigmaDeg: 7.5,
-            pitchSigmaDeg: 7.5,
-            yawSigmaDeg: 34.0
-        )
-        XCTAssertEqual(AlignProgressPolicy.progress(halfway, mountReady: false), 0.5, accuracy: 1e-12)
-
-        let ready = AlignProgressSnapshot(
-            isValid: true,
-            rollSigmaDeg: 5.0,
-            pitchSigmaDeg: 5.0,
-            yawSigmaDeg: 8.0
-        )
-        XCTAssertEqual(AlignProgressPolicy.progressPercent(ready, mountReady: false), 100)
+        let over = AlignProgressSnapshot(isValid: true, progress: 1.25)
+        XCTAssertEqual(over.progress ?? .nan, 1.0, accuracy: 1e-12)
     }
 
     func testRouteOverlayPolicyThrottlesContinuousRouteGrowth() {

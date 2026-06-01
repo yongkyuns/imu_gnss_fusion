@@ -327,6 +327,38 @@
       "base_url": "ios-drive-20260526-174206",
       "imu_gz": "imu.csv.gz",
       "gnss_gz": "gnss.csv.gz"
+    },
+    {
+      "id": "ios-drive-20260527-123747",
+      "label": "iOS drive 2026-05-27 12:37Z",
+      "description": "iOS MotionFusion drive recorded on 2026-05-27 at 12:37:47Z; exported to generic IMU/GNSS replay format.",
+      "base_url": "ios-drive-20260527-123747",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz"
+    },
+    {
+      "id": "ios-drive-20260528-183859",
+      "label": "iOS drive 2026-05-28 18:38Z",
+      "description": "iOS MotionFusion drive recorded on 2026-05-28 at 18:38:59Z; exported to generic IMU/GNSS replay format.",
+      "base_url": "ios-drive-20260528-183859",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz"
+    },
+    {
+      "id": "ios-drive-20260530-110409",
+      "label": "iOS drive 2026-05-30 11:04Z",
+      "description": "iOS MotionFusion drive recorded on 2026-05-30 at 11:04:09Z; exported to generic IMU/GNSS replay format.",
+      "base_url": "ios-drive-20260530-110409",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz"
+    },
+    {
+      "id": "ios-drive-20260530-164847",
+      "label": "iOS drive 2026-05-30 16:48Z",
+      "description": "iOS MotionFusion drive recorded on 2026-05-30 at 16:48:47Z; exported to generic IMU/GNSS replay format.",
+      "base_url": "ios-drive-20260530-164847",
+      "imu_gz": "imu.csv.gz",
+      "gnss_gz": "gnss.csv.gz"
     }
   ]
 }

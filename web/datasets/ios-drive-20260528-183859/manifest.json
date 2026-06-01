@@ -1,0 +1,65 @@
+{
+  "created_utc": "2026-05-31T12:11:15Z",
+  "dataset_id": "ios-drive-20260528-183859",
+  "files": {
+    "gnss": {
+      "bytes": 89783,
+      "columns": [
+        "t_s",
+        "lat_deg",
+        "lon_deg",
+        "height_m",
+        "vn_mps",
+        "ve_mps",
+        "vd_mps",
+        "pos_std_n_m",
+        "pos_std_e_m",
+        "pos_std_d_m",
+        "vel_std_n_mps",
+        "vel_std_e_mps",
+        "vel_std_d_mps",
+        "heading_rad"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 2.063269019126892,
+      "last_t_s": 1094.7938122749329,
+      "media_type": "text/csv",
+      "path": "gnss.csv.gz",
+      "rows": 1092,
+      "sha256": "d2681636dc60338f719b8d5eb8f08739ebc6c0875b2098c4075d4cdef024f8f4"
+    },
+    "imu": {
+      "bytes": 6698639,
+      "columns": [
+        "t_s",
+        "gx_radps",
+        "gy_radps",
+        "gz_radps",
+        "ax_mps2",
+        "ay_mps2",
+        "az_mps2"
+      ],
+      "encoding": "gzip",
+      "first_t_s": 0.0,
+      "last_t_s": 1095.7279043197632,
+      "media_type": "text/csv",
+      "path": "imu.csv.gz",
+      "rows": 109213,
+      "sha256": "3db30d896c6bc7d7fceb1ed601b440a3f20d00306eed1666768128041fed0ffa"
+    }
+  },
+  "manifest_version": 1,
+  "samples": {
+    "gnss": 1092,
+    "imu": 109213
+  },
+  "schema": "generic-replay-v1",
+  "source": {
+    "format": "generic"
+  },
+  "time_span_s": {
+    "end": 1095.7279043197632,
+    "start": 0.0
+  },
+  "title": "iOS drive 2026-05-28 18:38Z"
+}

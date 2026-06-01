@@ -1297,6 +1297,114 @@
         "max_gnss_rows": 400,
         "misalignment": "auto"
       }
+    },
+    {
+      "id": "ios-drive-20260527-123747",
+      "version": "v1",
+      "description": "iOS MotionFusion drive recorded on 2026-05-27 at 12:37:47Z; exported to generic IMU/GNSS replay format.",
+      "license": "MIT",
+      "replay_dir": ".",
+      "files": [
+        {
+          "path": "imu.csv.gz",
+          "url": "../../web/datasets/ios-drive-20260527-123747/imu.csv.gz",
+          "sha256": "f61a268c29149cdef09a3c5af045dcb53246a0da9c01dc7a509b471a2c0d0940",
+          "bytes": 15822682
+        },
+        {
+          "path": "gnss.csv.gz",
+          "url": "../../web/datasets/ios-drive-20260527-123747/gnss.csv.gz",
+          "sha256": "e3036a3d468693d13cae84149ff22b640819ea584b95734283fad8587f8bb9c6",
+          "bytes": 203952
+        }
+      ],
+      "smoke": {
+        "enabled": false,
+        "max_imu_rows": 20000,
+        "max_gnss_rows": 400,
+        "misalignment": "auto"
+      }
+    },
+    {
+      "id": "ios-drive-20260528-183859",
+      "version": "v1",
+      "description": "iOS MotionFusion drive recorded on 2026-05-28 at 18:38:59Z; exported to generic IMU/GNSS replay format.",
+      "license": "MIT",
+      "replay_dir": ".",
+      "files": [
+        {
+          "path": "imu.csv.gz",
+          "url": "../../web/datasets/ios-drive-20260528-183859/imu.csv.gz",
+          "sha256": "3db30d896c6bc7d7fceb1ed601b440a3f20d00306eed1666768128041fed0ffa",
+          "bytes": 6698639
+        },
+        {
+          "path": "gnss.csv.gz",
+          "url": "../../web/datasets/ios-drive-20260528-183859/gnss.csv.gz",
+          "sha256": "d2681636dc60338f719b8d5eb8f08739ebc6c0875b2098c4075d4cdef024f8f4",
+          "bytes": 89783
+        }
+      ],
+      "smoke": {
+        "enabled": false,
+        "max_imu_rows": 20000,
+        "max_gnss_rows": 400,
+        "misalignment": "auto"
+      }
+    },
+    {
+      "id": "ios-drive-20260530-110409",
+      "version": "v1",
+      "description": "iOS MotionFusion drive recorded on 2026-05-30 at 11:04:09Z; exported to generic IMU/GNSS replay format.",
+      "license": "MIT",
+      "replay_dir": ".",
+      "files": [
+        {
+          "path": "imu.csv.gz",
+          "url": "../../web/datasets/ios-drive-20260530-110409/imu.csv.gz",
+          "sha256": "88af01d4a78b94922145649691cc2cbc856b58dc07315373550f96cd4b573ccd",
+          "bytes": 3221790
+        },
+        {
+          "path": "gnss.csv.gz",
+          "url": "../../web/datasets/ios-drive-20260530-110409/gnss.csv.gz",
+          "sha256": "104803991b96795c949e3fe74f2e99d53fc1b040f0513a2f3ccb05379ae9dc03",
+          "bytes": 44682
+        }
+      ],
+      "smoke": {
+        "enabled": false,
+        "max_imu_rows": 20000,
+        "max_gnss_rows": 400,
+        "misalignment": "auto"
+      }
+    },
+    {
+      "id": "ios-drive-20260530-164847",
+      "version": "v1",
+      "description": "iOS MotionFusion drive recorded on 2026-05-30 at 16:48:47Z; exported to generic IMU/GNSS replay format.",
+      "license": "MIT",
+      "replay_dir": ".",
+      "files": [
+        {
+          "path": "imu.csv.gz",
+          "url": "../../web/datasets/ios-drive-20260530-164847/imu.csv.gz",
+          "sha256": "4e6678f49246fbeedaca6b744c3f8904cde7d84606fc9648a40254da30baa260",
+          "bytes": 13739104
+        },
+        {
+          "path": "gnss.csv.gz",
+          "url": "../../web/datasets/ios-drive-20260530-164847/gnss.csv.gz",
+          "sha256": "2ae49bfe00cb8f5942eaccad9800e582e1f6c68e1892fab9758aa4e047bf3071",
+          "bytes": 201746
+        }
+      ],
+      "smoke": {
+        "enabled": false,
+        "max_imu_rows": 20000,
+        "max_gnss_rows": 400,
+        "misalignment": "auto"
+      }
     }
   ]
 }

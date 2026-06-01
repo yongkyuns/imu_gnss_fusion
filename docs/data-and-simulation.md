@@ -2,11 +2,14 @@
 
 The common replay format is hardware-agnostic and uses timestamped IMU/GNSS CSV files. Synthetic scenarios and field recordings both convert into this format so the replay, evaluation, and visualizer paths stay shared.
 
-```{figure} _static/diagrams/overall-architecture-orthogonal.svg
+```{figure} _static/diagrams/overall-runtime-architecture.svg
 :alt: Architecture diagram highlighting generic replay and visualization flow.
 :class: framed
 
-Synthetic scenarios, hosted datasets, and iOS exports all enter the shared generic replay path before they reach the visualizer and `SensorFusion` runtime.
+Synthetic scenarios, hosted datasets, and iOS exports enter the visualizer or
+batch host through the generic replay adapter, which feeds `sensor_fusion`.
+The optional `road_events` path consumes vehicle-motion samples derived from
+fusion records.
 ```
 ## Generic Replay Directory
 

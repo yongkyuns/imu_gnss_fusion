@@ -555,7 +555,7 @@ private struct DriveTelemetryDrawer: View {
     private var statusProgress: Double {
         switch health.state {
         case .notReady, .initializing:
-            return AlignProgressPolicy.progress(store.alignProgress, mountReady: store.ekfMountReady)
+            return store.alignProgress.progress ?? 0.0
         case .running, .stable, .degraded, .degradedDeadReckoning, .awaitingGnssReseed:
             return health.fusedConfidence
         }

@@ -1836,6 +1836,7 @@ extension SensorStore: CLLocationManagerDelegate {
         alignProgress = AlignProgressSnapshot(
             isValid: alignProgressStatus.isValid,
             coarseReady: alignProgressStatus.coarseReady,
+            progress: alignProgressStatus.progress,
             rollSigmaDeg: alignProgressStatus.rollSigmaDeg,
             pitchSigmaDeg: alignProgressStatus.pitchSigmaDeg,
             yawSigmaDeg: alignProgressStatus.yawSigmaDeg

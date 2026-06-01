@@ -226,61 +226,6 @@ enum MotionEventVisualPolicy {
     }
 }
 
-enum AlignProgressPolicy {
-    static let tiltProgressWeight = 0.30
-    static let yawProgressWeight = 0.70
-    static let rollReadySigmaDeg = 5.0
-    static let pitchReadySigmaDeg = 5.0
-    static let yawReadySigmaDeg = 8.0
-    static let rollInitialSigmaDeg = 10.0
-    static let pitchInitialSigmaDeg = 10.0
-    static let yawInitialSigmaDeg = 60.0
-
-    static func progress(_ snapshot: AlignProgressSnapshot, mountReady: Bool) -> Double {
-        if mountReady { return 1.0 }
-        guard snapshot.isValid else { return 0.0 }
-        let tiltProgress = min(
-            axisProgress(
-                sigmaDeg: snapshot.rollSigmaDeg,
-                initialSigmaDeg: rollInitialSigmaDeg,
-                readySigmaDeg: rollReadySigmaDeg
-            ),
-            axisProgress(
-                sigmaDeg: snapshot.pitchSigmaDeg,
-                initialSigmaDeg: pitchInitialSigmaDeg,
-                readySigmaDeg: pitchReadySigmaDeg
-            )
-        )
-        let yawProgress = axisProgress(
-            sigmaDeg: snapshot.yawSigmaDeg,
-            initialSigmaDeg: yawInitialSigmaDeg,
-            readySigmaDeg: yawReadySigmaDeg
-        )
-        return min(max(tiltProgressWeight * tiltProgress + yawProgressWeight * yawProgress, 0.0), 1.0)
-    }
-
-    static func progressPercent(_ snapshot: AlignProgressSnapshot, mountReady: Bool) -> Int {
-        Int((progress(snapshot, mountReady: mountReady) * 100.0).rounded())
-    }
-
-    static func axisReady(sigmaDeg: Double?, readySigmaDeg: Double) -> Bool {
-        guard let sigmaDeg, sigmaDeg.isFinite else { return false }
-        return sigmaDeg <= readySigmaDeg
-    }
-
-    private static func axisProgress(
-        sigmaDeg: Double?,
-        initialSigmaDeg: Double,
-        readySigmaDeg: Double
-    ) -> Double {
-        guard let sigmaDeg, sigmaDeg.isFinite else { return 0.0 }
-        guard initialSigmaDeg > readySigmaDeg else { return sigmaDeg <= readySigmaDeg ? 1.0 : 0.0 }
-        if sigmaDeg <= readySigmaDeg { return 1.0 }
-        if sigmaDeg >= initialSigmaDeg { return 0.0 }
-        return (initialSigmaDeg - sigmaDeg) / (initialSigmaDeg - readySigmaDeg)
-    }
-}
-
 enum MapRouteOverlayPolicy {
     static let minimumUpdateIntervalSec: TimeInterval = 0.50
 

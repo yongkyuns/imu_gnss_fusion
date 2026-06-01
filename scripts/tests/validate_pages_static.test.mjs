@@ -89,7 +89,7 @@ async function writeStaticAssets(siteDir) {
   await writeFile(path.join(staticDir, "logo.png"), png);
   await writeFile(path.join(staticDir, "titlebar.png"), png);
   await writeFile(path.join(staticDir, "diagrams", "estimator-runtime-orthogonal.svg"), svg);
-  await writeFile(path.join(staticDir, "diagrams", "overall-architecture-orthogonal.svg"), svg);
+  await writeFile(path.join(staticDir, "diagrams", "overall-runtime-architecture.svg"), svg);
   await writeFile(path.join(staticDir, "screenshots", "web-visualizer-overview.png"), png);
 }
 

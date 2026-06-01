@@ -1,166 +1,314 @@
 {
   "name": "overall-architecture",
   "title": "Overall Architecture",
-  "output": "docs/_static/diagrams/overall-architecture-orthogonal.svg",
+  "output": "docs/_static/diagrams/overall-runtime-architecture.svg",
   "profile": "balanced",
   "direction": "DOWN",
-  "edgeRouting": "SPLINES",
+  "edgeRouting": "ORTHOGONAL",
   "layout": {
     "partitioning": true,
-    "nodeNode": 72,
-    "nodeNodeBetweenLayers": 76,
-    "edgeNode": 36,
-    "edgeEdge": 28,
-    "laneSpacing": 130
+    "originX": 48,
+    "originY": 56,
+    "columnSpacing": 78,
+    "rowSpacing": 82,
+    "nodeNode": 78,
+    "nodeNodeBetweenLayers": 92,
+    "edgeNode": 46,
+    "edgeEdge": 32,
+    "edgeNodeBetweenLayers": 50,
+    "edgeEdgeBetweenLayers": 38
   },
-  "groups": [],
+  "groups": [
+    {
+      "id": "sources",
+      "title": "Input sources"
+    },
+    {
+      "id": "adapters",
+      "title": "Lightweight host adapters"
+    },
+    {
+      "id": "fusionBoundary",
+      "title": "Sensor fusion runtime boundary"
+    },
+    {
+      "id": "optionalEvents",
+      "title": "Optional demonstration consumer"
+    },
+    {
+      "id": "hostRecords",
+      "title": ""
+    },
+    {
+      "id": "surfaces",
+      "title": ""
+    }
+  ],
   "nodes": [
     {
-      "id": "Datasets",
-      "title": "hosted datasets",
+      "id": "OfflineSources",
+      "title": "offline sources",
+      "subtitle": [
+        "hosted datasets, CSV",
+        "synthetic, .motionfusion"
+      ],
       "role": "storage",
       "shape": "cylinder",
-      "group": "inputs",
-      "lane": 0,
+      "group": "sources",
       "row": 0,
       "column": 0,
-      "layoutOptions": {
-        "elk.partitioning.partition": "0",
-        "elk.layered.crossingMinimization.positionId": "0"
-      }
+      "width": 330,
+      "height": 88
     },
     {
-      "id": "Sources",
-      "title": "data sources",
-      "subtitle": "iOS, hosted, CSV, synthetic",
+      "id": "RealtimeSources",
+      "title": "realtime streams",
+      "subtitle": [
+        "IMU, GNSS",
+        "optional vehicle data"
+      ],
       "role": "input",
-      "group": "inputs",
-      "lane": 1,
+      "group": "sources",
       "row": 0,
-      "column": 1,
-      "layoutOptions": {
-        "elk.partitioning.partition": "0",
-        "elk.layered.crossingMinimization.positionId": "1"
-      }
+      "column": 2,
+      "width": 330,
+      "height": 88
     },
     {
-      "id": "Packaging",
-      "title": "dataset packaging",
-      "subtitle": "schema + checksums",
-      "role": "core",
-      "group": "tools",
-      "lane": 1,
-      "row": 1,
-      "column": 1,
-      "layoutOptions": {
-        "elk.partitioning.partition": "1",
-        "elk.layered.crossingMinimization.positionId": "1"
-      }
-    },
-    {
-      "id": "Replay",
-      "title": "replay + diagnostics",
-      "subtitle": "traces, sweeps, profiles",
-      "role": "core",
-      "group": "tools",
-      "lane": 0,
-      "row": 1,
-      "column": 0,
-      "layoutOptions": {
-        "elk.partitioning.partition": "1",
-        "elk.layered.crossingMinimization.positionId": "0"
-      }
-    },
-    {
-      "id": "Fusion",
-      "title": "SensorFusion",
-      "subtitle": "align + EKF runtime",
-      "role": "core",
-      "group": "runtime",
-      "lane": 0,
-      "row": 2,
-      "column": 0,
-      "layoutOptions": {
-        "elk.partitioning.partition": "2",
-        "elk.layered.crossingMinimization.positionId": "0"
-      }
-    },
-    {
-      "id": "Events",
-      "title": "road_events",
-      "subtitle": "streaming detectors",
+      "id": "ReplayAdapter",
+      "title": "replay / simulation adapter",
+      "subtitle": [
+        "fusion_tools, web worker",
+        "batch replay jobs"
+      ],
       "role": "process",
-      "group": "runtime",
-      "lane": 0,
+      "group": "adapters",
+      "row": 1,
+      "column": 0,
+      "width": 330,
+      "height": 86
+    },
+    {
+      "id": "StreamAdapter",
+      "title": "stream adapter",
+      "subtitle": [
+        "iOS FFI, firmware HAL",
+        "product integration"
+      ],
+      "role": "process",
+      "group": "adapters",
+      "row": 1,
+      "column": 2,
+      "width": 330,
+      "height": 86
+    },
+    {
+      "id": "FusionInputs",
+      "title": "fusion input contracts",
+      "subtitle": [
+        "ImuSample, GnssSample",
+        "optional VehicleSpeed"
+      ],
+      "role": "input",
+      "group": "fusionBoundary",
       "row": 2,
       "column": 1,
-      "layoutOptions": {
-        "elk.partitioning.partition": "2",
-        "elk.layered.crossingMinimization.positionId": "0"
-      }
+      "width": 390,
+      "height": 90
     },
     {
-      "id": "Visualizer",
-      "title": "visualizers",
-      "subtitle": "web + native replay",
-      "role": "warning",
-      "group": "surfaces",
-      "lane": 1,
-      "row": 3,
-      "column": 0,
-      "layoutOptions": {
-        "elk.partitioning.partition": "3",
-        "elk.layered.crossingMinimization.positionId": "1"
-      }
-    },
-    {
-      "id": "MobileDocs",
-      "title": "iOS app",
-      "subtitle": "drive, review, settings",
-      "role": "warning",
-      "group": "surfaces",
-      "lane": 0,
+      "id": "SensorFusion",
+      "title": "sensor_fusion",
+      "subtitle": [
+        "portable align + EKF facade",
+        "navigation state, health, diagnostics"
+      ],
+      "role": "core",
+      "group": "fusionBoundary",
       "row": 3,
       "column": 1,
-      "layoutOptions": {
-        "elk.partitioning.partition": "3",
-        "elk.layered.crossingMinimization.positionId": "0"
-      }
+      "width": 390,
+      "height": 92
+    },
+    {
+      "id": "CoreInvariant",
+      "title": "portable library",
+      "subtitle": [
+        "no OS APIs or file formats",
+        "WASM and embedded compatible"
+      ],
+      "role": "note",
+      "group": "fusionBoundary",
+      "row": 3,
+      "column": 0,
+      "width": 330,
+      "height": 88
+    },
+    {
+      "id": "FusionRecords",
+      "title": "navigation records",
+      "subtitle": [
+        "pose, velocity, attitude, mount",
+        "health, covariance, diagnostics"
+      ],
+      "role": "process",
+      "group": "fusionBoundary",
+      "row": 4,
+      "column": 1,
+      "width": 430,
+      "height": 94
+    },
+    {
+      "id": "HostRecords",
+      "title": "host records and logs",
+      "subtitle": [
+        "navigation state",
+        "optional event records"
+      ],
+      "role": "process",
+      "group": "hostRecords",
+      "row": 5,
+      "column": 1,
+      "width": 360,
+      "height": 88
+    },
+    {
+      "id": "VehicleMotion",
+      "title": "vehicle-motion samples",
+      "subtitle": [
+        "speed, pitch, vehicle accel",
+        "height and derived channels"
+      ],
+      "role": "input",
+      "group": "optionalEvents",
+      "row": 4,
+      "column": 2,
+      "width": 330,
+      "height": 90
+    },
+    {
+      "id": "RoadEvents",
+      "title": "road_events",
+      "subtitle": [
+        "demo detectors",
+        "events and trip statistics"
+      ],
+      "role": "core",
+      "group": "optionalEvents",
+      "row": 5,
+      "column": 2,
+      "width": 330,
+      "height": 88
+    },
+    {
+      "id": "SimulatorSurface",
+      "title": "simulator / visualizer",
+      "subtitle": [
+        "synthetic and replay analysis",
+        "plots, maps, optional event tabs"
+      ],
+      "role": "warning",
+      "group": "surfaces",
+      "row": 6,
+      "column": 0,
+      "width": 330,
+      "height": 88
+    },
+    {
+      "id": "RealtimeSurface",
+      "title": "realtime app",
+      "subtitle": [
+        "Drive UI, alerts",
+        "review and export"
+      ],
+      "role": "warning",
+      "group": "surfaces",
+      "row": 6,
+      "column": 1,
+      "width": 330,
+      "height": 88
+    },
+    {
+      "id": "EmbeddedBatchSurface",
+      "title": "embedded / batch outputs",
+      "subtitle": [
+        "telemetry, persisted state",
+        "regression metrics and reports"
+      ],
+      "role": "warning",
+      "group": "surfaces",
+      "row": 6,
+      "column": 2,
+      "width": 330,
+      "height": 88
     }
   ],
   "edges": [
     {
-      "from": "Datasets",
-      "to": "Replay"
+      "from": "OfflineSources",
+      "to": "ReplayAdapter"
     },
     {
-      "from": "Sources",
-      "to": "Packaging"
+      "from": "RealtimeSources",
+      "to": "StreamAdapter"
     },
     {
-      "from": "Packaging",
-      "to": "Replay"
+      "from": "ReplayAdapter",
+      "to": "FusionInputs",
+      "fromSide": "SOUTH",
+      "toSide": "WEST"
     },
     {
-      "from": "Replay",
-      "to": "Fusion"
+      "from": "StreamAdapter",
+      "to": "FusionInputs",
+      "fromSide": "SOUTH",
+      "toSide": "EAST"
     },
     {
-      "from": "Fusion",
-      "to": "Events"
+      "from": "FusionInputs",
+      "to": "SensorFusion"
     },
     {
-      "from": "Fusion",
-      "to": "Visualizer"
+      "from": "SensorFusion",
+      "to": "FusionRecords"
     },
     {
-      "from": "Events",
-      "to": "MobileDocs"
+      "from": "FusionRecords",
+      "to": "VehicleMotion",
+      "fromSide": "EAST",
+      "toSide": "WEST",
+      "dashed": true
     },
     {
-      "from": "Events",
-      "to": "Visualizer",
-      "hidden": true
+      "from": "VehicleMotion",
+      "to": "RoadEvents"
+    },
+    {
+      "from": "FusionRecords",
+      "to": "HostRecords"
+    },
+    {
+      "from": "RoadEvents",
+      "to": "HostRecords",
+      "fromSide": "WEST",
+      "toSide": "EAST",
+      "dashed": true
+    },
+    {
+      "from": "HostRecords",
+      "to": "SimulatorSurface",
+      "fromSide": "SOUTH",
+      "toSide": "NORTH"
+    },
+    {
+      "from": "HostRecords",
+      "to": "RealtimeSurface"
+    },
+    {
+      "from": "HostRecords",
+      "to": "EmbeddedBatchSurface",
+      "fromSide": "SOUTH",
+      "toSide": "NORTH"
     }
   ]
 }
