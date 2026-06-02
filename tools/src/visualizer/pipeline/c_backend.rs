@@ -125,7 +125,43 @@ impl CSensorFusion {
         unsafe {
             sensor_fusion_set_r_body_vel_yz(self.as_mut_ptr(), cfg.r_body_vel, cfg.r_body_vel_z);
             sensor_fusion_set_r_vehicle_roll_prior(self.as_mut_ptr(), cfg.r_vehicle_roll_prior);
+            sensor_fusion_set_nhc_update_period_s(self.as_mut_ptr(), cfg.nhc_update_period_s);
+            sensor_fusion_set_attitude_roll_init_sigma_rad(
+                self.as_mut_ptr(),
+                cfg.attitude_roll_init_sigma_deg.to_radians(),
+            );
+            sensor_fusion_set_attitude_pitch_init_sigma_rad(
+                self.as_mut_ptr(),
+                cfg.attitude_pitch_init_sigma_deg.to_radians(),
+            );
+            sensor_fusion_set_gyro_bias_init_sigma_radps(
+                self.as_mut_ptr(),
+                cfg.gyro_bias_init_sigma_dps.to_radians(),
+            );
+            sensor_fusion_set_accel_bias_init_sigma_mps2(
+                self.as_mut_ptr(),
+                cfg.accel_bias_init_sigma_mps2,
+            );
+            sensor_fusion_set_mount_roll_pitch_init_sigma_rad(
+                self.as_mut_ptr(),
+                cfg.mount_roll_pitch_init_sigma_deg.to_radians(),
+            );
+            sensor_fusion_set_mount_roll_init_sigma_rad(
+                self.as_mut_ptr(),
+                cfg.mount_roll_init_sigma_deg.to_radians(),
+            );
+            sensor_fusion_set_mount_pitch_init_sigma_rad(
+                self.as_mut_ptr(),
+                cfg.mount_pitch_init_sigma_deg.to_radians(),
+            );
             sensor_fusion_set_r_vehicle_speed(self.as_mut_ptr(), cfg.r_vehicle_speed);
+            sensor_fusion_set_r_zero_vel(self.as_mut_ptr(), cfg.r_zero_vel);
+            sensor_fusion_set_align_handoff_delay_s(self.as_mut_ptr(), cfg.align_handoff_delay_s);
+            sensor_fusion_set_yaw_init_speed_mps(self.as_mut_ptr(), cfg.yaw_init_speed_mps as f32);
+            sensor_fusion_set_use_align_mount_covariance_on_seed(
+                self.as_mut_ptr(),
+                cfg.use_align_mount_covariance_on_seed,
+            );
             sensor_fusion_set_yaw_init_sigma_rad(
                 self.as_mut_ptr(),
                 cfg.yaw_init_sigma_deg.to_radians(),
@@ -134,6 +170,22 @@ impl CSensorFusion {
                 self.as_mut_ptr(),
                 cfg.mount_init_sigma_deg.to_radians(),
             );
+            if let Some(noise) = cfg.noise.ekf {
+                let mount_axes = if noise.mount_align_rw_var_axes_enabled {
+                    noise.mount_align_rw_var_axes
+                } else {
+                    [noise.mount_align_rw_var; 3]
+                };
+                sensor_fusion_set_ekf_process_noise(
+                    self.as_mut_ptr(),
+                    noise.gyro_var,
+                    noise.accel_var,
+                    noise.gyro_bias_rw_var,
+                    noise.accel_bias_rw_var,
+                    mount_axes.as_ptr(),
+                );
+            }
+            sensor_fusion_set_mount_align_rw_var(self.as_mut_ptr(), cfg.mount_align_rw_var);
         }
     }
 
@@ -237,6 +289,51 @@ unsafe extern "C" {
     fn sensor_fusion_set_r_body_vel_yz(fusion: *mut CSensorFusionOpaque, r_y: f32, r_z: f32);
     fn sensor_fusion_set_r_vehicle_roll_prior(fusion: *mut CSensorFusionOpaque, r: f32);
     fn sensor_fusion_set_r_vehicle_speed(fusion: *mut CSensorFusionOpaque, r: f32);
+    fn sensor_fusion_set_nhc_update_period_s(fusion: *mut CSensorFusionOpaque, period_s: f32);
+    fn sensor_fusion_set_attitude_roll_init_sigma_rad(
+        fusion: *mut CSensorFusionOpaque,
+        sigma_rad: f32,
+    );
+    fn sensor_fusion_set_attitude_pitch_init_sigma_rad(
+        fusion: *mut CSensorFusionOpaque,
+        sigma_rad: f32,
+    );
     fn sensor_fusion_set_yaw_init_sigma_rad(fusion: *mut CSensorFusionOpaque, sigma_rad: f32);
+    fn sensor_fusion_set_gyro_bias_init_sigma_radps(
+        fusion: *mut CSensorFusionOpaque,
+        sigma_radps: f32,
+    );
+    fn sensor_fusion_set_accel_bias_init_sigma_mps2(
+        fusion: *mut CSensorFusionOpaque,
+        sigma_mps2: f32,
+    );
+    fn sensor_fusion_set_mount_roll_pitch_init_sigma_rad(
+        fusion: *mut CSensorFusionOpaque,
+        sigma_rad: f32,
+    );
+    fn sensor_fusion_set_mount_roll_init_sigma_rad(
+        fusion: *mut CSensorFusionOpaque,
+        sigma_rad: f32,
+    );
+    fn sensor_fusion_set_mount_pitch_init_sigma_rad(
+        fusion: *mut CSensorFusionOpaque,
+        sigma_rad: f32,
+    );
     fn sensor_fusion_set_mount_init_sigma_rad(fusion: *mut CSensorFusionOpaque, sigma_rad: f32);
+    fn sensor_fusion_set_use_align_mount_covariance_on_seed(
+        fusion: *mut CSensorFusionOpaque,
+        enabled: bool,
+    );
+    fn sensor_fusion_set_r_zero_vel(fusion: *mut CSensorFusionOpaque, r: f32);
+    fn sensor_fusion_set_mount_align_rw_var(fusion: *mut CSensorFusionOpaque, var: f32);
+    fn sensor_fusion_set_align_handoff_delay_s(fusion: *mut CSensorFusionOpaque, delay_s: f32);
+    fn sensor_fusion_set_yaw_init_speed_mps(fusion: *mut CSensorFusionOpaque, speed_mps: f32);
+    fn sensor_fusion_set_ekf_process_noise(
+        fusion: *mut CSensorFusionOpaque,
+        gyro_var: f32,
+        accel_var: f32,
+        gyro_bias_rw_var: f32,
+        accel_bias_rw_var: f32,
+        mount_align_rw_var_axes: *const f32,
+    );
 }

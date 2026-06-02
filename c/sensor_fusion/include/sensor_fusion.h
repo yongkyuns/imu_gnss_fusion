@@ -239,11 +239,58 @@ void sensor_fusion_set_r_vehicle_speed(sensor_fusion_t *fusion, float r);
 /** Set the decimated NHC update period in seconds. */
 void sensor_fusion_set_nhc_update_period_s(sensor_fusion_t *fusion, float period_s);
 
+/** Set initial vehicle roll standard deviation in radians. */
+void sensor_fusion_set_attitude_roll_init_sigma_rad(sensor_fusion_t *fusion, float sigma_rad);
+
+/** Set initial vehicle pitch standard deviation in radians. */
+void sensor_fusion_set_attitude_pitch_init_sigma_rad(sensor_fusion_t *fusion, float sigma_rad);
+
 /** Set initial vehicle yaw standard deviation in radians. */
 void sensor_fusion_set_yaw_init_sigma_rad(sensor_fusion_t *fusion, float sigma_rad);
 
-/** Set initial mount-angle standard deviation in radians. */
+/** Set initial gyro-bias standard deviation in radians per second. */
+void sensor_fusion_set_gyro_bias_init_sigma_radps(sensor_fusion_t *fusion, float sigma_radps);
+
+/** Set initial accelerometer-bias standard deviation in meters per second squared. */
+void sensor_fusion_set_accel_bias_init_sigma_mps2(sensor_fusion_t *fusion, float sigma_mps2);
+
+/** Set initial mount roll/pitch standard deviation in radians. */
+void sensor_fusion_set_mount_roll_pitch_init_sigma_rad(sensor_fusion_t *fusion, float sigma_rad);
+
+/** Set initial mount roll standard deviation in radians. */
+void sensor_fusion_set_mount_roll_init_sigma_rad(sensor_fusion_t *fusion, float sigma_rad);
+
+/** Set initial mount pitch standard deviation in radians. */
+void sensor_fusion_set_mount_pitch_init_sigma_rad(sensor_fusion_t *fusion, float sigma_rad);
+
+/** Set initial mount yaw standard deviation in radians. */
 void sensor_fusion_set_mount_init_sigma_rad(sensor_fusion_t *fusion, float sigma_rad);
+
+/** Select whether automatic handoff copies the align covariance into EKF mount covariance. */
+void sensor_fusion_set_use_align_mount_covariance_on_seed(sensor_fusion_t *fusion, bool enabled);
+
+/** Set zero-velocity observation variance for IMU-stationary updates. */
+void sensor_fusion_set_r_zero_vel(sensor_fusion_t *fusion, float r);
+
+/** Set residual-mount random-walk variance applied to all mount axes. */
+void sensor_fusion_set_mount_align_rw_var(sensor_fusion_t *fusion, float var);
+
+/** Set residual-mount random-walk variance per roll, pitch, and yaw axis. */
+void sensor_fusion_set_mount_align_rw_var_axes(sensor_fusion_t *fusion, const float var_axes[3]);
+
+/** Set how long coarse align readiness must persist before EKF handoff. */
+void sensor_fusion_set_align_handoff_delay_s(sensor_fusion_t *fusion, float delay_s);
+
+/** Set the minimum horizontal speed used for yaw initialization from GNSS course. */
+void sensor_fusion_set_yaw_init_speed_mps(sensor_fusion_t *fusion, float speed_mps);
+
+/** Set EKF process noise. Pass mount random walk variances per roll, pitch, and yaw axis. */
+void sensor_fusion_set_ekf_process_noise(sensor_fusion_t *fusion,
+                                         float gyro_var,
+                                         float accel_var,
+                                         float gyro_bias_rw_var,
+                                         float accel_bias_rw_var,
+                                         const float mount_align_rw_var_axes[3]);
 
 #ifdef __cplusplus
 }
