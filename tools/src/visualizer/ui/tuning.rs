@@ -4,7 +4,7 @@ use eframe::egui;
 use road_events::HarshBehaviorPreset;
 use sensor_fusion::ProcessNoise;
 
-use crate::visualizer::model::VisualizerMountMode;
+use crate::visualizer::model::{VisualizerFusionBackend, VisualizerMountMode};
 use crate::visualizer::pipeline::FusionTuningConfig;
 
 const STANDARD_GRAVITY_MPS2: f32 = 9.80665;
@@ -12,8 +12,36 @@ const STANDARD_GRAVITY_MPS2: f32 = 9.80665;
 pub(super) fn draw_ekf_tuning(
     ui: &mut egui::Ui,
     misalignment: &mut VisualizerMountMode,
+    backend: &mut VisualizerFusionBackend,
     cfg: &mut FusionTuningConfig,
 ) {
+    ui.horizontal_wrapped(|ui| {
+        help_response(ui.label("Runtime backend"), "Runtime backend");
+        help_response(
+            ui.selectable_value(backend, VisualizerFusionBackend::Rust, "Rust"),
+            "Rust backend",
+        );
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            help_response(
+                ui.selectable_value(backend, VisualizerFusionBackend::C, "C"),
+                "C backend",
+            );
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            ui.add_enabled(false, egui::Button::new("C"));
+        }
+    });
+    #[cfg(not(target_arch = "wasm32"))]
+    if *backend == VisualizerFusionBackend::C {
+        ui.label(
+            egui::RichText::new(
+                "Native C backend runs sensor fusion replay; advanced Rust-only EKF inspector and road-event FFI diagnostics are not shown.",
+            )
+            .weak(),
+        );
+    }
     ui.horizontal_wrapped(|ui| {
         help_response(ui.label("Mount mode"), "Mount mode");
         help_response(

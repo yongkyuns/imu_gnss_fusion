@@ -2,7 +2,7 @@
 
 use eframe::egui;
 
-use crate::visualizer::model::VisualizerMountMode;
+use crate::visualizer::model::{VisualizerFusionBackend, VisualizerMountMode};
 use crate::visualizer::pipeline::{FusionTuningConfig, GnssOutageConfig};
 
 use super::App;
@@ -30,10 +30,17 @@ impl App {
             .default_width(620.0)
             .show(ctx, |ui| {
                 match panel {
-                    TuningPanel::Ekf => {
-                        draw_ekf_tuning(ui, &mut self.tuning_misalignment, &mut self.tuning_cfg)
+                    TuningPanel::Ekf => draw_ekf_tuning(
+                        ui,
+                        &mut self.tuning_misalignment,
+                        &mut self.tuning_backend,
+                        &mut self.tuning_cfg,
+                    ),
+                    TuningPanel::Align => {
+                        Self::draw_backend_selector(ui, &mut self.tuning_backend);
+                        ui.separator();
+                        draw_align_tuning(ui, &mut self.tuning_cfg);
                     }
-                    TuningPanel::Align => draw_align_tuning(ui, &mut self.tuning_cfg),
                     TuningPanel::RoadEvents => draw_road_event_tuning(ui, &mut self.tuning_cfg),
                 }
                 ui.separator();
@@ -43,6 +50,7 @@ impl App {
                         match panel {
                             TuningPanel::Ekf => {
                                 self.tuning_misalignment = VisualizerMountMode::Auto;
+                                self.tuning_backend = VisualizerFusionBackend::Rust;
                                 self.tuning_gnss_outages = GnssOutageConfig::default();
                                 self.tuning_cfg.r_body_vel = defaults.r_body_vel;
                                 self.tuning_cfg.r_body_vel_z = defaults.r_body_vel_z;
@@ -97,8 +105,22 @@ impl App {
             self.tuning_panel = None;
         }
         if apply_replay {
-            self.refresh_from_replay();
+            self.refresh_from_replay(ctx);
         }
+    }
+
+    fn draw_backend_selector(ui: &mut egui::Ui, backend: &mut VisualizerFusionBackend) {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(egui::RichText::new("Runtime backend").strong());
+            ui.selectable_value(backend, VisualizerFusionBackend::Rust, "Rust");
+            ui.selectable_value(backend, VisualizerFusionBackend::C, "C");
+            ui.label(
+                egui::RichText::new(
+                    "Apply replay or Run from Inputs to rebuild with the selected backend.",
+                )
+                .weak(),
+            );
+        });
     }
 
     pub(super) fn draw_update_inspector_window(&mut self, ctx: &egui::Context) {

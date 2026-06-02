@@ -34,7 +34,7 @@ The browser dataset picker reads `web/datasets/manifest.json`. The hosted
 generic dataset validation job reads `.github/datasets/generic-datasets.json`.
 Keep those manifests aligned when adding or replacing hosted datasets.
 
-The current browser manifest contains 32 datasets. See
+The current browser manifest contains 36 datasets. See
 [](../data/hosted-datasets.md) for the checked-in list.
 
 ## Validation

@@ -2,9 +2,10 @@
 
 The visualizer is a replay and simulation environment for the fusion runtime,
 not only a plotting frontend. Each run feeds recorded or synthesized IMU/GNSS
-samples through the Rust `SensorFusion` implementation and `road_events`
-detectors, then plots the resulting states, diagnostics, map traces, and events.
-The browser version runs the wasm-compiled visualizer and fusion code.
+samples through the selected fusion backend, derives road-event samples from
+the estimated vehicle motion, then plots the resulting states, diagnostics, map
+traces, and events. The browser version runs the wasm-compiled Rust visualizer
+and fusion code.
 
 Use synthetic runs to study theoretical properties of the filter under
 controlled motion, and use experimental runs to evaluate performance on real
@@ -83,7 +84,7 @@ For experimental analysis:
    detector behavior.
 
 Browser replay accepts hosted datasets listed in `web/datasets/manifest.json`.
-The current hosted set contains 32 datasets. Drag/drop replay accepts plain-text
+The current hosted set contains 36 datasets. Drag/drop replay accepts plain-text
 generic CSV files; at minimum provide `imu.csv` and `gnss.csv`. Optional
 reference files add attitude, mount, position, or vehicle-motion traces.
 
@@ -107,6 +108,20 @@ cargo run --release -p fusion_tools --bin visualizer -- \
 Use native replay when browser decimation or browser memory limits hide a
 high-rate detail.
 
+Native replay can also select the standalone C fusion implementation:
+
+```bash
+cargo run --release -p fusion_tools --bin visualizer -- \
+  --generic-replay-dir /path/to/replay-dir \
+  --backend c
+```
+
+The native C backend fills the core navigation, mount, bias, covariance, map,
+roughness, bump-diagnostic, road-event, and trip-statistic views. Rust-only EKF
+update inspector traces, NHC correction internals, and align debug-window
+traces are not exposed yet, so those diagnostic groups remain empty when `C` is
+selected.
+
 ## Main Controls
 
 | Control | Use |
@@ -115,7 +130,7 @@ high-rate detail.
 | `Traces` | Show or hide Reference, Align, and EKF traces across plots. |
 | `Map` | Show or hide GNSS/reference paths, heading arrows, and event overlays. |
 | `Filter` | Choose which road-event kinds are visible. |
-| `Tune` | Adjust EKF, align, or road-event parameters for the next run. |
+| `Tune` | Select the native runtime backend and adjust EKF, align, or road-event parameters for the next run. |
 | `Inspector` | Show update-level residual allocation near the hovered plot time. |
 
 Changing tabs, trace visibility, map overlays, event filters, map color, hover,
@@ -156,12 +171,13 @@ signals that caused the event.
 
 When `Run` is pressed, the visualizer builds a replay job from the selected
 input and current tuning values. In the browser, that replay job is executed by
-the wasm-compiled Rust visualizer/fusion code. The replay path feeds each
-recorded or synthesized sample through `SensorFusion` and `road_events`, then
-returns one render product containing time-series traces, map traces, event
-outputs, trip statistics, and diagnostic samples. The UI only displays and
-filters that render product; it does not change estimator state after replay
-finishes.
+the wasm-compiled Rust visualizer/fusion code. In the native app, the job can
+execute either the Rust fusion backend or the standalone C fusion backend. The
+replay path feeds each recorded or synthesized sample through the selected
+fusion backend and road-event sample pipeline, then returns one render product
+containing time-series traces, map traces, event outputs, trip statistics, and
+diagnostic samples. The UI only displays and filters that render product; it
+does not change estimator state after replay finishes.
 
 Browser replay runs this job in a web worker so the page can remain responsive.
 Dense browser traces are decimated for transport and rendering. Native replay is

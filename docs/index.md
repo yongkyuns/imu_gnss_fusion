@@ -111,6 +111,7 @@ data/hosted-datasets
 :caption: Developer Reference
 
 testing
+development/c-api
 development/generated-models
 development/ci
 development/datasets

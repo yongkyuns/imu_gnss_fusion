@@ -47,10 +47,67 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 CRATE_DIR = SCRIPT_DIR.parent.parent
 sys.path.insert(0, str(CRATE_DIR))
 
-from code_gen import RustCodeGenerator
+from code_gen import CodeGenerator, RustCodeGenerator
 
 
 GENERATED_RUST_DIR = SCRIPT_DIR / "generated"
+GENERATED_C_EKF_DIR = CRATE_DIR.parent / "c" / "sensor_fusion" / "src" / "ekf"
+GENERATED_C_DIR = GENERATED_C_EKF_DIR / "generated"
+
+
+OBSERVATION_NAMES = [
+    "gps_pos_n",
+    "gps_pos_e",
+    "gps_pos_d",
+    "gps_vel_n",
+    "gps_vel_e",
+    "gps_vel_d",
+    "body_vel_x",
+    "body_vel_y",
+    "body_vel_z",
+    "vehicle_roll_prior",
+]
+
+
+OBSERVATION_VARIANCE_PARAMS = {
+    "gps_pos_n": ("R_POS_N", "r_pos_n"),
+    "gps_pos_e": ("R_POS_E", "r_pos_e"),
+    "gps_pos_d": ("R_POS_D", "r_pos_d"),
+    "gps_vel_n": ("R_VEL_N", "r_vel_n"),
+    "gps_vel_e": ("R_VEL_E", "r_vel_e"),
+    "gps_vel_d": ("R_VEL_D", "r_vel_d"),
+    "body_vel_x": ("R_BODY_VEL", "r_body_vel"),
+    "body_vel_y": ("R_BODY_VEL", "r_body_vel"),
+    "body_vel_z": ("R_BODY_VEL", "r_body_vel"),
+    "vehicle_roll_prior": ("R_VEHICLE_ROLL", "r_vehicle_roll"),
+}
+
+
+NOMINAL_FIELD_NAMES = [
+    "q0",
+    "q1",
+    "q2",
+    "q3",
+    "vn",
+    "ve",
+    "vd",
+    "pn",
+    "pe",
+    "pd",
+    "bgx",
+    "bgy",
+    "bgz",
+    "bax",
+    "bay",
+    "baz",
+    "q_bv0",
+    "q_bv1",
+    "q_bv2",
+    "q_bv3",
+]
+
+
+IMU_FIELD_NAMES = ["dax", "day", "daz", "dvx", "dvy", "dvz", "dt"]
 
 
 def create_symmetric_cov_matrix(n):
@@ -107,6 +164,13 @@ def write_observation_equations(path, equations, state_dim):
     """Emit generated Rust assignments for a scalar observation update."""
 
     gen = RustCodeGenerator(str(path))
+    emit_observation_equation_body(gen, equations, state_dim)
+    gen.close()
+
+
+def emit_observation_equation_body(gen, equations, state_dim):
+    """Emit assignments for one scalar observation into a code generator."""
+
     gen.print_string("Sub Expressions")
     gen.write_subexpressions(equations[0])
     values = equations[1]
@@ -118,7 +182,6 @@ def write_observation_equations(path, equations, state_dim):
     gen.write_matrix(Matrix(values[state_dim:2 * state_dim]), "K")
     gen.print_string("Innovation Variance")
     gen.file.write(f"S = {gen.get_ccode(values[2 * state_dim])};\n")
-    gen.close()
 
 
 def quat_to_rot(q):
@@ -518,6 +581,416 @@ def emit_nominal_prediction_rust(model):
     gen.close()
 
 
+def compute_matrix_supports(matrix):
+    """Return sparse row supports and maximum row width for a symbolic matrix."""
+
+    supports = []
+    max_len = 0
+    for i in range(matrix.shape[0]):
+        row_support = [j for j in range(matrix.shape[1]) if matrix[i, j] != 0]
+        supports.append(row_support)
+        max_len = max(max_len, len(row_support))
+    return supports, max_len
+
+
+def emit_nominal_prediction_c(model):
+    """Emit the EKF nominal prediction C fragment."""
+
+    q_new = model["x_nom_new"][0:4, 0]
+    v_new = model["x_nom_new"][4:7, 0]
+    p_new = model["x_nom_new"][7:10, 0]
+    state_new = Matrix.vstack(q_new, v_new, p_new)
+    expr = cse(state_new, symbols("tmp_pred0:2000"), optimizations="basic")
+    pred_path = GENERATED_C_DIR / "nominal_prediction_generated.inc"
+    gen = CodeGenerator(str(pred_path))
+    gen.print_string("Generated EKF nominal-state prediction")
+    gen.write_subexpressions(expr[0])
+
+    values = expr[1]
+    if len(values) == 1 and isinstance(values[0], Matrix):
+        values = values[0]
+
+    state_names = ["q0", "q1", "q2", "q3", "vn", "ve", "vd", "pn", "pe", "pd"]
+    for i, name in enumerate(state_names):
+        gen.file.write(f"nominal->{name} = {gen.get_ccode(values[i])};\n")
+    gen.close()
+
+
+def emit_cse_matrix_assignments_c(path, title, matrix, variable_name, symbol_prefix, is_symmetric=False):
+    """Emit CSE-optimized C assignments for a matrix fragment."""
+
+    expr = cse(matrix, symbols(f"{symbol_prefix}0:4000"), optimizations="basic")
+    gen = CodeGenerator(str(path))
+    gen.print_string(title)
+    gen.write_subexpressions(expr[0])
+    values = expr[1]
+    if len(values) == 1 and isinstance(values[0], Matrix):
+        values = values[0]
+    gen.write_matrix(Matrix(values), variable_name, is_symmetric)
+    gen.close()
+
+
+def emit_observation_equations_c(path, equations, state_dim):
+    """Emit generated C assignments for a scalar observation update."""
+
+    gen = CodeGenerator(str(path))
+    emit_observation_equation_body(gen, equations, state_dim)
+    gen.close()
+
+
+def emit_matrix_supports_c(path, matrices):
+    """Emit C sparse row-support metadata definitions."""
+
+    with open(path, "w") as file:
+        file.write("// Generated EKF transition sparsity supports\n")
+        for prefix, matrix in matrices:
+            supports, max_len = compute_matrix_supports(matrix)
+            file.write(
+                f"const unsigned int SF_EKF_{prefix}_ROW_COUNTS[SF_EKF_ERROR_STATES] = {{\n"
+            )
+            file.write("    " + ", ".join(str(len(row)) for row in supports) + ",\n")
+            file.write("};\n")
+            file.write(
+                f"const unsigned int SF_EKF_{prefix}_ROW_COLS[SF_EKF_ERROR_STATES][SF_EKF_{prefix}_MAX_ROW_NONZERO] = {{\n"
+            )
+            for row in supports:
+                padded = row + [0] * (max_len - len(row))
+                file.write("    {" + ", ".join(str(col) for col in padded) + "},\n")
+            file.write("};\n\n")
+
+
+def c_unused_lines(names, indent="    "):
+    """Return C `(void)` lines to keep generated wrappers warning-clean."""
+
+    return "".join(f"{indent}SF_EKF_UNUSED({name});\n" for name in names)
+
+
+def c_nominal_locals(indent="    "):
+    """Return C local variable declarations for nominal-state fields."""
+
+    return "".join(
+        f"{indent}const float {name} = nominal->{name};\n" for name in NOMINAL_FIELD_NAMES
+    )
+
+
+def c_imu_locals(indent="    "):
+    """Return C local variable declarations for IMU delta fields."""
+
+    return "".join(f"{indent}const float {name} = imu->{name};\n" for name in IMU_FIELD_NAMES)
+
+
+def c_observation_wrapper(name):
+    """Return a generated C scalar-observation wrapper function."""
+
+    variance_symbol, variance_param = OBSERVATION_VARIANCE_PARAMS[name]
+    needs_nominal = name.startswith("body_vel_") or name == "vehicle_roll_prior"
+    params = []
+    if needs_nominal:
+        params.append("const sf_ekf_nominal_state_t *nominal")
+    params.extend(
+        [
+            "const float p[SF_EKF_ERROR_STATES][SF_EKF_ERROR_STATES]",
+            f"float {variance_param}",
+            "sf_ekf_scalar_observation_t *out",
+        ]
+    )
+
+    body = [
+        f"void sf_ekf_{name}_observation({', '.join(params)})\n",
+        "{\n",
+    ]
+    if needs_nominal:
+        body.append(c_nominal_locals())
+        body.append(c_unused_lines(NOMINAL_FIELD_NAMES))
+    body.extend(
+        [
+            "    const float (*P)[SF_EKF_ERROR_STATES] = p;\n",
+            f"    const float {variance_symbol} = {variance_param};\n",
+            "    float *H = out->h;\n",
+            "    float *K = out->k;\n",
+            "    float S = 0.0F;\n",
+            "    unsigned int i;\n",
+            "    for (i = 0; i < SF_EKF_ERROR_STATES; ++i) {\n",
+            "        H[i] = 0.0F;\n",
+            "        K[i] = 0.0F;\n",
+            "    }\n",
+            f'    #include "generated/{name}_generated.inc"\n',
+            "    out->s = S;\n",
+            "}\n\n",
+        ]
+    )
+    return "".join(body)
+
+
+def emit_generated_c_header(model):
+    """Emit the generated C wrapper header."""
+
+    f_supports, f_max = compute_matrix_supports(model["F"])
+    g_supports, g_max = compute_matrix_supports(model["G"])
+    del f_supports, g_supports
+
+    header_path = GENERATED_C_EKF_DIR / "generated_model.h"
+    with open(header_path, "w") as file:
+        file.write(
+            """#ifndef SF_EKF_GENERATED_MODEL_H
+#define SF_EKF_GENERATED_MODEL_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define SF_EKF_ERROR_STATES 18
+#define SF_EKF_NOISE_STATES 15
+#define SF_EKF_GRAVITY_MSS 9.80665F
+"""
+        )
+        file.write(f"#define SF_EKF_F_MAX_ROW_NONZERO {f_max}\n")
+        file.write(f"#define SF_EKF_G_MAX_ROW_NONZERO {g_max}\n\n")
+        file.write(
+            """typedef struct sf_ekf_nominal_state {
+    float q0;
+    float q1;
+    float q2;
+    float q3;
+    float vn;
+    float ve;
+    float vd;
+    float pn;
+    float pe;
+    float pd;
+    float bgx;
+    float bgy;
+    float bgz;
+    float bax;
+    float bay;
+    float baz;
+    float q_bv0;
+    float q_bv1;
+    float q_bv2;
+    float q_bv3;
+} sf_ekf_nominal_state_t;
+
+typedef struct sf_ekf_imu_delta {
+    float dax;
+    float day;
+    float daz;
+    float dvx;
+    float dvy;
+    float dvz;
+    float dt;
+} sf_ekf_imu_delta_t;
+
+typedef struct sf_ekf_error_transition {
+    float f[SF_EKF_ERROR_STATES][SF_EKF_ERROR_STATES];
+    float g[SF_EKF_ERROR_STATES][SF_EKF_NOISE_STATES];
+} sf_ekf_error_transition_t;
+
+typedef struct sf_ekf_scalar_observation {
+    float h[SF_EKF_ERROR_STATES];
+    float k[SF_EKF_ERROR_STATES];
+    float s;
+} sf_ekf_scalar_observation_t;
+
+extern const unsigned int SF_EKF_F_ROW_COUNTS[SF_EKF_ERROR_STATES];
+extern const unsigned int SF_EKF_F_ROW_COLS[SF_EKF_ERROR_STATES][SF_EKF_F_MAX_ROW_NONZERO];
+extern const unsigned int SF_EKF_G_ROW_COUNTS[SF_EKF_ERROR_STATES];
+extern const unsigned int SF_EKF_G_ROW_COLS[SF_EKF_ERROR_STATES][SF_EKF_G_MAX_ROW_NONZERO];
+
+void sf_ekf_predict_nominal(sf_ekf_nominal_state_t *nominal, const sf_ekf_imu_delta_t *imu);
+void sf_ekf_predict_nominal_with_gravity(
+    sf_ekf_nominal_state_t *nominal,
+    const sf_ekf_imu_delta_t *imu,
+    float gravity_mss);
+void sf_ekf_error_transition(
+    const sf_ekf_nominal_state_t *nominal,
+    const sf_ekf_imu_delta_t *imu,
+    sf_ekf_error_transition_t *out);
+void sf_ekf_error_transition_with_gravity(
+    const sf_ekf_nominal_state_t *nominal,
+    const sf_ekf_imu_delta_t *imu,
+    float gravity_mss,
+    sf_ekf_error_transition_t *out);
+void sf_ekf_attitude_reset_jacobian(const float dtheta[3], float g_reset_theta[3][3]);
+"""
+        )
+        for name in OBSERVATION_NAMES:
+            _, variance_param = OBSERVATION_VARIANCE_PARAMS[name]
+            needs_nominal = name.startswith("body_vel_") or name == "vehicle_roll_prior"
+            file.write(f"void sf_ekf_{name}_observation(\n")
+            if needs_nominal:
+                file.write("    const sf_ekf_nominal_state_t *nominal,\n")
+            file.write("    const float p[SF_EKF_ERROR_STATES][SF_EKF_ERROR_STATES],\n")
+            file.write(f"    float {variance_param},\n")
+            file.write("    sf_ekf_scalar_observation_t *out);\n")
+        file.write(
+            """
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+"""
+        )
+
+
+def emit_generated_c_source():
+    """Emit generated C wrapper functions around generated fragments."""
+
+    source_path = GENERATED_C_EKF_DIR / "generated_model.c"
+    with open(source_path, "w") as file:
+        file.write(
+            """#include "generated_model.h"
+
+#include <math.h>
+
+#define SF_EKF_UNUSED(x) ((void)(x))
+
+#include "generated/error_transition_support_generated.inc"
+
+void sf_ekf_predict_nominal(sf_ekf_nominal_state_t *nominal, const sf_ekf_imu_delta_t *imu)
+{
+    sf_ekf_predict_nominal_with_gravity(nominal, imu, SF_EKF_GRAVITY_MSS);
+}
+
+void sf_ekf_predict_nominal_with_gravity(
+    sf_ekf_nominal_state_t *nominal,
+    const sf_ekf_imu_delta_t *imu,
+    float gravity_mss)
+{
+"""
+        )
+        file.write(c_nominal_locals())
+        file.write(c_imu_locals())
+        file.write("    const float g = gravity_mss;\n")
+        file.write(c_unused_lines(NOMINAL_FIELD_NAMES + IMU_FIELD_NAMES + ["g"]))
+        file.write('    #include "generated/nominal_prediction_generated.inc"\n')
+        file.write(
+            """}
+
+void sf_ekf_error_transition(
+    const sf_ekf_nominal_state_t *nominal,
+    const sf_ekf_imu_delta_t *imu,
+    sf_ekf_error_transition_t *out)
+{
+    sf_ekf_error_transition_with_gravity(nominal, imu, SF_EKF_GRAVITY_MSS, out);
+}
+
+void sf_ekf_error_transition_with_gravity(
+    const sf_ekf_nominal_state_t *nominal,
+    const sf_ekf_imu_delta_t *imu,
+    float gravity_mss,
+    sf_ekf_error_transition_t *out)
+{
+"""
+        )
+        file.write(c_nominal_locals())
+        file.write(c_imu_locals())
+        file.write(
+            """    const float g = gravity_mss;
+    float (*F)[SF_EKF_ERROR_STATES] = out->f;
+    float (*G)[SF_EKF_NOISE_STATES] = out->g;
+    unsigned int i;
+    unsigned int j;
+"""
+        )
+        file.write(c_unused_lines(NOMINAL_FIELD_NAMES + IMU_FIELD_NAMES + ["g"]))
+        file.write(
+            """    for (i = 0; i < SF_EKF_ERROR_STATES; ++i) {
+        for (j = 0; j < SF_EKF_ERROR_STATES; ++j) {
+            F[i][j] = 0.0F;
+        }
+        for (j = 0; j < SF_EKF_NOISE_STATES; ++j) {
+            G[i][j] = 0.0F;
+        }
+    }
+    #include "generated/error_transition_generated.inc"
+    #include "generated/error_noise_input_generated.inc"
+}
+
+void sf_ekf_attitude_reset_jacobian(const float dtheta[3], float g_reset_theta[3][3])
+{
+    float (*G_reset_theta)[3] = g_reset_theta;
+    const float dtheta_x = dtheta[0];
+    const float dtheta_y = dtheta[1];
+    const float dtheta_z = dtheta[2];
+    unsigned int i;
+    unsigned int j;
+    for (i = 0; i < 3; ++i) {
+        for (j = 0; j < 3; ++j) {
+            G_reset_theta[i][j] = 0.0F;
+        }
+    }
+    #include "generated/attitude_reset_jacobian_generated.inc"
+}
+
+"""
+        )
+        for name in OBSERVATION_NAMES:
+            file.write(c_observation_wrapper(name))
+        file.write("#undef SF_EKF_UNUSED\n")
+
+
+def emit_generated_c():
+    """Regenerate all EKF C fragments and generated C wrappers."""
+
+    model = derive_error_dynamics()
+    meas = derive_measurement_model()
+    GENERATED_C_DIR.mkdir(parents=True, exist_ok=True)
+
+    emit_nominal_prediction_c(model)
+    emit_cse_matrix_assignments_c(
+        GENERATED_C_DIR / "error_transition_generated.inc",
+        "Generated EKF error-state transition matrix",
+        model["F"],
+        "F",
+        "tmp_f",
+    )
+    emit_cse_matrix_assignments_c(
+        GENERATED_C_DIR / "error_noise_input_generated.inc",
+        "Generated EKF error-state noise input matrix",
+        model["G"],
+        "G",
+        "tmp_g",
+    )
+    emit_matrix_supports_c(
+        GENERATED_C_DIR / "error_transition_support_generated.inc",
+        [
+            ("F", model["F"]),
+            ("G", model["G"]),
+        ],
+    )
+    emit_cse_matrix_assignments_c(
+        GENERATED_C_DIR / "attitude_reset_jacobian_generated.inc",
+        "Generated first-order EKF attitude reset Jacobian block",
+        model["attitude_reset_jacobian"],
+        "G_reset_theta",
+        "tmp_reset",
+    )
+
+    state_dim = model["state_dim_error"]
+    for name in OBSERVATION_NAMES:
+        emit_observation_equations_c(
+            GENERATED_C_DIR / f"{name}_generated.inc",
+            meas[name],
+            state_dim,
+        )
+
+    emit_generated_c_header(model)
+    emit_generated_c_source()
+
+    for path in [
+        GENERATED_C_DIR / "nominal_prediction_generated.inc",
+        GENERATED_C_DIR / "error_transition_generated.inc",
+        GENERATED_C_DIR / "error_noise_input_generated.inc",
+        GENERATED_C_DIR / "error_transition_support_generated.inc",
+        GENERATED_C_DIR / "attitude_reset_jacobian_generated.inc",
+        *[GENERATED_C_DIR / f"{name}_generated.inc" for name in OBSERVATION_NAMES],
+        GENERATED_C_EKF_DIR / "generated_model.h",
+        GENERATED_C_EKF_DIR / "generated_model.c",
+    ]:
+        print("Wrote:", path)
+
+
 def emit_generated_rust():
     """Regenerate all EKF Rust fragments from the symbolic model."""
 
@@ -602,8 +1075,13 @@ def emit_generated_rust():
 
 
 if __name__ == "__main__":
-    if "--emit-rust" in sys.argv:
+    if "--emit-all" in sys.argv:
         emit_generated_rust()
+        emit_generated_c()
+    elif "--emit-rust" in sys.argv:
+        emit_generated_rust()
+    elif "--emit-c" in sys.argv:
+        emit_generated_c()
     elif "--derive-fg" in sys.argv:
         model = derive_error_dynamics()
         print("F shape:", model["F"].shape)

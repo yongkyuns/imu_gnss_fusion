@@ -33,7 +33,7 @@ Optional reference files can provide attitude, position, motion, and mount strea
 
 ## Hosted Data
 
-The current browser manifest contains 32 datasets. See [](data/hosted-datasets.md) for the checked-in list.
+The current browser manifest contains 36 datasets. See [](data/hosted-datasets.md) for the checked-in list.
 
 ## Synthetic Scenarios
 

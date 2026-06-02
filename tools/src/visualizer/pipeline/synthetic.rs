@@ -9,17 +9,17 @@ use crate::synthetic::gnss_ins_path::{
     generate_with_noise,
 };
 use crate::visualizer::math::{ecef_to_ned, lla_to_ecef, quat_rpy_deg};
-use crate::visualizer::model::{PlotData, Trace, VisualizerMountMode};
+use crate::visualizer::model::{PlotData, Trace, VisualizerFusionBackend, VisualizerMountMode};
 use crate::visualizer::pipeline::generic::{
-    GenericReplayInput, GenericReplayProgress, build_generic_replay_plot_data_with_ekf_mount_seed,
-    build_generic_replay_plot_data_with_progress_and_ekf_mount_seed, q_bv_to_reference_mount_rpy,
+    GenericReplayInput, GenericReplayProgress, build_generic_replay_plot_data_with_backend,
+    build_generic_replay_plot_data_with_backend_and_progress, q_bv_to_reference_mount_rpy,
     reference_mount_rpy_to_q_bv,
 };
 use crate::visualizer::pipeline::{FusionTuningConfig, GnssOutageConfig};
 
 const STANDARD_GRAVITY_MPS2: f64 = 9.80665;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SyntheticNoiseMode {
     Truth,
     Low,
@@ -61,7 +61,31 @@ pub fn build_synthetic_plot_data(
     filter_cfg: FusionTuningConfig,
     gnss_outages: GnssOutageConfig,
 ) -> Result<PlotData> {
-    build_synthetic_plot_data_impl(synth_cfg, mount_mode, filter_cfg, gnss_outages, None)
+    build_synthetic_plot_data_with_backend_impl(
+        synth_cfg,
+        VisualizerFusionBackend::Rust,
+        mount_mode,
+        filter_cfg,
+        gnss_outages,
+        None,
+    )
+}
+
+pub fn build_synthetic_plot_data_with_backend(
+    synth_cfg: &SyntheticVisualizerConfig,
+    backend: VisualizerFusionBackend,
+    mount_mode: VisualizerMountMode,
+    filter_cfg: FusionTuningConfig,
+    gnss_outages: GnssOutageConfig,
+) -> Result<PlotData> {
+    build_synthetic_plot_data_with_backend_impl(
+        synth_cfg,
+        backend,
+        mount_mode,
+        filter_cfg,
+        gnss_outages,
+        None,
+    )
 }
 
 pub fn build_synthetic_replay_input(
@@ -197,8 +221,27 @@ pub fn build_synthetic_plot_data_with_progress(
     gnss_outages: GnssOutageConfig,
     progress: &mut dyn FnMut(GenericReplayProgress),
 ) -> Result<PlotData> {
-    build_synthetic_plot_data_impl(
+    build_synthetic_plot_data_with_backend_and_progress(
         synth_cfg,
+        VisualizerFusionBackend::Rust,
+        mount_mode,
+        filter_cfg,
+        gnss_outages,
+        progress,
+    )
+}
+
+pub fn build_synthetic_plot_data_with_backend_and_progress(
+    synth_cfg: &SyntheticVisualizerConfig,
+    backend: VisualizerFusionBackend,
+    mount_mode: VisualizerMountMode,
+    filter_cfg: FusionTuningConfig,
+    gnss_outages: GnssOutageConfig,
+    progress: &mut dyn FnMut(GenericReplayProgress),
+) -> Result<PlotData> {
+    build_synthetic_plot_data_with_backend_impl(
+        synth_cfg,
+        backend,
         mount_mode,
         filter_cfg,
         gnss_outages,
@@ -206,8 +249,9 @@ pub fn build_synthetic_plot_data_with_progress(
     )
 }
 
-fn build_synthetic_plot_data_impl(
+fn build_synthetic_plot_data_with_backend_impl(
     synth_cfg: &SyntheticVisualizerConfig,
+    backend: VisualizerFusionBackend,
     mount_mode: VisualizerMountMode,
     filter_cfg: FusionTuningConfig,
     gnss_outages: GnssOutageConfig,
@@ -371,27 +415,21 @@ fn build_synthetic_plot_data_impl(
         reference_position: Vec::new(),
         reference_motion: synthetic_reference_motion(&measured.reference, 1.0 / synth_cfg.imu_hz),
     };
-    let ekf_mount_seed = mount_mode.uses_ref_mount().then_some([
-        q_truth_mount[0] as f32,
-        q_truth_mount[1] as f32,
-        q_truth_mount[2] as f32,
-        q_truth_mount[3] as f32,
-    ]);
     let mut data = match progress {
-        Some(progress) => build_generic_replay_plot_data_with_progress_and_ekf_mount_seed(
+        Some(progress) => build_generic_replay_plot_data_with_backend_and_progress(
             &replay,
+            backend,
             mount_mode,
             filter_cfg,
             gnss_outages,
             progress,
-            ekf_mount_seed,
         ),
-        None => build_generic_replay_plot_data_with_ekf_mount_seed(
+        None => build_generic_replay_plot_data_with_backend(
             &replay,
+            backend,
             mount_mode,
             filter_cfg,
             gnss_outages,
-            ekf_mount_seed,
         ),
     };
     add_synthetic_overlays(

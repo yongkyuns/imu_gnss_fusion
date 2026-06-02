@@ -12,7 +12,6 @@ use std::{
 use eframe::egui;
 use flate2::read::GzDecoder;
 use js_sys::{Array, Date, Function, Object, Reflect, Uint8Array};
-use serde::Deserialize;
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{ErrorEvent, MessageEvent, Worker, WorkerOptions, WorkerType};
@@ -23,6 +22,9 @@ use crate::visualizer::stats::map_center_from_traces;
 use crate::visualizer::theme::UiTheme;
 
 use super::App;
+use super::input::{
+    HostedDatasetEntry, HostedDatasetManifest, InputMode, SyntheticNoise, SyntheticScenario,
+};
 use super::state::DataOrigin;
 
 pub(super) const WEB_MIN_POINTS_PER_TRACE: usize = 80;
@@ -35,51 +37,9 @@ pub(super) struct NamedText {
     pub(super) text: String,
 }
 
-#[derive(Clone, Deserialize)]
-pub(super) struct WebDatasetEntry {
-    #[serde(default)]
-    pub(super) id: Option<String>,
-    #[serde(default)]
-    pub(super) label: Option<String>,
-    #[serde(default)]
-    pub(super) description: Option<String>,
-    #[serde(default, alias = "baseUrl")]
-    base_url: Option<String>,
-    #[serde(default, alias = "imu_csv")]
-    imu: Option<String>,
-    #[serde(default, alias = "gnss_csv")]
-    gnss: Option<String>,
-    #[serde(default, alias = "imu_csv_gz")]
-    imu_gz: Option<String>,
-    #[serde(default, alias = "gnss_csv_gz")]
-    gnss_gz: Option<String>,
-    #[serde(default, alias = "reference_attitude_csv")]
-    reference_attitude: Option<String>,
-    #[serde(default, alias = "reference_attitude_csv_gz")]
-    reference_attitude_gz: Option<String>,
-    #[serde(default, alias = "reference_mount_csv")]
-    reference_mount: Option<String>,
-    #[serde(default, alias = "reference_mount_csv_gz")]
-    reference_mount_gz: Option<String>,
-    #[serde(default, alias = "reference_position_csv")]
-    reference_position: Option<String>,
-    #[serde(default, alias = "reference_position_csv_gz")]
-    reference_position_gz: Option<String>,
-    #[serde(default, alias = "reference_motion_csv")]
-    reference_motion: Option<String>,
-    #[serde(default, alias = "reference_motion_csv_gz")]
-    reference_motion_gz: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct WebDatasetManifest {
-    #[serde(default)]
-    datasets: Vec<WebDatasetEntry>,
-}
-
 pub(super) struct WebDatasetState {
     pub(super) manifest_url: String,
-    pub(super) datasets: Vec<WebDatasetEntry>,
+    pub(super) datasets: Vec<HostedDatasetEntry>,
     pub(super) selected: usize,
     pub(super) auto_load_id: Option<String>,
     pub(super) auto_load_attempted: bool,
@@ -96,7 +56,7 @@ pub(super) struct WebDatasetState {
 }
 
 pub(super) enum WebDatasetTaskResult {
-    Manifest(std::result::Result<Vec<WebDatasetEntry>, String>),
+    Manifest(std::result::Result<Vec<HostedDatasetEntry>, String>),
     Dataset(std::result::Result<WebDatasetFiles, String>),
 }
 
@@ -138,7 +98,7 @@ pub(super) enum WebReplayWorkerJob {
         motion_label: String,
         motion_text: String,
         mount_rpy_deg: [f64; 3],
-        noise: WebSyntheticNoise,
+        noise: SyntheticNoise,
         early_vel_bias_ned_mps: [f64; 3],
         early_fault_window_s: Option<[f64; 2]>,
     },
@@ -237,57 +197,10 @@ fn hash_f64_array<const N: usize>(values: &[f64; N], hasher: &mut DefaultHasher)
     values.map(f64::to_bits).hash(hasher);
 }
 
-impl WebDatasetEntry {
-    pub(super) fn display_label(&self) -> String {
-        self.label
-            .as_deref()
-            .or(self.id.as_deref())
-            .unwrap_or("unnamed dataset")
-            .to_string()
-    }
-
-    pub(super) fn picker_group_label(&self) -> &'static str {
-        let id = self.id.as_deref().unwrap_or_default();
-        let label = self.label.as_deref().unwrap_or_default();
-        if id.starts_with("ios-") || label.starts_with("iOS ") {
-            "iOS recordings"
-        } else {
-            "UBX/reference datasets"
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum WebInputMode {
-    Synthetic,
-    RealData,
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum WebRealDataSource {
     DroppedCsv,
     ManifestDataset,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum WebSyntheticScenario {
-    CityBlocks,
-    FigureEight,
-    FigureEightEarlyVelocityFault,
-    FigureEightRollExcitation,
-    StraightAccelBrake,
-    ObservabilityStraight,
-    ObservabilityAccelBrake,
-    ObservabilityTurns,
-    ObservabilityTurnsAccel,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum WebSyntheticNoise {
-    Truth,
-    Low,
-    Mid,
-    High,
 }
 
 #[derive(Default)]
@@ -545,46 +458,44 @@ fn js_number_array(values: &[f64]) -> Array {
     array
 }
 
-pub(super) fn web_query_synthetic_scenario() -> Option<WebSyntheticScenario> {
+pub(super) fn web_query_synthetic_scenario() -> Option<SyntheticScenario> {
     match web_query_value("scenario").as_deref() {
-        Some("city" | "city_blocks" | "city-blocks") => Some(WebSyntheticScenario::CityBlocks),
-        Some("figure8" | "figure_eight" | "figure-eight") => {
-            Some(WebSyntheticScenario::FigureEight)
-        }
+        Some("city" | "city_blocks" | "city-blocks") => Some(SyntheticScenario::CityBlocks),
+        Some("figure8" | "figure_eight" | "figure-eight") => Some(SyntheticScenario::FigureEight),
         Some("figure8_fault" | "figure-eight-fault" | "fig8_fault" | "bad_basin") => {
-            Some(WebSyntheticScenario::FigureEightEarlyVelocityFault)
+            Some(SyntheticScenario::FigureEightEarlyVelocityFault)
         }
         Some(
             "figure8_roll"
             | "figure-eight-roll"
             | "figure8_roll_excitation"
             | "figure-eight-roll-excitation",
-        ) => Some(WebSyntheticScenario::FigureEightRollExcitation),
+        ) => Some(SyntheticScenario::FigureEightRollExcitation),
         Some("straight" | "straight_accel_brake" | "straight-accel-brake") => {
-            Some(WebSyntheticScenario::StraightAccelBrake)
+            Some(SyntheticScenario::StraightAccelBrake)
         }
         Some("obs_straight" | "observability_straight" | "observability-straight") => {
-            Some(WebSyntheticScenario::ObservabilityStraight)
+            Some(SyntheticScenario::ObservabilityStraight)
         }
         Some("obs_accel" | "observability_accel_brake" | "observability-accel-brake") => {
-            Some(WebSyntheticScenario::ObservabilityAccelBrake)
+            Some(SyntheticScenario::ObservabilityAccelBrake)
         }
         Some("obs_turns" | "observability_turns" | "observability-turns") => {
-            Some(WebSyntheticScenario::ObservabilityTurns)
+            Some(SyntheticScenario::ObservabilityTurns)
         }
         Some("obs_turns_accel" | "observability_turns_accel" | "observability-turns-accel") => {
-            Some(WebSyntheticScenario::ObservabilityTurnsAccel)
+            Some(SyntheticScenario::ObservabilityTurnsAccel)
         }
         _ => None,
     }
 }
 
-pub(super) fn web_query_synthetic_noise() -> Option<WebSyntheticNoise> {
+pub(super) fn web_query_synthetic_noise() -> Option<SyntheticNoise> {
     match web_query_value("noise").as_deref() {
-        Some("truth" | "none" | "zero") => Some(WebSyntheticNoise::Truth),
-        Some("low") => Some(WebSyntheticNoise::Low),
-        Some("mid" | "medium") => Some(WebSyntheticNoise::Mid),
-        Some("high") => Some(WebSyntheticNoise::High),
+        Some("truth" | "none" | "zero") => Some(SyntheticNoise::Truth),
+        Some("low") => Some(SyntheticNoise::Low),
+        Some("mid" | "medium") => Some(SyntheticNoise::Mid),
+        Some("high") => Some(SyntheticNoise::High),
         _ => None,
     }
 }
@@ -616,10 +527,10 @@ async fn web_fetch_text(url: &str) -> std::result::Result<String, String> {
 
 pub(super) async fn web_fetch_manifest(
     url: String,
-) -> std::result::Result<Vec<WebDatasetEntry>, String> {
+) -> std::result::Result<Vec<HostedDatasetEntry>, String> {
     let fetch_url = cache_busted_url(&url);
     let text = web_fetch_text(&fetch_url).await?;
-    let manifest: WebDatasetManifest =
+    let manifest: HostedDatasetManifest =
         serde_json::from_str(&text).map_err(|err| format!("{url}: bad manifest JSON: {err}"))?;
     Ok(manifest.datasets)
 }
@@ -631,7 +542,7 @@ fn cache_busted_url(url: &str) -> String {
 
 pub(super) async fn web_fetch_dataset(
     manifest_url: String,
-    entry: WebDatasetEntry,
+    entry: HostedDatasetEntry,
 ) -> std::result::Result<WebDatasetFiles, String> {
     let label = entry.display_label();
     let imu = web_fetch_dataset_csv(&manifest_url, &entry, "imu")
@@ -668,7 +579,7 @@ pub(super) async fn web_fetch_dataset(
 
 async fn web_fetch_dataset_csv(
     manifest_url: &str,
-    entry: &WebDatasetEntry,
+    entry: &HostedDatasetEntry,
     kind: &str,
 ) -> std::result::Result<(String, String), String> {
     let (plain, gz) = match kind {
@@ -739,7 +650,7 @@ async fn web_fetch_dataset_csv(
 
 async fn web_fetch_optional_dataset_csv(
     manifest_url: &str,
-    entry: &WebDatasetEntry,
+    entry: &HostedDatasetEntry,
     kind: &str,
 ) -> std::result::Result<Option<(String, String)>, String> {
     let has_explicit_file = match kind {
@@ -890,267 +801,6 @@ pub(super) fn web_remember_ui_theme(theme: UiTheme) {
     }
 }
 
-impl WebSyntheticScenario {
-    pub(super) fn display_label(self) -> &'static str {
-        match self {
-            Self::CityBlocks => "City blocks",
-            Self::FigureEight => "Figure eight",
-            Self::FigureEightEarlyVelocityFault => "Figure eight early GNSS fault",
-            Self::FigureEightRollExcitation => "Figure eight roll excitation + GNSS fault",
-            Self::StraightAccelBrake => "Straight accel/brake",
-            Self::ObservabilityStraight => "Mount recovery: straight constant",
-            Self::ObservabilityAccelBrake => "Mount recovery: accel/brake",
-            Self::ObservabilityTurns => "Mount recovery: turns only",
-            Self::ObservabilityTurnsAccel => "Mount recovery: turns + accel/brake",
-        }
-    }
-
-    pub(super) fn scenario_text(self) -> (&'static str, &'static str) {
-        match self {
-            Self::CityBlocks => ("city_blocks_builtin.scenario", CITY_BLOCKS_SCENARIO),
-            Self::FigureEight => ("figure8_builtin.scenario", FIGURE_EIGHT_SCENARIO),
-            Self::FigureEightEarlyVelocityFault => (
-                "figure8_early_gnss_fault_builtin.scenario",
-                FIGURE_EIGHT_SCENARIO,
-            ),
-            Self::FigureEightRollExcitation => (
-                "figure8_roll_excitation_builtin.scenario",
-                FIGURE_EIGHT_ROLL_EXCITATION_SCENARIO,
-            ),
-            Self::StraightAccelBrake => (
-                "straight_accel_brake_builtin.scenario",
-                STRAIGHT_ACCEL_BRAKE_SCENARIO,
-            ),
-            Self::ObservabilityStraight => (
-                "observability_straight_builtin.scenario",
-                OBSERVABILITY_STRAIGHT_SCENARIO,
-            ),
-            Self::ObservabilityAccelBrake => (
-                "observability_accel_brake_builtin.scenario",
-                OBSERVABILITY_ACCEL_BRAKE_SCENARIO,
-            ),
-            Self::ObservabilityTurns => (
-                "observability_turns_builtin.scenario",
-                OBSERVABILITY_TURNS_SCENARIO,
-            ),
-            Self::ObservabilityTurnsAccel => (
-                "observability_turns_accel_builtin.scenario",
-                OBSERVABILITY_TURNS_ACCEL_SCENARIO,
-            ),
-        }
-    }
-
-    pub(super) fn early_fault(self) -> ([f64; 3], Option<[f64; 2]>) {
-        match self {
-            Self::FigureEightEarlyVelocityFault | Self::FigureEightRollExcitation => {
-                ([0.5, 0.0, 0.0], Some([120.0, 360.0]))
-            }
-            Self::ObservabilityStraight
-            | Self::ObservabilityAccelBrake
-            | Self::ObservabilityTurns
-            | Self::ObservabilityTurnsAccel => ([0.8, 0.25, 0.0], Some([130.0, 250.0])),
-            Self::CityBlocks | Self::FigureEight | Self::StraightAccelBrake => {
-                ([0.0, 0.0, 0.0], None)
-            }
-        }
-    }
-
-    pub(super) fn mount_rpy_deg(self) -> [f64; 3] {
-        [5.0, -5.0, 5.0]
-    }
-}
-
-impl WebSyntheticNoise {
-    pub(super) fn display_label(self) -> &'static str {
-        match self {
-            Self::Truth => "None",
-            Self::Low => "Low noise",
-            Self::Mid => "Mid noise",
-            Self::High => "High noise",
-        }
-    }
-
-    pub(super) fn tooltip(self) -> &'static str {
-        match self {
-            Self::Truth => {
-                "None\n\
-                 IMU and GNSS are exact generated measurements.\n\
-                 Use this to isolate filter formulation from sensor noise."
-            }
-            Self::Low => {
-                "Low noise\n\
-                 IMU: gyro ARW 0.05 deg/sqrt(hr), gyro bias drift 1 deg/hr\n\
-                 IMU: accel VRW 0.015 m/s/sqrt(hr), accel bias drift 0.0002 m/s^2\n\
-                 GNSS: position sigma 0.8 m horizontal, 1.2 m vertical\n\
-                 GNSS: velocity sigma 0.03 m/s horizontal, 0.05 m/s vertical"
-            }
-            Self::Mid => {
-                "Mid noise, consumer-grade reference point\n\
-                 IMU: gyro ARW 0.3 deg/sqrt(hr), gyro bias drift 10 deg/hr\n\
-                 IMU: accel VRW 0.05 m/s/sqrt(hr), accel bias drift 0.001 m/s^2\n\
-                 GNSS: position sigma 3 m horizontal, 5 m vertical\n\
-                 GNSS: velocity sigma 0.10 m/s horizontal, 0.15 m/s vertical"
-            }
-            Self::High => {
-                "High noise\n\
-                 IMU: gyro ARW 1.0 deg/sqrt(hr), gyro bias drift 30 deg/hr\n\
-                 IMU: accel VRW 0.12 m/s/sqrt(hr), accel bias drift 0.005 m/s^2\n\
-                 GNSS: position sigma 8 m horizontal, 12 m vertical\n\
-                 GNSS: velocity sigma 0.30 m/s horizontal, 0.50 m/s vertical"
-            }
-        }
-    }
-
-    pub(super) fn cli_value(self) -> &'static str {
-        match self {
-            Self::Truth => "truth",
-            Self::Low => "low",
-            Self::Mid => "mid",
-            Self::High => "high",
-        }
-    }
-}
-
-const CITY_BLOCKS_SCENARIO: &str = r#"
-initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
-wait 20s
-repeat 3 {
-    accelerate 1.0m/s^2 for 8s
-    wait 10s
-    turn left 10dps for 9s
-    wait 10s
-    brake 1.0m/s^2 for 8s
-    wait 10s
-    accelerate 1.0m/s^2 for 8s
-    wait 10s
-    turn right 10dps for 9s
-    wait 10s
-    brake 1.0m/s^2 for 8s
-    wait 10s
-}
-"#;
-
-const FIGURE_EIGHT_SCENARIO: &str = r#"
-initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
-wait 60s
-accelerate 0.6m/s^2 for 20s
-wait 10s
-repeat 11 {
-    turn left 10dps for 36s
-    turn right 10dps for 36s
-}
-brake 0.6666667m/s^2 for 18s
-"#;
-
-const FIGURE_EIGHT_ROLL_EXCITATION_SCENARIO: &str = r#"
-initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
-wait 60s
-accelerate 0.6m/s^2 for 20s
-wait 10s
-repeat 11 {
-    drive yaw=10 roll=0.25 for=18s
-    drive yaw=10 roll=-0.25 for=18s
-    drive yaw=-10 roll=-0.25 for=18s
-    drive yaw=-10 roll=0.25 for=18s
-}
-brake 0.6666667m/s^2 for 18s
-"#;
-
-const STRAIGHT_ACCEL_BRAKE_SCENARIO: &str = r#"
-initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
-wait 20s
-repeat 2 {
-    accelerate 0.5m/s^2 for 20s
-    wait 20s
-    brake 0.5m/s^2 for 20s
-    wait 15s
-}
-"#;
-
-const OBSERVABILITY_STRAIGHT_SCENARIO: &str = r#"
-initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
-wait 20s
-accelerate 0.8 for=20s
-turn left 10 for=18s
-turn right 10 for=18s
-coast for=24s
-wait for=420s
-"#;
-
-const OBSERVABILITY_ACCEL_BRAKE_SCENARIO: &str = r#"
-initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
-wait 20s
-accelerate 0.8 for=20s
-turn left 10 for=18s
-turn right 10 for=18s
-coast for=24s
-repeat 12 {
-    accelerate 1.0 for=15s
-    coast for=10s
-    brake 1.0 for=15s
-    coast for=10s
-}
-"#;
-
-const OBSERVABILITY_TURNS_SCENARIO: &str = r#"
-initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
-wait 20s
-accelerate 0.8 for=20s
-turn left 10 for=18s
-turn right 10 for=18s
-coast for=24s
-repeat 10 {
-    turn left 10 for=24s
-    turn right 10 for=24s
-}
-"#;
-
-const OBSERVABILITY_TURNS_ACCEL_SCENARIO: &str = r#"
-initial lat=32 lon=120 alt=0 speed=0 yaw=0 pitch=0 roll=0
-wait 20s
-accelerate 0.8 for=20s
-turn left 10 for=18s
-turn right 10 for=18s
-coast for=24s
-repeat 8 {
-    accelerate 0.8 for=10s
-    turn left 10 for=20s
-    brake 0.8 for=10s
-    turn right 10 for=20s
-}
-"#;
-
-pub(super) fn draw_web_run_button(
-    ui: &mut egui::Ui,
-    enabled: bool,
-    busy: bool,
-    progress: f32,
-    text: &str,
-) -> bool {
-    let width = 128.0_f32.max(ui.spacing().interact_size.x * 3.2);
-    let height = ui.spacing().interact_size.y;
-    if busy {
-        ui.add_sized(
-            [width, height],
-            egui::ProgressBar::new(progress.clamp(0.0, 1.0))
-                .desired_width(width)
-                .desired_height(height)
-                .fill(ui.visuals().selection.bg_fill)
-                .text(egui::RichText::new(format!(
-                    "{text} {:>3.0}%",
-                    100.0 * progress.clamp(0.0, 1.0)
-                ))),
-        );
-        false
-    } else {
-        ui.add_enabled(
-            enabled,
-            egui::Button::new("Run").min_size(egui::vec2(width, height)),
-        )
-        .clicked()
-    }
-}
-
 impl App {
     pub(super) fn draw_web_bulk_loading_page(&self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -1205,7 +855,7 @@ impl App {
         let entry = self.web_datasets.datasets[selected].clone();
         let label = entry.display_label();
         self.web_datasets.selected = selected;
-        self.web_input_mode = WebInputMode::RealData;
+        self.web_input_mode = InputMode::RealData;
         self.web_real_data_source = WebRealDataSource::ManifestDataset;
         self.web_datasets.loading_dataset = true;
         self.web_run_progress = 0.0;
@@ -1273,7 +923,7 @@ impl App {
                         let label = files.label.clone();
                         let imu_name = files.imu.name.clone();
                         let gnss_name = files.gnss.name.clone();
-                        self.web_input_mode = WebInputMode::RealData;
+                        self.web_input_mode = InputMode::RealData;
                         self.web_real_data_source = WebRealDataSource::ManifestDataset;
                         self.web_imu_csv = Some(files.imu);
                         self.web_gnss_csv = Some(files.gnss);
@@ -1347,9 +997,9 @@ impl App {
                                 DataOrigin::Real
                             };
                             self.web_input_mode = if is_synthetic {
-                                WebInputMode::Synthetic
+                                InputMode::Synthetic
                             } else {
-                                WebInputMode::RealData
+                                InputMode::RealData
                             };
                             self.web_status = if is_synthetic {
                                 format!("Synthetic scenario loaded: {}", output.label)
@@ -1380,7 +1030,7 @@ impl App {
                 "Load both imu.csv and gnss.csv before running CSV replay.".to_string();
             return false;
         };
-        self.web_input_mode = WebInputMode::RealData;
+        self.web_input_mode = InputMode::RealData;
         self.web_real_data_source = WebRealDataSource::DroppedCsv;
         self.data_origin = DataOrigin::Real;
         self.start_web_replay_build(
@@ -1607,7 +1257,7 @@ impl App {
         let (label, text) = self.web_scenario.scenario_text();
         let (early_vel_bias_ned_mps, early_fault_window_s) = self.web_scenario.early_fault();
         let mount_rpy_deg = self.web_scenario.mount_rpy_deg();
-        self.web_input_mode = WebInputMode::Synthetic;
+        self.web_input_mode = InputMode::Synthetic;
         self.start_web_replay_worker(
             WebReplayWorkerJob::Synthetic {
                 label: self.web_scenario.display_label().to_string(),
@@ -1730,7 +1380,7 @@ impl App {
                 self.web_gnss_csv = Some(named);
             }
         }
-        self.web_input_mode = WebInputMode::RealData;
+        self.web_input_mode = InputMode::RealData;
         self.web_real_data_source = WebRealDataSource::DroppedCsv;
         self.data_origin = DataOrigin::Real;
         self.web_status =

@@ -22,17 +22,22 @@ use fusion_tools::eval::state_summary::{SummaryMode, summarize_trace_pair};
 #[cfg(not(target_arch = "wasm32"))]
 use fusion_tools::eval::trace::sample_nearest_value;
 #[cfg(not(target_arch = "wasm32"))]
-use fusion_tools::visualizer::model::{PlotData, Trace, VisualizerMountMode};
+use fusion_tools::visualizer::model::{
+    PlotData, Trace, VisualizerFusionBackend, VisualizerMountMode,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use fusion_tools::visualizer::pipeline::generic::GenericReplayInput;
 #[cfg(not(target_arch = "wasm32"))]
 use fusion_tools::visualizer::pipeline::synthetic::{
-    SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_plot_data,
+    SyntheticNoiseMode, SyntheticVisualizerConfig, build_synthetic_plot_data_with_backend,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use fusion_tools::visualizer::pipeline::{FusionTuningConfig, GnssOutageConfig};
 #[cfg(not(target_arch = "wasm32"))]
-use fusion_tools::visualizer::replay_job::{GenericReplayJobConfig, run_generic_replay_job};
+use fusion_tools::visualizer::replay_job::{
+    GenericReplayJobConfig, WEB_TRANSPORT_MAX_POINTS_PER_TRACE, decimate_for_transport,
+    run_generic_replay_job,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use fusion_tools::visualizer::stats::{
     group_stats, max_gap_sec, max_gap_trace, max_step_abs, trace_stats, trace_time_bounds,
@@ -92,6 +97,8 @@ struct Args {
         value_parser = parse_misalignment
     )]
     misalignment: VisualizerMountMode,
+    #[arg(long, value_enum, default_value_t = BackendArg::Rust)]
+    backend: BackendArg,
     #[arg(long)]
     dump_align_axis_time_s: Option<f64>,
     #[arg(long, default_value_t = 3.0)]
@@ -148,6 +155,23 @@ enum SyntheticNoiseArg {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum BackendArg {
+    Rust,
+    C,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl From<BackendArg> for VisualizerFusionBackend {
+    fn from(value: BackendArg) -> Self {
+        match value {
+            BackendArg::Rust => Self::Rust,
+            BackendArg::C => Self::C,
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 impl From<SyntheticNoiseArg> for SyntheticNoiseMode {
     fn from(value: SyntheticNoiseArg) -> Self {
         match value {
@@ -162,6 +186,7 @@ impl From<SyntheticNoiseArg> for SyntheticNoiseMode {
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> Result<()> {
     let args = Args::parse();
+    let backend = VisualizerFusionBackend::from(args.backend);
     let t0 = Instant::now();
     let filter_cfg = FusionTuningConfig {
         r_body_vel: args
@@ -250,15 +275,29 @@ fn main() -> Result<()> {
         };
         let data = run_generic_replay_job(
             &replay,
-            GenericReplayJobConfig::complete(args.misalignment, filter_cfg, gnss_outages),
+            GenericReplayJobConfig {
+                backend,
+                ..GenericReplayJobConfig::complete(args.misalignment, filter_cfg, gnss_outages)
+            },
         );
+        let replay_state = ReplayState {
+            bytes: replay_dir.display().to_string().into_bytes(),
+            generic_replay_dir: Some(replay_dir.clone()),
+            hosted_dataset_id: None,
+            synthetic: None,
+            max_records: args.max_records,
+            misalignment: args.misalignment,
+            backend,
+            filter_cfg,
+            gnss_outages,
+        };
         (
             data,
             false,
             format!("generic-csv:{}", replay_dir.display()),
             input_records,
             t_read,
-            None,
+            Some(replay_state),
         )
     } else if let Some(motion_def) = args.synthetic_motion_def.clone() {
         let synth_cfg = SyntheticVisualizerConfig {
@@ -286,13 +325,21 @@ fn main() -> Result<()> {
                 .synthetic_early_fault_start_s
                 .zip(args.synthetic_early_fault_end_s),
         };
-        let data =
-            build_synthetic_plot_data(&synth_cfg, args.misalignment, filter_cfg, gnss_outages)?;
+        let data = build_synthetic_plot_data_with_backend(
+            &synth_cfg,
+            backend,
+            args.misalignment,
+            filter_cfg,
+            gnss_outages,
+        )?;
         let replay = ReplayState {
             bytes: Vec::new(),
+            generic_replay_dir: None,
+            hosted_dataset_id: None,
             synthetic: Some(synth_cfg),
             max_records: args.max_records,
             misalignment: args.misalignment,
+            backend,
             filter_cfg,
             gnss_outages,
         };
@@ -330,7 +377,8 @@ fn main() -> Result<()> {
         tmax
     );
     eprintln!(
-        "[profile] ekf-only misalignment={:?} predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} r_body_vel_y={:.3} r_body_vel_z={:.3} r_vehicle_roll_prior={:.6} attitude_roll_init_sigma_deg={:.3} attitude_pitch_init_sigma_deg={:.3} yaw_init_sigma_deg={:.3} gyro_bias_init_sigma_dps={:.3} mount_roll_pitch_init_sigma_deg={:.3} mount_yaw_init_sigma_deg={:.3} use_align_mount_covariance_on_seed={} r_vehicle_speed={:.3} r_zero_vel={:.3} mount_align_rw_var={:.6e} align_handoff_delay_s={:.3}",
+        "[profile] ekf-only backend={:?} misalignment={:?} predict_imu_decimation={} ekf-only predict_imu_lpf_cutoff_hz={} r_body_vel_y={:.3} r_body_vel_z={:.3} r_vehicle_roll_prior={:.6} attitude_roll_init_sigma_deg={:.3} attitude_pitch_init_sigma_deg={:.3} yaw_init_sigma_deg={:.3} gyro_bias_init_sigma_dps={:.3} mount_roll_pitch_init_sigma_deg={:.3} mount_yaw_init_sigma_deg={:.3} use_align_mount_covariance_on_seed={} r_vehicle_speed={:.3} r_zero_vel={:.3} mount_align_rw_var={:.6e} align_handoff_delay_s={:.3}",
+        backend,
         args.misalignment,
         filter_cfg.predict_imu_decimation,
         filter_cfg
@@ -525,6 +573,8 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    let mut data = data;
+    decimate_for_transport(&mut data, WEB_TRANSPORT_MAX_POINTS_PER_TRACE);
     run_visualizer(data, has_itow, replay_state)
 }
 

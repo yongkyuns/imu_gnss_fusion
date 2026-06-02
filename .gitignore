@@ -1,4 +1,6 @@
 /target
+/output/
+/c/build/
 /node_modules/
 /.cache/
 /ekf/target

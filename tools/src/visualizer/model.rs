@@ -49,6 +49,22 @@ impl RoadEventKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq)]
+pub enum VisualizerFusionBackend {
+    #[default]
+    Rust,
+    C,
+}
+
+impl VisualizerFusionBackend {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Rust => "Rust",
+            Self::C => "C",
+        }
+    }
+}
+
 #[cfg_attr(target_arch = "wasm32", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone, Default)]
 pub struct PlotData {

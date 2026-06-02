@@ -1,15 +1,20 @@
 use anyhow::Result;
 #[cfg(not(target_arch = "wasm32"))]
 use eframe::egui;
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::PathBuf;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::mpsc;
 use walkers::{HttpTiles, MapMemory};
 
-use super::model::{Page, PlotData, VisualizerMountMode};
+use super::model::{Page, PlotData, VisualizerFusionBackend, VisualizerMountMode};
 use super::pipeline::synthetic::SyntheticVisualizerConfig;
 use super::pipeline::{FusionTuningConfig, GnssOutageConfig};
 use super::theme::UiTheme;
 
 mod colors;
 mod controls;
+mod input;
 mod inspector;
 mod maps;
 mod orthogonal;
@@ -23,13 +28,13 @@ mod tuning;
 mod web;
 mod windows;
 
+#[cfg(not(target_arch = "wasm32"))]
+use input::{HostedDatasetEntry, NativeRealDataSource};
+use input::{InputMode, SyntheticNoise, SyntheticScenario};
 use runtime::create_app;
 use state::{DataOrigin, TuningPanel};
 #[cfg(target_arch = "wasm32")]
-use web::{
-    NamedText, WebDatasetState, WebInputMode, WebPerf, WebRealDataSource, WebSyntheticNoise,
-    WebSyntheticScenario,
-};
+use web::{NamedText, WebDatasetState, WebPerf, WebRealDataSource};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) const MAPBOX_ACCESS_TOKEN_ENV: &str = "MAPBOX_ACCESS_TOKEN";
@@ -65,9 +70,34 @@ pub struct App {
     tuning_cfg: FusionTuningConfig,
     tuning_gnss_outages: GnssOutageConfig,
     tuning_misalignment: VisualizerMountMode,
+    tuning_backend: VisualizerFusionBackend,
     tuning_panel: Option<TuningPanel>,
     replay: Option<ReplayState>,
     replay_status: Option<String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    native_input_mode: InputMode,
+    #[cfg(not(target_arch = "wasm32"))]
+    native_generic_replay_dir: String,
+    #[cfg(not(target_arch = "wasm32"))]
+    native_real_data_source: NativeRealDataSource,
+    #[cfg(not(target_arch = "wasm32"))]
+    native_datasets: Vec<HostedDatasetEntry>,
+    #[cfg(not(target_arch = "wasm32"))]
+    native_selected_dataset: usize,
+    #[cfg(not(target_arch = "wasm32"))]
+    native_scenario: SyntheticScenario,
+    #[cfg(not(target_arch = "wasm32"))]
+    native_synthetic_noise: SyntheticNoise,
+    #[cfg(not(target_arch = "wasm32"))]
+    native_replay_task: Option<NativeReplayTask>,
+    #[cfg(not(target_arch = "wasm32"))]
+    native_replay_job_id: u64,
+    #[cfg(not(target_arch = "wasm32"))]
+    native_run_progress: f32,
+    #[cfg(not(target_arch = "wasm32"))]
+    native_run_started_time_s: f64,
+    #[cfg(not(target_arch = "wasm32"))]
+    native_run_estimated_duration_s: f64,
     #[cfg(target_arch = "wasm32")]
     web_imu_csv: Option<NamedText>,
     #[cfg(target_arch = "wasm32")]
@@ -87,11 +117,11 @@ pub struct App {
     #[cfg(target_arch = "wasm32")]
     show_mapbox_token_window: bool,
     #[cfg(target_arch = "wasm32")]
-    web_scenario: WebSyntheticScenario,
+    web_scenario: SyntheticScenario,
     #[cfg(target_arch = "wasm32")]
-    web_synthetic_noise: WebSyntheticNoise,
+    web_synthetic_noise: SyntheticNoise,
     #[cfg(target_arch = "wasm32")]
-    web_input_mode: WebInputMode,
+    web_input_mode: InputMode,
     #[cfg(target_arch = "wasm32")]
     web_real_data_source: WebRealDataSource,
     #[cfg(target_arch = "wasm32")]
@@ -108,12 +138,36 @@ pub struct App {
     web_perf: WebPerf,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+struct NativeReplayTask {
+    job_id: u64,
+    receiver: mpsc::Receiver<NativeReplayTaskResult>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+enum NativeReplayTaskResult {
+    Complete {
+        plot_data: Box<PlotData>,
+        replay: ReplayState,
+        origin: DataOrigin,
+        status: String,
+    },
+    Failed {
+        status: String,
+    },
+}
+
 #[derive(Clone)]
 pub struct ReplayState {
     pub bytes: Vec<u8>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub generic_replay_dir: Option<PathBuf>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub hosted_dataset_id: Option<String>,
     pub synthetic: Option<SyntheticVisualizerConfig>,
     pub max_records: Option<usize>,
     pub misalignment: VisualizerMountMode,
+    pub backend: VisualizerFusionBackend,
     pub filter_cfg: FusionTuningConfig,
     pub gnss_outages: GnssOutageConfig,
 }
@@ -121,7 +175,9 @@ pub struct ReplayState {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn run_visualizer(data: PlotData, has_itow: bool, replay: Option<ReplayState>) -> Result<()> {
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_maximized(true),
+        viewport: egui::ViewportBuilder::default().with_inner_size([1500.0, 950.0]),
+        renderer: eframe::Renderer::Glow,
+        run_and_return: false,
         ..Default::default()
     };
     eframe::run_native(

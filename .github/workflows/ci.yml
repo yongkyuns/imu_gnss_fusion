@@ -67,6 +67,26 @@ jobs:
       - name: Document workspace
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 
+  c:
+    name: C99 (${{ matrix.os_name }})
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os_name: macOS
+            runs_on: macos-latest
+          - os_name: Linux
+            runs_on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build and test C libraries
+        run: make -C c clean test
+
   ios:
     name: iOS
     runs-on: macos-latest
@@ -226,7 +246,7 @@ jobs:
 
   deploy-pages:
     name: Deploy GitHub Pages
-    needs: [rust, ios, hosted-generic-datasets, web-pages-artifact]
+    needs: [rust, c, ios, hosted-generic-datasets, web-pages-artifact]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10

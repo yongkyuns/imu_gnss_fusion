@@ -6,10 +6,11 @@ use std::sync::mpsc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 
-use super::model::{PlotData, Trace, VisualizerMountMode};
+use super::model::{PlotData, Trace, VisualizerFusionBackend, VisualizerMountMode};
 use super::pipeline::generic::{
-    GenericReplayInput, GenericReplayProgress, build_generic_replay_plot_data,
-    build_generic_replay_plot_data_with_progress, parse_generic_replay_csvs_with_optional_motion,
+    GenericReplayInput, GenericReplayProgress, build_generic_replay_plot_data_with_backend,
+    build_generic_replay_plot_data_with_backend_and_progress,
+    parse_generic_replay_csvs_with_optional_motion,
 };
 use super::pipeline::{FusionTuningConfig, GnssOutageConfig};
 
@@ -107,6 +108,7 @@ pub struct GenericReplayJobRequest {
     pub inputs: GenericReplayCsvInputs,
     pub labels: GenericReplayLabels,
     pub mount_mode: VisualizerMountMode,
+    pub backend: VisualizerFusionBackend,
     pub filter_cfg: FusionTuningConfig,
     pub gnss_outages: GnssOutageConfig,
     pub output_policy: ReplayOutputPolicy,
@@ -115,6 +117,7 @@ pub struct GenericReplayJobRequest {
 #[derive(Clone, Copy, Debug)]
 pub struct GenericReplayJobConfig {
     pub misalignment: VisualizerMountMode,
+    pub backend: VisualizerFusionBackend,
     pub filter_cfg: FusionTuningConfig,
     pub gnss_outages: GnssOutageConfig,
     pub output_policy: ReplayOutputPolicy,
@@ -128,6 +131,7 @@ impl GenericReplayJobConfig {
     ) -> Self {
         Self {
             misalignment,
+            backend: VisualizerFusionBackend::Rust,
             filter_cfg,
             gnss_outages,
             output_policy: ReplayOutputPolicy::Complete,
@@ -137,6 +141,7 @@ impl GenericReplayJobConfig {
     pub fn web_transport() -> Self {
         Self {
             misalignment: VisualizerMountMode::Auto,
+            backend: VisualizerFusionBackend::Rust,
             filter_cfg: FusionTuningConfig::default(),
             gnss_outages: GnssOutageConfig::default(),
             output_policy: ReplayOutputPolicy::web_transport(),
@@ -160,6 +165,7 @@ impl GenericReplayJobRequest {
             inputs,
             labels: GenericReplayLabels::default(),
             mount_mode: VisualizerMountMode::Auto,
+            backend: VisualizerFusionBackend::Rust,
             filter_cfg: FusionTuningConfig::default(),
             gnss_outages: GnssOutageConfig::default(),
             output_policy: ReplayOutputPolicy::Complete,
@@ -187,6 +193,7 @@ pub fn run_generic_replay_request(
     let plot_data = build_generic_replay_plot_data_from_input(
         &replay,
         request.mount_mode,
+        request.backend,
         request.filter_cfg,
         request.gnss_outages,
         request.output_policy,
@@ -205,6 +212,7 @@ pub fn run_generic_replay_job(
     build_generic_replay_plot_data_from_input(
         replay,
         config.misalignment,
+        config.backend,
         config.filter_cfg,
         config.gnss_outages,
         config.output_policy,
@@ -235,8 +243,9 @@ pub fn run_generic_csv_replay_job_with_progress(
         job.reference_position_csv,
         job.reference_motion_csv,
     )?;
-    let mut plot_data = build_generic_replay_plot_data_with_progress(
+    let mut plot_data = build_generic_replay_plot_data_with_backend_and_progress(
         &replay,
+        job.config.backend,
         job.config.misalignment,
         job.config.filter_cfg,
         job.config.gnss_outages,
@@ -296,6 +305,7 @@ impl GenericReplayThread {
 pub fn parse_and_build_generic_replay_plot_data(
     inputs: &GenericReplayCsvInputs,
     mount_mode: VisualizerMountMode,
+    backend: VisualizerFusionBackend,
     filter_cfg: FusionTuningConfig,
     gnss_outages: GnssOutageConfig,
     output_policy: ReplayOutputPolicy,
@@ -311,6 +321,7 @@ pub fn parse_and_build_generic_replay_plot_data(
     Ok(build_generic_replay_plot_data_from_input(
         &replay,
         mount_mode,
+        backend,
         filter_cfg,
         gnss_outages,
         output_policy,
@@ -320,12 +331,18 @@ pub fn parse_and_build_generic_replay_plot_data(
 pub fn build_generic_replay_plot_data_from_input(
     replay: &GenericReplayInput,
     mount_mode: VisualizerMountMode,
+    backend: VisualizerFusionBackend,
     filter_cfg: FusionTuningConfig,
     gnss_outages: GnssOutageConfig,
     output_policy: ReplayOutputPolicy,
 ) -> PlotData {
-    let mut plot_data =
-        build_generic_replay_plot_data(replay, mount_mode, filter_cfg, gnss_outages);
+    let mut plot_data = build_generic_replay_plot_data_with_backend(
+        replay,
+        backend,
+        mount_mode,
+        filter_cfg,
+        gnss_outages,
+    );
     output_policy.apply(&mut plot_data);
     plot_data
 }

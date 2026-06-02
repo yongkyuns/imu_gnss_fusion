@@ -20,8 +20,12 @@ use crate::visualizer::math::{ecef_to_ned, lla_to_ecef, quat_rpy_deg};
 use crate::visualizer::model::{
     HeadingSample, MapCursorSample, PlotData, RoadEventKind, RoadEventSample, RoadSegmentSample,
     StateContribution, StateCorrelation, Trace, TripEventCountsSample, TripSummarySample,
-    UpdateInspectorSample, VisualizerMountMode,
+    UpdateInspectorSample, VisualizerFusionBackend, VisualizerMountMode,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use crate::visualizer::pipeline::c_backend::{CEkfState, CSensorFusion};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::visualizer::pipeline::c_road_events::CRoadEvents;
 use crate::visualizer::pipeline::reference::{
     final_reference_mount_rpy, reference_mount_seed_q_bv, reference_rpy_at, rpy_series_from_samples,
 };
@@ -367,6 +371,84 @@ pub fn build_generic_replay_plot_data(
     gnss_outages: GnssOutageConfig,
 ) -> PlotData {
     build_generic_replay_plot_data_impl(replay, mount_mode, filter_cfg, gnss_outages, None, None)
+}
+
+pub fn build_generic_replay_plot_data_with_backend(
+    replay: &GenericReplayInput,
+    backend: VisualizerFusionBackend,
+    mount_mode: VisualizerMountMode,
+    filter_cfg: FusionTuningConfig,
+    gnss_outages: GnssOutageConfig,
+) -> PlotData {
+    build_generic_replay_plot_data_with_backend_impl(
+        replay,
+        backend,
+        mount_mode,
+        filter_cfg,
+        gnss_outages,
+        None,
+    )
+}
+
+pub fn build_generic_replay_plot_data_with_backend_and_progress(
+    replay: &GenericReplayInput,
+    backend: VisualizerFusionBackend,
+    mount_mode: VisualizerMountMode,
+    filter_cfg: FusionTuningConfig,
+    gnss_outages: GnssOutageConfig,
+    progress: &mut dyn FnMut(GenericReplayProgress),
+) -> PlotData {
+    build_generic_replay_plot_data_with_backend_impl(
+        replay,
+        backend,
+        mount_mode,
+        filter_cfg,
+        gnss_outages,
+        Some(progress),
+    )
+}
+
+fn build_generic_replay_plot_data_with_backend_impl(
+    replay: &GenericReplayInput,
+    backend: VisualizerFusionBackend,
+    mount_mode: VisualizerMountMode,
+    filter_cfg: FusionTuningConfig,
+    gnss_outages: GnssOutageConfig,
+    progress: Option<&mut dyn FnMut(GenericReplayProgress)>,
+) -> PlotData {
+    match backend {
+        VisualizerFusionBackend::Rust => build_generic_replay_plot_data_impl(
+            replay,
+            mount_mode,
+            filter_cfg,
+            gnss_outages,
+            progress,
+            None,
+        ),
+        VisualizerFusionBackend::C => {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                build_generic_replay_plot_data_c_impl(
+                    replay,
+                    mount_mode,
+                    filter_cfg,
+                    gnss_outages,
+                    progress,
+                )
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                build_generic_replay_plot_data_impl(
+                    replay,
+                    mount_mode,
+                    filter_cfg,
+                    gnss_outages,
+                    progress,
+                    None,
+                )
+            }
+        }
+    }
 }
 
 pub fn build_generic_replay_plot_data_with_ekf_mount_seed(
@@ -1123,6 +1205,730 @@ fn build_generic_replay_plot_data_impl(
     data
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn build_generic_replay_plot_data_c_impl(
+    replay: &GenericReplayInput,
+    mount_mode: VisualizerMountMode,
+    filter_cfg: FusionTuningConfig,
+    gnss_outages: GnssOutageConfig,
+    progress: Option<&mut dyn FnMut(GenericReplayProgress)>,
+) -> PlotData {
+    let mut progress = GenericProgressReporter::new(replay, progress);
+    let ctx = GenericReplayRunContext::new(replay, filter_cfg, mount_mode, gnss_outages);
+    let seed_q_bv = ctx.reference_mount_seed_q_bv();
+    let mut fusion = if let Some(seed_q_bv) = seed_q_bv {
+        CSensorFusion::new_with_mount(seed_q_bv)
+    } else {
+        CSensorFusion::new_auto()
+    };
+    fusion.configure(filter_cfg);
+
+    let ref_gnss = replay.gnss.first().copied();
+    let ref_ecef = ref_gnss.map(|s| lla_to_ecef(s.lat_deg, s.lon_deg, s.height_m));
+    let outage_windows = sample_outage_windows(&replay.gnss, ctx.gnss_outages);
+    let output_sampling = ReplayOutputSampling::for_replay(replay);
+    let imu_total = replay.imu.len();
+
+    let mut raw_gyro_x = Vec::new();
+    let mut raw_gyro_y = Vec::new();
+    let mut raw_gyro_z = Vec::new();
+    let mut raw_accel_x = Vec::new();
+    let mut raw_accel_y = Vec::new();
+    let mut raw_accel_z = Vec::new();
+    let mut gnss_speed = Vec::new();
+    let mut gnss_pos_n = Vec::new();
+    let mut gnss_pos_e = Vec::new();
+    let mut gnss_pos_d = Vec::new();
+    let mut gnss_vel_n = Vec::new();
+    let mut gnss_vel_e = Vec::new();
+    let mut gnss_vel_d = Vec::new();
+    let mut reference_vel_n = Vec::new();
+    let mut reference_vel_e = Vec::new();
+    let mut reference_vel_d = Vec::new();
+    let mut gnss_map = Vec::new();
+    let mut reference_position_map = Vec::new();
+    let mut map_cursor = Vec::new();
+
+    for sample in &replay.gnss {
+        gnss_speed.push([
+            sample.t_s,
+            sample.vel_ned_mps[0].hypot(sample.vel_ned_mps[1]),
+        ]);
+        gnss_vel_n.push([sample.t_s, sample.vel_ned_mps[0]]);
+        gnss_vel_e.push([sample.t_s, sample.vel_ned_mps[1]]);
+        gnss_vel_d.push([sample.t_s, sample.vel_ned_mps[2]]);
+        gnss_map.push([sample.lon_deg, sample.lat_deg]);
+        map_cursor.push(MapCursorSample {
+            trace_name: "GNSS-only path (lon,lat)".to_string(),
+            t_s: sample.t_s,
+            lon_deg: sample.lon_deg,
+            lat_deg: sample.lat_deg,
+            yaw_deg: heading_deg_from_sample(sample.heading_rad, sample.vel_ned_mps),
+        });
+        if let (Some(ref_sample), Some(ref_ecef)) = (ref_gnss, ref_ecef) {
+            let ecef = lla_to_ecef(sample.lat_deg, sample.lon_deg, sample.height_m);
+            let ned = ecef_to_ned(ecef, ref_ecef, ref_sample.lat_deg, ref_sample.lon_deg);
+            gnss_pos_n.push([sample.t_s, ned[0]]);
+            gnss_pos_e.push([sample.t_s, ned[1]]);
+            gnss_pos_d.push([sample.t_s, ned[2]]);
+        }
+    }
+    for sample in &replay.reference_position {
+        reference_vel_n.push([sample.t_s, sample.vel_ned_mps[0]]);
+        reference_vel_e.push([sample.t_s, sample.vel_ned_mps[1]]);
+        reference_vel_d.push([sample.t_s, sample.vel_ned_mps[2]]);
+        reference_position_map.push([sample.lon_deg, sample.lat_deg]);
+        map_cursor.push(MapCursorSample {
+            trace_name: "Reference fused path (lon,lat)".to_string(),
+            t_s: sample.t_s,
+            lon_deg: sample.lon_deg,
+            lat_deg: sample.lat_deg,
+            yaw_deg: heading_deg_from_sample(sample.heading_rad, sample.vel_ned_mps),
+        });
+    }
+
+    let mut ekf_pos_n = Vec::new();
+    let mut ekf_pos_e = Vec::new();
+    let mut ekf_pos_d = Vec::new();
+    let mut ekf_vel_n = Vec::new();
+    let mut ekf_vel_e = Vec::new();
+    let mut ekf_vel_d = Vec::new();
+    let mut ekf_roll = Vec::new();
+    let mut ekf_pitch = Vec::new();
+    let mut ekf_yaw = Vec::new();
+    let mut ekf_mount_roll = Vec::new();
+    let mut ekf_mount_pitch = Vec::new();
+    let mut ekf_mount_yaw = Vec::new();
+    let mut ekf_bgx = Vec::new();
+    let mut ekf_bgy = Vec::new();
+    let mut ekf_bgz = Vec::new();
+    let mut ekf_bax = Vec::new();
+    let mut ekf_bay = Vec::new();
+    let mut ekf_baz = Vec::new();
+    let mut ekf_motion_gyro: [Vec<[f64; 2]>; 3] = std::array::from_fn(|_| Vec::new());
+    let mut ekf_motion_accel: [Vec<[f64; 2]>; 3] = std::array::from_fn(|_| Vec::new());
+    let mut ekf_cov: [Vec<[f64; 2]>; 18] = std::array::from_fn(|_| Vec::new());
+    let mut ekf_map = Vec::new();
+    let mut ekf_outage_map = Vec::new();
+    let mut ekf_heading = Vec::new();
+    let mut mount_ready_marker = Vec::new();
+    let mut ekf_init_marker = Vec::new();
+    let mut align_cov: [Vec<[f64; 2]>; 3] = std::array::from_fn(|_| Vec::new());
+    let mut align_ready = Vec::new();
+    let mut road_event_backend = CRoadEvents::new(filter_cfg.harsh_behavior_preset);
+    let mut bump_pitch_hpf = Vec::new();
+    let mut bump_pitch_noise = Vec::new();
+    let mut bump_vertical_accel_hpf = Vec::new();
+    let mut bump_vertical_accel_noise = Vec::new();
+    let mut roughness_rms = Vec::new();
+    let mut roughness_bandpass = Vec::new();
+    let mut roughness_level = Vec::new();
+    let mut road_events = Vec::new();
+    let harsh_behavior = filter_cfg.harsh_behavior_preset.configs();
+    let mut latest_gnss_height_m: Option<f32> = None;
+    let mut visual_long_accel = VisualLongitudinalAccelEma::new(harsh_behavior.accel);
+    let mut road_event_motion = RoadEventMotionTraces::default();
+    let mut road_segments = Vec::new();
+
+    for_each_event(&replay.imu, &replay.gnss, |event| match event {
+        ReplayEvent::Imu(index, sample) => {
+            progress.report_stage(0.0, 0.72, sample.t_s);
+            let _ = fusion.process_imu(*sample);
+            if let Some(trip_sample) =
+                c_trip_stats_sample(sample.t_s, sample, &fusion, latest_gnss_height_m)
+            {
+                road_event_backend.update_trip_motion(trip_sample);
+            }
+            if let Some(detector_sample) =
+                c_speed_bump_detector_sample(sample.t_s, sample, &fusion, ref_gnss)
+            {
+                let (diag, event) = road_event_backend.update_speed_bump(detector_sample);
+                bump_pitch_hpf.push([diag.t_s as f64, diag.pitch_hpf_deg as f64]);
+                bump_pitch_noise.push([diag.t_s as f64, diag.pitch_noise_deg as f64]);
+                bump_vertical_accel_hpf
+                    .push([diag.t_s as f64, diag.vertical_accel_hpf_mps2 as f64]);
+                bump_vertical_accel_noise
+                    .push([diag.t_s as f64, diag.vertical_accel_noise_mps2 as f64]);
+                road_event_motion
+                    .pitch_deg
+                    .push([detector_sample.t_s as f64, detector_sample.pitch_deg as f64]);
+                road_event_motion
+                    .bump_pitch_hpf_deg
+                    .push([detector_sample.t_s as f64, diag.pitch_hpf_deg as f64]);
+                road_event_motion.bump_vertical_accel_mps2.push([
+                    detector_sample.t_s as f64,
+                    detector_sample.vertical_accel_mps2 as f64,
+                ]);
+                road_event_motion.bump_vertical_accel_hpf_mps2.push([
+                    detector_sample.t_s as f64,
+                    diag.vertical_accel_hpf_mps2 as f64,
+                ]);
+                road_event_motion.bump_vertical_accel_noise_mps2.push([
+                    detector_sample.t_s as f64,
+                    diag.vertical_accel_noise_mps2 as f64,
+                ]);
+                if let Some(event) = event {
+                    road_event_backend.record_event(TripEventKind::SpeedBump);
+                    if let Some([lat, lon, _]) = fusion.position_lla() {
+                        road_events.push(RoadEventSample {
+                            kind: RoadEventKind::SpeedBump.as_str().to_string(),
+                            t_s: event.t_s as f64,
+                            lon_deg: lon,
+                            lat_deg: lat,
+                            confidence: event.confidence as f64,
+                            speed_mps: detector_sample.speed_mps as f64,
+                            trigger_window_start_t_s: 0.0,
+                            trigger_window_end_t_s: 0.0,
+                            trigger_traces: Vec::new(),
+                        });
+                    }
+                }
+                if let Some(update) =
+                    road_event_backend.update_roughness_with_events(RoadRoughnessSample {
+                        t_s: detector_sample.t_s,
+                        speed_mps: detector_sample.speed_mps,
+                        vertical_accel_mps2: detector_sample.vertical_accel_mps2,
+                    })
+                {
+                    let estimate = update.estimate;
+                    roughness_rms.push([estimate.t_s as f64, estimate.roughness_rms_mps2 as f64]);
+                    road_event_motion
+                        .roughness_rms_mps2
+                        .push([estimate.t_s as f64, estimate.roughness_rms_mps2 as f64]);
+                    roughness_bandpass.push([
+                        estimate.t_s as f64,
+                        estimate.vertical_accel_bandpass_mps2 as f64,
+                    ]);
+                    road_event_motion.roughness_vertical_bandpass_mps2.push([
+                        estimate.t_s as f64,
+                        estimate.vertical_accel_bandpass_mps2 as f64,
+                    ]);
+                    roughness_level
+                        .push([estimate.t_s as f64, roughness_level_value(estimate.level)]);
+                    if let Some(event) = update.completed_roughness_event {
+                        road_event_backend.record_event(TripEventKind::RoughRoad);
+                        road_segments.push(rough_road_segment_sample(event));
+                    }
+                    if let Some(event) = update.shock_event {
+                        road_event_backend.record_event(TripEventKind::RoadShock);
+                        road_segments.push(road_shock_segment_sample(event));
+                    }
+                }
+                if let Some(event) = road_event_backend.update_hill(HillSample {
+                    t_s: detector_sample.t_s,
+                    speed_mps: detector_sample.speed_mps,
+                    pitch_deg: detector_sample.pitch_deg,
+                }) {
+                    road_event_backend.record_event(match event.kind {
+                        HillKind::Uphill => TripEventKind::Uphill,
+                        HillKind::Downhill => TripEventKind::Downhill,
+                    });
+                    road_segments.push(road_segment_sample(event));
+                }
+                if let Some(reverse_sample) = c_reverse_detector_sample(sample.t_s, &fusion)
+                    && let Some(event) = road_event_backend.update_reverse(reverse_sample)
+                {
+                    road_event_backend.record_event(TripEventKind::Reverse);
+                    road_segments.push(reverse_segment_sample(event));
+                }
+                if let Some(longitudinal_sample) = c_harsh_longitudinal_sample(sample.t_s, &fusion)
+                {
+                    road_event_motion.forward_velocity_mps.push([
+                        longitudinal_sample.t_s as f64,
+                        longitudinal_sample.forward_velocity_mps as f64,
+                    ]);
+                    if let Some((raw_accel_mps2, accel_mps2)) =
+                        visual_long_accel.update(longitudinal_sample)
+                    {
+                        road_event_motion
+                            .longitudinal_accel_raw_mps2
+                            .push([longitudinal_sample.t_s as f64, raw_accel_mps2]);
+                        road_event_motion
+                            .longitudinal_accel_mps2
+                            .push([longitudinal_sample.t_s as f64, accel_mps2]);
+                    }
+                    if let Some(event) = road_event_backend.update_harsh_accel(longitudinal_sample)
+                    {
+                        road_event_backend.record_event(TripEventKind::HarshAcceleration);
+                        road_segments.push(harsh_longitudinal_segment_sample(
+                            RoadEventKind::HarshAcceleration,
+                            event,
+                        ));
+                    }
+                    if let Some(event) = road_event_backend.update_harsh_brake(longitudinal_sample)
+                    {
+                        road_event_backend.record_event(TripEventKind::HarshBraking);
+                        road_segments.push(harsh_longitudinal_segment_sample(
+                            RoadEventKind::HarshBraking,
+                            event,
+                        ));
+                    }
+                }
+                if let Some((corner_sample, yaw_rate_radps)) =
+                    c_harsh_corner_sample(sample.t_s, sample, &fusion)
+                {
+                    road_event_motion
+                        .speed_mps
+                        .push([corner_sample.t_s as f64, corner_sample.speed_mps as f64]);
+                    road_event_motion.yaw_rate_dps.push([
+                        corner_sample.t_s as f64,
+                        (yaw_rate_radps as f64).to_degrees(),
+                    ]);
+                    road_event_motion.lateral_accel_mps2.push([
+                        corner_sample.t_s as f64,
+                        corner_sample.lateral_accel_mps2.abs() as f64,
+                    ]);
+                    if let Some(event) = road_event_backend.update_harsh_corner(corner_sample) {
+                        road_event_backend.record_event(TripEventKind::HarshCornering);
+                        road_segments.push(harsh_corner_segment_sample(event));
+                    }
+                }
+            }
+            if !output_sampling.keep_imu(index, imu_total) {
+                return;
+            }
+            raw_gyro_x.push([sample.t_s, sample.gyro_radps[0].to_degrees()]);
+            raw_gyro_y.push([sample.t_s, sample.gyro_radps[1].to_degrees()]);
+            raw_gyro_z.push([sample.t_s, sample.gyro_radps[2].to_degrees()]);
+            raw_accel_x.push([sample.t_s, sample.accel_mps2[0]]);
+            raw_accel_y.push([sample.t_s, sample.accel_mps2[1]]);
+            raw_accel_z.push([sample.t_s, sample.accel_mps2[2]]);
+            append_c_ekf_motion_sample(
+                sample.t_s,
+                sample,
+                &fusion,
+                &mut ekf_motion_gyro,
+                &mut ekf_motion_accel,
+            );
+            append_c_ekf_sample(
+                sample.t_s,
+                &fusion,
+                ref_gnss,
+                ref_ecef,
+                &mut ekf_pos_n,
+                &mut ekf_pos_e,
+                &mut ekf_pos_d,
+                &mut ekf_vel_n,
+                &mut ekf_vel_e,
+                &mut ekf_vel_d,
+                &mut ekf_roll,
+                &mut ekf_pitch,
+                &mut ekf_yaw,
+                &mut ekf_mount_roll,
+                &mut ekf_mount_pitch,
+                &mut ekf_mount_yaw,
+                &mut ekf_bgx,
+                &mut ekf_bgy,
+                &mut ekf_bgz,
+                &mut ekf_bax,
+                &mut ekf_bay,
+                &mut ekf_baz,
+                &mut ekf_cov,
+                &mut ekf_map,
+                &mut ekf_outage_map,
+                &mut ekf_heading,
+                &mut map_cursor,
+                in_outage(sample.t_s, &outage_windows),
+            );
+        }
+        ReplayEvent::Gnss(_, sample) => {
+            progress.report_stage(0.0, 0.72, sample.t_s);
+            if !in_outage(sample.t_s, &outage_windows) {
+                latest_gnss_height_m = gnss_height_from_fixed_ned(sample, ref_gnss, ref_ecef);
+                let update = fusion.process_gnss(*sample);
+                if update.mount_ready_changed && update.mount_ready {
+                    mount_ready_marker.push([sample.t_s, 0.0]);
+                }
+                if update.navigation_started && update.navigation_usable {
+                    ekf_init_marker.push([sample.t_s, 0.0]);
+                }
+                let align = fusion.align_progress();
+                if align.valid {
+                    align_cov[0].push([sample.t_s, align.roll_sigma_deg as f64]);
+                    align_cov[1].push([sample.t_s, align.pitch_sigma_deg as f64]);
+                    align_cov[2].push([sample.t_s, align.yaw_sigma_deg as f64]);
+                    align_ready.push([sample.t_s, f64::from(align.coarse_ready)]);
+                }
+            }
+        }
+    });
+
+    if let Some(event) = road_event_backend.finish_hill() {
+        road_event_backend.record_event(match event.kind {
+            HillKind::Uphill => TripEventKind::Uphill,
+            HillKind::Downhill => TripEventKind::Downhill,
+        });
+        road_segments.push(road_segment_sample(event));
+    }
+    if let Some(event) = road_event_backend.finish_reverse() {
+        road_event_backend.record_event(TripEventKind::Reverse);
+        road_segments.push(reverse_segment_sample(event));
+    }
+    if let Some(event) = road_event_backend.finish_roughness() {
+        road_event_backend.record_event(TripEventKind::RoughRoad);
+        road_segments.push(rough_road_segment_sample(event));
+    }
+    if let Some(event) = road_event_backend.finish_harsh_accel() {
+        road_event_backend.record_event(TripEventKind::HarshAcceleration);
+        road_segments.push(harsh_longitudinal_segment_sample(
+            RoadEventKind::HarshAcceleration,
+            event,
+        ));
+    }
+    if let Some(event) = road_event_backend.finish_harsh_brake() {
+        road_event_backend.record_event(TripEventKind::HarshBraking);
+        road_segments.push(harsh_longitudinal_segment_sample(
+            RoadEventKind::HarshBraking,
+            event,
+        ));
+    }
+    if let Some(event) = road_event_backend.finish_harsh_corner() {
+        road_event_backend.record_event(TripEventKind::HarshCornering);
+        road_segments.push(harsh_corner_segment_sample(event));
+    }
+    attach_road_event_trigger_traces(&mut road_events, &road_event_motion);
+    attach_road_segment_trigger_traces(&mut road_segments, &road_event_motion);
+
+    let reference_mount_series = rpy_series_from_samples(&replay.reference_mount);
+    let reference_mount_final_rpy_deg = final_reference_mount_rpy(&replay.reference_mount);
+    let reference_attitude_series = rpy_series_from_samples(&replay.reference_attitude);
+
+    let mut data = PlotData {
+        speed: vec![Trace {
+            name: "GNSS speed [m/s]".to_string(),
+            points: gnss_speed,
+        }],
+        imu_raw_gyro: vec![
+            Trace {
+                name: "Raw IMU gyro X [deg/s]".to_string(),
+                points: raw_gyro_x.clone(),
+            },
+            Trace {
+                name: "Raw IMU gyro Y [deg/s]".to_string(),
+                points: raw_gyro_y.clone(),
+            },
+            Trace {
+                name: "Raw IMU gyro Z [deg/s]".to_string(),
+                points: raw_gyro_z.clone(),
+            },
+        ],
+        imu_raw_accel: vec![
+            Trace {
+                name: "Raw IMU accel X [m/s^2]".to_string(),
+                points: raw_accel_x.clone(),
+            },
+            Trace {
+                name: "Raw IMU accel Y [m/s^2]".to_string(),
+                points: raw_accel_y.clone(),
+            },
+            Trace {
+                name: "Raw IMU accel Z [m/s^2]".to_string(),
+                points: raw_accel_z.clone(),
+            },
+        ],
+        ekf_cmp_pos: vec![
+            Trace {
+                name: "GNSS posN [m]".to_string(),
+                points: gnss_pos_n,
+            },
+            Trace {
+                name: "EKF posN [m]".to_string(),
+                points: ekf_pos_n,
+            },
+            Trace {
+                name: "GNSS posE [m]".to_string(),
+                points: gnss_pos_e,
+            },
+            Trace {
+                name: "EKF posE [m]".to_string(),
+                points: ekf_pos_e,
+            },
+            Trace {
+                name: "GNSS posD [m]".to_string(),
+                points: gnss_pos_d,
+            },
+            Trace {
+                name: "EKF posD [m]".to_string(),
+                points: ekf_pos_d,
+            },
+        ],
+        ekf_cmp_vel: vec![
+            Trace {
+                name: "GNSS velN [m/s]".to_string(),
+                points: gnss_vel_n,
+            },
+            Trace {
+                name: "Reference velN [m/s]".to_string(),
+                points: reference_vel_n,
+            },
+            Trace {
+                name: "EKF velN [m/s]".to_string(),
+                points: ekf_vel_n,
+            },
+            Trace {
+                name: "GNSS velE [m/s]".to_string(),
+                points: gnss_vel_e,
+            },
+            Trace {
+                name: "Reference velE [m/s]".to_string(),
+                points: reference_vel_e,
+            },
+            Trace {
+                name: "EKF velE [m/s]".to_string(),
+                points: ekf_vel_e,
+            },
+            Trace {
+                name: "GNSS velD [m/s]".to_string(),
+                points: gnss_vel_d,
+            },
+            Trace {
+                name: "Reference velD [m/s]".to_string(),
+                points: reference_vel_d,
+            },
+            Trace {
+                name: "EKF velD [m/s]".to_string(),
+                points: ekf_vel_d,
+            },
+        ],
+        ekf_cmp_att: vec![
+            Trace {
+                name: "EKF roll [deg]".to_string(),
+                points: ekf_roll,
+            },
+            Trace {
+                name: "EKF pitch [deg]".to_string(),
+                points: ekf_pitch,
+            },
+            Trace {
+                name: "EKF yaw [deg]".to_string(),
+                points: ekf_yaw,
+            },
+            Trace {
+                name: "mount ready".to_string(),
+                points: mount_ready_marker,
+            },
+            Trace {
+                name: "ekf initialized".to_string(),
+                points: ekf_init_marker,
+            },
+        ],
+        vehicle_motion_gyro: axis_traces_deg_per_s("EKF angular velocity", ekf_motion_gyro),
+        vehicle_motion_accel: axis_traces_mps2("EKF linear acceleration", ekf_motion_accel),
+        ekf_bias_gyro: vec![
+            Trace {
+                name: "EKF gyro bias X [deg/s]".to_string(),
+                points: ekf_bgx,
+            },
+            Trace {
+                name: "EKF gyro bias Y [deg/s]".to_string(),
+                points: ekf_bgy,
+            },
+            Trace {
+                name: "EKF gyro bias Z [deg/s]".to_string(),
+                points: ekf_bgz,
+            },
+        ],
+        ekf_bias_accel: vec![
+            Trace {
+                name: "EKF accel bias X [m/s^2]".to_string(),
+                points: ekf_bax,
+            },
+            Trace {
+                name: "EKF accel bias Y [m/s^2]".to_string(),
+                points: ekf_bay,
+            },
+            Trace {
+                name: "EKF accel bias Z [m/s^2]".to_string(),
+                points: ekf_baz,
+            },
+        ],
+        ekf_meas_gyro: vec![
+            Trace {
+                name: "EKF raw IMU gyro X [deg/s]".to_string(),
+                points: raw_gyro_x,
+            },
+            Trace {
+                name: "EKF raw IMU gyro Y [deg/s]".to_string(),
+                points: raw_gyro_y,
+            },
+            Trace {
+                name: "EKF raw IMU gyro Z [deg/s]".to_string(),
+                points: raw_gyro_z,
+            },
+        ],
+        ekf_meas_accel: vec![
+            Trace {
+                name: "EKF raw IMU accel X [m/s^2]".to_string(),
+                points: raw_accel_x,
+            },
+            Trace {
+                name: "EKF raw IMU accel Y [m/s^2]".to_string(),
+                points: raw_accel_y,
+            },
+            Trace {
+                name: "EKF raw IMU accel Z [m/s^2]".to_string(),
+                points: raw_accel_z,
+            },
+        ],
+        ekf_cov_bias: vec![
+            Trace {
+                name: "EKF accel bias sigma X [m/s^2]".to_string(),
+                points: ekf_cov[12].clone(),
+            },
+            Trace {
+                name: "EKF accel bias sigma Y [m/s^2]".to_string(),
+                points: ekf_cov[13].clone(),
+            },
+            Trace {
+                name: "EKF accel bias sigma Z [m/s^2]".to_string(),
+                points: ekf_cov[14].clone(),
+            },
+            Trace {
+                name: "EKF gyro bias sigma X [deg/s]".to_string(),
+                points: ekf_cov[9].clone(),
+            },
+            Trace {
+                name: "EKF gyro bias sigma Y [deg/s]".to_string(),
+                points: ekf_cov[10].clone(),
+            },
+            Trace {
+                name: "EKF gyro bias sigma Z [deg/s]".to_string(),
+                points: ekf_cov[11].clone(),
+            },
+        ],
+        ekf_cov_nonbias: ekf_nonbias_sigma_traces(&ekf_cov),
+        ekf_mount_sigma: vec![
+            Trace {
+                name: "EKF mount roll sigma [deg]".to_string(),
+                points: sigma_rad_points_to_deg(&ekf_cov[15]),
+            },
+            Trace {
+                name: "EKF mount pitch sigma [deg]".to_string(),
+                points: sigma_rad_points_to_deg(&ekf_cov[16]),
+            },
+            Trace {
+                name: "EKF mount yaw sigma [deg]".to_string(),
+                points: sigma_rad_points_to_deg(&ekf_cov[17]),
+            },
+        ],
+        ekf_misalignment: vec![
+            Trace {
+                name: "EKF mount roll [deg]".to_string(),
+                points: ekf_mount_roll,
+            },
+            Trace {
+                name: "EKF mount pitch [deg]".to_string(),
+                points: ekf_mount_pitch,
+            },
+            Trace {
+                name: "EKF mount yaw [deg]".to_string(),
+                points: ekf_mount_yaw,
+            },
+        ],
+        ekf_map: vec![
+            Trace {
+                name: "GNSS-only path (lon,lat)".to_string(),
+                points: gnss_map,
+            },
+            Trace {
+                name: "Reference fused path (lon,lat)".to_string(),
+                points: reference_position_map,
+            },
+            Trace {
+                name: "EKF path (lon,lat)".to_string(),
+                points: ekf_map,
+            },
+            Trace {
+                name: "EKF path during GNSS outage (lon,lat)".to_string(),
+                points: ekf_outage_map,
+            },
+        ],
+        road_events,
+        road_segments,
+        trip_summary: trip_summary_sample(
+            road_event_backend.trip_summary(),
+            road_event_backend.roughness_estimate(),
+        ),
+        map_cursor,
+        ekf_map_heading: ekf_heading,
+        align_flags: vec![Trace {
+            name: "coarse alignment ready".to_string(),
+            points: align_ready,
+        }],
+        align_cov: vec![
+            Trace {
+                name: "Align roll sigma [deg]".to_string(),
+                points: align_cov[0].clone(),
+            },
+            Trace {
+                name: "Align pitch sigma [deg]".to_string(),
+                points: align_cov[1].clone(),
+            },
+            Trace {
+                name: "Align yaw sigma [deg]".to_string(),
+                points: align_cov[2].clone(),
+            },
+        ],
+        ..PlotData::default()
+    };
+
+    if let Some(truth) = reference_attitude_series {
+        data.ekf_cmp_att.extend([
+            Trace {
+                name: "Reference roll [deg]".to_string(),
+                points: truth[0].clone(),
+            },
+            Trace {
+                name: "Reference pitch [deg]".to_string(),
+                points: truth[1].clone(),
+            },
+            Trace {
+                name: "Reference yaw [deg]".to_string(),
+                points: truth[2].clone(),
+            },
+        ]);
+    }
+    if let Some(reference) = reference_mount_series {
+        push_mount_quaternion_error_trace(
+            &mut data.ekf_misalignment,
+            "EKF",
+            "EKF mount",
+            reference_mount_final_rpy_deg,
+        );
+        data.ekf_misalignment.extend([
+            Trace {
+                name: "Reference mount roll [deg]".to_string(),
+                points: reference[0].clone(),
+            },
+            Trace {
+                name: "Reference mount pitch [deg]".to_string(),
+                points: reference[1].clone(),
+            },
+            Trace {
+                name: "Reference mount yaw [deg]".to_string(),
+                points: reference[2].clone(),
+            },
+        ]);
+    }
+    populate_ekf_bump_pitch_speed(&mut data);
+    populate_ekf_bump_diagnostics(
+        &mut data,
+        bump_pitch_hpf,
+        bump_pitch_noise,
+        bump_vertical_accel_hpf,
+        bump_vertical_accel_noise,
+    );
+    populate_ekf_road_roughness(
+        &mut data,
+        roughness_rms,
+        roughness_bandpass,
+        roughness_level,
+    );
+    populate_ekf_road_event_motion(&mut data, &road_event_motion);
+    progress.complete();
+    data
+}
+
 pub fn add_auxiliary_generic_traces(
     data: &mut PlotData,
     replay: &GenericReplayInput,
@@ -1872,6 +2678,270 @@ fn roughness_level_value(level: RoadRoughnessLevel) -> f64 {
         RoadRoughnessLevel::VeryRough => 5.0,
         RoadRoughnessLevel::Severe => 6.0,
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn append_c_ekf_motion_sample(
+    t_s: f64,
+    sample: &GenericImuSample,
+    fusion: &CSensorFusion,
+    gyro: &mut [Vec<[f64; 2]>; 3],
+    accel: &mut [Vec<[f64; 2]>; 3],
+) {
+    let Some(ekf) = fusion.ekf_state() else {
+        push_motion_triplet(t_s, [0.0; 3], gyro);
+        push_motion_triplet(t_s, [0.0; 3], accel);
+        return;
+    };
+    let (gyro_vehicle, accel_vehicle) = c_ekf_vehicle_motion(sample, &ekf);
+    push_motion_triplet(t_s, gyro_vehicle.map(f64::to_degrees), gyro);
+    push_motion_triplet(t_s, accel_vehicle, accel);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn c_ekf_vehicle_motion(sample: &GenericImuSample, ekf: &CEkfState) -> ([f64; 3], [f64; 3]) {
+    let q_bv = ekf.q_bv.map(|v| v as f64);
+    let q_vehicle_to_ned = c_ekf_vehicle_attitude_q(ekf);
+    let gyro_body = [
+        sample.gyro_radps[0] - ekf.gyro_bias_b_radps[0] as f64,
+        sample.gyro_radps[1] - ekf.gyro_bias_b_radps[1] as f64,
+        sample.gyro_radps[2] - ekf.gyro_bias_b_radps[2] as f64,
+    ];
+    let accel_body = [
+        sample.accel_mps2[0] - ekf.accel_bias_b_mps2[0] as f64,
+        sample.accel_mps2[1] - ekf.accel_bias_b_mps2[1] as f64,
+        sample.accel_mps2[2] - ekf.accel_bias_b_mps2[2] as f64,
+    ];
+    let gyro_vehicle = rotate_body_to_vehicle(q_bv, gyro_body);
+    let accel_vehicle = gravity_compensate_vehicle_accel(
+        q_vehicle_to_ned,
+        rotate_body_to_vehicle(q_bv, accel_body),
+    );
+    (gyro_vehicle, accel_vehicle)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn c_ekf_vehicle_velocity(ekf: &CEkfState) -> [f64; 3] {
+    let q_vehicle_to_ned = c_ekf_vehicle_attitude_q(ekf);
+    quat_rotate(
+        quat_conj(q_vehicle_to_ned),
+        ekf.vel_ned_mps.map(|v| v as f64),
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn c_speed_bump_detector_sample(
+    t_s: f64,
+    sample: &GenericImuSample,
+    fusion: &CSensorFusion,
+    _ref_gnss: Option<GenericGnssSample>,
+) -> Option<SpeedBumpSample> {
+    let ekf = fusion.ekf_state()?;
+    let (_, accel_vehicle) = c_ekf_vehicle_motion(sample, &ekf);
+    let velocity_vehicle = c_ekf_vehicle_velocity(&ekf);
+    let q_vehicle = c_ekf_vehicle_attitude_q(&ekf);
+    let (_, pitch_deg, _) = quat_rpy_deg(
+        q_vehicle[0] as f32,
+        q_vehicle[1] as f32,
+        q_vehicle[2] as f32,
+        q_vehicle[3] as f32,
+    );
+    Some(SpeedBumpSample {
+        t_s: t_s as f32,
+        speed_mps: velocity_vehicle[0].hypot(velocity_vehicle[1]) as f32,
+        pitch_deg: pitch_deg as f32,
+        vertical_accel_mps2: accel_vehicle[2] as f32,
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn c_trip_stats_sample(
+    t_s: f64,
+    sample: &GenericImuSample,
+    fusion: &CSensorFusion,
+    gnss_height_m: Option<f32>,
+) -> Option<TripSample> {
+    let ekf = fusion.ekf_state()?;
+    let velocity_vehicle = c_ekf_vehicle_velocity(&ekf);
+    let (_, accel_vehicle) = c_ekf_vehicle_motion(sample, &ekf);
+    Some(TripSample {
+        t_s: t_s as f32,
+        speed_mps: velocity_vehicle[0].hypot(velocity_vehicle[1]) as f32,
+        forward_velocity_mps: velocity_vehicle[0] as f32,
+        height_m: gnss_height_m,
+        height_frame_id: 0,
+        longitudinal_accel_mps2: accel_vehicle[0] as f32,
+        lateral_accel_mps2: accel_vehicle[1] as f32,
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn c_reverse_detector_sample(t_s: f64, fusion: &CSensorFusion) -> Option<ReverseSample> {
+    let ekf = fusion.ekf_state()?;
+    let velocity_vehicle = c_ekf_vehicle_velocity(&ekf);
+    Some(ReverseSample {
+        t_s: t_s as f32,
+        forward_velocity_mps: velocity_vehicle[0] as f32,
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn c_harsh_longitudinal_sample(
+    t_s: f64,
+    fusion: &CSensorFusion,
+) -> Option<HarshLongitudinalSample> {
+    let ekf = fusion.ekf_state()?;
+    let velocity_vehicle = c_ekf_vehicle_velocity(&ekf);
+    Some(HarshLongitudinalSample {
+        t_s: t_s as f32,
+        forward_velocity_mps: velocity_vehicle[0] as f32,
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn c_harsh_corner_sample(
+    t_s: f64,
+    sample: &GenericImuSample,
+    fusion: &CSensorFusion,
+) -> Option<(HarshCornerSample, f32)> {
+    let ekf = fusion.ekf_state()?;
+    let velocity_vehicle = c_ekf_vehicle_velocity(&ekf);
+    let (gyro_vehicle, accel_vehicle) = c_ekf_vehicle_motion(sample, &ekf);
+    Some((
+        HarshCornerSample {
+            t_s: t_s as f32,
+            speed_mps: velocity_vehicle[0].hypot(velocity_vehicle[1]) as f32,
+            lateral_accel_mps2: accel_vehicle[1] as f32,
+        },
+        gyro_vehicle[2] as f32,
+    ))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
+fn append_c_ekf_sample(
+    t_s: f64,
+    fusion: &CSensorFusion,
+    ref_gnss: Option<GenericGnssSample>,
+    ref_ecef: Option<[f64; 3]>,
+    pos_n: &mut Vec<[f64; 2]>,
+    pos_e: &mut Vec<[f64; 2]>,
+    pos_d: &mut Vec<[f64; 2]>,
+    vel_n: &mut Vec<[f64; 2]>,
+    vel_e: &mut Vec<[f64; 2]>,
+    vel_d: &mut Vec<[f64; 2]>,
+    roll: &mut Vec<[f64; 2]>,
+    pitch: &mut Vec<[f64; 2]>,
+    yaw: &mut Vec<[f64; 2]>,
+    mount_roll: &mut Vec<[f64; 2]>,
+    mount_pitch: &mut Vec<[f64; 2]>,
+    mount_yaw: &mut Vec<[f64; 2]>,
+    bgx: &mut Vec<[f64; 2]>,
+    bgy: &mut Vec<[f64; 2]>,
+    bgz: &mut Vec<[f64; 2]>,
+    accel_bias_x: &mut Vec<[f64; 2]>,
+    accel_bias_y: &mut Vec<[f64; 2]>,
+    accel_bias_z: &mut Vec<[f64; 2]>,
+    cov: &mut [Vec<[f64; 2]>; 18],
+    map: &mut Vec<[f64; 2]>,
+    outage_map: &mut Vec<[f64; 2]>,
+    headings: &mut Vec<HeadingSample>,
+    map_cursor: &mut Vec<MapCursorSample>,
+    outage_active: bool,
+) {
+    let Some(ekf) = fusion.ekf_state() else {
+        return;
+    };
+    let display_pos = c_ekf_display_position_ned(fusion, &ekf, ref_gnss, ref_ecef);
+    let display_vel = ekf.vel_ned_mps.map(|v| v as f64);
+    pos_n.push([t_s, display_pos[0]]);
+    pos_e.push([t_s, display_pos[1]]);
+    pos_d.push([t_s, display_pos[2]]);
+    vel_n.push([t_s, display_vel[0]]);
+    vel_e.push([t_s, display_vel[1]]);
+    vel_d.push([t_s, display_vel[2]]);
+
+    let q_vehicle = c_ekf_vehicle_attitude_q(&ekf);
+    let (r, p, y) = quat_rpy_deg(
+        q_vehicle[0] as f32,
+        q_vehicle[1] as f32,
+        q_vehicle[2] as f32,
+        q_vehicle[3] as f32,
+    );
+    roll.push([t_s, r]);
+    pitch.push([t_s, p]);
+    yaw.push([t_s, y]);
+
+    let (mr, mp, my) = q_bv_to_reference_mount_rpy(ekf.q_bv.map(|v| v as f64));
+    mount_roll.push([t_s, mr]);
+    mount_pitch.push([t_s, mp]);
+    mount_yaw.push([t_s, my]);
+
+    bgx.push([t_s, (ekf.gyro_bias_b_radps[0] as f64).to_degrees()]);
+    bgy.push([t_s, (ekf.gyro_bias_b_radps[1] as f64).to_degrees()]);
+    bgz.push([t_s, (ekf.gyro_bias_b_radps[2] as f64).to_degrees()]);
+    accel_bias_x.push([t_s, ekf.accel_bias_b_mps2[0] as f64]);
+    accel_bias_y.push([t_s, ekf.accel_bias_b_mps2[1] as f64]);
+    accel_bias_z.push([t_s, ekf.accel_bias_b_mps2[2] as f64]);
+    for (i, trace) in cov.iter_mut().enumerate() {
+        trace.push([t_s, ekf.covariance[i][i].max(0.0).sqrt() as f64]);
+    }
+
+    if let Some([lat, lon, _]) = fusion.position_lla() {
+        map.push([lon, lat]);
+        if outage_active {
+            outage_map.push([lon, lat]);
+        } else if outage_map
+            .last()
+            .map(|p| p[0].is_finite() || p[1].is_finite())
+            .unwrap_or(false)
+        {
+            outage_map.push([f64::NAN, f64::NAN]);
+        }
+        headings.push(HeadingSample {
+            t_s,
+            lon_deg: lon,
+            lat_deg: lat,
+            yaw_deg: y,
+        });
+        map_cursor.push(MapCursorSample {
+            trace_name: "EKF path (lon,lat)".to_string(),
+            t_s,
+            lon_deg: lon,
+            lat_deg: lat,
+            yaw_deg: Some(y),
+        });
+        if outage_active {
+            map_cursor.push(MapCursorSample {
+                trace_name: "EKF path during GNSS outage (lon,lat)".to_string(),
+                t_s,
+                lon_deg: lon,
+                lat_deg: lat,
+                yaw_deg: Some(y),
+            });
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn c_ekf_display_position_ned(
+    fusion: &CSensorFusion,
+    ekf: &CEkfState,
+    ref_gnss: Option<GenericGnssSample>,
+    ref_ecef: Option<[f64; 3]>,
+) -> [f64; 3] {
+    if let (Some([lat, lon, h]), Some(ref_sample), Some(ref_ecef)) =
+        (fusion.position_lla(), ref_gnss, ref_ecef)
+    {
+        let ecef = lla_to_ecef(lat, lon, h);
+        return ecef_to_ned(ecef, ref_ecef, ref_sample.lat_deg, ref_sample.lon_deg);
+    }
+    ekf.pos_ned_m.map(|v| v as f64)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn c_ekf_vehicle_attitude_q(ekf: &CEkfState) -> [f64; 4] {
+    as_q64(ekf.q_nv)
 }
 
 fn harsh_longitudinal_sample(t_s: f64, fusion: &SensorFusion) -> Option<HarshLongitudinalSample> {

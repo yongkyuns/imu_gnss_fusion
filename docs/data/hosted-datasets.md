@@ -1,6 +1,6 @@
 # Hosted Datasets
 
-The hosted web visualizer reads its dataset list from `web/datasets/manifest.json`. The current checked-in manifest contains 32 datasets:
+The hosted web visualizer reads its dataset list from `web/datasets/manifest.json`. The current checked-in manifest contains 36 datasets:
 
 ```text
 urban-short-turn-loop-nominal-001
@@ -35,6 +35,10 @@ ios-drive-20260521-131420
 ios-drive-20260521-164415
 ios-drive-20260521-180601
 ios-drive-20260526-174206
+ios-drive-20260527-123747
+ios-drive-20260528-183859
+ios-drive-20260530-110409
+ios-drive-20260530-164847
 ```
 
 Dataset publishing validates manifest entries, schema, checksums, and replay

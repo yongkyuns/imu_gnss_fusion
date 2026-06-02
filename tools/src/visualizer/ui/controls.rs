@@ -2,16 +2,19 @@
 
 use eframe::egui;
 
-use crate::visualizer::model::Page;
+use crate::visualizer::model::{Page, VisualizerFusionBackend};
 use crate::visualizer::theme::UiTheme;
 
 use super::App;
+#[cfg(not(target_arch = "wasm32"))]
+use super::input::{DATASET_MANIFEST_PATH, NativeRealDataSource};
+use super::input::{
+    HostedDatasetEntry, InputMode, SYNTHETIC_NOISE_PRESETS, SYNTHETIC_SCENARIOS, SyntheticNoise,
+    SyntheticScenario, draw_run_button, draw_synthetic_noise_help,
+};
 use super::state::{EKF_FILTER_LABEL, TuningPanel};
 #[cfg(target_arch = "wasm32")]
-use super::web::{
-    WEB_MAX_POINTS_PER_TRACE, WEB_MIN_POINTS_PER_TRACE, WebDatasetEntry, WebInputMode,
-    WebRealDataSource, WebSyntheticNoise, WebSyntheticScenario, draw_web_run_button,
-};
+use super::web::{WEB_MAX_POINTS_PER_TRACE, WEB_MIN_POINTS_PER_TRACE, WebRealDataSource};
 
 impl App {
     pub(super) fn draw_top_controls(&mut self, ctx: &egui::Context) {
@@ -147,124 +150,39 @@ impl App {
                     .default_open(true)
                     .show(ui, |ui| {
                         ui.horizontal_wrapped(|ui| {
+                            draw_input_backend_selector(ui, &mut self.tuning_backend);
+                        });
+                        ui.horizontal_wrapped(|ui| {
                             ui.selectable_value(
                                 &mut self.web_input_mode,
-                                WebInputMode::Synthetic,
+                                InputMode::Synthetic,
                                 "Synthetic",
                             );
                             ui.selectable_value(
                                 &mut self.web_input_mode,
-                                WebInputMode::RealData,
+                                InputMode::RealData,
                                 "Experimental/real data",
                             );
                         });
                         ui.horizontal_wrapped(|ui| {
                             ui.label(match self.web_input_mode {
-                                WebInputMode::Synthetic => "Scenario:",
-                                WebInputMode::RealData => "Input:",
+                                InputMode::Synthetic => "Scenario:",
+                                InputMode::RealData => "Input:",
                             });
                             match self.web_input_mode {
-                                WebInputMode::Synthetic => {
-                                    egui::ComboBox::from_id_salt("web_synthetic_scenario_select")
-                                        .selected_text(self.web_scenario.display_label())
-                                        .show_ui(ui, |ui| {
-                                            ui.selectable_value(
-                                                &mut self.web_scenario,
-                                                WebSyntheticScenario::CityBlocks,
-                                                WebSyntheticScenario::CityBlocks.display_label(),
-                                            );
-                                            ui.selectable_value(
-                                                &mut self.web_scenario,
-                                                WebSyntheticScenario::FigureEight,
-                                                WebSyntheticScenario::FigureEight.display_label(),
-                                            );
-                                            ui.selectable_value(
-                                                &mut self.web_scenario,
-                                                WebSyntheticScenario::FigureEightEarlyVelocityFault,
-                                                WebSyntheticScenario::FigureEightEarlyVelocityFault
-                                                    .display_label(),
-                                            );
-                                            ui.selectable_value(
-                                                &mut self.web_scenario,
-                                                WebSyntheticScenario::FigureEightRollExcitation,
-                                                WebSyntheticScenario::FigureEightRollExcitation
-                                                    .display_label(),
-                                            );
-                                            ui.selectable_value(
-                                                &mut self.web_scenario,
-                                                WebSyntheticScenario::StraightAccelBrake,
-                                                WebSyntheticScenario::StraightAccelBrake
-                                                    .display_label(),
-                                            );
-                                            ui.selectable_value(
-                                                &mut self.web_scenario,
-                                                WebSyntheticScenario::ObservabilityStraight,
-                                                WebSyntheticScenario::ObservabilityStraight
-                                                    .display_label(),
-                                            );
-                                            ui.selectable_value(
-                                                &mut self.web_scenario,
-                                                WebSyntheticScenario::ObservabilityAccelBrake,
-                                                WebSyntheticScenario::ObservabilityAccelBrake
-                                                    .display_label(),
-                                            );
-                                            ui.selectable_value(
-                                                &mut self.web_scenario,
-                                                WebSyntheticScenario::ObservabilityTurns,
-                                                WebSyntheticScenario::ObservabilityTurns
-                                                    .display_label(),
-                                            );
-                                            ui.selectable_value(
-                                                &mut self.web_scenario,
-                                                WebSyntheticScenario::ObservabilityTurnsAccel,
-                                                WebSyntheticScenario::ObservabilityTurnsAccel
-                                                    .display_label(),
-                                            );
-                                        });
-                                    let noise_label = ui.add(
-                                        egui::Label::new(egui::RichText::new("Noise:").underline())
-                                            .sense(egui::Sense::hover()),
+                                InputMode::Synthetic => {
+                                    draw_synthetic_scenario_select(
+                                        ui,
+                                        "web_synthetic_scenario_select",
+                                        &mut self.web_scenario,
                                     );
-                                    if noise_label.hovered() {
-                                        egui::Tooltip::always_open(
-                                            ui.ctx().clone(),
-                                            ui.layer_id(),
-                                            noise_label.id,
-                                            noise_label.rect,
-                                        )
-                                        .width(560.0)
-                                        .show(draw_synthetic_noise_help);
-                                    }
-                                    egui::ComboBox::from_id_salt("web_synthetic_noise_select")
-                                        .selected_text(self.web_synthetic_noise.display_label())
-                                        .show_ui(ui, |ui| {
-                                            ui.selectable_value(
-                                                &mut self.web_synthetic_noise,
-                                                WebSyntheticNoise::Truth,
-                                                WebSyntheticNoise::Truth.display_label(),
-                                            )
-                                            .on_hover_text(WebSyntheticNoise::Truth.tooltip());
-                                            ui.selectable_value(
-                                                &mut self.web_synthetic_noise,
-                                                WebSyntheticNoise::Low,
-                                                WebSyntheticNoise::Low.display_label(),
-                                            )
-                                            .on_hover_text(WebSyntheticNoise::Low.tooltip());
-                                            ui.selectable_value(
-                                                &mut self.web_synthetic_noise,
-                                                WebSyntheticNoise::Mid,
-                                                WebSyntheticNoise::Mid.display_label(),
-                                            )
-                                            .on_hover_text(WebSyntheticNoise::Mid.tooltip());
-                                            ui.selectable_value(
-                                                &mut self.web_synthetic_noise,
-                                                WebSyntheticNoise::High,
-                                                WebSyntheticNoise::High.display_label(),
-                                            )
-                                            .on_hover_text(WebSyntheticNoise::High.tooltip());
-                                        });
+                                    draw_synthetic_noise_select(
+                                        ui,
+                                        "web_synthetic_noise_select",
+                                        &mut self.web_synthetic_noise,
+                                    );
                                 }
-                                WebInputMode::RealData => {
+                                InputMode::RealData => {
                                     let selected_text = match self.web_real_data_source {
                                         WebRealDataSource::DroppedCsv => {
                                             "Dropped CSV files".to_string()
@@ -273,7 +191,7 @@ impl App {
                                             .web_datasets
                                             .datasets
                                             .get(self.web_datasets.selected)
-                                            .map(WebDatasetEntry::display_label)
+                                            .map(HostedDatasetEntry::display_label)
                                             .unwrap_or_else(|| "No manifest entries".to_string()),
                                     };
                                     egui::ComboBox::from_id_salt("web_real_data_select")
@@ -321,8 +239,8 @@ impl App {
                             }
 
                             let run_enabled = match self.web_input_mode {
-                                WebInputMode::Synthetic => true,
-                                WebInputMode::RealData => match self.web_real_data_source {
+                                InputMode::Synthetic => true,
+                                InputMode::RealData => match self.web_real_data_source {
                                     WebRealDataSource::DroppedCsv => {
                                         !self.web_datasets.loading_replay
                                             && self.web_imu_csv.is_some()
@@ -338,14 +256,14 @@ impl App {
                             };
                             let run_text = match self.web_input_mode {
                                 _ if self.web_datasets.loading_replay => "Running replay...",
-                                WebInputMode::RealData if self.web_datasets.loading_dataset => {
+                                InputMode::RealData if self.web_datasets.loading_dataset => {
                                     "Loading dataset..."
                                 }
                                 _ => "Run",
                             };
                             let run_busy = self.web_datasets.loading_dataset
                                 || self.web_datasets.loading_replay;
-                            if draw_web_run_button(
+                            if draw_run_button(
                                 ui,
                                 run_enabled,
                                 run_busy,
@@ -353,8 +271,8 @@ impl App {
                                 run_text,
                             ) {
                                 match self.web_input_mode {
-                                    WebInputMode::Synthetic => self.refresh_from_web_synthetic(ctx),
-                                    WebInputMode::RealData => match self.web_real_data_source {
+                                    InputMode::Synthetic => self.refresh_from_web_synthetic(ctx),
+                                    InputMode::RealData => match self.web_real_data_source {
                                         WebRealDataSource::DroppedCsv => {
                                             self.refresh_from_generic_csv(ctx);
                                         }
@@ -366,8 +284,8 @@ impl App {
                             }
                         });
                         match self.web_input_mode {
-                            WebInputMode::Synthetic => {}
-                            WebInputMode::RealData => {
+                            InputMode::Synthetic => {}
+                            InputMode::RealData => {
                                 let imu_name = self
                                     .web_imu_csv
                                     .as_ref()
@@ -402,11 +320,139 @@ impl App {
                         ui.label(&self.web_status);
                     });
                 #[cfg(not(target_arch = "wasm32"))]
-                if let Some(status) = &self.replay_status {
-                    ui.label(status);
-                }
+                self.draw_native_inputs(ui);
             }
         });
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn draw_native_inputs(&mut self, ui: &mut egui::Ui) {
+        egui::CollapsingHeader::new("Inputs")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    draw_input_backend_selector(ui, &mut self.tuning_backend);
+                    ui.selectable_value(
+                        &mut self.native_input_mode,
+                        InputMode::Synthetic,
+                        "Synthetic",
+                    );
+                    ui.selectable_value(
+                        &mut self.native_input_mode,
+                        InputMode::RealData,
+                        "Experimental/real data",
+                    );
+                });
+                ui.horizontal_wrapped(|ui| match self.native_input_mode {
+                    InputMode::Synthetic => {
+                        ui.label("Scenario:");
+                        draw_synthetic_scenario_select(
+                            ui,
+                            "native_synthetic_scenario_select",
+                            &mut self.native_scenario,
+                        );
+                        draw_synthetic_noise_select(
+                            ui,
+                            "native_synthetic_noise_select",
+                            &mut self.native_synthetic_noise,
+                        );
+                    }
+                    InputMode::RealData => {
+                        ui.label("Input:");
+                        let selected_text = match self.native_real_data_source {
+                            NativeRealDataSource::CustomDirectory => {
+                                "Generic replay directory".to_string()
+                            }
+                            NativeRealDataSource::ManifestDataset => self
+                                .native_datasets
+                                .get(self.native_selected_dataset)
+                                .map(HostedDatasetEntry::display_label)
+                                .unwrap_or_else(|| "No manifest entries".to_string()),
+                        };
+                        egui::ComboBox::from_id_salt("native_real_data_select")
+                            .selected_text(selected_text)
+                            .show_ui(ui, |ui| {
+                                ui.label(egui::RichText::new("Local files").strong());
+                                ui.selectable_value(
+                                    &mut self.native_real_data_source,
+                                    NativeRealDataSource::CustomDirectory,
+                                    "Generic replay directory",
+                                );
+                                let groups = ["UBX/reference datasets", "iOS recordings"];
+                                for group in groups {
+                                    let mut showed_group = false;
+                                    for (idx, dataset) in self.native_datasets.iter().enumerate() {
+                                        if dataset.picker_group_label() != group {
+                                            continue;
+                                        }
+                                        if !showed_group {
+                                            ui.separator();
+                                            ui.label(egui::RichText::new(group).strong());
+                                            showed_group = true;
+                                        }
+                                        let selected = self.native_real_data_source
+                                            == NativeRealDataSource::ManifestDataset
+                                            && self.native_selected_dataset == idx;
+                                        if ui
+                                            .selectable_label(selected, dataset.display_label())
+                                            .clicked()
+                                        {
+                                            self.native_real_data_source =
+                                                NativeRealDataSource::ManifestDataset;
+                                            self.native_selected_dataset = idx;
+                                        }
+                                    }
+                                }
+                            });
+                        if self.native_real_data_source == NativeRealDataSource::CustomDirectory {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.native_generic_replay_dir)
+                                    .desired_width(520.0)
+                                    .hint_text("/path/to/generic replay directory"),
+                            );
+                        }
+                    }
+                });
+                ui.horizontal_wrapped(|ui| {
+                    let run_busy = self.native_replay_task.is_some();
+                    let run_enabled = match self.native_input_mode {
+                        InputMode::Synthetic => true,
+                        InputMode::RealData => match self.native_real_data_source {
+                            NativeRealDataSource::CustomDirectory => {
+                                !self.native_generic_replay_dir.trim().is_empty()
+                            }
+                            NativeRealDataSource::ManifestDataset => {
+                                !self.native_datasets.is_empty()
+                            }
+                        },
+                    };
+                    let run_text = if run_busy { "Running replay..." } else { "Run" };
+                    if draw_run_button(
+                        ui,
+                        run_enabled && !run_busy,
+                        run_busy,
+                        self.native_run_progress,
+                        run_text,
+                    ) {
+                        self.run_native_selected_input(ui.ctx());
+                    }
+                    if self.native_input_mode == InputMode::RealData
+                        && self.native_real_data_source == NativeRealDataSource::ManifestDataset
+                    {
+                        if self.native_datasets.is_empty() {
+                            ui.label(format!("no manifest entries in {DATASET_MANIFEST_PATH}"));
+                        } else if let Some(dataset) =
+                            self.native_datasets.get(self.native_selected_dataset)
+                            && let Some(description) = dataset.description.as_deref()
+                        {
+                            ui.label(description);
+                        }
+                    }
+                    if let Some(status) = &self.replay_status {
+                        ui.label(status);
+                    }
+                });
+            });
     }
 }
 
@@ -426,71 +472,50 @@ fn show_immediate_help(ui: &mut egui::Ui, response: &egui::Response, help: &'sta
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-fn draw_synthetic_noise_help(ui: &mut egui::Ui) {
-    ui.label(egui::RichText::new("Synthetic noise presets").strong());
-    ui.add_space(2.0);
-    ui.label(
-        "Noise is applied to generated IMU and GNSS measurements. Values are 1-sigma figures.",
-    );
-    ui.add_space(8.0);
-
-    egui::Grid::new("synthetic_noise_help_grid")
-        .num_columns(5)
-        .spacing([16.0, 5.0])
-        .striped(true)
-        .show(ui, |ui| {
-            ui.strong("Preset");
-            ui.strong("Gyro");
-            ui.strong("Accel");
-            ui.strong("GNSS pos");
-            ui.strong("GNSS vel");
-            ui.end_row();
-
-            noise_help_row(ui, "None", "exact", "exact", "exact", "exact");
-            noise_help_row(
-                ui,
-                "Low noise",
-                "0.05 deg/sqrt(hr)\n1 deg/hr drift",
-                "0.015 m/s/sqrt(hr)\n0.0002 m/s^2 drift",
-                "0.8 m horiz\n1.2 m vert",
-                "0.03 m/s horiz\n0.05 m/s vert",
-            );
-            noise_help_row(
-                ui,
-                "Mid noise",
-                "0.3 deg/sqrt(hr)\n10 deg/hr drift",
-                "0.05 m/s/sqrt(hr)\n0.001 m/s^2 drift",
-                "3 m horiz\n5 m vert",
-                "0.10 m/s horiz\n0.15 m/s vert",
-            );
-            noise_help_row(
-                ui,
-                "High noise",
-                "1.0 deg/sqrt(hr)\n30 deg/hr drift",
-                "0.12 m/s/sqrt(hr)\n0.005 m/s^2 drift",
-                "8 m horiz\n12 m vert",
-                "0.30 m/s horiz\n0.50 m/s vert",
-            );
-        });
-
-    ui.add_space(6.0);
-    ui.label("Mid noise is intended to be close to a consumer IMU/GNSS noise level.");
+fn draw_input_backend_selector(ui: &mut egui::Ui, backend: &mut VisualizerFusionBackend) {
+    ui.label("Backend:");
+    ui.selectable_value(backend, VisualizerFusionBackend::Rust, "Rust");
+    #[cfg(not(target_arch = "wasm32"))]
+    ui.selectable_value(backend, VisualizerFusionBackend::C, "C");
+    #[cfg(target_arch = "wasm32")]
+    ui.add_enabled(false, egui::Button::new("C"));
+    ui.separator();
 }
 
-#[cfg(target_arch = "wasm32")]
-fn noise_help_row(
+fn draw_synthetic_scenario_select(
     ui: &mut egui::Ui,
-    preset: &str,
-    gyro: &str,
-    accel: &str,
-    gnss_pos: &str,
-    gnss_vel: &str,
+    id: &'static str,
+    scenario: &mut SyntheticScenario,
 ) {
-    ui.label(egui::RichText::new(preset).strong());
-    ui.label(gyro);
-    ui.label(accel);
-    ui.label(gnss_pos);
-    ui.label(gnss_vel);
-    ui.end_row();
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(scenario.display_label())
+        .show_ui(ui, |ui| {
+            for candidate in SYNTHETIC_SCENARIOS {
+                ui.selectable_value(scenario, *candidate, candidate.display_label());
+            }
+        });
+}
+
+fn draw_synthetic_noise_select(ui: &mut egui::Ui, id: &'static str, noise: &mut SyntheticNoise) {
+    let noise_label = ui.add(
+        egui::Label::new(egui::RichText::new("Noise:").underline()).sense(egui::Sense::hover()),
+    );
+    if noise_label.hovered() {
+        egui::Tooltip::always_open(
+            ui.ctx().clone(),
+            ui.layer_id(),
+            noise_label.id,
+            noise_label.rect,
+        )
+        .width(560.0)
+        .show(draw_synthetic_noise_help);
+    }
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(noise.display_label())
+        .show_ui(ui, |ui| {
+            for candidate in SYNTHETIC_NOISE_PRESETS {
+                ui.selectable_value(noise, *candidate, candidate.display_label())
+                    .on_hover_text(candidate.tooltip());
+            }
+        });
 }
